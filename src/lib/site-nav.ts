@@ -47,6 +47,8 @@ export type NavLink = { href: string; label: string };
 type NavPage = NavLink & {
   group: NavGroup;
   visible: (state: NavState) => boolean;
+  /** Also linked from the footer, which is no second site map. */
+  footer?: true;
 };
 
 const always = () => true;
@@ -111,14 +113,27 @@ const NAV_PAGES: readonly NavPage[] = [
     group: "stats",
     visible: always,
   },
-  { href: "/news", label: "League news", group: "league", visible: always },
-  { href: "/features", label: "Feature tour", group: "league", visible: always },
+  {
+    href: "/news",
+    label: "League news",
+    group: "league",
+    visible: always,
+    footer: true,
+  },
+  {
+    href: "/features",
+    label: "Feature tour",
+    group: "league",
+    visible: always,
+    footer: true,
+  },
   { href: "/hall-of-fame", label: "Hall of Fame", group: "league", visible: always },
   {
     href: "/seasons",
     label: "Season history",
     group: "league",
     visible: ({ hasHistory }) => hasHistory,
+    footer: true,
   },
 ];
 
@@ -200,4 +215,16 @@ export function exploreNav(state: NavState): NavSection[] {
       (page) => page.group === group && page.visible(state),
     ).map(({ href, label }) => ({ href, label })),
   })).filter((section) => section.links.length > 0);
+}
+
+/**
+ * The footer's few links. It used to repeat every page from the header and
+ * Explore (up to 16 links, a second site map under every page); it now keeps
+ * the league's news, the tour and past seasons, all of which Explore lists
+ * too.
+ */
+export function footerNav(state: NavState): NavLink[] {
+  return NAV_PAGES.filter((page) => page.footer && page.visible(state)).map(
+    ({ href, label }) => ({ href, label }),
+  );
 }

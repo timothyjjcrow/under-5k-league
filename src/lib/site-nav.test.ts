@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 import {
   exploreNav,
+  footerNav,
   phoneDock,
   seasonNav,
   type NavLink,
@@ -40,6 +41,7 @@ describe("site navigation", () => {
       for (const link of [
         ...seasonNav(s, "team-1"),
         ...exploreNav(s).flatMap((section) => section.links),
+        ...footerNav(s),
       ]) {
         const known = labelFor.get(link.href);
         if (known) expect(link.label, link.href).toBe(known);
@@ -197,6 +199,25 @@ describe("site navigation", () => {
   });
 });
 
+describe("footer", () => {
+  it("keeps a few essentials, never a page the menus don't also offer", () => {
+    for (const s of allStates()) {
+      const links = hrefs(footerNav(s));
+      expect(links.length).toBeLessThanOrEqual(3);
+      for (const href of links) expect(exploreHrefs(s)).toContain(href);
+    }
+    expect(hrefs(footerNav(state(SEASON_STATUS.SIGNUPS)))).toEqual([
+      "/news",
+      "/features",
+    ]);
+    expect(
+      footerNav(state(SEASON_STATUS.REGULAR_SEASON, null, true)).map(
+        (link) => link.label,
+      ),
+    ).toEqual(["League news", "Feature tour", "Season history"]);
+  });
+});
+
 describe("phone tab bar and its sheet", () => {
   it("never lists a page both as a tab and in the sheet, and drops none", () => {
     for (const s of allStates()) {
@@ -272,12 +293,16 @@ describe("navigation surfaces", () => {
       ["footer", footer],
     ] as const) {
       expect(file, name).toContain('from "@/lib/site-nav"');
-      expect(file, name).toContain("seasonNav(");
-      expect(file, name).toContain("exploreNav(");
       expect(file, name).toContain("seasonPhaseLabel(");
       expect(file, name).not.toMatch(/\blabel:\s*["'`]/);
       expect(file, name).not.toMatch(/PHASE_LABEL|PHASE_TONE/);
     }
+    expect(header).toContain("seasonNav(");
+    expect(header).toContain("exploreNav(");
+    expect(footer).toContain("footerNav(");
+    // The footer is no second site map.
+    expect(footer).not.toContain("seasonNav(");
+    expect(footer).not.toContain("exploreNav(");
   });
 
   // Phones had a ☰ menu, the tab bar's sheet and the footer listing the same

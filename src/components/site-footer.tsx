@@ -2,7 +2,7 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { Badge, DiscordButton } from "@/components/ui";
 import { seasonPhaseLabel, seasonPhaseTone } from "@/lib/season-copy";
-import { exploreNav, seasonNav, type NavSection } from "@/lib/site-nav";
+import { footerNav } from "@/lib/site-nav";
 
 const FOOTER_LINK_CLASS =
   "rounded py-1 text-sm leading-6 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
@@ -20,27 +20,22 @@ export function SiteFooter({
   hasHistory?: boolean;
 }) {
   const year = new Date().getFullYear();
-  // The same pages, names and groups as the header and its Explore menu
-  // (src/lib/site-nav.ts): the header's primary row, then Explore's groups.
-  // The footer has no "My Team": it is the same for every viewer.
-  const navState = { phase, draftStatus, hasHistory };
-  const sections: NavSection[] = [
-    { group: "season", label: LEAGUE_CONFIG.name, links: seasonNav(navState) },
-    ...exploreNav(navState),
-  ];
+  // Only the essentials. The footer used to repeat every page from the header
+  // and Explore, a fourth copy of the same links under every page (about
+  // 775px tall on a phone). Its links come from src/lib/site-nav.ts, so they
+  // keep the names every other menu uses.
+  const links = footerNav({ phase, draftStatus, hasHistory });
   // The .ics feed is a file download, so it renders as a plain <a> below.
   const showCalendar = phase === "REGULAR_SEASON" || phase === "PLAYOFFS";
 
   return (
     <footer className="mt-8 border-t border-line-soft bg-bg">
-      <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-12">
-        {/* Keep the emblem prominent, but let the navigation share one clean
-            baseline instead of vertically centering unequal link stacks. */}
-        <div className="grid items-center gap-10 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.45fr)] lg:gap-16">
+      <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
+        <div className="flex flex-col items-center gap-5 sm:flex-row sm:justify-between">
           <Link
             href="/"
             aria-label={`${LEAGUE_CONFIG.name} — home`}
-            className="flex items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:justify-start"
+            className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
             {/* Use the same regional emblem as the header. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -50,68 +45,49 @@ export function SiteFooter({
               alt={LEAGUE_CONFIG.name}
               width={LEAGUE_CONFIG.branding.navWidth}
               height={LEAGUE_CONFIG.branding.navHeight}
-              className="h-32 w-auto sm:h-40 lg:h-44"
+              className="h-14 w-auto sm:h-16"
             />
           </Link>
 
-          <nav
-            aria-label="Footer"
-            className="grid w-full grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4"
-          >
-            {sections.map((section) => (
-              <div key={section.group} className="min-w-0">
-                <p
-                  id={`footer-nav-${section.group}`}
-                  className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted"
-                >
-                  {section.label}
-                </p>
-                <ul
-                  aria-labelledby={`footer-nav-${section.group}`}
-                  className="mt-3 flex flex-col items-start gap-y-1"
-                >
-                  {section.links.map((l) => (
-                    <li key={l.href}>
-                      {/* inline-block so the 32px hit box takes up its own
-                          height instead of overlapping the next row. */}
-                      <Link
-                        href={l.href}
-                        className={`${FOOTER_LINK_CLASS} inline-block`}
-                      >
-                        {l.label}
-                      </Link>
-                    </li>
-                  ))}
-                  {section.group === "season" && showCalendar ? (
-                    <li>
-                      <a
-                        href="/api/calendar"
-                        className={`${FOOTER_LINK_CLASS} inline-flex items-center gap-2 whitespace-nowrap`}
-                      >
-                        <svg
-                          aria-hidden="true"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="h-3.5 w-3.5 shrink-0"
-                        >
-                          <path d="M7 3v3M17 3v3M4.5 9.5h15" />
-                          <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
-                        </svg>
-                        Calendar (.ics)
-                      </a>
-                    </li>
-                  ) : null}
-                </ul>
-              </div>
-            ))}
+          <nav aria-label="Footer" className="min-w-0">
+            {/* Flex items, so each padded 32px hit box keeps its own row
+                height when the list wraps. */}
+            <ul className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 sm:justify-end">
+              {links.map((l) => (
+                <li key={l.href}>
+                  <Link href={l.href} className={`${FOOTER_LINK_CLASS} block`}>
+                    {l.label}
+                  </Link>
+                </li>
+              ))}
+              {showCalendar ? (
+                <li>
+                  <a
+                    href="/api/calendar"
+                    className={`${FOOTER_LINK_CLASS} flex items-center gap-2 whitespace-nowrap`}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-3.5 w-3.5 shrink-0"
+                    >
+                      <path d="M7 3v3M17 3v3M4.5 9.5h15" />
+                      <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
+                    </svg>
+                    Calendar (.ics)
+                  </a>
+                </li>
+              ) : null}
+            </ul>
           </nav>
         </div>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
+        <div className="mt-6 grid gap-4 border-t border-line-soft pt-6 sm:grid-cols-[auto_1fr] sm:items-center">
           <div className="flex justify-center sm:justify-start">
             <DiscordButton size="sm" />
           </div>
