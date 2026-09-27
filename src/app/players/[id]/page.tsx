@@ -78,6 +78,7 @@ import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { type FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
+import { pickStandout } from "@/lib/profile-history";
 import {
   careerReportCard,
   gradeFor,
@@ -583,14 +584,9 @@ export default async function PlayerProfilePage({
     gameRows.filter((r) => r.stat.lastHits != null),
     (s) => s.lastHits,
   );
-  const bestGame =
-    gameRows.length > 0
-      ? [...gameRows].sort(
-          (a, b) =>
-            (b.stat.netWorth ?? 0) - (a.stat.netWorth ?? 0) ||
-            b.stat.kills + b.stat.assists - (a.stat.kills + a.stat.assists),
-        )[0]
-      : null;
+  // Their best performance by impact points (the Match MVP rating), so a
+  // support's big game can stand out, not just the richest one.
+  const bestGame = pickStandout(gameRows);
   const hasPerf = avgNet != null || avgGpm != null;
   const bestView = bestGame
     ? {
@@ -603,7 +599,10 @@ export default async function PlayerProfilePage({
         assists: bestGame.stat.assists,
         netWorth: bestGame.stat.netWorth,
         gpm: bestGame.stat.gpm,
-        week: bestGame.game.match.week,
+        round: matchRoundLabel(
+          bestGame.game.match,
+          playoffRoundsBySeason.get(bestGame.game.match.seasonId) ?? 0,
+        ),
         opponent:
           bestGame.stat.teamId === bestGame.game.match.homeTeamId
             ? bestGame.game.match.awayTeam.name
@@ -1010,37 +1009,52 @@ export default async function PlayerProfilePage({
                   {bestView ? (
                     <Link
                       href={`/matches/${bestView.matchId}`}
-                      className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
+                      className="block rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
                     >
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-muted">
-                        Standout
+                      <span
+                        className="block text-[10px] font-medium uppercase tracking-wide text-muted"
+                        title="Their best game by impact points, the rating behind Match MVP"
+                      >
+                        Standout game
                       </span>
-                      {bestView.hero ? (
-                        <HeroIcon hero={bestView.hero} size={30} />
-                      ) : null}
-                      <span className="min-w-0 flex-1">
-                        <span className="block font-medium">
-                          {bestView.hero?.name ?? `Hero ${bestView.heroId}`}
+                      {/* On a phone the stats take their own line under the
+                          hero (basis-full); from sm they sit at the end of
+                          the row. Side by side at 390px they crushed the
+                          opponent's name to one word per line and printed it
+                          over the net worth. */}
+                      <span className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                        {bestView.hero ? (
+                          <HeroIcon hero={bestView.hero} size={30} />
+                        ) : null}
+                        <span className="min-w-0 flex-1">
+                          <span className="block font-medium">
+                            {bestView.hero?.name ?? `Hero ${bestView.heroId}`}
+                          </span>
+                          <span className="block text-xs text-muted [overflow-wrap:anywhere]">
+                            vs {bestView.opponent} · {bestView.round}
+                          </span>
                         </span>
-                        <span className="block text-xs text-muted">
-                          vs {bestView.opponent} · Wk {bestView.week}
+                        <Badge
+                          tone={bestView.won ? "success" : "danger"}
+                          className="sm:order-last"
+                        >
+                          {bestView.won ? "W" : "L"}
+                        </Badge>
+                        <span className="flex basis-full flex-wrap items-baseline gap-x-2 text-xs sm:block sm:basis-auto sm:text-right">
+                          <KDA
+                            kills={bestView.kills}
+                            deaths={bestView.deaths}
+                            assists={bestView.assists}
+                            className="sm:block"
+                          />
+                          <span className="text-muted sm:block">
+                            {formatNetWorth(bestView.netWorth)}
+                            {bestView.gpm != null
+                              ? ` · ${bestView.gpm} GPM`
+                              : ""}
+                          </span>
                         </span>
                       </span>
-                      <span className="shrink-0 text-right">
-                        <KDA
-                          kills={bestView.kills}
-                          deaths={bestView.deaths}
-                          assists={bestView.assists}
-                          className="block text-xs"
-                        />
-                        <span className="block text-xs text-muted">
-                          {formatNetWorth(bestView.netWorth)}
-                          {bestView.gpm != null ? ` · ${bestView.gpm} GPM` : ""}
-                        </span>
-                      </span>
-                      <Badge tone={bestView.won ? "success" : "danger"}>
-                        {bestView.won ? "W" : "L"}
-                      </Badge>
                     </Link>
                   ) : null}
                 </CardBody>
