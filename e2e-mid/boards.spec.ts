@@ -322,6 +322,12 @@ test("public statistics metadata is route-specific and invalid archives are noin
     .first()
     .getAttribute("href");
   expect(profileHref).toBeTruthy();
+  // Profiles stay out of search results; their links still unfurl.
+  await page.goto(profileHref!);
+  await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute(
+    "content",
+    "noindex, follow",
+  );
   const profileResponse = await page.goto(
     `${profileHref}?season=one&season=two`,
   );

@@ -1,4 +1,3 @@
-import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -14,7 +13,7 @@ import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { getRosterHistory } from "@/lib/player-roster-history";
 import { appearanceCareers } from "@/lib/appearance-careers";
 import { PlayerTeamHistory } from "@/components/player-team-history";
-import { shareMetadata } from "@/lib/share-metadata";
+import { playerProfileMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
@@ -127,10 +126,7 @@ export async function generateMetadata({
       : null,
     favoriteHero ? `${favoriteHero.name} player` : null,
   ].filter((highlight): highlight is string => highlight !== null);
-  return shareMetadata(
-    `${user.name} · Player`,
-    `${user.name}'s player profile${highlights.length > 0 ? ` · ${highlights.join(" · ")}` : ""} — match history in ${LEAGUE_CONFIG.name}.`,
-  );
+  return playerProfileMetadata(user.name, highlights);
 }
 
 export default async function PlayerProfilePage({
