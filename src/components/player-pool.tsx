@@ -10,6 +10,7 @@ import {
   EmptyState,
   HeroIcon,
   HeroList,
+  LinkArrow,
   PlayerLink,
   RankBadge,
   RoleBadges,
@@ -450,7 +451,7 @@ export function PlayerPool({
                           rel="noreferrer"
                           className={textLink()}
                         >
-                          Dotabuff ↗
+                          Dotabuff <LinkArrow out />
                         </a>
                       ) : null}
                       <DiscordTag

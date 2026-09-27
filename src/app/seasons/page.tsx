@@ -12,6 +12,7 @@ import {
   Card,
   CardBody,
   EmptyState,
+  LinkArrow,
   PageTitle,
   TeamCrest,
   textLink,
@@ -75,7 +76,7 @@ export default async function SeasonsPage() {
         action={
           hasChampion ? (
             <Link href="/hall-of-fame" className={textLink("text-sm")}>
-              Hall of Fame →
+              Hall of Fame <LinkArrow />
             </Link>
           ) : undefined
         }

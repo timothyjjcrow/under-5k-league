@@ -36,6 +36,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
 } from "@/components/ui";
@@ -600,7 +601,7 @@ export default async function LeadersPage({
                 href={`/recap${seasonQS}`}
                 className={buttonClasses("secondary", "sm")}
               >
-                Season recap →
+                Season recap <LinkArrow />
               </Link>
             ) : null}
           </div>

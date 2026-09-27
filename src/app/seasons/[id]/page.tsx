@@ -25,6 +25,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -152,7 +153,7 @@ function ResultRow({
           aria-label={matchLabel}
           className="inline-flex min-h-11 items-center text-xs font-medium text-info hover:underline"
         >
-          Match details ↗
+          Match details <LinkArrow />
         </Link>
       </div>
     </div>
@@ -308,7 +309,7 @@ export default async function SeasonArchivePage({
               href={`/recap?season=${season.id}`}
               className={buttonClasses("secondary", "sm")}
             >
-              Season recap →
+              Season recap <LinkArrow />
             </Link>
           ) : null}
         </div>

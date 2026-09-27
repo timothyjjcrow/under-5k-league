@@ -619,7 +619,7 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   }
 
   await page.goto(`/seasons/${archivedSeasonId}`);
-  await page.getByRole("link", { name: "Season recap →" }).click();
+  await page.getByRole("link", { name: "Season recap", exact: true }).click();
   await expect(page).toHaveURL(/\/recap\?season=/);
   await expect(
     page.getByRole("heading", { name: "Season Recap" }),

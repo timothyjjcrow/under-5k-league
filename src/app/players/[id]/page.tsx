@@ -54,6 +54,7 @@ import {
   HeroList,
   HeroPool,
   KDA,
+  LinkArrow,
   PlayerLink,
   RankMedal,
   RoleBadges,
@@ -596,7 +597,7 @@ export default async function PlayerProfilePage({
               href={`/players/compare?a=${user.id}`}
               className={textLink("text-sm")}
             >
-              Compare vs… →
+              Compare vs… <LinkArrow />
             </Link>
           ) : null}
         </div>

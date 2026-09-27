@@ -20,6 +20,7 @@ import {
   CardBody,
   EmptyState,
   HeroIcon,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   SectionTitle,
@@ -175,7 +176,7 @@ export default async function RecordsPage({
       <PageTitle
         title="Record book"
         subtitle="The biggest single-game performances and the matches that made league history."
-        action={hasChampion ? <Link href="/hall-of-fame" className="text-sm font-semibold text-info hover:underline">Career legends →</Link> : undefined}
+        action={hasChampion ? <Link href="/hall-of-fame" className="text-sm font-semibold text-info hover:underline">Career legends <LinkArrow /></Link> : undefined}
       />
       <StatsNav active="records" seasonId={selectedSeason?.id} />
       <StatsDataNotice {...analysis.diagnostics} />

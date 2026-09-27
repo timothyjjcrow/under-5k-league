@@ -37,6 +37,7 @@ import {
   CardHeader,
   EmptyState,
   HeroIcon,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -83,7 +84,7 @@ export default async function PlayersPage() {
                 </Link>
               ) : null}
               <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
-                Play an inhouse →
+                Play an inhouse <LinkArrow />
               </Link>
             </div>
           }
@@ -247,7 +248,7 @@ export default async function PlayersPage() {
               </SteamJoin>
             ) : canSignUp ? (
               <Link href="/me" className={buttonClasses("primary", "sm")}>
-                Join the season →
+                Join the season <LinkArrow />
               </Link>
             ) : null}
             {hasGames ? (
@@ -255,7 +256,7 @@ export default async function PlayersPage() {
                 href="/players/compare"
                 className={textLink("text-sm")}
               >
-                Compare players →
+                Compare players <LinkArrow />
               </Link>
             ) : null}
           </span>
