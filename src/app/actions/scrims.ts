@@ -44,8 +44,9 @@ async function pingCaptains(content: string, userIds: string[]) {
   if (userIds.length === 0) return;
   try {
     await sendDiscordMessage(content, await mentionUsers(userIds));
-  } catch (error) {
-    console.error("[scrims] SCRIM_PING_FAILED", error);
+  } catch {
+    // Never log the raw error: a database failure can carry a connection URL.
+    console.error("[scrims] SCRIM_PING_FAILED");
   }
 }
 
