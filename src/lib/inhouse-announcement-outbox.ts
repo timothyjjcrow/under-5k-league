@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { INHOUSE_STATUS } from "./constants";
-import { inhouseResultMessage, sendInhouseDiscordMessage } from "./discord";
+import {
+  inhouseResultMessage,
+  inhouseResultVoidedMessage,
+  sendInhouseDiscordMessage,
+} from "./discord";
 import { parseInhouseBox, type InhouseBoxPlayer } from "./inhouse-box";
 import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
 import { gameMvp } from "./achievements";
@@ -383,6 +387,40 @@ function stillDescribesCurrentState(event: Candidate): boolean {
   return false;
 }
 
+// The retired Cred block always started on its own line under the one-line
+// result: the pot line when any stake was live, otherwise the refunded line.
+const RETIRED_CRED_RESULT_BLOCK = /\n(?:\*\*Pot \d+ Cred\*\*|-# Refunded: )/;
+
+/**
+ * The text to post for an event, without copy from the retired Cred betting
+ * feature.
+ *
+ * Events store their text already rendered, and a row written before Cred was
+ * removed can still be unsent: a RESULT with the pot and stake lines under the
+ * result, or a RESULT_VOIDED saying the wagers reverse. Unsent rows retry with
+ * no attempt cap or age cutoff (a missing alert webhook parks them for as long
+ * as it stays missing), so without this they would post the retired copy
+ * whenever delivery resumes. Rows written since never carry it and come back
+ * unchanged.
+ */
+function deliverableInhouseContent(event: {
+  kind: string;
+  content: string;
+  resultMatchId: string | null;
+}): string {
+  if (event.kind === INHOUSE_ANNOUNCEMENT_KIND.RESULT) {
+    const block = RETIRED_CRED_RESULT_BLOCK.exec(event.content);
+    return block ? event.content.slice(0, block.index) : event.content;
+  }
+  if (
+    event.kind === INHOUSE_ANNOUNCEMENT_KIND.RESULT_VOIDED &&
+    /\bCred\b/.test(event.content)
+  ) {
+    return inhouseResultVoidedMessage({ dotaMatchId: event.resultMatchId });
+  }
+  return event.content;
+}
+
 async function cancelIfEligible(event: Candidate, now: Date): Promise<boolean> {
   const cancelled = await prisma.inhouseAnnouncement.updateMany({
     where: { id: event.id, ...eligibleWhere(now) },
@@ -492,7 +530,7 @@ export async function deliverInhouseAnnouncements(
 
       let accepted = false;
       try {
-        accepted = await send(event.content);
+        accepted = await send(deliverableInhouseContent(event));
       } catch {
         // The canonical sender resolves false, but keep the outbox safe for an
         // injected/custom sender that rejects. Never serialize an error here:
