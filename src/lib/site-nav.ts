@@ -12,7 +12,7 @@
 // Pure on purpose (no React, no Prisma): the client header, the server footer
 // and the unit tests all import it.
 
-import { SEASON_STATUS } from "./constants";
+import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import { featureAvailability } from "./features-lifecycle";
 
 /**
@@ -159,9 +159,52 @@ export function seasonNav(
   return links;
 }
 
-export type DockIconName = "home" | "matches" | "team";
+/** A button that takes a visitor to the signup form. */
+export type JoinCta = { href: string; label: string };
 
-export type DockTab = NavLink & { icon: DockIconName };
+/**
+ * During signups, the header and the phone tab bar offer "Join Season N" to
+ * anyone who hasn't joined yet, on every page (only Home and Players had a
+ * join button before). The rule is Home's: no active signup, not a signup an
+ * admin removed, and not already on a roster. It goes where Home's button
+ * goes: the signup form on /me, through sign-in when needed.
+ */
+export function joinSeasonCta({
+  phase,
+  seasonName,
+  signedIn,
+  registrationStatus,
+  onRoster,
+}: {
+  phase: string | null;
+  seasonName: string | null;
+  signedIn: boolean;
+  /** The viewer's signup in the active season; null when there is none. */
+  registrationStatus: string | null;
+  onRoster: boolean;
+}): JoinCta | null {
+  if (phase !== SEASON_STATUS.SIGNUPS || !seasonName || onRoster) return null;
+  if (
+    registrationStatus === REGISTRATION_STATUS.ACTIVE ||
+    registrationStatus === REGISTRATION_STATUS.REMOVED
+  ) {
+    return null;
+  }
+  return {
+    href: signedIn ? "/me" : "/login?next=/me",
+    // Season names are admin-typed; a long one would crowd the header.
+    label:
+      seasonName.length <= 16 ? `Join ${seasonName}` : "Join the season",
+  };
+}
+
+export type DockIconName = "home" | "matches" | "team" | "join";
+
+export type DockTab = NavLink & {
+  icon: DockIconName;
+  /** The full name when the tab's visible label is shortened. */
+  ariaLabel?: string;
+};
 
 /**
  * The phone tab bar and its one menu sheet. The bar holds three pages (Home,
@@ -170,36 +213,45 @@ export type DockTab = NavLink & { icon: DockIconName };
  * so no page is ever both a tab and a sheet entry; the Explore groups follow
  * it. Phones used to have a ☰ menu as well, which listed the same pages a
  * third time.
+ *
+ * During signups, a viewer who hasn't joined gets "Join" in the second slot;
+ * the page it replaces moves to the sheet.
  */
 export function phoneDock(
   items: NavLink[],
   myTeamHref: string | null,
+  join: JoinCta | null = null,
 ): { tabs: DockTab[]; sheet: NavLink[] } {
   const has = (href: string) => items.some((item) => item.href === href);
-  const slots: { href: string; icon: DockIconName }[] = [
-    { href: "/", icon: "home" },
-    {
-      href: has("/draft")
-        ? "/draft"
-        : has("/schedule")
-          ? "/schedule"
-          : "/inhouse",
-      icon: "matches",
-    },
-    {
-      href:
-        myTeamHref && has(myTeamHref)
-          ? myTeamHref
-          : has("/teams")
-            ? "/teams"
-            : "/players",
-      icon: "team",
-    },
-  ];
-  const tabs = slots.flatMap(({ href, icon }) => {
+  const pick = (href: string, icon: DockIconName): DockTab[] => {
     const item = items.find((link) => link.href === href);
     return item ? [{ ...item, icon }] : [];
-  });
+  };
+  const focusHref = has("/draft")
+    ? "/draft"
+    : has("/schedule")
+      ? "/schedule"
+      : "/inhouse";
+  const teamHref =
+    myTeamHref && has(myTeamHref)
+      ? myTeamHref
+      : has("/teams")
+        ? "/teams"
+        : "/players";
+  const tabs: DockTab[] = [
+    ...pick("/", "home"),
+    ...(join
+      ? [
+          {
+            href: join.href,
+            label: "Join",
+            ariaLabel: join.label,
+            icon: "join" as const,
+          },
+        ]
+      : pick(focusHref, "matches")),
+    ...pick(teamHref, "team"),
+  ];
   const inTabs = new Set(tabs.map((tab) => tab.href));
   return { tabs, sheet: items.filter((item) => !inTabs.has(item.href)) };
 }

@@ -38,6 +38,10 @@ test("a new player can sign in and join the season", async ({ page }) => {
   // since the name also appears in the header nav).
   await page.goto("/");
   await expect(page.getByRole("main").getByText(name)).toBeVisible();
+  // Signed up: the header's "Join Season 1" gives its place back to Merch.
+  const header = page.getByRole("banner");
+  await expect(header.getByRole("link", { name: /^Join / })).toHaveCount(0);
+  await expect(header.getByRole("link", { name: /Merch/ })).toBeVisible();
 });
 
 test("a player's profile uses their Steam-verified Dota account", async ({

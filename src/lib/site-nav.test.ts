@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import {
+  DRAFT_STATUS,
+  REGISTRATION_STATUS,
+  SEASON_STATUS,
+} from "./constants";
 import {
   exploreNav,
   footerNav,
+  joinSeasonCta,
   phoneDock,
   seasonNav,
   type NavLink,
@@ -218,6 +223,58 @@ describe("footer", () => {
   });
 });
 
+describe("join button during signups", () => {
+  const signups = {
+    phase: SEASON_STATUS.SIGNUPS,
+    seasonName: "Season 7",
+    signedIn: true,
+    registrationStatus: null,
+    onRoster: false,
+  };
+
+  it("sends a viewer who hasn't joined to the signup form, through sign-in if needed", () => {
+    expect(joinSeasonCta(signups)).toEqual({
+      href: "/me",
+      label: "Join Season 7",
+    });
+    expect(
+      joinSeasonCta({ ...signups, signedIn: false }),
+    ).toEqual({ href: "/login?next=/me", label: "Join Season 7" });
+    // A player who withdrew can sign up again.
+    expect(
+      joinSeasonCta({
+        ...signups,
+        registrationStatus: REGISTRATION_STATUS.WITHDRAWN,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("stays away from players who joined, were removed, or are on a roster", () => {
+    for (const registrationStatus of [
+      REGISTRATION_STATUS.ACTIVE,
+      REGISTRATION_STATUS.REMOVED,
+    ]) {
+      expect(joinSeasonCta({ ...signups, registrationStatus })).toBeNull();
+    }
+    expect(joinSeasonCta({ ...signups, onRoster: true })).toBeNull();
+  });
+
+  it("only runs during signups", () => {
+    for (const phase of PHASES) {
+      if (phase === SEASON_STATUS.SIGNUPS) continue;
+      expect(joinSeasonCta({ ...signups, phase })).toBeNull();
+      expect(joinSeasonCta({ ...signups, phase, signedIn: false })).toBeNull();
+    }
+  });
+
+  it("falls back to a short label for a long season name", () => {
+    expect(
+      joinSeasonCta({ ...signups, seasonName: "Winter Championship 2027" })
+        ?.label,
+    ).toBe("Join the season");
+  });
+});
+
 describe("phone tab bar and its sheet", () => {
   it("never lists a page both as a tab and in the sheet, and drops none", () => {
     for (const s of allStates()) {
@@ -239,6 +296,18 @@ describe("phone tab bar and its sheet", () => {
         );
       }
     }
+  });
+
+  it("puts Join in the second slot during signups and moves that page to the sheet", () => {
+    const signups = seasonNav(state(SEASON_STATUS.SIGNUPS));
+    const join = { href: "/me", label: "Join Season 7" };
+    const { tabs, sheet } = phoneDock(signups, null, join);
+    expect(tabs).toEqual([
+      { href: "/", label: "Home", icon: "home" },
+      { href: "/me", label: "Join", ariaLabel: "Join Season 7", icon: "join" },
+      { href: "/players", label: "Players", icon: "team" },
+    ]);
+    expect(hrefs(sheet)).toEqual(["/inhouse"]);
   });
 
   it("keeps the season's current focus and the viewer's team one tap away", () => {

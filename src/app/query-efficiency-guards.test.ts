@@ -14,6 +14,16 @@ describe("shared-shell query efficiency", () => {
     expect(PUBLIC_NAVIGATION).toMatch(/prisma\.season\.findFirst\(\{/);
     expect(PUBLIC_NAVIGATION).not.toMatch(/prisma\.season\.count\(\{/);
   });
+
+  // Every page renders the layout, so the header's "Join Season N" costs one
+  // unique-key row for signed-in viewers during signups and nothing else.
+  it("reads the viewer's signup for the join button with one unique-key lookup", () => {
+    expect(LAYOUT.match(/prisma\.registration\./g)).toHaveLength(1);
+    expect(LAYOUT).toContain("prisma.registration.findUnique({");
+    expect(LAYOUT).toMatch(
+      /user && season\?\.status === "SIGNUPS"\s*\?\s*prisma\.registration/,
+    );
+  });
 });
 
 describe("homepage query efficiency", () => {

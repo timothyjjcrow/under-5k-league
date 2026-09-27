@@ -156,6 +156,50 @@ test("internal pages keep the active league phase visible in the header", async 
   ).toBeVisible();
 });
 
+test("signups put Join Season 1 in the header and the phone tab bar", async ({
+  page,
+}) => {
+  await page.goto("/inhouse");
+  const header = page.getByRole("banner");
+  // Signed out: join through sign-in, and sign-in stays for returning players.
+  await expect(
+    header.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveAttribute("href", "/login?next=/me");
+  await expect(
+    header.getByRole("link", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const dock = page.getByRole("navigation", { name: "Quick navigation" });
+  await expect(
+    dock.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveAttribute("href", "/login?next=/me");
+  // Inhouse gave its tab to Join and waits in the tab bar's sheet.
+  await expect(dock.getByRole("link", { name: "Inhouse" })).toHaveCount(0);
+  await dock.getByRole("button", { name: "Explore league" }).click();
+  await expect(
+    page
+      .getByRole("navigation", { name: "Explore league", exact: true })
+      .getByRole("link", { name: "Inhouse", exact: true }),
+  ).toBeVisible();
+
+  // Signed in without a signup, both go straight to the form on /me.
+  const steamId = "76561197" + String(Date.now()).slice(-9);
+  await page.goto(
+    `/api/auth/dev?name=Join+Tester&steamId=${steamId}&redirect=/inhouse`,
+  );
+  await expect(
+    dock.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveAttribute("href", "/me");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await header.getByRole("link", { name: "Join Season 1", exact: true }).click();
+  await expect(page).toHaveURL(/\/me$/);
+  // The form is right there, so the header button steps aside.
+  await expect(
+    header.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveCount(0);
+});
+
 test("phones get one menu: the tab bar's sheet, plus the avatar's account menu", async ({
   page,
 }) => {

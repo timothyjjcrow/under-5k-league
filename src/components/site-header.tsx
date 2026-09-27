@@ -13,6 +13,7 @@ import {
   phoneDock,
   seasonNav,
   type DockIconName,
+  type JoinCta,
   type NavLink,
   type NavSection,
 } from "@/lib/site-nav";
@@ -51,6 +52,7 @@ export function SiteHeader({
   myTeamId,
   draftStatus = null,
   hasHistory = false,
+  join = null,
 }: {
   user: HeaderUser;
   phase: string | null;
@@ -59,6 +61,8 @@ export function SiteHeader({
   /** The active season's auction status; only read during DRAFT. */
   draftStatus?: string | null;
   hasHistory?: boolean;
+  /** "Join Season N" during signups, for a viewer who hasn't joined. */
+  join?: JoinCta | null;
 }) {
   const pathname = usePathname();
   // Every list below comes from src/lib/site-nav.ts, which the footer shares:
@@ -155,7 +159,10 @@ export function SiteHeader({
     section.links.some((item) => isActive(pathname, item.href, myTeamHref)),
   );
   // Three pages in the tab bar; the sheet behind its last slot lists the rest.
-  const dock = phoneDock(items, myTeamHref);
+  const dock = phoneDock(items, myTeamHref, join);
+  // The signup form is on /me, and /login is already the way there.
+  const headerJoin =
+    join && pathname !== "/me" && pathname !== "/login" ? join : null;
   const sheetActive =
     exploreActive ||
     dock.sheet.some((item) => isActive(pathname, item.href, myTeamHref));
@@ -262,7 +269,18 @@ export function SiteHeader({
 
           <div className="flex-1 lg:hidden" />
 
-          <MerchLink className="hidden lg:inline-flex" />
+          {/* During signups, joining is the one thing to do; Merch stays in
+            the footer and the phone menu. */}
+          {headerJoin ? (
+            <Link
+              href={headerJoin.href}
+              className="hidden min-h-10 shrink-0 items-center whitespace-nowrap rounded-lg bg-brand px-4 text-sm font-medium text-brand-fg hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:inline-flex"
+            >
+              {headerJoin.label}
+            </Link>
+          ) : (
+            <MerchLink className="hidden lg:inline-flex" />
+          )}
 
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             {user ? (
@@ -347,7 +365,15 @@ export function SiteHeader({
                     ? `/login?next=${encodeURIComponent(pathname)}`
                     : "/login"
                 }
-                className="inline-flex min-h-11 items-center rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:px-4 lg:min-h-10"
+                className={cn(
+                  "inline-flex min-h-11 items-center rounded-lg px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:px-4 lg:min-h-10",
+                  // Beside the red join button, sign-in is the quiet choice
+                  // for players who have already joined. Phones keep it red:
+                  // their join button is in the tab bar.
+                  headerJoin
+                    ? "bg-brand text-brand-fg hover:bg-brand/90 lg:bg-transparent lg:px-2 lg:text-muted lg:hover:bg-surface-2/60 lg:hover:text-fg"
+                    : "bg-brand text-brand-fg hover:bg-brand/90",
+                )}
               >
                 Sign in
               </Link>
@@ -369,6 +395,7 @@ export function SiteHeader({
               <Link
                 key={item.href}
                 href={item.href}
+                aria-label={item.ariaLabel}
                 aria-current={active ? "page" : undefined}
                 onClick={() => setSheetOpen(false)}
                 className={cn(
@@ -513,6 +540,12 @@ function DockIcon({ name }: { name: DockIconName | "explore" }) {
         <>
           <circle cx="9" cy="8" r="3" />
           <path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4v3" />
+        </>
+      ) : null}
+      {name === "join" ? (
+        <>
+          <circle cx="10" cy="8" r="4" />
+          <path d="M3 21v-1a7 7 0 0 1 11-5.7M19 14v6m-3-3h6" />
         </>
       ) : null}
       {name === "explore" ? (

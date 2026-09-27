@@ -23,6 +23,7 @@ import { prisma } from "@/lib/prisma";
 import { resolveSiteUrl } from "@/lib/site-url";
 import { getPublicReadSignals } from "@/lib/public-read-signals";
 import { getPublicHasHistory } from "@/lib/public-navigation";
+import { joinSeasonCta } from "@/lib/site-nav";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
@@ -74,7 +75,7 @@ export default async function RootLayout({
       getPublicReadSignals(),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
-  const [myTeam, draft] = await Promise.all([
+  const [myTeam, draft, registration] = await Promise.all([
     user && season
       ? prisma.teamMember.findFirst({
           where: { seasonId: season.id, userId: user.id },
@@ -90,8 +91,23 @@ export default async function RootLayout({
           select: { status: true },
         })
       : null,
+    // During signups the header offers "Join Season N" to anyone who hasn't
+    // joined: one unique-key row, signed-in viewers only.
+    user && season?.status === "SIGNUPS"
+      ? prisma.registration.findUnique({
+          where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+          select: { status: true },
+        })
+      : null,
   ]);
   const draftStatus = draft?.status ?? null;
+  const join = joinSeasonCta({
+    phase: season?.status ?? null,
+    seasonName: season?.name ?? null,
+    signedIn: user !== null,
+    registrationStatus: registration?.status ?? null,
+    onRoster: myTeam !== null,
+  });
 
   return (
     <html
@@ -110,6 +126,7 @@ export default async function RootLayout({
           myTeamId={myTeam?.teamId ?? null}
           draftStatus={draftStatus}
           hasHistory={hasHistory}
+          join={join}
         />
         <main
           id="main"
