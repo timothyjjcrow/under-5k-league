@@ -2317,9 +2317,10 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   (`src/lib/appearance-careers.ts`), game counts via pure `careerGameCounts`
   (`src/lib/hall-of-fame.ts`, tested; team cuids are globally unique so
   cross-season membership just works), career impact points
-  (`pointsByPlayer` over all games ever), 🔮 all-time oracle record
-  (`pickemStandings` over all predictions, min 3 graded). Linked from
-  `/seasons` and the footer.
+  (`pointsByPlayer` over all games ever), 🔮 "Pick'em calls" (career correct
+  picks, placed by the SAME `pickemStandings` as /pickem — `topPlaces` takes
+  an optional `rankValue` for that; nobody with zero correct is listed).
+  Linked from `/seasons` and the footer.
 - **It waits for a champion.** Until `resolveChampionPresentation` accepts at
   least one season (`hasOfficialChampion`, `src/lib/official-champion.ts`,
   itested) the page is one short note pointing at Leaders and the Record
@@ -2366,23 +2367,45 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   award stale inside the result transaction; reconciliation sends an explicit
   corrected award (or withdrawal) exactly once, and failed/abandoned claims
   are swept by result sync.
+- The same post carries a "Pick'em Oracle of the Week" line (`weekOracles`
+  over that week's REGULAR matches: first place on the oracle ranking, every
+  tie listed, omitted when nobody called one). It rides the one message and
+  marker — never a post of its own — and its read is best-effort
+  (`weekOracleLine`), so a failure costs the line, never the award.
 
 ## Pick'em (done, branch: bigger-features)
 
 - `Prediction` model (matchId+userId unique). Pure `src/lib/pickem.ts`
   (tested): `predictionOpen` (locks at `scheduledAt`, LIVE, or completion),
   exhaustive `partitionPickemMatches` (open/locked/graded/void),
-  `pickemStandings` (correct desc, accuracy tiebreak; draws void picks),
-  `pickSplit` (community percentages).
+  `pickSplit` (community percentages), `pickResult` (right/wrong/void/null),
+  `calledItCount` ("2 of 3 called it"; null rather than "0 of 0").
+- **ONE ranking, everywhere**: `pickemStandings` — most correct, then fewest
+  misses (= better accuracy at equal correct); draws void picks. Rows carry
+  `place` and equal records share one (1, 1, 3). /pickem's oracle board, the
+  Hall of Fame and the weekly Oracle all use it, and both boards print
+  `PICKEM_RANKING_NOTE` under themselves. Don't re-sort it anywhere (the Hall
+  of Fame used to rank by accuracy with a 3-pick floor, so #1 differed).
 - `savePrediction` re-validates active Season/Draft lifecycle, matchup, side,
   status and deadline in the same Serializable transaction as the upsert.
   `side-game-claims.ts` takes PostgreSQL shared Season/Draft/Match locks (or
   SQLite guarded claims), keeping participant bursts concurrent while
   excluding result, reschedule, phase and archive writers.
 - `/pickem`: one pending-state form per fixture, hidden community split until
-  lock, locked/graded/void pick review, deadline-first grouping, and a client
-  deadline refresh whose server rerender remains authoritative. Discoverable
-  from DRAFT; COMPLETE/archive are read-only.
+  lock (said once, in the Upcoming heading), deadline-first grouping, and a
+  client deadline refresh whose server rerender remains authoritative. The
+  viewer's history is ONE "Your picks" list (`pickHistory`, newest first,
+  ✓/✗/🔒/➖ marks with accessible names). Discoverable from DRAFT;
+  COMPLETE/archive are read-only.
+- `PickemPickForm` is the one pick control (/pickem, the home This-week
+  cards, the match preview). Its two sides are a CONTAINER query
+  (`@container/pick`, side by side from 26rem): stacked full-width rows in
+  any narrow card, names wrap instead of truncating. Signed-out viewers
+  (only /pickem shows them fixtures) get `signInHref`: the matchup as text
+  plus one "Sign in with Steam to pick" button — never dead greyed buttons.
+- Closing the loop: the locked control carries `result`, so `PickemTray`
+  says ✓/✗/void once decided (home cards included), and a COMPLETED match
+  page shows a signed-in picker "Your pick: X ✓ (2 of 3 called it)".
 
 ## Interactive bracket (done)
 
