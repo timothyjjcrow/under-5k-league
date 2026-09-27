@@ -99,7 +99,7 @@ describe("admin copy names only controls that exist", () => {
     },
   );
 
-  // The four literals that were actually wrong. Named individually so a
+  // The literals that were actually wrong. Named individually so a
   // regression says which one came back rather than "some string matched".
   const BANNED = [
     {
@@ -117,6 +117,10 @@ describe("admin copy names only controls that exist", () => {
     {
       text: "or use Remove.",
       why: 'only the league webhook has a "Remove webhook" button; the inhouse ones clear via differently-labelled buttons',
+    },
+    {
+      text: "Finish the draft again",
+      why: "no control finishes a draft; a reopened auction completes itself when its seats fill or the pool runs out",
     },
   ];
 

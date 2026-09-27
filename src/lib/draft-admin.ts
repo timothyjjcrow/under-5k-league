@@ -59,7 +59,9 @@ export type UndoSale = { name: string; teamName: string; price: number };
  * warning: undoLastSale writes the draft back to live with a fresh nomination
  * clock, and if the buyer doesn't nominate in time the draft auto-nominates
  * for them, so one click on a screen that says "the draft is complete" puts
- * every captain back in a running auction. From a live or paused draft the
+ * every captain back in a running auction. It ends the way any auction does
+ * (the resolvers complete it once the seats are filled or the pool runs dry);
+ * there is no finish button to point at. From a live or paused draft the
  * status doesn't change (a paused draft stays paused).
  */
 export function undoSaleConfirm(o: {
@@ -72,7 +74,7 @@ export function undoSaleConfirm(o: {
   const buyer = o.sale ? o.sale.teamName : "The buying team";
   const effect = `The player goes back to the pool, and ${buyer} gets the money back and nominates next.`;
   return o.draftComplete
-    ? `Undo ${what}? This reopens the finished auction with a live ${DEFAULTS.NOMINATION_TIMER_SECONDS}-second nomination clock. ${effect} If nobody nominates in time, the draft picks a player for them. Finish the draft again afterwards.`
+    ? `Undo ${what}? This reopens the finished auction with a live ${DEFAULTS.NOMINATION_TIMER_SECONDS}-second nomination clock. ${effect} If nobody nominates in time, the draft picks a player for them. The draft completes again on its own when the open seats are filled or the pool runs out.`
     : `Undo ${what}? ${effect}`;
 }
 

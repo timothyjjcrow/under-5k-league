@@ -77,6 +77,11 @@ describe("undoSaleConfirm", () => {
       "reopens the finished auction with a live 90-second nomination clock",
     );
     expect(text).toContain("the draft picks a player for them");
+    // No control finishes a draft: say what actually ends it.
+    expect(text).toContain(
+      "The draft completes again on its own when the open seats are filled or the pool runs out.",
+    );
+    expect(text).not.toMatch(/finish the draft/i);
   });
 
   it("keeps the mid-auction confirm short", () => {
