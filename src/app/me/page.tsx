@@ -30,7 +30,11 @@ import {
   AccountNextStepBanner,
   SignupNextSteps,
 } from "@/components/account-next-steps";
-import { accountNextSteps, type AccountStepInput } from "@/lib/account-page";
+import {
+  accountNextSteps,
+  signupSummary,
+  type AccountStepInput,
+} from "@/lib/account-page";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
@@ -583,7 +587,10 @@ export default async function MePage({
                     </span>
                   </div>
                 ) : null}
-                <SavedSignupForm saved={isRegistered}>
+                <SavedSignupForm
+                  saved={isRegistered}
+                  summary={reg && isRegistered ? signupSummary(reg) : undefined}
+                >
                 <ActionForm action={saveRegistration} trackChanges className="space-y-5">
                   {/* Said once, in neutral colours: the accent box this used
                       to be looked exactly like the "Confirmation needed" box,

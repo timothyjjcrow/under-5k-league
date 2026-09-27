@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   accountNextSteps,
+  signupSummary,
   type AccountStepInput,
 } from "./account-page";
 
@@ -122,5 +123,67 @@ describe("accountNextSteps", () => {
       ...accountNextSteps({ ...base, membership: "pending" }),
     ].map((s) => s.label);
     expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+describe("signupSummary", () => {
+  it("summarises a full signup", () => {
+    expect(
+      signupSummary({
+        type: "PLAYER",
+        mmr: 3200,
+        roles: "2,3",
+        favoriteHeroes: "Pudge, Lion, Sniper",
+        wantsCaptain: true,
+      }),
+    ).toBe("Full player · 3200 MMR · Mid, Offlane · 3 heroes · Captain volunteer");
+  });
+
+  it("leaves out empty answers and an unknown MMR", () => {
+    expect(
+      signupSummary({
+        type: "PLAYER",
+        mmr: 0,
+        roles: "",
+        favoriteHeroes: "",
+        wantsCaptain: false,
+      }),
+    ).toBe("Full player");
+  });
+
+  it("says 'Any position' when every role is ticked and counts one hero", () => {
+    expect(
+      signupSummary({
+        type: "STANDIN",
+        mmr: 2100,
+        roles: "1,2,3,4,5",
+        favoriteHeroes: "Axe",
+        wantsCaptain: false,
+      }),
+    ).toBe("Standin · 2100 MMR · Any position · 1 hero");
+  });
+
+  it("never calls a standin a captain volunteer", () => {
+    expect(
+      signupSummary({
+        type: "STANDIN",
+        mmr: 0,
+        roles: null,
+        favoriteHeroes: null,
+        wantsCaptain: true,
+      }),
+    ).toBe("Standin");
+  });
+
+  it("counts hero names it doesn't recognise too", () => {
+    expect(
+      signupSummary({
+        type: "PLAYER",
+        mmr: 0,
+        roles: "1",
+        favoriteHeroes: "Pudge, Not A Hero",
+        wantsCaptain: false,
+      }),
+    ).toBe("Full player · Carry · 2 heroes");
   });
 });

@@ -1,6 +1,9 @@
 // Pure copy and ordering for My account (/me). No database or Discord calls:
 // the page reads the facts and these helpers decide what to say.
 
+import { parseHeroList } from "./heroes";
+import { DOTA_ROLES, roleLabels } from "./roles";
+
 /** Where a draft confirmation stands for a signed-up full player. */
 export type DraftConfirmationState = "none" | "needed" | "changed";
 
@@ -102,4 +105,33 @@ export function accountNextSteps(input: AccountStepInput): AccountStep[] {
     });
   }
   return steps;
+}
+
+export type SignupSummaryInput = {
+  type: string;
+  mmr: number;
+  roles: string | null | undefined;
+  favoriteHeroes: string | null | undefined;
+  wantsCaptain: boolean;
+};
+
+/**
+ * One line for the collapsed "Edit signup" row, so a player can check what
+ * they submitted without opening the form: "Full player · 3200 MMR · Mid,
+ * Offlane · 3 heroes". Empty answers are left out rather than printed as
+ * gaps; MMR 0 is the stored "unknown" and captains see the medal instead.
+ */
+export function signupSummary(reg: SignupSummaryInput): string {
+  const standin = reg.type === "STANDIN";
+  const parts = [standin ? "Standin" : "Full player"];
+  if (reg.mmr > 0) parts.push(`${reg.mmr} MMR`);
+  const roles = roleLabels(reg.roles);
+  if (roles.length === DOTA_ROLES.length) parts.push("Any position");
+  else if (roles.length > 0) parts.push(roles.join(", "));
+  const heroes = parseHeroList(reg.favoriteHeroes);
+  const heroCount = heroes.matched.length + heroes.unmatched.length;
+  if (heroCount > 0) parts.push(heroCount === 1 ? "1 hero" : `${heroCount} heroes`);
+  // Standins never enter the captain pool, whatever the stored flag says.
+  if (reg.wantsCaptain && !standin) parts.push("Captain volunteer");
+  return parts.join(" · ");
 }

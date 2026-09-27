@@ -5,9 +5,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 /** Saved answers stay available without dominating every profile visit. */
 export function SavedSignupForm({
   saved,
+  summary,
   children,
 }: {
   saved: boolean;
+  /** What was submitted, in one line ("Full player · 3200 MMR · Mid"), so
+   *  the collapsed row answers "what did I put?" without opening the form. */
+  summary?: string;
   children: ReactNode;
 }) {
   // Preserve the open editor after a first successful signup or revalidation.
@@ -60,10 +64,17 @@ export function SavedSignupForm({
             : "hidden"
         }
       >
-        <span>Edit signup</span>
+        <span className="min-w-0">
+          <span className="block">Edit signup</span>
+          {summary ? (
+            <span className="block text-xs font-normal text-muted">
+              {summary}
+            </span>
+          ) : null}
+        </span>
         <span
           aria-hidden
-          className="text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
+          className="shrink-0 text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
         >
           ⌄
         </span>
