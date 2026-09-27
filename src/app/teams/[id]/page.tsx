@@ -1080,7 +1080,8 @@ function StandingBadge({
         tone="accent"
         className="transition-colors group-hover:border-accent/70 group-hover:bg-accent/25"
       >
-        {children}
+        {/* Its own element, so the badge's text can be found on its own. */}
+        <span>{children}</span>
         <span className="sr-only"> {where}</span>
         <span aria-hidden>→</span>
       </Badge>
