@@ -2,7 +2,11 @@
 // feeds the season recap page. All resolution of names/heroes/matches happens in
 // the UI; this module only decides *who/what* wins each award.
 
-export type AwardGameLine = {
+import { fantasyPoints, type FantasyStatLine } from "./fantasy";
+
+/** One stored box-score line. The optional FantasyStatLine fields (last hits,
+ *  damage, healing, denies) feed the MVP's points, so pass them when known. */
+export type AwardGameLine = FantasyStatLine & {
   /** Mapped league user — null for unmapped accounts (they still count for
    *  hero tallies, just never for player awards). */
   userId: string | null;
@@ -38,7 +42,10 @@ export type Award = {
 type Agg = {
   userId: string;
   games: number;
-  wins: number;
+  /** Summed per-game points in whole TENTHS. fantasyPoints is already
+   *  rounded to 0.1, so this is an exact integer and equal averages compare
+   *  equal — a float running sum would split a genuine tie by rounding noise. */
+  pointsTenths: number;
   kills: number;
   deaths: number;
   assists: number;
@@ -82,7 +89,7 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
         ({
           userId: line.userId,
           games: 0,
-          wins: 0,
+          pointsTenths: 0,
           kills: 0,
           deaths: 0,
           assists: 0,
@@ -90,7 +97,10 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
           gpmGames: 0,
         } satisfies Agg);
       a.games += 1;
-      if (line.isRadiant === g.radiantWin) a.wins += 1;
+      // The same per-game scoring Player of the Week (and fantasy) uses.
+      a.pointsTenths += Math.round(
+        fantasyPoints(line, line.isRadiant === g.radiantWin) * 10,
+      );
       a.kills += line.kills;
       a.deaths += line.deaths;
       a.assists += line.assists;
@@ -133,20 +143,25 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
 
   const qualified = aggs.filter((a) => a.games >= minGames);
 
-  // "1 win", "2 wins" — award strings read like prose, so pluralize.
+  // "1 game", "2 games" — award strings read like prose, so pluralize.
   const n = (count: number, word: string) =>
     `${count} ${word}${count === 1 ? "" : "s"}`;
 
+  // MVP is individual play PER GAME, never a count: a count of wins or games
+  // just crowns whoever played the most for the best team. Scored with the
+  // same points Player of the Week uses. The floor is half the most games
+  // anyone played, so a short cameo can't win on one or two big nights.
+  const mvpFloor = Math.max(1, Math.ceil(maxGames / 2));
   pick(
-    aggs,
-    (a) => a.wins * 1000 + kdaOf(a),
+    aggs.filter((a) => a.games >= mvpFloor),
+    (a) => a.pointsTenths / a.games,
     (a) => ({
       key: "mvp",
       title: "MVP",
       emoji: "🏆",
-      blurb: "Most wins across the season",
-      value: n(a.wins, "win"),
-      detail: `${kdaOf(a).toFixed(1)} KDA · ${n(a.games, "game")}`,
+      blurb: `Most points per game, scored like Player of the Week (min ${n(mvpFloor, "game")})`,
+      value: `${(a.pointsTenths / a.games / 10).toFixed(1)} pts/game`,
+      detail: `over ${n(a.games, "game")}`,
     }),
   );
   pick(
@@ -197,18 +212,6 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       blurb: `Highest KDA ratio (min ${n(minGames, "game")})`,
       value: `${kdaOf(a).toFixed(1)} KDA`,
       detail: n(a.games, "game"),
-    }),
-  );
-  pick(
-    aggs,
-    (a) => a.games,
-    (a) => ({
-      key: "workhorse",
-      title: "Workhorse",
-      emoji: "🐎",
-      blurb: "Most games played",
-      value: n(a.games, "game"),
-      detail: `${a.wins}–${a.games - a.wins}`,
     }),
   );
 
