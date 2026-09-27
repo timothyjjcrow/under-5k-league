@@ -355,7 +355,7 @@ export default async function HallOfFamePage() {
               <CardBody>
                 <h3 className="font-display text-xl font-bold">How this is ranked</h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted">
-                  {PICKEM_RANKING_NOTE} This is the same order as the season&apos;s oracle board on Pick&apos;em, counted over every season. Draws and unfinished matches aren&apos;t graded.
+                  {PICKEM_RANKING_NOTE} It is the same rule as each season&apos;s oracle board on Pick&apos;em, with every season counted together. Draws and unfinished matches aren&apos;t graded.
                 </p>
                 <Link href="/pickem" className="mt-4 inline-block text-sm font-semibold text-info hover:underline">Make a pick →</Link>
               </CardBody>
