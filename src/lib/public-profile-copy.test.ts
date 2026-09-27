@@ -38,17 +38,18 @@ describe("public profile explanations", () => {
     expect(filesWith('href="/terms"')).toEqual([]);
   });
 
-  it("pins every public signup category and rejects misleading provider copy", () => {
-    for (const field of [
-      "participation type",
-      "MMR",
-      "preferred roles",
-      "favorite heroes",
-      "captain",
-      "goals",
-      "captain note",
+  it("says once that the signup is public and rejects misleading provider copy", () => {
+    // One blanket statement covers every field on the form (it replaced a
+    // per-category list plus a "shown publicly" line under each field). The
+    // medal is named because it is public without being on the form.
+    const notice = me.replace(/\s+/g, " ");
+    for (const disclosure of [
+      "Everything on this form, and your medal, is public in the player pool and on your profile.",
+      "Your Discord is only shown to league admins and players signed up this season.",
+      "Keep contact, health and availability details out of the text boxes.",
+      "Joining lets the league refresh your public Steam and Dota data.",
     ]) {
-      expect(me).toContain(field);
+      expect(notice).toContain(disclosure);
     }
     for (const misleading of [
       "Only to get your name and profile",
