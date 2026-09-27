@@ -1,4 +1,4 @@
-// The signup form's one free-text box, "About you (shown to captains)".
+// The signup form's one free-text box, "About you (public, shown to captains)".
 //
 // It replaced two boxes that read almost the same ("What you want from the
 // league" and "Note for captains"), of which the pool only ever showed one.

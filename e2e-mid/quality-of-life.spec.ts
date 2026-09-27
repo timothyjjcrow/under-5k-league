@@ -189,7 +189,7 @@ test("profile saves optional details with clear dirty state", async ({
     .last();
   await optional.locator("summary").click();
   await page
-    .getByLabel("About you (shown to captains)")
+    .getByLabel("About you (public, shown to captains)")
     .fill("Practice communication");
   await expect(
     page.getByText("Unsaved changes", { exact: true }),
@@ -228,7 +228,7 @@ test("profile saves optional details with clear dirty state", async ({
   ).toBeVisible();
   await optional.locator("summary").click();
   await expect(
-    page.getByLabel("About you (shown to captains)"),
+    page.getByLabel("About you (public, shown to captains)"),
   ).toHaveValue("Practice communication");
 });
 

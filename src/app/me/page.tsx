@@ -917,7 +917,7 @@ export default async function MePage({
                       htmlFor="about"
                       className="mb-1.5 block text-sm font-medium"
                     >
-                      About you (shown to captains)
+                      About you (public, shown to captains)
                     </label>
                     <textarea
                       id="about"
