@@ -11,6 +11,10 @@ const playerProfile = readFileSync(
   path.resolve(process.cwd(), "src/app/players/[id]/page.tsx"),
   "utf8",
 );
+const scrimPage = readFileSync(
+  path.resolve(process.cwd(), "src/app/scrims/[id]/page.tsx"),
+  "utf8",
+);
 
 describe("player-directory contact visibility wiring", () => {
   it("does not equate any signed-in account with directory contact access", () => {
@@ -33,6 +37,17 @@ describe("player-directory contact visibility wiring", () => {
     expect(playersPage).not.toMatch(
       /standins\.map[\s\S]*?\{viewer \? \(/,
     );
+  });
+
+  it("shows a scrim's captain handles only through the shared policy", () => {
+    expect(scrimPage).toMatch(/canViewLeagueContact\(\s*viewer,\s*userId,/);
+    expect(scrimPage).toContain(
+      "showContact={contactFor(scrim.hostTeam.captainId)}",
+    );
+    expect(scrimPage).toContain(
+      "showContact={contactFor(scrim.opponentTeam.captainId)}",
+    );
+    expect(scrimPage).toMatch(/showContact \? \(\s*captain\.discordName/);
   });
 
   it("keeps profile contact and the private-match-data flag behind the shared policy", () => {

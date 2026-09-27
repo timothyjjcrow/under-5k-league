@@ -2,12 +2,20 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { SCRIM_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  REGISTRATION_STATUS,
+  SCRIM_STATUS,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import { formatMatchTime } from "@/lib/match-time";
 import { heroById } from "@/lib/heroes";
 import { parseGamePlayers } from "@/lib/player-stats";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { scrimHostLine } from "@/lib/scrim-view";
+import { canViewLeagueContact } from "@/lib/visibility";
 import { LocalTime } from "@/components/local-time";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { DiscordTag } from "@/components/discord-tag";
 import {
   addScrimGuest,
   autoDetectScrimGames,
@@ -54,6 +62,68 @@ export async function generateMetadata({
 const inputClass =
   "h-10 min-w-0 rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60";
 
+const captainSelect = {
+  select: { id: true, name: true, discordName: true, discordId: true },
+} as const;
+
+type ScrimCaptain = {
+  id: string;
+  name: string;
+  discordName: string;
+  discordId: string | null;
+};
+
+/**
+ * One side of the matchup: team, its captain, and — for league members only
+ * (the DiscordTag rule) — the captain's copyable Discord handle, so the two
+ * captains can find each other without a trip through the team pages.
+ */
+function ScrimSide({
+  team,
+  label,
+  captain,
+  showContact,
+}: {
+  team: { id: string; name: string; logoUrl: string | null };
+  label: string;
+  captain: ScrimCaptain;
+  showContact: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <TeamCrest
+        seed={team.id}
+        name={team.name}
+        logoUrl={team.logoUrl}
+        size={48}
+      />
+      <div className="min-w-0">
+        <p className="truncate font-display text-lg font-semibold">
+          {team.name}
+        </p>
+        <p className="text-xs text-muted">{label}</p>
+        <p className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2 text-sm">
+          <span className="text-muted">Captain</span>
+          <PlayerLink userId={captain.id} className="min-w-6 max-w-full truncate">
+            {captain.name}
+          </PlayerLink>
+          {showContact ? (
+            captain.discordName ? (
+              <DiscordTag
+                name={captain.discordName}
+                verified={!!captain.discordId}
+                className="min-w-0"
+              />
+            ) : (
+              <span className="text-xs text-muted">no Discord</span>
+            )
+          ) : null}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function statusBadge(status: string) {
   if (status === SCRIM_STATUS.OPEN) return <Badge tone="info">Open</Badge>;
   if (status === SCRIM_STATUS.SCHEDULED)
@@ -77,8 +147,8 @@ export default async function ScrimDetailPage({
         season: {
           select: { id: true, name: true, isActive: true, status: true },
         },
-        hostTeam: { include: { staff: true } },
-        opponentTeam: { include: { staff: true } },
+        hostTeam: { include: { staff: true, captain: captainSelect } },
+        opponentTeam: { include: { staff: true, captain: captainSelect } },
         winnerTeam: true,
         participants: {
           orderBy: [{ teamId: "asc" }, { guest: "asc" }, { createdAt: "asc" }],
@@ -90,6 +160,15 @@ export default async function ScrimDetailPage({
     getSessionUser(),
   ]);
   if (!scrim) notFound();
+  const viewerRegistration =
+    viewer && scrim.season.isActive
+      ? await prisma.registration.findUnique({
+          where: {
+            seasonId_userId: { seasonId: scrim.seasonId, userId: viewer.id },
+          },
+          select: { status: true },
+        })
+      : null;
 
   const teamManager = (team: typeof scrim.hostTeam | null) =>
     !!viewer &&
@@ -98,6 +177,20 @@ export default async function ScrimDetailPage({
       team.staff.some((staff) => staff.userId === viewer.id));
   const managesHost = teamManager(scrim.hostTeam);
   const managesAway = teamManager(scrim.opponentTeam);
+  // Captains and coaches of either side always get the other captain's
+  // handle: arranging the lobby is the whole point of this page for them.
+  const contactFor = (userId: string) =>
+    canViewLeagueContact(
+      viewer,
+      userId,
+      viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE ||
+        managesHost ||
+        managesAway,
+    );
+  const booked =
+    !!scrim.opponentTeam &&
+    (scrim.status === SCRIM_STATUS.SCHEDULED ||
+      scrim.status === SCRIM_STATUS.LIVE);
   const canManageResults =
     viewer?.role === "ADMIN" || managesHost || managesAway;
   const canCancel =
@@ -147,53 +240,67 @@ export default async function ScrimDetailPage({
       />
 
       <Card tone="feature">
-        <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <TeamCrest
-              seed={scrim.hostTeam.id}
-              name={scrim.hostTeam.name}
-              logoUrl={scrim.hostTeam.logoUrl}
-              size={48}
-            />
-            <div className="min-w-0">
-              <p className="truncate font-display text-lg font-semibold">
-                {scrim.hostTeam.name}
-              </p>
-              <p className="text-xs text-muted">Posting team</p>
-            </div>
-            <span className="text-sm font-medium uppercase text-muted">vs</span>
-            {scrim.opponentTeam ? (
-              <>
-                <TeamCrest
-                  seed={scrim.opponentTeam.id}
-                  name={scrim.opponentTeam.name}
-                  logoUrl={scrim.opponentTeam.logoUrl}
-                  size={48}
-                />
-                <p className="min-w-0 truncate font-display text-lg font-semibold">
-                  {scrim.opponentTeam.name}
-                </p>
-              </>
-            ) : (
-              <span className="text-muted">Waiting for an opponent</span>
-            )}
-          </div>
-          <div className="space-y-1 text-left sm:text-right">
-            <div>{statusBadge(scrim.status)}</div>
-            <p className="text-sm text-muted">
-              <LocalTime
-                ts={scrim.scheduledAt.getTime()}
-                variant="full"
-                initial={formatMatchTime(scrim.scheduledAt, "full")}
+        <CardBody className="space-y-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="grid min-w-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2">
+              <ScrimSide
+                team={scrim.hostTeam}
+                label="Posting team"
+                captain={scrim.hostTeam.captain}
+                showContact={contactFor(scrim.hostTeam.captainId)}
               />
-            </p>
-            {scrim.status === SCRIM_STATUS.LIVE ||
-            scrim.status === SCRIM_STATUS.COMPLETED ? (
-              <p className="font-display text-2xl font-bold tabular-nums">
-                {scrim.hostScore}–{scrim.awayScore}
+              {scrim.opponentTeam ? (
+                <ScrimSide
+                  team={scrim.opponentTeam}
+                  label="Claimed the time"
+                  captain={scrim.opponentTeam.captain}
+                  showContact={contactFor(scrim.opponentTeam.captainId)}
+                />
+              ) : (
+                <p className="self-center text-muted">Waiting for an opponent</p>
+              )}
+            </div>
+            <div className="space-y-1 text-left sm:text-right">
+              <div>{statusBadge(scrim.status)}</div>
+              <p className="text-sm text-muted">
+                <LocalTime
+                  ts={scrim.scheduledAt.getTime()}
+                  variant="full"
+                  initial={formatMatchTime(scrim.scheduledAt, "full")}
+                />
               </p>
-            ) : null}
+              {scrim.status === SCRIM_STATUS.LIVE ||
+              scrim.status === SCRIM_STATUS.COMPLETED ? (
+                <p className="font-display text-2xl font-bold tabular-nums">
+                  {scrim.hostScore}–{scrim.awayScore}
+                </p>
+              ) : null}
+            </div>
           </div>
+          {booked && scrim.opponentTeam ? (
+            <div className="space-y-1 border-t border-line-soft pt-3 text-sm">
+              <p>
+                {scrimHostLine({
+                  hostTeamName: scrim.hostTeam.name,
+                  hostCaptainName: scrim.hostTeam.captain.name,
+                  opponentCaptainName: scrim.opponentTeam.captain.name,
+                  bestOf: scrim.bestOf,
+                  region: LEAGUE_CONFIG.gameServerRegion,
+                })}
+              </p>
+              {!viewer ? (
+                <p className="text-xs text-muted">
+                  <Link
+                    href={`/login?returnTo=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
+                    className={textLink()}
+                  >
+                    Sign in
+                  </Link>{" "}
+                  to see the captains&apos; Discord handles.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </CardBody>
       </Card>
 
@@ -237,7 +344,10 @@ export default async function ScrimDetailPage({
                     size={30}
                   />
                   <h2 className="font-display font-semibold">{team.name}</h2>
-                  <Badge>{participants.length} known IDs</Badge>
+                  <Badge>
+                    {participants.length}{" "}
+                    {participants.length === 1 ? "player" : "players"}
+                  </Badge>
                 </div>
                 <ul className="divide-y divide-line/60 rounded-lg border border-line/70">
                   {participants.map((participant) => (
@@ -258,11 +368,18 @@ export default async function ScrimDetailPage({
                             {participant.displayName}
                           </span>
                         )}
-                        <p className="font-mono text-[11px] text-muted">
-                          Dota {participant.dotaAccountId}
-                        </p>
+                        {/* A guest has no profile, so the account they were
+                            added with is the only way to tell who they are. */}
+                        {participant.guest ? (
+                          <p className="font-mono text-[11px] text-muted">
+                            Dota {participant.dotaAccountId}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex items-center gap-2">
+                        {participant.userId === team.captainId ? (
+                          <Badge tone="accent">Captain</Badge>
+                        ) : null}
                         {participant.guest ? <Badge tone="info">Guest</Badge> : null}
                         {participant.guest && manages && mutable ? (
                           <ActionForm
