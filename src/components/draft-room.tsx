@@ -1385,7 +1385,6 @@ export function DraftRoom({
 
       {/* On the block */}
       <div
-        ref={bannerRef}
         className={cn(
           "rounded-[var(--radius)] border border-line bg-surface/80",
           // The viewer IS the player being auctioned — their moment glows.
@@ -1397,275 +1396,297 @@ export function DraftRoom({
           (connectionUnavailable || disconnected) && "opacity-50",
         )}
       >
-        <div className="border-b border-line">
-          <div className="flex items-center justify-between px-5 py-3">
-            <h2 className="min-w-0 text-sm font-normal text-muted">
-              On the clock: <span className="text-fg">{nominatorName}</span>
-              {nextNominatorName ? (
-                <span className="hidden sm:inline">
-                  {" "}
-                  · next: {nextNominatorName}
+        {/* The ACTION ZONE — clock, player, price and the bid controls, in
+            that order — is what useBannerOffscreen watches. Scouting detail
+            (heroes, notes, contact, the bid trail) lives below it, so the
+            compact bar takes over the moment the controls themselves scroll
+            away rather than once the whole card has gone. */}
+        <div ref={bannerRef}>
+          <div className="border-b border-line">
+            <div className="flex items-center justify-between px-5 py-3">
+              <h2 className="min-w-0 text-sm font-normal text-muted">
+                On the clock: <span className="text-fg">{nominatorName}</span>
+                {nextNominatorName ? (
+                  <span className="hidden sm:inline">
+                    {" "}
+                    · next: {nextNominatorName}
+                  </span>
+                ) : null}
+              </h2>
+              {paused ? (
+                <span className="font-mono text-sm font-semibold text-info">
+                  ⏸ paused
                 </span>
+              ) : state.nominatedPlayer ? (
+                <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
+              ) : state.nominationEndsAt ? (
+                <NomClock
+                  endsAtMs={state.nominationEndsAt}
+                  offsetMs={offsetMs}
+                />
               ) : null}
-            </h2>
-            {paused ? (
-              <span className="font-mono text-sm font-semibold text-info">
-                ⏸ paused
-              </span>
-            ) : state.nominatedPlayer ? (
-              <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
-            ) : state.nominationEndsAt ? (
-              <NomClock
-                endsAtMs={state.nominationEndsAt}
-                offsetMs={offsetMs}
-              />
+            </div>
+            {liveTeamLine || soundToggle ? (
+              <div className="-mt-1 flex items-center gap-2 px-5 pb-2 text-xs text-muted">
+                {liveTeamLine}
+                {soundToggle}
+              </div>
             ) : null}
           </div>
-          {liveTeamLine || soundToggle ? (
-            <div className="-mt-1 flex items-center gap-2 px-5 pb-2 text-xs text-muted">
-              {liveTeamLine}
-              {soundToggle}
-            </div>
-          ) : null}
-        </div>
 
-        <div className="p-5">
-          {state.nominatedPlayer ? (
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Avatar
-                  name={state.nominatedPlayer.name}
-                  src={state.nominatedPlayer.avatar}
-                  size={52}
-                />
-                <div>
-                  <div className="flex flex-wrap items-center gap-2 text-xl font-bold">
-                    {state.nominatedPlayer.name}
-                    {me.userId === state.nominatedPlayer.userId ? (
-                      <Badge tone="accent">You&apos;re on the block!</Badge>
-                    ) : null}
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted">
-                    {state.nominatedPlayer.mmr > 0 ? (
-                      <span>{state.nominatedPlayer.mmr} MMR</span>
-                    ) : null}
-                    <RankBadge rankTier={state.nominatedPlayer.rankTier} />
-                    <RoleBadges roles={state.nominatedPlayer.roles} />
-                    <DiscordTag
-                      name={state.nominatedPlayer.discordName}
-                      verified={state.nominatedPlayer.discordVerified}
+          <div className="p-5">
+            {state.nominatedPlayer ? (
+              <>
+                {/* Price beside the name, then straight into the controls:
+                    on a phone the bid row used to start ~800px down, under
+                    the player's heroes, note and quote. */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Avatar
+                      name={state.nominatedPlayer.name}
+                      src={state.nominatedPlayer.avatar}
+                      size={52}
+                      className="shrink-0"
                     />
-                    {/* Scouting links — open in a new tab so a captain can't
-                        navigate away mid-auction. */}
-                    <Link
-                      href={`/players/${state.nominatedPlayer.userId}`}
-                      target="_blank"
-                      className={textLink()}
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xl font-bold [overflow-wrap:anywhere]">
+                        {state.nominatedPlayer.name}
+                        {me.userId === state.nominatedPlayer.userId ? (
+                          <Badge tone="accent">You&apos;re on the block!</Badge>
+                        ) : null}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted">
+                        {state.nominatedPlayer.mmr > 0 ? (
+                          <span>{state.nominatedPlayer.mmr} MMR</span>
+                        ) : null}
+                        <RankBadge rankTier={state.nominatedPlayer.rankTier} />
+                        <RoleBadges roles={state.nominatedPlayer.roles} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-3xl font-bold text-accent">
+                      ${state.currentBid}
+                    </div>
+                    {/* One line whatever the bidder's name: a wrapping name
+                        would move the bid buttons every time the lead
+                        changed hands. */}
+                    <div
+                      className="max-w-[8rem] truncate text-xs text-muted sm:max-w-[12rem]"
+                      title={
+                        highBidderName
+                          ? `High bid: ${highBidderName}`
+                          : undefined
+                      }
                     >
-                      Profile ↗
-                    </Link>
-                    {state.nominatedPlayer.accountId ? (
-                      <a
-                        href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={textLink()}
-                      >
-                        Dotabuff ↗
-                      </a>
-                    ) : null}
+                      {highBidderName
+                        ? `high bid · ${highBidderName}`
+                        : "opening"}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="text-right">
-                <div className="text-3xl font-bold text-accent">
-                  ${state.currentBid}
-                </div>
-                <div className="text-xs text-muted">
-                  {highBidderName ? `high bid · ${highBidderName}` : "opening"}
-                </div>
-              </div>
-
-              {state.nominatedPlayer.favoriteHeroes ||
-              state.nominatedPlayer.statement ||
-              hasText(state.nominatedPlayer.captainNote) ? (
-                <div className="w-full space-y-1 border-t border-line pt-3 text-sm">
-                  {state.nominatedPlayer.favoriteHeroes ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-muted">Heroes:</span>
-                      <HeroList
-                        value={state.nominatedPlayer.favoriteHeroes}
-                        size={30}
+                {me.canBid ? (
+                  <div
+                    aria-busy={reqPending}
+                    className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-4"
+                  >
+                    <span className="text-sm text-muted">
+                      Your max ${me.myMaxBid} · budget ${me.myBudget}
+                      {myTeam && myTeam.need > 1
+                        ? ` · winning at $${state.currentBid + 1} leaves $${
+                            me.myBudget - (state.currentBid + 1)
+                          } for ${myTeam.need - 1} more ${
+                            myTeam.need - 1 === 1 ? "seat" : "seats"
+                          }`
+                        : ""}
+                    </span>
+                    <div className="ml-auto grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
+                      {[1, 5, 10].map((d) => (
+                        <button
+                          key={d}
+                          disabled={
+                            pending || state.currentBid + d > me.myMaxBid
+                          }
+                          onClick={() => quickBid(d)}
+                          aria-label={`Bid $${state.currentBid + d}`}
+                          title={`Bid $${state.currentBid + d}`}
+                          className={buttonClasses("secondary", "sm")}
+                        >
+                          {/* Show the amount that will actually be submitted —
+                              "+$5" alone hid the absolute price. */}
+                          +${d} → ${state.currentBid + d}
+                        </button>
+                      ))}
+                      <button
+                        disabled={pending || me.myMaxBid <= state.currentBid}
+                        onClick={() => {
+                          // One tap here commits the entire remaining budget —
+                          // make it deliberate.
+                          if (
+                            window.confirm(
+                              `Bid your maximum $${me.myMaxBid}? That's everything you can spend on this player.`,
+                            )
+                          ) {
+                            act("/api/draft/bid", { amount: me.myMaxBid });
+                          }
+                        }}
+                        className={buttonClasses("primary", "sm")}
+                      >
+                        Max ${me.myMaxBid}
+                      </button>
+                      <ExactBidControl
+                        key={`${state.nominatedPlayer.userId}:${state.currentBid}:${me.myMaxBid}`}
+                        currentBid={state.currentBid}
+                        maxBid={me.myMaxBid}
+                        pending={pending}
+                        submit={(amount) => act("/api/draft/bid", { amount })}
                       />
                     </div>
-                  ) : null}
-                  {/* Clamped: these are free text up to 1000 chars each, and
-                      at full length the banner grew past the viewport and
-                      pushed the bid controls off-screen mid-auction. The full
-                      text is a click away on the player's profile. */}
-                  {hasText(state.nominatedPlayer.captainNote) ? (
-                    <div className="line-clamp-3 [overflow-wrap:anywhere]">
-                      <span className="text-muted">Note to captains:</span>{" "}
-                      {state.nominatedPlayer.captainNote}
-                    </div>
-                  ) : null}
-                  {hasText(state.nominatedPlayer.statement) ? (
-                    <div className="line-clamp-3 [overflow-wrap:anywhere] text-muted">
-                      &ldquo;{state.nominatedPlayer.statement}&rdquo;
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {state.lotBids.length > 1 ? (
-                // The lot's audit trail (newest first) — kills "who bid
-                // what?" disputes without leaving the banner.
-                <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 border-t border-line pt-3 text-xs text-muted">
-                  <span className="shrink-0">
-                    {state.lotBidsTruncated ? "Latest 8 bids:" : "Bid trail:"}
-                  </span>
-                  {state.lotBids.map((b, i) => (
-                    <span
-                      key={b.at + "-" + i}
-                      className="flex items-center gap-2"
-                    >
-                      {i > 0 ? <span aria-hidden>‹</span> : null}
-                      <span
-                        className={cn(
-                          "font-mono tabular-nums",
-                          i === 0 && "font-semibold text-accent",
-                        )}
-                      >
-                        {state.teams.find((t) => t.id === b.teamId)?.name ??
-                          "—"}{" "}
-                        ${b.amount}
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-
-              {me.canBid ? (
-                <div
-                  aria-busy={reqPending}
-                  className="flex w-full flex-wrap items-center gap-2 border-t border-line pt-4"
-                >
-                  <span className="text-sm text-muted">
-                    Your max ${me.myMaxBid} · budget ${me.myBudget}
-                    {myTeam && myTeam.need > 1
-                      ? ` · winning at $${state.currentBid + 1} leaves $${
-                          me.myBudget - (state.currentBid + 1)
-                        } for ${myTeam.need - 1} more ${
-                          myTeam.need - 1 === 1 ? "seat" : "seats"
-                        }`
-                      : ""}
-                  </span>
-                  <div className="ml-auto grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
-                    {[1, 5, 10].map((d) => (
-                      <button
-                        key={d}
-                        disabled={pending || state.currentBid + d > me.myMaxBid}
-                        onClick={() => quickBid(d)}
-                        aria-label={`Bid $${state.currentBid + d}`}
-                        title={`Bid $${state.currentBid + d}`}
-                        className={buttonClasses("secondary", "sm")}
-                      >
-                        {/* Show the amount that will actually be submitted —
-                            "+$5" alone hid the absolute price. */}
-                        +${d} → ${state.currentBid + d}
-                      </button>
-                    ))}
-                    <button
-                      disabled={pending || me.myMaxBid <= state.currentBid}
-                      onClick={() => {
-                        // One tap here commits the entire remaining budget —
-                        // make it deliberate.
-                        if (
-                          window.confirm(
-                            `Bid your maximum $${me.myMaxBid}? That's everything you can spend on this player.`,
-                          )
-                        ) {
-                          act("/api/draft/bid", { amount: me.myMaxBid });
-                        }
-                      }}
-                      className={buttonClasses("primary", "sm")}
-                    >
-                      Max ${me.myMaxBid}
-                    </button>
-                    <ExactBidControl
-                      key={`${state.nominatedPlayer.userId}:${state.currentBid}:${me.myMaxBid}`}
-                      currentBid={state.currentBid}
-                      maxBid={me.myMaxBid}
-                      pending={pending}
-                      submit={(amount) => act("/api/draft/bid", { amount })}
-                    />
                   </div>
-                </div>
-              ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
-                <div
-                  role="status"
-                  className="w-full border-t border-line pt-3 text-sm text-success"
+                ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
+                  <div
+                    role="status"
+                    className="mt-4 border-t border-line pt-3 text-sm text-success"
+                  >
+                    You hold the high bid.
+                  </div>
+                ) : rosterFull ? (
+                  <div className="mt-4 border-t border-line pt-3 text-sm text-muted">
+                    Your roster is full — you&apos;re done bidding.
+                  </div>
+                ) : pricedOut ? (
+                  <div className="mt-4 border-t border-line pt-3 text-sm text-muted">
+                    Priced out — your max bid is ${me.myMaxBid} (reserving $
+                    {state.minBid} per remaining slot).
+                  </div>
+                ) : (
+                  <div className="mt-4 border-t border-line pt-3 text-sm text-muted">
+                    You&apos;re watching this lot. Only captains with an open
+                    roster seat and enough reserved budget can bid.
+                  </div>
+                )}
+              </>
+            ) : me.canNominate ? (
+              <NominateBar
+                state={state}
+                selected={selected}
+                nomAmount={nomAmount}
+                setNomAmount={setNomAmount}
+                pending={pending}
+                onNominate={(playerId, amount) =>
+                  act("/api/draft/nominate", { playerId, amount })
+                }
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-3 py-4">
+                <p className="text-center text-muted">
+                  Waiting for {nominatorName} to nominate a player…
+                </p>
+                {/* Hidden while PAUSED: nominatePlayer refuses any non-live
+                    draft, so in the pause → settle → resume flow this button
+                    could only walk the admin through the confirm into a
+                    "Draft is not live" toast. Resume is the real next step. */}
+                {me.isAdmin && !paused ? (
+                  <button
+                    disabled={pending}
+                    onClick={() => {
+                      // Skipping a captain's turn is intrusive — confirm it.
+                      if (
+                        window.confirm(
+                          `Auto-nominate the top player for ${nominatorName}? Use this when they're absent — it takes their turn.`,
+                        )
+                      ) {
+                        act("/api/draft/admin-nominate", {});
+                      }
+                    }}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    Admin: auto-nominate top player
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {state.nominatedPlayer ? (
+          <div className="space-y-3 border-t border-line px-5 py-3 text-sm">
+            {state.lotBids.length > 1 ? (
+              // The lot's audit trail (newest first) — kills "who bid
+              // what?" disputes without leaving the card.
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                <span className="shrink-0">
+                  {state.lotBidsTruncated ? "Latest 8 bids:" : "Bid trail:"}
+                </span>
+                {state.lotBids.map((b, i) => (
+                  <span
+                    key={b.at + "-" + i}
+                    className="flex items-center gap-2"
+                  >
+                    {i > 0 ? <span aria-hidden>‹</span> : null}
+                    <span
+                      className={cn(
+                        "font-mono tabular-nums",
+                        i === 0 && "font-semibold text-accent",
+                      )}
+                    >
+                      {state.teams.find((t) => t.id === b.teamId)?.name ?? "—"}{" "}
+                      ${b.amount}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2 text-muted">
+              <DiscordTag
+                name={state.nominatedPlayer.discordName}
+                verified={state.nominatedPlayer.discordVerified}
+              />
+              {/* Scouting links — open in a new tab so a captain can't
+                  navigate away mid-auction. */}
+              <Link
+                href={`/players/${state.nominatedPlayer.userId}`}
+                target="_blank"
+                className={textLink()}
+              >
+                Profile ↗
+              </Link>
+              {state.nominatedPlayer.accountId ? (
+                <a
+                  href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={textLink()}
                 >
-                  You hold the high bid.
-                </div>
-              ) : rosterFull ? (
-                <div className="w-full border-t border-line pt-3 text-sm text-muted">
-                  Your roster is full — you&apos;re done bidding.
-                </div>
-              ) : pricedOut ? (
-                <div className="w-full border-t border-line pt-3 text-sm text-muted">
-                  Priced out — your max bid is ${me.myMaxBid} (reserving $
-                  {state.minBid} per remaining slot).
-                </div>
-              ) : (
-                <div className="w-full border-t border-line pt-3 text-sm text-muted">
-                  You&apos;re watching this lot. Only captains with an open
-                  roster seat and enough reserved budget can bid.
-                </div>
-              )}
-            </div>
-          ) : me.canNominate ? (
-            <NominateBar
-              state={state}
-              selected={selected}
-              nomAmount={nomAmount}
-              setNomAmount={setNomAmount}
-              pending={pending}
-              onNominate={(playerId, amount) =>
-                act("/api/draft/nominate", { playerId, amount })
-              }
-            />
-          ) : (
-            <div className="flex flex-col items-center gap-3 py-4">
-              <p className="text-center text-muted">
-                Waiting for {nominatorName} to nominate a player…
-              </p>
-              {/* Hidden while PAUSED: nominatePlayer refuses any non-live
-                  draft, so in the pause → settle → resume flow this button
-                  could only walk the admin through the confirm into a
-                  "Draft is not live" toast. Resume is the real next step. */}
-              {me.isAdmin && !paused ? (
-                <button
-                  disabled={pending}
-                  onClick={() => {
-                    // Skipping a captain's turn is intrusive — confirm it.
-                    if (
-                      window.confirm(
-                        `Auto-nominate the top player for ${nominatorName}? Use this when they're absent — it takes their turn.`,
-                      )
-                    ) {
-                      act("/api/draft/admin-nominate", {});
-                    }
-                  }}
-                  className={buttonClasses("secondary", "sm")}
-                >
-                  Admin: auto-nominate top player
-                </button>
+                  Dotabuff ↗
+                </a>
               ) : null}
             </div>
-          )}
-        </div>
+            {state.nominatedPlayer.favoriteHeroes ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-muted">Heroes:</span>
+                <HeroList
+                  value={state.nominatedPlayer.favoriteHeroes}
+                  size={30}
+                />
+              </div>
+            ) : null}
+            {/* Clamped: these are free text up to 1000 chars each. The full
+                text is a click away on the player's profile. */}
+            {hasText(state.nominatedPlayer.captainNote) ? (
+              <div className="line-clamp-3 [overflow-wrap:anywhere]">
+                <span className="text-muted">Note to captains:</span>{" "}
+                {state.nominatedPlayer.captainNote}
+              </div>
+            ) : null}
+            {hasText(state.nominatedPlayer.statement) ? (
+              <div className="line-clamp-3 [overflow-wrap:anywhere] text-muted">
+                &ldquo;{state.nominatedPlayer.statement}&rdquo;
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <AuctionPrimer
