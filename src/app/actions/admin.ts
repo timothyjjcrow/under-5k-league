@@ -102,7 +102,7 @@ import { fetchSteamProfiles } from "@/lib/steam";
 import { bool, clampInt, localDate, str } from "@/lib/form";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import {
-  draftStartedMessage,
+  draftStartedAnnouncement,
   regularSeasonStartedMessage,
   draftAbortedMessage,
   draftLotVoidedMessage,
@@ -2547,7 +2547,26 @@ export async function startDraft(
     }
     throw e;
   }
-  await sendDiscordMessage(draftStartedMessage(started.seasonName));
+  // Mention the captains (linked ones only): an absent captain's nomination
+  // clock runs out and the site nominates for them. Read after the commit,
+  // outside the Serializable start, and best-effort: a failed read only
+  // costs the names, never the announcement or the started draft.
+  const captains = await prisma.team
+    .findMany({
+      where: { seasonId: season.id },
+      orderBy: [{ draftOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: { captain: { select: { name: true, discordId: true } } },
+    })
+    .then((teams) => teams.map((team) => team.captain))
+    .catch(() => []);
+  const liveAnnouncement = draftStartedAnnouncement({
+    seasonName: started.seasonName,
+    captains,
+  });
+  await sendDiscordMessage(
+    liveAnnouncement.content,
+    mentionsOf(liveAnnouncement.mentionUserIds),
+  );
   await logAdminAction({
     action: "startDraft",
     summary: `Started the live auction with ${started.budgets.size} teams and ${started.poolCount} draftable players`,

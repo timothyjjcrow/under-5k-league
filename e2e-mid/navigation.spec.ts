@@ -84,3 +84,12 @@ test("league tools live under Explore on desktop and mobile", async ({
   ).toBeVisible();
   await expect(page.locator("#mobile-nav")).toHaveCount(0);
 });
+
+test("the draft room sends visitors to /teams once the season is past the draft", async ({
+  page,
+}) => {
+  // Mid-season the auction is history: rosters, prices and the draft-night
+  // recap live on /teams, and an old /draft link (Discord posts) lands there.
+  await page.goto("/draft");
+  await expect(page).toHaveURL(/\/teams$/);
+});

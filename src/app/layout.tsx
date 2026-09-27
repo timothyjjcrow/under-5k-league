@@ -19,6 +19,7 @@ import { NavigationContextTracker } from "@/components/context-back-link";
 import { SiteAnalytics } from "@/components/site-analytics";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
+import { draftNightSoon } from "@/lib/draft-setup";
 import { prisma } from "@/lib/prisma";
 import { resolveSiteUrl } from "@/lib/site-url";
 import { getPublicReadSignals } from "@/lib/public-read-signals";
@@ -74,6 +75,14 @@ export default async function RootLayout({
       getPublicReadSignals(),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
+  // Draft night during Signups: link the draft room before Start.
+  const draftRoomSoon = draftNightSoon(
+    season?.status,
+    season?.draftAt?.getTime(),
+    // One time snapshot for this render.
+    // eslint-disable-next-line react-hooks/purity
+    Date.now(),
+  );
   const myTeam =
     user && season
       ? await prisma.teamMember.findFirst({
@@ -98,6 +107,7 @@ export default async function RootLayout({
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}
           hasHistory={hasHistory}
+          draftRoomSoon={draftRoomSoon}
         />
         <main
           id="main"

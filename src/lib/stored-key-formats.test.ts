@@ -15,6 +15,10 @@ import {
 import { outPingPrefix, outPingThrottleKey } from "./availability";
 import { honorsClaimValue } from "./honors-service";
 import {
+  draftPresenceKey,
+  draftPresencePrefix,
+  draftTeamsPingKey,
+  draftTeamsPingPrefix,
   fixtureImportCooldownResource,
   importSkipKey,
   playoffRoundBuiltKey,
@@ -33,6 +37,10 @@ import {
 describe("stored Setting key formats", () => {
   it("keeps the season-scoped key strings", () => {
     expect(importSkipKey("s1")).toBe("importSkip:s1");
+    expect(draftPresenceKey("s1", "u1")).toBe("draftPresence:s1:u1");
+    expect(draftPresencePrefix("s1")).toBe("draftPresence:s1:");
+    expect(draftTeamsPingKey("s1", "r1")).toBe("draftTeamsPing:s1:r1");
+    expect(draftTeamsPingPrefix("s1")).toBe("draftTeamsPing:s1:");
     expect(playoffRoundBuiltKey("s1", 2)).toBe("playoffRoundBuilt:s1:2");
     expect(playoffRoundBuiltPrefix("s1")).toBe("playoffRoundBuilt:s1:");
     expect(tiebreakerDrawKey("s1", "g")).toBe("tiebreakerDraw:s1:g");
@@ -58,6 +66,8 @@ describe("stored Setting key formats", () => {
     const clauses = JSON.stringify(where.OR);
     for (const key of [
       importSkipKey("s1"),
+      draftPresencePrefix("s1"),
+      draftTeamsPingPrefix("s1"),
       playoffRoundBuiltPrefix("s1"),
       tiebreakerDrawPrefix("s1"),
       outPingPrefix("m1"),

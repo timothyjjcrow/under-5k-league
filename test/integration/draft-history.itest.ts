@@ -132,6 +132,29 @@ describe("durable draft and roster history", () => {
     expect(runs[1].id).not.toBe(runs[0].id);
   });
 
+  it("tells the draft room which lot and which sales the clock opened", async () => {
+    const f = await setup(); await start(f);
+    expect((await getDraftState(f.season.id, null))!.lotAutoNominated).toBe(false);
+    // Captain A's clock runs out: the draft opens the top player for them.
+    await expireNominationClock(f.season.id); await resolveStalledNomination(f.season.id);
+    const auto = (await getDraftState(f.season.id, null))!;
+    expect(auto.nominatedPlayer?.userId).toBe(f.p.id);
+    expect(auto.lotAutoNominated).toBe(true);
+    await expireClock(f.season.id); await resolveExpiredNomination(f.season.id);
+    // Captain B nominates for themselves.
+    expect((await nominatePlayer(f.season.id, sessionFor(f.b.user), f.q.id, 2)).ok).toBe(true);
+    expect((await getDraftState(f.season.id, null))!.lotAutoNominated).toBe(false);
+    await expireClock(f.season.id); await resolveExpiredNomination(f.season.id);
+    const done = (await getDraftState(f.season.id, null))!;
+    expect(done.lotAutoNominated).toBe(false);
+    expect(done.recentSales.map((sale) => [sale.name, sale.auto])).toEqual([
+      ["Second", false], ["Purchase", true],
+    ]);
+    // Rostered players carry their listed roles (the captain's roles-to-cover hint).
+    const teamA = done.teams.find((team) => team.id === f.a.team.id)!;
+    expect(teamA.members.find((m) => m.userId === f.p.id)?.roles).toBe("4,5");
+  });
+
   it("records automatic lots and an ineligible nominee as a void without a sale", async () => {
     const f = await setup(); await start(f);
     await expireNominationClock(f.season.id); await resolveStalledNomination(f.season.id);
@@ -251,5 +274,23 @@ describe("durable draft and roster history", () => {
     const audit = await prisma.adminAction.findFirstOrThrow({ where: { action: "preserveUnpartitionedDraftBids" } });
     expect(JSON.parse(audit.detailsJson!).bids.map((bid: { id: string }) => bid.id)).toEqual([stray.id]);
     expect(await prisma.bid.count({ where: { userId: f.p.id } })).toBe(0);
+  });
+});
+
+describe("the finished draft room's recap", () => {
+  it("is built from the auction's sale records once the draft is complete", async () => {
+    const f = await setup(); await start(f);
+    await sell(f, f.p.id, 7);
+    expect((await getDraftState(f.season.id, null))!.recap).toBeNull();
+    await sell(f, f.q.id, 2);
+    const done = (await getDraftState(f.season.id, null))!;
+    expect(done.status).toBe("COMPLETE");
+    expect(done.recap).toMatchObject({
+      biggestSpend: { name: "Purchase", price: 7, teamName: f.a.team.name },
+      bestValue: { name: "Second", price: 2, mmr: 2800 },
+      topSpender: { teamId: f.a.team.id, spent: 7 },
+      bargainHunter: { teamId: f.b.team.id, spent: 2 },
+      totalSpent: 9,
+    });
   });
 });

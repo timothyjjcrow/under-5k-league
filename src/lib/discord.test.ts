@@ -6,8 +6,8 @@ import {
   rescheduleMessage,
   adminRetimeMessage,
   signupMessage,
-  draftStartedMessage,
-  draftCompleteMessage,
+  draftStartedAnnouncement,
+  draftCompleteAnnouncement,
   regularSeasonStartedMessage,
   freeAgentSignedMessage,
   inhouseLobbyMessage,
@@ -16,7 +16,6 @@ import {
   inhouseResultVoidedMessage,
   matchResultMessage,
   playerReleasedMessage,
-  playerSoldMessage,
   playoffsStartedMessage,
   playoffsReturnedToRegularMessage,
   championMessage,
@@ -121,15 +120,6 @@ describe("discord message formatters", () => {
     expect(signupMessage("Zai", 1, 20)).toContain("1 player in");
   });
 
-  it("links the draft room when the draft starts", () => {
-    const msg = draftStartedMessage("Season 1");
-    expect(msg).toContain("Season 1");
-    expect(msg).toContain("/draft");
-  });
-
-  it("links the teams page when the draft completes", () => {
-    expect(draftCompleteMessage("Season 1")).toContain("/teams");
-  });
 
   it("announces the start of the Regular season with its schedule", () => {
     const msg = regularSeasonStartedMessage("Season *One*");
@@ -331,13 +321,6 @@ describe("discord message formatters", () => {
     expect(msg).not.toContain("(https://evil.test)");
   });
 
-  it("announces a sale with the price", () => {
-    const msg = playerSoldMessage("Fly", "Fear's Team", 23);
-    expect(msg).toContain("**Fly**");
-    expect(msg).toContain("**Fear's Team**");
-    expect(msg).toContain("$23");
-  });
-
   it("announces a free-agent signing", () => {
     const msg = freeAgentSignedMessage("Late Joiner", "Short Squad");
     expect(msg).toContain("**Late Joiner**");
@@ -349,12 +332,6 @@ describe("discord message formatters", () => {
     const msg = playerReleasedMessage("Ghoster", "Short Squad");
     expect(msg).toContain("**Ghoster**");
     expect(msg).toContain("released from **Short Squad**");
-  });
-
-  it("flavors min-bid steals and big spends", () => {
-    expect(playerSoldMessage("A", "T", 1)).toContain("steal");
-    expect(playerSoldMessage("A", "T", 75)).toContain("big spender");
-    expect(playerSoldMessage("A", "T", 20)).not.toMatch(/steal|big spender/);
   });
 });
 
@@ -592,6 +569,212 @@ describe("draftReminderAnnouncement", () => {
     for (const { content } of variants) {
       expect(content).not.toContain("—");
     }
+  });
+});
+
+describe("draftStartedAnnouncement", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const captains = [
+    { name: "Dendi", discordId: "111111111111111111" },
+    { name: "Puppey", discordId: null },
+    { name: "Typo", discordId: "123" },
+  ];
+  const visibleMentions = (content: string) =>
+    [...content.matchAll(/<@(\d{17,20})>/g)].map((m) => m[1]);
+
+  it("links the room and mentions only the linked captains", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains,
+    });
+    expect(announcement.content).toBe(
+      [
+        "🔨 **The Season 1 draft is LIVE!** Watch the auction: <https://league.example/draft>",
+        "Captains <@111111111111111111>, Puppey, Typo: you're on the clock. If your nomination timer runs out, the site nominates for you.",
+      ].join("\n"),
+    );
+    // A captain without a real snowflake is named, never pinged.
+    expect(announcement.mentionUserIds).toEqual(["111111111111111111"]);
+    expect(announcement.content).not.toContain("—");
+  });
+
+  it("still says what to do when no captain is known", () => {
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: [],
+    });
+    expect(announcement.content).toContain("/draft>");
+    expect(announcement.content).toMatch(
+      /\nCaptains, you're on the clock\. .* the site nominates for you\.$/,
+    );
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("packs captains under Discord's limit and pings only the ones shown", () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({
+      name: `A Very Long Captain Persona Number ${i + 1}`,
+      discordId: i % 3 ? null : (BigInt("600000000000000000") + BigInt(i)).toString(),
+    }));
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: many,
+    });
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    expect(delivered).toMatch(
+      / \+\d+ more: you're on the clock\. If your nomination timer runs out, the site nominates for you\.$/,
+    );
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(delivered)),
+    );
+    expect(announcement.mentionUserIds).not.toContain(many[117].discordId);
+  });
+
+  it("falls back to a deliverable post that names nobody", () => {
+    const announcement = draftStartedAnnouncement({
+      seasonName: "S".repeat(2_100),
+      captains,
+    });
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("escapes a captain name", () => {
+    const content = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: [{ name: "[free mmr](https://evil.test)\nfake line", discordId: null }],
+    }).content;
+    expect(content).not.toContain("](");
+    expect(content.split("\n")).toHaveLength(2);
+  });
+});
+
+describe("draftCompleteAnnouncement", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const teams = [
+    {
+      name: "Radiant Rejects",
+      captainName: "Dendi",
+      players: [
+        { name: "Miracle", discordId: "222222222222222222", price: 9 },
+        { name: "N0tail", discordId: null, price: 1 },
+      ],
+      openSeats: 0,
+    },
+    {
+      name: "Dire Straits",
+      captainName: "Puppey",
+      players: [{ name: "Typo", discordId: "123", price: 3 }],
+      openSeats: 1,
+    },
+  ];
+  const visibleMentions = (content: string) =>
+    [...content.matchAll(/<@(\d{17,20})>/g)].map((m) => m[1]);
+
+  it("lists every team and mentions each linked drafted player once", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams,
+    });
+    expect(announcement.content).toBe(
+      [
+        "✅ **The Season 3 draft is complete! Here are the teams:**",
+        "**Radiant Rejects** (captain Dendi): <@222222222222222222> $9, N0tail $1",
+        "**Dire Straits** (captain Puppey, 1 open seat): Typo $3",
+        "Open seats get filled with free agents, and standins cover until then. Every roster: <https://league.example/teams>",
+      ].join("\n"),
+    );
+    // Captains are named, never pinged; a fake snowflake is named, never pinged.
+    expect(announcement.mentionUserIds).toEqual(["222222222222222222"]);
+    // No automatic "a steal!" tag on $1 lots, and no em dashes.
+    expect(announcement.content).not.toMatch(/steal/i);
+    expect(announcement.content).not.toContain("—");
+  });
+
+  it("drops the open-seats note when every roster is full, and says so for an empty team", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const content = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams: [
+        { name: "Solo", captainName: "Lone", players: [], openSeats: 0 },
+      ],
+    }).content;
+    expect(content).toContain("**Solo** (captain Lone): no players bought");
+    expect(content.split("\n").at(-1)).toBe(
+      "Every roster: <https://league.example/teams>",
+    );
+  });
+
+  it("packs whole teams under Discord's limit and pings only the players shown", () => {
+    let id = BigInt("700000000000000000");
+    const many = Array.from({ length: 16 }, (_, t) => ({
+      name: `A Rather Long Team Name Number ${t + 1}`,
+      captainName: `Captain Persona ${t + 1}`,
+      players: Array.from({ length: 6 }, (_, p) => {
+        id += BigInt(1);
+        return {
+          name: `Player ${t + 1}-${p + 1} with a long persona`,
+          discordId: p % 2 ? null : id.toString(),
+          price: p + 1,
+        };
+      }),
+      openSeats: 0,
+    }));
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams: many,
+    });
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+    // Every allowlisted id is already in the text, so nothing is prepended.
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    expect(delivered).toMatch(/…and \d+ more teams on the teams page\./);
+    expect(delivered).toContain("/teams>");
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(delivered)),
+    );
+    const lastPlayer = many.at(-1)!.players[0].discordId!;
+    expect(announcement.mentionUserIds).not.toContain(lastPlayer);
+  });
+
+  it("falls back to a deliverable post that names nobody", () => {
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "S".repeat(2_100),
+      teams,
+    });
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("completing again after an undo names everyone and pings nobody", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams,
+      again: true,
+    });
+    expect(announcement.content).toBe(
+      [
+        "✅ **The Season 3 draft is complete again. Here are the updated teams:**",
+        "**Radiant Rejects** (captain Dendi): Miracle $9, N0tail $1",
+        "**Dire Straits** (captain Puppey, 1 open seat): Typo $3",
+        "Open seats get filled with free agents, and standins cover until then. Every roster: <https://league.example/teams>",
+      ].join("\n"),
+    );
+    expect(announcement.mentionUserIds).toEqual([]);
   });
 });
 
@@ -1290,9 +1473,18 @@ describe("no message unfurls a link preview", () => {
         unconfirmed: [{ name: "B", discordId: null }],
       }).content,
       captainAssignedMessage("A", "T", "123"),
-      draftStartedMessage("S1"),
-      draftCompleteMessage("S1"),
-      playerSoldMessage("A", "T", 5),
+      draftStartedAnnouncement({ seasonName: "S1", captains: [] }).content,
+      draftCompleteAnnouncement({
+        seasonName: "S1",
+        teams: [
+          {
+            name: "T",
+            captainName: "C",
+            players: [{ name: "A", discordId: null, price: 5 }],
+            openSeats: 1,
+          },
+        ],
+      }).content,
       matchResultMessage({
         matchId: "m1",
         homeName: "A",
@@ -1433,7 +1625,17 @@ describe("no player-supplied name can inject markdown", () => {
 
   const messages = () => [
     signupMessage(EVIL, 3, 10),
-    playerSoldMessage(EVIL, EVIL, 5),
+    draftCompleteAnnouncement({
+      seasonName: "S1",
+      teams: [
+        {
+          name: EVIL,
+          captainName: EVIL,
+          players: [{ name: EVIL, discordId: null, price: 5 }],
+          openSeats: 0,
+        },
+      ],
+    }).content,
     matchResultMessage({
       matchId: "m1",
       homeName: EVIL,
@@ -1578,7 +1780,20 @@ describe("no player-supplied name can inject markdown", () => {
 
   it("never lets a name forge an extra line", () => {
     const nl = "evil\nplayer";
-    expect(playerSoldMessage(nl, nl, 1)).not.toContain("\n");
+    // header, one team line, footer
+    expect(
+      draftCompleteAnnouncement({
+        seasonName: "S1",
+        teams: [
+          {
+            name: nl,
+            captainName: nl,
+            players: [{ name: nl, discordId: null, price: 1 }],
+            openSeats: 0,
+          },
+        ],
+      }).content.split("\n"),
+    ).toHaveLength(3);
     expect(teamWithdrewMessage(nl, 3)).not.toContain("\n");
     expect(
       rescheduleDeclinedMessage({
@@ -1665,9 +1880,19 @@ describe("no player-supplied name can inject markdown", () => {
   });
 
   it("leaves ordinary names alone", () => {
-    expect(playerSoldMessage("Puppey", "Team Liquid", 40)).toContain(
-      "**Puppey** → **Team Liquid**",
-    );
+    expect(
+      draftCompleteAnnouncement({
+        seasonName: "S1",
+        teams: [
+          {
+            name: "Team Liquid",
+            captainName: "Puppey",
+            players: [{ name: "Miracle", discordId: null, price: 40 }],
+            openSeats: 0,
+          },
+        ],
+      }).content,
+    ).toContain("**Team Liquid** (captain Puppey): Miracle $40");
   });
 });
 

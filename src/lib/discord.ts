@@ -19,6 +19,7 @@ import {
 } from "./league-announcement-outbox";
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
+import { runAfterResponse } from "./after-response";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -95,12 +96,144 @@ export function captainAssignedMessage(
   return `🧭 ${captain}, **you now captain ${name(teamName)}.** Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
 }
 
-export function draftStartedMessage(seasonName: string): string {
-  return `🔨 **The ${seasonName} draft is LIVE!** Captains are on the clock — watch the auction at <${resolveSiteUrl()}/draft>`;
+export type DraftStartedInput = {
+  /** Admin-authored, so not escaped (the draftScheduledMessage rule). */
+  seasonName: string;
+  /** The designated captains, in draft order. */
+  captains: DraftReminderPerson[];
+};
+
+/**
+ * The draft is live. It mentions the captains who linked Discord, and nobody
+ * else: a captain who isn't watching the channel misses the start, and the
+ * site nominates for them when their nomination clock runs out. Everyone else
+ * only needs the link. Captains who haven't linked are named as plain text, so
+ * the channel still sees who is on the clock. Packed under Discord's 2,000
+ * characters like the draft-night reminder, and the allowlist holds exactly
+ * the mentions that made it into the text.
+ */
+export function draftStartedAnnouncement(
+  m: DraftStartedInput,
+): DraftReminderAnnouncement {
+  const site = resolveSiteUrl();
+  const header = `🔨 **The ${m.seasonName} draft is LIVE!** Watch the auction: <${site}/draft>`;
+  // The names lead, so the people pinged read that the line is for them (a
+  // list AFTER "the site nominates for you" read as the players it would pick).
+  const call =
+    "you're on the clock. If your nomination timer runs out, the site nominates for you.";
+  const render = (shown: number): string =>
+    shown > 0
+      ? `${header}\nCaptains ${peopleList(m.captains, shown)}: ${call}`
+      : `${header}\nCaptains, ${call}`;
+  const fits = (content: string) => content.length <= DISCORD_CONTENT_MAX;
+  if (!fits(render(0))) {
+    // Defensive last resort for an absurd season name or site URL: still
+    // deliverable, and it names nobody, so nobody is allowlisted.
+    return {
+      content: "🔨 **The draft is LIVE!** Captains, join the draft room now.",
+      mentionUserIds: [],
+    };
+  }
+  let shown = 0;
+  while (shown < m.captains.length && fits(render(shown + 1))) shown += 1;
+  return {
+    content: render(shown),
+    mentionUserIds: mentionIdsOf(m.captains.slice(0, shown)),
+  };
 }
 
-export function draftCompleteMessage(seasonName: string): string {
-  return `✅ **The ${seasonName} draft is complete — the auction has closed.** See every roster — including any open seats still needing free agents or standins — at <${resolveSiteUrl()}/teams>`;
+export type DraftRosterPlayer = DraftReminderPerson & {
+  /** What the team paid; 0 prints no price. */
+  price: number;
+};
+
+export type DraftRosterTeam = {
+  name: string;
+  captainName: string;
+  /** Non-captain roster members, in the order to list them. */
+  players: DraftRosterPlayer[];
+  /** Seats the draft left empty (a pool that ran dry). */
+  openSeats: number;
+};
+
+export type DraftCompleteInput = {
+  /** Admin-authored, so not escaped (the draftScheduledMessage rule). */
+  seasonName: string;
+  /** Teams in draft order. */
+  teams: DraftRosterTeam[];
+  /**
+   * The same draft run finishing a second time, after an admin undid a sale
+   * on the finished draft. The teams are posted again as an update, with
+   * every player named in plain text: they were all pinged the first time.
+   */
+  again?: boolean;
+};
+
+/**
+ * The draft is over: one post listing every team, which replaces the old
+ * line-per-sale posts. It mentions each drafted player who linked Discord,
+ * once, on their team's line, so a player who wasn't watching learns their
+ * team and captain from the channel. Captains are named, not pinged: they
+ * were in the room. Whole team lines are packed in draft order under
+ * Discord's 2,000 characters; teams that don't fit are counted and left to
+ * the teams page, and their players are never allowlisted. With `again`, it
+ * mentions nobody.
+ */
+export function draftCompleteAnnouncement(
+  m: DraftCompleteInput,
+): DraftReminderAnnouncement {
+  const site = resolveSiteUrl();
+  const header = m.again
+    ? `✅ **The ${m.seasonName} draft is complete again. Here are the updated teams:**`
+    : `✅ **The ${m.seasonName} draft is complete! Here are the teams:**`;
+  const label = (p: DraftRosterPlayer): string =>
+    m.again ? name(p.name) : personLabel(p);
+  const anyOpen = m.teams.some((t) => t.openSeats > 0);
+  const footer = anyOpen
+    ? `Open seats get filled with free agents, and standins cover until then. Every roster: <${site}/teams>`
+    : `Every roster: <${site}/teams>`;
+  const teamLine = (t: DraftRosterTeam): string => {
+    const seats =
+      t.openSeats > 0
+        ? `, ${t.openSeats} open seat${t.openSeats === 1 ? "" : "s"}`
+        : "";
+    const roster = t.players.length
+      ? t.players
+          .map((p) => `${label(p)}${p.price > 0 ? ` $${p.price}` : ""}`)
+          .join(", ")
+      : "no players bought";
+    return `**${name(t.name)}** (captain ${name(t.captainName)}${seats}): ${roster}`;
+  };
+  const render = (shown: number): string => {
+    const hidden = m.teams.length - shown;
+    const more =
+      hidden > 0
+        ? [
+            `…and ${hidden} more team${hidden === 1 ? "" : "s"} on the teams page.`,
+          ]
+        : [];
+    return [header, ...m.teams.slice(0, shown).map(teamLine), ...more, footer].join(
+      "\n",
+    );
+  };
+  const fits = (content: string) => content.length <= DISCORD_CONTENT_MAX;
+  if (!fits(render(0))) {
+    // Defensive last resort for an absurd season name or site URL: still
+    // deliverable, and it names nobody, so nobody is allowlisted.
+    return {
+      content:
+        "✅ **The draft is complete!** Every roster is on the league site's teams page.",
+      mentionUserIds: [],
+    };
+  }
+  let shown = 0;
+  while (shown < m.teams.length && fits(render(shown + 1))) shown += 1;
+  return {
+    content: render(shown),
+    mentionUserIds: m.again
+      ? []
+      : mentionIdsOf(m.teams.slice(0, shown).flatMap((t) => t.players)),
+  };
 }
 
 export function regularSeasonStartedMessage(seasonName: string): string {
@@ -139,7 +272,7 @@ export function draftAbortedMessage(
   return `🛑 **The ${seasonName} auction was aborted and the season is back in Signups.** ${playersReturned} non-captain roster member(s) returned to the pool${matchesRemoved ? `; ${matchesRemoved} unplayed fixture(s) were cleared` : ""}. Wait for the admin to announce the restart: <${resolveSiteUrl()}>`;
 }
 
-/** Draft-night superlatives, appended right after the complete message. */
+/** Draft-night superlatives, posted right after the teams (draftCompleteAnnouncement). */
 export function draftRecapMessage(r: {
   biggestSpend: { name: string; teamName: string; price: number } | null;
   bestValue: { name: string; teamName: string; price: number } | null;
@@ -165,16 +298,6 @@ export function draftRecapMessage(r: {
     );
   }
   return lines.join("\n");
-}
-
-export function playerSoldMessage(
-  playerName: string,
-  teamName: string,
-  price: number,
-): string {
-  const tag =
-    price >= 50 ? " 💸 big spender!" : price <= 1 ? " — a steal!" : "";
-  return `💰 **${name(playerName)}** → **${name(teamName)}** for **$${price}**${tag}`;
 }
 
 /** "the semifinals", "the grand final", "Round 3" — a round name mid-sentence. */
@@ -761,21 +884,7 @@ export function draftReminderAnnouncement(
       : "Player signups are closed; standins can still sign up.");
   const footer = `Draft room: <${site}/draft> · Signup page: <${site}/me>`;
 
-  const mentionable = (p: DraftReminderPerson): string | null => {
-    const id = p.discordId?.trim();
-    return id && normalizeMentionAllowlist({ users: [id] }) ? id : null;
-  };
-  const who = (people: DraftReminderPerson[], shown: number): string => {
-    const names = people
-      .slice(0, shown)
-      .map((p) => {
-        const id = mentionable(p);
-        return id ? `<@${id}>` : name(p.name);
-      })
-      .join(", ");
-    const extra = people.length - shown;
-    return `${names}${extra > 0 ? ` +${extra} more` : ""}`;
-  };
+  const who = peopleList;
   const render = (captainsShown: number, unconfirmedShown: number): string => {
     const lines = [header, counts];
     if (captainCount > 0) {
@@ -823,18 +932,42 @@ export function draftReminderAnnouncement(
   }
 
   const content = render(captainsShown, unconfirmedShown);
-  const mentionUserIds = [
+  const mentionUserIds = mentionIdsOf([
+    ...m.captains.slice(0, captainsShown),
+    ...m.unconfirmed.slice(0, unconfirmedShown),
+  ]);
+  return { content, mentionUserIds };
+}
+
+/** A person's snowflake when it is a real one a mention can reach, else null. */
+function mentionableId(p: DraftReminderPerson): string | null {
+  const id = p.discordId?.trim();
+  return id && normalizeMentionAllowlist({ users: [id] }) ? id : null;
+}
+
+/** `<@id>` for a linked person, their escaped site name otherwise. */
+function personLabel(p: DraftReminderPerson): string {
+  const id = mentionableId(p);
+  return id ? `<@${id}>` : name(p.name);
+}
+
+/** The first `shown` people, comma-separated, plus "+N more" for the rest. */
+function peopleList(people: DraftReminderPerson[], shown: number): string {
+  const names = people.slice(0, shown).map(personLabel).join(", ");
+  const extra = people.length - shown;
+  return `${names}${extra > 0 ? ` +${extra} more` : ""}`;
+}
+
+/** The distinct mentionable ids among `people`, in order. */
+function mentionIdsOf(people: DraftReminderPerson[]): string[] {
+  return [
     ...new Set(
-      [
-        ...m.captains.slice(0, captainsShown),
-        ...m.unconfirmed.slice(0, unconfirmedShown),
-      ].flatMap((p) => {
-        const id = mentionable(p);
+      people.flatMap((p) => {
+        const id = mentionableId(p);
         return id ? [id] : [];
       }),
     ),
   ];
-  return { content, mentionUserIds };
 }
 
 export function weeklyHonorsMessage(honors: {
@@ -1222,7 +1355,25 @@ export type DiscordSendOptions = {
   marker?: LeagueAnnouncementMarker;
   /** False is reserved for webhook health checks and transport tests. */
   durable?: boolean;
+  /**
+   * Queue now, but make the immediate delivery attempt after the HTTP response
+   * is sent (runAfterResponse), so the request that triggered the post never
+   * waits on Discord. For hot paths such as the live draft, where the captain
+   * whose poll or bid closed the last lot would otherwise sit frozen for up to
+   * 5s per post. If that attempt is lost, the minute worker drains the row.
+   */
+  afterResponse?: boolean;
 };
+
+/**
+ * How many queued rows one after-response attempt may deliver. More than one
+ * on purpose: two posts queued by one request (the draft's teams post, then
+ * its recap) each schedule an attempt, and after() runs them concurrently. The
+ * queue delivers strictly in order, so the second attempt finds the first
+ * row mid-send and gives up; the first attempt then carries on to the next
+ * row instead of leaving it for the minute worker.
+ */
+const AFTER_RESPONSE_DELIVERY_LIMIT = 4;
 
 /**
  * Persist a league announcement before webhook I/O. `true` means the work is
@@ -1272,14 +1423,20 @@ export async function sendDiscordMessage(
   // immediate UX, but a DB/Discord failure after enqueue belongs to the cron
   // drain and must not make the domain action believe its notification vanished.
   if (event.status !== LEAGUE_ANNOUNCEMENT_STATUS.SENT) {
-    try {
-      await deliverLeagueAnnouncements({
-        limit: 1,
+    const attempt = (limit: number) =>
+      deliverLeagueAnnouncements({
+        limit,
         send: (queuedContent, queuedMentions) =>
           sendTo(url, queuedContent, queuedMentions),
       });
-    } catch {
-      // Durable row remains pending; the worker retries it.
+    if (options.afterResponse) {
+      await runAfterResponse(() => attempt(AFTER_RESPONSE_DELIVERY_LIMIT));
+    } else {
+      try {
+        await attempt(1);
+      } catch {
+        // Durable row remains pending; the worker retries it.
+      }
     }
   }
   return true;

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   rateLimit: vi.fn(),
   clientIp: vi.fn(),
   claimThrottle: vi.fn(),
+  recordCaptainPresence: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
@@ -20,6 +21,9 @@ vi.mock("@/lib/draft-service", () => ({
   getDraftState: mocks.getDraftState,
   placeBid: mocks.placeBid,
   nominatePlayer: mocks.nominatePlayer,
+}));
+vi.mock("@/lib/draft-presence-service", () => ({
+  recordCaptainPresence: mocks.recordCaptainPresence,
 }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: mocks.rateLimit,
@@ -42,7 +46,12 @@ import { POST as adminNominate } from "./admin-nominate/route";
 const user = { id: "captain-1", name: "Captain", role: "USER" };
 const admin = { id: "admin-1", name: "Admin", role: "ADMIN" };
 const season = { id: "season-1", name: "Season One" };
-const state = { seasonId: season.id, status: "IN_PROGRESS" };
+const state = {
+  seasonId: season.id,
+  seasonStatus: "DRAFT",
+  status: "IN_PROGRESS",
+  me: { myTeamId: null as string | null },
+};
 const turn = {
   seasonId: season.id,
   draftVersion: 1_800_000_000_000,
@@ -89,6 +98,7 @@ beforeEach(() => {
   mocks.nominatePlayer.mockResolvedValue({ ok: true });
   mocks.rateLimit.mockReturnValue({ allowed: true });
   mocks.claimThrottle.mockResolvedValue(true);
+  mocks.recordCaptainPresence.mockResolvedValue(undefined);
   mocks.clientIp.mockReturnValue("203.0.113.10");
 });
 
@@ -163,6 +173,50 @@ describe("POST /api/draft/tick", () => {
       resolveDeadlines: false,
     });
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("records a captain's poll as their presence in the draft room", async () => {
+    mocks.getDraftState.mockResolvedValue({
+      ...state,
+      me: { myTeamId: "team-1" },
+    });
+
+    const response = await tick(request("tick", { seasonId: season.id }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.recordCaptainPresence).toHaveBeenCalledWith(
+      season.id,
+      user.id,
+    );
+  });
+
+  it("records presence in the waiting room before Start, not once the draft is over", async () => {
+    mocks.getDraftState.mockResolvedValue({
+      ...state,
+      seasonStatus: "SIGNUPS",
+      status: "NOT_STARTED",
+      me: { myTeamId: "team-1" },
+    });
+    await tick(request("tick", { seasonId: season.id }));
+    expect(mocks.recordCaptainPresence).toHaveBeenCalledOnce();
+
+    mocks.recordCaptainPresence.mockClear();
+    mocks.getDraftState.mockResolvedValue({
+      ...state,
+      status: "COMPLETE",
+      me: { myTeamId: "team-1" },
+    });
+    await tick(request("tick", { seasonId: season.id }));
+    expect(mocks.recordCaptainPresence).not.toHaveBeenCalled();
+  });
+
+  it("records no presence for viewers who aren't captains", async () => {
+    await tick(request("tick", { seasonId: season.id }));
+    expect(mocks.recordCaptainPresence).not.toHaveBeenCalled();
+
+    mocks.getSessionUser.mockResolvedValue(null);
+    await tick(request("tick", { seasonId: season.id }));
+    expect(mocks.recordCaptainPresence).not.toHaveBeenCalled();
   });
 
   it("rejects an oversized body after the IP preflight but before auth or database work", async () => {

@@ -1324,9 +1324,16 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
   against a live league, where `resolveStalledNomination` auto-sells an
   undrafted signup onto a mid-season roster on the next poll from any visitor.
   Coverage in `test/integration/season-phase.itest.ts`.
-- **/draft page gates ONLY on "no active season"** — never on season.status:
-  the league parks there during SIGNUPS and a static gate never learns the
-  admin hit start. The room's poll handles waiting → live → complete.
+- **/draft never gates on the phases the room moves through.** With an
+  active season in SIGNUPS or DRAFT it renders whatever the auction's status:
+  the league parks there during SIGNUPS, a static gate never learns the admin
+  hit Start, and the room's poll handles waiting → live → complete. Once the
+  season has LEFT those two phases the page redirects to /teams (rosters,
+  prices and the draft-night recap live there) — EXCEPT while the auction is
+  IN_PROGRESS or PAUSED. That is the stranded-auction state (the flip back
+  into DRAFT is its repair), and the admin must still be able to see it in
+  the room, so don't widen the redirect to cover it. No active season shows
+  the empty state.
 - **Room correctness**: poll/action responses are sequence-ordered (a slow
   tick must not clobber a fresher bid response); the outbid latch is NOT
   cleared just because the captain is priced out (they most need to see it);
@@ -1363,9 +1370,14 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
   note and hide Remove (clearing the DB key can't touch env). Regression guard:
   don't reintroduce any client render of the raw URL.
 - Announces: new player signups (with countdown to the draft threshold), draft
-  started (`startDraft`), every auction sale (`resolveExpiredNomination`,
-  captured in-tx and sent post-commit — one message per sale, idempotent),
-  draft complete (both draft-service resolvers), match results — every decided
+  started (`startDraft`, mentions the linked captains), draft complete (both
+  draft-service resolvers: ONE teams post mentioning each linked drafted
+  player, then the recap, queued with `afterResponse` so the captain whose
+  request closed the last lot never waits on Discord; single sales post
+  nothing, the room shows them. Only a run's FIRST completion pings: Undo can
+  reopen a finished draft, and the repeat completion posts the updated teams
+  with plain names and no recap, gated on the `draftTeamsPing:<season>:<run>`
+  Setting CREATE, released if nothing was queued), match results — every decided
   series announces via `announceSeriesResultOnce` (`match-import.ts`, fired
   from `recomputeSeries` on the transition to decided, idempotent through an
   atomic `resultAnnounced:<matchId>` Setting CREATE; admin `recordResult`

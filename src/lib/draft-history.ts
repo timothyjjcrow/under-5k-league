@@ -46,7 +46,9 @@ export async function startDraftRun(tx: Tx, input: {
     seasonId: input.seasonId, runNumber: await nextRunNumber(tx, input.seasonId),
     provenance: "COMMAND", status: "RUNNING", startedAt: now, startedById: input.actor.id,
     rulesSnapshot: JSON.stringify({ version: 1, ...input.rules, minimumBid: DEFAULTS.MIN_BID,
-      bidTimerSeconds: DEFAULTS.BID_TIMER_SECONDS, nominationTimerSeconds: DEFAULTS.NOMINATION_TIMER_SECONDS,
+      bidTimerSeconds: DEFAULTS.BID_TIMER_SECONDS,
+      uncontestedBidTimerSeconds: DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
+      nominationTimerSeconds: DEFAULTS.NOMINATION_TIMER_SECONDS,
       budgetAlgorithm: "mmrWeightedBudgets-v1" }),
     openingTeamsSnapshot: JSON.stringify({ version: 1, teams: input.teams.map((team) => ({
       ...team, captainMmr: byUser.get(team.captainId)?.mmr || null,
@@ -208,9 +210,11 @@ export async function voidDraftLot(tx: Tx, draft: Draft, reason: string, actorId
   await tx.draft.update({ where: { id: draft.id }, data: { currentLotId: null } });
 }
 
-export async function setDraftRunStatus(tx: Tx, draft: Draft, status: "RUNNING" | "COMPLETE", now = new Date()) {
+/** Returns the run's id: the draft-complete teams post is keyed to it. */
+export async function setDraftRunStatus(tx: Tx, draft: Draft, status: "RUNNING" | "COMPLETE", now = new Date()): Promise<string> {
   const run = await ensureDraftRun(tx, draft, undefined, now);
   await tx.draftRun.update({ where: { id: run.id }, data: { status, endedAt: status === "COMPLETE" ? now : null } });
+  return run.id;
 }
 
 export async function undoDraftSaleHistory(tx: Tx, draft: Draft, member: TeamMember, actor: HistoryActor, now = new Date()) {
@@ -277,5 +281,7 @@ export function draftLotPlayer(lot: DraftLot): DraftedPlayer & { at: number } {
 
 export async function readDraftSales(tx: Pick<Tx, "draftLot">, runId: string) {
   return (await tx.draftLot.findMany({ where: { runId, status: "SOLD" }, orderBy: [{ soldAt: "desc" }, { sequence: "desc" }, { id: "desc" }] }))
-    .map(draftLotPlayer);
+    // `auto`: the nominator's clock ran out and the draft opened this lot for
+    // them, so the draft room can label the sale "auto-picked".
+    .map((lot) => ({ ...draftLotPlayer(lot), auto: lot.openingKind === "AUTOMATIC" }));
 }

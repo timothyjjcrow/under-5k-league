@@ -8,6 +8,7 @@ import { getSeasonGameLeaders } from "@/lib/cached-queries";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
+import { draftNightSoon } from "@/lib/draft-setup";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import {
@@ -230,10 +231,25 @@ export default async function Home() {
     ? "Register as a standin →"
     : "Sign in to stand in →";
   let heroAction: ReactNode = null;
+  // Draft night during Signups: from shortly before the scheduled time until
+  // the admin presses Start, the hero points everyone at the draft room (a
+  // waiting room that goes live by itself) instead of the feature tour.
+  const draftRoomSoon = draftNightSoon(
+    season.status,
+    season.draftAt?.getTime(),
+    // One time snapshot for this render.
+    // eslint-disable-next-line react-hooks/purity
+    Date.now(),
+  );
   if (season.status === "SIGNUPS") {
     // The feature tour rides along during signups — new visitors can't see
-    // most of the league (draft, fantasy, pick'em…) until later phases.
-    const tourLink = (
+    // most of the league (draft, fantasy, pick'em…) until later phases. On
+    // draft night the draft room takes its place.
+    const sideLink = draftRoomSoon ? (
+      <Link href="/draft" className={buttonClasses("accent", "lg")}>
+        Enter the draft room →
+      </Link>
+    ) : (
       <Link href="/features" className={buttonClasses("secondary", "lg")}>
         See what you&apos;re joining
       </Link>
@@ -244,24 +260,24 @@ export default async function Home() {
         <Link href="/login?next=/me" className={buttonClasses("primary", "lg")}>
           Sign in with Steam to join →
         </Link>
-        {tourLink}
+        {sideLink}
       </>
     ) : isRemovedReg ? (
       <>
         <Link href="/me" className={buttonClasses("secondary", "lg")}>
           Signup removed — see details
         </Link>
-        {tourLink}
+        {sideLink}
       </>
     ) : !isActiveReg ? (
       <>
         <Link href="/me" className={buttonClasses("primary", "lg")}>
           Join the season →
         </Link>
-        {tourLink}
+        {sideLink}
       </>
     ) : (
-      tourLink
+      sideLink
     );
   } else if (season.status === "DRAFT") {
     heroAction = (
@@ -459,7 +475,9 @@ export default async function Home() {
           playoffRounds={playoffTotalRounds(matches)}
         />
       </Suspense>
-    ) : season.status === "SIGNUPS" && isActiveReg ? (
+    ) : season.status === "SIGNUPS" && isActiveReg && !draftRoomSoon ? (
+      // On draft night the aside gives way, so the hero's action column can
+      // carry "Enter the draft room" to the players about to be drafted.
       <SignupsAside snapshot={snapshot} />
     ) : null;
 
@@ -1593,9 +1611,18 @@ function StatBar({
 // A read-only glance at the live auction so the dashboard tells the story
 // without opening the draft room: who's on the block, what's left in the
 // pool, and the latest sales. Never resolves clocks — that stays in /draft.
+// Live and paused auctions only: once the draft is complete there is nothing
+// to watch, and the hero's "Review the draft results" link and the rosters
+// below already cover it.
 async function DraftPulse({ seasonId }: { seasonId: string }) {
   const draft = await prisma.draft.findUnique({ where: { seasonId } });
-  if (!draft || draft.status === DRAFT_STATUS.NOT_STARTED) return null;
+  if (
+    !draft ||
+    (draft.status !== DRAFT_STATUS.IN_PROGRESS &&
+      draft.status !== DRAFT_STATUS.PAUSED)
+  ) {
+    return null;
+  }
 
   const rostered = await prisma.teamMember.findMany({
     where: { seasonId },
@@ -1667,13 +1694,11 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
             </div>
           ) : (
             <p className="mt-2 text-sm text-muted">
-              {draft.status === DRAFT_STATUS.COMPLETE
-                ? "The draft is complete."
-                : draft.status === DRAFT_STATUS.PAUSED
-                  ? "The draft is paused."
-                  : nominatorTeam
-                    ? `${nominatorTeam.name} is on the clock to nominate.`
-                    : "Waiting on the next nomination…"}
+              {draft.status === DRAFT_STATUS.PAUSED
+                ? "The draft is paused."
+                : nominatorTeam
+                  ? `${nominatorTeam.name} is on the clock to nominate.`
+                  : "Waiting on the next nomination…"}
             </p>
           )}
         </div>

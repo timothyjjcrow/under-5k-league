@@ -408,3 +408,54 @@ describe("live rooms delegate their alert triggers", () => {
     });
   }
 });
+
+// Both rooms used to stack one strip per condition (offline, connection lost,
+// back online, checking after an interrupted action, sign-in expired, updates
+// delayed), and two could show at once. They now render ONE line picked by
+// the tested `roomStatus`; a strip re-inlined into a room would bring the
+// stacking back without any test noticing.
+describe("live rooms share one status line", () => {
+  for (const file of ROOMS) {
+    it(`${file}: renders its conditions through roomStatus + RoomStatusLine`, () => {
+      const src = code(file);
+      expect(src).toContain("roomStatus(");
+      expect(src).toContain("<RoomStatusLine");
+    });
+  }
+
+  it("no UI file hand-writes a status sentence", () => {
+    for (const sentence of [
+      "Connection lost — reconnecting",
+      "Connection restored — checking",
+      "after an interrupted action",
+    ]) {
+      expect(
+        uiFilesWith(sentence),
+        `UI code has re-inlined a room status strip ("${sentence}") — pick ` +
+          `the line with roomStatus and render <RoomStatusLine>.`,
+      ).toEqual([]);
+    }
+  });
+
+  // The status line and the pause note come and go between polls (a lost bid
+  // response, a 429, the admin resuming). Rendered above the lot card they
+  // pushed the lot and its bid buttons down and back up under a captain's
+  // thumb, so the live view renders them below the controls instead.
+  it("draft-room: the live view's status line sits below the bid controls", () => {
+    const src = code("draft-room.tsx");
+    const live = src.indexOf("const lotStale");
+    const zone = src.indexOf("ref={bannerRef}", live);
+    const primer = src.indexOf("<AuctionPrimer", zone);
+    expect(live).toBeGreaterThan(-1);
+    expect(zone).toBeGreaterThan(live);
+    expect(primer).toBeGreaterThan(zone);
+    const aboveCard = src.slice(live, zone);
+    expect(aboveCard).not.toContain("{roomAlerts}");
+    expect(aboveCard).not.toContain("paused the auction");
+    const card = src.slice(zone, primer);
+    const controls = card.indexOf("<ExactBidControl");
+    expect(controls).toBeGreaterThan(-1);
+    expect(card.indexOf("{roomAlerts}")).toBeGreaterThan(controls);
+    expect(card.indexOf("paused the auction")).toBeGreaterThan(controls);
+  });
+});
