@@ -247,6 +247,12 @@ type CompletedDraft = { name: string; teamSize: number };
  * The draft-complete posts, after the commit: the teams (every drafted player
  * who linked Discord mentioned once), then the draft-night recap. Best-effort
  * like every send: a failed read or send never touches the finished draft.
+ *
+ * This runs on the live draft's hot path (the tick, bid and nominate routes
+ * resolve expired clocks), so both posts are queued now and delivered after
+ * the response: the captain whose request closed the last lot never waits on
+ * Discord. The queue keeps them in order, and the minute worker delivers them
+ * if the after-response attempt is lost.
  */
 async function announceDraftComplete(
   seasonId: string,
@@ -286,6 +292,7 @@ async function announceDraftComplete(
     await sendDiscordMessage(
       announcement.content,
       mentionsOf(announcement.mentionUserIds),
+      { afterResponse: true },
     );
     await sendDraftRecap(seasonId);
   } catch {
@@ -311,7 +318,11 @@ async function sendDraftRecap(seasonId: string): Promise<void> {
         mmr: null,
       })));
   const recap = draftRecap(players);
-  if (recap.totalSpent > 0) await sendDiscordMessage(draftRecapMessage(recap));
+  if (recap.totalSpent > 0) {
+    await sendDiscordMessage(draftRecapMessage(recap), undefined, {
+      afterResponse: true,
+    });
+  }
 }
 
 /**

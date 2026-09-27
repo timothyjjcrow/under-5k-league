@@ -8,6 +8,14 @@ import {
   it,
   vi,
 } from "vitest";
+// The real `after` (it throws outside a request scope, which is every test
+// here), wrapped so one test can capture the task a request would run after
+// its response.
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: vi.fn(actual.after) };
+});
+import { after } from "next/server";
 import {
   deleteWebhookMessage,
   deliverPendingLeagueAnnouncements,
@@ -232,6 +240,93 @@ describe("sendDiscordMessage", () => {
       else process.env.DISCORD_WEBHOOK_URL = previous;
     }
     expect(recorded).toHaveLength(0);
+  });
+
+  it("afterResponse queues the post and leaves Discord for after the response", async () => {
+    // Inside a request, after() takes the delivery attempt: the request that
+    // queued the posts returns before Discord is contacted at all.
+    const scheduled: (() => Promise<unknown>)[] = [];
+    vi.mocked(after)
+      .mockImplementationOnce((task) => {
+        scheduled.push(task as () => Promise<unknown>);
+      })
+      .mockImplementationOnce((task) => {
+        scheduled.push(task as () => Promise<unknown>);
+      });
+    respond = () => ({ status: 204, delayMs: 50 });
+
+    expect(
+      await sendDiscordMessage("Teams post", undefined, { afterResponse: true }),
+    ).toBe(true);
+    expect(
+      await sendDiscordMessage("Recap post", undefined, { afterResponse: true }),
+    ).toBe(true);
+    expect(recorded).toHaveLength(0);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { content: true, status: true, attempts: true },
+      }),
+    ).toEqual([
+      { content: "Teams post", status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, attempts: 0 },
+      { content: "Recap post", status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, attempts: 0 },
+    ]);
+
+    // after() runs its tasks concurrently. The queue still delivers both, in
+    // order, without leaving the second post for the minute worker.
+    expect(scheduled).toHaveLength(2);
+    await Promise.all(scheduled.map((task) => task()));
+    expect(recorded.map((r) => r.body?.content)).toEqual([
+      "Teams post",
+      "Recap post",
+    ]);
+    expect(
+      await prisma.leagueAnnouncement.count({
+        where: { status: LEAGUE_ANNOUNCEMENT_STATUS.SENT },
+      }),
+    ).toBe(2);
+  });
+
+  it("afterResponse outside a request delivers inline, like a plain send", async () => {
+    expect(
+      await sendDiscordMessage("Worker post", undefined, { afterResponse: true }),
+    ).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(await prisma.leagueAnnouncement.findFirst()).toMatchObject({
+      content: "Worker post",
+      status: LEAGUE_ANNOUNCEMENT_STATUS.SENT,
+    });
+  });
+
+  it("afterResponse keeps the post queued when the late attempt fails", async () => {
+    let scheduled: (() => Promise<unknown>) | null = null;
+    vi.mocked(after).mockImplementationOnce((task) => {
+      scheduled = task as () => Promise<unknown>;
+    });
+    respond = () => ({ status: 503 });
+
+    expect(
+      await sendDiscordMessage("Durable draft post", undefined, {
+        afterResponse: true,
+      }),
+    ).toBe(true);
+    await scheduled!();
+    const pending = await prisma.leagueAnnouncement.findFirstOrThrow();
+    expect(pending).toMatchObject({
+      content: "Durable draft post",
+      status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+      attempts: 1,
+      lastErrorCode: "TRANSPORT_REJECTED",
+    });
+
+    // The worker's drain picks it up once Discord is back.
+    respond = () => ({ status: 204 });
+    await expect(
+      deliverPendingLeagueAnnouncements({
+        now: new Date(pending.availableAt.getTime() + 1),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ attempted: 1, delivered: 1, pending: false });
   });
 
   it("rejects invalid payloads and persistence failures before webhook I/O", async () => {

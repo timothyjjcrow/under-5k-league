@@ -462,6 +462,12 @@ describe("draft auction — claim guards", () => {
     const recap = String(mockSend.mock.calls[1][0]);
     expect(recap).toContain("Draft night in numbers");
     expect(recap).toContain("First Buy"); // $9 — the biggest buy
+
+    // Both are queued now and delivered after the response, so the captain
+    // whose request closed the last lot never waits on Discord.
+    for (const call of mockSend.mock.calls) {
+      expect(call[2]).toEqual({ afterResponse: true });
+    }
   });
 });
 

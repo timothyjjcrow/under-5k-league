@@ -19,6 +19,7 @@ import {
 } from "./league-announcement-outbox";
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
+import { runAfterResponse } from "./after-response";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -1341,7 +1342,25 @@ export type DiscordSendOptions = {
   marker?: LeagueAnnouncementMarker;
   /** False is reserved for webhook health checks and transport tests. */
   durable?: boolean;
+  /**
+   * Queue now, but make the immediate delivery attempt after the HTTP response
+   * is sent (runAfterResponse), so the request that triggered the post never
+   * waits on Discord. For hot paths such as the live draft, where the captain
+   * whose poll or bid closed the last lot would otherwise sit frozen for up to
+   * 5s per post. If that attempt is lost, the minute worker drains the row.
+   */
+  afterResponse?: boolean;
 };
+
+/**
+ * How many queued rows one after-response attempt may deliver. More than one
+ * on purpose: two posts queued by one request (the draft's teams post, then
+ * its recap) each schedule an attempt, and after() runs them concurrently. The
+ * queue delivers strictly in order, so the second attempt finds the first
+ * row mid-send and gives up; the first attempt then carries on to the next
+ * row instead of leaving it for the minute worker.
+ */
+const AFTER_RESPONSE_DELIVERY_LIMIT = 4;
 
 /**
  * Persist a league announcement before webhook I/O. `true` means the work is
@@ -1391,14 +1410,20 @@ export async function sendDiscordMessage(
   // immediate UX, but a DB/Discord failure after enqueue belongs to the cron
   // drain and must not make the domain action believe its notification vanished.
   if (event.status !== LEAGUE_ANNOUNCEMENT_STATUS.SENT) {
-    try {
-      await deliverLeagueAnnouncements({
-        limit: 1,
+    const attempt = (limit: number) =>
+      deliverLeagueAnnouncements({
+        limit,
         send: (queuedContent, queuedMentions) =>
           sendTo(url, queuedContent, queuedMentions),
       });
-    } catch {
-      // Durable row remains pending; the worker retries it.
+    if (options.afterResponse) {
+      await runAfterResponse(() => attempt(AFTER_RESPONSE_DELIVERY_LIMIT));
+    } else {
+      try {
+        await attempt(1);
+      } catch {
+        // Durable row remains pending; the worker retries it.
+      }
     }
   }
   return true;
