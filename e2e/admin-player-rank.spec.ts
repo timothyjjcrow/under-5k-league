@@ -132,7 +132,8 @@ for (const viewport of [
       const publicPlayer = publicPage.locator("li").filter({ has: publicPage.getByRole("link", { name: player.name, exact: true }) });
       await expect(publicPlayer.getByText("4800", { exact: true })).toBeVisible();
       await expect(publicPlayer.getByLabel("Herald 1", { exact: true })).toBeVisible();
-      const publicStandin = publicPage.getByRole("link", { name: new RegExp(standin.name) });
+      // Standins share the pool table with full players.
+      const publicStandin = publicPage.locator("li").filter({ has: publicPage.getByRole("link", { name: standin.name, exact: true }) });
       await expect(publicStandin.getByText("4100", { exact: true })).toBeVisible();
       await expect(publicStandin.getByLabel("Archon 3", { exact: true })).toBeVisible();
 

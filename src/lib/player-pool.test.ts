@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPoolInhouseInfo,
   filterAndSortPlayers,
+  filterPoolRows,
   inhouseToken,
   pubHeroTitle,
   pubTitle,
@@ -103,6 +104,46 @@ describe("draft-status filter", () => {
     expect(names("all")).toEqual(["Free", "NoField", "Taken"]);
     expect(names("drafted")).toEqual(["NoField", "Taken"]);
     expect(names("free")).toEqual(["Free", "NoField"]);
+  });
+});
+
+describe("filterPoolRows (standins share the /players table)", () => {
+  const rows = [
+    mk({ name: "Drafted", mmr: 4000, drafted: true, roles: "1" }),
+    mk({ name: "Free", mmr: 3000, roles: "2" }),
+    mk({ name: "Sub", mmr: 3500, roles: "1,5" }),
+    mk({ name: "Spare", mmr: 1000, roles: "4" }),
+  ];
+  const standins = new Set(["Sub", "Spare"]);
+  const names = (filter: Parameters<typeof filterPoolRows>[1]) =>
+    filterPoolRows(rows, filter, standins).map((p) => p.name);
+
+  it("lists everyone by default, standins interleaved by the chosen sort", () => {
+    expect(names({})).toEqual(["Drafted", "Sub", "Free", "Spare"]);
+  });
+  it("search, role and sort reach standins too", () => {
+    expect(names({ query: "sub" })).toEqual(["Sub"]);
+    expect(names({ role: "1" })).toEqual(["Drafted", "Sub"]);
+    expect(names({ sort: "name" })).toEqual(["Drafted", "Free", "Spare", "Sub"]);
+  });
+  it("the Standins chip narrows to standins and keeps the other filters", () => {
+    expect(names({ status: "standin" })).toEqual(["Sub", "Spare"]);
+    expect(names({ status: "standin", role: "4" })).toEqual(["Spare"]);
+  });
+  it("never counts a standin as a free agent or as drafted", () => {
+    expect(names({ status: "free" })).toEqual(["Free"]);
+    expect(names({ status: "drafted" })).toEqual(["Drafted"]);
+  });
+  it("leaves the shared lib standin-blind (the draft room's filter)", () => {
+    // Without the type narrowing a standin reads as an undrafted player.
+    expect(
+      filterAndSortPlayers(rows, { status: "free" }).map((p) => p.name),
+    ).toEqual(["Sub", "Free", "Spare"]);
+  });
+  it("does not mutate the input", () => {
+    const before = rows.map((p) => p.name);
+    names({ status: "standin", sort: "name" });
+    expect(rows.map((p) => p.name)).toEqual(before);
   });
 });
 

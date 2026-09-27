@@ -20,7 +20,7 @@ import {
 import { heroById } from "@/lib/heroes";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
-  filterAndSortPlayers,
+  filterPoolRows,
   inhouseTitle,
   inhouseToken,
   pubHeroTitle,
@@ -30,6 +30,7 @@ import {
   type PoolPlayer,
   type PoolScoutInfo,
   type PoolSort,
+  type PoolStatusFilter,
 } from "@/lib/player-pool";
 import { pubActivity } from "@/lib/pub-stats";
 import { cn, hasText } from "@/lib/utils";
@@ -47,8 +48,6 @@ export type PoolDraftInfo = Record<
   }
 >;
 
-type PoolStatus = "all" | "drafted" | "free";
-
 /** The component's sort space: the shared lib's three, plus the pool-only
  *  inhouse ordering. Deliberately NOT added to PoolSort — that type is shared
  *  with the draft room, where an inhouse option would be a phantom control. */
@@ -59,6 +58,7 @@ const ROLE_KEYS: string[] = DOTA_ROLES.map((r) => r.key);
 
 export function PlayerPool({
   players,
+  standinIds,
   showDraftStatus,
   draftInfo,
   scout,
@@ -66,6 +66,10 @@ export function PlayerPool({
   showContact = false,
 }: {
   players: PoolPlayer[];
+  /** Which rows are STANDIN registrations. A parallel list rather than a
+   *  PoolPlayer field: that shape is shared with the draft room, which never
+   *  lists standins. */
+  standinIds?: string[];
   showDraftStatus: boolean;
   draftInfo?: PoolDraftInfo;
   /** Per-player scouting extras (inhouse record, pub snapshot, goals quote) —
@@ -82,6 +86,8 @@ export function PlayerPool({
   // Data-presence gates (the anyDrafted precedent — never season phase).
   // Computed before the state hooks: the sort seeding below reads anyInhouse.
   const anyInhouse = players.some((p) => !!scout?.[p.userId]?.inhouse);
+  const standinSet = useMemo(() => new Set(standinIds ?? []), [standinIds]);
+  const anyStandin = players.some((p) => standinSet.has(p.userId));
   const nowMs = now;
   const grid = rowGrid(anyInhouse);
   // Filter state seeds from the URL so a captain can SEND someone "the pos-1
@@ -107,8 +113,11 @@ export function PlayerPool({
   const [captainOnly, setCaptainOnly] = useState(
     () => params.get("cap") === "1",
   );
-  const [status, setStatus] = useState<PoolStatus>(() => {
+  const [status, setStatus] = useState<PoolStatusFilter>(() => {
     const s = params.get("status");
+    // A shared ?status=standin link degrades like ?sort=inhouse when there is
+    // nobody to show, rather than filtering to an empty list with no chip.
+    if (s === "standin") return anyStandin ? "standin" : "all";
     return s === "drafted" || s === "free" ? s : "all";
   });
 
@@ -153,15 +162,19 @@ export function PlayerPool({
     // "inhouse" is a pool-only re-sort layered on the shared lib: filter with
     // the neutral mmr order, then band by inhouse record (ranked > provisional
     // > no games; the stable sort keeps the MMR order inside the tail band).
-    const base = filterAndSortPlayers(players, {
-      query,
-      role,
-      sort: sort === "inhouse" ? "mmr" : sort,
-      captainOnly,
-      status,
-    });
+    const base = filterPoolRows(
+      players,
+      {
+        query,
+        role,
+        sort: sort === "inhouse" ? "mmr" : sort,
+        captainOnly,
+        status,
+      },
+      standinSet,
+    );
     return sort === "inhouse" ? sortByInhouseRecord(base, scout ?? {}) : base;
-  }, [players, query, role, sort, captainOnly, status, scout]);
+  }, [players, query, role, sort, captainOnly, status, scout, standinSet]);
   const filtersActive =
     query !== "" || role !== null || captainOnly || status !== "all";
   // Sort is deliberately NOT reset: it's an ordering preference, not a filter,
@@ -243,26 +256,42 @@ export function PlayerPool({
           Wants captain
         </button>
 
-        {showDraftStatus && anyDrafted ? (
+        {(showDraftStatus && anyDrafted) || anyStandin ? (
           <div
             className="flex items-center gap-1"
             role="group"
-            aria-label="Filter by draft status"
+            aria-label="Filter by status"
           >
-            <StatusChip
-              active={status === "drafted"}
-              onClick={() =>
-                setStatus((s) => (s === "drafted" ? "all" : "drafted"))
-              }
-            >
-              Drafted
-            </StatusChip>
-            <StatusChip
-              active={status === "free"}
-              onClick={() => setStatus((s) => (s === "free" ? "all" : "free"))}
-            >
-              Free agents
-            </StatusChip>
+            {showDraftStatus && anyDrafted ? (
+              <>
+                <StatusChip
+                  active={status === "drafted"}
+                  onClick={() =>
+                    setStatus((s) => (s === "drafted" ? "all" : "drafted"))
+                  }
+                >
+                  Drafted
+                </StatusChip>
+                <StatusChip
+                  active={status === "free"}
+                  onClick={() =>
+                    setStatus((s) => (s === "free" ? "all" : "free"))
+                  }
+                >
+                  Free agents
+                </StatusChip>
+              </>
+            ) : null}
+            {anyStandin ? (
+              <StatusChip
+                active={status === "standin"}
+                onClick={() =>
+                  setStatus((s) => (s === "standin" ? "all" : "standin"))
+                }
+              >
+                Standins
+              </StatusChip>
+            ) : null}
           </div>
         ) : null}
 
@@ -566,7 +595,11 @@ export function PlayerPool({
                     {p.wantsCaptain ? (
                       <Badge tone="brand">Wants captain</Badge>
                     ) : null}
-                    {p.drafted ? (
+                    {standinSet.has(p.userId) ? (
+                      // Before the draft-status branch: a standin is never
+                      // rostered, and "Free agent" would say they can be signed.
+                      <Badge>Standin</Badge>
+                    ) : p.drafted ? (
                       draftInfo?.[p.userId] ? (
                         <TeamChip info={draftInfo[p.userId]} />
                       ) : (

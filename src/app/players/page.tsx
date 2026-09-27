@@ -151,7 +151,10 @@ export default async function PlayersPage() {
     viewer,
     viewerHasActiveRegistration,
   );
-  const poolPlayers = players.map((p) => ({
+  // Standins share the pool table (one list, so search, roles, sort and the
+  // scouting line work for everyone); the parallel id list marks them.
+  const poolRegistrations = [...players, ...standins];
+  const poolPlayers = poolRegistrations.map((p) => ({
     userId: p.userId,
     name: p.user.name,
     avatar: p.user.avatar,
@@ -189,10 +192,10 @@ export default async function PlayersPage() {
   const nowMs = Date.now();
   const inhouseInfo = buildPoolInhouseInfo(
     ladder,
-    players.map((p) => p.userId),
+    poolRegistrations.map((p) => p.userId),
   );
   const scout: PoolScoutInfo = {};
-  for (const p of players) {
+  for (const p of poolRegistrations) {
     const entry: PoolScout = {};
     if (inhouseInfo[p.userId]) entry.inhouse = inhouseInfo[p.userId];
     const pub = poolPubRecord(p.user.pubStats);
@@ -296,7 +299,7 @@ export default async function PlayersPage() {
         <SectionTitle aside={directory.poolAside}>
           {directory.poolTitle}
         </SectionTitle>
-        {players.length === 0 ? (
+        {poolRegistrations.length === 0 ? (
           <EmptyState
             title="No players yet"
             description={directory.emptyDescription}
@@ -309,6 +312,7 @@ export default async function PlayersPage() {
           >
             <PlayerPool
               players={poolPlayers}
+              standinIds={standins.map((s) => s.userId)}
               showDraftStatus={directory.showDraftStatus}
               draftInfo={draftInfo}
               scout={scout}
@@ -484,80 +488,6 @@ export default async function PlayersPage() {
           </div>
         </section>
       ) : null}
-
-      <section className="space-y-4">
-        <SectionTitle
-          aside={
-            standins.length > 0
-              ? `· ${standins.length} on call for match night`
-              : undefined
-          }
-        >
-          Standins
-        </SectionTitle>
-        {standins.length === 0 ? (
-          // Compact: this section is empty for most of a season and is not
-          // what anyone came for — a full 240px dashed box below a populated
-          // pool made the page look like it had failed to load.
-          <EmptyState
-            compact
-            title="No standins yet"
-            description="Standins fill in when a rostered player can't make a match."
-          />
-        ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {standins.map((s) => (
-              <PlayerLink
-                key={s.id}
-                userId={s.userId}
-                className="flex min-w-0 items-center gap-2.5 rounded-lg border border-line bg-surface/80 px-3 py-2 hover:border-muted/60 hover:no-underline"
-              >
-                <Avatar name={s.user.name} src={s.user.avatar} size={28} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">
-                    {s.user.name}
-                  </span>
-                  {/* Standins are the people a captain has to find at 7pm on a
-                      match night — they get the same roles/MMR legibility as
-                      the pool, not a bare name in a pill. Contact rides along
-                      for active league participants, the subject, and admins:
-                      the whole point of this list is "who can I actually
-                      reach tonight", and it made captains open profiles one by one.
-                      Plain text, not the copy-chip — the card is one link and
-                      a button inside a link is a tap-target trap. */}
-                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                    <RoleBadges roles={s.roles} />
-                    {canViewLeagueContact(
-                      viewer,
-                      s.userId,
-                      viewerHasActiveRegistration,
-                    ) ? (
-                      s.user.discordName || s.user.discordId ? (
-                        <span className="truncate text-xs text-muted">
-                          {s.user.discordName
-                            ? `@${s.user.discordName}`
-                            : "Discord linked"}
-                          {s.user.discordId ? " ✓" : ""}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted">
-                          no Discord
-                        </span>
-                      )
-                    ) : null}
-                  </span>
-                </span>
-                <span className="flex shrink-0 items-center gap-1.5">
-                  <RankBadge rankTier={s.user.rankTier} />
-                  <span className="text-sm tabular-nums text-muted">
-                    {s.mmr > 0 ? s.mmr : "—"}
-                  </span>
-                </span>
-              </PlayerLink>
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

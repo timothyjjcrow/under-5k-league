@@ -209,6 +209,39 @@ export type FilterablePlayer = {
   drafted?: boolean;
 };
 
+/** The /players status chips: the lib's draft-status filter plus "standin". */
+export type PoolStatusFilter = "all" | "drafted" | "free" | "standin";
+
+/**
+ * The /players pool's filter. Standins sit in the same table as full players,
+ * so search, roles and sort work for everyone, but registration type is a
+ * pool-only fact: `filterAndSortPlayers` is shared with the draft room, which
+ * must never list a standin, so neither PoolPlayer nor PoolFilter learns about
+ * it. The type narrowing happens here, then the shared lib does the rest.
+ *
+ * "drafted" and "free" are about FULL players: a standin is never rostered,
+ * so the lib alone would count every standin as a free agent, and a free agent
+ * is someone a captain can sign (signFreeAgent refuses standins).
+ * Never mutates the input.
+ */
+export function filterPoolRows<
+  T extends FilterablePlayer & { userId: string },
+>(
+  rows: T[],
+  filter: Omit<PoolFilter, "status"> & { status?: PoolStatusFilter },
+  standinIds: ReadonlySet<string>,
+): T[] {
+  const { status = "all", ...rest } = filter;
+  const typed =
+    status === "all"
+      ? rows
+      : rows.filter((r) => standinIds.has(r.userId) === (status === "standin"));
+  return filterAndSortPlayers(typed, {
+    ...rest,
+    status: status === "standin" ? "all" : status,
+  });
+}
+
 /** Filter + sort a player list. Never mutates the input. */
 export function filterAndSortPlayers<T extends FilterablePlayer>(
   players: T[],
