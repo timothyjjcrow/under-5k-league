@@ -15,7 +15,7 @@ test("signed-out profile requests explain sign-in without a duplicate header CTA
   ).toBeVisible();
   await expect(
     page.getByText(
-      "Sign in to open your profile and continue setting up your league account.",
+      "Sign in to open your account and continue setting up for the league.",
     ),
   ).toBeVisible();
   await expect(

@@ -57,10 +57,10 @@ export default async function LoginPage({
   const devLogin = process.env.ALLOW_DEV_LOGIN === "true";
   const intro =
     next === "/me"
-      ? "Sign in to open your profile and continue setting up your league account."
+      ? "Sign in to open your account and continue setting up for the league."
       : next
         ? "Sign in to continue where you left off."
-        : "Use Steam to create or return to your league profile.";
+        : "Use Steam to create or return to your league account.";
 
   return (
     <div className="mx-auto max-w-md">
@@ -161,7 +161,7 @@ export default async function LoginPage({
           browse the league
         </Link>{" "}
         without signing in — use Steam when you&apos;re ready to participate or
-        manage your profile.
+        manage your account.
       </p>
       <p className="mt-2 text-center text-sm text-muted">
         <Link href="/" className="hover:text-fg">
