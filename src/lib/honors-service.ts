@@ -91,8 +91,9 @@ async function weekOracleLine(
     return names.length > 0
       ? { names, correct: oracles[0].correct, graded: oracles[0].graded }
       : null;
-  } catch (error) {
-    console.error("[honors] pick'em oracle line skipped", error);
+  } catch {
+    // Never log the raw error: a database failure can carry a connection URL.
+    console.error("[honors] ORACLE_LINE_SKIPPED");
     return null;
   }
 }

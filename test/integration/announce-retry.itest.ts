@@ -769,6 +769,32 @@ describe("weekly-honors announcement retry", () => {
       expect(posts).toHaveLength(1);
       expect(posts[0]).not.toMatch(/Oracle/);
     });
+
+    it("posts without the line when the pick read fails, logging only a fixed tag", async () => {
+      const { season } = await setupCompletedWeek();
+      const read = vi
+        .spyOn(prisma.prediction, "findMany")
+        .mockRejectedValueOnce(
+          new Error("connect failed: postgresql://league:hunter2@db.internal/ld2l"),
+        );
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await maybeAnnounceWeekHonors(season.id, 1);
+
+        const posts = honorsPosts();
+        expect(posts).toHaveLength(1);
+        expect(posts[0]).not.toMatch(/Oracle/);
+        expect(read).toHaveBeenCalled();
+        expect(logged).toHaveBeenCalledWith("[honors] ORACLE_LINE_SKIPPED");
+        const everything = JSON.stringify(
+          logged.mock.calls.map((call) => call.map((arg) => String(arg))),
+        );
+        expect(everything).not.toContain("hunter2");
+      } finally {
+        read.mockRestore();
+        logged.mockRestore();
+      }
+    });
   });
 
   it("retries after a failed send, then stays once-only", async () => {
