@@ -21,7 +21,7 @@ import {
 } from "@/lib/player-pool";
 import { poolPubRecord } from "@/lib/pub-stats";
 import { heroById } from "@/lib/heroes";
-import { REGISTRATION_STATUS } from "@/lib/constants";
+import { REGISTRATION_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { playerDirectoryPresentation } from "@/lib/player-directory-lifecycle";
 import {
   canViewLeagueContact,
@@ -129,6 +129,8 @@ export default async function PlayersPage() {
     season.status,
     draft?.status,
   );
+  // After the final nobody is "on call" any more.
+  const seasonOver = season.status === SEASON_STATUS.COMPLETE;
   const draftedUserIds = new Set(
     teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
@@ -291,7 +293,7 @@ export default async function PlayersPage() {
             label="Standins"
             value={standins.length}
             tone={standins.length > 0 ? "default" : "muted"}
-            hint="on call"
+            hint={seasonOver ? undefined : "on call"}
           />
           {teams.length > 0 ? (
             <StatCell label="Teams" value={teams.length} />
@@ -499,7 +501,9 @@ export default async function PlayersPage() {
         <SectionTitle
           aside={
             standins.length > 0
-              ? `· ${standins.length} on call for match night`
+              ? seasonOver
+                ? `· ${standins.length} this season`
+                : `· ${standins.length} on call for match night`
               : undefined
           }
         >
@@ -511,7 +515,7 @@ export default async function PlayersPage() {
           // pool made the page look like it had failed to load.
           <EmptyState
             compact
-            title="No standins yet"
+            title={seasonOver ? "No standins this season" : "No standins yet"}
             description="Standins fill in when a rostered player can't make a match."
           />
         ) : (

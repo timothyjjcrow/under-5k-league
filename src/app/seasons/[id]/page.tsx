@@ -218,7 +218,15 @@ export default async function SeasonArchivePage({
     <div className="space-y-8">
       <PageTitle
         title={season.name}
-        subtitle={season.isActive ? "Current season" : "Season archive"}
+        subtitle={
+          // The badge already says "Current season"; the subtitle says where
+          // the season is, so a finished one stops reading as running.
+          season.isActive
+            ? season.status === "COMPLETE"
+              ? "Season complete"
+              : (PHASE_LABEL[season.status] ?? season.status)
+            : "Season archive"
+        }
         action={
           season.isActive ? (
             <Badge tone="brand">Current season</Badge>

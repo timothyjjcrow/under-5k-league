@@ -141,7 +141,9 @@ export default async function SeasonsPage() {
                         {s.status === "COMPLETE"
                           ? "Champion state needs review"
                           : s.isActive
-                            ? "Season in progress"
+                            ? // Where the season is: "Signups open" is not
+                              // "in progress".
+                              (PHASE_LABEL[s.status] ?? s.status)
                             : "No champion recorded"}
                       </div>
                     )}
