@@ -22,8 +22,15 @@ import {
   getGuildConfig,
   getRoleConfig,
   primeMembershipMemo,
+  type GuildConfig,
+  type GuildMemberInfo,
 } from "@/lib/discord-roles";
-import { DiscordJoinCard, DiscordSetupCard } from "@/components/discord-setup";
+import { DiscordJoinCard } from "@/components/discord-setup";
+import {
+  AccountNextStepBanner,
+  SignupNextSteps,
+} from "@/components/account-next-steps";
+import { accountNextSteps, type AccountStepInput } from "@/lib/account-page";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
@@ -34,6 +41,7 @@ import {
 import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
+  DISCORD_INVITE_URL,
   HARD_MMR_CEILING,
   MATCH_PHASE,
   REGISTRATION_STATUS,
@@ -231,122 +239,43 @@ export default async function MePage({
     reg?.type === REGISTRATION_TYPE.PLAYER &&
     myDraftReadiness !== DRAFT_READINESS.READY
   );
-  const canJoin =
-    !!season &&
-    !isRegistered &&
-    !registrationRemoved &&
-    !seasonRegistrationClosed;
-  const nextSetupStep = needsDraftConfirmation
-    ? { href: "#profile-signup", label: "Review draft commitment" }
-    : canJoin
-      ? {
-          href: "#profile-signup",
-          label: signupsOpen ? "Join the season" : "Register as a standin",
-        }
-      : dbUser?.fhUnavailable === true
-        ? { href: "#profile-dota", label: "Fix match visibility" }
-        : !dbUser?.discordId && !dbUser?.discordName
-          ? { href: "#profile-discord", label: "Add Discord" }
-          : { href: "#profile-signup", label: "Your season" };
-  const setupSteps = [
-    {
-      href: "#profile-signup",
-      label: "Season participation",
-      complete: isRegistered && !needsDraftConfirmation,
-      attention: canJoin || needsDraftConfirmation || registrationRemoved,
-      status: registrationRemoved
-        ? "Admin review required"
-        : needsDraftConfirmation
-          ? "Draft confirmation needed"
-          : isRegistered
-            ? reg?.type === "STANDIN"
-              ? "Registered · standin"
-              : "Registered · player"
-            : seasonRegistrationClosed
-              ? "Season complete"
-              : season
-                ? "Not registered"
-                : "No active season",
-    },
-    {
-      href: "#profile-discord",
-      label: "Discord",
-      complete: false,
-      attention: !dbUser?.discordId && !dbUser?.discordName,
-      status: dbUser?.discordId
-        ? "Linked · review server access below"
-        : dbUser?.discordName
-          ? "Handle saved · link to verify"
-          : "Add or link your handle",
-    },
-    {
-      href: "#profile-dota",
-      label: "Dota match data",
-      complete: dbUser?.fhUnavailable === false,
-      attention: dbUser?.fhUnavailable === true,
-      status:
-        dbUser?.fhUnavailable === false
-          ? "Public match data"
-          : dbUser?.fhUnavailable === true
-            ? "Private · imports need access"
-            : "Review visibility",
-    },
-    {
-      href: "#profile-identity",
-      label: "Steam identity",
-      complete: true,
-      attention: false,
-      status: "Verified with Steam",
-    },
-  ];
+  // What is still left to do, derived fresh on every render (never a stored
+  // flag). Signed up in a season that still takes changes: listed under the
+  // signup form, where the player just pressed the button. Everyone else can
+  // only have the match-data step, shown as one line at the top.
+  const signupLive = isRegistered && !seasonRegistrationClosed;
+  const stepFacts = {
+    signedUp: signupLive,
+    draftConfirmation: needsDraftConfirmation
+      ? myDraftReadiness === DRAFT_READINESS.STALE
+        ? ("changed" as const)
+        : ("needed" as const)
+      : ("none" as const),
+    isCaptain,
+    discordLinked: !!dbUser?.discordId,
+    discordHandle: !!dbUser?.discordName,
+    discordLinkable: !!(
+      process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
+    ),
+    matchDataPrivate: dbUser?.fhUnavailable === true,
+  };
+  // ONE live member lookup, shared by the next-steps list and the Discord
+  // card, so a cold visit costs Discord a single request. Never awaited here:
+  // both readers sit behind their own <Suspense>.
+  const guildCfg = getGuildConfig();
+  const memberInfo: Promise<GuildMemberInfo> =
+    dbUser?.discordId && guildCfg
+      ? fetchGuildMember(dbUser.discordId, guildCfg)
+      : Promise.resolve(null);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <PageTitle title="My account" />
-      <Card>
-        <CardHeader
-          headingLevel={2}
-          title="Your setup"
-          action={
-            <a
-              href={nextSetupStep.href}
-              className={buttonClasses("secondary", "sm")}
-            >
-              {nextSetupStep.label} →
-            </a>
-          }
+      {signupLive ? null : (
+        <AccountNextStepBanner
+          step={accountNextSteps({ ...stepFacts, membership: null })[0]}
         />
-        <CardBody>
-          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {setupSteps.map((step) => (
-              <li key={step.href} className="min-w-0">
-                <a
-                  href={step.href}
-                  className={`flex min-h-16 items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors hover:bg-surface-2 ${step.attention ? "border-accent/35 bg-accent/5" : "border-line bg-surface-2/30"}`}
-                >
-                  <span
-                    aria-hidden
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm ${step.complete ? "border-success/35 bg-success/10 text-success" : step.attention ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-muted"}`}
-                  >
-                    {step.complete ? "✓" : step.attention ? "!" : "·"}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium">
-                      {step.label}
-                    </span>
-                    <span className="block text-xs text-muted">
-                      {step.status}
-                    </span>
-                  </span>
-                  <span aria-hidden className="text-muted">
-                    ↗
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </CardBody>
-      </Card>
+      )}
 
       <section id="profile-signup" className="scroll-mt-24">
       {!season ? (
@@ -408,10 +337,11 @@ export default async function MePage({
             isRegistered &&
             reg?.type === REGISTRATION_TYPE.PLAYER ? (
               <div
+                id="draft-commitment"
                 className={
                   myDraftReadiness === DRAFT_READINESS.READY
-                    ? "rounded-lg border border-success/35 bg-success/10 px-4 py-3"
-                    : "rounded-lg border border-accent/35 bg-accent/10 px-4 py-3"
+                    ? "scroll-mt-24 rounded-lg border border-success/35 bg-success/10 px-4 py-3"
+                    : "scroll-mt-24 rounded-lg border border-accent/35 bg-accent/10 px-4 py-3"
                 }
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -897,6 +827,24 @@ export default async function MePage({
                 </ActionForm>
                 </SavedSignupForm>
 
+                {signupLive ? (
+                  <Suspense
+                    fallback={
+                      <SignupNextSteps
+                        steps={accountNextSteps({
+                          ...stepFacts,
+                          membership: null,
+                        })}
+                      />
+                    }
+                  >
+                    <LiveSignupNextSteps
+                      facts={stepFacts}
+                      memberInfo={memberInfo}
+                    />
+                  </Suspense>
+                ) : null}
+
                 {isRegistered ? (
                   <div className="mt-4 border-t border-line pt-4">
                     {isRostered || isCaptain ? (
@@ -938,8 +886,8 @@ export default async function MePage({
         <AwayDatesSection userId={user.id} />
       </Suspense>
 
-      <Suspense fallback={<Card><CardBody><p role="status">Checking your Discord…</p></CardBody></Card>}>
-        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} />
+      <Suspense fallback={<section id="profile-discord" className="scroll-mt-24"><Card><CardBody><p role="status">Checking your Discord…</p></CardBody></Card></section>}>
+        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} guildCfg={guildCfg} memberInfo={memberInfo} />
       </Suspense>
 
       <Card id="profile-identity" className="scroll-mt-24">
@@ -1046,12 +994,38 @@ async function AwayDatesSection({ userId }: { userId: string }) {
   );
 }
 
-async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCaptain, signupsOpen }: {
+/**
+ * The next-steps list once Discord has answered. The fallback above renders
+ * the same list without the membership steps, so an unknown or slow answer
+ * simply leaves them out: never "not in the server" on a guess.
+ */
+async function LiveSignupNextSteps({
+  facts,
+  memberInfo,
+}: {
+  facts: Omit<AccountStepInput, "membership">;
+  memberInfo: Promise<GuildMemberInfo>;
+}) {
+  const info = await memberInfo;
+  return (
+    <SignupNextSteps
+      steps={accountNextSteps({
+        ...facts,
+        membership: info === null ? null : info.membership,
+      })}
+    />
+  );
+}
+
+async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCaptain, signupsOpen, guildCfg, memberInfo: memberInfoPromise }: {
   dbUser: User | null;
   discordParam?: string;
   isRegistered: boolean;
   isCaptain: boolean;
   signupsOpen: boolean;
+  guildCfg: GuildConfig | null;
+  /** The page's one live member lookup (null without a link or a bot). */
+  memberInfo: Promise<GuildMemberInfo>;
 }) {
   // hasOwnProperty guard: a crafted ?discord=__proto__/constructor/toString
   // would otherwise resolve an inherited truthy value past the ?? fallback
@@ -1069,14 +1043,11 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
   // With a bot + server configured the OAuth consent also carries
   // `guilds.join`, so linking adds them to the server in the same click. The
   // copy has to match what the consent screen actually asks for.
-  const guildCfg = getGuildConfig();
   const discordWritesEnabled = discordMutationsAllowed();
   const discordAutoJoins = discordWritesEnabled && !!guildCfg;
 
   const [memberInfo, pingCfg] = await Promise.all([
-    dbUser?.discordId && guildCfg
-      ? fetchGuildMember(dbUser.discordId, guildCfg)
-      : null,
+    memberInfoPromise,
     dbUser?.discordId && discordWritesEnabled ? getRoleConfig() : null,
   ]);
   // ONE live member lookup answers both questions this page has about the
@@ -1121,20 +1092,16 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
       : false,
   };
   return <section id="profile-discord" className="scroll-mt-24 space-y-4">
-      {/* Signed up but unreachable. Above the fold rather than in the Discord
-          card below, because that card is what everyone has already scrolled
-          past. Gone the moment discordId exists. */}
-      {isRegistered && !dbUser?.discordId ? (
-        <DiscordSetupCard
-          linkAvailable={discordLinkAvailable}
-          autoJoins={discordAutoJoins}
-          isCaptain={isCaptain}
-        />
-      ) : isRegistered &&
-        (membership === "not-member" || membership === "pending") ? (
+      {/* Signed up but not linked: no separate "one step left" card here any
+          more. The season card sits first on this page and its next-steps
+          list, right under the signup button, points at the Discord card
+          below, which carries the link button; a second card asking the same
+          thing with an identically named button was the ask shown twice. */}
+      {isRegistered &&
+      (membership === "not-member" || membership === "pending") ? (
         /* Linked but not (fully) in the server — the cohort that LOOKS done.
-           Same above-the-fold placement as the setup card, same derived-state
-           rule: it disappears the moment the join/rules step is complete. */
+           Derived state: it disappears the moment the join/rules step is
+           complete. */
         <DiscordJoinCard
           membership={membership}
           linkAvailable={discordLinkAvailable && discordAutoJoins}
@@ -1322,6 +1289,15 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
             </>
           ) : (
             <>
+              {/* Without the one-click join, getting into the server is its
+                  own trip through the invite. The old "one step left" card
+                  carried that button; with it gone from this page, the invite
+                  lives here so no configuration loses the way in. */}
+              {!discordAutoJoins && DISCORD_INVITE_URL ? (
+                <div>
+                  <DiscordButton size="sm" label="Join the server" />
+                </div>
+              ) : null}
               {discordLinkAvailable ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <a
