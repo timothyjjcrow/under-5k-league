@@ -24,7 +24,20 @@ The back is personalized for the named player. If Fourthwall product artwork is
 revised, recopy the corresponding verified proofs selected by the deployment
 ledger and check the live product before presenting them as current.
 
-The live league database currently names My Team Sucks `w4tkins's Team`.
-The roster plan records that league-name alias, and all five current players
-match the merchandise roster. The preview mapping accepts both team names and
-keeps `My Team Sucks` as the jersey label.
+## How a team gets its jersey
+
+`getTeamJersey` (`src/lib/team-jerseys.ts`) links a jersey set to a team by
+its players, never by the team's name. A team in the US league shows a set
+when at least three of its current players are players the set was made for
+(the five personalized products above). Case, accents and surrounding spaces
+in a Steam name are ignored.
+
+Production team ids cannot be known from this repository, but each set names
+the five players it was made for, so the roster is the stable identity. A
+rename by a captain or admin, a new logo, or a team name carried into a new
+season never changes it; the live My Team Sucks roster matched even while the
+league still called the team `w4tkins's Team`, which previously needed a
+hand-written name alias. Three of five is a majority, so no two teams in one
+season can claim the same set, and a team keeps its jerseys through one or two
+roster changes or Steam renames. If more of a team's players change, update
+the player names in `JERSEYS` to their current Steam names.

@@ -161,7 +161,7 @@ export default async function TeamsPage() {
       )
     : teams;
   const jerseys = ordered.flatMap((team) => {
-    const jersey = getTeamJersey(team.name);
+    const jersey = getTeamJersey(team.members.map((member) => member.user));
     return jersey ? [jersey] : [];
   });
 

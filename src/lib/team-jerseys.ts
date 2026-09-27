@@ -75,18 +75,47 @@ const JERSEYS: readonly TeamJersey[] = [
   ]),
 ];
 
-const byTeamName = new Map(
-  JERSEYS.map((item) => [item.teamName.toLowerCase(), item]),
-);
+/**
+ * A team shows a jersey set when at least this many of its current players are
+ * players the set was made for. Three of five is a majority, so two teams in
+ * one season can never both claim a set (a player is on one roster), and a
+ * team keeps its jerseys through one or two roster changes or Steam renames.
+ */
+const JERSEY_ROSTER_MATCH_MIN = 3;
 
-// The verified roster plan records this current league name for My Team Sucks.
-const leagueTeamAliases = new Map([["w4tkins's team", "my team sucks"]]);
+/** Steam personas as the merch roster spelled them: case, accents and edge
+ *  spaces are not identity ("Bóbr Kurwa" still matches "bobr kurwa"). */
+function playerKey(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
 
-/** Merchandise currently belongs to the US league's verified 2026 roster. */
-export function getTeamJersey(teamName: string): TeamJersey | null {
-  if (LEAGUE_CONFIG.region !== "us") return null;
-  const normalizedName = teamName.trim().toLowerCase();
-  const alias = leagueTeamAliases.get(normalizedName);
-  const jersey = byTeamName.get(alias ?? normalizedName);
-  return jersey ? { ...jersey, teamName: alias ? jersey.teamName : teamName } : null;
+/**
+ * The jersey set this roster wears, or null.
+ *
+ * Linked by the PLAYERS, never by the team's name. Captains and admins can
+ * rename a team at any time, and a name match silently dropped a team's
+ * jerseys on the first rename (the live "My Team Sucks" was still called
+ * "w4tkins's Team" in the league and needed a hand-written alias). Production
+ * team ids are not knowable from this repo, but the set's own products name
+ * the five players it was made for, so the roster is the stable identity:
+ * a rename, a new logo or a carried-over name never changes who is on it.
+ * Merchandise belongs to the US league's verified 2026 roster only.
+ */
+export function getTeamJersey(
+  roster: readonly { name: string }[],
+  region: string = LEAGUE_CONFIG.region,
+): TeamJersey | null {
+  if (region !== "us") return null;
+  const players = new Set(roster.map((player) => playerKey(player.name)));
+  return (
+    JERSEYS.find(
+      (jersey) =>
+        jersey.products.filter((product) => players.has(playerKey(product.player)))
+          .length >= JERSEY_ROSTER_MATCH_MIN,
+    ) ?? null
+  );
 }

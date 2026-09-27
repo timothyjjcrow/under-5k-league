@@ -106,7 +106,9 @@ export default async function TeamPage({
     },
   });
   if (!team) notFound();
-  const jersey = team.season.isActive ? getTeamJersey(team.name) : null;
+  const jersey = team.season.isActive
+    ? getTeamJersey(team.members.map((member) => member.user))
+    : null;
   const viewer = await getSessionUser();
 
   const memberIds = team.members.map((m) => m.userId);
