@@ -8,11 +8,16 @@ import { AuctionHistory } from "@/components/auction-history";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
 import { formByTeam } from "@/lib/team-matches";
-import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
+import {
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { getTeamJersey } from "@/lib/team-jerseys";
 import { TeamJerseyPreview } from "@/components/team-jersey-preview";
+import { PowerRankingsCard } from "@/components/power-rankings-card";
 import {
   Avatar,
   Badge,
@@ -165,21 +170,21 @@ export default async function TeamsPage() {
     return jersey ? [jersey] : [];
   });
 
-  // Elo power rankings — only regular-season series feed the rating.
+  // Elo power rankings: only regular-season series feed the rating, so it
+  // stops moving once the regular season is over.
   const power = powerRankings(
     matches.filter((m) => m.phase === "REGULAR"),
     teams.map((t) => t.id),
   );
-  const powerChangeScale = Math.max(
-    10,
-    Math.ceil(Math.max(0, ...power.map((row) => Math.abs(row.delta))) / 10) *
-      10,
+  const powerTeams = new Map(
+    teams.map((t) => [
+      t.id,
+      { name: t.name, logoUrl: t.logoUrl, withdrawn: t.withdrawn },
+    ]),
   );
-  const powerName = new Map(teams.map((t) => [t.id, t.name]));
-  const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
-  const withdrawnTeamIds = new Set(
-    teams.filter((team) => team.withdrawn).map((team) => team.id),
-  );
+  const powerFrozen =
+    season.status === SEASON_STATUS.PLAYOFFS ||
+    season.status === SEASON_STATUS.COMPLETE;
   const championPresentation = resolveChampionPresentation(season, matches);
 
   return (
@@ -199,165 +204,6 @@ export default async function TeamsPage() {
           )
         }
       />
-
-      {power.length > 0 ? (
-        <Card className="overflow-hidden">
-          <CardHeader
-            title="Power rankings"
-            headingLevel={2}
-            subtitle="Elo rating · latest week's movement"
-            action={
-              <span className="inline-flex items-center gap-3 text-[10px] font-medium uppercase tracking-wider text-muted">
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full bg-danger"
-                    aria-hidden
-                  />
-                  Lost
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full bg-cyan-300"
-                    aria-hidden
-                  />
-                  Gained
-                </span>
-              </span>
-            }
-          />
-          <CardBody className="p-3 sm:p-4">
-            <ol className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
-              {power.map((row) => {
-                const hasMovement = row.prevRank > 0;
-                const moved = hasMovement ? row.prevRank - row.rank : 0;
-                const name = powerName.get(row.teamId) ?? "?";
-                return (
-                  <li
-                    key={row.teamId}
-                    className="min-w-0 rounded-lg border border-line-soft bg-surface-2/35 px-3 py-3 sm:px-4"
-                  >
-                    <div className="grid grid-cols-[1.25rem_1.75rem_minmax(0,1fr)_auto] items-center gap-2.5">
-                      <span
-                        className="font-display text-xl tabular-nums text-muted"
-                        aria-label={`Power rank ${row.rank}`}
-                      >
-                        {String(row.rank).padStart(2, "0")}
-                      </span>
-                      <TeamCrest
-                        name={name}
-                        seed={row.teamId}
-                        logoUrl={teamLogoUrl.get(row.teamId)}
-                        size={28}
-                        className="shrink-0 rounded-md"
-                      />
-                      <div className="min-w-0">
-                        <Link
-                          href={`/teams/${row.teamId}`}
-                          className="inline-flex min-h-11 items-center text-sm font-semibold leading-snug hover:text-info [overflow-wrap:anywhere]"
-                        >
-                          {name}
-                        </Link>
-                        {withdrawnTeamIds.has(row.teamId) ? (
-                          <Badge
-                            tone="danger"
-                            className="mt-1 px-1.5 py-0 text-[10px]"
-                            title="Withdrawn teams retain played results but cannot qualify for playoffs"
-                          >
-                            Withdrawn
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <div className="text-right">
-                        <span
-                          className="font-display text-2xl leading-none tabular-nums text-fg"
-                          title="Elo rating: higher is stronger"
-                        >
-                          {row.rating}
-                        </span>
-                        <span
-                          className={cn(
-                            "mt-1 block font-mono text-[10px] tabular-nums",
-                            moved > 0
-                              ? "text-cyan-300"
-                              : moved < 0
-                                ? "text-danger"
-                                : "text-muted",
-                          )}
-                          title={
-                            row.prevRank > 0
-                              ? `Power rank last week: ${row.prevRank}`
-                              : "No previous week to compare"
-                          }
-                          aria-label={
-                            row.prevRank > 0
-                              ? `Power rank ${moved > 0 ? "up" : moved < 0 ? "down" : "unchanged"}${moved ? ` ${Math.abs(moved)}` : ""} since last week`
-                              : "No previous rank"
-                          }
-                        >
-                          {moved > 0
-                            ? `▲ ${moved}`
-                            : moved < 0
-                              ? `▼ ${-moved}`
-                              : "—"}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-[minmax(0,1fr)_2.75rem] items-center gap-3">
-                      <div
-                        role="img"
-                        aria-label={
-                          hasMovement
-                            ? `Weekly Elo change: ${row.delta > 0 ? "+" : ""}${row.delta}`
-                            : "No previous completed week to compare"
-                        }
-                        className="relative h-2 rounded-full bg-bg/80"
-                      >
-                        <span
-                          aria-hidden
-                          className="absolute -top-1 bottom-[-4px] left-1/2 w-px bg-muted/50"
-                        />
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "absolute inset-y-0 rounded-full",
-                            row.delta < 0 ? "bg-danger" : "bg-cyan-300",
-                          )}
-                          style={{
-                            left: `${row.delta < 0 ? 50 - (Math.abs(row.delta) / powerChangeScale) * 50 : 50}%`,
-                            width: `${(Math.abs(row.delta) / powerChangeScale) * 50}%`,
-                          }}
-                        />
-                      </div>
-                      <span
-                        className={cn(
-                          "text-right font-mono text-xs font-semibold tabular-nums",
-                          row.delta > 0
-                            ? "text-cyan-300"
-                            : row.delta < 0
-                              ? "text-danger"
-                              : "text-muted",
-                        )}
-                      >
-                        {hasMovement
-                          ? `${row.delta > 0 ? "+" : ""}${row.delta}`
-                          : "—"}
-                      </span>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-            <div className="mt-3 flex items-center justify-between gap-3 px-1 text-[10px] text-muted">
-              <span>Weekly Elo change</span>
-              <span className="font-mono tabular-nums">
-                −{powerChangeScale}{" "}
-                <span className="px-2 text-muted/60">/ 0 /</span> +
-                {powerChangeScale}
-              </span>
-            </div>
-          </CardBody>
-        </Card>
-      ) : null}
 
       <section aria-label="Team rosters" className="space-y-4">
         <div className="flex items-center justify-between gap-3">
@@ -617,6 +463,8 @@ export default async function TeamsPage() {
           })}
         </div>
       </section>
+
+      <PowerRankingsCard rows={power} teams={powerTeams} frozen={powerFrozen} />
 
       {recap.totalSpent > 0 ? (
         <Card>
