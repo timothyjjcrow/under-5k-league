@@ -74,7 +74,6 @@ import {
   PlayerLink,
   RankBadge,
   RoleBadges,
-  Sparkline,
   Stat,
   TeamCrest,
   textLink,
@@ -247,15 +246,6 @@ export default async function TeamPage({
     : (stakesReport?.teams.get(id) ?? null);
 
   const form = recentForm(id, myMatches);
-  // Game differential per completed match (chronological) → a form trend.
-  const diffTrend = myMatches
-    .filter((m) => m.status === "COMPLETED")
-    .map((m) => {
-      const isHome = m.homeTeamId === id;
-      const myS = isHome ? m.homeScore : m.awayScore;
-      const oppS = isHome ? m.awayScore : m.homeScore;
-      return myS - oppS;
-    });
   // Only opponents met more than once: a single meeting is already on the
   // Matches list, so the card would repeat it.
   const h2h = rematches(headToHead(id, myMatches)).sort(
@@ -941,22 +931,6 @@ export default async function TeamPage({
           </CardBody>
         </Card>
       )}
-
-      {diffTrend.length >= 2 ? (
-        <Card>
-          <CardBody className="flex items-center justify-between gap-4 py-3">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                Game diff by match
-              </div>
-              <div className="text-xs text-muted">
-                last {diffTrend.length} played
-              </div>
-            </div>
-            <Sparkline values={diffTrend} width={180} height={40} />
-          </CardBody>
-        </Card>
-      ) : null}
 
       {teamHeroes.length > 0 ? (
         <Card id="team-heroes" className="scroll-mt-40">
