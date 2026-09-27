@@ -287,12 +287,10 @@ export function DraftRoom({
   const [soundOn, setSoundOn] = usePersistedFlag("draftSound");
   // Latched while the viewer's team has lost the high bid on the live
   // nomination — cleared by the poll once it's stale (re-took the bid, the
-  // player sold, or bidding closed).
-  const [outbid, setOutbid] = useState<{
-    player: string;
-    team: string;
-    amount: number;
-  } | null>(null);
+  // player sold, or bidding closed). A plain flag: the card's price block
+  // already names the current leader live, and a remembered "Team B bid $5"
+  // went stale the moment a third captain bid.
+  const [outbid, setOutbid] = useState(false);
   // Clock skew as STATE, not a ref read during render. Reading `ref.current`
   // while rendering is unsafe under concurrent React (the value can differ
   // between a render React keeps and one it throws away) and the lint rules
@@ -572,7 +570,7 @@ export function DraftRoom({
         })),
       );
       setSoldFlash(null);
-      setOutbid(null);
+      setOutbid(false);
       return;
     }
 
@@ -599,15 +597,8 @@ export function DraftRoom({
       prevNominatedId: prev.nominatedPlayer?.userId ?? null,
       curNominatedId: state.nominatedPlayer?.userId ?? null,
     });
-    if (latch === "clear") setOutbid(null);
-    if (latch === "set") {
-      setOutbid({
-        player: state.nominatedPlayer!.name,
-        team:
-          state.teams.find((t) => t.id === state.currentBidTeamId)?.name ?? "—",
-        amount: state.currentBid,
-      });
-    }
+    if (latch === "clear") setOutbid(false);
+    if (latch === "set") setOutbid(true);
 
     // ONE ring for the whole transition — being sold, being nominated, your
     // turn to nominate, being outbid. These do coincide (an admin nominating
@@ -653,7 +644,7 @@ export function DraftRoom({
     loaded: !!state,
     status: state?.status ?? null,
     canNominate: !!state?.me.canNominate,
-    outbid: !!outbid,
+    outbid,
   });
   useEffect(() => {
     // Strip before writing, so a re-render can never stack two prefixes. The
@@ -1489,13 +1480,14 @@ export function DraftRoom({
                       appear on the poll where the viewer LOST the high bid —
                       the same poll that brings their bid buttons back — so it
                       never shoves controls that were already on screen. */}
-                  {outbid ? (
+                  {/* The latch clears in the effect AFTER this render, so
+                      also check the payload: never "lost" beside "hold". */}
+                  {outbid && state.currentBidTeamId !== me.myTeamId ? (
                     <p role="status">
                       <span className="font-display font-black uppercase tracking-wider text-danger">
                         💸 Outbid!
                       </span>{" "}
-                      <span className="font-semibold">{outbid.team}</span> bid $
-                      {outbid.amount}.
+                      You lost the high bid.
                     </p>
                   ) : null}
                   {me.canBid ? (
