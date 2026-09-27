@@ -65,7 +65,7 @@ import type { DraftState } from "@/lib/draft-service";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import type { ActionResult } from "@/lib/action-result";
 
-// A single line in the live feed: the tested content (see @/lib/draft-feed)
+// A single line in "Recent sales": the tested content (see @/lib/draft-feed)
 // plus the React key this component hands out.
 type FeedEvent = FeedLine & { id: number };
 
@@ -309,11 +309,15 @@ export function DraftRoom({
   const [offsetMsState, setOffsetMs] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [nomAmount, setNomAmount] = useState(1);
-  // Live feed + "SOLD!" flash — derived client-side by diffing successive
+  // Recent sales + "SOLD!" flash — derived client-side by diffing successive
   // polled states, so no changes to the server-authoritative draft engine.
   const prevRef = useRef<DraftState | null>(null);
   const eventIdRef = useRef(0);
-  const [events, setEvents] = useState<FeedEvent[]>([]);
+  const [sales, setSales] = useState<FeedEvent[]>([]);
+  // The newest nomination or bid, read out to screen readers only. The lot
+  // card shows both already; the old feed repeated them on screen, and was
+  // also the only place a bid was ever announced.
+  const [lotNews, setLotNews] = useState("");
   const [soldFlash, setSoldFlash] = useState<{
     name: string;
     team: string;
@@ -378,7 +382,7 @@ export function DraftRoom({
       ...line,
       id: -1 - i,
     }));
-    if (seed.length) setEvents(seed);
+    if (seed.length) setSales(seed);
   }
 
   // Does this viewer need alerts even with the tab hidden? Captains and admins
@@ -570,12 +574,13 @@ export function DraftRoom({
     // live history.
     if (draftFeedInvalidated(prev, state)) {
       eventIdRef.current = 0;
-      setEvents(
+      setSales(
         seedDraftFeed(state).map((line, index) => ({
           ...line,
           id: -1 - index,
         })),
       );
+      setLotNews("");
       setSoldFlash(null);
       setOutbid(false);
       return;
@@ -589,12 +594,20 @@ export function DraftRoom({
     // The feed is an append-only LOG of state transitions; it cannot be
     // derived from the current state alone, which is what a pure alternative
     // would require, and setting it here rather than deferring is deliberate:
-    // the feed line and the SOLD! flash must land in the same commit, and this
+    // the sale line and the SOLD! flash must land in the same commit, and this
     // is draft night's marquee moment. Ids are assigned HERE and counted up
     // from 0, staying clear of the negative ids the seed uses — a collision
     // would break React keys mid-draft.
-    const fresh = lines.map((line) => ({ ...line, id: eventIdRef.current++ }));
-    if (fresh.length) setEvents((e) => [...fresh, ...e].slice(0, FEED_MAX));
+    //
+    // Only SALES are listed; the lot card already shows the live nomination
+    // and its bid trail. The newest lot line (lines are newest first) goes to
+    // the screen-reader announcement instead.
+    const fresh = lines
+      .filter((line) => line.kind === "sold")
+      .map((line) => ({ ...line, id: eventIdRef.current++ }));
+    if (fresh.length) setSales((e) => [...fresh, ...e].slice(0, FEED_MAX));
+    const lotLine = lines.find((line) => line.kind !== "sold");
+    if (lotLine) setLotNews(`${lotLine.text}, $${lotLine.amount}`);
 
     // Outbid latch — set / clear / leave alone, decided by the tested
     // outbidLatchAfter (which deliberately has no budget input: a priced-out
@@ -1186,6 +1199,11 @@ export function DraftRoom({
   return (
     <div className="space-y-6">
       {roomAlerts}
+      {/* Screen readers hear each nomination and bid as it lands ("Team 3
+          bid on Pudge, $8"); sighted viewers read it off the lot card. */}
+      <p role="status" className="sr-only">
+        {lotNews}
+      </p>
       {!paused ? (
         <ClockExpiryObserver
           endsAtMs={
@@ -1739,7 +1757,7 @@ export function DraftRoom({
             />
           </div>
           <div className="lg:order-1">
-            <BidFeed events={events} />
+            <RecentSales sales={sales} />
           </div>
         </div>
         <div className="min-w-0 lg:order-1 lg:col-span-2">
@@ -2021,12 +2039,12 @@ function AvailableList({
   );
 }
 
-function BidFeed({ events }: { events: FeedEvent[] }) {
+function RecentSales({ sales }: { sales: FeedEvent[] }) {
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/80">
       <h2 className="flex items-center gap-2 border-b border-line px-5 py-3 text-sm font-semibold">
         <span className="animate-live-pulse inline-block h-1.5 w-1.5 rounded-full bg-danger" />
-        Live feed
+        Recent sales
       </h2>
       <div
         role="log"
@@ -2034,25 +2052,20 @@ function BidFeed({ events }: { events: FeedEvent[] }) {
         aria-relevant="additions"
         className="max-h-64 space-y-0.5 overflow-y-auto p-3"
       >
-        {events.length === 0 ? (
+        {sales.length === 0 ? (
           <p className="p-2 text-sm text-muted">
-            Nominations, bids, and picks appear here…
+            Each player appears here as they&apos;re sold.
           </p>
         ) : (
-          events.map((e) => (
+          sales.map((e) => (
             <div
               key={e.id}
-              className={cn(
-                "flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm",
-                e.kind === "sold" && "bg-success/5",
-              )}
+              className="flex items-center justify-between gap-2 rounded-md bg-success/5 px-2 py-1.5 text-sm"
             >
               <span className="flex min-w-0 items-center gap-1.5">
-                <span aria-hidden>
-                  {e.kind === "sold" ? "✅" : e.kind === "bid" ? "💰" : "🎯"}
-                </span>
+                <span aria-hidden>✅</span>
                 <span className="truncate">{e.text}</span>
-                {e.auto && e.kind === "sold" ? (
+                {e.auto ? (
                   <span
                     title="The nominating captain's clock ran out, so the draft put this player up for them."
                     className="shrink-0 text-xs text-muted"
@@ -2061,12 +2074,7 @@ function BidFeed({ events }: { events: FeedEvent[] }) {
                   </span>
                 ) : null}
               </span>
-              <span
-                className={cn(
-                  "shrink-0 font-mono text-xs tabular-nums",
-                  e.kind === "sold" ? "font-bold text-success" : "text-accent",
-                )}
-              >
+              <span className="shrink-0 font-mono text-xs font-bold tabular-nums text-success">
                 ${e.amount}
               </span>
             </div>

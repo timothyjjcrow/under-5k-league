@@ -1,6 +1,14 @@
 /**
  * The draft room's live feed, as a pure diff.
  *
+ * WHERE THE LINES GO. The room shows only the SALE lines, as its "Recent
+ * sales" card: the lot card already carries the live nomination and its bid
+ * trail, and a second list repeating "Team 3 bid" beside it told the same story
+ * twice. The nomination and bid lines are still produced here, and the room
+ * reads the newest of them out through a screen-reader-only status line, so a
+ * captain using a screen reader still hears each bid as it lands (the feed was
+ * an aria-live log, and that was the only place bids were announced).
+ *
  * WHAT MAKES THIS DIFFERENT from the room's other extracted rules: the feed is
  * an append-only LOG of state transitions, so it genuinely cannot be derived
  * from the current payload — a captain who reloads mid-draft has no way to know
@@ -27,8 +35,8 @@
  *    it prepends this array whole. One poll routinely carries a sale AND the
  *    nomination it resolved into — `getDraftState` runs both resolvers before
  *    it reads — and the nomination is the newer of the two, so it goes on top.
- *    (The seed below has always ordered itself this way; the diff used to
- *    disagree with it and show the sale above the nomination that followed.)
+ *    (The diff used to disagree with the seed's order and show the sale above
+ *    the nomination that followed.)
  *
  * Team names are looked up in the NEW payload, so a line about a team that has
  * somehow vanished renders "—" rather than crashing the room.
@@ -101,7 +109,7 @@ export type DraftFeedResetReason =
   | "lot-voided"
   | "roster-retracted";
 
-/** How many lines the feed keeps. */
+/** How many sales the room's "Recent sales" list keeps. */
 export const FEED_MAX = 12;
 
 const teamName = (s: FeedSnapshot, id: string | null) =>
@@ -169,22 +177,20 @@ export function draftFeedInvalidated(
 }
 
 /**
- * The feed as reconstructed from the FIRST payload after a page load: the live
- * nomination on top, then recent sales. Without it, joining mid-draft shows an
- * empty feed on the busiest screen in the app.
+ * The "Recent sales" list as reconstructed from the FIRST payload after a page
+ * load, newest first. Without it, joining mid-draft shows an empty list on the
+ * busiest screen in the app. The live lot is not a line here: it has the lot
+ * card to itself.
  */
-export function seedDraftFeed(s: FeedSeedSnapshot): FeedLine[] {
-  const seed: FeedLine[] = [];
-  if (s.nominatedPlayer) seed.push(nominationLine(s));
-  for (const sale of s.recentSales) {
-    seed.push({
-      kind: "sold",
-      text: `${sale.name} → ${sale.teamName}`,
-      amount: sale.price,
-      ...(sale.auto ? { auto: true } : {}),
-    });
-  }
-  return seed.slice(0, FEED_MAX);
+export function seedDraftFeed(
+  s: Pick<FeedSeedSnapshot, "recentSales">,
+): FeedLine[] {
+  return s.recentSales.slice(0, FEED_MAX).map((sale) => ({
+    kind: "sold",
+    text: `${sale.name} → ${sale.teamName}`,
+    amount: sale.price,
+    ...(sale.auto ? { auto: true } : {}),
+  }));
 }
 
 /**
@@ -254,9 +260,11 @@ export function draftFeedDiff(
       notice = `Your nomination clock ran out, so the draft nominated ${next.nominatedPlayer!.name} for you at the minimum bid.`;
     }
   } else if (curNom && curNom === prevNom && next.currentBid > prev.currentBid) {
+    // Names the player: read out on its own, "Team 3 bid" said nothing
+    // about which lot.
     lot.push({
       kind: "bid",
-      text: `${teamName(next, next.currentBidTeamId)} bid`,
+      text: `${teamName(next, next.currentBidTeamId)} bid on ${next.nominatedPlayer!.name}`,
       amount: next.currentBid,
     });
   }
