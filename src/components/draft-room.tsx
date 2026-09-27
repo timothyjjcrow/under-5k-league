@@ -915,16 +915,6 @@ export function DraftRoom({
     </div>
   ) : null;
 
-  const settlingStrip = clockSettling ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
-    >
-      Time is up — confirming the sale or next nomination turn with the server…
-    </div>
-  ) : null;
-
   const roomAlerts = (
     <>
       {connectivityStrip}
@@ -932,7 +922,6 @@ export function DraftRoom({
       {syncDelayedStrip}
       {actionReconcilingStrip}
       {sessionExpiredStrip}
-      {settlingStrip}
     </>
   );
 
@@ -1227,75 +1216,6 @@ export function DraftRoom({
           sell. Stay put; it resumes with a fresh clock.
         </div>
       ) : null}
-      {outbid ? (
-        <div
-          role="status"
-          className="flex flex-col items-center gap-1 rounded-[var(--radius)] border border-danger/50 bg-gradient-to-r from-danger/15 via-danger/10 to-danger/15 px-5 py-3 text-center"
-        >
-          <div className="font-display text-lg font-black uppercase tracking-widest text-danger">
-            💸 Outbid!
-          </div>
-          <div className="text-sm">
-            <span className="font-semibold">{outbid.team}</span> bid $
-            {outbid.amount} on{" "}
-            <span className="font-semibold">{outbid.player}</span>
-          </div>
-          {state.me.canBid ? (
-            <button
-              type="button"
-              onClick={() => quickBid(1)}
-              disabled={pending || state.currentBid + 1 > me.myMaxBid}
-              className={buttonClasses("accent", "sm", "mt-1")}
-            >
-              Re-bid ${state.currentBid + 1}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {soldFlash ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "sold-flash flex flex-col items-center gap-1 rounded-[var(--radius)] border px-5 py-4 text-center",
-            soldFlash.isMe
-              ? "border-accent/60 bg-gradient-to-r from-accent/20 via-accent/10 to-accent/20"
-              : "border-success/50 bg-gradient-to-r from-success/15 via-success/10 to-success/15",
-          )}
-        >
-          <div
-            className={cn(
-              "font-display text-2xl font-black uppercase tracking-widest",
-              soldFlash.isMe ? "text-accent" : "text-success",
-            )}
-          >
-            {soldFlash.isMe ? "🎉 You're drafted!" : "Sold!"}
-          </div>
-          <div className="text-sm">
-            {soldFlash.isMe ? (
-              <>
-                Welcome to{" "}
-                <span className="font-semibold">{soldFlash.team}</span> — they
-                paid{" "}
-                <span className="font-bold text-accent">
-                  ${soldFlash.price}
-                </span>{" "}
-                for you.
-              </>
-            ) : (
-              <>
-                <span className="font-semibold">{soldFlash.name}</span> →{" "}
-                {soldFlash.team} for{" "}
-                <span className="font-bold text-accent">
-                  ${soldFlash.price}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
-
       {/* Compact clock bar — pins under the site header while the captain is
           deep in the player pool, so the auction never disappears. */}
       {bannerOffscreen &&
@@ -1430,19 +1350,66 @@ export function DraftRoom({
             away rather than once the whole card has gone. */}
         <div ref={bannerRef}>
           <div className="border-b border-line">
-            <div className="flex items-center justify-between px-5 py-3">
-              <h2 className="min-w-0 text-sm font-normal text-muted">
-                On the clock: <span className="text-fg">{nominatorName}</span>
-                {nextNominatorName ? (
-                  <span className="hidden sm:inline">
-                    {" "}
-                    · next: {nextNominatorName}
-                  </span>
-                ) : null}
-              </h2>
+            {/* FIXED HEIGHT (min-h-14, two text lines at most): a sale and a
+                clock running out used to insert banners ABOVE the card, which
+                pushed the lot and its buttons ~110px down and back again right
+                as the next captain nominated and others reached for +$1. Those
+                moments now replace text inside this row instead. */}
+            <div
+              className={cn(
+                "flex min-h-14 items-center justify-between gap-3 rounded-t-[var(--radius)] px-5 py-2 transition-colors",
+                soldFlash &&
+                  (soldFlash.isMe ? "bg-accent/15" : "bg-success/10"),
+              )}
+            >
+              {soldFlash ? (
+                <p
+                  role="status"
+                  className={cn(
+                    "sold-flash line-clamp-2 min-w-0 text-sm font-semibold [overflow-wrap:anywhere]",
+                    soldFlash.isMe ? "text-accent" : "text-success",
+                  )}
+                >
+                  {soldFlash.isMe ? (
+                    <>
+                      🎉 You&apos;re drafted! {soldFlash.team} paid $
+                      {soldFlash.price} for you.
+                    </>
+                  ) : (
+                    <>
+                      Sold! {soldFlash.name} → {soldFlash.team} · $
+                      {soldFlash.price}
+                    </>
+                  )}
+                </p>
+              ) : (
+                <h2 className="line-clamp-2 min-w-0 text-sm font-normal text-muted [overflow-wrap:anywhere]">
+                  On the clock: <span className="text-fg">{nominatorName}</span>
+                  {nextNominatorName ? (
+                    <span className="hidden sm:inline">
+                      {" "}
+                      · next: {nextNominatorName}
+                    </span>
+                  ) : null}
+                </h2>
+              )}
               {paused ? (
-                <span className="font-mono text-sm font-semibold text-info">
+                <span className="shrink-0 font-mono text-sm font-semibold text-info">
                   ⏸ paused
+                </span>
+              ) : clockSettling ? (
+                // The clock hit zero and the room is waiting for the server to
+                // settle it — said in the clock's own slot, not a strip above.
+                <span
+                  role="status"
+                  className="shrink-0 font-mono text-sm font-semibold text-info"
+                >
+                  {state.nominatedPlayer ? "Closing…" : "Time's up…"}
+                  <span className="sr-only">
+                    {state.nominatedPlayer
+                      ? " Confirming the sale with the server."
+                      : " Confirming the next nomination with the server."}
+                  </span>
                 </span>
               ) : state.nominatedPlayer ? (
                 <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
@@ -1513,82 +1480,110 @@ export function DraftRoom({
                   </div>
                 </div>
 
-                {me.canBid ? (
-                  <div
-                    aria-busy={reqPending}
-                    className="mt-4 space-y-3 border-t border-line pt-4"
-                  >
-                    <p className="text-sm text-muted">
-                      {bidAllowanceLine({
-                        maxBid: me.myMaxBid,
-                        need: myTeam?.need ?? 1,
-                        minBid: state.minBid,
-                      })}
+                <div
+                  aria-busy={me.canBid ? reqPending : undefined}
+                  className="mt-4 space-y-3 border-t border-line pt-4 text-sm"
+                >
+                  {/* The outbid alert has a slot of its own at the top of this
+                      area rather than a banner above the card. It can only
+                      appear on the poll where the viewer LOST the high bid —
+                      the same poll that brings their bid buttons back — so it
+                      never shoves controls that were already on screen. */}
+                  {outbid ? (
+                    <p role="status">
+                      <span className="font-display font-black uppercase tracking-wider text-danger">
+                        💸 Outbid!
+                      </span>{" "}
+                      <span className="font-semibold">{outbid.team}</span> bid $
+                      {outbid.amount}.
                     </p>
-                    {/* +$1, +$5 and a typed amount. +$10 went: the box
-                        covers any bigger jump, and six controls under a
-                        30-second clock was four more than a captain needs. */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
-                        {[1, 5].map((d) => (
-                          <button
-                            key={d}
-                            disabled={
-                              pending || state.currentBid + d > me.myMaxBid
-                            }
-                            onClick={() => quickBid(d)}
-                            aria-label={`Bid $${state.currentBid + d}`}
-                            title={`Bid $${state.currentBid + d}`}
-                            className={buttonClasses("secondary", "sm")}
-                          >
-                            {/* Show the amount that will actually be submitted —
-                                "+$5" alone hid the absolute price. */}
-                            +${d} → ${state.currentBid + d}
-                          </button>
-                        ))}
-                      </div>
-                      <ExactBidControl
-                        key={state.currentLotId ?? state.nominatedPlayer.userId}
-                        currentBid={state.currentBid}
-                        maxBid={me.myMaxBid}
-                        pending={pending}
-                        submit={(amount) => act("/api/draft/bid", { amount })}
-                        onMax={() => {
-                          // One tap here commits the entire remaining
-                          // budget — make it deliberate.
-                          if (
-                            window.confirm(
-                              `Bid your maximum $${me.myMaxBid}? That's everything you can spend on this player.`,
-                            )
-                          ) {
-                            act("/api/draft/bid", { amount: me.myMaxBid });
+                  ) : null}
+                  {me.canBid ? (
+                    <>
+                      <p className="text-muted">
+                        {bidAllowanceLine({
+                          maxBid: me.myMaxBid,
+                          need: myTeam?.need ?? 1,
+                          minBid: state.minBid,
+                        })}
+                      </p>
+                      {/* +$1, +$5 and a typed amount. +$10 went: the box
+                          covers any bigger jump, and six controls under a
+                          30-second clock was four more than a captain needs. */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+                          {[1, 5].map((d) => {
+                            const amount = state.currentBid + d;
+                            // After an outbid, +$1 IS the re-bid — one button,
+                            // not a second copy of it in a banner.
+                            const label =
+                              d === 1 && outbid
+                                ? `Re-bid $${amount}`
+                                : `Bid $${amount}`;
+                            return (
+                              <button
+                                key={d}
+                                disabled={pending || amount > me.myMaxBid}
+                                onClick={() => quickBid(d)}
+                                aria-label={label}
+                                title={label}
+                                className={buttonClasses(
+                                  d === 1 && outbid ? "accent" : "secondary",
+                                  "sm",
+                                )}
+                              >
+                                {/* Show the amount that will actually be
+                                    submitted — "+$5" alone hid the absolute
+                                    price. */}
+                                {d === 1 && outbid
+                                  ? label
+                                  : `+$${d} → $${amount}`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <ExactBidControl
+                          key={
+                            state.currentLotId ?? state.nominatedPlayer.userId
                           }
-                        }}
-                      />
-                    </div>
-                  </div>
-                ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
-                  <div
-                    role="status"
-                    className="mt-4 border-t border-line pt-3 text-sm text-success"
-                  >
-                    You hold the high bid.
-                  </div>
-                ) : rosterFull ? (
-                  <div className="mt-4 border-t border-line pt-3 text-sm text-muted">
-                    Your roster is full — you&apos;re done bidding.
-                  </div>
-                ) : pricedOut ? (
-                  <div className="mt-4 border-t border-line pt-3 text-sm text-muted">
-                    Priced out — your max bid is ${me.myMaxBid} (reserving $
-                    {state.minBid} per remaining slot).
-                  </div>
-                ) : (
-                  <div className="mt-4 border-t border-line pt-3 text-sm text-muted">
-                    You&apos;re watching this lot. Only captains with an open
-                    roster seat and enough reserved budget can bid.
-                  </div>
-                )}
+                          currentBid={state.currentBid}
+                          maxBid={me.myMaxBid}
+                          pending={pending}
+                          submit={(amount) => act("/api/draft/bid", { amount })}
+                          onMax={() => {
+                            // One tap here commits the entire remaining
+                            // budget — make it deliberate.
+                            if (
+                              window.confirm(
+                                `Bid your maximum $${me.myMaxBid}? That's everything you can spend on this player.`,
+                              )
+                            ) {
+                              act("/api/draft/bid", { amount: me.myMaxBid });
+                            }
+                          }}
+                        />
+                      </div>
+                    </>
+                  ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
+                    <p role="status" className="text-success">
+                      You hold the high bid.
+                    </p>
+                  ) : rosterFull ? (
+                    <p className="text-muted">
+                      Your roster is full — you&apos;re done bidding.
+                    </p>
+                  ) : pricedOut ? (
+                    <p className="text-muted">
+                      Priced out — your max bid is ${me.myMaxBid} (reserving $
+                      {state.minBid} per remaining slot).
+                    </p>
+                  ) : (
+                    <p className="text-muted">
+                      You&apos;re watching this lot. Only captains with an open
+                      roster seat and enough reserved budget can bid.
+                    </p>
+                  )}
+                </div>
               </>
             ) : me.canNominate ? (
               <NominateBar
