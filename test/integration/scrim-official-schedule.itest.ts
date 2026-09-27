@@ -132,6 +132,9 @@ describe("official fixture creation respects confirmed scrims", () => {
     expect(result?.error).toContain(
       `within four hours of the ${teams[0].name} vs ${teams[1].name} scrim on `,
     );
+    expect(result?.error).toMatch(
+      /\. Cancel that scrim on its page, then generate the schedule again\.$/,
+    );
     const after = await prisma.match.findMany({
       where: { seasonId: season.id },
       orderBy: { id: "asc" },

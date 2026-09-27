@@ -14,6 +14,7 @@ import { UserFacingError } from "./user-facing-error";
 import {
   describeScrimConflict,
   findConfirmedScrimConflict,
+  scrimConflictFix,
 } from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
 import { rescheduleDeadline } from "./schedule";
@@ -243,7 +244,7 @@ export async function proposeReschedule(
         });
         if (scrimClash) {
           throw new UserFacingError(
-            `That time is within four hours of ${describeScrimConflict(scrimClash)}. Pick another time, or cancel that scrim on its page first.`,
+            `That time is within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} first, or pick another time.`,
           );
         }
         await assertFitsLeagueCalendar(
@@ -384,7 +385,7 @@ export async function respondReschedule(
         });
         if (scrimClash) {
           throw new UserFacingError(
-            `That time is now within four hours of ${describeScrimConflict(scrimClash)}. Cancel that scrim on its page first, or propose another time.`,
+            `That time is now within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} first, or propose another time.`,
           );
         }
         await assertFitsLeagueCalendar(

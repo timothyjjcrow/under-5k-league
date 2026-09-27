@@ -3,8 +3,10 @@ import {
   describeScrimConflict,
   describeScrimYield,
   scrimCollisionRange,
+  scrimConflictFix,
   SCRIM_COLLISION_WINDOW_MS,
 } from "./scrim-schedule-conflict";
+import { SCRIM_STATUS } from "./constants";
 import { formatLeagueTime } from "./zoned-time";
 
 const AT = new Date(Date.UTC(2026, 9, 4, 3, 0));
@@ -42,6 +44,16 @@ describe("scrim conflict wording", () => {
     const kept = describeScrimYield({ ...clash, cancelled: false }, "the grand final", FINAL);
     expect(kept).toMatch(/^Kept the Radiant Raccoons vs Dire Straits scrim on /);
     expect(kept).toContain("end it at its current score");
+  });
+
+  it("points a booked scrim at Cancel and a live one at End series", () => {
+    expect(scrimConflictFix({ status: SCRIM_STATUS.SCHEDULED })).toBe(
+      "Cancel that scrim on its page",
+    );
+    // A live scrim can't be cancelled; its page only offers "End series".
+    expect(scrimConflictFix({ status: SCRIM_STATUS.LIVE })).toBe(
+      "End that series on its scrim page",
+    );
   });
 
   it("collides within four hours either side", () => {

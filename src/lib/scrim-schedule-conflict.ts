@@ -14,6 +14,7 @@ export function scrimCollisionRange(scheduledAt: Date) {
 /** A booked (SCHEDULED or LIVE) scrim that sits too close to another time. */
 export type ScrimConflict = {
   id: string;
+  status: string;
   scheduledAt: Date;
   hostTeamName: string;
   opponentTeamName: string | null;
@@ -51,6 +52,7 @@ export async function findConfirmedScrimConflict(
     orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
+      status: true,
       scheduledAt: true,
       hostTeam: { select: { name: true } },
       opponentTeam: { select: { name: true } },
@@ -59,6 +61,7 @@ export async function findConfirmedScrimConflict(
   return scrim
     ? {
         id: scrim.id,
+        status: scrim.status,
         scheduledAt: scrim.scheduledAt,
         hostTeamName: scrim.hostTeam.name,
         opponentTeamName: scrim.opponentTeam?.name ?? null,
@@ -82,6 +85,20 @@ export function describeScrimConflict(
     ? `${conflict.hostTeamName} vs ${conflict.opponentTeamName}`
     : conflict.hostTeamName;
   return `the ${teams} scrim on ${formatLeagueTime(conflict.scheduledAt)}`;
+}
+
+/**
+ * What clears the clash, worded to start a sentence ("…, then try again").
+ * A booked scrim has a Cancel button on its page. A LIVE one doesn't — the
+ * cancel is refused once games can be recorded, and its page offers only
+ * "End series" — so pointing at Cancel would name a control that isn't there.
+ */
+export function scrimConflictFix(
+  conflict: Pick<ScrimConflict, "status">,
+): string {
+  return conflict.status === SCRIM_STATUS.LIVE
+    ? "End that series on its scrim page"
+    : "Cancel that scrim on its page";
 }
 
 /**

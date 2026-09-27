@@ -173,6 +173,8 @@ import { normalizeTeamLogoUrl } from "@/lib/team-logo";
 import {
   describeScrimConflict,
   findConfirmedScrimConflict,
+  scrimConflictFix,
+  type ScrimConflict,
 } from "@/lib/scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
@@ -237,10 +239,15 @@ class ScheduleMatchChangedError extends Error {}
 class ScheduledWeekEmptyError extends Error {}
 class UnknownScheduleMatchError extends Error {}
 /** Carries the clashing booking, already described, so every refusal can
- *  name the scrim to cancel instead of "a booked scrim" somewhere. */
+ *  name the scrim instead of "a booked scrim" somewhere, plus the step that
+ *  clears it (cancel a booked scrim, end a live one). */
 class ScrimScheduleConflictError extends Error {
-  constructor(readonly scrim: string) {
+  readonly scrim: string;
+  readonly fix: string;
+  constructor(conflict: ScrimConflict) {
     super("Scrim schedule conflict");
+    this.scrim = describeScrimConflict(conflict);
+    this.fix = scrimConflictFix(conflict);
   }
 }
 class DraftAlreadyStartedError extends Error {}
@@ -2973,9 +2980,7 @@ export async function generateSchedule(
               })
             : null;
           if (scrimClash) {
-            throw new ScrimScheduleConflictError(
-              describeScrimConflict(scrimClash),
-            );
+            throw new ScrimScheduleConflictError(scrimClash);
           }
         }
 
@@ -3102,7 +3107,7 @@ export async function generateSchedule(
     }
     if (e instanceof ScrimScheduleConflictError) {
       return {
-        error: `A generated kickoff falls within four hours of ${e.scrim}. Cancel that scrim on its page, then generate the schedule again.`,
+        error: `A generated kickoff falls within four hours of ${e.scrim}. ${e.fix}, then generate the schedule again.`,
       };
     }
     if (isSerializationConflict(e)) {
@@ -5764,9 +5769,7 @@ export async function setWeekNight(
             scheduledAt,
           });
           if (scrimClash) {
-            throw new ScrimScheduleConflictError(
-              describeScrimConflict(scrimClash),
-            );
+            throw new ScrimScheduleConflictError(scrimClash);
           }
           const updated = await tx.match.updateMany({
             where: {
@@ -5863,7 +5866,7 @@ export async function setWeekNight(
     }
     if (error instanceof ScrimScheduleConflictError) {
       return {
-        error: `A new kickoff in this move falls within four hours of ${error.scrim}. Cancel that scrim on its page first, or pick another time.`,
+        error: `A new kickoff in this move falls within four hours of ${error.scrim}. ${error.fix} first, or pick another time.`,
       };
     }
     if (isSerializationConflict(error)) {
@@ -6028,9 +6031,7 @@ export async function setMatchTime(
             })
           : null;
         if (scrimClash) {
-          throw new ScrimScheduleConflictError(
-            describeScrimConflict(scrimClash),
-          );
+          throw new ScrimScheduleConflictError(scrimClash);
         }
 
         // Status and old kickoff are both claims. A result import or competing
@@ -6099,7 +6100,7 @@ export async function setMatchTime(
     }
     if (error instanceof ScrimScheduleConflictError) {
       return {
-        error: `That kickoff falls within four hours of ${error.scrim}. Cancel that scrim on its page first, or pick another time.`,
+        error: `That kickoff falls within four hours of ${error.scrim}. ${error.fix} first, or pick another time.`,
       };
     }
     if (isSerializationConflict(error)) {

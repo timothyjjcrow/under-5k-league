@@ -10,7 +10,7 @@ import { parseTiebreakerStage, tiebreakerSlot, type TiebreakerGroup } from "./ti
 import { parseSingleTiebreakerSlot } from "./tiebreaker-format";
 import { singleEliminationPlan } from "./single-elimination";
 import { UserFacingError } from "./user-facing-error";
-import { describeScrimConflict, findConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import { describeScrimConflict, findConfirmedScrimConflict, scrimConflictFix } from "./scrim-schedule-conflict";
 import { raceHook } from "./race-hook";
 import { resultAnnouncedKey, stampResultChange, tiebreakerDrawKey, tiebreakerGamesArchiveKey, weekReminderKey } from "./settings";
 import { isSerializationConflict } from "./prisma-errors";
@@ -125,7 +125,7 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
         for (const pair of ready) {
           const scrimClash = scheduledAt && await findConfirmedScrimConflict(tx, { seasonId, teamIds: [pair.home, pair.away], scheduledAt });
           if (scrimClash) {
-            throw new UserFacingError(`A tiebreaker kickoff falls within four hours of ${describeScrimConflict(scrimClash)}. Cancel that scrim on its page before continuing.`);
+            throw new UserFacingError(`A tiebreaker kickoff falls within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} before continuing.`);
           }
           data.push({ seasonId, week: opening?.week ?? nextWeek, phase: MATCH_PHASE.TIEBREAKER,
             homeTeamId: pair.home, awayTeamId: pair.away, bestOf: 1, bracketSlot: pair.slot, scheduledAt });
@@ -152,7 +152,7 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
         : group.pairings;
       const scrimClash = scheduledAt && await findConfirmedScrimConflict(tx, { seasonId, teamIds: group.teamIds, scheduledAt });
       if (scrimClash) {
-        throw new UserFacingError(`The tiebreaker kickoff falls within four hours of ${describeScrimConflict(scrimClash)}. Cancel that scrim on its page before scheduling the week.`);
+        throw new UserFacingError(`The tiebreaker kickoff falls within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} before scheduling the week.`);
       }
       data.push(...pairings.map((pair, i) => ({
         seasonId, week, phase: MATCH_PHASE.TIEBREAKER,
