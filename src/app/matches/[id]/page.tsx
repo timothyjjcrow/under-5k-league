@@ -27,6 +27,7 @@ import { roleShort } from "@/lib/roles";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
+import { signInHref } from "@/lib/sign-in";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
 import { LocalTime } from "@/components/local-time";
@@ -741,8 +742,7 @@ async function MatchPreview({
   // fixture guard; it is not client render state.
   // eslint-disable-next-line react-hooks/purity
   const previewNow = Date.now();
-  const isParticipant =
-    !!viewer &&
+  const checkinOpen =
     match.status !== "LIVE" &&
     !!previewSeason?.isActive &&
     matchCheckinOpen(
@@ -751,8 +751,9 @@ async function MatchPreview({
       match.status,
       match.scheduledAt,
       previewNow,
-    ) &&
-    activeNightRoster.has(viewer.id);
+    );
+  const isParticipant =
+    !!viewer && checkinOpen && activeNightRoster.has(viewer.id);
   const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
   // Same rule as the dashboard's This-week cards. The season gate mirrors
   // /pickem's canPlay: savePrediction only ever writes to the ACTIVE season,
@@ -808,6 +809,15 @@ async function MatchPreview({
           whenTs={match.scheduledAt?.getTime()}
           myRsvp={myRsvp}
         />
+      ) : !viewer && checkinOpen ? (
+        // Signed out, nothing above tells a player they can check in here.
+        // Sign-in returns to this page, where the banner then appears.
+        <p className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm text-muted">
+          Playing in this match?{" "}
+          <Link href={signInHref(`/matches/${match.id}`)} className={textLink()}>
+            Sign in to check in
+          </Link>
+        </p>
       ) : null}
 
       <StakesBanner match={match} seasonMatches={seasonMatches} />

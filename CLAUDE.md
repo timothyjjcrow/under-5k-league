@@ -28,7 +28,11 @@ per-phase or offseason so unused features stay hidden.
   on the next poll/action (no cron/websocket).
 - **Mutations**: server actions in `src/app/actions/*` (forms) and JSON route
   handlers in `src/app/api/draft/*` (the live draft).
-- **Auth**: `src/lib/auth.ts` (jose-signed cookie session), `steam.ts` (OpenID
+- **Auth**: `src/lib/auth.ts` (jose-signed cookie session; the token itself
+  lives in `session-token.ts`, DB-free). Sessions SLIDE: `src/proxy.ts`
+  re-issues a week-old cookie on GET page loads with the same uid, epoch and
+  sign-in time (180-day absolute cap), so an epoch bump still revokes it and
+  the admin allowlist is still re-read per request. `steam.ts` (OpenID
   2.0), `users.ts` (upsert + `resolveRole`). Dev/mock login: `/api/auth/dev`
   (gated by `ALLOW_DEV_LOGIN`). Admin: `ADMIN_STEAM_IDS` is authoritative
   (exactly those SteamID64s are admin; others demoted on login), and production
