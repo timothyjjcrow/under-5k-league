@@ -484,7 +484,7 @@ export default async function MatchDetailPage({
           <Suspense fallback={<CardSkeleton rows={5} />}>
             {/* Rosters, scouting (scans all seasons' box scores) and the stakes
               banner stream in so the header + check-in paint immediately. */}
-            <MatchPreview match={match} />
+            <MatchPreview match={match} roundLabel={postseasonLabel} />
           </Suspense>
         ) : games.length === 0 ? (
           <EmptyState
@@ -639,7 +639,10 @@ export default async function MatchDetailPage({
 // confirmed for match night — shown until the first game is recorded.
 async function MatchPreview({
   match,
+  roundLabel,
 }: {
+  /** matchRoundLabel of this fixture, for the pick'em tray's legend. */
+  roundLabel: string;
   match: {
     id: string;
     seasonId: string;
@@ -933,7 +936,7 @@ async function MatchPreview({
           <PickemTray
             control={pick}
             matchId={match.id}
-            week={match.week}
+            roundLabel={roundLabel}
             home={{
               id: match.homeTeamId,
               name: match.homeTeam.name,

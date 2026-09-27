@@ -358,7 +358,7 @@ export default async function PickemPage({
                               </div>
                               <PickemPickForm
                                 matchId={m.id}
-                                week={m.week}
+                                roundLabel={roundLabel(m)}
                                 home={pickSide(m.homeTeamId)}
                                 away={pickSide(m.awayTeamId)}
                                 pickedTeamId={myPicks.get(m.id) ?? null}

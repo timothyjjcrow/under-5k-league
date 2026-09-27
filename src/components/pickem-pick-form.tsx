@@ -24,7 +24,7 @@ export type PickemSide = { id: string; name: string; logoUrl: string | null };
  */
 export function PickemPickForm({
   matchId,
-  week,
+  roundLabel,
   home,
   away,
   pickedTeamId,
@@ -33,7 +33,8 @@ export function PickemPickForm({
   compact = false,
 }: {
   matchId: string;
-  week: number;
+  /** The fixture's name, from matchRoundLabel: "Week 3", "Semifinal". */
+  roundLabel: string;
   home: PickemSide;
   away: PickemSide;
   pickedTeamId: string | null;
@@ -81,7 +82,7 @@ export function PickemPickForm({
     >
       <fieldset className="min-w-0">
         <legend className="sr-only">
-          Pick the winner of Week {week}: {home.name} versus {away.name}
+          Pick the winner — {roundLabel}: {home.name} versus {away.name}
         </legend>
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">{side(home)}</div>
@@ -106,7 +107,7 @@ export function PickemPickForm({
 export function PickemTray({
   control,
   matchId,
-  week,
+  roundLabel,
   home,
   away,
   locksAt,
@@ -114,7 +115,8 @@ export function PickemTray({
 }: {
   control: PickemControl;
   matchId: string;
-  week: number;
+  /** Passed through to PickemPickForm's accessible legend. */
+  roundLabel: string;
   home: PickemSide;
   away: PickemSide;
   locksAt: number | null;
@@ -146,7 +148,7 @@ export function PickemTray({
       </p>
       <PickemPickForm
         matchId={matchId}
-        week={week}
+        roundLabel={roundLabel}
         home={home}
         away={away}
         pickedTeamId={control.pickedTeamId}

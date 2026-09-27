@@ -2688,7 +2688,7 @@ async function ThisWeek({
                 <PickemTray
                   control={pick}
                   matchId={m.id}
-                  week={m.week}
+                  roundLabel={matchRoundLabel(m, playoffRounds)}
                   home={pickSide(m.homeTeamId)}
                   away={pickSide(m.awayTeamId)}
                   locksAt={m.scheduledAt?.getTime() ?? null}
