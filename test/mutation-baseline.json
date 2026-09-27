@@ -87,7 +87,7 @@
     "src/app/actions/registration.ts::desiredLinkIsCurrent::rankTierManual#2",
     "src/app/actions/registration.ts::desiredLinkIsCurrent::rankTierManual#3",
     "src/app/actions/registration.ts::leaveLeague::status#1",
-    "src/app/actions/registration.ts::refreshRank::rankTierManual#1",
+    "src/app/actions/registration.ts::refreshOpenDotaProfileFor::rankTierManual#1",
     "src/app/actions/registration.ts::saveRegistration::rankTier+rankTierManual#1",
     "src/app/actions/registration.ts::saveRegistration::status#1",
     "src/app/api/dota-lobby/route.ts::POST::status#1",
