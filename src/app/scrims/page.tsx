@@ -254,7 +254,7 @@ export default async function ScrimsPage({
       ) : !viewer && seasonOpen ? (
         <Card tone="quiet">
           <CardBody className="text-sm text-muted">
-            <Link href="/login?returnTo=%2Fscrims" className={textLink()}>
+            <Link href="/login?next=/scrims" className={textLink()}>
               Sign in
             </Link>{" "}
             to post, claim, or manage a scrim.

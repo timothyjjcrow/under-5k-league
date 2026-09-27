@@ -382,7 +382,7 @@ export default async function ScrimDetailPage({
                       {joinCheck.signIn ? (
                         <>
                           <Link
-                            href={`/login?returnTo=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
+                            href={`/login?next=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
                             className={textLink()}
                           >
                             Sign in
@@ -443,7 +443,7 @@ export default async function ScrimDetailPage({
               {!viewer ? (
                 <p className="text-xs text-muted">
                   <Link
-                    href={`/login?returnTo=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
+                    href={`/login?next=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
                     className={textLink()}
                   >
                     Sign in
