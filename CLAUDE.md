@@ -1959,6 +1959,16 @@ already in the `Setting` table.
   pages (`setAvailability` action — rostered players and assigned standins
   only, no completed matches). Schedule match rows show per-team ✓/✗ counts
   while a match is unplayed.
+- **Who may answer for a side** is `loadSidePlayerIds`
+  (`availability-service.ts`): the roster minus seats a standin covers, plus
+  standins whose signup is active (or absent) and who hold no roster seat this
+  season. `setAvailability`, the "I'm away" range and the live-series
+  readiness prompt all go through it.
+- **Playing lineups are retired.** Captains no longer confirm lineups, and
+  nothing writes `MatchLineup`/`MatchLineupSeat` or `Match.logisticsRevision`
+  any more; only the season export and the postseason reset receipt copy old
+  rows. They stay in the schema until the next planned migration drops them —
+  don't build on them.
 - Admin standin card flags players who declared OUT and aren't covered by an
   assignment yet, right above the assign form.
 - **Match-night Discord reminder**: `src/lib/reminder-service.ts`

@@ -130,7 +130,7 @@ export async function setAvailability(
         }
 
         if (priorStatus !== status) {
-          await recordCheckin(tx, match, user.id, status, seat.teamId);
+          await recordCheckin(tx, match, user.id, status);
         }
 
         // Which side loses a player — the roster seat, or the team a standin

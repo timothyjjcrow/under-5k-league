@@ -16,7 +16,6 @@ import {
 } from "./discord";
 import { mentionsOf } from "./discord-mentions";
 import { standinConflict, standinMmrNote } from "./standin";
-import { invalidateMatchLineups } from "./match-lineups";
 import { isSerializationConflict } from "./prisma-errors";
 
 /**
@@ -508,7 +507,6 @@ export async function assignStandinGuarded(opts: {
             replacingUserId,
           },
         });
-        await invalidateMatchLineups(tx, matchId, "Standin cover changed", new Date(), coverTeamId);
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -640,7 +638,6 @@ export async function removeStandinGuarded(opts: {
           match: { status: { not: MATCH_STATUS.COMPLETED }, games: { none: {} } },
         },
       });
-      if (deleted.count) await invalidateMatchLineups(tx, assignment.matchId, "Standin cover was removed", new Date(), assignment.teamId);
       return deleted;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {

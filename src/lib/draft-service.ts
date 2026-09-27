@@ -40,7 +40,6 @@ import {
   openDraftLot, readDraftSales, setDraftRunStatus, settleDraftLot,
   undoDraftSaleHistory, voidDraftLot,
 } from "./draft-history";
-import { invalidateTeamLineups } from "./match-lineups";
 import { isSerializationConflict } from "./prisma-errors";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
@@ -127,7 +126,6 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         },
       });
       await settleDraftLot(tx, draft, member, nomReg.mmr, nomReg.roles);
-      await invalidateTeamLineups(tx, member.teamId, "ROSTER_AUCTION_ACQUISITION");
       await tx.team.update({
         where: { id: draft.currentBidTeamId },
         data: { budget: { decrement: draft.currentBid } },
@@ -669,7 +667,6 @@ export async function undoLastSale(
     }
     await undoDraftSaleHistory(tx, draft, last, viewer);
     await closeRosterTenure(tx, last, "DRAFT_UNDO", viewer.id);
-    await invalidateTeamLineups(tx, last.teamId, "ROSTER_DRAFT_UNDO");
     // Clear only the operational trail; immutable lot receipts survive. The Bid rows are keyed by
     // (draftId, userId) with no per-nomination id, so leaving them meant the
     // re-run auction's "Bid trail" replayed the VOIDED sale's prices — every
@@ -911,7 +908,6 @@ export async function abortDraft(
         await abortDraftHistory(tx, draft, roster, viewer, historyAt);
         for (const member of retainedCaptains) await captureRosterTenure(tx, member, undefined, historyAt);
         for (const member of returned) await closeRosterTenure(tx, member, "DRAFT_ABORT", viewer.id, historyAt);
-        for (const team of teamAuthorities) await invalidateTeamLineups(tx, team.id, "ROSTER_DRAFT_ABORT", historyAt);
         if (returned.length > 0) {
           await tx.teamMember.deleteMany({
             where: { id: { in: returned.map((member) => member.id) } },

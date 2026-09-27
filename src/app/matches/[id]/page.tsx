@@ -227,7 +227,7 @@ export default async function MatchDetailPage({
     ...(hasPreview
       ? [
           { id: "match-games", label: "Match night" },
-          { id: "match-matchup", label: "Lineups" },
+          { id: "match-matchup", label: "Matchup" },
           { id: "match-scouting", label: "Scouting" },
         ]
       : [{ id: "match-games", label: "Games" }]),

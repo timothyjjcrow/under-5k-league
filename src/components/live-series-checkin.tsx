@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { loadLineupCandidates } from "@/lib/match-lineups";
+import { loadSidePlayerIds } from "@/lib/availability-service";
 import { matchCheckinOpen } from "@/lib/league-lifecycle";
 import { CheckinBanner } from "./checkin-banner";
 
@@ -32,8 +32,7 @@ export async function LiveSeriesCheckin({ matchId }: { matchId: string }) {
   if (!ownTeam || ownTeam.withdrawn) return null;
   // The same who-plays-for-this-side rule check-ins use: a covered player is
   // out, and the standin covering them is in.
-  const candidates = await loadLineupCandidates(prisma, match, ownTeam.id);
-  if (!candidates.some((candidate) => candidate.userId === viewer.id && candidate.eligible)) return null;
+  if (!(await loadSidePlayerIds(prisma, match, ownTeam.id)).has(viewer.id)) return null;
   return (
     <section id="match-live-checkin" aria-label="Ready for the next game" className="scroll-mt-40">
       <CheckinBanner matchId={match.id} scheduleRevision={match.scheduleRevision} heading="Ready for the next game" remainingGames myRsvp={ownRsvp?.status ?? null} />

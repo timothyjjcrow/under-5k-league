@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
-import { MATCH_STATUS } from "./constants";
+import { MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
 import {
   AVAILABILITY,
   CHECKIN_REFUSAL,
@@ -22,7 +22,6 @@ import {
   type SeenFixture,
 } from "./away-range";
 import { postAuctionWorkOpen } from "./league-lifecycle";
-import { invalidateMatchLineups, loadLineupCandidates } from "./match-lineups";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 
@@ -53,12 +52,63 @@ export type CheckinSeat =
   | { refusal: CheckinRefusal };
 
 /**
+ * Who answers for `teamId` on this fixture: its rostered players, minus any
+ * whose named seat a standin has taken, plus the standins covering it. A
+ * booking that names someone no longer on the roster covers nothing, and a
+ * standin only counts while their signup (if any) is active and they aren't
+ * rostered anywhere this season. Pass the caller's transaction when there is
+ * one, so roster, cover and registration changes contend with its write.
+ */
+export async function loadSidePlayerIds(
+  db: Pick<Tx, "teamMember" | "standinAssignment" | "registration">,
+  match: { id: string; seasonId: string },
+  teamId: string,
+): Promise<Set<string>> {
+  const [members, bookings] = await Promise.all([
+    db.teamMember.findMany({
+      where: { seasonId: match.seasonId, teamId },
+      select: { userId: true },
+    }),
+    db.standinAssignment.findMany({
+      where: { matchId: match.id, teamId },
+      select: { standinUserId: true, replacingUserId: true },
+    }),
+  ]);
+  const memberIds = new Set(members.map((m) => m.userId));
+  const cover = bookings.filter(
+    (b) => b.replacingUserId == null || memberIds.has(b.replacingUserId),
+  );
+  const covered = new Set(cover.map((b) => b.replacingUserId));
+  const players = new Set([...memberIds].filter((id) => !covered.has(id)));
+  const standinIds = cover.map((b) => b.standinUserId);
+  if (standinIds.length === 0) return players;
+  const [registrations, rostered] = await Promise.all([
+    db.registration.findMany({
+      where: { seasonId: match.seasonId, userId: { in: standinIds } },
+      select: { userId: true, status: true },
+    }),
+    db.teamMember.findMany({
+      where: { seasonId: match.seasonId, userId: { in: standinIds } },
+      select: { userId: true },
+    }),
+  ]);
+  const statusOf = new Map(registrations.map((r) => [r.userId, r.status]));
+  const rosteredIds = new Set(rostered.map((m) => m.userId));
+  for (const id of standinIds) {
+    const status = statusOf.get(id);
+    if ((status === undefined || status === REGISTRATION_STATUS.ACTIVE) && !rosteredIds.has(id)) {
+      players.add(id);
+    }
+  }
+  return players;
+}
+
+/**
  * Which side, if any, `userId` answers for on this fixture. Rostered players
  * answer unless a standin has taken their named seat; assigned standins
- * answer for the team they cover; and the lineup projection has the final
- * say, so a check-in can never be counted for someone the captain's lineup
- * would refuse. Read inside the caller's SERIALIZABLE transaction, so roster,
- * cover and registration changes contend with the write that follows.
+ * answer for the team they cover; and `loadSidePlayerIds` has the final say.
+ * Read inside the caller's SERIALIZABLE transaction, so roster, cover and
+ * registration changes contend with the write that follows.
  */
 export async function resolveCheckinSeat(
   tx: Tx,
@@ -85,8 +135,7 @@ export async function resolveCheckinSeat(
   const teamId = onRoster?.teamId ?? standinSeat!.teamId;
   const team = teamId === match.homeTeamId ? match.homeTeam : match.awayTeam;
   if (team.withdrawn) return { refusal: CHECKIN_REFUSAL.WITHDRAWN };
-  const candidates = await loadLineupCandidates(tx, match, teamId);
-  if (!candidates.some((c) => c.userId === userId && c.eligible)) {
+  if (!(await loadSidePlayerIds(tx, match, teamId)).has(userId)) {
     return { refusal: CHECKIN_REFUSAL.INELIGIBLE };
   }
   return { teamId, captainId: team.captainId };
@@ -109,21 +158,18 @@ export async function currentCheckinStatus(
   return prior?.scheduleRevision === match.scheduleRevision ? prior.status : null;
 }
 
-/** Write an answer for the current kickoff and retire the side's confirmed
- *  lineup, which was built from the old answers. */
+/** Write an answer for the fixture's current kickoff. */
 export async function recordCheckin(
   tx: Tx,
   match: { id: string; scheduleRevision: number },
   userId: string,
   status: AvailabilityStatus,
-  teamId: string,
 ): Promise<void> {
   await tx.matchAvailability.upsert({
     where: { matchId_userId: { matchId: match.id, userId } },
     create: { matchId: match.id, userId, status, scheduleRevision: match.scheduleRevision },
     update: { status, scheduleRevision: match.scheduleRevision },
   });
-  await invalidateMatchLineups(tx, match.id, "A player's check-in changed", new Date(), teamId);
 }
 
 /**
@@ -317,7 +363,7 @@ export async function markAwayRange(opts: {
           inAwayRange(seen.get(id)!.kickoffMs, range),
       ).length;
 
-      const toMark: { match: (typeof matches)[number]; seat: { teamId: string; captainId: string }; ref: AwayMarkedFixture }[] = [];
+      const toMark: { match: (typeof matches)[number]; ref: AwayMarkedFixture }[] = [];
       const alreadyOut: AwayFixtureRef[] = [];
       const skipped: (AwayFixtureRef & { reason: AwaySkip })[] = [];
       for (const match of matches) {
@@ -367,7 +413,6 @@ export async function markAwayRange(opts: {
         else if (outcome.kind === "mark" && seat && "teamId" in seat) {
           toMark.push({
             match,
-            seat,
             ref: {
               ...ref,
               week: match.week,
@@ -382,8 +427,8 @@ export async function markAwayRange(opts: {
       }
 
       // Every fixture is judged; now write. Nothing below can refuse.
-      for (const { match, seat } of toMark) {
-        await recordCheckin(tx, match, userId, AVAILABILITY.OUT, seat.teamId);
+      for (const { match } of toMark) {
+        await recordCheckin(tx, match, userId, AVAILABILITY.OUT);
       }
       return {
         marked: toMark.map((m) => m.ref),

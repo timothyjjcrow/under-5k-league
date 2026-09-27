@@ -8,7 +8,6 @@ import { raceHook } from "@/lib/race-hook";
 import { requireAdmin } from "@/lib/auth";
 import { captureRosterTenure, closeRosterTenure, recordHistoryAction } from "@/lib/roster-history";
 import { startDraftRun } from "@/lib/draft-history";
-import { invalidateMatchLineups, invalidateTeamLineups } from "@/lib/match-lineups";
 import {
   archiveCompletedSeason,
   completedSeasonArchiveReadiness,
@@ -1081,7 +1080,6 @@ export async function addCaptain(
           },
         });
         await captureRosterTenure(tx, member, { kind: "CAPTAIN_DESIGNATION", mmr: reg.mmr || null, roles: reg.roles, actorId: actor.id });
-        await invalidateTeamLineups(tx, team.id, "ROSTER_CAPTAIN_DESIGNATED");
         return { name: user.name, teamName, discordId: user.discordId };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -1245,7 +1243,6 @@ export async function removeCaptain(
         }
         const historyAt = new Date();
         for (const member of team.members) await closeRosterTenure(tx, member, "PRE_DRAFT_TEAM_REMOVED", actor.id, historyAt);
-        await invalidateTeamLineups(tx, team.id, "ROSTER_CAPTAIN_REMOVED", historyAt);
         const gone = await tx.team.deleteMany({
           where: {
             id: team.id,
@@ -1500,7 +1497,6 @@ export async function transferCaptaincy(
         await recordHistoryAction(tx, actor, currentSeason.id, "captainTransferHistory",
           `Transferred captaincy of ${team.name} from ${team.captain.name} to ${incoming.user.name}`,
           { teamId: team.id, outgoingUserId: outgoing.userId, incomingUserId: incoming.userId, effectiveAt: historyAt.toISOString() });
-        await invalidateTeamLineups(tx, team.id, "CAPTAIN_AUTHORITY_CHANGED", historyAt);
         return {
           teamName: team.name,
           incomingName: incoming.user.name,
@@ -3949,7 +3945,6 @@ export async function signFreeAgent(
         });
         await captureRosterTenure(tx, member, { kind: "FREE_AGENT", mmr: currentRegistration.mmr || null,
           roles: currentRegistration.roles, actorId: actor.id });
-        await invalidateTeamLineups(tx, teamId, "ROSTER_FREE_AGENT_SIGNED");
         // The reverse of releasePlayer's stale-cover rule: an EMPTY-SEAT
         // assignment (replacingUserId null) is permanently "live" to
         // matchNightRoster, so once this signing fills the team's LAST seat
@@ -4269,7 +4264,6 @@ export async function releasePlayer(
           throw new Error("ALREADY_RELEASED");
         }
         await closeRosterTenure(tx, member, "RELEASE", actor.id);
-        await invalidateTeamLineups(tx, member.teamId, "ROSTER_RELEASED");
         // Only cover on a series that hasn't started. Once a game is imported the
         // assignment is load-bearing for the REST of that series: gatherTeamAccounts
         // re-reads StandinAssignment on every import, so deleting it mid-Bo3 drops
@@ -4553,7 +4547,6 @@ export async function withdrawTeam(
         if (flagged.count === 0) {
           throw new TeamAlreadyWithdrawnError(team.name);
         }
-        await invalidateTeamLineups(tx, teamId, "TEAM_WITHDRAWN");
         const cancelledScrims = await tx.scrim.updateMany({
           where: {
             seasonId: expectedActiveSeasonId,
@@ -5129,7 +5122,6 @@ export async function reopenMatch(
             "That match or its games just changed — reload before reopening it.",
           );
         }
-        await invalidateMatchLineups(tx, match.id, "MATCH_REOPENED");
 
         if (match.scheduledAt) {
           await invalidatePendingAnnouncementMarkers(
@@ -5762,7 +5754,6 @@ export async function setWeekNight(
             data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
           });
           if (updated.count !== 1) throw new ScheduleMatchChangedError();
-          await invalidateMatchLineups(tx, match.id, "KICKOFF_CHANGED");
         }
 
         // Keep the arithmetic anchor used for future playoff rounds aligned with
@@ -6030,7 +6021,6 @@ export async function setMatchTime(
           data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
         });
         if (updated.count !== 1) throw new ScheduleMatchChangedError();
-        await invalidateMatchLineups(tx, matchId, "KICKOFF_CHANGED");
 
         const [rsvps, proposals] = await Promise.all([
           tx.matchAvailability.deleteMany({ where: { matchId } }),
