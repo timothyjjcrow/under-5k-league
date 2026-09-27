@@ -1256,8 +1256,9 @@ database-identity metadata files are `0600`. They are renamed from
 same-directory temporaries only after checksum creation, and every
 partial/published piece is removed if any step fails. SQLite uses its online
 backup API and verifies the resulting snapshot with `PRAGMA integrity_check`
-instead of byte-copying a potentially live WAL database; it requires the
-`sqlite3` CLI and fails rather than falling back to an inconsistent copy.
+instead of byte-copying a potentially live WAL database; it uses Node's
+built-in `node:sqlite` (22.16+, no `sqlite3` CLI) and fails rather than
+falling back to an inconsistent copy.
 `npm run db:backup:verify -- backups/<file>` checks the sidecar
 filename/digest and artifact modes. With `BACKUP_RECEIPT_SECRET` configured it
 also signs a portable receipt naming the artifact digest, kind, creation and

@@ -877,7 +877,8 @@ and credential-free database identity metadata. `backups/` is mode `0700`;
 every artifact and sidecar is `0600`; failed runs remove partial output. SQLite
 uses its online backup API rather than a byte copy and requires the resulting snapshot to pass
 `PRAGMA integrity_check` before publication. That local-development path
-requires the `sqlite3` command-line client and fails safely if it is absent.
+uses Node's built-in `node:sqlite` (Node 22.16 or newer), needs no `sqlite3`
+program, and fails safely if the running Node lacks it.
 
 > **`pg_dump` must be at least as new as the server**, or it aborts with
 > `aborting because of server version mismatch` and writes nothing. Check the
