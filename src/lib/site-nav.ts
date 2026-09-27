@@ -142,7 +142,13 @@ const NAV_PAGES: readonly NavPage[] = [
   { href: "/", label: "Home", group: "season", visible: always },
   { href: "/players", label: "Players", group: "season", visible: always },
   // Inhouse is a standalone pick-up mode: available season or not.
-  { href: "/inhouse", label: "Inhouse", group: "season", visible: always },
+  {
+    href: "/inhouse",
+    label: "Inhouse",
+    group: "season",
+    visible: always,
+    footer: true,
+  },
   { href: "/teams", label: "Teams", group: "season", visible: teamsExist },
   {
     href: "/draft",
@@ -163,7 +169,13 @@ const NAV_PAGES: readonly NavPage[] = [
   },
   // Scrims are listed in every phase: the archive stays useful between
   // seasons.
-  { href: "/scrims", label: "Scrims", group: "play", visible: always },
+  {
+    href: "/scrims",
+    label: "Scrims",
+    group: "play",
+    visible: always,
+    footer: true,
+  },
   { href: "/fantasy", label: "Fantasy", group: "play", visible: fantasyListed },
   { href: "/pickem", label: "Pick'em", group: "play", visible: afterAuction },
   { href: "/leaders", label: "Leaders", group: "stats", visible: seasonStats },
@@ -383,8 +395,8 @@ export function exploreNav(state: NavState): NavSection[] {
 /**
  * The footer's few links. It used to repeat every page from the header and
  * Explore (up to 16 links, a second site map under every page); it now keeps
- * the league's news, How it works and past seasons, all of which Explore
- * lists too.
+ * the two ways to play outside the season (Inhouse and Scrims), the league's
+ * news, How it works and past seasons, all of which the menus list too.
  */
 export function footerNav(state: NavState): NavLink[] {
   return NAV_PAGES.filter((page) => page.footer && page.visible(state)).map(

@@ -296,10 +296,12 @@ describe("footer", () => {
   it("keeps a few essentials, never a page the menus don't also offer", () => {
     for (const s of allStates()) {
       const links = hrefs(footerNav(s));
-      expect(links.length).toBeLessThanOrEqual(3);
-      for (const href of links) expect(exploreHrefs(s)).toContain(href);
+      expect(links.length).toBeLessThanOrEqual(5);
+      for (const href of links) expect(everyHref(s)).toContain(href);
     }
     expect(hrefs(footerNav(state(SEASON_STATUS.SIGNUPS)))).toEqual([
+      "/inhouse",
+      "/scrims",
       "/news",
       "/how-it-works",
     ]);
@@ -307,7 +309,23 @@ describe("footer", () => {
       footerNav(
         state(SEASON_STATUS.REGULAR_SEASON, null, { hasHistory: true }),
       ).map((link) => link.label),
-    ).toEqual(["League news", "How it works", "Season history"]);
+    ).toEqual([
+      "Inhouse",
+      "Scrims",
+      "League news",
+      "How it works",
+      "Season history",
+    ]);
+  });
+
+  // Tim keeps the inhouse queue and scrims promoted: slimming the footer
+  // must not drop their links in any phase.
+  it("links Inhouse and Scrims in every phase", () => {
+    for (const s of allStates()) {
+      expect(hrefs(footerNav(s))).toEqual(
+        expect.arrayContaining(["/inhouse", "/scrims"]),
+      );
+    }
   });
 });
 
