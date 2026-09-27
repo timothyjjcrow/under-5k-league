@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import {
   analyzeRecordGames,
   formatGameDuration,
@@ -137,10 +138,13 @@ export default async function RecordsPage({
 }: {
   searchParams: Promise<{ season?: string | string[] }>;
 }) {
-  const [games, seasons, query] = await Promise.all([
+  const [games, seasons, query, { hasChampion }] = await Promise.all([
     getAllGamesForRecords(),
     prisma.season.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, name: true } }),
     searchParams,
+    // The Hall of Fame is linked once a season has a champion (the menus'
+    // rule); before that it is empty boards or a copy of Leaders.
+    getPublicLeagueContent(null),
   ]);
   const seasonParam = singleSearchParam(query.season);
   if (seasonParam === null) notFound();
@@ -171,7 +175,7 @@ export default async function RecordsPage({
       <PageTitle
         title="Record book"
         subtitle="The biggest single-game performances and the matches that made league history."
-        action={<Link href="/hall-of-fame" className="text-sm font-semibold text-info hover:underline">Career legends →</Link>}
+        action={hasChampion ? <Link href="/hall-of-fame" className="text-sm font-semibold text-info hover:underline">Career legends →</Link> : undefined}
       />
       <StatsNav active="records" seasonId={selectedSeason?.id} />
       <StatsDataNotice {...analysis.diagnostics} />

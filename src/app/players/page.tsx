@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { hasText } from "@/lib/utils";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { prisma } from "@/lib/prisma";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { PlayerPool, type PoolDraftInfo } from "@/components/player-pool";
@@ -50,7 +51,12 @@ import {
 export const metadata = { title: "Players" };
 
 export default async function PlayersPage() {
-  const season = await getActiveSeason();
+  // Compare players fills from imported games; before the league's first one
+  // it would only open onto "No player careers yet".
+  const [season, { hasGames }] = await Promise.all([
+    getActiveSeason(),
+    getPublicLeagueContent(null),
+  ]);
   if (!season) {
     return (
       <div className="space-y-6">
@@ -63,12 +69,14 @@ export default async function PlayersPage() {
               <Link href="/seasons" className={buttonClasses("secondary", "sm")}>
                 Season history
               </Link>
-              <Link
-                href="/players/compare"
-                className={buttonClasses("secondary", "sm")}
-              >
-                Compare players
-              </Link>
+              {hasGames ? (
+                <Link
+                  href="/players/compare"
+                  className={buttonClasses("secondary", "sm")}
+                >
+                  Compare players
+                </Link>
+              ) : null}
               <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
                 Play an inhouse →
               </Link>
@@ -230,12 +238,14 @@ export default async function PlayersPage() {
                 Join the season →
               </Link>
             ) : null}
-            <Link
-              href="/players/compare"
-              className={textLink("text-sm")}
-            >
-              Compare players →
-            </Link>
+            {hasGames ? (
+              <Link
+                href="/players/compare"
+                className={textLink("text-sm")}
+              >
+                Compare players →
+              </Link>
+            ) : null}
           </span>
         }
       />

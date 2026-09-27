@@ -47,6 +47,15 @@ export default async function SeasonsPage() {
   ]);
   const isAdmin = viewer?.role === "ADMIN";
   const activeSeason = seasons.find((season) => season.isActive) ?? null;
+  const championOf = new Map(
+    seasons.map((season) => [
+      season.id,
+      resolveChampionPresentation(season, season.matches).championTeamId,
+    ]),
+  );
+  // The Hall of Fame is linked once a season has a champion (the menus' rule);
+  // before that it is empty boards or a copy of Leaders.
+  const hasChampion = [...championOf.values()].some((id) => id !== null);
   const backupReceiptRequired = productionDeleteBackupRequired(process.env);
 
   return (
@@ -55,12 +64,11 @@ export default async function SeasonsPage() {
         title="Season history"
         subtitle="Every season the league has run — champions, standings, and rosters."
         action={
-          <Link
-            href="/hall-of-fame"
-            className={textLink("text-sm")}
-          >
-            Hall of Fame →
-          </Link>
+          hasChampion ? (
+            <Link href="/hall-of-fame" className={textLink("text-sm")}>
+              Hall of Fame →
+            </Link>
+          ) : undefined
         }
       />
 
@@ -91,14 +99,9 @@ export default async function SeasonsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {seasons.map((s) => {
-            const championPresentation = resolveChampionPresentation(
-              s,
-              s.matches,
-            );
-            const champion = championPresentation.championTeamId
-              ? s.teams.find(
-                  (team) => team.id === championPresentation.championTeamId,
-                )
+            const championTeamId = championOf.get(s.id);
+            const champion = championTeamId
+              ? s.teams.find((team) => team.id === championTeamId)
               : null;
             return (
               <div key={s.id} className="flex h-full flex-col gap-1.5">

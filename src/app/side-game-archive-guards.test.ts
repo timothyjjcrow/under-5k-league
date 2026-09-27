@@ -106,6 +106,17 @@ describe("side-game archive: the season archive links to them", () => {
       /href=\{`\/pickem\?season=\$\{season\.id\}`\}/,
     );
   });
+
+  it("/seasons/[id] keeps the Fantasy link whenever the season had managers", () => {
+    // Fantasy is kept forever; its archive link only steps aside for a
+    // season nobody entered, which would open onto "Entries 0".
+    expect(SEASON_ARCHIVE).toMatch(
+      /fantasyRoster\.findFirst\(\{\s*where: \{ seasonId: id \}/,
+    );
+    expect(SEASON_ARCHIVE).toMatch(
+      /\{fantasyEntry \? \(\s*<Link\s*href=\{`\/fantasy\?season=/,
+    );
+  });
 });
 
 describe("side-game live-state integrity", () => {

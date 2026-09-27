@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 import { heroById } from "@/lib/heroes";
 import { notFound } from "next/navigation";
 import { getActiveSeason } from "@/lib/season";
+import { SEASON_STATUS } from "@/lib/constants";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
@@ -593,12 +594,15 @@ export default async function LeadersPage({
                 Season archive →
               </Link>
             ) : null}
-            <Link
-              href={`/recap${seasonQS}`}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Season recap →
-            </Link>
+            {/* Before the final, the recap's awards are this page's #1 rows. */}
+            {season.status === SEASON_STATUS.COMPLETE ? (
+              <Link
+                href={`/recap${seasonQS}`}
+                className={buttonClasses("secondary", "sm")}
+              >
+                Season recap →
+              </Link>
+            ) : null}
           </div>
         }
       />

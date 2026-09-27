@@ -292,6 +292,20 @@ test("public statistics and news explain their pre-result empty states", async (
       page.getByRole("navigation", { name: "Statistics" }),
     ).toHaveCount(0);
   }
+  // Nor do other pages point at them: no game yet means nothing to compare,
+  // and no champion means no Hall of Fame.
+  await page.goto("/records");
+  await expect(
+    page.locator('#main a[href="/hall-of-fame"]'),
+  ).toHaveCount(0);
+  await page.goto("/players");
+  await expect(
+    page.locator('#main a[href^="/players/compare"]'),
+  ).toHaveCount(0);
+  await page.goto("/seasons");
+  await expect(
+    page.locator('#main a[href="/hall-of-fame"]'),
+  ).toHaveCount(0);
 });
 
 test("profile page renders the searchable hero picker", async ({ page }) => {

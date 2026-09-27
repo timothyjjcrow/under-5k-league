@@ -592,12 +592,17 @@ export default async function PlayerProfilePage({
           <ContextBackLink href="/players" className={textLink("text-sm")}>
             ← All players
           </ContextBackLink>
-          <Link
-            href={`/players/compare?a=${user.id}`}
-            className={textLink("text-sm")}
-          >
-            Compare vs… →
-          </Link>
+          {/* Compare lists players with an imported league game (the same
+              trusted lines as gameRows); anyone else, such as a standin who
+              never played, would open onto "Player unavailable". */}
+          {gameRows.length > 0 ? (
+            <Link
+              href={`/players/compare?a=${user.id}`}
+              className={textLink("text-sm")}
+            >
+              Compare vs… →
+            </Link>
+          ) : null}
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
           {/* Signature hero portrait fading in from the right. */}

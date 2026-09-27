@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { prisma } from "@/lib/prisma";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { draftRecap } from "@/lib/draft-recap";
@@ -34,6 +35,8 @@ export const metadata = { title: "Teams" };
 export default async function TeamsPage() {
   const season = await getActiveSeason();
   if (!season) {
+    // The Hall of Fame is linked once a season has a champion.
+    const { hasChampion } = await getPublicLeagueContent(null);
     return (
       <div className="space-y-6">
         <PageTitle title="Teams" />
@@ -48,12 +51,14 @@ export default async function TeamsPage() {
               >
                 Season history
               </Link>
-              <Link
-                href="/hall-of-fame"
-                className={buttonClasses("secondary", "sm")}
-              >
-                Hall of Fame
-              </Link>
+              {hasChampion ? (
+                <Link
+                  href="/hall-of-fame"
+                  className={buttonClasses("secondary", "sm")}
+                >
+                  Hall of Fame
+                </Link>
+              ) : null}
               <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
                 Play an inhouse →
               </Link>
