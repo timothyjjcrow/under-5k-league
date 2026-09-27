@@ -103,8 +103,8 @@ export type ThreatBoard = {
  * Team-wide hero threat board over every line by any of `userIds`. Each line
  * is a pick (two teammates on one hero in a game would count as 2 — can't
  * happen side-split anyway). `minPicks` is an adaptive floor —
- * max(2, ceil(totalTeamPicks / 25)) — mirroring the metaMinPicks philosophy:
- * a win rate needs a few picks behind it before it's a threat signal.
+ * max(2, ceil(totalTeamPicks / 25)): a win rate needs a few picks behind it
+ * before it's a threat signal.
  */
 export function threatBoard(
   userIds: string[],

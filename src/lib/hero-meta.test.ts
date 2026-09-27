@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   allHeroesKnown,
   heroMeta,
-  metaMinPicks,
+  metaHeadlines,
+  type HeroMetaRow,
   type MetaGame,
   type MetaLine,
 } from "./hero-meta";
@@ -190,11 +191,42 @@ describe("catalogue boundary", () => {
   });
 });
 
-describe("metaMinPicks", () => {
-  it("floors at 2 for young seasons and scales with games", () => {
-    expect(metaMinPicks(0)).toBe(2);
-    expect(metaMinPicks(10)).toBe(2);
-    expect(metaMinPicks(25)).toBe(3);
-    expect(metaMinPicks(60)).toBe(6);
+describe("metaHeadlines", () => {
+  const row = (heroId: number, picks: number, wins: number): HeroMetaRow => ({
+    heroId,
+    picks,
+    wins,
+    losses: picks - wins,
+    winRate: Math.round((wins / picks) * 100),
+    pickRate: 0,
+    kda: 0,
+    killsPerPick: 0,
+    deathsPerPick: 0,
+    assistsPerPick: 0,
+    mappedPlayers: 0,
+    topPlayer: null,
+  });
+
+  it("is empty for no picks", () => {
+    expect(metaHeadlines([])).toEqual({ mostPicked: null, bestWinRate: null });
+  });
+
+  it("never headlines a small sample's win rate", () => {
+    // A 5-for-5 hero is not "the best"; nothing has 8 picks yet.
+    const rows = [row(1, 7, 4), row(2, 5, 5)];
+    const headlines = metaHeadlines(rows);
+    expect(headlines.mostPicked?.heroId).toBe(1);
+    expect(headlines.bestWinRate).toBeNull();
+  });
+
+  it("picks the best exact win rate among heroes with 8+ picks", () => {
+    const rows = [row(1, 12, 7), row(2, 9, 6), row(3, 8, 5), row(4, 3, 3)];
+    // 6/9 = 66.7% beats 5/8 = 62.5% and 7/12 = 58.3%; 3/3 lacks the sample.
+    expect(metaHeadlines(rows).bestWinRate?.heroId).toBe(2);
+  });
+
+  it("breaks an equal rate by the bigger sample", () => {
+    const rows = [row(1, 8, 6), row(2, 12, 9)];
+    expect(metaHeadlines(rows).bestWinRate?.heroId).toBe(2);
   });
 });

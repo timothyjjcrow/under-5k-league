@@ -101,21 +101,32 @@ test("homepage league pulse shares the trusted honors and hero state", async ({
   assertNoErrors();
 });
 
-test("hero meta explains its sample and lets players explore the pool", async ({
+test("hero meta is one table of picked heroes with an honest headline", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/meta");
   await expect(page.getByRole("heading", { name: "Hero meta", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What the league is actually picking" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "The meta, at a glance" })).toBeVisible();
-  await expect(page.getByText("Most in demand")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Explore the hero pool" })).toBeVisible();
-  const search = page.getByRole("searchbox", { name: "Find a hero" });
-  await search.fill("no-such-hero");
-  await expect(page.getByText("No heroes match these filters")).toBeVisible();
-  await page.getByRole("button", { name: "Clear filters" }).click();
-  await expect(page.getByRole("status")).toContainText(/matching heroes/i);
+  await expect(page.locator("#meta-sample")).toHaveText(
+    /^\d+ of \d+ heroes picked across \d+ complete games?\.$/,
+  );
+  await expect(page.getByText("Most picked", { exact: true })).toBeVisible();
+  // A win-rate headline only names a hero with 8+ picks.
+  const best = page.getByText(/^Best win rate, 8\+ picks$/);
+  if (await best.count()) await expect(best).toBeVisible();
+  const table = page.getByRole("table");
+  await expect(table).toHaveCount(1);
+  for (const column of ["Hero", "Picks", "Win %"]) {
+    await expect(table.getByRole("columnheader", { name: column })).toBeVisible();
+  }
+  await expect(table.getByRole("columnheader", { name: "Most played by" })).toBeVisible();
+  // The old explorer's filters, highlight cards and paging are gone.
+  await expect(page.getByRole("group", { name: "Hero sample filter" })).toHaveCount(0);
+  await expect(page.getByRole("searchbox")).toHaveCount(0);
+  await expect(page.getByText("The meta, at a glance")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Show more heroes/ })).toHaveCount(0);
+  // Never-picked heroes fold into one line.
+  await expect(page.locator("details summary").filter({ hasText: /not picked yet$/ })).toBeVisible();
   await expectNoHorizontalOverflow(page, "/meta");
   assertNoErrors();
 });
