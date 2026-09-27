@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { ChampionBanner } from "@/components/champion-banner";
 import { AuctionHistory } from "@/components/auction-history";
-import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
+import {
+  HISTORY_PHASE_LABEL as PHASE_LABEL,
+  seasonPhaseLabel,
+} from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
+import { getSeasonDraftStatus, getViewerFantasyEntered } from "@/lib/queries";
+import { fantasyListed } from "@/lib/site-nav";
+import { SEASON_STATUS } from "@/lib/constants";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -173,14 +180,34 @@ export default async function SeasonArchivePage({
       },
     }),
     prisma.game.count({ where: { match: { seasonId: id } } }),
-    // Fantasy is linked when the season had managers; otherwise the page
-    // would open onto "Entries 0".
+    // An archived season links Fantasy when it had managers; otherwise the
+    // page would open onto "Entries 0".
     prisma.fantasyRoster.findFirst({
       where: { seasonId: id },
       select: { id: true },
     }),
   ]);
   if (!season) notFound();
+
+  // The current season names its phase as the header and footer chips do,
+  // and links Fantasy by the menus' rule. Both reads are request-cached: the
+  // root layout already made them.
+  const draftStatus =
+    season.isActive && season.status === SEASON_STATUS.DRAFT
+      ? await getSeasonDraftStatus(season.id)
+      : null;
+  const fantasyLocked = season.fantasyLockedAt != null || gameCount > 0;
+  const viewer = season.isActive && fantasyLocked ? await getSessionUser() : null;
+  const showFantasy = season.isActive
+    ? fantasyListed({
+        phase: season.status,
+        draftStatus,
+        fantasyLocked,
+        fantasyEntered: viewer
+          ? await getViewerFantasyEntered(season.id, viewer.id)
+          : false,
+      })
+    : fantasyEntry !== null;
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
@@ -220,11 +247,12 @@ export default async function SeasonArchivePage({
         title={season.name}
         subtitle={
           // The badge already says "Current season"; the subtitle says where
-          // the season is, so a finished one stops reading as running.
+          // the season is, in the header chip's words, so a finished one
+          // stops reading as running.
           season.isActive
-            ? season.status === "COMPLETE"
+            ? season.status === SEASON_STATUS.COMPLETE
               ? "Season complete"
-              : (PHASE_LABEL[season.status] ?? season.status)
+              : seasonPhaseLabel(season.status, draftStatus)
             : "Season archive"
         }
         action={
@@ -260,7 +288,7 @@ export default async function SeasonArchivePage({
           ) : null}
           {/* Recap, fantasy, and pick'em can all have useful season state even
               when no OpenDota Game rows were imported. */}
-          {fantasyEntry ? (
+          {showFantasy ? (
             <Link
               href={`/fantasy?season=${season.id}`}
               className={buttonClasses("secondary", "sm")}

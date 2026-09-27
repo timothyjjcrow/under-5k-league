@@ -17,7 +17,10 @@ import {
   textLink,
 } from "@/components/ui";
 
-import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
+import {
+  HISTORY_PHASE_LABEL as PHASE_LABEL,
+  seasonPhaseLabel,
+} from "@/lib/season-copy";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { productionDeleteBackupRequired } from "@/lib/backup-receipt.mjs";
 
@@ -147,9 +150,9 @@ export default async function SeasonsPage() {
                         {s.status === "COMPLETE"
                           ? "Champion state needs review"
                           : s.isActive
-                            ? // Where the season is: "Signups open" is not
-                              // "in progress".
-                              (PHASE_LABEL[s.status] ?? s.status)
+                            ? // Where the season is, in the header chip's
+                              // words: "Signups open" is not "in progress".
+                              seasonPhaseLabel(s.status, s.draft?.status)
                             : "No champion recorded"}
                       </div>
                     )}

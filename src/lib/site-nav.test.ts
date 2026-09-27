@@ -598,6 +598,18 @@ describe("navigation surfaces", () => {
     expect(footer).not.toContain("exploreNav(");
   });
 
+  // The current season's page and its /seasons card said "In season" and
+  // "Drafting" under a header chip reading "Regular season" and "Draft
+  // setup". The archive labels are for archived seasons only.
+  it("names the current season's phase in the header chip's words", () => {
+    expect(source("src/app/seasons/[id]/page.tsx")).toContain(
+      "seasonPhaseLabel(season.status, draftStatus)",
+    );
+    expect(source("src/app/seasons/page.tsx")).toContain(
+      "seasonPhaseLabel(s.status, s.draft?.status)",
+    );
+  });
+
   // Home's Fantasy tile used to be shown to everyone all season ("Rosters
   // locked — standings") after the menus stopped listing it.
   it("promotes Fantasy on Home by the menus' rule", () => {

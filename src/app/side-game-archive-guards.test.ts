@@ -107,14 +107,19 @@ describe("side-game archive: the season archive links to them", () => {
     );
   });
 
-  it("/seasons/[id] keeps the Fantasy link whenever the season had managers", () => {
-    // Fantasy is kept forever; its archive link only steps aside for a
-    // season nobody entered, which would open onto "Entries 0".
+  it("/seasons/[id] keeps the Fantasy link whenever an archived season had managers", () => {
+    // Fantasy is kept forever; an archived season's link only steps aside
+    // for a season nobody entered, which would open onto "Entries 0". The
+    // current season follows the menus' rule instead, so the link is there
+    // for the whole pick window, before anyone has entered.
     expect(SEASON_ARCHIVE).toMatch(
       /fantasyRoster\.findFirst\(\{\s*where: \{ seasonId: id \}/,
     );
     expect(SEASON_ARCHIVE).toMatch(
-      /\{fantasyEntry \? \(\s*<Link\s*href=\{`\/fantasy\?season=/,
+      /const showFantasy = season\.isActive\s*\?\s*fantasyListed\(\{[\s\S]*?\}\)\s*:\s*fantasyEntry !== null;/,
+    );
+    expect(SEASON_ARCHIVE).toMatch(
+      /\{showFantasy \? \(\s*<Link\s*href=\{`\/fantasy\?season=/,
     );
   });
 });
