@@ -7,9 +7,7 @@ import { profileMatch } from "@/lib/profile-match";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import {
-  getAllGamesForRecords,
-} from "@/lib/cached-queries";
+import { getAllGamesForRecords } from "@/lib/cached-queries";
 import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { getRosterHistory } from "@/lib/player-roster-history";
 import { appearanceCareers } from "@/lib/appearance-careers";
@@ -50,7 +48,6 @@ import {
   CardBody,
   CardHeader,
   CardSkeleton,
-  EmptyState,
   FormStrip,
   HeroIcon,
   HeroList,
@@ -189,21 +186,15 @@ export default async function PlayerProfilePage({
     getRosterHistory(id),
     // Participant indexes narrow covered history; old sources retain a safe fallback.
     getPlayerGameFacts(id),
-    // Latest completed inhouse game doubles as the activity-card data and the
-    // gate for the streamed ladder card, so league-only players never mount a
-    // skeleton that will immediately disappear.
+    // Any completed inhouse game gates the streamed ladder card, so
+    // league-only players never mount a skeleton that will immediately
+    // disappear.
     prisma.inhouseLobby.findFirst({
       where: {
         status: INHOUSE_STATUS.COMPLETED,
         players: { some: { userId: id } },
       },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        matchStartTime: true,
-        startedAt: true,
-        createdAt: true,
-      },
+      select: { id: true },
     }),
     // All-time record book input — the cached /records scan ("games"-tagged).
     // Awaited in the page body on purpose: an unstable_cache wrapper awaited
@@ -236,10 +227,6 @@ export default async function PlayerProfilePage({
       },
     }),
   ]);
-  const recentInhousePlayedAt = recentInhouse
-    ? inhousePlayedAt(recentInhouse)
-    : null;
-
   // Pass 2: only THIS player's games carry the heavy match/team/season joins
   // that feed the match history, stat tiles, achievements, and report card.
   const myGameIds = gamesLite
@@ -269,8 +256,8 @@ export default async function PlayerProfilePage({
   const accountId = effectiveDotaAccountId(user);
 
   // A signup row exists for WITHDRAWN/REMOVED players too — only an ACTIVE one
-  // may render as a live signup (MMR, roles, Standin badge, the whole Signup
-  // profile card). WITHDRAWN gets an honest badge instead of reading as a
+  // may render as a live signup (MMR, roles, Standin badge, their goals and
+  // note for captains). WITHDRAWN gets an honest badge instead of reading as a
   // biddable "Registered"; REMOVED renders exactly as unregistered — a
   // moderation decision is not a public scarlet letter.
   const activeReg =
@@ -497,8 +484,7 @@ export default async function PlayerProfilePage({
     const teamId =
       seriesGames
         .map((row) => row.stat.teamId)
-        .find((t) => t === match.homeTeamId || t === match.awayTeamId) ??
-      null;
+        .find((t) => t === match.homeTeamId || t === match.awayTeamId) ?? null;
     const firstPlayed = seriesGames.find((row) => row.game.startTime > 0);
     const playedAt = firstPlayed
       ? new Date(firstPlayed.game.startTime * 1000)
@@ -571,14 +557,12 @@ export default async function PlayerProfilePage({
   const roles = roleLabels(activeReg?.roles);
   const isStandin = activeReg?.type === "STANDIN";
   const isCaptain = !!membership?.isCaptain;
+  // Season context only: the badges already say Captain / Standin and the
+  // team box names the team, so the subtitle doesn't repeat either.
   const subtitle = season
-    ? isStandin
-      ? `Standin · ${season.name}`
-      : team
-        ? `${isCaptain ? "Captain" : "Player"} · ${team.name}`
-        : activeReg
-          ? `Registered · ${season.name}`
-          : season.name
+    ? activeReg && !team && !isStandin
+      ? `Registered · ${season.name}`
+      : season.name
     : null;
   // A signature hero for the banner backdrop: most-played if we have games,
   // otherwise the player's first listed favorite.
@@ -591,22 +575,21 @@ export default async function PlayerProfilePage({
 
   // Band/card visibility, computed once so a SectionTitle can never render
   // above an empty band. Everything gates on data presence, never phase.
-  const signupCardVisible =
-    !!activeReg &&
-    (hasText(activeReg.statement) ||
-      hasText(activeReg.captainNote) ||
-      activeReg.wantsCaptain);
+  const hasLeagueGames = gameRows.length > 0;
+  // What they wrote for captains, shown once under the header.
+  const signupGoals =
+    activeReg && hasText(activeReg.statement) ? activeReg.statement : null;
+  const signupNote =
+    activeReg && hasText(activeReg.captainNote) ? activeReg.captainNote : null;
+  // Only while they could still be picked as one; once on a team (or when
+  // they already captain) it is old news.
+  const wantsCaptainNow = !!activeReg?.wantsCaptain && !team && !isStandin;
   const selfPickedHeroes = activeReg?.favoriteHeroes;
   const heroCardVisible =
     leagueHeroes.length > 0 ||
     pubHeroes.length > 0 ||
     hasText(selfPickedHeroes);
   const connectionsVisible = !!affinities.nemesis || !!affinities.duo;
-  const activityVisible =
-    !!latestLeagueGame || !!recentInhouse || !!pubActivityNow;
-  const newSignupVisible = !!activeReg && gameRows.length === 0;
-  const signupSnapshotVisible =
-    !!activeReg && (newSignupVisible || signupCardVisible);
 
   // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
   // game (older imports may lack them), so average only over games that have it.
@@ -684,24 +667,31 @@ export default async function PlayerProfilePage({
           latestLeagueGame.game.match.awayTeam,
         ]
       : [];
-  const profileVisible =
-    activityVisible ||
-    signupSnapshotVisible ||
-    heroCardVisible ||
-    heldRecords.length > 0 ||
-    connectionsVisible;
+  const extrasVisible = heldRecords.length > 0 || connectionsVisible;
+  const profileVisible = heroCardVisible || extrasVisible;
+  // With no league games the inhouse card leads the page (it is their one
+  // real record); otherwise it sits with the rest of their career.
+  const inhouseInOverview = !hasLeagueGames && !!recentInhouse;
   const careerVisible =
-    badges.length > 0 || seasonRows.length > 0 || !!recentInhouse;
+    badges.length > 0 ||
+    seasonRows.length > 0 ||
+    (!!recentInhouse && !inhouseInOverview);
   const sectionItems = [
     { id: "player-overview", label: "Overview" },
-    { id: "player-matches", label: "Matches" },
+    ...(hasLeagueGames ? [{ id: "player-matches", label: "Matches" }] : []),
     ...(hasPerf || reportCard.graded > 0
       ? [{ id: "player-performance", label: "Performance" }]
       : []),
     ...(heroCardVisible ? [{ id: "player-heroes", label: "Heroes" }] : []),
-    ...(profileVisible ? [{ id: "player-about", label: "About" }] : []),
+    // "About" only when the band holds more than the hero card, which the
+    // Heroes tab already reaches.
+    ...(extrasVisible ? [{ id: "player-about", label: "About" }] : []),
     ...(careerVisible ? [{ id: "player-career", label: "Career" }] : []),
   ];
+  const overviewItems =
+    (hasLeagueGames ? 1 : 0) +
+    (featuredMatch ? 1 : 0) +
+    (inhouseInOverview ? 1 : 0);
 
   return (
     <div className="space-y-6">
@@ -762,6 +752,9 @@ export default async function PlayerProfilePage({
                 ) : null}
                 {isCaptain ? <Badge tone="brand">Captain</Badge> : null}
                 {isStandin ? <Badge tone="info">Standin</Badge> : null}
+                {wantsCaptainNow ? (
+                  <Badge tone="neutral">Wants to captain</Badge>
+                ) : null}
                 {withdrewThisSeason ? (
                   <Badge tone="neutral">Withdrew this season</Badge>
                 ) : null}
@@ -918,20 +911,53 @@ export default async function PlayerProfilePage({
                   Team
                 </div>
                 <div className="font-medium">{team.name}</div>
-                {membership ? (
+                {membership && !membership.isCaptain ? (
                   <div className="text-xs text-muted">
-                    {membership.isCaptain
-                      ? "Captain"
-                      : `Drafted for $${membership.price}`}
+                    Drafted for ${membership.price}
                   </div>
                 ) : null}
               </Link>
+            ) : null}
+            {signupGoals || signupNote ? (
+              // Their own words for captains, once, under the header. Full
+              // width so a long note wraps instead of squeezing the name.
+              <dl
+                className={cn(
+                  "grid basis-full grid-cols-1 gap-x-6 gap-y-3 border-t border-line/60 pt-4 text-sm",
+                  signupGoals && signupNote && "sm:grid-cols-2",
+                )}
+              >
+                {signupGoals ? (
+                  <div className="min-w-0">
+                    <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+                      Goals
+                    </dt>
+                    <dd className="mt-0.5 [overflow-wrap:anywhere]">
+                      {signupGoals}
+                    </dd>
+                  </div>
+                ) : null}
+                {signupNote ? (
+                  <div className="min-w-0">
+                    <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+                      Note for captains
+                    </dt>
+                    <dd className="mt-0.5 italic [overflow-wrap:anywhere]">
+                      &ldquo;{signupNote}&rdquo;
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
             ) : null}
           </div>
         </div>
       </div>
 
-      <SectionNav items={sectionItems} label="Player sections" sticky />
+      {/* Tabs only earn their space with three or more sections to jump
+          between; a new signup's page is short enough to scroll. */}
+      {sectionItems.length >= 3 ? (
+        <SectionNav items={sectionItems} label="Player sections" sticky />
+      ) : null}
 
       <section
         id="player-overview"
@@ -939,161 +965,161 @@ export default async function PlayerProfilePage({
         className="scroll-mt-40 space-y-3"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* With no league games the heading IS the one status line: the
+              signup details, pub form and inhouse record around it are what
+              they do have. */}
           <h2 className="font-display text-xl font-semibold">
-            {hasSeasonGames ? "Season form" : "Career form"}
+            {!hasLeagueGames
+              ? "No league games yet"
+              : hasSeasonGames
+                ? "Season form"
+                : "Career form"}
           </h2>
-          <span className="text-xs text-muted">
-            {hasSeasonGames ? season?.name : "All league seasons"}
-          </span>
+          {hasLeagueGames ? (
+            <span className="text-xs text-muted">
+              {hasSeasonGames ? season?.name : "All league seasons"}
+            </span>
+          ) : null}
         </div>
-        <div
-          className={cn(
-            "grid grid-cols-1 gap-4",
-            featuredMatch && tiles.games > 0 && "lg:grid-cols-2",
-          )}
-        >
-          {tiles.games > 0 ? (
-            <div className="grid min-w-0 grid-cols-2 gap-3">
-              <Stat
-                label={hasSeasonGames ? "Record" : "Career record"}
-                value={`${tiles.wins}–${tiles.losses}`}
-                hint={
-                  hasSeasonGames && careerSummary.games > seasonSummary.games
-                    ? `${tiles.winRate}% · career ${careerSummary.wins}–${careerSummary.losses}`
-                    : `${tiles.winRate}% win rate`
-                }
-              />
-              <Stat label="Games" value={tiles.games} hint={streakLabel} />
-              <Stat
-                label="Avg KDA"
-                value={`${tiles.avgKills}/${tiles.avgDeaths}/${tiles.avgAssists}`}
-                hint={`${tiles.kda} ratio`}
-              />
-              {team ? (
+        {overviewItems > 0 ? (
+          <div
+            className={cn(
+              "grid grid-cols-1 gap-4",
+              overviewItems >= 2 && "lg:grid-cols-2",
+            )}
+          >
+            {hasLeagueGames ? (
+              <div className="grid min-w-0 grid-cols-2 gap-3">
                 <Stat
-                  label="Team rank"
-                  value={teamRank > 0 ? `#${teamRank}` : "—"}
+                  label={hasSeasonGames ? "Record" : "Career record"}
+                  value={`${tiles.wins}–${tiles.losses}`}
                   hint={
-                    teamRow
-                      ? `${teamRow.wins}–${teamRow.losses} · ${teamRow.points} pts`
-                      : undefined
+                    hasSeasonGames && careerSummary.games > seasonSummary.games
+                      ? `${tiles.winRate}% · career ${careerSummary.wins}–${careerSummary.losses}`
+                      : `${tiles.winRate}% win rate`
                   }
                 />
-              ) : (
+                <Stat label="Games" value={tiles.games} hint={streakLabel} />
                 <Stat
-                  label="Hero pool"
-                  value={careerSummary.topHeroes.length}
-                  hint="heroes played"
+                  label="Avg KDA"
+                  value={`${tiles.avgKills}/${tiles.avgDeaths}/${tiles.avgAssists}`}
+                  hint={`${tiles.kda} ratio`}
                 />
-              )}
-            </div>
-          ) : null}
+                {team ? (
+                  <Stat
+                    label="Team rank"
+                    value={teamRank > 0 ? `#${teamRank}` : "—"}
+                    hint={
+                      teamRow
+                        ? `${teamRow.wins}–${teamRow.losses} · ${teamRow.points} pts`
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <Stat
+                    label="Hero pool"
+                    value={careerSummary.topHeroes.length}
+                    hint="heroes played"
+                  />
+                )}
+              </div>
+            ) : null}
 
-          {featuredMatch ? (
-            <ProfileMatchSpotlight
-              match={featuredMatch}
-              teams={featuredTeams}
-              playoffRounds={featuredPlayoffRounds}
-              nowMs={nowMs}
-              teamContext={!!teamSpotlight}
-            />
-          ) : null}
-          {tiles.games === 0 && !featuredMatch ? (
-            <div className="rounded-xl border border-dashed border-line bg-surface/50 p-5 text-sm text-muted">
-              League form starts with their first recorded game.
-            </div>
-          ) : null}
-        </div>
+            {featuredMatch ? (
+              <ProfileMatchSpotlight
+                match={featuredMatch}
+                teams={featuredTeams}
+                playoffRounds={featuredPlayoffRounds}
+                nowMs={nowMs}
+                teamContext={!!teamSpotlight}
+              />
+            ) : null}
+            {inhouseInOverview ? (
+              <Suspense fallback={<CardSkeleton rows={3} />}>
+                <InhouseCareerCard userId={user.id} />
+              </Suspense>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
-      <Card id="player-matches" className="scroll-mt-40 overflow-hidden">
-        <CardHeader
-          title="Match history"
-          headingLevel={2}
-          subtitle={
-            gameRows.length > 0
-              ? selectedHistoryGroup
+      {hasLeagueGames ? (
+        <Card id="player-matches" className="scroll-mt-40 overflow-hidden">
+          <CardHeader
+            title="Match history"
+            headingLevel={2}
+            subtitle={
+              selectedHistoryGroup
                 ? selectedHistoryGroup.seasonName
                 : multiSeasonHistory
                   ? "All seasons"
                   : historyGroups[0]?.seasonName
-              : (season?.name ?? undefined)
-          }
-          action={
-            recentFormStrip.length > 0 || multiSeasonHistory ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {recentFormStrip.length > 0 ? (
-                  <FormStrip form={recentFormStrip} size={5} />
-                ) : null}
-                {multiSeasonHistory ? (
-                  <form
-                    method="get"
-                    action={`/players/${id}#player-matches`}
-                    className="flex items-center gap-2"
-                  >
-                    <label>
-                      <span className="sr-only">Show games from season</span>
-                      <select
-                        name="season"
-                        defaultValue={selectedHistoryGroup?.seasonId ?? ""}
-                        className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-xs text-fg outline-none focus:border-accent/60 sm:h-8"
-                      >
-                        <option value="">All seasons</option>
-                        {historyGroups.map((group) => (
-                          <option key={group.seasonId} value={group.seasonId}>
-                            {group.seasonName}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="submit"
-                      className={buttonClasses("secondary", "sm")}
+            }
+            action={
+              recentFormStrip.length > 0 || multiSeasonHistory ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {recentFormStrip.length > 0 ? (
+                    <FormStrip form={recentFormStrip} size={5} />
+                  ) : null}
+                  {multiSeasonHistory ? (
+                    <form
+                      method="get"
+                      action={`/players/${id}#player-matches`}
+                      className="flex items-center gap-2"
                     >
-                      View
-                    </button>
-                  </form>
-                ) : null}
-              </div>
-            ) : undefined
-          }
-        />
-        <CardBody className="p-0">
-          {gameRows.length === 0 ? (
-            <div className="p-5">
-              <EmptyState
-                title="No games recorded yet"
-                description="Games appear here once this player's matches are imported."
-              />
-            </div>
-          ) : (
-            <>
-              <SeriesList
-                series={visibleSeries.slice(0, HISTORY_PREVIEW)}
-                previousSeasonId={null}
-                showSeasonHeaders={showSeasonHeaders}
-                seriesCountBySeason={seriesCountBySeason}
-              />
-              {visibleSeries.length > HISTORY_PREVIEW ? (
-                <ShowMore
-                  showLabel={`Show all ${visibleSeries.length} series`}
-                  hideLabel="Show fewer"
-                >
-                  <SeriesList
-                    series={visibleSeries.slice(HISTORY_PREVIEW)}
-                    previousSeasonId={
-                      visibleSeries[HISTORY_PREVIEW - 1].match.seasonId
-                    }
-                    showSeasonHeaders={showSeasonHeaders}
-                    seriesCountBySeason={seriesCountBySeason}
-                    className="border-t border-line/60"
-                  />
-                </ShowMore>
-              ) : null}
-            </>
-          )}
-        </CardBody>
-      </Card>
+                      <label>
+                        <span className="sr-only">Show games from season</span>
+                        <select
+                          name="season"
+                          defaultValue={selectedHistoryGroup?.seasonId ?? ""}
+                          className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-xs text-fg outline-none focus:border-accent/60 sm:h-8"
+                        >
+                          <option value="">All seasons</option>
+                          {historyGroups.map((group) => (
+                            <option key={group.seasonId} value={group.seasonId}>
+                              {group.seasonName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="submit"
+                        className={buttonClasses("secondary", "sm")}
+                      >
+                        View
+                      </button>
+                    </form>
+                  ) : null}
+                </div>
+              ) : undefined
+            }
+          />
+          <CardBody className="p-0">
+            <SeriesList
+              series={visibleSeries.slice(0, HISTORY_PREVIEW)}
+              previousSeasonId={null}
+              showSeasonHeaders={showSeasonHeaders}
+              seriesCountBySeason={seriesCountBySeason}
+            />
+            {visibleSeries.length > HISTORY_PREVIEW ? (
+              <ShowMore
+                showLabel={`Show all ${visibleSeries.length} series`}
+                hideLabel="Show fewer"
+              >
+                <SeriesList
+                  series={visibleSeries.slice(HISTORY_PREVIEW)}
+                  previousSeasonId={
+                    visibleSeries[HISTORY_PREVIEW - 1].match.seasonId
+                  }
+                  showSeasonHeaders={showSeasonHeaders}
+                  seriesCountBySeason={seriesCountBySeason}
+                  className="border-t border-line/60"
+                />
+              </ShowMore>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : null}
 
       {/* ---------- How they play ---------- */}
       {/* Bands: an h2 SectionTitle over an auto-fit grid. auto-fit, NEVER
@@ -1305,148 +1331,12 @@ export default async function PlayerProfilePage({
         </section>
       ) : null}
 
-      {activityVisible ||
-      signupSnapshotVisible ||
-      heroCardVisible ||
-      heldRecords.length > 0 ||
-      connectionsVisible ? (
+      {profileVisible ? (
         <section id="player-about" className="scroll-mt-40 space-y-3">
           <SectionTitle>Player profile</SectionTitle>
-          <div className="grid gap-6 lg:grid-cols-2">
-            {activityVisible || signupSnapshotVisible ? (
-              <Card
-                className={cn(
-                  "min-w-0",
-                  activityVisible && signupSnapshotVisible && "lg:col-span-2",
-                )}
-              >
-                <CardHeader
-                  title={
-                    signupSnapshotVisible
-                      ? "League snapshot"
-                      : "Recent activity"
-                  }
-                  subtitle={
-                    signupSnapshotVisible
-                      ? "Signup details and recent activity"
-                      : "The latest signal from league and public play"
-                  }
-                />
-                <CardBody className="space-y-5 text-sm">
-                  {activityVisible ? (
-                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-line/60 bg-surface-2/30 px-3 py-2.5">
-                      {signupSnapshotVisible ? (
-                        <h4 className="text-xs font-medium uppercase tracking-wide text-muted">
-                          Recent activity
-                        </h4>
-                      ) : null}
-                      {latestLeagueGame ? (
-                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                          <span className="text-muted">League game</span>
-                          <Link
-                            href={`/matches/${latestLeagueGame.game.matchId}`}
-                            className="font-medium hover:text-info hover:underline"
-                          >
-                            <LocalTime
-                              ts={latestLeagueGame.game.startTime * 1000}
-                              variant="short"
-                              initial={formatMatchTime(
-                                new Date(
-                                  latestLeagueGame.game.startTime * 1000,
-                                ),
-                                "short",
-                              )}
-                            />
-                          </Link>
-                        </div>
-                      ) : null}
-                      {recentInhouse ? (
-                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                          <span className="text-muted">Inhouse game</span>
-                          <Link
-                            href={`/inhouse/history?game=${recentInhouse.id}#result-${recentInhouse.id}`}
-                            className="font-medium hover:text-info hover:underline"
-                          >
-                            <LocalTime
-                              ts={recentInhousePlayedAt!.getTime()}
-                              variant="short"
-                              initial={formatMatchTime(
-                                recentInhousePlayedAt!,
-                                "short",
-                              )}
-                            />
-                          </Link>
-                        </div>
-                      ) : null}
-                      {pubActivityNow ? (
-                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                          <span className="text-muted">Public pub</span>
-                          <span className="font-medium">
-                            last played {pubActivityNow.label}
-                          </span>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  {signupSnapshotVisible && activeReg ? (
-                    <div className="space-y-4">
-                      <h4 className="font-medium text-fg">Signup profile</h4>
-                      {newSignupVisible ? (
-                        <div className="rounded-lg border border-line/60 bg-surface-2/30 px-3 py-2.5">
-                          <h4 className="font-medium text-fg">
-                            Ready for the first game
-                          </h4>
-                          <p className="mt-0.5 text-xs text-muted">
-                            League stats appear after the first imported match.
-                          </p>
-                        </div>
-                      ) : null}
-                      <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
-                        {roles.length > 0 ? (
-                          <Detail label="Preferred roles">
-                            <RoleBadges roles={activeReg.roles} />
-                          </Detail>
-                        ) : null}
-                        {hasText(selfPickedHeroes) ? (
-                          <Detail label="Favorite heroes">
-                            <HeroList value={selfPickedHeroes} size={24} />
-                          </Detail>
-                        ) : null}
-                        {activeReg.wantsCaptain ? (
-                          <Detail label="Captaincy">
-                            <Badge tone="brand">Wants to captain</Badge>
-                          </Detail>
-                        ) : null}
-                        {hasText(activeReg.statement) ? (
-                          <Detail label="Goals">
-                            <span className="text-muted">
-                              {activeReg.statement}
-                            </span>
-                          </Detail>
-                        ) : null}
-                        {hasText(activeReg.captainNote) ? (
-                          <Detail label="Note for captains">
-                            <span className="italic text-muted">
-                              &ldquo;{activeReg.captainNote}&rdquo;
-                            </span>
-                          </Detail>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </CardBody>
-              </Card>
-            ) : null}
-
+          <div className="space-y-6">
             {heroCardVisible ? (
-              <Card
-                id="player-heroes"
-                className={cn(
-                  "min-w-0 scroll-mt-40",
-                  activityVisible && signupSnapshotVisible && "lg:col-span-2",
-                )}
-              >
+              <Card id="player-heroes" className="min-w-0 scroll-mt-40">
                 <CardHeader
                   title="Hero pool"
                   subtitle="League games, public pubs, and their favorite heroes"
@@ -1480,82 +1370,90 @@ export default async function PlayerProfilePage({
               </Card>
             ) : null}
 
-            {heldRecords.length > 0 ? (
-              <Card className="min-w-0">
-                <CardHeader
-                  title="League records"
-                  subtitle="All-time single-game records"
-                  action={
-                    <Link href="/records" className={textLink("text-sm")}>
-                      Record book →
-                    </Link>
-                  }
-                />
-                <CardBody className="flex flex-wrap gap-2">
-                  {heldRecords.map((record) => {
-                    const hero = heroById(record.heroId);
-                    return (
-                      <Link
-                        key={record.key}
-                        href={`/matches/${record.matchId}`}
-                        className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm transition-colors hover:border-muted/60"
-                        title={`${record.title}: ${recordDisplayValue(record)}`}
-                      >
-                        <span aria-hidden>{record.emoji}</span>
-                        {hero ? <HeroIcon hero={hero} size={22} /> : null}
-                        <span>
-                          <span className="block font-medium">
-                            {record.title}
-                          </span>
-                          <span className="block font-mono text-xs tabular-nums text-muted">
-                            {recordDisplayValue(record)}
-                          </span>
-                        </span>
-                        <Badge tone={record.won ? "success" : "danger"}>
-                          {record.won ? "W" : "L"}
-                        </Badge>
-                      </Link>
-                    );
-                  })}
-                </CardBody>
-              </Card>
-            ) : null}
+            {extrasVisible ? (
+              // auto-fit, never grid-cols-1: either card can be missing, and
+              // the empty track must collapse so the other takes the width.
+              <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
+                {heldRecords.length > 0 ? (
+                  <Card className="min-w-0">
+                    <CardHeader
+                      title="League records"
+                      subtitle="All-time single-game records"
+                      action={
+                        <Link href="/records" className={textLink("text-sm")}>
+                          Record book →
+                        </Link>
+                      }
+                    />
+                    <CardBody className="flex flex-wrap gap-2">
+                      {heldRecords.map((record) => {
+                        const hero = heroById(record.heroId);
+                        return (
+                          <Link
+                            key={record.key}
+                            href={`/matches/${record.matchId}`}
+                            className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm transition-colors hover:border-muted/60"
+                            title={`${record.title}: ${recordDisplayValue(record)}`}
+                          >
+                            <span aria-hidden>{record.emoji}</span>
+                            {hero ? <HeroIcon hero={hero} size={22} /> : null}
+                            <span>
+                              <span className="block font-medium">
+                                {record.title}
+                              </span>
+                              <span className="block font-mono text-xs tabular-nums text-muted">
+                                {recordDisplayValue(record)}
+                              </span>
+                            </span>
+                            <Badge tone={record.won ? "success" : "danger"}>
+                              {record.won ? "W" : "L"}
+                            </Badge>
+                          </Link>
+                        );
+                      })}
+                    </CardBody>
+                  </Card>
+                ) : null}
 
-            {connectionsVisible ? (
-              <Card className="min-w-0">
-                <CardHeader
-                  title="League connections"
-                  subtitle="Across imported league games"
-                />
-                <CardBody className="space-y-4 text-sm">
-                  {affinities.nemesis ? (
-                    <Connection
-                      label="Nemesis"
-                      emoji="⚔️"
-                      profileId={id}
-                      playerId={affinities.nemesis.userId}
-                      playerName={affinityName.get(affinities.nemesis.userId)}
-                      games={affinities.nemesis.games}
-                      wins={affinities.nemesis.wins}
-                      losses={affinities.nemesis.losses}
-                      detail="as rivals"
+                {connectionsVisible ? (
+                  <Card className="min-w-0">
+                    <CardHeader
+                      title="League connections"
+                      subtitle="Across imported league games"
                     />
-                  ) : null}
-                  {affinities.duo ? (
-                    <Connection
-                      label="Best duo"
-                      emoji="🤝"
-                      profileId={id}
-                      playerId={affinities.duo.userId}
-                      playerName={affinityName.get(affinities.duo.userId)}
-                      games={affinities.duo.games}
-                      wins={affinities.duo.wins}
-                      losses={affinities.duo.losses}
-                      detail="as teammates"
-                    />
-                  ) : null}
-                </CardBody>
-              </Card>
+                    <CardBody className="space-y-4 text-sm">
+                      {affinities.nemesis ? (
+                        <Connection
+                          label="Nemesis"
+                          emoji="⚔️"
+                          profileId={id}
+                          playerId={affinities.nemesis.userId}
+                          playerName={affinityName.get(
+                            affinities.nemesis.userId,
+                          )}
+                          games={affinities.nemesis.games}
+                          wins={affinities.nemesis.wins}
+                          losses={affinities.nemesis.losses}
+                          detail="as rivals"
+                        />
+                      ) : null}
+                      {affinities.duo ? (
+                        <Connection
+                          label="Best duo"
+                          emoji="🤝"
+                          profileId={id}
+                          playerId={affinities.duo.userId}
+                          playerName={affinityName.get(affinities.duo.userId)}
+                          games={affinities.duo.games}
+                          wins={affinities.duo.wins}
+                          losses={affinities.duo.losses}
+                          detail="as teammates"
+                        />
+                      ) : null}
+                    </CardBody>
+                  </Card>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </section>
@@ -1608,15 +1506,15 @@ export default async function PlayerProfilePage({
 
           <PlayerSeasons rows={seasonRows} teamLogos={teamLogos} />
 
-          {/* Inhouse career — only stream for players with a completed game. */}
-          {recentInhouse ? (
+          {/* Inhouse career — only stream for players with a completed game
+              (players with no league games get it at the top instead). */}
+          {recentInhouse && !inhouseInOverview ? (
             <Suspense fallback={<CardSkeleton rows={3} />}>
               <InhouseCareerCard userId={user.id} />
             </Suspense>
           ) : null}
         </section>
       ) : null}
-
     </div>
   );
 }
@@ -1671,9 +1569,7 @@ function SeriesList({
                 className="flex items-center justify-between border-b border-line/60 bg-surface-2/40 px-5 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
               >
                 <span className="truncate">{entry.match.season.name}</span>
-                <span className="shrink-0 tabular-nums">
-                  {count} series
-                </span>
+                <span className="shrink-0 tabular-nums">{count} series</span>
               </Link>
             ) : null}
             <Link
@@ -1752,23 +1648,6 @@ function SeriesList({
         );
       })}
     </ul>
-  );
-}
-
-function Detail({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="w-32 shrink-0 text-xs font-medium uppercase tracking-wide text-muted">
-        {label}
-      </span>
-      <span className="flex flex-wrap items-center gap-2">{children}</span>
-    </div>
   );
 }
 
