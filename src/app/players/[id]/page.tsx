@@ -89,6 +89,7 @@ import {
   reportVerdicts,
 } from "@/lib/benchmarks";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { playoffRunTile, teamPlayoffRun } from "@/lib/playoff-run";
 import { canViewLeagueContact } from "@/lib/visibility";
 
 export async function generateMetadata({
@@ -530,6 +531,17 @@ export default async function PlayerProfilePage({
   const teamRank = team
     ? standings.findIndex((s) => s.teamId === team.id) + 1
     : 0;
+  // Once the season has a bracket, the regular-season rank stops saying where
+  // the team stands: the tile shows their playoff run instead.
+  const playoffRun =
+    team && season
+      ? teamPlayoffRun(
+          team.id,
+          seasonMatches,
+          resolveChampionPresentation(season, seasonMatches).championTeamId,
+        )
+      : null;
+  const playoffTile = playoffRun ? playoffRunTile(playoffRun) : null;
 
   const roles = roleLabels(activeReg?.roles);
   const isStandin = activeReg?.type === "STANDIN";
@@ -963,8 +975,10 @@ export default async function PlayerProfilePage({
           >
             {hasLeagueGames ? (
               <div className="grid min-w-0 grid-cols-2 gap-3">
+                {/* Games won and lost, not series: "Game record" keeps it
+                    apart from the team's series record beside it. */}
                 <Stat
-                  label={hasSeasonGames ? "Record" : "Career record"}
+                  label={hasSeasonGames ? "Game record" : "Career game record"}
                   value={`${tiles.wins}–${tiles.losses}`}
                   hint={
                     hasSeasonGames && careerSummary.games > seasonSummary.games
@@ -978,7 +992,16 @@ export default async function PlayerProfilePage({
                   value={`${tiles.avgKills}/${tiles.avgDeaths}/${tiles.avgAssists}`}
                   hint={`${tiles.kda} ratio`}
                 />
-                {team ? (
+                {team && playoffTile ? (
+                  <Stat
+                    label="Playoffs"
+                    value={playoffTile.value}
+                    hint={playoffTile.hint}
+                    // md: a round name ("Quarterfinal") at text-3xl overflows
+                    // a half-width tile on a phone.
+                    size="md"
+                  />
+                ) : team ? (
                   <Stat
                     label="Team rank"
                     value={teamRank > 0 ? `#${teamRank}` : "—"}
