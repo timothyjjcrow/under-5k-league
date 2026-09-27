@@ -97,7 +97,26 @@ describe("reschedule service (integration)", () => {
 
     await expect(
       proposeReschedule(home.captainId, match.id, NIGHT),
-    ).rejects.toThrow(/booked scrim within four hours/i);
+    ).rejects.toThrow(
+      `That time is within four hours of the ${home.name} vs ${practiceOpponent.name} scrim on `,
+    );
+    await expect(
+      proposeReschedule(home.captainId, match.id, NIGHT),
+    ).rejects.toThrow(/\. Cancel that scrim on its page first, or pick another time\.$/);
+    expect(await pendingFor(match.id)).toBeNull();
+
+    // A LIVE scrim has no Cancel button (only "End series"), so the refusal
+    // must not send the captain looking for one.
+    await prisma.scrim.update({
+      where: { id: booked.id },
+      data: { status: SCRIM_STATUS.LIVE },
+    });
+    const live = await proposeReschedule(home.captainId, match.id, NIGHT).then(
+      () => null,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(live).toMatch(/\. End that series on its scrim page first, or pick another time\.$/);
+    expect(live).not.toMatch(/cancel/i);
     expect(await pendingFor(match.id)).toBeNull();
 
     await prisma.scrim.update({
@@ -113,7 +132,16 @@ describe("reschedule service (integration)", () => {
 
     await expect(
       respondReschedule(away.captainId, pending!.id, true),
-    ).rejects.toThrow(/now has a booked scrim within four hours/i);
+    ).rejects.toThrow(
+      `That time is now within four hours of the ${home.name} vs ${practiceOpponent.name} scrim on `,
+    );
+    await prisma.scrim.update({
+      where: { id: booked.id },
+      data: { status: SCRIM_STATUS.LIVE },
+    });
+    await expect(
+      respondReschedule(away.captainId, pending!.id, true),
+    ).rejects.toThrow(/\. End that series on its scrim page first, or propose another time\.$/);
     expect(
       (await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
         .scheduledAt,

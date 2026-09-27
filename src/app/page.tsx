@@ -2902,7 +2902,7 @@ async function LeaguePulse({
               </PlayerLink>{" "}
               <span className="text-muted">
                 · Week {latestWeek} Player of the Week · {honors.player.points}{" "}
-                pts
+                impact points
               </span>
             </span>
           </div>

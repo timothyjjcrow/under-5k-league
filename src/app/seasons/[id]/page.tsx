@@ -1,6 +1,9 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import type { Metadata } from "next";
 import { ChampionBanner } from "@/components/champion-banner";
 import { AuctionHistory } from "@/components/auction-history";
+import { SeasonAwards } from "@/components/season-awards";
 import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -11,12 +14,14 @@ import { StandingsTable } from "@/components/standings-table-server";
 import { LeagueResultsMap } from "@/components/league-results-map";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
+import { shareMetadata } from "@/lib/share-metadata";
 import {
   Avatar,
   Badge,
   Card,
   CardBody,
   CardHeader,
+  CardSkeleton,
   EmptyState,
   PageTitle,
   PlayerLink,
@@ -33,15 +38,28 @@ export async function generateMetadata({
   params,
 }: {
   params: Promise<{ id: string }>;
-}) {
+}): Promise<Metadata> {
   const { id } = await params;
   const season = await prisma.season.findUnique({
     where: { id },
-    select: { name: true },
+    select: { name: true, isActive: true, status: true },
   });
   // notFound() in metadata runs before the shell streams → real 404 status.
   if (!season) notFound();
-  return { title: `${season.name} · Season` };
+  // The champion post in Discord links here, so a finished season's preview
+  // says what the page holds.
+  return shareMetadata(
+    `${season.name} · Season`,
+    isFinishedSeason(season)
+      ? `Champion, final standings, bracket, awards and every result from ${season.name}.`
+      : `Standings, results and rosters from ${season.name}.`,
+    `/seasons/${encodeURIComponent(id)}`,
+  );
+}
+
+/** An archived season, or the current one once its final is played. */
+function isFinishedSeason(season: { isActive: boolean; status: string }) {
+  return !season.isActive || season.status === "COMPLETE";
 }
 
 function ResultRow({
@@ -158,7 +176,7 @@ export default async function SeasonArchivePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [season, gameCount] = await Promise.all([
+  const [season, gameCount, fantasyEntry] = await Promise.all([
     prisma.season.findUnique({
       where: { id },
       include: {
@@ -173,6 +191,12 @@ export default async function SeasonArchivePage({
       },
     }),
     prisma.game.count({ where: { match: { seasonId: id } } }),
+    // Fantasy is linked when the season had managers; otherwise the page
+    // would open onto "Entries 0".
+    prisma.fantasyRoster.findFirst({
+      where: { seasonId: id },
+      select: { id: true },
+    }),
   ]);
   if (!season) notFound();
 
@@ -244,25 +268,21 @@ export default async function SeasonArchivePage({
               </Link>
             </>
           ) : null}
-          {/* Recap, fantasy, and pick'em can all have useful season state even
-              when no OpenDota Game rows were imported. */}
-          <Link
-            href={`/fantasy?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Fantasy
-          </Link>
+          {/* Fantasy and pick'em can have useful season state even when no
+              OpenDota Game rows were imported. */}
+          {fantasyEntry ? (
+            <Link
+              href={`/fantasy?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Fantasy
+            </Link>
+          ) : null}
           <Link
             href={`/pickem?season=${season.id}`}
             className={buttonClasses("secondary", "sm")}
           >
             Pick&rsquo;em
-          </Link>
-          <Link
-            href={`/recap?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Season recap →
           </Link>
         </div>
       </div>
@@ -369,6 +389,20 @@ export default async function SeasonArchivePage({
               ))}
           </div>
         </section>
+      ) : null}
+
+      {/* The season's numbers and awards live here, not on a separate recap
+          page: /recap redirects to this page. Only for a finished season;
+          mid-season the Leaders boards are the running version. */}
+      {isFinishedSeason(season) && season.matches.length > 0 ? (
+        <Suspense fallback={<CardSkeleton rows={4} />}>
+          <SeasonAwards
+            seasonId={season.id}
+            completedSeries={
+              season.matches.filter((m) => m.status === "COMPLETED").length
+            }
+          />
+        </Suspense>
       ) : null}
 
       {weeks.length > 0 ? (

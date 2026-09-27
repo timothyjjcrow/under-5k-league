@@ -67,9 +67,10 @@ export function partitionPickemMatches<T extends PickemMatchLike>(
  * can't disagree about when a match still takes a call.
  *
  * - `open`: the one-tap pick control, pressed on `pickedTeamId` if any.
- * - `locked`: the viewer's own pick as plain text, nothing else. Never the
- *   community split: /pickem reveals it in locked review, and a fixture card
- *   is not the place to grow a second copy of that.
+ * - `locked`: the viewer's own pick as plain text, with how it came out once
+ *   the match is decided (`result`, from pickResult). Never the community
+ *   split: /pickem reveals it in locked review, and a fixture card is not the
+ *   place to grow a second copy of that.
  * - `null`: nothing new at all. Signed-out viewers always land here (the
  *   control would be an ask with nothing behind it), and so does a locked
  *   match the viewer never picked.
@@ -82,7 +83,7 @@ export function partitionPickemMatches<T extends PickemMatchLike>(
  */
 export type PickemControl =
   | { kind: "open"; pickedTeamId: string | null }
-  | { kind: "locked"; pickedTeamId: string };
+  | { kind: "locked"; pickedTeamId: string; result: PickResult | null };
 
 export function pickemControlFor(
   match: PickemMatchLike & { homeTeamId: string; awayTeamId: string },
@@ -104,7 +105,9 @@ export function pickemControlFor(
   if (viewer.canPlay && predictionOpen(match, now)) {
     return { kind: "open", pickedTeamId: picked };
   }
-  return picked ? { kind: "locked", pickedTeamId: picked } : null;
+  return picked
+    ? { kind: "locked", pickedTeamId: picked, result: pickResult(match, picked) }
+    : null;
 }
 
 /**
@@ -128,9 +131,26 @@ export type PickemStanding = {
   graded: number;
   /** correct / graded, 0..1 (0 when nothing graded). */
   accuracy: number;
+  /** Board place. Equal records (same correct, same graded) share one: 1, 1, 3. */
+  place: number;
 };
 
-/** Grade every prediction against completed matches and rank the oracles. */
+/**
+ * How every pick'em board ranks, in the words both /pickem and the Hall of
+ * Fame print under it, so the rule and its explanation can't drift apart.
+ */
+export const PICKEM_RANKING_NOTE =
+  "Ranked by correct picks; a tie goes to whoever missed fewer. Equal records share a place.";
+
+/**
+ * Grade every prediction against completed matches and rank the oracles.
+ *
+ * THE pick'em ranking, used by /pickem's oracle board and the Hall of Fame
+ * alike: most correct picks first, then fewest misses (at equal correct picks
+ * that is the better accuracy, and it still separates 0/1 from 0/4). Equal
+ * records share a place, the way Leaders does; the user id only keeps the
+ * order inside a shared place stable and never decides one.
+ */
 export function pickemStandings(
   predictions: PredictionLike[],
   matches: PickemMatchLike[],
@@ -149,6 +169,7 @@ export function pickemStandings(
       correct: 0,
       graded: 0,
       accuracy: 0,
+      place: 0,
     };
     row.graded++;
     if (p.pickedTeamId === winner) row.correct++;
@@ -161,10 +182,102 @@ export function pickemStandings(
   rows.sort(
     (a, b) =>
       b.correct - a.correct ||
-      b.accuracy - a.accuracy ||
+      a.graded - b.graded ||
       a.userId.localeCompare(b.userId),
   );
+  rows.forEach((row, index) => {
+    const above = rows[index - 1];
+    row.place =
+      above && above.correct === row.correct && above.graded === row.graded
+        ? above.place
+        : index + 1;
+  });
   return rows;
+}
+
+/**
+ * Oracle of the week: the players sharing first place when one week's
+ * matches are ranked like the oracle board (most correct, then fewest
+ * misses), so a tie is everyone with that same record. Empty when nobody
+ * called one right. The caller passes the week's regular-season matches.
+ */
+export function weekOracles(
+  predictions: PredictionLike[],
+  matches: PickemMatchLike[],
+): PickemStanding[] {
+  return pickemStandings(predictions, matches).filter(
+    (row) => row.place === 1 && row.correct > 0,
+  );
+}
+
+/**
+ * How one pick came out: right or wrong once the series has a winner, void on
+ * a draw or no-contest, null while the match is still undecided. The same
+ * grading as pickemStandings (a unit test pins that they agree).
+ */
+export type PickResult = "right" | "wrong" | "void";
+
+export function pickResult(
+  match: PickemMatchLike,
+  pickedTeamId: string,
+): PickResult | null {
+  if (match.status !== MATCH_STATUS.COMPLETED) return null;
+  if (!match.winnerTeamId) return "void";
+  return pickedTeamId === match.winnerTeamId ? "right" : "wrong";
+}
+
+/**
+ * "2 of 3 called it": of everyone who picked a decided match, how many named
+ * the winner. Null when there is no winner to call (undecided or a draw) or
+ * nobody picked it, so a caller never prints "0 of 0".
+ */
+export function calledItCount(
+  predictions: PredictionLike[],
+  match: PickemMatchLike,
+): { called: number; total: number } | null {
+  if (match.status !== MATCH_STATUS.COMPLETED || !match.winnerTeamId) {
+    return null;
+  }
+  let called = 0;
+  let total = 0;
+  for (const p of predictions) {
+    if (p.matchId !== match.id) continue;
+    total++;
+    if (p.pickedTeamId === match.winnerTeamId) called++;
+  }
+  return total > 0 ? { called, total } : null;
+}
+
+export type PickHistoryRow<T> = {
+  match: T;
+  pickedTeamId: string;
+  result: PickResult | null;
+};
+
+/**
+ * A viewer's picks on matches that no longer take one, as ONE list, newest
+ * first (latest week first, then latest kickoff), each with how it came out.
+ * /pickem used to split these into locked, void and graded sections with the
+ * graded ones oldest first, so the result someone came to check sat at the
+ * bottom of the third list. `matches` must hold only closed matches; open
+ * ones belong to the pick cards.
+ */
+export function pickHistory<
+  T extends PickemMatchLike & { week: number },
+>(matches: T[], picks: ReadonlyMap<string, string>): PickHistoryRow<T>[] {
+  // A TBD kickoff sorts after any real one in its week.
+  const at = (m: T) => m.scheduledAt?.getTime() ?? 0;
+  // Rows with the same week and kickoff keep the reverse of the input order
+  // (a stable sort after the reverse), so the list never reshuffles.
+  return [...matches]
+    .reverse()
+    .flatMap((match) => {
+      const pickedTeamId = picks.get(match.id);
+      return pickedTeamId
+        ? [{ match, pickedTeamId, result: pickResult(match, pickedTeamId) }]
+        : [];
+    })
+    .sort((a, b) => b.match.week - a.match.week || at(b.match) - at(a.match));
 }
 
 /** Community pick split for one match: how many chose each side. */

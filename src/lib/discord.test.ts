@@ -146,6 +146,42 @@ describe("discord message formatters", () => {
     expect(msg).not.toMatch(/eliminated|advance/);
   });
 
+  it("adds at most one broken-record line, with the holder's name escaped", () => {
+    const base = {
+      matchId: "m9",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 2,
+      awayScore: 0,
+      label: "Week 4",
+      hasGames: true,
+    };
+    const msg = matchResultMessage({
+      ...base,
+      record: {
+        emoji: "🔪",
+        holderName: "[free mmr](https://evil.test)",
+        mark: "17 kills",
+        heroName: "Razor",
+        previousMark: "14 kills",
+      },
+    });
+    const lines = msg.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/Box score: <[^>]+\/matches\/m9>$/);
+    expect(lines[1]).toMatch(/^🔪 New league record: \*\*.+\*\*, 17 kills on Razor \(old mark 14 kills\)$/);
+    expect(lines[1]).not.toContain("](");
+    expect(
+      matchResultMessage({
+        ...base,
+        record: { emoji: "💰", holderName: "Carry", mark: "32.1k net worth", heroName: null, previousMark: "30.0k net worth" },
+      }),
+    ).toContain("**Carry**, 32.1k net worth (old mark 30.0k net worth)");
+    // No record, no second line: the post is byte-for-byte what it was.
+    expect(matchResultMessage({ ...base, record: null })).toBe(matchResultMessage(base));
+    expect(matchResultMessage(base)).not.toContain("\n");
+  });
+
   it("promises a box score only when a game was imported", () => {
     const base = {
       matchId: "m8",
@@ -307,7 +343,9 @@ describe("discord message formatters", () => {
     const msg = championMessage("Season 1", "Zai's Team", "season/one");
     expect(msg).toContain("**Zai's Team**");
     expect(msg).toContain("champions");
-    expect(msg).toContain("/recap?season=season%2Fone");
+    // Straight to the season page (old /recap?season= posts redirect there).
+    expect(msg).toContain("/seasons/season%2Fone>");
+    expect(msg).not.toContain("/recap");
   });
 
   it("escapes a season name in the champion announcement", () => {
@@ -1721,6 +1759,7 @@ describe("no player-supplied name can inject markdown", () => {
       heroName: "Pudge",
       teamName: EVIL,
       teamGameWins: 2,
+      oracle: { names: [EVIL, EVIL], correct: 1, graded: 1 },
     }),
     inhouseLobbyMessage([{ name: EVIL, discordId: null }]),
     inhouseResultMessage({
@@ -1965,6 +2004,69 @@ describe("freeAgentSignedMessage addresses the signed player", () => {
     const msg = freeAgentSignedMessage("Late Joiner", "Short Squad");
     expect(msg).toContain("/schedule");
     expect(msg.split("Late Joiner")).toHaveLength(3); // named exactly twice
+  });
+});
+
+describe("weeklyHonorsMessage", () => {
+  it("names the Player of the Week score impact points, as /leaders does", () => {
+    const message = weeklyHonorsMessage({
+      week: 4,
+      playerName: "Winner",
+      playerPoints: 134.2,
+      heroName: "Lina",
+      teamName: "Team",
+      teamGameWins: 2,
+    });
+    expect(message).toContain("134.2 impact points on Lina");
+    expect(message).not.toMatch(/fantasy/i);
+  });
+
+  const base = {
+    week: 4,
+    playerName: "Winner",
+    playerPoints: 50,
+    heroName: "Lina",
+    teamName: "Team",
+    teamGameWins: 2,
+  };
+
+  it("adds the pick'em oracle inside the same post, before the link", () => {
+    const lines = weeklyHonorsMessage({
+      ...base,
+      oracle: { names: ["Seer"], correct: 3, graded: 3 },
+    }).split("\n");
+    expect(lines).toContain(
+      "🔮 Pick'em Oracle of the Week: **Seer** (3 of 3 picks right)",
+    );
+    expect(lines.at(-1)).toMatch(/^Full leaderboards: /);
+  });
+
+  it("lists every tied oracle, then caps a long tie", () => {
+    expect(
+      weeklyHonorsMessage({
+        ...base,
+        oracle: { names: ["A", "B", "C"], correct: 2, graded: 2 },
+      }),
+    ).toContain(
+      "🔮 Pick'em Oracles of the Week: **A**, **B** and **C** (2 of 2 picks right each)",
+    );
+    expect(
+      weeklyHonorsMessage({
+        ...base,
+        oracle: {
+          names: ["A", "B", "C", "D", "E", "F", "G"],
+          correct: 1,
+          graded: 1,
+        },
+      }),
+    ).toContain("**A**, **B**, **C**, **D**, **E** and 2 more (1 of 1");
+  });
+
+  it("leaves the line out when there is no oracle", () => {
+    expect(weeklyHonorsMessage(base)).not.toMatch(/Oracle/);
+    expect(
+      weeklyHonorsMessage({ ...base, oracle: { names: [], correct: 0, graded: 0 } }),
+    ).not.toMatch(/Oracle/);
   });
 });
 

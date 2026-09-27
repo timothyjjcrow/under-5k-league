@@ -755,9 +755,11 @@ the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
   re-sorts by standings with W–L(–D), points, and diff. Team detail
   (`/teams/[id]`) adds recent-form chips + head-to-head (pure `recentForm` /
   `headToHead` in `src/lib/team-matches.ts`, tested) and a draft-spend summary.
-- **Leaders** `/leaders` — six leaderboards (wins, KDA, win rate, kills,
-  assists, games) via pure `topBy` (`player-stats.ts`); rate boards use an
-  adaptive min-games floor.
+- **Leaders** `/leaders` — opens on Weekly honors, then player boards (KDA,
+  kills and assists PER GAME, kill involvement, sustain, GPM, net worth, most
+  games) via pure `topBy` (`player-stats.ts`); rate boards use an adaptive
+  min-games floor. No wins or win-rate board on purpose (they ranked the
+  team's record), no per-board search (the viewer's row is pinned).
 - **Dashboard** (`src/app/page.tsx`) shows a compact playoff bracket during
   PLAYOFFS and a champion/final-standings recap on COMPLETE. Bracket
   round-grouping is pure `slotRound` / `groupPlayoffRounds` (`schedule.ts`,
@@ -1382,7 +1384,8 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
   from `recomputeSeries` on the transition to decided, idempotent through an
   atomic `resultAnnounced:<matchId>` Setting CREATE; admin `recordResult`
   always sends but upserts the same marker so a later game import can't
-  double-post), playoff bracket (`startPlayoffs`), the champion
+  double-post; the post may carry one broken-record line — see Record book),
+  playoff bracket (`startPlayoffs`), the champion
   (`advancePlayoffBracket`), and inhouse moments: lobby formed
   (`maybeFormLobby`, captured in-tx/sent post-commit) plus a queue-filling ping
   (`joinQueue` — fires only on an upward crossing of `INHOUSE.QUEUE_PING_AT`,
@@ -1789,6 +1792,27 @@ already in the `Setting` table.
   standings, playoff rounds, weekly results, full rosters. Reuses
   `computeStandings`, `groupPlayoffRounds`, and `StandingsTable`; archived
   `/teams/[id]` pages already work since they query by id, not active season.
+- **`/seasons/[id]` is THE page for a finished season** (2026-09): once a
+  season is archived or COMPLETE it also streams `<SeasonAwards>`
+  (`src/components/season-awards.tsx` — the stat strip and award cards that
+  used to be a separate /recap page repeating the champion and bracket).
+  `/recap` is now only a route handler (`src/app/recap/route.ts`, pure
+  `recapDestination` in `recap.ts`, tested) so every old link still lands:
+  `?season=<id>` → that season's page (Leaders while it is still running;
+  an unknown id → the season page's not-found; a repeated key → 404); bare
+  → the current season's page at COMPLETE, Leaders mid-season, else the
+  latest archive. It is a route handler, not a page, so the redirect is a
+  real 307 that Discord unfurls follow. `championMessage` links the season
+  page directly; keep `/recap` working anyway — old champion posts use it.
+- **The season-scoped pages share one scope** (`src/lib/season-scope.ts`):
+  Leaders, Hero meta, Pick'em and Fantasy resolve `?season=` (unknown → 404,
+  never a quiet fallback) or the active season, and with NO active season
+  open the most recent one (read-only for the side games) instead of an
+  empty "No active season" screen. One `<SeasonSwitcher>`
+  (`src/components/season-scope.tsx`, pure choice rules in
+  `season-choices.ts`) renders only when 2+ seasons have that page's data
+  (games / predictions / fantasy entries), plus the viewed and current
+  season. Records uses the same switcher with "All seasons" as its bare page.
 - Admins can **permanently delete an archived season** (test runs/misfires)
   via a confirm-guarded button on `/seasons` → `deleteSeason` (never the
   active season; deletes matches first since Match→Team is RESTRICT, then
@@ -2308,6 +2332,29 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 - `/fantasy`: private live-budget picker before lock, entry count without
   ownership leakage, then live/final standings with per-pick breakdowns and
   locked-roster chips. Discoverable from DRAFT; COMPLETE/archive are read-only.
+- **Tim's call: Fantasy stays, forever.** Menus and home tiles promote it only
+  during the pick window and, after the lock, only to managers (another
+  lane's work); the page itself is always reachable. Three rules on the page:
+  - **After the lock the page is the standings, never a dead end.** The
+    `#lineup` section renders only while picks are open or for the viewer's
+    own five (`!locked || myRoster`); everyone else reads standings and
+    player scores, and the subtitle says in one line why they can't pick
+    ("New fives open after next season's draft"). A season nobody entered
+    gets a compact note where the standings go. The old "Rosters are
+    locked… Catch the next season!" card was all a latecomer saw, and
+    `side-game-archive-guards.test.ts` now refuses that copy.
+  - **The picker's count, salary and Save live in ONE sticky bar**
+    (`sticky bottom-[calc(var(--mobile-dock-height)+0.75rem)]`, so it rides
+    above the phone tab bar and stops at the end of the picker). There is
+    exactly one Save button (source-guarded); on phones it reads "Save"/
+    "Update" with the full "Save fantasy five" as its name. The status line
+    and the pool order are pure in `src/lib/fantasy-picker.ts`; the pool opens
+    PRICE-DESCENDING (fit your stars, then fill under the cap). MMR there is
+    formatted en-US on purpose: `toLocaleString()` in a hydrated client
+    component prints "7.200" in a German browser over the server's "7,200".
+  - **The scoring card leads with "impact points"** — the same `fantasyPoints`
+    score behind match MVPs and Player of the Week — and says a player only
+    scores in games they play (a standin night earns them nothing).
 
 ## MVPs & achievements (done, branch: bigger-features)
 
@@ -2325,10 +2372,23 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   contributions and ⚔️ series wins via `appearanceCareers`
   (`src/lib/appearance-careers.ts`), game counts via pure `careerGameCounts`
   (`src/lib/hall-of-fame.ts`, tested; team cuids are globally unique so
-  cross-season membership just works), 🎯 career fantasy
-  points (`pointsByPlayer` over all games ever), 🔮 all-time oracle record
-  (`pickemStandings` over all predictions, min 3 graded). Linked from
-  `/seasons` and the footer.
+  cross-season membership just works), career impact points
+  (`pointsByPlayer` over all games ever), 🔮 "Pick'em calls" (career correct
+  picks, placed by the SAME `pickemStandings` as /pickem — `topPlaces` takes
+  an optional `rankValue` for that; nobody with zero correct is listed).
+  Linked from `/seasons` and the footer.
+- **It waits for a champion.** Until `resolveChampionPresentation` accepts at
+  least one season (`hasOfficialChampion`, `src/lib/official-champion.ts`,
+  itested) the page is one short note pointing at Leaders and the Record
+  book — a first-season Hall of Fame is a page of empty or one-season boards.
+  After that, Champions lead; the game-performance boards appear only once
+  trusted games span two seasons, and each section renders only when it has
+  rows. The Record book's "Career legends →" link follows the same gate.
+- **Equal scores share a place and ties at the cutoff show** (`topPlaces`,
+  tested — `competitionRanks`, so 1, 1, 3). A board keeps everyone placed in
+  the top 5, capped at 10 rows with a "+N more tied" line; decimal boards rank
+  on the displayed tenth (`placeKey`) so two players who READ the same never
+  get different places.
 
 ## Power rankings (done, branch: bigger-features)
 
@@ -2343,8 +2403,10 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 ## Weekly honors (done, branch: bigger-features)
 
 - Pure `weeklyHonors` (`src/lib/honors.ts`, tested): Player of the Week =
-  best fantasy points that week (same `fantasyPoints` identity as the
-  fantasy league); Team of the Week = most game wins, points tiebreak.
+  most points that week (same `fantasyPoints` identity as the fantasy
+  league); Team of the Week = most game wins, points tiebreak. Publicly that
+  score is "impact points" (Leaders, Hall of Fame, recap MVP, Discord), and
+  every surface quotes `impactPointsRule()` (`fantasy.ts`) to explain it.
 - Publication authority is `evaluateHonorWeeks` in
   `src/lib/honors-readiness.ts`, loaded by
   `src/lib/honors-readiness-service.ts`. It ignores postseason matches and
@@ -2361,23 +2423,98 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   award stale inside the result transaction; reconciliation sends an explicit
   corrected award (or withdrawal) exactly once, and failed/abandoned claims
   are swept by result sync.
+- The same post carries a "Pick'em Oracle of the Week" line (`weekOracles`
+  over that week's REGULAR matches: first place on the oracle ranking, every
+  tie listed, omitted when nobody called one). It rides the one message and
+  marker — never a post of its own — and its read is best-effort
+  (`weekOracleLine`), so a failure costs the line, never the award.
 
 ## Pick'em (done, branch: bigger-features)
 
 - `Prediction` model (matchId+userId unique). Pure `src/lib/pickem.ts`
   (tested): `predictionOpen` (locks at `scheduledAt`, LIVE, or completion),
   exhaustive `partitionPickemMatches` (open/locked/graded/void),
-  `pickemStandings` (correct desc, accuracy tiebreak; draws void picks),
-  `pickSplit` (community percentages).
+  `pickSplit` (community percentages), `pickResult` (right/wrong/void/null),
+  `calledItCount` ("2 of 3 called it"; null rather than "0 of 0").
+- **ONE ranking, everywhere**: `pickemStandings` — most correct, then fewest
+  misses (= better accuracy at equal correct); draws void picks. Rows carry
+  `place` and equal records share one (1, 1, 3). /pickem's oracle board, the
+  Hall of Fame and the weekly Oracle all use it, and both boards print
+  `PICKEM_RANKING_NOTE` under themselves. Don't re-sort it anywhere (the Hall
+  of Fame used to rank by accuracy with a 3-pick floor, so #1 differed).
 - `savePrediction` re-validates active Season/Draft lifecycle, matchup, side,
   status and deadline in the same Serializable transaction as the upsert.
   `side-game-claims.ts` takes PostgreSQL shared Season/Draft/Match locks (or
   SQLite guarded claims), keeping participant bursts concurrent while
   excluding result, reschedule, phase and archive writers.
 - `/pickem`: one pending-state form per fixture, hidden community split until
-  lock, locked/graded/void pick review, deadline-first grouping, and a client
-  deadline refresh whose server rerender remains authoritative. Discoverable
-  from DRAFT; COMPLETE/archive are read-only.
+  lock (said once, in the Upcoming heading), deadline-first grouping, and a
+  client deadline refresh whose server rerender remains authoritative. The
+  viewer's history is ONE "Your picks" list (`pickHistory`, newest first,
+  ✓/✗/🔒/➖ marks with accessible names). Discoverable from DRAFT;
+  COMPLETE/archive are read-only.
+- `PickemPickForm` is the one pick control (/pickem, the home This-week
+  cards, the match preview). Its two sides are a CONTAINER query
+  (`@container/pick`, side by side from 26rem): stacked full-width rows in
+  any narrow card, names wrap instead of truncating. Signed-out viewers
+  (only /pickem shows them fixtures) get `signInHref`: the matchup as text
+  plus one "Sign in with Steam to pick" button — never dead greyed buttons.
+- Closing the loop: the locked control carries `result`, so `PickemTray`
+  says ✓/✗/void once decided (home cards included), and a COMPLETED match
+  page shows a signed-in picker "Your pick: X ✓ (2 of 3 called it)".
+
+## Scrims (practice games — Tim's call: they stay)
+
+Captains post an OPEN time, another team's captain claims it (SCHEDULED),
+games import by player IDs (LIVE → COMPLETED), and nothing touches league
+standings. Services: `scrim-service.ts` (post/claim/cancel/end, guests,
+coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
+`scrim-view.ts`, `scrim-discord.ts`, `scrim-schedule-conflict.ts`.
+
+- **League fixtures win over scrims.** A playoff round is ALWAYS built: its
+  build transaction calls `yieldScrimsToOfficialFixture`, which cancels every
+  BOOKED (SCHEDULED) scrim of those teams within four hours of the round's
+  night and keeps a LIVE one (games recorded) but reports it. It used to be
+  a refusal, and on the automatic path that meant a booked practice silently
+  stopped the next round (the final included) from existing. Each clash is
+  announced to that scrim's two captains (mentioned, names escaped), logged
+  to the admin activity log ("League automation" when no admin acted), and
+  appended to the Start playoffs toast. The cancel is an EQUIVALENT claim in
+  the ratchet (it runs inside the Serializable build and cancels exactly the
+  ids it just read).
+- **Every refusal names the scrim.** `findConfirmedScrimConflict` returns the
+  booking and `describeScrimConflict` prints "the A vs B scrim on <league
+  time>" — admin schedule tools, reschedule propose/accept, tiebreakers and
+  scrim booking all use it. "A booked scrim" alone sent people hunting.
+  KNOWN GAP: the automatic tiebreaker continuation can still be blocked by a
+  clashing scrim (it now says which); it does not yield the way playoff
+  rounds do.
+- **A booked scrim's page says who to talk to**: both captains, their
+  `<DiscordTag>` behind `canViewLeagueContact` (signed-in league members and
+  either side's staff; never the public), and `scrimHostLine` — the posting
+  captain hosts, region from `LEAGUE_CONFIG.gameServerRegion`.
+- **An open scrim's page has the Join button** (one click, no confirm), or
+  the reason the viewer can't claim it: pure `scrimJoinCheck`, shared with
+  the /scrims list, including the viewer's own clash within four hours. Its
+  grace for a just-started time is `SCRIM_PAST_GRACE_MS`, the service's own.
+- **Pings go only to the captains who must act** (`mentionUsers`, sent by the
+  action after commit, best-effort): a new time → every other non-withdrawn
+  captain; a claim → the posting captain (who hosts, who to message, which of
+  their open times the booking withdrew); a cancel → the captain who didn't
+  cancel (both, for an admin; nobody, for your own unclaimed time). joinScrim
+  reads the offers its overlap sweep withdraws with the SAME WHERE in the
+  same Serializable snapshot — don't fold that into the sweep's WHERE, which
+  is a protected claim.
+- **"Not played" is display only.** A SCHEDULED booking 36h
+  (`SCRIM_DETECT_WINDOW_AFTER_MS`) after kickoff leaves Booked for the
+  history (`scrimNotPlayedCutoff`/`isScrimNotPlayed`). The row stays
+  SCHEDULED, so a late "Add game" still works (the import judges the game's
+  own start time); statistics count COMPLETED only.
+- **`endScrimSeries`**: either captain or a verified admin (not coaches)
+  ends a LIVE series at its current score; leader wins, level = no winner.
+  One guarded `updateMany` re-asserting LIVE + both scores (spelled
+  `hostScore: scrim.hostScore` on purpose — the ratchet can't see shorthand
+  keys), seam `scrim.endSeries.beforeClaim`, protected in the baseline.
 
 ## Interactive bracket (done)
 
@@ -2408,11 +2545,14 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## Hero meta page (done)
 
-- `/meta`: league-wide hero report from imported box scores — pick/win rates,
-  most-contested table, an "established" win-rate view (adaptive
-  `metaMinPicks` floor), signature player per hero, untouched-pool card. Pure
-  `heroMeta`/`metaMinPicks` in `src/lib/hero-meta.ts` (tested); the explorer
-  UI is `src/components/hero-meta-explorer.tsx`. Only complete, unique 5v5
+- `/meta`: league-wide hero report from imported box scores — ONE sortable
+  table of picked heroes (`HeroMetaTable`, `src/components/hero-meta-table.tsx`:
+  picks / W–L / win % / most played by; sorts in place, no URL state), the
+  never-picked pool folded into ONE `<details>` line, and a two-line headline.
+  "Best win rate" only names a hero with `META_HEADLINE_MIN_PICKS` (8) picks
+  (`metaHeadlines`, exact cross-multiplied rate, more picks breaks ties) — a
+  3-0 hero is not a headline. Pure `heroMeta`/`metaHeadlines` in
+  `src/lib/hero-meta.ts` (tested). Only complete, unique 5v5
   boxes enter the denominator; a game containing an unknown hero id is omitted
   as a whole so known-hero coverage cannot exceed 100%, with a catalogue-update
   diagnostic. Deleted signature owners remain visible as `Former player`.
@@ -2421,17 +2561,30 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## Record book (done)
 
-- `/records`: all-time single-game records across every season — player
-  records (kills, assists, net worth, GPM, last hits, deaths) and game
-  records (longest/fastest by `durationSecs`, bloodiest/biggest stomp by kill
-  score; 0–0 or 0-duration games never qualify — unreported ≠ record). Pure
-  `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps a
-  tie, so `fetchAllGamesForRecords` orders by OpenDota start time, puts unknown
-  chronology last, then uses id as a deterministic key. Malformed/partial/
+- `/records`: all-time single-game records across every season, as two
+  compact lists (Player records, Match records; one row per record: title,
+  mark, holder + hero, match link) with a season switcher once two seasons
+  have games. Player records: kills, assists, hero/tower damage, healing,
+  net worth, GPM, XPM, last hits, denies. **There is deliberately no "Most
+  deaths"** — the book never names a player for their worst game. Game
+  records: longest/fastest by `durationSecs`, bloodiest/biggest stomp/closest
+  by kill score; 0–0 or 0-duration games never qualify — unreported ≠ record.
+  Pure `leagueRecords` in `src/lib/records.ts` (tested): first achiever keeps
+  a tie, so games are ordered by OpenDota start time, unknown chronology last,
+  then id (`compareRecordChronology`, shared by the cached scan and the
+  announcement). Malformed/partial/
   duplicated boxes are omitted from both player and game records; unsafe
   stored duration/score values are neutralized and diagnosed. The UI discloses
   the first-achiever policy. Linked from Statistics navigation, Explore/mobile
   discovery, the footer, and Hall of Fame.
+- **A broken player record rides the series result post** — at most ONE line,
+  inside `announceSeriesResultOnce`'s existing send-once marker (no new send,
+  no new marker). `brokenPlayerRecord` compares the book with and without the
+  series' games and stays silent until `RECORD_ANNOUNCE_MIN_GAMES` (20)
+  complete games exist OUTSIDE the series — before that every game "breaks" a
+  record. Strictly greater only (an equalled mark keeps its first achiever).
+  The lookup (`src/lib/record-announce.ts`) is best-effort: a failure drops
+  the line, never the result post.
 
 ## Hero report cards (done, branch: ambitious-features)
 

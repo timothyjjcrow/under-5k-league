@@ -12,14 +12,12 @@ import { SubmitButton } from "@/components/action-form";
 export function PickemSubmitButton({
   children,
   selected,
-  canSubmit,
   locksAt,
   name,
   value,
 }: {
   children: ReactNode;
   selected: boolean;
-  canSubmit: boolean;
   /** Epoch milliseconds; null means time TBD and status controls the lock. */
   locksAt: number | null;
   name: string;
@@ -42,8 +40,10 @@ export function PickemSubmitButton({
     <SubmitButton
       variant={selected ? "accent" : "secondary"}
       size="sm"
-      className="w-full"
-      disabled={!canSubmit || deadlinePassed}
+      // A long team name wraps and the button grows with it (min-h keeps the
+      // usual size); h-full lets side-by-side buttons match heights.
+      className="h-full min-h-10 w-full py-1.5 sm:h-full sm:min-h-8"
+      disabled={deadlinePassed}
       aria-pressed={selected}
       name={name}
       value={value}

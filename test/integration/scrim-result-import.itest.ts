@@ -14,6 +14,7 @@ import {
   removeScrimGame,
 } from "@/lib/scrim-result-service";
 import { importGameForMatch, loadImportSkips } from "@/lib/match-import";
+import { isScrimNotPlayed } from "@/lib/scrim-view";
 import { makeCaptain, makeSeason, makeUser } from "./factories";
 
 vi.mock("@/lib/dota", async (importOriginal) => {
@@ -138,6 +139,12 @@ describe("scrim result ownership and competitive isolation", () => {
         },
       },
     });
+    // Long past its 36-hour window, so the scrim pages list this booking as
+    // "Not played" — and the late "Add game" below must still work, because
+    // the import judges the game's own start time, not today's date.
+    expect(
+      isScrimNotPlayed(scrim.status, scrim.scheduledAt.getTime(), Date.now()),
+    ).toBe(true);
 
     const imported = await importScrimGame(
       { id: host.user.id, role: ROLE.USER },

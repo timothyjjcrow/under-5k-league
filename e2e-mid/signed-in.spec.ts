@@ -35,7 +35,7 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   assertNoErrors();
 });
 
-test("fantasy renders standings for a signed-in viewer (league locked)", async ({
+test("fantasy shows a signed-in latecomer the scores, not a dead end (league locked)", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
@@ -43,9 +43,32 @@ test("fantasy renders standings for a signed-in viewer (league locked)", async (
   await expect(
     page.getByRole("heading", { name: "Fantasy", exact: true }),
   ).toBeVisible();
-  // Imported games lock the league — the page must say so instead of
-  // offering a dead picker.
-  await expect(page.getByText(/locked/i).first()).toBeVisible();
+  // Imported games lock the league — the page must say so, in one line,
+  // instead of offering a dead picker…
+  await expect(
+    page.getByText(/Rosters locked at the season's first game/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/New fives open after next season's draft/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /save fantasy|update fantasy/i }),
+  ).toHaveCount(0);
+  // …and the page is the scores, not a "catch the next season" card. The
+  // mid-season fixture has no fantasy entries, so it says that too.
+  await expect(
+    page.getByText("No fantasy fives this season", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Player scores" }),
+  ).toBeVisible();
+  await expect(page.getByText(/Catch the next season/)).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Your five", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "How impact points work" }),
+  ).toBeVisible();
   assertNoErrors();
 });
 
@@ -58,10 +81,11 @@ test("pick'em hides open splits and saves a call", async ({ page }) => {
     has: page.getByRole("heading", { name: /Upcoming matches/ }),
   });
   await expect(upcoming).toBeVisible();
+  // Said once, in the section heading, not repeated on every card.
   await expect(
-    upcoming
-      .getByText("Community split stays hidden until picks lock.")
-      .first(),
+    upcoming.getByRole("heading", {
+      name: /the crowd's picks stay hidden until then/,
+    }),
   ).toBeVisible();
   await expect(upcoming.getByText(/^crowd:/i)).toHaveCount(0);
 
@@ -91,6 +115,23 @@ test("Fantasy and Pick'em fit a narrow phone", async ({ page }) => {
     ).toBeVisible();
     await expectNoHorizontalOverflow(page, path);
   }
+
+  // On a phone the two teams are stacked rows, not two halves that cut
+  // the names to "Roshan's …".
+  const pair = page.locator("fieldset").first().locator("button[aria-pressed]");
+  await expect(pair).toHaveCount(2);
+  const first = (await pair.nth(0).boundingBox())!;
+  const second = (await pair.nth(1).boundingBox())!;
+  expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
+  expect(Math.round(second.width)).toBe(Math.round(first.width));
+  const clipped = await pair.evaluateAll((buttons) =>
+    buttons.flatMap((button) =>
+      [...button.querySelectorAll("span:not(.sr-only):not([aria-hidden])")]
+        .filter((span) => span.scrollWidth > span.clientWidth + 1)
+        .map((span) => span.textContent ?? ""),
+    ),
+  );
+  expect(clipped, "pick'em team names cut off").toEqual([]);
 
   assertNoErrors();
 });

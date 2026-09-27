@@ -3,12 +3,21 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { getActiveSeason } from "@/lib/season";
+import {
+  loadSeasonChoices,
+  resolveSeasonScope,
+  seasonScopeMetadata,
+} from "@/lib/season-scope";
+import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
 import { getSessionUser } from "@/lib/auth";
 import {
+  calledItCount,
   groupOpenByWeek,
   partitionPickemMatches,
+  PICKEM_RANKING_NOTE,
   pickemStandings,
+  pickHistory,
+  type PickResult,
   pickSplit,
 } from "@/lib/pickem";
 import { LocalTime } from "@/components/local-time";
@@ -17,7 +26,6 @@ import { formatMatchTime } from "@/lib/match-time";
 import {
   Avatar,
   Badge,
-  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -31,7 +39,6 @@ import { cn } from "@/lib/utils";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { PickemPickForm } from "@/components/pickem-pick-form";
 import { PickemDeadlineRefresh } from "@/components/pickem-deadline-refresh";
-import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import {
   matchRoundLabel,
@@ -41,32 +48,35 @@ import {
 
 type PickemSearchParams = { season?: string | string[] };
 
+/** The mark on each row of "Your picks". */
+const PICK_MARK: Record<
+  PickResult | "locked",
+  { glyph: string; label: string; className: string }
+> = {
+  right: { glyph: "✓", label: "Correct pick", className: "text-success" },
+  wrong: { glyph: "✗", label: "Wrong pick", className: "text-danger-soft" },
+  locked: {
+    glyph: "🔒",
+    label: "Locked, waiting for the result",
+    className: "",
+  },
+  void: { glyph: "➖", label: "Void pick", className: "text-muted" },
+};
+
 export async function generateMetadata({
   searchParams,
 }: {
   searchParams: Promise<PickemSearchParams>;
 }): Promise<Metadata> {
-  const seasonId = singleSearchParam((await searchParams).season);
-  if (seasonId === null) notFound();
-  const generic = () =>
-    shareMetadata(
-      "Pick'em",
-      `Call every ${LEAGUE_CONFIG.name} match before kickoff and climb the season's oracle board.`,
-      "/pickem",
-    );
-  if (!seasonId) return generic();
-  const season = await prisma.season.findUnique({
-    where: { id: seasonId },
-    select: { name: true, isActive: true },
+  return seasonScopeMetadata((await searchParams).season, {
+    path: "/pickem",
+    title: "Pick'em",
+    description: `Call every ${LEAGUE_CONFIG.name} match before kickoff and climb the season's oracle board.`,
+    archived: (name) => ({
+      title: `${name} Pick'em`,
+      description: `Final predictions and oracle standings from ${name}.`,
+    }),
   });
-  if (!season) notFound();
-  if (season.isActive) return generic();
-  const path = `/pickem?${new URLSearchParams({ season: seasonId })}`;
-  return shareMetadata(
-    `${season.name} Pick'em`,
-    `Final predictions and oracle standings from ${season.name}.`,
-    path,
-  );
 }
 
 export default async function PickemPage({
@@ -76,49 +86,12 @@ export default async function PickemPage({
 }) {
   const seasonParam = singleSearchParam((await searchParams).season);
   if (seasonParam === null) notFound();
-  // ?season=<id> shows an archived season's oracle board (the leaders/meta/
-  // recap pattern). Prediction rows hang off Match and outlive archival, so
-  // without this the season's oracle champion became unreachable the moment
-  // season N+1 was created.
-  const season = seasonParam
-    ? await prisma.season.findUnique({ where: { id: seasonParam } })
-    : await getActiveSeason();
-  if (seasonParam && !season) notFound();
-  if (!season) {
-    const archived = await prisma.season.findMany({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true },
-    });
-    return (
-      <div>
-        <PageTitle title="Pick'em" />
-        <EmptyState
-          title="No active season"
-          description={
-            archived.length > 0
-              ? "Browse a past season's oracle board instead."
-              : undefined
-          }
-          action={
-            archived.length > 0 ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                {archived.map((s) => (
-                  <Link
-                    key={s.id}
-                    href={`/pickem?season=${s.id}`}
-                    className={buttonClasses("secondary", "sm")}
-                  >
-                    {s.name} →
-                  </Link>
-                ))}
-              </div>
-            ) : undefined
-          }
-        />
-      </div>
-    );
-  }
+  // ?season=<id> shows an archived season's oracle board. Prediction rows
+  // hang off Match and outlive archival, so without this the season's oracle
+  // champion became unreachable the moment season N+1 was created. With no
+  // season running the page opens on the most recent one.
+  const season = await resolveSeasonScope(seasonParam);
+  if (!season) return <NoSeasonYet title="Pick'em" />;
   // Structurally read-only: savePrediction resolves the ACTIVE season itself,
   // and predictionOpen returns true for any SCHEDULED match with no kickoff —
   // so an archived season would otherwise render live pick buttons that can
@@ -126,22 +99,32 @@ export default async function PickemPage({
   const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
-  const [draft, matches, teams, predictions, users] = await Promise.all([
-    prisma.draft.findUnique({
-      where: { seasonId: season.id },
-      select: { status: true },
-    }),
-    prisma.match.findMany({
-      where: { seasonId: season.id },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
-    }),
-    prisma.team.findMany({ where: { seasonId: season.id } }),
-    prisma.prediction.findMany({ where: { match: { seasonId: season.id } } }),
-    prisma.user.findMany({
-      where: { predictions: { some: { match: { seasonId: season.id } } } },
-      select: { id: true, name: true, avatar: true },
-    }),
-  ]);
+  const [draft, matches, teams, predictions, users, seasonChoices] =
+    await Promise.all([
+      prisma.draft.findUnique({
+        where: { seasonId: season.id },
+        select: { status: true },
+      }),
+      prisma.match.findMany({
+        where: { seasonId: season.id },
+        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+      }),
+      prisma.team.findMany({ where: { seasonId: season.id } }),
+      prisma.prediction.findMany({ where: { match: { seasonId: season.id } } }),
+      prisma.user.findMany({
+        where: { predictions: { some: { match: { seasonId: season.id } } } },
+        select: { id: true, name: true, avatar: true },
+      }),
+      loadSeasonChoices("predictions", season.id),
+    ]);
+  const switcher = (
+    <SeasonSwitcher
+      label="pick'em"
+      basePath="/pickem"
+      seasons={seasonChoices}
+      selectedId={season.id}
+    />
+  );
 
   const phaseOpen = postAuctionWorkOpen(season.status, draft?.status);
   const canPlay = !readOnly && phaseOpen;
@@ -153,6 +136,7 @@ export default async function PickemPage({
           title="Pick'em"
           subtitle={`${season.name}${readOnly ? " · archived" : ""}`}
         />
+        {switcher}
         <EmptyState
           title={
             readOnly || season.status === "COMPLETE"
@@ -197,6 +181,10 @@ export default async function PickemPage({
     : [...buckets.locked, ...buckets.open];
   const graded = buckets.graded;
   const voided = buckets.voided;
+  // Every closed match the viewer picked, as one newest-first list.
+  const history = viewer
+    ? pickHistory([...lockedForReview, ...graded, ...voided], myPicks)
+    : [];
   const nextOpenDeadline = open.reduce<number | null>((next, match) => {
     const at = match.scheduledAt?.getTime();
     return at == null || (next != null && next <= at) ? next : at;
@@ -223,6 +211,7 @@ export default async function PickemPage({
           )
         }
       />
+      {switcher}
 
       {standings.length > 0 ? (
         <Card>
@@ -232,7 +221,7 @@ export default async function PickemPage({
             headingLevel={2}
           />
           <CardBody className="divide-y divide-line/60 p-0">
-            {standings.map((s, i) => (
+            {standings.map((s) => (
               <div
                 key={s.userId}
                 className={cn(
@@ -240,8 +229,16 @@ export default async function PickemPage({
                   viewer?.id === s.userId && "bg-info/[0.07]",
                 )}
               >
-                <span className="w-6 text-center text-muted">
-                  {i === 0 ? "🔮" : i + 1}
+                {/* Equal records share a place, so several rows can be 🔮. */}
+                <span className="w-6 shrink-0 text-center text-muted">
+                  {s.place === 1 ? (
+                    <>
+                      <span aria-hidden>🔮</span>
+                      <span className="sr-only">1</span>
+                    </>
+                  ) : (
+                    s.place
+                  )}
                 </span>
                 <Avatar
                   name={userName.get(s.userId) ?? "?"}
@@ -269,6 +266,7 @@ export default async function PickemPage({
                 </span>
               </div>
             ))}
+            <p className="px-5 py-3 text-xs text-muted">{PICKEM_RANKING_NOTE}</p>
           </CardBody>
         </Card>
       ) : null}
@@ -278,13 +276,7 @@ export default async function PickemPage({
           {nextOpenDeadline != null ? (
             <PickemDeadlineRefresh targetMs={nextOpenDeadline} />
           ) : null}
-          <SectionTitle
-            aside={
-              viewer
-                ? "· picks lock at the match's scheduled start"
-                : "· sign in to lock in your calls"
-            }
-          >
+          <SectionTitle aside="· picks lock at kickoff; the crowd's picks stay hidden until then">
             Upcoming matches
           </SectionTitle>
           {open.length === 0 ? (
@@ -312,17 +304,18 @@ export default async function PickemPage({
                           <Card key={m.id}>
                             <CardBody className="space-y-2.5">
                               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted">
-                                <span className="shrink-0 whitespace-nowrap">
-                                  {m.phase === "REGULAR" ? (
-                                    roundLabel(m)
-                                  ) : (
+                                {/* A regular week is already the group's
+                                    heading; a playoff card still names its
+                                    round and series length. */}
+                                {m.phase === "REGULAR" ? null : (
+                                  <span className="shrink-0 whitespace-nowrap">
                                     <Badge tone="accent">
                                       {matchRoundLabel(m, playoffRounds, {
                                         bestOf: true,
                                       })}
                                     </Badge>
-                                  )}
-                                </span>
+                                  </span>
+                                )}
                                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                   {m.scheduledAt ? (
                                     <>
@@ -362,12 +355,11 @@ export default async function PickemPage({
                                 home={pickSide(m.homeTeamId)}
                                 away={pickSide(m.awayTeamId)}
                                 pickedTeamId={myPicks.get(m.id) ?? null}
-                                canSubmit={viewer != null}
+                                signInHref={
+                                  viewer ? undefined : "/login?next=/pickem"
+                                }
                                 locksAt={m.scheduledAt?.getTime() ?? null}
                               />
-                              <div className="text-center text-[11px] text-muted">
-                                Community split stays hidden until picks lock.
-                              </div>
                             </CardBody>
                           </Card>
                         );
@@ -445,152 +437,77 @@ export default async function PickemPage({
         />
       ) : null}
 
-      {viewer && lockedForReview.some((m) => myPicks.has(m.id)) ? (
+      {history.length > 0 ? (
         <section className="space-y-4">
-          <SectionTitle aside="· submitted and no longer editable">
-            Your locked picks
-          </SectionTitle>
+          <SectionTitle aside="· newest first">Your picks</SectionTitle>
           <Card>
             <CardBody className="divide-y divide-line/60 p-0">
-              {lockedForReview
-                .filter((m) => myPicks.has(m.id))
-                .map((m) => {
-                  const pick = myPicks.get(m.id)!;
-                  const split = pickSplit(predictions, m.id, m.homeTeamId);
-                  const total = split.home + split.away;
-                  return (
-                    <div
-                      key={m.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
+              {history.map(({ match: m, pickedTeamId: pick, result }) => {
+                const mark = PICK_MARK[result ?? "locked"];
+                // Locked rows show how the crowd split; decided ones how
+                // many called it. Draws have neither.
+                const split =
+                  result === null
+                    ? pickSplit(predictions, m.id, m.homeTeamId)
+                    : null;
+                const splitTotal = split ? split.home + split.away : 0;
+                const called = calledItCount(predictions, m);
+                return (
+                  <div
+                    key={m.id}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5 text-sm"
+                  >
+                    <span
+                      role="img"
+                      aria-label={mark.label}
+                      title={mark.label}
+                      className={cn("w-5 shrink-0 text-center", mark.className)}
                     >
-                      <span aria-hidden className="shrink-0">
-                        🔒
-                      </span>
+                      <span aria-hidden>{mark.glyph}</span>
+                    </span>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
+                    >
+                      {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                      {result === null ? (
+                        "vs "
+                      ) : (
+                        <>
+                          <span className="font-mono text-xs">
+                            {m.homeScore}–{m.awayScore}
+                          </span>{" "}
+                        </>
+                      )}
+                      {teamName.get(m.awayTeamId) ?? "?"}
+                    </Link>
+                    <span className="w-full pl-8 text-xs text-muted sm:w-auto sm:pl-0">
+                      you picked{" "}
                       <Link
-                        href={`/matches/${m.id}`}
-                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
+                        href={`/teams/${pick}`}
+                        className="font-medium text-fg hover:text-info hover:underline"
                       >
-                        {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"} vs{" "}
+                        {teamName.get(pick) ?? "?"}
+                      </Link>
+                      {result === "void"
+                        ? " · void (draw or no-contest)"
+                        : null}
+                      {called
+                        ? ` · ${called.called} of ${called.total} called it`
+                        : null}
+                    </span>
+                    {split && splitTotal > 0 ? (
+                      <span className="w-full pl-8 text-xs text-muted sm:w-auto sm:pl-0">
+                        crowd: {Math.round((split.home / splitTotal) * 100)}%{" "}
+                        {teamName.get(m.homeTeamId) ?? "?"}
+                        {" · "}
+                        {Math.round((split.away / splitTotal) * 100)}%{" "}
                         {teamName.get(m.awayTeamId) ?? "?"}
-                      </Link>
-                      <span className="shrink-0 text-xs text-muted">
-                        you picked{" "}
-                        <Link
-                          href={`/teams/${pick}`}
-                          className="font-medium text-fg hover:text-info hover:underline"
-                        >
-                          {teamName.get(pick) ?? "?"}
-                        </Link>
                       </span>
-                      {total > 0 ? (
-                        <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
-                          crowd: {Math.round((split.home / total) * 100)}%{" "}
-                          {teamName.get(m.homeTeamId) ?? "?"}
-                          {" · "}
-                          {Math.round((split.away / total) * 100)}%{" "}
-                          {teamName.get(m.awayTeamId) ?? "?"}
-                        </span>
-                      ) : null}
-                    </div>
-                  );
-                })}
-            </CardBody>
-          </Card>
-        </section>
-      ) : null}
-
-      {viewer && voided.some((m) => myPicks.has(m.id)) ? (
-        <section className="space-y-4">
-          <SectionTitle aside="· draw or no-contest — no point awarded">
-            Your void picks
-          </SectionTitle>
-          <Card>
-            <CardBody className="divide-y divide-line/60 p-0">
-              {voided
-                .filter((m) => myPicks.has(m.id))
-                .map((m) => {
-                  const pick = myPicks.get(m.id)!;
-                  return (
-                    <div
-                      key={m.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
-                    >
-                      <span role="img" aria-label="Void pick">
-                        <span aria-hidden>➖</span>
-                      </span>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
-                      >
-                        {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"}{" "}
-                        <span className="font-mono text-xs">
-                          {m.homeScore}–{m.awayScore}
-                        </span>{" "}
-                        {teamName.get(m.awayTeamId) ?? "?"}
-                      </Link>
-                      <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
-                        you picked{" "}
-                        <Link
-                          href={`/teams/${pick}`}
-                          className="hover:text-info hover:underline"
-                        >
-                          {teamName.get(pick) ?? "?"}
-                        </Link>
-                      </span>
-                    </div>
-                  );
-                })}
-            </CardBody>
-          </Card>
-        </section>
-      ) : null}
-
-      {/* `graded` counts every decided match; without the myPicks filter here
-          a viewer who never predicted got a "Your graded picks" heading over
-          an empty bordered card. */}
-      {viewer && graded.some((m) => myPicks.has(m.id)) ? (
-        <section className="space-y-4">
-          <SectionTitle>Your graded picks</SectionTitle>
-          <Card>
-            <CardBody className="divide-y divide-line/60 p-0">
-              {graded
-                .filter((m) => myPicks.has(m.id))
-                .map((m) => {
-                  const pick = myPicks.get(m.id)!;
-                  const right = pick === m.winnerTeamId;
-                  return (
-                    <div
-                      key={m.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5 text-sm"
-                    >
-                      <span
-                        role="img"
-                        aria-label={right ? "Correct pick" : "Wrong pick"}
-                      >
-                        <span aria-hidden>{right ? "✅" : "❌"}</span>
-                      </span>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
-                      >
-                        {roundLabel(m)}: {teamName.get(m.homeTeamId)}{" "}
-                        <span className="font-mono text-xs">
-                          {m.homeScore}–{m.awayScore}
-                        </span>{" "}
-                        {teamName.get(m.awayTeamId)}
-                      </Link>
-                      <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
-                        you picked{" "}
-                        <Link
-                          href={`/teams/${pick}`}
-                          className="hover:text-info hover:underline"
-                        >
-                          {teamName.get(pick)}
-                        </Link>
-                      </span>
-                    </div>
-                  );
-                })}
+                    ) : null}
+                  </div>
+                );
+              })}
             </CardBody>
           </Card>
         </section>

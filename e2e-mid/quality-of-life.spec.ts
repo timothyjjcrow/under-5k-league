@@ -118,54 +118,54 @@ test("admin jumps reveal closed sections clear of both sticky bars", async ({
   noErrors();
 });
 
-test("hero explorer exposes the full pool and filters without navigating", async ({
+test("hero table sorts in place and folds unpicked heroes into one line", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meta");
   const initialUrl = page.url();
-  const explorer = page.locator("#explore-heroes");
-  const cards = explorer.locator("article");
-  const status = explorer.getByRole("status");
-  const sampleFilters = explorer.getByRole("group", { name: "Hero sample filter" });
-  const allHeroes = sampleFilters.getByRole("button", { name: /All heroes/ });
-  const poolSize = Number((await allHeroes.innerText()).match(/\d+/)?.[0]);
-  expect(poolSize).toBeGreaterThan(12);
-  await expect(allHeroes).toHaveAttribute("aria-pressed", "true");
-  await expect(status).toContainText(`of ${poolSize} matching heroes`);
-  await expect(cards).toHaveCount(12);
-  await explorer.getByRole("button", { name: /Show more heroes/ }).click();
-  await expect(cards).toHaveCount(24);
+  const table = page.getByRole("table");
+  const rows = table.locator("tbody tr");
+  const heroNames = () =>
+    rows.evaluateAll((nodes) =>
+      nodes.map((node) => node.querySelector("th p")?.textContent?.trim() ?? ""),
+    );
+  const picks = () =>
+    rows.evaluateAll((nodes) =>
+      nodes.map((node) => Number(node.querySelector("td")?.textContent?.trim())),
+    );
+  expect(await rows.count()).toBeGreaterThan(1);
 
-  // The leading picked hero opens its per-pick stats without leaving the page.
-  await cards.first().getByRole("button").click();
-  await expect(cards.first()).toContainText("Kills / pick");
+  // Most picked first by default.
+  const picksHeader = table.getByRole("columnheader", { name: "Picks" });
+  await expect(picksHeader).toHaveAttribute("aria-sort", "descending");
+  const byPicks = await picks();
+  expect(byPicks).toEqual([...byPicks].sort((a, b) => b - a));
 
-  const search = explorer.getByRole("searchbox", { name: "Find a hero" });
-  await search.fill("Axe");
-  await expect(cards).toHaveCount(1);
-  await expect(cards.first()).toContainText("Axe");
-  await search.fill("");
-
-  const untouched = sampleFilters.getByRole("button", { name: /Untouched/ });
-  await untouched.click();
-  await expect(untouched).toHaveAttribute("aria-pressed", "true");
-  await expect(cards.first()).toContainText("No recorded picks");
-  await search.fill("no-such-hero");
-  await expect(cards).toHaveCount(0);
-  await expect(explorer.getByText("No heroes match these filters")).toBeVisible();
-  await explorer.getByRole("button", { name: "Clear filters" }).click();
-  await expect(allHeroes).toHaveAttribute("aria-pressed", "true");
-  await expect(status).toContainText(`of ${poolSize} matching heroes`);
-
-  await explorer.getByRole("combobox", { name: "Sort by" }).selectOption("name");
-  const names = await cards.evaluateAll((nodes) =>
-    nodes.map((node) => node.querySelector("button")?.innerText.split("\n")[0]?.trim() ?? ""),
-  );
+  await table.getByRole("button", { name: "Hero", exact: true }).click();
+  await expect(table.getByRole("columnheader", { name: "Hero", exact: true })).toHaveAttribute("aria-sort", "ascending");
+  await expect(picksHeader).not.toHaveAttribute("aria-sort", /.+/);
+  const names = await heroNames();
   expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+
+  await table.getByRole("button", { name: "Win %", exact: true }).click();
+  await expect(table.getByRole("columnheader", { name: "Win %" })).toHaveAttribute("aria-sort", "descending");
+
+  // Every hero nobody has picked is listed once, behind one summary line.
+  const unpicked = page.locator("details").filter({
+    has: page.locator("summary", { hasText: /not picked yet$/ }),
+  });
+  const count = Number((await unpicked.locator("summary").innerText()).match(/\d+/)?.[0]);
+  expect(count + (await rows.count())).toBeGreaterThan(100);
+  await unpicked.locator("summary").click();
+  await expect(unpicked.locator("p")).toBeVisible();
+  const listed = (await unpicked.locator("p").innerText()).split(", ");
+  expect(listed).toHaveLength(count);
+  expect(listed.some((name) => names.includes(name))).toBe(false);
+
   expect(page.url()).toBe(initialUrl);
-  await expectNoHorizontalOverflow(page, "hero explorer");
+  await expectNoHorizontalOverflow(page, "hero table");
   noErrors();
 });
 

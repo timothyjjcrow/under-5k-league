@@ -326,6 +326,18 @@ export function matchResultMessage(m: {
    *  loser is out. The grand final gets no such line — crowning the champion
    *  is the champion post's job. */
   knockout?: { nextRound: string | null };
+  /** An all-time player record set in this series (brokenPlayerRecord),
+   *  added as one line. Riding the result post means no extra send and no
+   *  second once-only marker. */
+  record?: {
+    emoji: string;
+    holderName: string;
+    /** "17 kills", with its unit (formatRecordMark). */
+    mark: string;
+    heroName: string | null;
+    /** The mark it beat, same format. */
+    previousMark: string;
+  } | null;
 }): string {
   const home = name(m.homeName);
   const away = name(m.awayName);
@@ -344,7 +356,10 @@ export function matchResultMessage(m: {
   // Only promise a box score when a game was actually imported: a manual
   // score (forfeit or not) opens on "no games recorded".
   const link = `${m.hasGames ? "Box score" : "Match page"}: <${resolveSiteUrl()}/matches/${m.matchId}>`;
-  return `${tail} ${link}`;
+  const record = m.record
+    ? `\n${m.record.emoji} New league record: **${name(m.record.holderName)}**, ${m.record.mark}${m.record.heroName ? ` on ${m.record.heroName}` : ""} (old mark ${m.record.previousMark})`
+    : "";
+  return `${tail} ${link}${record}`;
 }
 
 export function playoffsStartedMessage(
@@ -382,8 +397,10 @@ export function championMessage(
   teamName: string,
   seasonId: string,
 ): string {
-  const recap = `${resolveSiteUrl()}/recap?${new URLSearchParams({ season: seasonId })}`;
-  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — recap at <${recap}>`;
+  // The season's own page holds the champion, bracket and awards. Older posts
+  // link /recap?season=, which redirects there.
+  const recap = `${resolveSiteUrl()}/seasons/${encodeURIComponent(seasonId)}`;
+  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — season recap at <${recap}>`;
 }
 
 export function freeAgentSignedMessage(
@@ -970,6 +987,9 @@ function mentionIdsOf(people: DraftReminderPerson[]): string[] {
   ];
 }
 
+/** Oracle-of-the-week names shown before "and N more". */
+const ORACLE_NAMES_SHOWN = 5;
+
 export function weeklyHonorsMessage(honors: {
   week: number;
   playerName: string | null;
@@ -979,6 +999,9 @@ export function weeklyHonorsMessage(honors: {
   teamGameWins: number;
   /** A prior award was retracted by a result/box-score correction. */
   corrected?: boolean;
+  /** Pick'em's best record that week (everyone tied on it); omitted when
+   *  nobody called a match right. */
+  oracle?: { names: string[]; correct: number; graded: number } | null;
 }): string {
   const lines = [
     honors.corrected
@@ -987,12 +1010,28 @@ export function weeklyHonorsMessage(honors: {
   ];
   if (honors.playerName) {
     lines.push(
-      `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} fantasy pts${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+      `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
     );
   }
   if (honors.teamName) {
     lines.push(
       `🛡️ Team of the Week: **${name(honors.teamName)}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
+    );
+  }
+  if (honors.oracle && honors.oracle.names.length > 0) {
+    const { names, correct, graded } = honors.oracle;
+    const shown = names
+      .slice(0, ORACLE_NAMES_SHOWN)
+      .map((n) => `**${name(n)}**`);
+    const more = names.length - shown.length;
+    const list =
+      more > 0
+        ? `${shown.join(", ")} and ${more} more`
+        : shown.length > 1
+          ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`
+          : shown[0];
+    lines.push(
+      `🔮 Pick'em Oracle${names.length === 1 ? "" : "s"} of the Week: ${list} (${correct} of ${graded} picks right${names.length === 1 ? "" : " each"})`,
     );
   }
   if (honors.corrected && !honors.playerName && !honors.teamName) {

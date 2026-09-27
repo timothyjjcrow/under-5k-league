@@ -304,7 +304,12 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   save concurrently, while import, phase, and archive writers remain
   exclusive; transient serialization conflicts retry from a fresh snapshot.
   COMPLETE and `?season=` archive views show read-only standings and roster
-  breakdowns.
+  breakdowns. After the lock the page is the standings and player scores:
+  only a manager's own five gets a lineup section, and the subtitle tells
+  everyone else why they cannot pick. The picker opens the pool most
+  expensive first and keeps count, salary and the one Save button in a bar
+  that sticks above the phone tab bar (`src/lib/fantasy-picker.ts`). The
+  scoring card explains that fantasy scores impact points.
 - _Pick'em_: `/pickem` uses the same post-auction lifecycle boundary. Each
   prediction locks at scheduled kickoff or as soon as the fixture is LIVE or
   COMPLETED. `savePrediction` re-reads the active Season, optional Draft,
@@ -317,6 +322,18 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   community split before lock, and preserves the viewer's locked or void pick.
   A deadline refresh moves the whole card into its authoritative locked state.
   COMPLETE and archive views are structurally read-only.
+- _Scrims_: `/scrims` is casual practice outside every league table. A
+  captain posts an OPEN time; another captain claims it in one click from the
+  list or the scrim's own page (`scrimJoinCheck` explains a refusal there),
+  which books it and withdraws both teams' other open times within four
+  hours. Games import by player IDs (`scrim-result-service.ts`); either
+  captain or an admin can end a LIVE series at its current score through one
+  guarded claim that re-asserts status and score. A booking with no games
+  36 hours after kickoff is listed as "Not played" (display only, so a late
+  game can still be added). Posts, claims and cancels ping only the captains
+  who must act. League fixtures win: a playoff round build cancels booked
+  scrims within four hours of its night and reports LIVE ones, and every
+  schedule refusal names the scrim that caused it.
 
 **Playoffs.** `startPlayoffs` calls `createPlayoffBracket`
 (`src/lib/playoff-service.ts`). The rendered Start, Reset, and Return-to-regular
@@ -359,18 +376,20 @@ decided authoritative grand final. `resolveChampionPresentation`
 (`src/lib/champion-presentation.ts`) is the shared public boundary: when saved
 postseason rows exist it requires one latest completed FINAL whose participant
 and winner match the stored id; champion-only legacy archives remain trusted.
-Dashboard, schedule, teams, match detail, recap, archive, player careers, Hall
+Dashboard, schedule, teams, match detail, season page, player careers, Hall
 of Fame, feature metrics, bracket trophies, and Discord champion sends all use
 that proof. A hand-entered final can be reopened and an imported final game can
 be removed through dedicated correction commands even when the stored title
 incorrectly names the losing finalist: both atomically clear the
 champion/announcement marker, return to PLAYOFFS, preserve earlier rounds, and
 recrown if the recomputed series is still decided. Earlier rounds are locked by
-the shared `hasLaterBracketRound` rule. `/recap` keeps the champion, bracket,
-and completed series even when there are zero imported Dota games; only
-player-stat awards become unavailable. `/seasons` and `/seasons/[id]` recompute
+the shared `hasLaterBracketRound` rule. A finished season's page
+(`/seasons/[id]`) keeps the champion, bracket, and completed series even when
+there are zero imported Dota games; only its player-stat awards become
+unavailable. `/recap` only redirects there (`src/app/recap/route.ts`,
+`recapDestination`), so old links and Discord champion posts keep working. `/seasons` and `/seasons/[id]` recompute
 archived standings and brackets from stored rows; `/hall-of-fame` rolls up
-cross-season careers (`src/lib/hall-of-fame.ts`, career fantasy points,
+cross-season careers (`src/lib/hall-of-fame.ts`, career impact points,
 all-time oracle). `/seasons` also hosts a non-restorable JSON audit archive
 (`/api/admin/season-export`) and `deleteSeason` behind the strongest confirm
 tier plus a recent full-database backup receipt in production.
@@ -397,7 +416,12 @@ Opening a season from offseason is either `createSeason` with no active id or
 the offseason-only `reactivateSeason` (`src/lib/season.ts`). Reactivation
 compare-and-sets the archived target's rendered `updatedAt`, restores its exact
 phase, and parks legacy live auction clocks before activation; it never
-silently archives a different active season. Every season-settings form also
+silently archives a different active season. The season-scoped public pages
+(Leaders, Hero meta, Pick'em, Fantasy) resolve `?season=` or the active season
+through `resolveSeasonScope` (`src/lib/season-scope.ts`); in offseason they
+open the most recent season (side games read-only) rather than an empty
+screen, and one season switcher appears only when two or more seasons have
+that page's data. Every season-settings form also
 claims the rendered active id and revision. These lifecycle commands run at
 Serializable isolation because "at most one active season" has no database
 constraint. `resultChangedAt` invalidates dependent reads after each committed
@@ -602,14 +626,14 @@ directly.
 | `/schedule`        | Standings, weeks, bracket, season grid, playoff picture                                        | Nav from DRAFT; phase-specific published/locked/read-only states                                   | `computeStandings`, `crossTable`, `buildBracketRounds`, `matchCheckinOpen`                                    |
 | `/matches/[id]`    | Box scores or pre-match preview (scouting, stakes, RSVP, standins, reschedule, captain report) | Always                                                                                             | Game JSON, `scouting.ts`, `PlayoffOutlook`                                                                    |
 | `/leaders`         | 8 stat boards + report-card board + evidence-gated weekly honors                               | Nav from REGULAR_SEASON; direct/archive reads always work                                          | Trusted `getSeasonGameLeaders`, `topBy`, `getSeasonHonorReadiness`                                            |
-| `/meta`            | Trusted hero meta report with known-pool coverage and signature owners                         | Nav from REGULAR_SEASON; direct/archive reads always work                                          | `getSeasonGameScores`, `heroMeta`, bundled hero catalogue                                                     |
-| `/fantasy`         | Fantasy-five picker, final fives, scoring, and standings                                       | Nav from DRAFT; interaction after completed auction until first import; COMPLETE/archive read-only | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
-| `/pickem`          | Match predictions, locked/void-pick review, and oracle board                                   | Nav from DRAFT; interaction after completed auction until each kickoff; COMPLETE/archive read-only | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
-| `/records`         | All-time trusted single-game record book with first-achiever tie policy                        | Evergreen: Statistics nav, Explore, footer                                                         | `getAllGamesForRecords` (deterministic chronology), `leagueRecords`                                           |
-| `/hall-of-fame`    | Cross-season career boards                                                                     | Footer link                                                                                        | `appearanceCareers`, all-seasons scans                                                                        |
-| `/recap`           | Season awards page                                                                             | Nav on COMPLETE; `?season=`                                                                        | `computeSeasonAwards`                                                                                         |
+| `/meta`            | One sortable table of picked heroes; unpicked pool in one line; 8+ pick win-rate headline      | Nav from REGULAR_SEASON; direct/archive reads always work                                          | `getSeasonGameScores`, `heroMeta`, bundled hero catalogue                                                     |
+| `/fantasy`         | Fantasy-five picker (sticky Save bar), standings, player scores, impact-points explainer       | Nav from DRAFT; interaction after completed auction until first import; COMPLETE/archive read-only | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
+| `/pickem`          | Match predictions, one "Your picks" history, and oracle board (shared places)                  | Nav from DRAFT; interaction after completed auction until each kickoff; COMPLETE/archive read-only | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
+| `/records`         | Compact trusted single-game record book (no Most deaths), first-achiever tie policy            | Evergreen: Statistics nav, Explore, footer                                                         | `getAllGamesForRecords` (deterministic chronology), `leagueRecords`                                           |
+| `/hall-of-fame`    | Short note until a champion exists; then champions first and shared-place career boards        | Footer link                                                                                        | `appearanceCareers`, all-seasons scans                                                                        |
+| `/recap`           | Redirect only: to a finished season's page, or Leaders while the season runs                   | Old links and Discord posts; `?season=`                                                            | `recapDestination`                                                                                            |
 | `/seasons`         | Season history + audit archive/delete; offseason-only reactivation                              | Nav once an archive exists; reactivation disabled while a season is active                         | —                                                                                                             |
-| `/seasons/[id]`    | Season archive: standings, bracket, rosters                                                    | Same                                                                                               | Recomputed from archived rows                                                                                 |
+| `/seasons/[id]`    | Season page: champion, standings, bracket, awards once finished, results, rosters              | Same                                                                                               | Recomputed from archived rows; `computeSeasonAwards`                                                          |
 | `/inhouse`         | Inhouse room + scene stats + Elo ladder + results                                              | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`                                                                      |
 | `/inhouse/history` | Complete completed-lobby archive, 100 rows per `?page=N`, exact-row admin void                 | Always                                                                                             | Stable formation ordering; authoritative played-time fallback                                                 |
 | `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Evergreen: Explore, mobile menu, footer                                                            | `NewsPost`; create request receipts; `NewsMedia`                                                              |

@@ -45,6 +45,7 @@ describe("computeSeasonAwards", () => {
     expect(mvp?.detail).toBe("over 4 games");
     expect(mvp?.blurb).toContain("per game");
     expect(mvp?.blurb).toContain("Player of the Week");
+    expect(mvp?.blurb).toContain("impact points");
     expect(mvp?.blurb).not.toMatch(/most wins/i);
   });
 

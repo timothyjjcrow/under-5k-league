@@ -1,4 +1,5 @@
 import type { AwardGame } from "./awards";
+import { SEASON_STATUS } from "./constants";
 import { decodeGamePlayers, trustedGamePlayers } from "./player-stats";
 
 export type RecapGameInput = {
@@ -87,4 +88,43 @@ export function summarizeRecapGames(
     playerIds,
     heroIds,
   };
+}
+
+/**
+ * Where /recap sends a visitor. A finished season's recap (champion, bracket,
+ * stat strip and awards) lives on that season's own page now, and /recap only
+ * redirects, so old links and the champion posts already in Discord keep
+ * working:
+ * - a link to a season lands on that season's page, unless the season is
+ *   still running: then Leaders, which already carries every award so far;
+ * - the bare /recap lands on the current season's page once it is complete,
+ *   on Leaders while it is being played, and before its first game (signups,
+ *   draft) or between seasons on the last archived season's page;
+ * - with nothing to recap at all, Leaders, which says so.
+ */
+export function recapDestination({
+  requested,
+  active,
+  lastArchived,
+}: {
+  /** The season a ?season= link names; null for the bare /recap. */
+  requested: { id: string; isActive: boolean; status: string } | null;
+  active: { id: string; status: string } | null;
+  /** The most recent season that is no longer active. */
+  lastArchived: { id: string } | null;
+}): string {
+  const seasonPage = (id: string) => `/seasons/${encodeURIComponent(id)}`;
+  if (requested) {
+    return requested.isActive && requested.status !== SEASON_STATUS.COMPLETE
+      ? "/leaders"
+      : seasonPage(requested.id);
+  }
+  if (active?.status === SEASON_STATUS.COMPLETE) return seasonPage(active.id);
+  if (
+    active?.status === SEASON_STATUS.REGULAR_SEASON ||
+    active?.status === SEASON_STATUS.PLAYOFFS
+  ) {
+    return "/leaders";
+  }
+  return lastArchived ? seasonPage(lastArchived.id) : "/leaders";
 }

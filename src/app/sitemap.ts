@@ -1,7 +1,8 @@
 import type { MetadataRoute } from "next";
 import { resolveSiteUrl } from "@/lib/site-url";
 
-// The public, index-worthy routes. Auth-gated / per-entity pages are excluded.
+// The public, index-worthy routes. Auth-gated / per-entity pages are excluded,
+// and so is /recap, which only redirects to a season's own page.
 export default function sitemap(): MetadataRoute.Sitemap {
   const base = resolveSiteUrl();
   const routes = [
@@ -19,7 +20,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { path: "/players/compare", changeFrequency: "weekly", priority: 0.6 },
     { path: "/hall-of-fame", changeFrequency: "weekly", priority: 0.7 },
     { path: "/seasons", changeFrequency: "weekly", priority: 0.7 },
-    { path: "/recap", changeFrequency: "weekly", priority: 0.7 },
     { path: "/inhouse", changeFrequency: "daily", priority: 0.7 },
     { path: "/inhouse/history", changeFrequency: "weekly", priority: 0.6 },
     { path: "/features", changeFrequency: "monthly", priority: 0.6 },

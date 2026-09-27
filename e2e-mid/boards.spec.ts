@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { MID_DB_URL } from "../playwright.midseason.config";
 import {
   expectNoCollapsedTruncation,
   expectNoHorizontalOverflow,
@@ -8,16 +10,53 @@ import {
   trackPageErrors,
 } from "./helpers";
 
+// Read-only: season ids for the season-scoped pages.
+const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
+test.afterAll(async () => {
+  await db.$disconnect();
+});
+
 // The stat roll-up pages — all recompute from every stored Game and all were
 // previously untested in a browser. Each check: key cards render, the
 // interactive bits respond, and nothing crashed client-side.
 
-test("leaders groups metrics and preserves ranks through search", async ({ page }) => {
+test("leaders opens on weekly honors and ranks what each player did", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/leaders");
   await expect(page.getByRole("heading", { name: "Leaders" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Winning", level: 2 })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Teamfights", level: 2 })).toBeVisible();
+  const honors = page.getByRole("heading", { name: "Weekly honors", level: 2 });
+  const teamfights = page.getByRole("heading", { name: "Teamfights", level: 2 });
+  await expect(honors).toBeVisible();
+  await expect(teamfights).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Resources & presence", level: 2 }),
+  ).toBeVisible();
+  // Honors lead the page: they change every week and the Discord honors
+  // post links here for them. They used to sit ~7,900px down on a phone.
+  expect((await honors.boundingBox())!.y).toBeLessThan(
+    (await teamfights.boundingBox())!.y,
+  );
+  await expect(page.getByText(/is still in progress/i)).toBeVisible();
+  // "Impact points" are defined right where Player of the Week shows them.
+  await expect(
+    page.getByText(/earns the most impact points: \+2 per kill/),
+  ).toBeVisible();
+  // The "How honors unlock" disclosure carries a visible marker.
+  const unlock = page.locator("#weekly-honors summary");
+  await expect(unlock.locator("svg")).toBeVisible();
+  await unlock.click();
+  await expect(
+    page.getByText(/Official after every regular match is final/),
+  ).toBeVisible();
+  // No team-record boards, no highlight cards, no per-board search: kills
+  // and assists are per game, and "Most games" still recognises showing up.
+  await expect(page.getByRole("heading", { name: "Winning", level: 2 })).toHaveCount(0);
+  await expect(page.locator("#metric-wins, #metric-winRate")).toHaveCount(0);
+  await expect(page.getByText("Who is setting the pace?")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Find player" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Kills per game", level: 3 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Assists per game", level: 3 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Most games", level: 3 })).toBeVisible();
   await expect(page.locator("#metric-participation")).toBeVisible();
   const toggle = page.getByRole("button", { name: /Show all/ }).first();
   await expect(toggle).toBeVisible();
@@ -25,17 +64,6 @@ test("leaders groups metrics and preserves ranks through search", async ({ page 
   await expect(
     page.getByRole("button", { name: /Show top 3/ }).first(),
   ).toBeVisible();
-  const wins = page.locator("#metric-wins");
-  await wins.getByRole("button", { name: "Find player" }).click();
-  const search = wins.getByRole("searchbox", { name: /Find a player or team/i });
-  await search.fill("no-such-league-player");
-  await expect(wins.getByText("No player or team matches that search.")).toBeVisible();
-  await search.fill("");
-  await expect(wins.getByRole("button", { name: /Show top 3/ })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Weekly honors", level: 2 }),
-  ).toBeVisible();
-  await expect(page.getByText(/is still in progress/i)).toBeVisible();
   // A 55th-percentile player should fill about 55% of the scale, even when
   // they lead this league. Relative-to-leader scaling would incorrectly fill it.
   const reportLeader = page.locator("#metric-report li").first();
@@ -73,57 +101,80 @@ test("homepage league pulse shares the trusted honors and hero state", async ({
   assertNoErrors();
 });
 
-test("hero meta explains its sample and lets players explore the pool", async ({
+test("hero meta is one table of picked heroes with an honest headline", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/meta");
   await expect(page.getByRole("heading", { name: "Hero meta", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What the league is actually picking" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "The meta, at a glance" })).toBeVisible();
-  await expect(page.getByText("Most in demand")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Explore the hero pool" })).toBeVisible();
-  const search = page.getByRole("searchbox", { name: "Find a hero" });
-  await search.fill("no-such-hero");
-  await expect(page.getByText("No heroes match these filters")).toBeVisible();
-  await page.getByRole("button", { name: "Clear filters" }).click();
-  await expect(page.getByRole("status")).toContainText(/matching heroes/i);
+  await expect(page.locator("#meta-sample")).toHaveText(
+    /^\d+ of \d+ heroes picked across \d+ complete games?\.$/,
+  );
+  await expect(page.getByText("Most picked", { exact: true })).toBeVisible();
+  // A win-rate headline only names a hero with 8+ picks.
+  const best = page.getByText(/^Best win rate, 8\+ picks$/);
+  if (await best.count()) await expect(best).toBeVisible();
+  const table = page.getByRole("table");
+  await expect(table).toHaveCount(1);
+  for (const column of ["Hero", "Picks", "Win %"]) {
+    await expect(table.getByRole("columnheader", { name: column })).toBeVisible();
+  }
+  await expect(table.getByRole("columnheader", { name: "Most played by" })).toBeVisible();
+  // The old explorer's filters, highlight cards and paging are gone.
+  await expect(page.getByRole("group", { name: "Hero sample filter" })).toHaveCount(0);
+  await expect(page.getByRole("searchbox")).toHaveCount(0);
+  await expect(page.getByText("The meta, at a glance")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Show more heroes/ })).toHaveCount(0);
+  // Never-picked heroes fold into one line.
+  await expect(page.locator("details summary").filter({ hasText: /not picked yet$/ })).toBeVisible();
   await expectNoHorizontalOverflow(page, "/meta");
   assertNoErrors();
 });
 
-test("the record book groups performances and filters by season", async ({ page }) => {
+test("the record book lists records compactly and scopes by season", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/records");
   await expect(page.getByRole("heading", { name: "Record book" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Impact & team play" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Economy & lane" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Match stories" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "View match →" }).first()).toBeVisible();
-  const season = page.getByRole("combobox", { name: "Season" });
-  const firstSeason = await season.locator('option:not([value=""])').first().getAttribute("value");
-  expect(firstSeason).toBeTruthy();
-  await season.selectOption(firstSeason!);
-  await page.getByRole("button", { name: "View records" }).click();
-  await expect(page).toHaveURL(new RegExp(`/records\\?season=${firstSeason}`));
+  await expect(page.getByRole("heading", { name: "Player records" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Match records" })).toBeVisible();
+  await expect(page.getByText(/Most kills$/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Match →" }).first()).toBeVisible();
+  // No record names a player for their worst game.
+  await expect(page.getByText(/Most deaths|Wild card/)).toHaveCount(0);
+  await expect(page.getByText(/tie goes to whoever set the mark first/)).toBeVisible();
+  // No champion yet, so no link to a Hall of Fame that would only say so.
+  await expect(page.getByRole("link", { name: "Career legends →" })).toHaveCount(0);
+  // One season of games: "All seasons" would be the same list, so no picker
+  // and no separate submit button.
+  const picker = page.getByRole("navigation", { name: "Choose a season for records" });
+  await expect(picker).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View records" })).toHaveCount(0);
+  // A season link still works, and keeps a way back to the all-time book.
+  const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
+  await page.goto(`/records?season=${season.id}`);
   await expect(page.getByRole("heading", { name: "Record book" })).toBeVisible();
+  await expect(picker.getByRole("link", { name: "All seasons" })).toHaveAttribute("href", "/records");
+  await expect(picker.getByRole("link", { name: season.name })).toHaveAttribute("aria-current", "page");
   const statsNav = page.getByRole("navigation", { name: "Statistics" });
-  await expect(statsNav.getByRole("link", { name: "Leaders" })).toHaveAttribute("href", `/leaders?season=${firstSeason}`);
-  await expect(statsNav.getByRole("link", { name: "Hero meta" })).toHaveAttribute("href", `/meta?season=${firstSeason}`);
-  await expect(statsNav.getByRole("link", { name: "Record book" })).toHaveAttribute("href", `/records?season=${firstSeason}`);
+  await expect(statsNav.getByRole("link", { name: "Leaders" })).toHaveAttribute("href", `/leaders?season=${season.id}`);
+  await expect(statsNav.getByRole("link", { name: "Hero meta" })).toHaveAttribute("href", `/meta?season=${season.id}`);
+  await expect(statsNav.getByRole("link", { name: "Record book" })).toHaveAttribute("href", `/records?season=${season.id}`);
   await page.setViewportSize({ width: 360, height: 812 });
   await expectNoHorizontalOverflow(page, "/records");
   assertNoErrors();
 });
 
-test("Hall of Fame puts career rates and champion history in context", async ({ page }) => {
+test("Hall of Fame waits for a champion instead of showing empty boards", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
+  // The midseason fixture has one season and no champion yet.
   await page.goto("/hall-of-fame");
-  await expect(page.getByRole("heading", { name: "Hall of Fame" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Career honors" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Game performance" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Fantasy per game" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Champion history" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hall of Fame", level: 1 })).toBeVisible();
+  await expect(page.getByText("No champion yet", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Leaders →" })).toHaveAttribute("href", "/leaders");
+  await expect(page.getByRole("link", { name: "Record book →" })).toHaveAttribute("href", "/records");
+  await expect(page.getByRole("heading", { name: "Career honors" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Game performance" })).toHaveCount(0);
+  await expect(page.getByText("Nobody has qualified yet.")).toHaveCount(0);
   await page.setViewportSize({ width: 360, height: 812 });
   await expectNoHorizontalOverflow(page, "/hall-of-fame");
   assertNoErrors();
@@ -261,6 +312,28 @@ test("failed news media degrades to its source link", async ({ page }) => {
   assertNoErrors();
 });
 
+test("signed-out pick'em cards offer one sign-in button each", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/pickem");
+  const upcoming = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /Upcoming matches/ }),
+  });
+  await expect(upcoming).toBeVisible();
+  // No greyed-out team buttons that do nothing on tap: each card names the
+  // matchup and carries one sign-in link that comes back to /pickem.
+  await expect(upcoming.locator("button[aria-pressed]")).toHaveCount(0);
+  const signIn = upcoming.getByRole("link", {
+    name: /^Sign in with Steam to pick/,
+  });
+  await expect(signIn.first()).toBeVisible();
+  await expect(signIn.first()).toHaveAttribute("href", "/login?next=/pickem");
+  await expectNoHorizontalOverflow(page, "/pickem signed out");
+  assertNoErrors();
+});
+
 test("public statistics metadata is route-specific and invalid archives are noindex not-found pages", async ({
   page,
 }) => {
@@ -271,7 +344,6 @@ test("public statistics metadata is route-specific and invalid archives are noin
     ["/leaders", /season leaders/i],
     ["/meta", /heroes .+ players pick/i],
     ["/records", /all-time single-game/i],
-    ["/recap", /awards, superlatives/i],
     ["/fantasy", /salary-capped fantasy five/i],
     ["/pickem", /Call every .+ match/i],
   ] as const) {
@@ -297,7 +369,7 @@ test("public statistics metadata is route-specific and invalid archives are noin
   // archive lookup. Next 16 therefore documents this as a 200 response with a
   // not-found UI and an injected noindex directive. Preserve the shared page
   // loading experience and verify the complete browser-visible contract.
-  for (const path of ["/leaders", "/meta", "/records", "/recap", "/fantasy", "/pickem"]) {
+  for (const path of ["/leaders", "/meta", "/records", "/fantasy", "/pickem"]) {
     for (const query of [
       "season=definitely-missing",
       "season=one&season=two",
@@ -313,6 +385,21 @@ test("public statistics metadata is route-specific and invalid archives are noin
       );
     }
   }
+
+  // /recap only redirects now. Mid-season it opens Leaders; a link to a
+  // season that doesn't exist lands on that season's (not found) page; and a
+  // repeated key is a plain 404 rather than a guess at which season.
+  await page.goto("/recap");
+  await expect(page).toHaveURL(/\/leaders$/);
+  await page.goto("/recap?season=definitely-missing");
+  await expect(page).toHaveURL(/\/seasons\/definitely-missing$/);
+  await expect(
+    page.getByRole("heading", { name: "Page not found" }),
+  ).toBeVisible();
+  const repeatedRecap = await page.request.get("/recap?season=one&season=two", {
+    maxRedirects: 0,
+  });
+  expect(repeatedRecap.status()).toBe(404);
 
   // Player history uses the same one-season selector, but a malformed key
   // previously fell back to "All seasons" instead of rejecting the URL.

@@ -25,6 +25,8 @@ import {
 } from "./announcement-marker";
 import { singleActiveSeason } from "./season";
 import { raceHook } from "./race-hook";
+import { MATCH_PHASE } from "./constants";
+import { weekOracles } from "./pickem";
 
 // Value formats (prefixes and patterns) are shared with the automation gate
 // and the outbox through announcement-marker.ts; see the note there.
@@ -53,6 +55,47 @@ function honorsFor(readiness: HonorWeekReadiness): WeeklyHonors {
 
 function honorDigest(honors: WeeklyHonors): string {
   return Buffer.from(JSON.stringify(honors)).toString("base64url");
+}
+
+/**
+ * The week's pick'em Oracle line for the honors post: whoever called the most
+ * of that week's regular-season matches (ties all listed). It rides the same
+ * message and send-once marker as the awards, never a post of its own.
+ * Best-effort: a failed read costs the line, never the announcement.
+ */
+async function weekOracleLine(
+  seasonId: string,
+  week: number,
+): Promise<{ names: string[]; correct: number; graded: number } | null> {
+  try {
+    const matches = await prisma.match.findMany({
+      where: { seasonId, week, phase: MATCH_PHASE.REGULAR },
+      select: { id: true, status: true, winnerTeamId: true, scheduledAt: true },
+    });
+    if (matches.length === 0) return null;
+    const predictions = await prisma.prediction.findMany({
+      where: { matchId: { in: matches.map((match) => match.id) } },
+      select: { matchId: true, userId: true, pickedTeamId: true },
+    });
+    const oracles = weekOracles(predictions, matches);
+    if (oracles.length === 0) return null;
+    const users = await prisma.user.findMany({
+      where: { id: { in: oracles.map((oracle) => oracle.userId) } },
+      select: { id: true, name: true },
+    });
+    const nameOf = new Map(users.map((user) => [user.id, user.name]));
+    const names = oracles.flatMap((oracle) => {
+      const name = nameOf.get(oracle.userId);
+      return name ? [name] : [];
+    });
+    return names.length > 0
+      ? { names, correct: oracles[0].correct, graded: oracles[0].graded }
+      : null;
+  } catch {
+    // Never log the raw error: a database failure can carry a connection URL.
+    console.error("[honors] ORACLE_LINE_SKIPPED");
+    return null;
+  }
 }
 
 async function readyWeek(seasonId: string, week: number) {
@@ -208,13 +251,14 @@ export async function maybeAnnounceWeekHonors(
     return;
   }
 
-  const [playerUser, team] = await Promise.all([
+  const [playerUser, team, oracle] = await Promise.all([
     honors.player
       ? prisma.user.findUnique({ where: { id: honors.player.userId } })
       : null,
     honors.team
       ? prisma.team.findUnique({ where: { id: honors.team.teamId } })
       : null,
+    weekOracleLine(seasonId, week),
   ]);
   const sent = await sendDiscordMessage(
     weeklyHonorsMessage({
@@ -228,6 +272,7 @@ export async function maybeAnnounceWeekHonors(
       teamName: team?.name ?? null,
       teamGameWins: honors.team?.gameWins ?? 0,
       corrected: claim.mode === "corrected",
+      oracle,
     }),
     undefined,
     {

@@ -298,15 +298,24 @@ test("complete-season public pages agree on the champion and recap", async ({
     page.getByRole("img", { name: "Champion crowned" }),
   ).toBeVisible();
 
+  // The recap lives on the season's own page; /recap redirects there.
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\/[^/?#]+$/);
+  const seasonPage = new URL(page.url()).pathname;
   await expect(
-    page.getByRole("heading", { name: "Season Recap" }),
+    page.getByRole("heading", {
+      name: "Season 9 (fixture)",
+      exact: true,
+      level: 1,
+    }),
   ).toBeVisible();
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(champion, { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Season awards")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Season awards" }),
+  ).toBeVisible();
   await expect(
     page.getByText("Completed series", { exact: true }),
   ).toBeVisible();
@@ -314,13 +323,23 @@ test("complete-season public pages agree on the champion and recap", async ({
   await expectStatValue(page, "Completed series", 35);
   await expectStatValue(page, "Imported games", 74);
 
+  // A finished season's boards point at that page too.
+  await page.goto("/leaders");
+  await expect(
+    page.getByRole("link", { name: "Season recap →" }),
+  ).toHaveAttribute("href", seasonPage);
+
   await page.goto("/fantasy");
   await expect(
     page.getByRole("heading", { name: "Fantasy", exact: true }),
   ).toBeVisible();
+  // A signed-out visitor gets the final standings, with no lineup section.
+  await expect(
+    page.getByText(/Season complete: these are the final standings/),
+  ).toBeVisible();
   await expect(
     page.getByText(/season complete — these are the final fives/i),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(page.getByText("Fantasy opens after the draft")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: /save fantasy|update fantasy/i }),
@@ -349,6 +368,10 @@ test("complete-season public pages agree on the champion and recap", async ({
       exact: true,
     }),
   ).toBeVisible();
+  // The manager still gets their own five, below the standings.
+  await expect(
+    page.getByText(/season complete — these are the final fives/i),
+  ).toBeVisible();
   const finalFive = page.getByText("View fantasy five", { exact: true });
   await expect(finalFive).toBeVisible();
   await finalFive.click();
@@ -364,13 +387,31 @@ test("complete-season public pages agree on the champion and recap", async ({
       exact: true,
     }),
   ).toBeVisible();
+  // One "Your picks" list: the graded call and the void one, each marked.
+  const yourPicks = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /^Your picks/ }),
+  });
   await expect(
-    page.getByRole("heading", { name: "Your graded picks" }),
+    yourPicks.getByRole("img", { name: "Correct pick" }),
   ).toBeVisible();
+  await expect(yourPicks.getByRole("img", { name: "Void pick" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /Your void picks/ }),
-  ).toBeVisible();
+    page.getByRole("heading", { name: /Your (graded|void|locked) picks/ }),
+  ).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/pickem completed side game");
+
+  // The finished match itself tells the picker how the call went. The
+  // seeded viewer is the only one who picked it, and picked the winner.
+  await yourPicks
+    .getByRole("img", { name: "Correct pick" })
+    .locator("xpath=..")
+    .getByRole("link")
+    .first()
+    .click();
+  await expect(page).toHaveURL(/\/matches\//);
+  await expect(page.getByText(/Your pick:/)).toContainText(
+    "(1 of 1 called it)",
+  );
 
   assertNoErrors();
 });
@@ -380,11 +421,17 @@ test("complete champion and recap remain usable at 360px", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
 
+  // "/recap" lands on the season page, awards included.
   for (const path of ["/", "/schedule", "/recap"] as const) {
     await page.goto(path);
     await expect(
       page.getByText("Season 9 (fixture) Champion", { exact: true }),
     ).toBeVisible();
+    if (path === "/recap") {
+      await expect(
+        page.getByRole("region", { name: "Season awards" }),
+      ).toBeVisible();
+    }
     await expectNoHorizontalOverflow(page, `${path} completed postseason`);
   }
 
@@ -450,6 +497,22 @@ test("admin can enter a real offseason, browse it, and open the next season", as
       page.getByRole("link", { name: "Season history" }),
     ).toBeVisible();
     await expectNoHorizontalOverflow(page, `${path} offseason`);
+  }
+
+  // With no season running, the season pages open on the last season
+  // instead of an empty "No active season" screen.
+  for (const [path, heading] of [
+    ["/leaders", "Leaders"],
+    ["/pickem", "Pick'em"],
+  ] as const) {
+    await page.goto(path);
+    await expect(
+      page.getByRole("heading", { name: heading, level: 1 }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Season 9 \(fixture\) · archived/).first(),
+    ).toBeVisible();
+    await expect(page.getByText("No active season")).toHaveCount(0);
   }
 
   await page.goto("/seasons");
@@ -524,6 +587,7 @@ test("a conflicting stored champion is never presented as the title holder", asy
   );
 
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\//);
   await expect(
     page.getByText("Champion state needs review", { exact: true }),
   ).toBeVisible();
@@ -542,6 +606,7 @@ test("a champion recap remains complete without imported Dota games", async ({
   const assertNoErrors = trackPageErrors(page);
 
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\//);
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
@@ -603,6 +668,14 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   await expect(
     page.getByRole("heading", { name: "Regular season results" }),
   ).toBeVisible();
+  // The season's recap is part of its page now.
+  await expect(
+    page.getByRole("region", { name: "Season awards" }),
+  ).toBeVisible();
+  await expectStatValue(page, "Completed series", 35);
+  await expect(
+    page.getByRole("link", { name: "Season recap →" }),
+  ).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/seasons/[id] archived postseason");
 
   for (const [path, heading] of [
@@ -629,22 +702,17 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
     await expectNoHorizontalOverflow(page, `${path} archived stats`);
   }
 
-  await page.goto(`/seasons/${archivedSeasonId}`);
-  await page.getByRole("link", { name: "Season recap →" }).click();
-  await expect(page).toHaveURL(/\/recap\?season=/);
-  await expect(
-    page.getByRole("heading", { name: "Season Recap" }),
-  ).toBeVisible();
+  // An old recap link (the champion post in Discord) lands on the same page.
+  await page.goto(`/recap?season=${archivedSeasonId}`);
+  await expect(page).toHaveURL(
+    new RegExp(`/seasons/${archivedSeasonId}$`),
+  );
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText(champion!, { exact: true }).first(),
+    page.getByRole("region", { name: "Season awards" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("region", { name: "Playoff bracket" }),
-  ).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/recap archived postseason");
 
   await page.goto(
     "/api/auth/dev?name=Side%20Game%20Viewer&steamId=76561190000992001&redirect=/",
@@ -670,11 +738,14 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   }
 
   await page.goto(`/pickem?season=${archivedSeasonId}`);
+  const archivedPicks = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /^Your picks/ }),
+  });
   await expect(
-    page.getByRole("heading", { name: "Your graded picks" }),
+    archivedPicks.getByRole("img", { name: "Correct pick" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /Your void picks/ }),
+    archivedPicks.getByRole("img", { name: "Void pick" }),
   ).toBeVisible();
 
   assertNoErrors();

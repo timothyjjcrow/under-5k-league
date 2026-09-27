@@ -31,31 +31,27 @@ const FANTASY = read("fantasy", "page.tsx");
 const PICKEM = read("pickem", "page.tsx");
 const HOME = read("page.tsx");
 const FANTASY_ACTION = read("actions", "fantasy.ts");
+const FANTASY_PICKER = read("..", "components", "fantasy-picker.tsx");
 const PICKEM_BUTTON = read("..", "components", "pickem-submit-button.tsx");
 const PICK_FORM = read("..", "components", "pickem-pick-form.tsx");
 const MATCH = read("matches", "[id]", "page.tsx");
 const SEASON_ARCHIVE = read("seasons", "[id]", "page.tsx");
+const SEASON_SCOPE = read("..", "lib", "season-scope.ts");
 
 describe("side-game archive: both pages resolve ?season=", () => {
   for (const [name, src] of [
     ["fantasy", FANTASY],
     ["pickem", PICKEM],
   ] as const) {
-    it(`${name} accepts a season param and 404s an unknown one`, () => {
+    it(`${name} accepts a season param and resolves it through the shared scope`, () => {
       expect(src, `${name} takes searchParams`).toMatch(
         /type \w+SearchParams = \{ season\?: string \| string\[\] \}/,
       );
       expect(src, `${name} rejects a repeated season key`).toContain(
         "if (seasonParam === null) notFound()",
       );
-      expect(
-        src,
-        `${name} resolves the param before the active season`,
-      ).toMatch(/seasonParam\s*\n?\s*\?\s*await prisma\.season\.findUnique/);
-      // An unknown id must 404, not silently fall back to the live season —
-      // that would render this season's data under someone else's link.
-      expect(src, `${name} notFounds an unknown season`).toMatch(
-        /if \(seasonParam && !season\) notFound\(\)/,
+      expect(src, `${name} resolves the season through the shared scope`).toMatch(
+        /const season = await resolveSeasonScope\(seasonParam\);/,
       );
     });
 
@@ -65,6 +61,15 @@ describe("side-game archive: both pages resolve ?season=", () => {
       );
     });
   }
+
+  it("the shared scope reads the param before the active season and 404s an unknown one", () => {
+    // An unknown id must 404, not silently fall back to the live season —
+    // that would render this season's data under someone else's link.
+    // (Behaviour is pinned in test/integration/season-scope.itest.ts.)
+    expect(SEASON_SCOPE).toMatch(
+      /if \(seasonParam\) \{\s*const season = await prisma\.season\.findUnique\(\{\s*where: \{ id: seasonParam \},\s*\}\);\s*if \(!season\) notFound\(\);\s*return season;\s*\}/,
+    );
+  });
 });
 
 describe("side-game archive: an archived season is STRUCTURALLY read-only", () => {
@@ -106,6 +111,46 @@ describe("side-game archive: the season archive links to them", () => {
       /href=\{`\/pickem\?season=\$\{season\.id\}`\}/,
     );
   });
+
+  it("/seasons/[id] keeps the Fantasy link whenever the season had managers", () => {
+    // Fantasy is kept forever; its archive link only steps aside for a
+    // season nobody entered, which would open onto "Entries 0".
+    expect(SEASON_ARCHIVE).toMatch(
+      /fantasyRoster\.findFirst\(\{\s*where: \{ seasonId: id \}/,
+    );
+    expect(SEASON_ARCHIVE).toMatch(
+      /\{fantasyEntry \? \(\s*<Link\s*href=\{`\/fantasy\?season=/,
+    );
+  });
+});
+
+describe("fantasy after the lock, and the picker before it", () => {
+  it("a viewer without a five gets the standings, not a dead-end card", () => {
+    // Everyone who arrived after the first game used to read "Rosters are
+    // locked… Catch the next season!" as the page's main content. The lineup
+    // section now exists only while picks are open or for a manager's own
+    // five; the subtitle says why nobody else can pick.
+    expect(FANTASY).toMatch(/\{!locked \|\| myRoster \? \(\s*<section id="lineup"/);
+    expect(FANTASY).not.toMatch(/Catch the next season|Rosters are locked/);
+    expect(FANTASY).toMatch(/New fives open after next season's draft\./);
+  });
+
+  it("explains impact points on the page", () => {
+    expect(FANTASY).toMatch(/title="How impact points work"/);
+    expect(FANTASY).toMatch(/href="#scoring"/);
+  });
+
+  it("keeps one Save button, in the bar that sticks above the phone dock", () => {
+    expect(FANTASY_PICKER.match(/<SubmitButton\b/g)).toHaveLength(1);
+    const barAt = FANTASY_PICKER.indexOf(
+      "sticky bottom-[calc(var(--mobile-dock-height)",
+    );
+    expect(barAt).toBeGreaterThan(0);
+    expect(FANTASY_PICKER.slice(barAt)).toMatch(/<SubmitButton\b/);
+    // The pool opens in the price order the shared helper defines.
+    expect(FANTASY_PICKER).toMatch(/useState<FantasyPickerOrder>\(\s*DEFAULT_FANTASY_PICKER_ORDER,?\s*\)/);
+    expect(FANTASY_PICKER).toMatch(/orderFantasyCandidates\(/);
+  });
 });
 
 describe("side-game live-state integrity", () => {
@@ -122,7 +167,11 @@ describe("side-game live-state integrity", () => {
 
   it("Pick'em transitions at kickoff and preserves void history", () => {
     expect(PICKEM).toMatch(/const voided = buckets\.voided;/);
-    expect(PICKEM).toMatch(/Your void picks/);
+    // Void picks stay in the viewer's one "Your picks" list, marked void.
+    expect(PICKEM).toMatch(
+      /pickHistory\(\[\.\.\.lockedForReview, \.\.\.graded, \.\.\.voided\]/,
+    );
+    expect(PICKEM).toMatch(/label: "Void pick"/);
     expect(PICKEM).toMatch(
       /<PickemDeadlineRefresh targetMs=\{nextOpenDeadline\}/,
     );

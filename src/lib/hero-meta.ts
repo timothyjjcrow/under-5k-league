@@ -143,11 +143,33 @@ export function heroMeta(games: MetaGame[]): HeroMeta {
   return { games: total, rows };
 }
 
-/**
- * Adaptive floor for an "established" hero on /meta (the explorer's win-rate
- * view): heroes need a few picks before their rate means anything, scaling up
- * as the season accumulates games.
- */
-export function metaMinPicks(totalGames: number): number {
-  return Math.max(2, Math.ceil(totalGames / 10));
+/** Picks a hero needs before /meta will headline its win rate. Below this a
+ *  5-for-5 run reads as "100% wins", which says more about luck than the
+ *  hero. The table still lists every picked hero's record. */
+export const META_HEADLINE_MIN_PICKS = 8;
+
+export type MetaHeadlines = {
+  /** The most-picked hero (the first row of heroMeta's ordering). */
+  mostPicked: HeroMetaRow | null;
+  /** Best win rate among heroes with at least `minPicks`; more picks break
+   *  an equal rate. Null until some hero has the sample. */
+  bestWinRate: HeroMetaRow | null;
+};
+
+export function metaHeadlines(
+  rows: HeroMetaRow[],
+  minPicks = META_HEADLINE_MIN_PICKS,
+): MetaHeadlines {
+  let bestWinRate: HeroMetaRow | null = null;
+  for (const row of rows) {
+    if (row.picks < minPicks) continue;
+    // Compare wins/picks exactly (cross-multiplied), not the rounded percent.
+    const diff = bestWinRate
+      ? row.wins * bestWinRate.picks - bestWinRate.wins * row.picks
+      : 1;
+    if (diff > 0 || (diff === 0 && bestWinRate && row.picks > bestWinRate.picks)) {
+      bestWinRate = row;
+    }
+  }
+  return { mostPicked: rows[0] ?? null, bestWinRate };
 }

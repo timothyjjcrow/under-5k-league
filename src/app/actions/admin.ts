@@ -170,7 +170,12 @@ import {
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
 import { normalizeTeamLogoUrl } from "@/lib/team-logo";
-import { hasConfirmedScrimConflict } from "@/lib/scrim-schedule-conflict";
+import {
+  describeScrimConflict,
+  findConfirmedScrimConflict,
+  scrimConflictFix,
+  type ScrimConflict,
+} from "@/lib/scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
 
@@ -233,7 +238,18 @@ class WithdrawnTeamsError extends Error {
 class ScheduleMatchChangedError extends Error {}
 class ScheduledWeekEmptyError extends Error {}
 class UnknownScheduleMatchError extends Error {}
-class ScrimScheduleConflictError extends Error {}
+/** Carries the clashing booking, already described, so every refusal can
+ *  name the scrim instead of "a booked scrim" somewhere, plus the step that
+ *  clears it (cancel a booked scrim, end a live one). */
+class ScrimScheduleConflictError extends Error {
+  readonly scrim: string;
+  readonly fix: string;
+  constructor(conflict: ScrimConflict) {
+    super("Scrim schedule conflict");
+    this.scrim = describeScrimConflict(conflict);
+    this.fix = scrimConflictFix(conflict);
+  }
+}
 class DraftAlreadyStartedError extends Error {}
 class DraftSetupLockedError extends Error {}
 class CaptainStateChangedError extends Error {}
@@ -2975,15 +2991,15 @@ export async function generateSchedule(
         // new official kickoff. Both this path and scrim claiming are
         // Serializable, so a concurrent claim/generate race has one loser.
         for (const row of rows) {
-          if (
-            row.scheduledAt &&
-            (await hasConfirmedScrimConflict(tx, {
-              seasonId: currentSeason.id,
-              teamIds: [row.homeTeamId, row.awayTeamId],
-              scheduledAt: row.scheduledAt,
-            }))
-          ) {
-            throw new ScrimScheduleConflictError();
+          const scrimClash = row.scheduledAt
+            ? await findConfirmedScrimConflict(tx, {
+                seasonId: currentSeason.id,
+                teamIds: [row.homeTeamId, row.awayTeamId],
+                scheduledAt: row.scheduledAt,
+              })
+            : null;
+          if (scrimClash) {
+            throw new ScrimScheduleConflictError(scrimClash);
           }
         }
 
@@ -3110,8 +3126,7 @@ export async function generateSchedule(
     }
     if (e instanceof ScrimScheduleConflictError) {
       return {
-        error:
-          "A team has a booked scrim within four hours of a generated kickoff. Move or cancel that scrim before replacing the schedule.",
+        error: `A generated kickoff falls within four hours of ${e.scrim}. ${e.fix}, then generate the schedule again.`,
       };
     }
     if (isSerializationConflict(e)) {
@@ -3311,11 +3326,16 @@ export async function startPlayoffs(
   // the transaction; this tag keeps cached stat boards in the actor's own tab
   // synchronized immediately as well.
   refreshGames();
+  // A practice scrim booked near the first round's night was cancelled (or,
+  // if already under way, kept) by the build — say which, by name.
+  const scrimNote = outcome.scrimNotes.length
+    ? ` ${outcome.scrimNotes.join(" ")}`
+    : "";
   return {
     message:
-      intent === "reset"
+      (intent === "reset"
         ? "Playoff bracket reset and reseeded"
-        : "Playoff bracket created",
+        : "Playoff bracket created") + scrimNote,
   };
 }
 
@@ -5762,14 +5782,13 @@ export async function setWeekNight(
         }
 
         for (const { match, scheduledAt } of moves) {
-          if (
-            await hasConfirmedScrimConflict(tx, {
-              seasonId: expectedActiveSeasonId,
-              teamIds: [match.homeTeamId, match.awayTeamId],
-              scheduledAt,
-            })
-          ) {
-            throw new ScrimScheduleConflictError();
+          const scrimClash = await findConfirmedScrimConflict(tx, {
+            seasonId: expectedActiveSeasonId,
+            teamIds: [match.homeTeamId, match.awayTeamId],
+            scheduledAt,
+          });
+          if (scrimClash) {
+            throw new ScrimScheduleConflictError(scrimClash);
           }
           const updated = await tx.match.updateMany({
             where: {
@@ -5866,8 +5885,7 @@ export async function setWeekNight(
     }
     if (error instanceof ScrimScheduleConflictError) {
       return {
-        error:
-          "A team in this schedule move has a booked scrim within four hours of its new kickoff. Move or cancel that scrim first.",
+        error: `A new kickoff in this move falls within four hours of ${error.scrim}. ${error.fix} first, or pick another time.`,
       };
     }
     if (isSerializationConflict(error)) {
@@ -6024,15 +6042,15 @@ export async function setMatchTime(
             proposals: 0,
           };
         }
-        if (
-          scheduledAt &&
-          (await hasConfirmedScrimConflict(tx, {
-            seasonId: expectedActiveSeasonId,
-            teamIds: [before.homeTeamId, before.awayTeamId],
-            scheduledAt,
-          }))
-        ) {
-          throw new ScrimScheduleConflictError();
+        const scrimClash = scheduledAt
+          ? await findConfirmedScrimConflict(tx, {
+              seasonId: expectedActiveSeasonId,
+              teamIds: [before.homeTeamId, before.awayTeamId],
+              scheduledAt,
+            })
+          : null;
+        if (scrimClash) {
+          throw new ScrimScheduleConflictError(scrimClash);
         }
 
         // Status and old kickoff are both claims. A result import or competing
@@ -6101,8 +6119,7 @@ export async function setMatchTime(
     }
     if (error instanceof ScrimScheduleConflictError) {
       return {
-        error:
-          "One of these teams has a booked scrim within four hours of that kickoff. Move or cancel the scrim first.",
+        error: `That kickoff falls within four hours of ${error.scrim}. ${error.fix} first, or pick another time.`,
       };
     }
     if (isSerializationConflict(error)) {

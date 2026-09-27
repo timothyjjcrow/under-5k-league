@@ -16,12 +16,15 @@ import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
 import {
-  hasConfirmedScrimConflict,
+  describeScrimConflict,
+  findConfirmedScrimConflict,
   scrimCollisionRange,
 } from "./scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
+import { SCRIM_PAST_GRACE_MS } from "./scrim-window";
+import { raceHook } from "./race-hook";
+import { scrimEndedMessage } from "./scrim-view";
 
-const PAST_GRACE_MS = 60 * 60 * 1000;
 const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000;
 export { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
 export const SCRIM_GUEST_LIMIT_PER_TEAM = 5;
@@ -32,6 +35,7 @@ type Db = Prisma.TransactionClient;
 type ScrimAccessRow = {
   id: string;
   seasonId: string;
+  scheduledAt: Date;
   hostTeamId: string;
   opponentTeamId: string | null;
   status: string;
@@ -49,10 +53,33 @@ export type ScrimMutationSummary = {
   scheduledAt: Date;
   bestOf: number;
   status: string;
-  hostTeam: { id: string; name: string };
-  opponentTeam: { id: string; name: string } | null;
+  hostTeam: { id: string; name: string; captainName: string };
+  opponentTeam: { id: string; name: string; captainName: string } | null;
   snapshottedParticipants: number;
   cancelledOpenOffers: number;
+  /**
+   * The OPEN times a booking withdrew (joinScrim cancels each booked team's
+   * other offers within four hours). Reported in the toast and the ping,
+   * because nothing else tells the captains their other times are gone.
+   */
+  withdrawnOffers: { teamId: string; scheduledAt: Date }[];
+  /** The captains the action pings (never the one who acted): every other
+   *  active captain for a new time, the posting captain for a claim. */
+  notifyUserIds: string[];
+};
+
+/** What cancelScrim reports so its action can tell the other side. */
+export type ScrimCancelSummary = {
+  id: string;
+  scheduledAt: Date;
+  hostTeamName: string;
+  opponentTeamName: string | null;
+  /** True when a captain of the scrim cancelled it (named in the ping);
+   *  false for an admin who captains neither side. */
+  byCaptain: boolean;
+  /** The captains who didn't cancel it. Empty when a captain withdraws
+   *  their own unclaimed time — nobody else has to do anything. */
+  notifyUserIds: string[];
 };
 
 export type ScrimManagementAccess = {
@@ -82,7 +109,7 @@ function assertSaneScrimTime(scheduledAt: Date, now = new Date()): void {
   if (!(scheduledAt instanceof Date) || !Number.isFinite(scheduledAt.getTime())) {
     throw new UserFacingError("Choose a valid scrim time");
   }
-  if (scheduledAt.getTime() < now.getTime() - PAST_GRACE_MS) {
+  if (scheduledAt.getTime() < now.getTime() - SCRIM_PAST_GRACE_MS) {
     throw new UserFacingError("That scrim time is in the past");
   }
   if (scheduledAt.getTime() > now.getTime() + MAX_AHEAD_MS) {
@@ -145,7 +172,12 @@ async function requireActiveScrimSeason(db: Db) {
 async function requireCaptainTeam(db: Db, viewerId: string, seasonId: string) {
   const team = await db.team.findUnique({
     where: { seasonId_captainId: { seasonId, captainId: viewerId } },
-    select: { id: true, name: true, withdrawn: true },
+    select: {
+      id: true,
+      name: true,
+      withdrawn: true,
+      captain: { select: { name: true } },
+    },
   });
   if (!team) {
     throw new UserFacingError("Only an active league team captain can do that");
@@ -153,7 +185,12 @@ async function requireCaptainTeam(db: Db, viewerId: string, seasonId: string) {
   if (team.withdrawn) {
     throw new UserFacingError("Withdrawn teams cannot schedule scrims");
   }
-  return team;
+  return {
+    id: team.id,
+    name: team.name,
+    withdrawn: team.withdrawn,
+    captainName: team.captain.name,
+  };
 }
 
 async function assertedAdmin(
@@ -199,7 +236,7 @@ async function assertTeamTimeAvailable(
       },
       select: { id: true },
     }),
-    hasConfirmedScrimConflict(db, {
+    findConfirmedScrimConflict(db, {
       seasonId,
       teamIds: [team.id],
       scheduledAt,
@@ -213,7 +250,7 @@ async function assertTeamTimeAvailable(
   }
   if (scrimConflict) {
     throw new UserFacingError(
-      `${team.name} already has a confirmed scrim within four hours of that time`,
+      `${team.name} already has ${describeScrimConflict(scrimConflict)}, within four hours of that time`,
     );
   }
 }
@@ -274,6 +311,7 @@ async function loadScrimAccessRow(
     select: {
       id: true,
       seasonId: true,
+      scheduledAt: true,
       hostTeamId: true,
       opponentTeamId: true,
       status: true,
@@ -339,6 +377,84 @@ async function managementAccess(
   };
 }
 
+/** A booked scrim an official fixture overrode (see yieldScrimsToOfficialFixture). */
+export type OfficialFixtureScrimClash = {
+  id: string;
+  scheduledAt: Date;
+  hostTeamName: string;
+  opponentTeamName: string | null;
+  /** Both sides' captains: the people told about it. */
+  captainIds: string[];
+  /** true: it was only booked and is now cancelled. false: already under
+   *  way (LIVE, games recorded), so it was kept and only reported. */
+  cancelled: boolean;
+};
+
+/** A clashing scrim changed between this transaction's read and its write. */
+export class ScrimClashChangedError extends Error {}
+
+/**
+ * League fixtures win. A playoff round is built for its night whether or not
+ * a team booked practice near it: this cancels every BOOKED (SCHEDULED) scrim
+ * of these teams within four hours of `scheduledAt`, and reports the ones
+ * already under way (LIVE — games recorded, which cancelling would throw
+ * away) without touching them. Callers announce both after their transaction
+ * commits.
+ *
+ * This used to be a refusal, and for the automatic round build that meant a
+ * booked practice silently stopped the next round (the final included) from
+ * existing until someone happened to cancel the scrim.
+ *
+ * Runs inside the caller's transaction and THROWS ScrimClashChangedError
+ * (never returns) if a scrim moved under it, so the caller rolls back.
+ */
+export async function yieldScrimsToOfficialFixture(
+  tx: Db,
+  options: { seasonId: string; teamIds: string[]; scheduledAt: Date | null },
+): Promise<OfficialFixtureScrimClash[]> {
+  if (!options.scheduledAt || options.teamIds.length === 0) return [];
+  const clashes = await tx.scrim.findMany({
+    where: {
+      seasonId: options.seasonId,
+      scheduledAt: scrimCollisionRange(options.scheduledAt),
+      status: { in: [SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
+      OR: [
+        { hostTeamId: { in: options.teamIds } },
+        { opponentTeamId: { in: options.teamIds } },
+      ],
+    },
+    orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      status: true,
+      scheduledAt: true,
+      hostTeam: { select: { name: true, captainId: true } },
+      opponentTeam: { select: { name: true, captainId: true } },
+    },
+  });
+  const booked = clashes
+    .filter((scrim) => scrim.status === SCRIM_STATUS.SCHEDULED)
+    .map((scrim) => scrim.id);
+  if (booked.length > 0) {
+    const cancelled = await tx.scrim.updateMany({
+      where: { id: { in: booked }, status: SCRIM_STATUS.SCHEDULED },
+      data: { status: SCRIM_STATUS.CANCELLED },
+    });
+    if (cancelled.count !== booked.length) throw new ScrimClashChangedError();
+  }
+  return clashes.map((scrim) => ({
+    id: scrim.id,
+    scheduledAt: scrim.scheduledAt,
+    hostTeamName: scrim.hostTeam.name,
+    opponentTeamName: scrim.opponentTeam?.name ?? null,
+    captainIds: [
+      scrim.hostTeam.captainId,
+      ...(scrim.opponentTeam ? [scrim.opponentTeam.captainId] : []),
+    ],
+    cancelled: scrim.status === SCRIM_STATUS.SCHEDULED,
+  }));
+}
+
 /** A captain posts one available scrim time for their current active team. */
 export async function createScrim(
   viewerId: string,
@@ -347,8 +463,9 @@ export async function createScrim(
 ): Promise<ScrimMutationSummary> {
   assertSaneScrimTime(scheduledAt);
   assertBestOf(bestOf);
+  let posted: Omit<ScrimMutationSummary, "notifyUserIds">;
   try {
-    return await prisma.$transaction(
+    posted = await prisma.$transaction(
       async (tx) => {
         assertSaneScrimTime(scheduledAt);
         const season = await requireActiveScrimSeason(tx);
@@ -378,10 +495,11 @@ export async function createScrim(
         }
         return {
           ...scrim,
-          hostTeam: { id: team.id, name: team.name },
+          hostTeam: { id: team.id, name: team.name, captainName: team.captainName },
           opponentTeam: null,
           snapshottedParticipants: participants.length,
           cancelledOpenOffers: 0,
+          withdrawnOffers: [],
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -394,6 +512,29 @@ export async function createScrim(
     }
     throw error;
   }
+  // The captains who could claim it: every other team still in the league.
+  // Read after the commit — a ping list has no business in the transaction.
+  // The scrim is posted by now, so a failed read costs the ping, never the
+  // booking: throwing here would tell the captain the post failed and send
+  // them to post the same time again.
+  let notifyUserIds: string[] = [];
+  try {
+    const otherCaptains = await prisma.team.findMany({
+      where: {
+        seasonId: posted.seasonId,
+        withdrawn: false,
+        id: { not: posted.hostTeam.id },
+      },
+      select: { captainId: true },
+    });
+    notifyUserIds = otherCaptains
+      .map((team) => team.captainId)
+      .filter((captainId) => captainId !== viewerId);
+  } catch {
+    // Never log the raw error: a database failure can carry a connection URL.
+    console.error("[scrims] SCRIM_PING_LIST_FAILED");
+  }
+  return { ...posted, notifyUserIds };
 }
 
 /** An opposing captain atomically claims an OPEN offer for their own team. */
@@ -417,7 +558,13 @@ export async function joinScrim(
             bestOf: true,
             status: true,
             hostTeam: {
-              select: { id: true, name: true, withdrawn: true },
+              select: {
+                id: true,
+                name: true,
+                withdrawn: true,
+                captainId: true,
+                captain: { select: { name: true } },
+              },
             },
           },
         });
@@ -497,6 +644,25 @@ export async function joinScrim(
           await tx.scrimParticipant.createMany({ data: participants });
         }
 
+        // Which offers the sweep below withdraws, so the toast and the
+        // posting captain's ping can say so. Same WHERE, same Serializable
+        // snapshot: the rows read here are the rows the sweep cancels (a
+        // rival that changes one aborts this transaction instead). An OPEN
+        // offer has no opponent, so its host is the team that posted it.
+        const withdrawing = await tx.scrim.findMany({
+          where: {
+            id: { not: offer.id },
+            seasonId: season.id,
+            status: SCRIM_STATUS.OPEN,
+            scheduledAt: scrimCollisionRange(offer.scheduledAt),
+            OR: [
+              { hostTeamId: { in: [offer.hostTeamId, joiningTeam.id] } },
+              { opponentTeamId: { in: [offer.hostTeamId, joiningTeam.id] } },
+            ],
+          },
+          orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+          select: { hostTeamId: true, scheduledAt: true },
+        });
         const cancelled = await tx.scrim.updateMany({
           where: {
             id: { not: offer.id },
@@ -517,10 +683,23 @@ export async function joinScrim(
           scheduledAt: offer.scheduledAt,
           bestOf: offer.bestOf,
           status: SCRIM_STATUS.SCHEDULED,
-          hostTeam: { id: offer.hostTeam.id, name: offer.hostTeam.name },
-          opponentTeam: { id: joiningTeam.id, name: joiningTeam.name },
+          hostTeam: {
+            id: offer.hostTeam.id,
+            name: offer.hostTeam.name,
+            captainName: offer.hostTeam.captain.name,
+          },
+          opponentTeam: {
+            id: joiningTeam.id,
+            name: joiningTeam.name,
+            captainName: joiningTeam.captainName,
+          },
           snapshottedParticipants: participants.length,
           cancelledOpenOffers: cancelled.count,
+          withdrawnOffers: withdrawing.map((withdrawn) => ({
+            teamId: withdrawn.hostTeamId,
+            scheduledAt: withdrawn.scheduledAt,
+          })),
+          notifyUserIds: [offer.hostTeam.captainId],
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -545,9 +724,9 @@ export async function cancelScrim(
   viewerId: string,
   isAdmin: boolean,
   scrimId: string,
-): Promise<void> {
+): Promise<ScrimCancelSummary> {
   try {
-    await prisma.$transaction(
+    return await prisma.$transaction(
       async (tx) => {
         const season = await requireActiveScrimSeason(tx);
         const [scrim, admin] = await Promise.all([
@@ -584,6 +763,18 @@ export async function cancelScrim(
         if (cancelled.count !== 1) {
           throw new UserFacingError("That scrim can no longer be cancelled");
         }
+        const captainIds = [
+          scrim.hostTeam.captainId,
+          ...(scrim.opponentTeam ? [scrim.opponentTeam.captainId] : []),
+        ];
+        return {
+          id: scrim.id,
+          scheduledAt: scrim.scheduledAt,
+          hostTeamName: scrim.hostTeam.name,
+          opponentTeamName: scrim.opponentTeam?.name ?? null,
+          byCaptain: isCaptain,
+          notifyUserIds: captainIds.filter((id) => id !== viewerId),
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -595,6 +786,103 @@ export async function cancelScrim(
     }
     throw error;
   }
+}
+
+/**
+ * Either captain (or a verified admin) calls a half-played series at its
+ * current score: a best-of-3 abandoned at 1–0 because someone had to leave
+ * otherwise sat LIVE forever, since a live scrim can't be cancelled. The
+ * leader wins; a level score ends as a draw with no winner.
+ *
+ * ONE guarded claim is the whole write. It re-asserts LIVE and the exact
+ * score this request judged, so a game recorded in the gap (an import or the
+ * auto-fetch) wins and the captain is told the new score, instead of the
+ * series being frozen at a stale one.
+ */
+export async function endScrimSeries(
+  viewerId: string,
+  isAdmin: boolean,
+  scrimId: string,
+): Promise<{
+  message: string;
+  hostScore: number;
+  awayScore: number;
+  winnerTeamId: string | null;
+}> {
+  const [scrim, admin] = await Promise.all([
+    prisma.scrim.findUnique({
+      where: { id: scrimId },
+      select: {
+        id: true,
+        status: true,
+        hostScore: true,
+        awayScore: true,
+        hostTeamId: true,
+        opponentTeamId: true,
+        hostTeam: { select: { captainId: true, name: true } },
+        opponentTeam: { select: { captainId: true, name: true } },
+      },
+    }),
+    assertedAdmin(prisma, viewerId, isAdmin),
+  ]);
+  if (!scrim) throw new UserFacingError("Scrim not found");
+  const isCaptain =
+    scrim.hostTeam.captainId === viewerId ||
+    scrim.opponentTeam?.captainId === viewerId;
+  if (!isCaptain && !admin) {
+    throw new UserFacingError(
+      "Only either team's captain or an admin can end this series",
+    );
+  }
+  if (scrim.status !== SCRIM_STATUS.LIVE || !scrim.opponentTeam) {
+    throw new UserFacingError(
+      scrim.status === SCRIM_STATUS.COMPLETED
+        ? "This scrim series is already final"
+        : "Only a series with games recorded can be ended early — cancel an unplayed scrim instead",
+    );
+  }
+  const { hostScore, awayScore } = scrim;
+  const winnerTeamId =
+    hostScore > awayScore
+      ? scrim.hostTeamId
+      : awayScore > hostScore
+        ? scrim.opponentTeamId
+        : null;
+
+  await raceHook("scrim.endSeries.beforeClaim");
+  const ended = await prisma.scrim.updateMany({
+    where: {
+      id: scrim.id,
+      status: SCRIM_STATUS.LIVE,
+      hostScore: scrim.hostScore,
+      awayScore: scrim.awayScore,
+    },
+    data: { status: SCRIM_STATUS.COMPLETED, winnerTeamId },
+  });
+  if (ended.count === 0) {
+    const now = await prisma.scrim.findUnique({
+      where: { id: scrim.id },
+      select: { status: true, hostScore: true, awayScore: true },
+    });
+    throw new UserFacingError(
+      now?.status === SCRIM_STATUS.COMPLETED
+        ? `This series just finished at ${now.hostScore}–${now.awayScore} — nothing to end`
+        : now?.status === SCRIM_STATUS.LIVE
+          ? `A game was just recorded and the score is now ${now.hostScore}–${now.awayScore} — check it, then end the series if you still want to`
+          : "The recorded games just changed — reload before ending this series",
+    );
+  }
+  return {
+    message: scrimEndedMessage({
+      hostTeamName: scrim.hostTeam.name,
+      awayTeamName: scrim.opponentTeam.name,
+      hostScore,
+      awayScore,
+    }),
+    hostScore,
+    awayScore,
+    winnerTeamId,
+  };
 }
 
 /** Add one account-only, per-scrim guest to the viewer's participating side. */

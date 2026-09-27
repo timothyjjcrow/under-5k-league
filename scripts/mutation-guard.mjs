@@ -155,6 +155,14 @@ const EQUIVALENT = new Set([
   // deleting the copied status predicate cannot make a stale cancellation
   // commit. The predicate remains explicit state-machine documentation.
   "src/lib/scrim-service.ts::cancelScrim::status#1",
+  // yieldScrimsToOfficialFixture runs inside the playoff build's SERIALIZABLE
+  // transaction and cancels exactly the ids it just read as SCHEDULED there.
+  // A rival that moves one of them (a game import making it LIVE, a captain
+  // cancelling) either commits before the snapshot, so the read never selects
+  // it, or after it, so the UPDATE of that row fails with P2034 whether or not
+  // it carries the status predicate. SQLite serializes the whole transaction.
+  // The count check stays as the explicit rollback if that ever changes.
+  "src/lib/scrim-service.ts::yieldScrimsToOfficialFixture::status#1",
   // respondReschedule and cancelReschedule now read the PENDING request and
   // conditionally write that same row inside one SERIALIZABLE transaction.
   // Their same-row write conflicts make the copied `status: PENDING` WHERE

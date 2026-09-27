@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
@@ -17,6 +17,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { generateSchedule } from "@/app/actions/admin";
+import { sendDiscordMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 import {
   DRAFT_STATUS,
@@ -65,6 +66,21 @@ async function confirmedScrim(options: {
   });
 }
 
+async function linkDiscord(userId: string, discordId: string) {
+  await prisma.user.update({ where: { id: userId }, data: { discordId } });
+}
+
+/** The scrim-override announcements sent so far: [content, mentions]. */
+function scrimYieldSends() {
+  return vi
+    .mocked(sendDiscordMessage)
+    .mock.calls.filter(([content]) => content.includes(" scrim on "));
+}
+
+beforeEach(() => {
+  vi.mocked(sendDiscordMessage).mockClear();
+});
+
 async function completedRegularSeason(firstMatchNight: Date) {
   const season = await makeSeason({
     status: SEASON_STATUS.REGULAR_SEASON,
@@ -112,7 +128,13 @@ describe("official fixture creation respects confirmed scrims", () => {
       }),
     );
 
-    expect(result?.error).toMatch(/booked scrim within four hours/i);
+    // The refusal names the booking to cancel, not just "a booked scrim".
+    expect(result?.error).toContain(
+      `within four hours of the ${teams[0].name} vs ${teams[1].name} scrim on `,
+    );
+    expect(result?.error).toMatch(
+      /\. Cancel that scrim on its page, then generate the schedule again\.$/,
+    );
     const after = await prisma.match.findMany({
       where: { seasonId: season.id },
       orderBy: { id: "asc" },
@@ -127,7 +149,7 @@ describe("official fixture creation respects confirmed scrims", () => {
     ).toBeNull();
   });
 
-  it("refuses first-round playoff creation without tearing down league state", async () => {
+  it("builds the first playoff round anyway and cancels the clashing booked scrim", async () => {
     const firstNight = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
     const { season, teams, matches } = await completedRegularSeason(firstNight);
     const firstPlayoffWeek = Math.max(...matches.map((match) => match.week)) + 1;
@@ -136,6 +158,8 @@ describe("official fixture creation respects confirmed scrims", () => {
       firstPlayoffWeek,
       Date.now(),
     );
+    await linkDiscord(teams[0].captainId, "900000000000000001");
+    await linkDiscord(teams[1].captainId, "900000000000000002");
     const scrim = await confirmedScrim({
       seasonId: season.id,
       hostTeamId: teams[0].id,
@@ -144,9 +168,9 @@ describe("official fixture creation respects confirmed scrims", () => {
       scheduledAt: playoffNight,
     });
 
-    await expect(createPlayoffBracket(season.id)).rejects.toThrow(
-      /playoff team has a booked scrim within four hours/i,
-    );
+    const outcome = await createPlayoffBracket(season.id);
+
+    // League fixtures win: the bracket exists and the practice booking is off.
     expect(
       await prisma.match.count({
         where: {
@@ -154,19 +178,94 @@ describe("official fixture creation respects confirmed scrims", () => {
           phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
         },
       }),
-    ).toBe(0);
+    ).toBe(2);
     expect(
       (await prisma.season.findUniqueOrThrow({ where: { id: season.id } })).status,
-    ).toBe(SEASON_STATUS.REGULAR_SEASON);
-
-    await prisma.scrim.update({
-      where: { id: scrim.id },
-      data: { status: SCRIM_STATUS.CANCELLED },
-    });
-    await expect(createPlayoffBracket(season.id)).resolves.toBeDefined();
+    ).toBe(SEASON_STATUS.PLAYOFFS);
+    expect(
+      (await prisma.scrim.findUniqueOrThrow({ where: { id: scrim.id } })).status,
+    ).toBe(SCRIM_STATUS.CANCELLED);
+    // The admin's toast names the scrim…
+    expect(outcome.scrimNotes).toHaveLength(1);
+    expect(outcome.scrimNotes[0]).toContain(
+      `Cancelled the ${teams[0].name} vs ${teams[1].name} scrim on `,
+    );
+    // …and both of its captains are pinged, nobody else.
+    const sends = scrimYieldSends();
+    expect(sends).toHaveLength(1);
+    expect(sends[0][0]).toContain("was cancelled");
+    expect([...(sends[0][1]?.users ?? [])].sort()).toEqual([
+      "900000000000000001",
+      "900000000000000002",
+    ]);
+    expect(
+      await prisma.adminAction.findFirst({
+        where: { seasonId: season.id, action: "yieldScrimsToPlayoffs" },
+      }),
+    ).toMatchObject({ summary: outcome.scrimNotes[0] });
   });
 
-  it("leaves an advancing round retryable until its live scrim conflict clears", async () => {
+  it("builds the next round when a clashing scrim is booked, cancelling it", async () => {
+    const firstNight = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    const { season, teams } = await completedRegularSeason(firstNight);
+    await createPlayoffBracket(season.id);
+    const semifinals = await prisma.match.findMany({
+      where: { seasonId: season.id, bracketSlot: { startsWith: "R0M" } },
+      orderBy: { bracketSlot: "asc" },
+    });
+    expect(semifinals).toHaveLength(2);
+    for (const semifinal of semifinals) await recordMatch(semifinal.id, 2, 0);
+
+    const finalWeek = Math.max(...semifinals.map((match) => match.week)) + 1;
+    const finalNight = upcomingMatchNight(firstNight, finalWeek, Date.now());
+    const finalistIds = semifinals.map((match) => match.homeTeamId);
+    const host = teams.find((team) => team.id === finalistIds[0])!;
+    const practicePartner = teams.find((team) => team.id !== finalistIds[0])!;
+    const booked = await confirmedScrim({
+      seasonId: season.id,
+      hostTeamId: host.id,
+      opponentTeamId: practicePartner.id,
+      createdById: host.captainId,
+      scheduledAt: finalNight,
+    });
+    // A booking of the same team at a different night is not in the way.
+    const later = await confirmedScrim({
+      seasonId: season.id,
+      hostTeamId: host.id,
+      opponentTeamId: practicePartner.id,
+      createdById: host.captainId,
+      scheduledAt: new Date(finalNight.getTime() + 5 * 60 * 60 * 1000),
+    });
+
+    await expect(advancePlayoffBracket(season.id)).resolves.toBe(true);
+    expect(
+      await prisma.match.count({
+        where: { seasonId: season.id, bracketSlot: { startsWith: "R1M" } },
+      }),
+    ).toBe(1);
+    const statuses = new Map(
+      (
+        await prisma.scrim.findMany({
+          where: { id: { in: [booked.id, later.id] } },
+          select: { id: true, status: true },
+        })
+      ).map((row) => [row.id, row.status]),
+    );
+    expect(statuses.get(booked.id)).toBe(SCRIM_STATUS.CANCELLED);
+    expect(statuses.get(later.id)).toBe(SCRIM_STATUS.SCHEDULED);
+    const sends = scrimYieldSends();
+    expect(sends).toHaveLength(1);
+    expect(sends[0][0]).toContain("the grand final");
+    const log = await prisma.adminAction.findFirstOrThrow({
+      where: { seasonId: season.id, action: "yieldScrimsToPlayoffs" },
+    });
+    expect(log.actorName).toBe("League automation");
+    expect(log.summary).toContain(
+      `Cancelled the ${host.name} vs ${practicePartner.name} scrim on `,
+    );
+  });
+
+  it("builds the next round past a live scrim, keeping its games and reporting it", async () => {
     const firstNight = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
     const { season, teams } = await completedRegularSeason(firstNight);
     await createPlayoffBracket(season.id);
@@ -189,27 +288,27 @@ describe("official fixture creation respects confirmed scrims", () => {
       status: SCRIM_STATUS.LIVE,
     });
 
-    await expect(advancePlayoffBracket(season.id)).resolves.toBe(false);
-    expect(
-      await prisma.match.count({
-        where: { seasonId: season.id, bracketSlot: { startsWith: "R1M" } },
-      }),
-    ).toBe(0);
-    expect(
-      await prisma.setting.findUnique({
-        where: { key: `playoffRoundBuilt:${season.id}:1` },
-      }),
-    ).toBeNull();
-
-    await prisma.scrim.update({
-      where: { id: scrim.id },
-      data: { status: SCRIM_STATUS.COMPLETED },
-    });
     await expect(advancePlayoffBracket(season.id)).resolves.toBe(true);
     expect(
       await prisma.match.count({
         where: { seasonId: season.id, bracketSlot: { startsWith: "R1M" } },
       }),
     ).toBe(1);
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `playoffRoundBuilt:${season.id}:1` },
+      }),
+    ).not.toBeNull();
+    expect(
+      (await prisma.scrim.findUniqueOrThrow({ where: { id: scrim.id } })).status,
+    ).toBe(SCRIM_STATUS.LIVE);
+    const sends = scrimYieldSends();
+    expect(sends).toHaveLength(1);
+    expect(sends[0][0]).toContain("is still in progress");
+    expect(sends[0][0]).toContain(`/scrims/${scrim.id}`);
+
+    // Idempotent: a later reconciler pass neither rebuilds nor re-announces.
+    await expect(advancePlayoffBracket(season.id)).resolves.toBe(false);
+    expect(scrimYieldSends()).toHaveLength(1);
   });
 });

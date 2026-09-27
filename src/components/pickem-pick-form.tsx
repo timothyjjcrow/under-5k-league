@@ -1,11 +1,34 @@
+import Link from "next/link";
+import type { ReactNode } from "react";
 import { savePrediction } from "@/app/actions/pickem";
 import { ActionForm } from "@/components/action-form";
 import { PickemSubmitButton } from "@/components/pickem-submit-button";
-import { TeamCrest } from "@/components/ui";
+import { buttonClasses, TeamCrest } from "@/components/ui";
 import type { PickemControl } from "@/lib/pickem";
 import { cn } from "@/lib/utils";
 
 export type PickemSide = { id: string; name: string; logoUrl: string | null };
+
+/**
+ * The two sides of a fixture: two full-width rows until the form itself is
+ * 26rem wide, then side by side. A container query, not a viewport
+ * breakpoint: the same form sits in a phone-width card, in /pickem's two-up
+ * grid and in the wide match preview, and side by side in anything narrower
+ * cut the team names to "Roshan's …", the one thing a picker has to read.
+ */
+function SidePair({ home, away }: { home: ReactNode; away: ReactNode }) {
+  return (
+    <div className="@container/pick min-w-0">
+      <div className="flex flex-col gap-1 @min-[26rem]/pick:flex-row @min-[26rem]/pick:items-stretch @min-[26rem]/pick:gap-2">
+        <div className="min-w-0 @min-[26rem]/pick:flex-1">{home}</div>
+        <span className="shrink-0 self-center text-[11px] leading-none text-muted @min-[26rem]/pick:text-xs">
+          vs
+        </span>
+        <div className="min-w-0 @min-[26rem]/pick:flex-1">{away}</div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * THE pick'em control: both sides of one fixture as a pressed/unpressed pair
@@ -19,6 +42,11 @@ export type PickemSide = { id: string; name: string; logoUrl: string | null };
  * client-clock kickoff. Deciding WHETHER to render it is the caller's job,
  * via pickemControlFor or /pickem's own partition.
  *
+ * `signInHref` is for signed-out viewers (only /pickem shows them fixtures):
+ * the pair becomes the matchup as text plus ONE sign-in button that comes
+ * back here. Two greyed-out team buttons that did nothing on tap read as
+ * broken, on the phone a Discord reminder link usually opens.
+ *
  * `compact` drops the crests for fixture cards that already show them large
  * right above the buttons.
  */
@@ -28,7 +56,7 @@ export function PickemPickForm({
   home,
   away,
   pickedTeamId,
-  canSubmit,
+  signInHref,
   locksAt,
   compact = false,
 }: {
@@ -38,32 +66,60 @@ export function PickemPickForm({
   home: PickemSide;
   away: PickemSide;
   pickedTeamId: string | null;
-  canSubmit: boolean;
+  /** Set for a signed-out viewer: the sign-in link that returns to this page. */
+  signInHref?: string;
   /** Epoch milliseconds; null means time TBD and status controls the lock. */
   locksAt: number | null;
   compact?: boolean;
 }) {
+  const crest = (team: PickemSide) =>
+    compact ? null : (
+      <TeamCrest
+        name={team.name}
+        seed={team.id}
+        logoUrl={team.logoUrl}
+        size={20}
+        className="shrink-0 rounded"
+      />
+    );
+
+  if (signInHref) {
+    const label = (team: PickemSide) => (
+      <span className="flex min-w-0 items-center justify-center gap-2 text-sm font-medium">
+        {crest(team)}
+        <span className="min-w-0 [overflow-wrap:anywhere]">{team.name}</span>
+      </span>
+    );
+    return (
+      <div className="min-w-0 space-y-2.5">
+        <SidePair home={label(home)} away={label(away)} />
+        <Link
+          href={signInHref}
+          className={buttonClasses("secondary", "sm", "w-full")}
+        >
+          Sign in with Steam to pick
+          <span className="sr-only">
+            : {roundLabel}, {home.name} versus {away.name}
+          </span>
+        </Link>
+      </div>
+    );
+  }
+
   const side = (team: PickemSide) => {
     const mine = pickedTeamId === team.id;
     return (
       <PickemSubmitButton
         selected={mine}
-        canSubmit={canSubmit}
         locksAt={locksAt}
         name="pickedTeamId"
         value={team.id}
       >
         <span className="flex min-w-0 items-center gap-2">
-          {compact ? null : (
-            <TeamCrest
-              name={team.name}
-              seed={team.id}
-              logoUrl={team.logoUrl}
-              size={20}
-              className="rounded"
-            />
-          )}
-          <span className="truncate">{team.name}</span>
+          {crest(team)}
+          <span className="min-w-0 leading-tight [overflow-wrap:anywhere]">
+            {team.name}
+          </span>
           {mine ? (
             <>
               <span aria-hidden>✓</span>
@@ -84,11 +140,7 @@ export function PickemPickForm({
         <legend className="sr-only">
           Pick the winner — {roundLabel}: {home.name} versus {away.name}
         </legend>
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">{side(home)}</div>
-          <span className="shrink-0 text-xs text-muted">vs</span>
-          <div className="min-w-0 flex-1">{side(away)}</div>
-        </div>
+        <SidePair home={side(home)} away={side(away)} />
       </fieldset>
     </ActionForm>
   );
@@ -102,7 +154,10 @@ export function PickemPickForm({
  *
  * Open: a small label plus the two-button form. Locked: the viewer's own pick
  * as one quiet line, and deliberately nothing else; the community split is
- * /pickem's locked review, not a second copy on every card.
+ * /pickem's locked review, not a second copy on every card. Once the match is
+ * decided the line says how the pick went ("✓", "✗", void), and a caller that
+ * has every pick on the match (the finished match page) adds how many called
+ * it.
  */
 export function PickemTray({
   control,
@@ -111,6 +166,7 @@ export function PickemTray({
   home,
   away,
   locksAt,
+  called,
   className,
 }: {
   control: PickemControl;
@@ -120,6 +176,8 @@ export function PickemTray({
   home: PickemSide;
   away: PickemSide;
   locksAt: number | null;
+  /** A decided match: how many of its pickers named the winner. */
+  called?: { called: number; total: number } | null;
   className?: string;
 }) {
   if (control.kind === "locked") {
@@ -130,7 +188,28 @@ export function PickemTray({
         <span className="font-medium text-fg [overflow-wrap:anywhere]">
           {picked.name}
         </span>{" "}
-        · locked
+        {control.result === "right" ? (
+          <>
+            <span aria-hidden className="font-semibold text-success">
+              ✓
+            </span>
+            <span className="sr-only">, right</span>
+          </>
+        ) : control.result === "wrong" ? (
+          <>
+            <span aria-hidden className="font-semibold text-danger-soft">
+              ✗
+            </span>
+            <span className="sr-only">, wrong</span>
+          </>
+        ) : control.result === "void" ? (
+          "· void (draw or no-contest)"
+        ) : (
+          "· locked"
+        )}
+        {control.result && control.result !== "void" && called
+          ? ` (${called.called} of ${called.total} called it)`
+          : null}
       </p>
     );
   }
@@ -152,7 +231,6 @@ export function PickemTray({
         home={home}
         away={away}
         pickedTeamId={control.pickedTeamId}
-        canSubmit
         locksAt={locksAt}
         compact
       />
