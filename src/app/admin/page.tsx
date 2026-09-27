@@ -191,7 +191,7 @@ import {
 import { MatchImportControls } from "@/components/match-import-controls";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { AdminPlayerRankEditor } from "@/components/admin-player-rank-editor";
-import { TEAM_LOGO_URL_MAX_LENGTH } from "@/lib/team-logo";
+import { TeamIdentityForm } from "@/components/team-identity-form";
 import {
   Avatar,
   Badge,
@@ -1995,43 +1995,17 @@ function CaptainControls({
                         <summary className="cursor-pointer text-xs text-muted hover:text-fg">
                           ✎ Edit team
                         </summary>
-                        <ActionForm
-                          action={renameTeam}
-                          className="mt-1.5 grid max-w-md grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]"
-                          hidden={{
-                            teamId: t.id,
-                            expectedActiveSeasonId: season.id,
-                          }}
-                        >
-                          <input
-                            name="name"
-                            type="text"
-                            maxLength={60}
-                            defaultValue={t.name}
-                            aria-label={`Name for ${t.name}`}
-                            className="h-8 min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                        <div className="mt-1.5">
+                          <TeamIdentityForm
+                            key={`${t.name}|${t.logoUrl ?? ""}`}
+                            action={renameTeam}
+                            teamId={t.id}
+                            name={t.name}
+                            logoUrl={t.logoUrl}
+                            hidden={{ expectedActiveSeasonId: season.id }}
+                            note="Captains can also change this themselves on their team page."
                           />
-                          <input
-                            name="logoUrl"
-                            type="text"
-                            inputMode="url"
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            maxLength={TEAM_LOGO_URL_MAX_LENGTH}
-                            defaultValue={t.logoUrl ?? ""}
-                            placeholder="https://…/logo.png"
-                            aria-label={`Logo URL for ${t.name}`}
-                            className="h-8 min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-sm sm:col-span-2"
-                          />
-                          <p className="text-xs text-muted sm:col-span-2">
-                            Paste an HTTPS image URL. Leave it blank to use the
-                            generated initials crest.
-                          </p>
-                          <SubmitButton variant="secondary" size="sm">
-                            Save team
-                          </SubmitButton>
-                        </ActionForm>
+                        </div>
                       </details>
                     ) : null}
                     {season.status !== SEASON_STATUS.COMPLETE && captainReg.get(t.captainId) ? (

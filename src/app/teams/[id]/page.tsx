@@ -38,6 +38,9 @@ import { draftSetupOpen } from "@/lib/draft-setup";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { getTeamJersey } from "@/lib/team-jerseys";
 import { TeamJerseyPreview } from "@/components/team-jersey-preview";
+import { TeamIdentityForm } from "@/components/team-identity-form";
+import { editTeamIdentity } from "@/app/actions/teams";
+import { canEditTeamIdentity } from "@/lib/team-identity";
 import { canViewLeagueContact } from "@/lib/visibility";
 import {
   REGISTRATION_STATUS,
@@ -110,6 +113,14 @@ export default async function TeamPage({
     ? getTeamJersey(team.members.map((member) => member.user))
     : null;
   const viewer = await getSessionUser();
+  // The captain (or an admin) edits the team's name and logo right here, all
+  // season until it is complete; the service enforces the same rule on save.
+  const canEditTeam = canEditTeamIdentity({
+    viewer,
+    captainId: team.captainId,
+    seasonIsActive: team.season.isActive,
+    seasonStatus: team.season.status,
+  });
 
   const memberIds = team.members.map((m) => m.userId);
   const shouldProjectBudget =
@@ -450,6 +461,31 @@ export default async function TeamPage({
             </div>
           </div>
         </div>
+        {canEditTeam ? (
+          <details className="mt-3 rounded-[var(--radius)] border border-line bg-surface px-4">
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-muted hover:text-fg">
+              ✎ Edit team name and logo
+            </summary>
+            <div className="space-y-3 pb-4">
+              <p className="text-xs text-muted">
+                Changes save right away and are posted in the league Discord.
+              </p>
+              <TeamIdentityForm
+                // Remount on a saved change so the fields start from it.
+                key={`${team.name}|${team.logoUrl ?? ""}`}
+                action={editTeamIdentity}
+                teamId={team.id}
+                name={team.name}
+                logoUrl={team.logoUrl}
+                note={
+                  jersey
+                    ? "This team's Fourthwall jerseys stay linked when it is renamed."
+                    : undefined
+                }
+              />
+            </div>
+          </details>
+        ) : null}
       </div>
 
       {team.withdrawn ? (

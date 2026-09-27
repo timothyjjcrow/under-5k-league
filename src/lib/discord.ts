@@ -290,6 +290,24 @@ export function teamWithdrewMessage(
   return `🏳️ **${name(teamName)}** have withdrawn from the season — their ${forfeited} remaining fixture(s) are forfeited to the opponents.`;
 }
 
+/** A team's captain or an admin changed its name or logo. A broadcast with no
+ *  mentions: nobody has to act on it, it keeps the channel's team names in
+ *  step with the site. */
+export function teamIdentityChangedMessage(m: {
+  teamId: string;
+  previousName: string;
+  name: string;
+  nameChanged: boolean;
+  logoChanged: boolean;
+}): string {
+  const link = `<${resolveSiteUrl()}/teams/${encodeURIComponent(m.teamId)}>`;
+  if (m.nameChanged) {
+    const logo = m.logoChanged ? ", with a new logo" : "";
+    return `✏️ **${name(m.previousName)}** is now **${name(m.name)}**${logo}: ${link}`;
+  }
+  return `🎨 **${name(m.name)}** has a new logo: ${link}`;
+}
+
 /** `<@&id>` prefix, or nothing when the league hasn't set a ping role. */
 export function rolePrefix(roleId: string | null | undefined): string {
   return roleId ? `<@&${roleId}> ` : "";

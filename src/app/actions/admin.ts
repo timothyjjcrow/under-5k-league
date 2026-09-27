@@ -112,6 +112,7 @@ import {
   freeAgentSignedMessage,
   playerReleasedMessage,
   teamWithdrewMessage,
+  teamIdentityChangedMessage,
   playoffsStartedMessage,
   playoffsReturnedToRegularMessage,
   standinRemovedMessage,
@@ -169,7 +170,8 @@ import {
 } from "@/lib/season-phase-policy";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
-import { normalizeTeamLogoUrl } from "@/lib/team-logo";
+import { saveTeamIdentity } from "@/lib/team-identity-service";
+import { teamIdentitySummary } from "@/lib/team-identity";
 import { hasConfirmedScrimConflict } from "@/lib/scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
@@ -1555,13 +1557,17 @@ export async function transferCaptaincy(
   };
 }
 
-/** Update a team's public identity (captains can't edit it themselves). */
+/**
+ * Update any team's public identity from /admin. Captains edit their own team
+ * from its page (actions/teams.ts); both go through saveTeamIdentity.
+ */
 export async function renameTeam(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -1574,64 +1580,26 @@ export async function renameTeam(
         "The active season changed while this page was open — reload before editing a team.",
     };
   }
-  const teamId = str(formData, "teamId");
-  const name = str(formData, "name").trim().slice(0, 60);
-  if (!name) return { error: "Enter a team name" };
-  const logo = formData.has("logoUrl")
-    ? normalizeTeamLogoUrl(str(formData, "logoUrl"))
-    : null;
-  if (logo && "error" in logo) return logo;
-  try {
-    await prisma.$transaction(
-      async (tx) => {
-        const currentSeason = await tx.season.findUnique({
-          where: { id: expectedActiveSeasonId },
-          select: { isActive: true, status: true },
-        });
-        if (!currentSeason?.isActive) throw new ActiveSeasonChangedError();
-        if (currentSeason.status === SEASON_STATUS.COMPLETE) {
-          throw new DraftSetupLockedError(
-            "The season is complete — team details are historical and read-only.",
-          );
-        }
-        const changed = await tx.team.updateMany({
-          where: { id: teamId, seasonId: expectedActiveSeasonId },
-          data: {
-            name,
-            ...(logo ? { logoUrl: logo.logoUrl } : {}),
-          },
-        });
-        if (changed.count === 0) throw new CaptainStateChangedError();
-        // Record snapshots embed team names; fence older in-flight refreshes.
-        await stampResultChange(tx);
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-  } catch (error) {
-    if (error instanceof DraftSetupLockedError) return { error: error.message };
-    if (error instanceof CaptainStateChangedError)
-      return { error: "Unknown team" };
-    if (
-      error instanceof ActiveSeasonChangedError ||
-      isSerializationConflict(error)
-    ) {
-      return {
-        error: "The season or team just changed — reload and try again.",
-      };
-    }
-    throw error;
+  const saved = await saveTeamIdentity({
+    editor: { userId: actor.id, isAdmin: true },
+    teamId: str(formData, "teamId"),
+    expectedSeasonId: expectedActiveSeasonId,
+    name: str(formData, "name"),
+    logoUrl: formData.has("logoUrl") ? str(formData, "logoUrl") : undefined,
+  });
+  if (!saved.ok) return { error: saved.error };
+  if (saved.nameChanged || saved.logoChanged) {
+    await logAdminAction({
+      action: "renameTeam",
+      summary: teamIdentitySummary(saved),
+      seasonId: saved.seasonId,
+    });
+    await sendDiscordMessage(teamIdentityChangedMessage(saved));
   }
   // The record-book cache embeds matchup team identity under the shared games
   // tag, so an edit must expire that dependency as well as the page shell.
-  await logAdminAction({
-    action: "renameTeam",
-    summary: logo
-      ? `Updated team ${teamId} identity to "${name}" (${logo.logoUrl ? "custom logo" : "generated crest"})`
-      : `Renamed team ${teamId} to "${name}"`,
-    seasonId: season.id,
-  });
   refreshGames();
-  return { message: `Saved ${name}` };
+  return { message: `Saved ${saved.name}` };
 }
 
 /**

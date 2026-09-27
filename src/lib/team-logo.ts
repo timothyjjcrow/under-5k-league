@@ -21,7 +21,7 @@ function isDiscordAttachment(url: URL): boolean {
 }
 
 /**
- * Normalize an admin-supplied team logo location.
+ * Normalize a team logo location typed by an admin or the team's captain.
  *
  * Production pages are HTTPS, so accepting HTTP would create a logo that the
  * browser blocks as mixed content. Root-relative paths remain useful for
