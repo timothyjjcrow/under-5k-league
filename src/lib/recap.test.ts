@@ -52,6 +52,32 @@ describe("summarizeRecapGames", () => {
     expect(summary.awardGames).toHaveLength(2);
   });
 
+  it("passes the extended stat fields the MVP's points read into award lines", () => {
+    const box = JSON.parse(completeBox(1)) as Record<string, unknown>[];
+    box[0] = {
+      ...box[0],
+      lastHits: 210,
+      denies: 12,
+      heroDamage: 18000,
+      towerDamage: 2500,
+      heroHealing: 6000,
+    };
+    const summary = summarizeRecapGames([
+      game({ players: JSON.stringify(box) }),
+    ]);
+
+    expect(summary.awardGames[0].lines[0]).toMatchObject({
+      userId: "user-0",
+      lastHits: 210,
+      denies: 12,
+      heroDamage: 18000,
+      towerDamage: 2500,
+      heroHealing: 6000,
+    });
+    // A legacy line without those fields still reads as "unknown", not 0.
+    expect(summary.awardGames[0].lines[1].heroHealing).toBeNull();
+  });
+
   it("excludes partial box scores from public awards without hiding imports", () => {
     const summary = summarizeRecapGames([
       game({

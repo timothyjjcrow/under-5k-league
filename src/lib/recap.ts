@@ -56,6 +56,13 @@ export function summarizeRecapGames(
         assists: player.assists,
         netWorth: player.netWorth,
         gpm: player.gpm,
+        // The rest of the line the MVP's points read (Player of the Week
+        // scoring) — dropping them would under-score supports and offlaners.
+        lastHits: player.lastHits,
+        denies: player.denies,
+        heroDamage: player.heroDamage,
+        towerDamage: player.towerDamage,
+        heroHealing: player.heroHealing,
       };
     });
     trustedStatGames++;
