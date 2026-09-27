@@ -127,8 +127,8 @@ jobs:
         run: npm run lint -- --max-warnings=0
       - name: Type check
         run: npx tsc --noEmit
-      - name: Shared release and regional provisioning guards
-        run: npm run test:release && npm run test:provisioning
+      - name: Shared release, regional provisioning and script tool guards
+        run: npm run test:release && npm run test:provisioning && npm run test:scripts
       - name: Validate European scheduler artifacts
         run: npm run scheduler:europe:check && npm run scheduler:europe:check:paused
       - name: Validate active scheduler artifact

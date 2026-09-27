@@ -313,7 +313,7 @@ has to justify it.
   own tests. Advisory, not a CI gate (test hooks such as `setRaceHook` are
   meant to be test-only). Run it after replacing a lib function and delete the
   old one WITH its tests, so the suite stops vouching for code the site never
-  runs.
+  runs. The script's own tests run in CI via `npm run test:scripts`.
 - `npm run test:e2e:mid` is the MID-SEASON browser suite
   (`playwright.midseason.config.ts`, specs in `e2e-mid/`): its own
   `prisma/e2e-fixture.db` (name satisfies seed-fixture's guard) seeded to

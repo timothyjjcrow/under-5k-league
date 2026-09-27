@@ -55,6 +55,7 @@
     "test:e2e:mid": "playwright test --config playwright.midseason.config.ts",
     "test:e2e:postseason": "playwright test --config playwright.postseason.config.ts",
     "test:release": "node --test scripts/shared-release.test.mjs",
+    "test:scripts": "node --test scripts/unused-exports.test.mjs",
     "release:both": "node scripts/release-both.mjs"
   },
   "dependencies": {
