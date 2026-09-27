@@ -55,6 +55,7 @@ import {
 import { playoffStatuses } from "@/lib/playoff-status";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
+import { SeriesRecord } from "@/components/series-record";
 import { teamHueVar } from "@/lib/team-hues";
 import {
   Avatar,
@@ -482,12 +483,7 @@ export default async function TeamPage({
                     <span className="text-muted">Regular season: </span>
                   ) : null}
                   <span className="font-semibold tabular-nums">
-                    <span aria-hidden>
-                      {row.wins}W {row.draws}D {row.losses}L
-                    </span>
-                    <span className="sr-only">
-                      {row.wins} won, {row.draws} drawn, {row.losses} lost
-                    </span>
+                    <SeriesRecord record={row} />
                   </span>
                   <span className="text-muted"> · </span>
                   <span className="font-semibold tabular-nums">
@@ -903,7 +899,6 @@ export default async function TeamPage({
           <CardBody className="p-0">
             <ul className="divide-y divide-line/60">
               {h2h.map((r) => {
-                const record = `${r.wins}–${r.losses}${r.draws > 0 ? `–${r.draws}` : ""}`;
                 const edge =
                   r.wins > r.losses
                     ? "success"
@@ -934,7 +929,9 @@ export default async function TeamPage({
                       <span className="text-xs text-muted">
                         {r.gamesFor}–{r.gamesAgainst} games
                       </span>
-                      <Badge tone={edge}>{record}</Badge>
+                      <Badge tone={edge}>
+                        <SeriesRecord record={r} />
+                      </Badge>
                     </span>
                   </li>
                 );

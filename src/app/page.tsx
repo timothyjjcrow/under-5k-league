@@ -94,6 +94,7 @@ import { ByeWeekNote } from "@/components/bye-week-note";
 import { StandingsTable } from "@/components/standings-table-server";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
+import { SeriesRecord } from "@/components/series-record";
 import { InviteLink } from "@/components/invite-link";
 import {
   DRAFT_PASSED_LABEL,
@@ -3096,8 +3097,7 @@ async function CompleteView({
           {championRow ? (
             <div className="text-sm text-muted">
               <span className="font-medium text-fg">
-                {championRow.wins}–{championRow.losses}
-                {championRow.draws > 0 ? `–${championRow.draws}` : ""}
+                <SeriesRecord record={championRow} />
               </span>{" "}
               regular season · {championRow.points} pts
             </div>

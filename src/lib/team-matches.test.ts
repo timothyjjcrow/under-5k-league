@@ -4,6 +4,8 @@ import {
   headToHead,
   recentForm,
   resultFor,
+  seriesRecordSpoken,
+  seriesRecordText,
   teamFixtureOrder,
   type TeamMatchLike,
 } from "./team-matches";
@@ -80,6 +82,19 @@ describe("headToHead", () => {
       m({ homeTeamId: A, awayTeamId: B, status: "SCHEDULED", winnerTeamId: null }),
     ];
     expect(headToHead(A, matches)).toEqual([]);
+  });
+});
+
+describe("seriesRecordText", () => {
+  it("writes wins, draws, losses in the standings' order, lettered", () => {
+    // 3 won, 1 drawn, 3 lost: never "3–3–1", which reads as three draws.
+    const record = { wins: 3, draws: 1, losses: 3 };
+    expect(seriesRecordText(record)).toBe("3W 1D 3L");
+    expect(seriesRecordSpoken(record)).toBe("3 won, 1 drawn, 3 lost");
+  });
+
+  it("keeps a zero column so every record has the same shape", () => {
+    expect(seriesRecordText({ wins: 4, draws: 0, losses: 0 })).toBe("4W 0D 0L");
   });
 });
 

@@ -56,6 +56,27 @@ export function formByTeam(
   return map;
 }
 
+export type SeriesRecordCounts = {
+  wins: number;
+  draws: number;
+  losses: number;
+};
+
+/**
+ * A team's series record in the standings' order (wins, draws, losses) with
+ * the letters attached: "5W 1D 2L". Every page that shows a team's record
+ * uses this, because bare numbers in another order ("5–2–1") read as draws
+ * where the losses are to anyone used to the standings.
+ */
+export function seriesRecordText(r: SeriesRecordCounts): string {
+  return `${r.wins}W ${r.draws}D ${r.losses}L`;
+}
+
+/** The same record for a screen reader: "5 won, 1 drawn, 2 lost". */
+export function seriesRecordSpoken(r: SeriesRecordCounts): string {
+  return `${r.wins} won, ${r.draws} drawn, ${r.losses} lost`;
+}
+
 export type HeadToHead = {
   opponentId: string;
   wins: number;
