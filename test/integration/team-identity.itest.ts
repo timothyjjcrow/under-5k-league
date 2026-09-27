@@ -221,6 +221,26 @@ describe("editTeamIdentity — the captain's own team page", () => {
     });
   });
 
+  it("refuses a logo that points at one of the site's own endpoints", async () => {
+    const { home } = await league();
+    signIn(home.user);
+    for (const logoUrl of [
+      "/api/auth/discord",
+      "https://ggd2l.example/api/admin/season-export?seasonId=x",
+    ]) {
+      const res = await editTeamIdentity(
+        empty,
+        fd({ teamId: home.team.id, name: "Radiant Raccoons", logoUrl }),
+      );
+      expect(res?.error).toMatch(/image file/);
+    }
+    expect(await teamRow(home.team.id)).toMatchObject({
+      name: "Zai's Team",
+      logoUrl: null,
+    });
+    expect(vi.mocked(sendDiscordMessage)).not.toHaveBeenCalled();
+  });
+
   it("refuses a name another team in the season already uses", async () => {
     const { home, away } = await league();
     signIn(away.user);
