@@ -11,6 +11,8 @@ import {
   lotHeadingLead,
   nextNominatorIndex,
   nominationTurnTeamId,
+  outbidLine,
+  outbidders,
   mmrWeightedBudgets,
   openSeatsLabel,
   rosterDisplayOrder,
@@ -621,5 +623,61 @@ describe("lotHeadingLead", () => {
     expect(lotHeadingLead({ lotLive: false, autoNominated: true })).toBe(
       "On the clock:",
     );
+  });
+});
+
+describe("outbidders / outbidLine", () => {
+  // teamSize 3 (captain + 2 buys), $1 minimum.
+  const t = (id: string, budget: number, rostered: number) => ({
+    id,
+    name: id.toUpperCase(),
+    budget,
+    members: Array.from({ length: rostered }, (_, i) => ({ i })),
+  });
+  const lot = (over: Partial<Parameters<typeof outbidLine>[0]> = {}) => ({
+    teams: [t("a", 50, 1), t("b", 30, 2), t("c", 10, 1), t("d", 90, 3)],
+    teamSize: 3,
+    minBid: 1,
+    currentBid: 8,
+    currentBidTeamId: "a",
+    myTeamId: null,
+    ...over,
+  });
+
+  it("lists the teams that can top the price, with the cap each can reach", () => {
+    // b: one seat left, whole budget ($30). c: two seats, keeps $1 back ($9).
+    // d: full. a: holds the bid.
+    expect(outbidders(lot())).toEqual([
+      { id: "b", name: "B", cap: 30 },
+      { id: "c", name: "C", cap: 9 },
+    ]);
+    expect(outbidLine(lot())).toBe(
+      "Can still outbid: B (up to $30), C (up to $9).",
+    );
+  });
+
+  it("uses the same cap as maxBid, so a team AT its cap is out", () => {
+    // c keeps $1 back for its other seat: cap $9 — in at $8, out at $9.
+    expect(maxBid({ id: "c", budget: 10, rosterCount: 1 }, 3, 1)).toBe(9);
+    expect(outbidders(lot({ currentBid: 9 })).map((x) => x.id)).toEqual(["b"]);
+  });
+
+  it("calls the viewer's own team 'you'", () => {
+    expect(outbidLine(lot({ myTeamId: "c" }))).toBe(
+      "Can still outbid: B (up to $30), you (up to $9).",
+    );
+  });
+
+  it("says when nobody can respond, naming who takes the player", () => {
+    expect(outbidLine(lot({ currentBid: 30 }))).toBe(
+      "No one can outbid A: sells at $30 when the clock runs out.",
+    );
+    expect(outbidLine(lot({ currentBid: 30, myTeamId: "a" }))).toBe(
+      "No one can outbid you: you win at $30 when the clock runs out.",
+    );
+  });
+
+  it("says nothing without a high bid", () => {
+    expect(outbidLine(lot({ currentBidTeamId: null }))).toBeNull();
   });
 });

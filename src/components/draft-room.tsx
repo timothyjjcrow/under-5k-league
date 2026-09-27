@@ -36,6 +36,7 @@ import {
   nominationTurnTeamId,
   openSeatsLabel,
   outbidLatchAfter,
+  outbidLine,
   rosterDisplayOrder,
   stripDraftTitleFlag,
 } from "@/lib/draft";
@@ -972,6 +973,18 @@ export function DraftRoom({
   const rosterFull = !!me.myTeamId && myTeam?.need === 0;
   const pricedOut =
     !!me.myTeamId && !rosterFull && me.myMaxBid <= state.currentBid;
+  // Who can still answer the current price — the fact a captain weighs before
+  // going higher, which used to live only in each team card's tiny "max $N".
+  const outbidText = state.nominatedPlayer
+    ? outbidLine({
+        teams: state.teams,
+        teamSize: state.teamSize,
+        minBid: state.minBid,
+        currentBid: state.currentBid,
+        currentBidTeamId: state.currentBidTeamId,
+        myTeamId: me.myTeamId,
+      })
+    : null;
 
   const viewerTeamBanner = me.rosterTeamId ? (
     <div
@@ -1606,6 +1619,12 @@ export function DraftRoom({
                       roster seat and enough reserved budget can bid.
                     </p>
                   )}
+                  {/* Last in the area, BELOW the controls: its length changes
+                      as teams price out, and above the buttons that would move
+                      them under a captain's thumb. */}
+                  {outbidText ? (
+                    <p className="text-xs text-muted">{outbidText}</p>
+                  ) : null}
                 </div>
               </>
             ) : me.canNominate ? (

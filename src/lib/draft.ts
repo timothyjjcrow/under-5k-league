@@ -22,7 +22,7 @@ export function teamNeed(teamSize: number, rosterCount: number): number {
 export function maxBid(
   team: DraftTeam,
   teamSize: number,
-  minBid = DEFAULTS.MIN_BID,
+  minBid: number = DEFAULTS.MIN_BID,
 ): number {
   const need = teamNeed(teamSize, team.rosterCount);
   if (need <= 0) return 0;
@@ -373,4 +373,72 @@ export function lotHeadingLead(o: {
 }): string {
   if (!o.lotLive) return "On the clock:";
   return o.autoNominated ? "Clock ran out: auto-picked for" : "Nominated by";
+}
+
+type AuctionTeam = {
+  id: string;
+  name: string;
+  budget: number;
+  /** Everyone on the roster, the captain included. */
+  members: readonly unknown[];
+};
+
+/**
+ * The teams that can still top the current price on the live lot, in draft
+ * order, each with the most it may bid. Same rule the server applies to a bid
+ * (canBid) and the team cards show as "max $N": an open seat, a cap above the
+ * price, and not already holding the high bid.
+ */
+export function outbidders(s: {
+  teams: readonly AuctionTeam[];
+  teamSize: number;
+  minBid?: number;
+  currentBid: number;
+  currentBidTeamId: string | null;
+}): { id: string; name: string; cap: number }[] {
+  const minBid = s.minBid ?? DEFAULTS.MIN_BID;
+  return s.teams
+    .filter((t) => t.id !== s.currentBidTeamId)
+    .map((t) => ({
+      id: t.id,
+      name: t.name,
+      cap: maxBid(
+        { id: t.id, budget: t.budget, rosterCount: t.members.length },
+        s.teamSize,
+        minBid,
+      ),
+      need: teamNeed(s.teamSize, t.members.length),
+    }))
+    .filter((t) => t.need > 0 && t.cap > s.currentBid)
+    .map(({ id, name, cap }) => ({ id, name, cap }));
+}
+
+/**
+ * One line under a live lot: who can still respond to this price, or that
+ * nobody can. Deciding whether to go higher turns on exactly this, and it used
+ * to mean scanning every team card for a 10px "max $N" turning red.
+ * Null when there is no high bid to outbid.
+ */
+export function outbidLine(s: {
+  teams: readonly AuctionTeam[];
+  teamSize: number;
+  minBid?: number;
+  currentBid: number;
+  currentBidTeamId: string | null;
+  myTeamId: string | null;
+}): string | null {
+  if (!s.currentBidTeamId) return null;
+  const rivals = outbidders(s);
+  if (rivals.length > 0) {
+    const names = rivals.map(
+      (t) => `${t.id === s.myTeamId ? "you" : t.name} (up to $${t.cap})`,
+    );
+    return `Can still outbid: ${names.join(", ")}.`;
+  }
+  if (s.currentBidTeamId === s.myTeamId) {
+    return `No one can outbid you: you win at $${s.currentBid} when the clock runs out.`;
+  }
+  const leader =
+    s.teams.find((t) => t.id === s.currentBidTeamId)?.name ?? "the high bidder";
+  return `No one can outbid ${leader}: sells at $${s.currentBid} when the clock runs out.`;
 }
