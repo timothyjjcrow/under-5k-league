@@ -5,7 +5,7 @@
 // The server page serializes everything (dates preformatted so hydration
 // never disagrees on locale); this component only filters and toggles.
 
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
@@ -76,6 +76,9 @@ export type WeekView = {
   nightTs?: number | null;
   /** Server-formatted date-only fallback for the first paint. */
   nightInitial?: string | null;
+  /** Before the league's current week — listed newest first under a
+   *  small "Earlier weeks" heading (see orderScheduleWeeks). */
+  earlier?: boolean;
 };
 
 export function ScheduleWeeks({
@@ -211,7 +214,7 @@ export function ScheduleWeeks({
       ) : null}
 
       <div className="space-y-5">
-        {visibleWeeks.map((w) => {
+        {visibleWeeks.map((w, index) => {
           const completed = filterTeam
             ? w.matches.filter((match) => match.done).length
             : w.completed;
@@ -222,137 +225,147 @@ export function ScheduleWeeks({
             ? false
             : (collapsedOverride[w.week] ?? defaultCollapsed(w));
           const canToggle = !filterTeam;
+          // Only a heading when something current or upcoming sits above it;
+          // a list that is ALL earlier weeks needs no divider.
+          const earlierHeading =
+            w.earlier && index > 0 && !visibleWeeks[index - 1].earlier;
           return (
-            <div
-              key={w.week}
-              // Deep-link target ("/schedule#this-week"); scroll-mt clears
-              // the sticky site header.
-              id={w.isCurrent ? "this-week" : undefined}
-              className={cn(
-                "overflow-hidden rounded-xl border bg-surface",
-                w.isCurrent
-                  ? "scroll-mt-24 border-accent/50"
-                  : "border-line-soft",
-              )}
-            >
-              <h3
+            <Fragment key={w.week}>
+              {earlierHeading ? (
+                <h3 className="pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
+                  Earlier weeks
+                </h3>
+              ) : null}
+              <div
+                // Deep-link target ("/schedule#this-week"); scroll-mt clears
+                // the sticky site header.
+                id={w.isCurrent ? "this-week" : undefined}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-3 sm:px-5",
-                  w.isCurrent ? "bg-accent/[0.05]" : "bg-surface-2/30",
+                  "overflow-hidden rounded-xl border bg-surface",
+                  w.isCurrent
+                    ? "scroll-mt-24 border-accent/50"
+                    : "border-line-soft",
                 )}
               >
-                <WeekProgress
-                  completed={completed}
-                  total={total}
-                  current={w.isCurrent}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    {canToggle ? (
-                      <button
-                        type="button"
-                        aria-label={w.label ?? `Week ${w.week}`}
-                        aria-expanded={!collapsed}
-                        onClick={() => setWeekCollapsed(w.week, !collapsed)}
-                        className="flex min-h-11 items-center gap-2 rounded text-base font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
-                      >
-                        <span>{w.label ?? `Week ${w.week}`}</span>
-                        <svg
-                          aria-hidden
-                          viewBox="0 0 16 16"
-                          className={cn(
-                            "h-4 w-4 text-muted transition-transform",
-                            collapsed ? "-rotate-90" : "",
-                          )}
-                          fill="none"
+                <h3
+                  className={cn(
+                    "flex items-center gap-3 px-4 py-3 sm:px-5",
+                    w.isCurrent ? "bg-accent/[0.05]" : "bg-surface-2/30",
+                  )}
+                >
+                  <WeekProgress
+                    completed={completed}
+                    total={total}
+                    current={w.isCurrent}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {canToggle ? (
+                        <button
+                          type="button"
+                          aria-label={w.label ?? `Week ${w.week}`}
+                          aria-expanded={!collapsed}
+                          onClick={() => setWeekCollapsed(w.week, !collapsed)}
+                          className="flex min-h-11 items-center gap-2 rounded text-base font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
                         >
-                          <path
-                            d="m4 6 4 4 4-4"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </button>
-                    ) : (
-                      <span className="inline-flex min-h-11 items-center text-base font-semibold text-fg">
-                        {w.label ?? `Week ${w.week}`}
-                      </span>
-                    )}
-                    {w.isCurrent ? (
-                      <Badge tone="accent">This week</Badge>
+                          <span>{w.label ?? `Week ${w.week}`}</span>
+                          <svg
+                            aria-hidden
+                            viewBox="0 0 16 16"
+                            className={cn(
+                              "h-4 w-4 text-muted transition-transform",
+                              collapsed ? "-rotate-90" : "",
+                            )}
+                            fill="none"
+                          >
+                            <path
+                              d="m4 6 4 4 4-4"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </button>
+                      ) : (
+                        <span className="inline-flex min-h-11 items-center text-base font-semibold text-fg">
+                          {w.label ?? `Week ${w.week}`}
+                        </span>
+                      )}
+                      {w.isCurrent ? (
+                        <Badge tone="accent">This week</Badge>
+                      ) : null}
+                      {w.isOverdue ? (
+                        <Badge tone="accent">Results overdue</Badge>
+                      ) : null}
+                    </span>
+                    {!filterTeam && w.nightTs != null && w.nightInitial ? (
+                      <LocalTime
+                        ts={w.nightTs}
+                        variant="date"
+                        initial={w.nightInitial}
+                        className="block text-xs font-normal text-muted"
+                      />
                     ) : null}
-                    {w.isOverdue ? (
-                      <Badge tone="accent">Results overdue</Badge>
-                    ) : null}
+                    <span className="sr-only">
+                      {total
+                        ? `${completed} of ${total} series complete`
+                        : "No fixture · bye week"}
+                    </span>
                   </span>
-                  {!filterTeam && w.nightTs != null && w.nightInitial ? (
-                    <LocalTime
-                      ts={w.nightTs}
-                      variant="date"
-                      initial={w.nightInitial}
-                      className="block text-xs font-normal text-muted"
-                    />
-                  ) : null}
-                  <span className="sr-only">
-                    {total
-                      ? `${completed} of ${total} series complete`
-                      : "No fixture · bye week"}
+                  <span className="shrink-0 text-right text-xs font-normal text-muted">
+                    <span
+                      className={cn(
+                        "block font-mono text-sm tabular-nums",
+                        completed === total && total > 0
+                          ? "text-success"
+                          : "text-fg",
+                      )}
+                    >
+                      {completed}
+                      <span className="text-muted"> of {total}</span>
+                    </span>
+                    {/* "Final" is the grand final's word alone — a round
+                        header reading "Grand final · 0 / 1 FINAL" said it twice
+                        and meant two different things. */}
+                    <span className="mt-0.5 block text-[10px] uppercase tracking-wider">
+                      {total ? "Played" : "Bye"}
+                    </span>
                   </span>
-                </span>
-                <span className="shrink-0 text-right text-xs font-normal text-muted">
-                  <span
-                    className={cn(
-                      "block font-mono text-sm tabular-nums",
-                      completed === total && total > 0
-                        ? "text-success"
-                        : "text-fg",
-                    )}
-                  >
-                    {completed}
-                    <span className="text-muted"> of {total}</span>
-                  </span>
-                  {/* "Final" is the grand final's word alone — a round
-                      header reading "Grand final · 0 / 1 FINAL" said it twice
-                      and meant two different things. */}
-                  <span className="mt-0.5 block text-[10px] uppercase tracking-wider">
-                    {total ? "Played" : "Bye"}
-                  </span>
-                </span>
-              </h3>
-              {collapsed ? null : (
-                <div className="border-t border-line-soft">
-                  <div
-                    className={cn(
-                      "grid grid-cols-1 gap-px bg-line-soft",
-                      w.matches.length > 1 && "lg:grid-cols-2",
-                      w.matches.length > 2 && "xl:grid-cols-3",
-                    )}
-                  >
-                    {w.matches.map((m) => (
-                      <MatchRow key={m.id} match={m} />
-                    ))}
-                  </div>
-                  {w.byes.length > 0 &&
-                  (!filterTeam || w.byes.some((b) => b.id === filterTeam)) ? (
-                    <div className="flex items-center gap-2 border-t border-line-soft px-4 py-3 text-xs text-muted sm:px-5">
-                      <span className="rounded bg-surface-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider">
-                        Bye
-                      </span>
-                      <span>
-                        {(filterTeam
-                          ? w.byes.filter((b) => b.id === filterTeam)
-                          : w.byes
-                        )
-                          .map((b) => b.name)
-                          .join(", ")}
-                      </span>
+                </h3>
+                {collapsed ? null : (
+                  <div className="border-t border-line-soft">
+                    <div
+                      className={cn(
+                        "grid grid-cols-1 gap-px bg-line-soft",
+                        w.matches.length > 1 && "lg:grid-cols-2",
+                        w.matches.length > 2 && "xl:grid-cols-3",
+                      )}
+                    >
+                      {w.matches.map((m) => (
+                        <MatchRow key={m.id} match={m} />
+                      ))}
                     </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
+                    {w.byes.length > 0 &&
+                    (!filterTeam || w.byes.some((b) => b.id === filterTeam)) ? (
+                      <div className="flex items-center gap-2 border-t border-line-soft px-4 py-3 text-xs text-muted sm:px-5">
+                        <span className="rounded bg-surface-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider">
+                          Bye
+                        </span>
+                        <span>
+                          {(filterTeam
+                            ? w.byes.filter((b) => b.id === filterTeam)
+                            : w.byes
+                          )
+                            .map((b) => b.name)
+                            .join(", ")}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </Fragment>
           );
         })}
       </div>

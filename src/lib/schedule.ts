@@ -471,6 +471,34 @@ export function byeTeamsByWeek<
 }
 
 /**
+ * The order /schedule reads its regular weeks in: the league's current week,
+ * then the weeks still to come in order, then the earlier weeks NEWEST first
+ * (flagged `earlier`, so the list can head them "Earlier weeks"). A player
+ * looking for next week's fixture no longer scrolls past old results to find
+ * it. `currentWeek` is the league's current slate (leagueProgress's
+ * focusWeek); with none — every result in, or only overdue results left —
+ * every week is behind the league and the whole list reads newest first.
+ */
+export function orderScheduleWeeks<T extends { week: number }>(
+  weeks: T[],
+  currentWeek: number | null,
+): (T & { earlier: boolean })[] {
+  const ahead =
+    currentWeek == null
+      ? []
+      : weeks
+          .filter((w) => w.week >= currentWeek)
+          .sort((a, b) => a.week - b.week);
+  const behind = weeks
+    .filter((w) => currentWeek == null || w.week < currentWeek)
+    .sort((a, b) => b.week - a.week);
+  return [
+    ...ahead.map((w) => ({ ...w, earlier: false })),
+    ...behind.map((w) => ({ ...w, earlier: true })),
+  ];
+}
+
+/**
  * Each team's unplayed regular-season opponents, in week order — the
  * "run-in" a playoff race is decided by.
  */

@@ -3,6 +3,7 @@ import {
   focusSlate,
   roundRobin,
   byeTeamsByWeek,
+  orderScheduleWeeks,
   remainingSchedule,
   seedOrder,
   playoffFirstRound,
@@ -497,6 +498,41 @@ describe("byeTeamsByWeek", () => {
   it("ignores playoff matches", () => {
     const byes = byeTeamsByWeek([m(9, "a", "b", "PLAYOFF")], ["a", "b", "c"]);
     expect(byes.size).toBe(0);
+  });
+});
+
+describe("orderScheduleWeeks", () => {
+  const weeks = [1, 2, 3, 4, 5].map((week) => ({ week }));
+  const order = (current: number | null) =>
+    orderScheduleWeeks(weeks, current).map(
+      (w) => `${w.earlier ? "earlier " : ""}${w.week}`,
+    );
+
+  it("reads this week, then the weeks ahead, then earlier weeks newest first", () => {
+    expect(order(3)).toEqual(["3", "4", "5", "earlier 2", "earlier 1"]);
+  });
+
+  it("keeps a whole season in order before it starts", () => {
+    expect(order(1)).toEqual(["1", "2", "3", "4", "5"]);
+  });
+
+  it("puts the last week first once no week is current", () => {
+    expect(order(5)).toEqual(["5", "earlier 4", "earlier 3", "earlier 2", "earlier 1"]);
+    expect(order(null)).toEqual([
+      "earlier 5",
+      "earlier 4",
+      "earlier 3",
+      "earlier 2",
+      "earlier 1",
+    ]);
+  });
+
+  it("does not depend on the order it is given", () => {
+    expect(
+      orderScheduleWeeks([{ week: 4 }, { week: 1 }, { week: 2 }], 2).map(
+        (w) => w.week,
+      ),
+    ).toEqual([2, 4, 1]);
   });
 });
 

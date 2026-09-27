@@ -22,6 +22,7 @@ import {
   byKickoff,
   groupPlayoffRounds,
   matchRoundLabel,
+  orderScheduleWeeks,
   pickBracketSize,
   playoffFirstRound,
   remainingSchedule,
@@ -807,11 +808,7 @@ export default async function SchedulePage() {
           ) : (
             <>
               <ScheduleWeeks
-                weeks={[...weekViews].sort(
-                  (a, b) =>
-                    Number(b.isCurrent) - Number(a.isCurrent) ||
-                    a.week - b.week,
-                )}
+                weeks={orderScheduleWeeks(weekViews, progress.focusWeek)}
                 initialTeamId={[...myTeamIds][0]}
                 teams={[...teams]
                   .sort((a, b) => a.name.localeCompare(b.name))

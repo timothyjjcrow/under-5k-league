@@ -183,7 +183,8 @@ test("captains can report an open series and get a clear correction handoff once
 
   // Capture the dynamically staged captain's team from the match itself, then
   // use the team filter to reach a completed fixture for the same captain.
-  // Filtering expands every week; current fixtures come first, past weeks follow.
+  // Filtering expands every week; current fixtures come first, then earlier
+  // weeks newest first, so the last row is the team's oldest completed series.
   const captainTeam = page.locator('#main a[href^="/teams/"]').first();
   const captainTeamName = (await captainTeam.textContent())?.trim();
   expect(captainTeamName).toBeTruthy();
