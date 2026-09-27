@@ -46,16 +46,17 @@ test("schedule selection survives reload and back navigation on a phone", async 
   const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/schedule");
+  // Fixture cards name their teams as plain text (the card itself opens the
+  // match), so check the long name wraps inside its card on a phone.
   const longName = page
-    .locator("#fixtures")
-    .getByRole("link", {
-      name: "The Couriers of Catastrophe With Very Long Name",
+    .locator("#fixtures article")
+    .getByText("The Couriers of Catastrophe With Very Long Name", {
       exact: true,
     })
     .first();
   await expect(longName).toBeVisible();
   expect(
-    await longName.evaluate((link) => link.scrollWidth <= link.clientWidth + 1),
+    await longName.evaluate((name) => name.scrollWidth <= name.clientWidth + 1),
   ).toBe(true);
   const team = page.getByRole("combobox", { name: "Show matches for" });
   await team.selectOption({ label: "Dire Straits" });
