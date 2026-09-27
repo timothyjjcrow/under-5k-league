@@ -149,9 +149,11 @@ test("fully-played past weeks start collapsed and expand on click", async ({
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/schedule");
 
-  // Scope to #main: the header's (hidden-at-desktop) hamburger also carries
-  // aria-expanded and would otherwise be .first().
-  const collapsed = page.locator('#main button[aria-expanded="false"]').first();
+  // Scope to #fixtures: the header's hamburger and the page title's "Add to
+  // calendar" button also carry aria-expanded and would otherwise be .first().
+  const collapsed = page
+    .locator('#fixtures button[aria-expanded="false"]')
+    .first();
   await expect(collapsed).toBeVisible();
   const weekName = (await collapsed.getAttribute("aria-label"))!;
   const week = page.getByRole("button", { name: weekName, exact: true });

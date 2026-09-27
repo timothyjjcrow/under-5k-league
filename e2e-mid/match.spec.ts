@@ -11,9 +11,10 @@ test("a completed match page renders the box score with an MVP chip", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/schedule");
 
-  // Past completed weeks start collapsed — expand the first (#main scope:
-  // the header hamburger also has aria-expanded) and open its first match.
-  await page.locator('#main button[aria-expanded="false"]').first().click();
+  // Past completed weeks start collapsed — expand the first (#fixtures scope:
+  // the header hamburger and "Add to calendar" also have aria-expanded) and
+  // open its first match.
+  await page.locator('#fixtures button[aria-expanded="false"]').first().click();
   await page
     .getByRole("article", { name: / · Final score$/ })
     .first()
