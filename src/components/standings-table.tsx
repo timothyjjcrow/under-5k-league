@@ -267,14 +267,19 @@ export function StandingsTableClient({
                     href={`/teams/${row.teamId}`}
                     className="-my-1 flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-1 hover:text-info"
                   >
-                    <TeamCrest
-                      name={row.name}
-                      seed={row.teamId}
-                      logoUrl={row.logoUrl}
-                      size={22}
-                      className="rounded-md shrink-0"
-                    />
-                    <span className="truncate">{row.name}</span>
+                    {/* Crest and name are ONE flex item, so a long name
+                        truncates beside its crest; only the chips after it
+                        wrap to a second line on a narrow phone. */}
+                    <span className="flex min-w-0 max-w-full items-center gap-2">
+                      <TeamCrest
+                        name={row.name}
+                        seed={row.teamId}
+                        logoUrl={row.logoUrl}
+                        size={22}
+                        className="rounded-md shrink-0"
+                      />
+                      <span className="truncate">{row.name}</span>
+                    </span>
                     {row.teamId === viewerTeamId ? (
                       <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-xs font-semibold uppercase tracking-wide text-info">
                         You
