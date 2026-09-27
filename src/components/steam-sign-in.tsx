@@ -27,9 +27,14 @@ export function SteamSignInButton({
   children: React.ReactNode;
 }) {
   // A plain <a>: next/link would prefetch the Steam route, which starts a
-  // sign-in and replaces its state cookie.
+  // sign-in and replaces its state cookie. nofollow: crawlers have no
+  // business starting one either (robots.txt also keeps them out of /api).
   return (
-    <a href={steamSignInHref(next)} className={buttonClasses(variant, size, className)}>
+    <a
+      href={steamSignInHref(next)}
+      rel="nofollow"
+      className={buttonClasses(variant, size, className)}
+    >
       {children}
     </a>
   );
