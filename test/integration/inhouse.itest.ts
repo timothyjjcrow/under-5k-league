@@ -2158,6 +2158,75 @@ describe("inhouse — Elo deltas + result announcement", () => {
     expect(state.lastResult!.eloDelta).toBe(deltas[winner.userId]);
   });
 
+  it("keeps the newest game on the post-game banner when an older game's row is written later", async () => {
+    const admin = sessionFor(await makeUser("AdminRecency", "ADMIN"));
+
+    // Game A, recorded end to end.
+    const first = await runToInProgress(admin);
+    const firstSides = await teamAccounts(first.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000030,
+        ...firstSides,
+        radiantWin: true,
+        startTime: Math.floor(first.lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    expect(
+      (await recordMatch(first.players[0].session, "7000000030")).ok,
+    ).toBe(true);
+
+    // Game B: the same ten run it back.
+    const users = first.players.map((p) => p.user);
+    for (const u of users) await joinQueue(sessionFor(u), 3000);
+    const sessById = new Map(users.map((u) => [u.id, sessionFor(u)]));
+    const formed = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    for (const p of formed.players) await acceptMatch(sessById.get(p.userId)!);
+    for (const p of formed.players) {
+      await castVote(sessById.get(p.userId)!, "MMR");
+    }
+    await driveDraftToReady(admin);
+    await startGame(sessionFor(users[0]));
+    const second = await lobbyByStatus(INHOUSE_STATUS.IN_PROGRESS);
+    const secondSides = await teamAccounts(second.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000031,
+        ...secondSides,
+        radiantWin: false,
+        startTime: Math.floor(second.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    expect((await recordMatch(sessionFor(users[0]), "7000000031")).ok).toBe(
+      true,
+    );
+
+    const now = Date.now();
+    await prisma.inhouseLobby.update({
+      where: { id: first.lobby.id },
+      data: { completedAt: new Date(now - 60_000) },
+    });
+    await prisma.inhouseLobby.update({
+      where: { id: second.id },
+      data: { completedAt: new Date(now) },
+    });
+    // Any later write to a finished game (the Elo stamp, the result
+    // reconciler, a void) moves its updatedAt. Make the OLDER game provably
+    // newest by that mutable clock; the banner must still follow completedAt.
+    await prisma.inhouseLobby.update({
+      where: { id: first.lobby.id },
+      data: {
+        detectedAt: new Date(now + 1_000),
+        updatedAt: new Date(now + 60_000),
+      },
+    });
+
+    const state = await getInhouseState(sessionFor(users[0]), {
+      syncBoard: false,
+    });
+    expect(state.lastResult?.lobbyId).toBe(second.id);
+  });
+
   it("announces the result to Discord exactly once, with the score and MVP", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const { players, lobby } = await runToInProgress(admin);
