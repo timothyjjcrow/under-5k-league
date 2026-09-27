@@ -768,12 +768,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 - **Every state transition is a guarded claim (2026-07 hardening — keep it
   that way)**: `applyResult` first claims
   `updateMany({id, status: IN_PROGRESS})` with team fixes (a cancel racing the
-  seconds-long OpenDota fetch must never be overwritten), then after the Elo
-  calculation claims the same COMPLETED + `dotaMatchId` result before
-  stamping `eloDeltas` and attempting Discord. That short final transaction
-  holds the lobby row across the bounded webhook call so a void is totally
-  ordered with publication: void-first suppresses the stale result; result-
-  first commits before the correction. `cancelLobby`
+  seconds-long OpenDota fetch must never be overwritten), then, after the Elo
+  calculation, claims the same COMPLETED + `dotaMatchId` result again to stamp
+  `eloDeltas` (a void that landed first makes that claim lose). No network call
+  runs inside either transaction: the RESULT outbox row commits with COMPLETED,
+  and publication happens after commit through the durable outbox, which
+  orders it with a void — `voidLastResult` cancels a still-unsent RESULT, or
+  queues its correction behind one already sending or sent. `cancelLobby`
   re-claims inside its tx (loses to a landed result, skips the requeue);
   `applyPick` claims the target row `{team: null}` (double-click = one turn)
   and AUTO-ASSIGNS the final pool player (no dead-air last clock);
