@@ -20,7 +20,7 @@ import { sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
 import { listAwayFixtures } from "@/lib/availability-service";
 import { seenFixturesField, type SeenFixture } from "@/lib/away-range";
-import { MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
   generateRegularSchedule,
   makeSeason,
@@ -136,6 +136,61 @@ describe("listAwayFixtures — the /me card's list and render gate", () => {
       mine.map((m) => `Week ${m.week} vs ${opponentOf(m)}`),
     );
     expect(view!.fixtures.every((f) => !f.standin && f.rsvp === null)).toBe(true);
+  });
+
+  it("names a playoff fixture by its round, on the card and in the report", async () => {
+    const { season, alpha, player, mine, days } = await setupSeason();
+    const teams = await prisma.team.findMany({
+      where: { seasonId: season.id },
+      orderBy: { draftOrder: "asc" },
+    });
+    const [bravo, charlie, delta] = teams.filter((t) => t.id !== alpha.id);
+    // Regular season over; a four-team bracket whose first round is the semis.
+    await prisma.match.updateMany({
+      where: { id: { in: mine.map((m) => m.id) } },
+      data: { status: MATCH_STATUS.COMPLETED },
+    });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.PLAYOFFS },
+    });
+    const semi = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 4,
+        phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M0",
+        homeTeamId: alpha.id,
+        awayTeamId: bravo.id,
+        scheduledAt: new Date(days(23)),
+      },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 4,
+        phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1",
+        homeTeamId: charlie.id,
+        awayTeamId: delta.id,
+        scheduledAt: new Date(days(23)),
+      },
+    });
+
+    const view = await page(player.id);
+    expect(view!.fixtures).toEqual([
+      expect.objectContaining({ matchId: semi.id, label: "Semifinal vs Bravo" }),
+    ]);
+
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    const res = await markAwayDates(
+      {},
+      awayForm(season.id, days(22), days(24), view!.fixtures),
+    );
+    expect(res).toEqual({
+      message:
+        "Marked you out for 1 fixture: Semifinal vs Bravo. Captains can now line up cover.",
+    });
   });
 
   it("renders nothing for a non-participant or outside the check-in phases", async () => {

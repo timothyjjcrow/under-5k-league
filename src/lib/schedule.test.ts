@@ -567,16 +567,6 @@ describe("seedsFromFirstRound (bracket-view)", () => {
   });
 });
 
-describe("matchPhaseLabel", () => {
-  it("labels regular weeks by number and playoff phases by name", async () => {
-    const { matchPhaseLabel } = await import("./schedule");
-    expect(matchPhaseLabel("REGULAR", 3)).toBe("Week 3");
-    expect(matchPhaseLabel("PLAYOFF", 9)).toBe("Playoffs");
-    expect(matchPhaseLabel("FINAL", 10)).toBe("Grand final");
-    expect(matchPhaseLabel("TIEBREAKER", 8)).toBe("Tiebreaker week 8");
-  });
-});
-
 describe("matchRoundLabel and friends", () => {
   // An 8-team bracket: R0 quarterfinals (4), R1 semifinals (2), R2 final.
   const bracket8 = [

@@ -269,19 +269,6 @@ export function roundName(roundIndex: number, totalRounds: number): string {
   return `Round ${roundIndex + 1}`;
 }
 
-/**
- * Human label for a match's slot in the season: playoff matches carry a
- * continuing week number in the DB, so raw "Week N" reads wrong for them.
- * Phase-only (every playoff round reads "Playoffs"); prefer matchRoundLabel
- * wherever the season's bracket is at hand.
- */
-export function matchPhaseLabel(phase: string, week: number): string {
-  if (phase === MATCH_PHASE.FINAL) return "Grand final";
-  if (phase === MATCH_PHASE.PLAYOFF) return "Playoffs";
-  if (phase === MATCH_PHASE.TIEBREAKER) return `Tiebreaker week ${week}`;
-  return `Week ${week}`;
-}
-
 /** A fixture as far as naming it goes. */
 export type RoundLabelMatch = {
   phase: string;

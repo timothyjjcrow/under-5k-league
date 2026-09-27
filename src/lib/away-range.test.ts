@@ -266,9 +266,16 @@ describe("awaySeatVerdict", () => {
 });
 
 describe("awayFixtureLabel", () => {
-  it("names the fixture from the viewer's side", () => {
-    expect(awayFixtureLabel(MATCH_PHASE.REGULAR, 3, "Dire Wolves")).toBe("Week 3 vs Dire Wolves");
-    expect(awayFixtureLabel(MATCH_PHASE.PLAYOFF, 7, "Dire Wolves")).toBe("Playoffs vs Dire Wolves");
+  it("names the fixture from the viewer's side, by its playoff round", () => {
+    const regular = { phase: MATCH_PHASE.REGULAR, week: 3 };
+    expect(awayFixtureLabel(regular, 0, "Dire Wolves")).toBe("Week 3 vs Dire Wolves");
+    const semi = { phase: MATCH_PHASE.PLAYOFF, week: 7, bracketSlot: "R0M1" };
+    expect(awayFixtureLabel(semi, 2, "Dire Wolves")).toBe("Semifinal vs Dire Wolves");
+    // No bracket depth to place it: the round can't be named, so it says so.
+    expect(awayFixtureLabel(semi, 0, "Dire Wolves")).toBe("Playoffs vs Dire Wolves");
+    expect(
+      awayFixtureLabel({ phase: MATCH_PHASE.TIEBREAKER, week: 6 }, 0, "Dire Wolves"),
+    ).toBe("Tiebreaker vs Dire Wolves");
   });
 });
 

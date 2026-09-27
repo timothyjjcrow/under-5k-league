@@ -11,7 +11,7 @@ import {
   type CheckinRefusal,
 } from "./availability";
 import { MATCH_STATUS } from "./constants";
-import { matchPhaseLabel } from "./schedule";
+import { matchRoundLabel, type RoundLabelMatch } from "./schedule";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -243,13 +243,18 @@ export function awaySeatVerdict(f: {
   return { kind: "mark" };
 }
 
-/** "Week 3 vs Radiant Rejects" — one fixture, from the viewer's side. */
+/**
+ * "Week 3 vs Radiant Rejects" or "Semifinal vs Radiant Rejects": one fixture,
+ * from the viewer's side, named the way the rest of the site names it.
+ * `playoffRounds` is the season's `playoffTotalRounds` (0 when unknown, which
+ * falls back to "Playoffs").
+ */
 export function awayFixtureLabel(
-  phase: string,
-  week: number,
+  match: RoundLabelMatch,
+  playoffRounds: number,
   opponentName: string,
 ): string {
-  return `${matchPhaseLabel(phase, week)} vs ${opponentName}`;
+  return `${matchRoundLabel(match, playoffRounds)} vs ${opponentName}`;
 }
 
 export type AwayFixtureRef = { matchId: string; label: string };

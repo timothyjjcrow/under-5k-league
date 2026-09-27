@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
-import { MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
+import { MATCH_PHASE, MATCH_STATUS, REGISTRATION_STATUS } from "./constants";
 import {
   AVAILABILITY,
   CHECKIN_REFUSAL,
@@ -22,6 +22,7 @@ import {
   type SeenFixture,
 } from "./away-range";
 import { postAuctionWorkOpen } from "./league-lifecycle";
+import { loadPlayoffRoundsBySeason } from "./playoff-rounds";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 
@@ -216,6 +217,7 @@ export async function listAwayFixtures(
       seasonId: true,
       week: true,
       phase: true,
+      bracketSlot: true,
       status: true,
       scheduledAt: true,
       scheduleRevision: true,
@@ -225,6 +227,11 @@ export async function listAwayFixtures(
       awayTeam: { select: { name: true, captainId: true, withdrawn: true } },
     },
   });
+  // A playoff fixture is named by its round ("Semifinal"), which needs the
+  // bracket's depth; read it only when one is listed.
+  const playoffRounds = matches.some((m) => m.phase === MATCH_PHASE.PLAYOFF)
+    ? ((await loadPlayoffRoundsBySeason([season.id])).get(season.id) ?? 0)
+    : 0;
   const rows = await Promise.all(
     matches.map(async (match) => {
       if (checkinClosedReason(season.status, season.draft?.status, match, nowMs)) {
@@ -241,7 +248,7 @@ export async function listAwayFixtures(
         matchId: match.id,
         scheduleRevision: match.scheduleRevision,
         kickoffMs: match.scheduledAt!.getTime(),
-        label: awayFixtureLabel(match.phase, match.week, opponent.name),
+        label: awayFixtureLabel(match, playoffRounds, opponent.name),
         standin: !teamIds.includes(seat.teamId),
         rsvp,
       };
@@ -284,6 +291,13 @@ export async function markAwayRange(opts: {
   nowMs: number;
 }): Promise<AwayRangeOutcome> {
   const { userId, range, seen, nowMs } = opts;
+  // Bracket depth, only to name playoff fixtures in the report ("Semifinal").
+  // Read before the transaction so a display label adds nothing to its
+  // SERIALIZABLE read set; the depth is fixed by the first round anyway.
+  const playoffRounds =
+    (await loadPlayoffRoundsBySeason([opts.expectedSeasonId])).get(
+      opts.expectedSeasonId,
+    ) ?? 0;
   return prisma.$transaction(
     async (tx) => {
       const season = await tx.season
@@ -343,6 +357,7 @@ export async function markAwayRange(opts: {
           seasonId: true,
           week: true,
           phase: true,
+          bracketSlot: true,
           status: true,
           scheduledAt: true,
           scheduleRevision: true,
@@ -406,7 +421,7 @@ export async function markAwayRange(opts: {
         const opponent = sideId === match.homeTeamId ? match.awayTeam : match.homeTeam;
         const ref = {
           matchId: match.id,
-          label: awayFixtureLabel(match.phase, match.week, opponent.name),
+          label: awayFixtureLabel(match, playoffRounds, opponent.name),
         };
         if (outcome.kind === "skip") skipped.push({ ...ref, reason: outcome.reason });
         else if (outcome.kind === "already-out") alreadyOut.push(ref);
