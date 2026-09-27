@@ -1367,7 +1367,10 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
   draft-service resolvers: ONE teams post mentioning each linked drafted
   player, then the recap, queued with `afterResponse` so the captain whose
   request closed the last lot never waits on Discord; single sales post
-  nothing, the room shows them), match results — every decided
+  nothing, the room shows them. Only a run's FIRST completion pings: Undo can
+  reopen a finished draft, and the repeat completion posts the updated teams
+  with plain names and no recap, gated on the `draftTeamsPing:<season>:<run>`
+  Setting CREATE, released if nothing was queued), match results — every decided
   series announces via `announceSeriesResultOnce` (`match-import.ts`, fired
   from `recomputeSeries` on the transition to decided, idempotent through an
   atomic `resultAnnounced:<matchId>` Setting CREATE; admin `recordResult`

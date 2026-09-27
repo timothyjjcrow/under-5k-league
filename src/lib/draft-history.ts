@@ -210,9 +210,11 @@ export async function voidDraftLot(tx: Tx, draft: Draft, reason: string, actorId
   await tx.draft.update({ where: { id: draft.id }, data: { currentLotId: null } });
 }
 
-export async function setDraftRunStatus(tx: Tx, draft: Draft, status: "RUNNING" | "COMPLETE", now = new Date()) {
+/** Returns the run's id: the draft-complete teams post is keyed to it. */
+export async function setDraftRunStatus(tx: Tx, draft: Draft, status: "RUNNING" | "COMPLETE", now = new Date()): Promise<string> {
   const run = await ensureDraftRun(tx, draft, undefined, now);
   await tx.draftRun.update({ where: { id: run.id }, data: { status, endedAt: status === "COMPLETE" ? now : null } });
+  return run.id;
 }
 
 export async function undoDraftSaleHistory(tx: Tx, draft: Draft, member: TeamMember, actor: HistoryActor, now = new Date()) {

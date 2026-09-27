@@ -159,6 +159,12 @@ export type DraftCompleteInput = {
   seasonName: string;
   /** Teams in draft order. */
   teams: DraftRosterTeam[];
+  /**
+   * The same draft run finishing a second time, after an admin undid a sale
+   * on the finished draft. The teams are posted again as an update, with
+   * every player named in plain text: they were all pinged the first time.
+   */
+  again?: boolean;
 };
 
 /**
@@ -168,13 +174,18 @@ export type DraftCompleteInput = {
  * team and captain from the channel. Captains are named, not pinged: they
  * were in the room. Whole team lines are packed in draft order under
  * Discord's 2,000 characters; teams that don't fit are counted and left to
- * the teams page, and their players are never allowlisted.
+ * the teams page, and their players are never allowlisted. With `again`, it
+ * mentions nobody.
  */
 export function draftCompleteAnnouncement(
   m: DraftCompleteInput,
 ): DraftReminderAnnouncement {
   const site = resolveSiteUrl();
-  const header = `✅ **The ${m.seasonName} draft is complete! Here are the teams:**`;
+  const header = m.again
+    ? `✅ **The ${m.seasonName} draft is complete again. Here are the updated teams:**`
+    : `✅ **The ${m.seasonName} draft is complete! Here are the teams:**`;
+  const label = (p: DraftRosterPlayer): string =>
+    m.again ? name(p.name) : personLabel(p);
   const anyOpen = m.teams.some((t) => t.openSeats > 0);
   const footer = anyOpen
     ? `Open seats get filled with free agents, and standins cover until then. Every roster: <${site}/teams>`
@@ -186,7 +197,7 @@ export function draftCompleteAnnouncement(
         : "";
     const roster = t.players.length
       ? t.players
-          .map((p) => `${personLabel(p)}${p.price > 0 ? ` $${p.price}` : ""}`)
+          .map((p) => `${label(p)}${p.price > 0 ? ` $${p.price}` : ""}`)
           .join(", ")
       : "no players bought";
     return `**${name(t.name)}** (captain ${name(t.captainName)}${seats}): ${roster}`;
@@ -217,9 +228,9 @@ export function draftCompleteAnnouncement(
   while (shown < m.teams.length && fits(render(shown + 1))) shown += 1;
   return {
     content: render(shown),
-    mentionUserIds: mentionIdsOf(
-      m.teams.slice(0, shown).flatMap((t) => t.players),
-    ),
+    mentionUserIds: m.again
+      ? []
+      : mentionIdsOf(m.teams.slice(0, shown).flatMap((t) => t.players)),
   };
 }
 

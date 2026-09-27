@@ -754,6 +754,24 @@ describe("draftCompleteAnnouncement", () => {
     expect(announcement.content.length).toBeLessThanOrEqual(2_000);
     expect(announcement.mentionUserIds).toEqual([]);
   });
+
+  it("completing again after an undo names everyone and pings nobody", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams,
+      again: true,
+    });
+    expect(announcement.content).toBe(
+      [
+        "✅ **The Season 3 draft is complete again. Here are the updated teams:**",
+        "**Radiant Rejects** (captain Dendi): Miracle $9, N0tail $1",
+        "**Dire Straits** (captain Puppey, 1 open seat): Typo $3",
+        "Open seats get filled with free agents, and standins cover until then. Every roster: <https://league.example/teams>",
+      ].join("\n"),
+    );
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
 });
 
 describe("inhouse messages", () => {

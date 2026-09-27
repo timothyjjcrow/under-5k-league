@@ -469,6 +469,84 @@ describe("draft auction — claim guards", () => {
       expect(call[2]).toEqual({ afterResponse: true });
     }
   });
+
+  // Undo works on a finished draft, and the reopened run then completes again.
+  async function completeUndoAndRecomplete() {
+    const season = await makeSeason({ teamSize: 2, draftBudget: 50 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const p1 = await makePlayer(season.id, "First Buy", 4000);
+    const p2 = await makePlayer(season.id, "Disputed Buy", 3000);
+    const p3 = await makePlayer(season.id, "Replacement", 2000);
+    for (const [user, discordId] of [
+      [p1, "920000000000000001"],
+      [p2, "920000000000000002"],
+      [p3, "920000000000000003"],
+    ] as const) {
+      await prisma.user.update({ where: { id: user.id }, data: { discordId } });
+    }
+    await startDraftState(season.id);
+
+    await nominatePlayer(season.id, sessionFor(capA.user), p1.id, 9);
+    await expireClock(season.id);
+    await resolveExpiredNomination(season.id);
+    await nominatePlayer(season.id, sessionFor(capB.user), p2.id, 3);
+    await expireClock(season.id);
+    await resolveExpiredNomination(season.id);
+    const firstCalls = [...mockSend.mock.calls];
+
+    const admin = sessionFor(await makeUser("Boss", "ADMIN"));
+    expect((await undoLastSale(season.id, admin)).ok).toBe(true);
+    mockSend.mockClear();
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capB.user), p3.id, 2)).ok,
+    ).toBe(true);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+    expect(
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }))
+        .status,
+    ).toBe(DRAFT_STATUS.COMPLETE);
+    return { firstCalls, secondCalls: [...mockSend.mock.calls] };
+  }
+
+  it("completing again after an undo posts the updated teams without pinging anyone", async () => {
+    const { firstCalls, secondCalls } = await completeUndoAndRecomplete();
+    // The first completion pinged the drafted players and posted the recap.
+    expect(firstCalls).toHaveLength(2);
+    expect(firstCalls[0][1]).toEqual({
+      users: ["920000000000000001", "920000000000000002"],
+    });
+
+    // The repeat: one teams post, every name in plain text, nobody allowlisted,
+    // and no second recap.
+    expect(secondCalls).toHaveLength(1);
+    const [content, mentions, options] = secondCalls[0];
+    expect(content).toContain("draft is complete again. Here are the updated teams:");
+    expect(content).toContain("First Buy $9");
+    expect(content).toContain("Replacement $2");
+    expect(content).not.toContain("Disputed Buy");
+    expect(content).not.toContain("<@");
+    expect(mentions).toBeUndefined();
+    expect(options).toEqual({ afterResponse: true });
+  });
+
+  it("a first teams post that was never queued leaves the ping for the next completion", async () => {
+    // No webhook (or a failed enqueue) at the first completion: nobody heard.
+    mockSend.mockResolvedValueOnce(false);
+    const { firstCalls, secondCalls } = await completeUndoAndRecomplete();
+    expect(firstCalls[0][1]).toEqual({
+      users: ["920000000000000001", "920000000000000002"],
+    });
+
+    expect(secondCalls).toHaveLength(2);
+    const [content, mentions] = secondCalls[0];
+    expect(content).toContain("draft is complete! Here are the teams:");
+    expect(mentions).toEqual({
+      users: ["920000000000000001", "920000000000000003"],
+    });
+    expect(String(secondCalls[1][0])).toContain("Draft night in numbers");
+  });
 });
 
 describe("draft auction — clocks, rotation, pause", () => {

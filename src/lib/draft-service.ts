@@ -28,7 +28,7 @@ import type {
   DraftLotExpectation,
   DraftTurnExpectation,
 } from "./draft-http";
-import { weekReminderPrefix } from "./settings";
+import { draftTeamsPingKey, weekReminderPrefix } from "./settings";
 import {
   draftCompleteAnnouncement,
   draftRecapMessage,
@@ -43,7 +43,7 @@ import {
   openDraftLot, readDraftSales, setDraftRunStatus, settleDraftLot,
   undoDraftSaleHistory, voidDraftLot,
 } from "./draft-history";
-import { isSerializationConflict } from "./prisma-errors";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
@@ -220,8 +220,11 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         where: { seasonId },
         data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
       });
-      await setDraftRunStatus(tx, draft, "COMPLETE");
-      completed = { name: season.name, teamSize: season.teamSize };
+      completed = {
+        name: season.name,
+        teamSize: season.teamSize,
+        runId: await setDraftRunStatus(tx, draft, "COMPLETE"),
+      };
     } else {
       await tx.draft.update({
         where: { seasonId },
@@ -240,13 +243,37 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
   return resolved;
 }
 
-/** The season a resolver just finished the draft for. */
-type CompletedDraft = { name: string; teamSize: number };
+/** The season a resolver just finished the draft for, and the run it closed. */
+type CompletedDraft = { name: string; teamSize: number; runId: string };
+
+/**
+ * Claim the run's one mention-bearing teams post. The Setting row is CREATED,
+ * so exactly one completion of a run wins it; false means an earlier
+ * completion of this run already pinged everyone.
+ */
+async function claimDraftTeamsPing(key: string): Promise<boolean> {
+  try {
+    await prisma.setting.create({
+      data: { key, value: new Date().toISOString() },
+    });
+    return true;
+  } catch (e) {
+    if (isUniqueViolation(e)) return false;
+    throw e;
+  }
+}
 
 /**
  * The draft-complete posts, after the commit: the teams (every drafted player
  * who linked Discord mentioned once), then the draft-night recap. Best-effort
  * like every send: a failed read or send never touches the finished draft.
+ *
+ * Undo can reopen a finished auction, and the run then completes a second
+ * time. Only its first completion pings: the repeat posts the updated teams
+ * with every name in plain text and skips the recap, instead of buzzing the
+ * phones of ~30 players for a roster that changed by one. The marker is
+ * released when nothing was queued (no webhook, a failed read), because then
+ * nobody was pinged.
  *
  * This runs on the live draft's hot path (the tick, bid and nominate routes
  * resolve expired clocks), so both posts are queued now and delivered after
@@ -258,7 +285,11 @@ async function announceDraftComplete(
   seasonId: string,
   season: CompletedDraft,
 ): Promise<void> {
+  const pingKey = draftTeamsPingKey(seasonId, season.runId);
+  let unqueuedClaim = false;
   try {
+    const first = await claimDraftTeamsPing(pingKey);
+    unqueuedClaim = first;
     const teams = await prisma.team.findMany({
       where: { seasonId },
       orderBy: [{ draftOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
@@ -288,15 +319,23 @@ async function announceDraftComplete(
         })),
         openSeats: Math.max(0, season.teamSize - team._count.members),
       })),
+      again: !first,
     });
-    await sendDiscordMessage(
+    const queued = await sendDiscordMessage(
       announcement.content,
       mentionsOf(announcement.mentionUserIds),
       { afterResponse: true },
     );
-    await sendDraftRecap(seasonId);
+    if (queued) unqueuedClaim = false;
+    if (first) await sendDraftRecap(seasonId);
   } catch {
     // The draft is already committed; a lost post is the only cost.
+  } finally {
+    if (unqueuedClaim) {
+      await prisma.setting
+        .deleteMany({ where: { key: pingKey } })
+        .catch(() => undefined);
+    }
   }
 }
 
@@ -404,8 +443,11 @@ export async function resolveStalledNomination(
           data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
         });
         if (done.count === 0) return false;
-        await setDraftRunStatus(tx, draft, "COMPLETE");
-        completed = { name: season.name, teamSize: season.teamSize };
+        completed = {
+          name: season.name,
+          teamSize: season.teamSize,
+          runId: await setDraftRunStatus(tx, draft, "COMPLETE"),
+        };
       } else {
         const adv = await tx.draft.updateMany({
           where: {
@@ -455,8 +497,11 @@ export async function resolveStalledNomination(
         },
       });
       if (done.count === 0) return false;
-      await setDraftRunStatus(tx, draft, "COMPLETE");
-      completed = { name: season.name, teamSize: season.teamSize };
+      completed = {
+        name: season.name,
+        teamSize: season.teamSize,
+        runId: await setDraftRunStatus(tx, draft, "COMPLETE"),
+      };
       return true;
     }
 
