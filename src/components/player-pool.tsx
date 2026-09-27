@@ -35,6 +35,7 @@ import {
   type PoolStatusFilter,
 } from "@/lib/player-pool";
 import { pubLastPlayed } from "@/lib/pub-stats";
+import { aboutText } from "@/lib/about-you";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
 
@@ -391,14 +392,16 @@ export function PlayerPool({
               // Measured when the snapshot was taken, and only while it is
               // recent: an old snapshot says nothing about last week.
               const activity = pub ? pubLastPlayed(pub, nowMs) : null;
-              // One quote line per row: the captain note (written TO captains)
-              // beats the player's own goals; the goals fill the slot when no
-              // note exists. `statement` is only sent when it would render.
-              const quote = hasText(p.captainNote)
-                ? { text: p.captainNote, label: "Note for captains" }
-                : sc?.statement
-                  ? { text: sc.statement, label: "Their goals" }
-                  : null;
+              // One quote line per row: what they wrote about themselves.
+              // Signups made before the form had one "About you" box keep a
+              // captain note and goals; both show, joined, never one dropped.
+              const about = aboutText(
+                { captainNote: p.captainNote, statement: sc?.statement },
+                " · ",
+              );
+              const quote = about
+                ? { text: about, label: "About this player" }
+                : null;
               return (
                 <li
                   key={p.userId}

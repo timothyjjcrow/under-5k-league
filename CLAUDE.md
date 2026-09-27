@@ -676,9 +676,14 @@ has to justify it.
     `scripts/link-fixture-discord.ts` links fixture users to those ids; log in
     with `/api/auth/dev`.
 - **Player questionnaire**: `Registration.roles` (comma-sep position keys,
-  helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
-  `captainNote` — captured on `/me`, surfaced in the player pool and draft room
-  (`getDraftState` carries roles/heroes/note for the nominated player).
+  helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, and ONE "About
+  you (shown to captains)" box — captured on `/me`, surfaced in the player
+  pool and draft room (`getDraftState` carries roles/heroes/note for the
+  nominated player). The box replaced two (goals + captain note) but both
+  columns stay: new text is stored in `captainNote` and clears `statement`;
+  a box submitted unchanged leaves an old two-part row alone; every surface
+  shows old rows JOINED via `aboutText` (`src/lib/about-you.ts`), never one
+  part dropped.
 
 ## Automatic result sync (done)
 
@@ -2273,8 +2278,8 @@ renders byte-identical to the pre-feature page:
   `pubStatsFresh`); the toast reports "(N more next run)".
 - `PoolPlayer` stays FROZEN: everything rides `PoolScoutInfo`, one parallel
   record (the `PoolDraftInfo` precedent) carrying `{inhouse?, pub?,
-statement?}` — statement is the row quote's fallback when `captainNote` is
-  empty, sent only when it will render. Token/title text lives in
+statement?}` — an older signup's goals, sent only when they add to
+  `captainNote`; the row shows the two joined (`aboutText`). Token/title text lives in
   `player-pool.ts` (`inhouseToken`/`pubToken`/…) so the rows, the lg column
   and the hopefuls cards can never phrase the same fact differently.
   The component takes `now` (server epoch ms) so SSR and hydration compute

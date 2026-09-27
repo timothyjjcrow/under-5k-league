@@ -40,6 +40,7 @@ import {
   withdrawConfirmText,
   type AccountStepInput,
 } from "@/lib/account-page";
+import { ABOUT_MAX_LENGTH, aboutText } from "@/lib/about-you";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { steamIdToAccountId } from "@/lib/dota";
 import {
@@ -601,15 +602,14 @@ export default async function MePage({
                 >
                   {/* Said once, in neutral colours: the accent box this used
                       to be looked exactly like the "Confirmation needed" box,
-                      and each field then repeated "shown publicly". The
-                      "(public)" labels on the text boxes stay. */}
+                      and each field then repeated "shown publicly". */}
                   <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs leading-relaxed text-muted">
                     Everything on this form, and your medal, is public in the
                     player pool and on your profile. Your Discord is only
                     shown to league admins and players signed up this season.
                     Keep contact, health and availability details out of the
-                    text boxes. Joining lets the league refresh your public
-                    Steam and Dota data.
+                    About you box. Joining lets the league refresh your
+                    public Steam and Dota data.
                   </p>
 
                   {playerLocked ? (
@@ -770,38 +770,23 @@ export default async function MePage({
                     </p>
                   </div>
 
+                  {/* One box where there used to be two near-identical ones
+                      (goals, and a note for captains). An older signup's two
+                      answers show here joined, so nothing is lost. */}
                   <div>
                     <label
-                      htmlFor="statement"
+                      htmlFor="about"
                       className="mb-1.5 block text-sm font-medium"
                     >
-                      What you want from the league (public)
+                      About you (shown to captains)
                     </label>
                     <textarea
-                      id="statement"
-                      name="statement"
-                      rows={3}
-                      maxLength={1000}
-                      defaultValue={form?.statement ?? ""}
-                      placeholder="Why you're here and what you'd like to improve…"
-                      className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="captainNote"
-                      className="mb-1.5 block text-sm font-medium"
-                    >
-                      Note for captains (public)
-                    </label>
-                    <textarea
-                      id="captainNote"
-                      name="captainNote"
-                      rows={3}
-                      maxLength={1000}
-                      defaultValue={form?.captainNote ?? ""}
-                      placeholder="What should captains know about you as a player?"
+                      id="about"
+                      name="about"
+                      rows={4}
+                      maxLength={ABOUT_MAX_LENGTH}
+                      defaultValue={form ? aboutText(form) : ""}
+                      placeholder="How you play, what you're working on, what you want from the league…"
                       className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
                     />
                   </div>

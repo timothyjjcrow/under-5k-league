@@ -191,8 +191,13 @@ export default async function PlayersPage() {
     if (inhouseInfo[p.userId]) entry.inhouse = inhouseInfo[p.userId];
     const pub = poolPubRecord(p.user.pubStats, p.user.pubStatsAt);
     if (pub) entry.pub = pub;
-    // The quote fallback only ships when it would render (payload trimming).
-    if (!hasText(p.captainNote) && hasText(p.statement)) {
+    // An older signup's goals ride along only when they add something to
+    // the captain note the row already carries (payload trimming); the row
+    // shows the two joined (about-you.ts).
+    if (
+      hasText(p.statement) &&
+      p.statement.trim() !== p.captainNote.trim()
+    ) {
       entry.statement = p.statement;
     }
     if (entry.lastSeason || entry.inhouse || entry.pub || entry.statement) {

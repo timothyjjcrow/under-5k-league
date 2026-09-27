@@ -36,6 +36,7 @@ import type { PlayerStat } from "@/lib/match-import";
 import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
 import { leagueRecords, toRecordGames, type PlayerRecord } from "@/lib/records";
 import { formatNetWorth, cn, hasText } from "@/lib/utils";
+import { aboutText } from "@/lib/about-you";
 import { rankMedalName } from "@/lib/rank";
 import { pubTitle, pubToken } from "@/lib/player-pool";
 import {
@@ -600,11 +601,10 @@ export default async function PlayerProfilePage({
   // Band/card visibility, computed once so a SectionTitle can never render
   // above an empty band. Everything gates on data presence, never phase.
   const hasLeagueGames = gameRows.length > 0;
-  // What they wrote for captains, shown once under the header.
-  const signupGoals =
-    activeReg && hasText(activeReg.statement) ? activeReg.statement : null;
-  const signupNote =
-    activeReg && hasText(activeReg.captainNote) ? activeReg.captainNote : null;
+  // What they wrote about themselves, shown once under the header. Signups
+  // from before the form had one "About you" box keep two answers; they show
+  // joined, never one dropped.
+  const signupAbout = activeReg ? aboutText(activeReg) || null : null;
   // Only while they could still be picked as one; once on a team (or when
   // they already captain) it is old news.
   const wantsCaptainNow = !!activeReg?.wantsCaptain && !team && !isStandin;
@@ -940,35 +940,18 @@ export default async function PlayerProfilePage({
                 ) : null}
               </Link>
             ) : null}
-            {signupGoals || signupNote ? (
-              // Their own words for captains, once, under the header. Full
-              // width so a long note wraps instead of squeezing the name.
-              <dl
-                className={cn(
-                  "grid basis-full grid-cols-1 gap-x-6 gap-y-3 border-t border-line/60 pt-4 text-sm",
-                  signupGoals && signupNote && "sm:grid-cols-2",
-                )}
-              >
-                {signupGoals ? (
-                  <div className="min-w-0">
-                    <dt className="text-xs font-medium uppercase tracking-wide text-muted">
-                      Goals
-                    </dt>
-                    <dd className="mt-0.5 [overflow-wrap:anywhere]">
-                      {signupGoals}
-                    </dd>
-                  </div>
-                ) : null}
-                {signupNote ? (
-                  <div className="min-w-0">
-                    <dt className="text-xs font-medium uppercase tracking-wide text-muted">
-                      Note for captains
-                    </dt>
-                    <dd className="mt-0.5 italic [overflow-wrap:anywhere]">
-                      &ldquo;{signupNote}&rdquo;
-                    </dd>
-                  </div>
-                ) : null}
+            {signupAbout ? (
+              // Their own words, once, under the header. Full width so a
+              // long answer wraps instead of squeezing the name.
+              <dl className="basis-full border-t border-line/60 pt-4 text-sm">
+                <div className="min-w-0">
+                  <dt className="text-xs font-medium uppercase tracking-wide text-muted">
+                    About
+                  </dt>
+                  <dd className="mt-0.5 whitespace-pre-line [overflow-wrap:anywhere]">
+                    {signupAbout}
+                  </dd>
+                </div>
               </dl>
             ) : null}
           </div>

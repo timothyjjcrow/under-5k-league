@@ -1205,13 +1205,13 @@ describe("saveRegistration — a late medal must not brick an admitted signup", 
     // `roles` is a repeated field (formData.getAll), so one valid key here.
     const res = await saveRegistration(
       {},
-      form({ type: "PLAYER", mmr: 3000, roles: "2", statement: "still here" }),
+      form({ type: "PLAYER", mmr: 3000, roles: "2", about: "still here" }),
     );
 
     expect(res?.error).toBeUndefined();
     const reg = await regFor(season.id, user.id);
     expect(reg?.roles).toBe("2");
-    expect(reg?.statement).toBe("still here");
+    expect(reg?.captainNote).toBe("still here");
     expect(reg?.status).toBe("ACTIVE");
   });
 
@@ -1274,7 +1274,7 @@ describe("saveRegistration — a late medal must not brick an admitted signup", 
     const reg = await regFor(season.id, user.id);
     expect(reg?.status).toBe("WITHDRAWN"); // not revived
     expect(reg?.roles).not.toBe("3"); // and the edit didn't land either
-    expect(reg?.statement).toBe(""); // nothing from this submit landed
+    expect(reg?.captainNote).toBe(""); // nothing from this submit landed
   });
 });
 
@@ -1312,14 +1312,14 @@ describe("saveRegistration — draft-night locks (live auction)", () => {
 
     const res = await saveRegistration(
       {},
-      form({ type: "PLAYER", mmr: 1500, statement: "new goals" }),
+      form({ type: "PLAYER", mmr: 1500, about: "new goals" }),
     );
 
     expect(res?.error).toBeUndefined();
     expect(res?.message).toMatch(/MMR is locked/);
     const reg = await regFor(season.id, user.id);
     expect(reg?.mmr).toBe(4400); // getDraftState re-reads this every poll
-    expect(reg?.statement).toBe("new goals"); // the harmless edit still lands
+    expect(reg?.captainNote).toBe("new goals"); // the harmless edit still lands
   });
 
   it("freezes MMR while the auction is merely PAUSED too", async () => {
@@ -1501,5 +1501,109 @@ describe("saveRegistration — draft-night lock scope", () => {
     expect(res?.error).toMatch(/admin removed your signup/i);
     expect(res?.error).not.toMatch(/reopens once it finishes/i);
     expect((await regFor(season.id, user.id))?.status).toBe("REMOVED");
+  });
+});
+
+// One "About you" box replaced the goals + captain-note pair. Both stored
+// columns stay; the text a player writes now lands in captainNote, and an old
+// two-part answer is only rewritten once the player actually edits it.
+describe("saveRegistration — the About you box", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  async function oldTwoPartSignup() {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Two Part Writer");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+        statement: "Want to learn offlane",
+        captainNote: "Reliable on Sundays",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    return { season, user };
+  }
+
+  it("stores a new signup's text in the captain note", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("New About Writer");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3000, about: "  Pos 5 main\r\nComms on  " }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      captainNote: "Pos 5 main\nComms on",
+      statement: "",
+    });
+  });
+
+  it("leaves an old two-part answer alone when the box comes back unchanged", async () => {
+    const { season, user } = await oldTwoPartSignup();
+
+    // Exactly what /me shows (the browser posts the break as CRLF), plus an
+    // unrelated edit to the roles.
+    const res = await saveRegistration(
+      {},
+      form({
+        type: "PLAYER",
+        mmr: 3000,
+        roles: "3",
+        about: "Reliable on Sundays\r\n\r\nWant to learn offlane",
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      roles: "3",
+      captainNote: "Reliable on Sundays",
+      statement: "Want to learn offlane",
+    });
+  });
+
+  it("merges an old answer into the one field once the player edits it", async () => {
+    const { season, user } = await oldTwoPartSignup();
+
+    const res = await saveRegistration(
+      {},
+      form({
+        type: "PLAYER",
+        mmr: 3000,
+        about: "Reliable on Sundays\n\nNow learning mid",
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      captainNote: "Reliable on Sundays\n\nNow learning mid",
+      statement: "",
+    });
+  });
+
+  it("joins both answers from a page loaded before the merge", async () => {
+    const { season, user } = await oldTwoPartSignup();
+
+    const res = await saveRegistration(
+      {},
+      form({
+        type: "PLAYER",
+        mmr: 3000,
+        statement: "Want to learn support",
+        captainNote: "Reliable on Sundays",
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      captainNote: "Reliable on Sundays\n\nWant to learn support",
+      statement: "",
+    });
   });
 });

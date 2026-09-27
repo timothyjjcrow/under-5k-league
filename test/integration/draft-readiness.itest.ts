@@ -278,7 +278,7 @@ describe("draft readiness confirmation", () => {
 
     const edited = await saveRegistration(
       {},
-      fd({ type: "PLAYER", mmr: 3000, roles: "1", statement: "Still in" }),
+      fd({ type: "PLAYER", mmr: 3000, roles: "1", about: "Still in" }),
     );
     expect(edited?.error).toBeUndefined();
     expect(

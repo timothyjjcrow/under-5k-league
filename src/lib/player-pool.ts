@@ -75,8 +75,8 @@ export type PoolScout = {
   inhouse?: PoolInhouseRecord;
   pub?: PoolPubRecord;
   lastSeason?: PoolLastSeason;
-  /** Signup "goals" — the row's quote fallback when captainNote is empty
-   *  (only sent when it will actually render; payload trimming). */
+  /** An older signup's "goals", shown joined with its captain note (only
+   *  sent when it adds something; payload trimming). */
   statement?: string;
 };
 export type PoolScoutInfo = Record<string, PoolScout>;

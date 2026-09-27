@@ -51,6 +51,7 @@ import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 import { mergeAccountRefresh } from "@/lib/account-page";
+import { aboutUnchanged, submittedAbout } from "@/lib/about-you";
 import { claimProviderCooldown } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
@@ -252,10 +253,9 @@ export async function saveRegistration(
   // Clamp on whole hero names, not raw characters — a mid-name cut rendered
   // as garbage in the player pool and draft room.
   const favoriteHeroes = clampHeroList(str(formData, "favoriteHeroes"), 200);
-  // Trim before storing: a whitespace-only note used to render as an empty
-  // pair of smart quotes with a "NOTE FOR CAPTAINS" label above it.
-  const statement = str(formData, "statement").trim().slice(0, 1000);
-  const captainNote = str(formData, "captainNote").trim().slice(0, 1000);
+  // One "About you" box (see about-you.ts). Trimmed before storing: a
+  // whitespace-only note used to render as an empty pair of smart quotes.
+  const about = submittedAbout(formData);
 
   const existing = await prisma.registration.findUnique({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
@@ -486,14 +486,20 @@ export async function saveRegistration(
         )
       : null;
   let confirmedDraft = false;
+  // New text goes to captainNote and clears the old goals column. A box
+  // submitted exactly as the form showed it leaves both columns untouched, so
+  // an old two-part answer is only merged once the player edits it.
+  const aboutData =
+    existing && aboutUnchanged(about, existing)
+      ? {}
+      : { captainNote: about, statement: "" };
   const registrationData = {
     type,
     mmr: check.mmr,
     wantsCaptain,
     roles,
     favoriteHeroes,
-    statement,
-    captainNote,
+    ...aboutData,
     status: REGISTRATION_STATUS.ACTIVE,
     ...(resetDraftConfirmation ? clearedDraftConfirmation : {}),
   };

@@ -46,7 +46,7 @@ describe("public profile explanations", () => {
     for (const disclosure of [
       "Everything on this form, and your medal, is public in the player pool and on your profile.",
       "Your Discord is only shown to league admins and players signed up this season.",
-      "Keep contact, health and availability details out of the text boxes.",
+      "Keep contact, health and availability details out of the About you box.",
       "Joining lets the league refresh your public Steam and Dota data.",
     ]) {
       expect(notice).toContain(disclosure);
