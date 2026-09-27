@@ -43,9 +43,17 @@ export function createLeagueConfig(env: LeagueEnvironment) {
   const inhouseLeagueName = env.NEXT_PUBLIC_INHOUSE_LEAGUE_NAME?.trim() ||
     (europe ? "European inhouse league ticket (to be configured)" : "Under 5K In-House League");
 
+  // The footer's one line on who runs the league, what is public and who to
+  // ask about a profile. Deliberately no policy page and no promised
+  // timelines; Discord is only named where the region has an invite.
+  const footerNote = `${name} is run by volunteers. Your Steam name, avatar, medal and league results are public here. To fix or remove your profile, ${
+    discordInviteUrl ? "message a league admin on Discord" : "contact a league admin"
+  }.`;
+
   return {
     region,
     name,
+    footerNote,
     merchUrl: "https://ggd2l-shop.fourthwall.com/",
     branding: {
       blendMode: europe ? "lighten" : "normal",

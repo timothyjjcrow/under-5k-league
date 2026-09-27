@@ -134,6 +134,10 @@ test("home renders the season timeline, pool composition, and footer", async ({
   } else {
     await expect(discord).toHaveCount(0);
   }
+  // One line on who runs the league and who fixes or removes a profile.
+  await expect(page.getByRole("contentinfo")).toContainText(
+    LEAGUE_CONFIG.footerNote,
+  );
   const support = page.getByRole("contentinfo").getByRole("link", {
     name: "Support the league on Buy Me a Coffee (opens in a new tab)",
   });

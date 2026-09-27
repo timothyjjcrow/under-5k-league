@@ -134,6 +134,11 @@ export function SiteFooter({
               Support the league <span aria-hidden="true">↗</span>
             </a>
           </div>
+          {/* Who runs the league and who to ask about a profile, per region.
+              One line on purpose: there is no policy page. */}
+          <p className="text-center text-xs leading-relaxed text-muted sm:col-span-2 sm:text-left">
+            {LEAGUE_CONFIG.footerNote}
+          </p>
         </div>
       </div>
     </footer>
