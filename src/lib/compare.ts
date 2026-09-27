@@ -42,6 +42,44 @@ export function meetings(
   return result;
 }
 
+export type SharedSeries = {
+  matchId: string;
+  /** Epoch seconds of the earliest dated game they shared there; 0 = unknown. */
+  startTime: number;
+  meetings: Meetings;
+};
+
+/**
+ * Every series A and B both played in, newest first, with how they met in it
+ * (the same side/opposite side rule as `meetings`). Feeds the head-to-head
+ * card's links to each match page. Games without both players are ignored.
+ */
+export function sharedSeries(
+  games: (MeetingGame & { matchId: string; startTime: number })[],
+  a: string,
+  b: string,
+): SharedSeries[] {
+  const byMatch = new Map<string, typeof games>();
+  for (const game of games) {
+    const hasA = game.lines.some((l) => l.userId === a);
+    const hasB = game.lines.some((l) => l.userId === b);
+    if (!hasA || !hasB) continue;
+    byMatch.set(game.matchId, [...(byMatch.get(game.matchId) ?? []), game]);
+  }
+  return [...byMatch]
+    .map(([matchId, series]) => {
+      const dated = series.map((g) => g.startTime).filter((t) => t > 0);
+      return {
+        matchId,
+        startTime: dated.length ? Math.min(...dated) : 0,
+        meetings: meetings(series, a, b),
+      };
+    })
+    .sort(
+      (x, y) => y.startTime - x.startTime || x.matchId.localeCompare(y.matchId),
+    );
+}
+
 /**
  * Starting values for the Compare page's two selects. Whichever slot the URL
  * left empty is filled with the viewer, when the viewer has league games of

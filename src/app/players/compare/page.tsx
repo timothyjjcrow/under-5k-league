@@ -10,7 +10,18 @@ import {
   decodeGamePlayers,
   trustedGamePlayers,
 } from "@/lib/player-stats";
-import { compareDefaults, meetings } from "@/lib/compare";
+import {
+  compareDefaults,
+  meetings,
+  sharedSeries,
+  type Meetings,
+} from "@/lib/compare";
+import { getPlayerGameFacts } from "@/lib/player-game-history";
+import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
+import { matchRoundLabel } from "@/lib/schedule";
+import { formatMatchTime } from "@/lib/match-time";
+import { LocalTime } from "@/components/local-time";
+import Link from "next/link";
 import { heroById } from "@/lib/heroes";
 import { formatNetWorth } from "@/lib/utils";
 import {
@@ -24,6 +35,7 @@ import {
   PlayerLink,
   RankBadge,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
 import { shareMetadata } from "@/lib/share-metadata";
@@ -220,6 +232,61 @@ export default async function ComparePage({
     : null;
   const met = comparable ? meetings(games, a!.id, b!.id) : null;
 
+  // The series they shared, so the head-to-head can link each match page.
+  // Read from A's indexed game history (the profile's read), not the all-games
+  // scan, which carries no match ids.
+  const shared =
+    met && (met.opposite.games > 0 || met.together.games > 0)
+      ? sharedSeries(
+          (await getPlayerGameFacts(a!.id)).map((game) => ({
+            matchId: game.matchId,
+            startTime: game.startTime,
+            radiantWin: game.radiantWin,
+            lines: trustedGamePlayers(decodeGamePlayers(game.players)),
+          })),
+          a!.id,
+          b!.id,
+        )
+      : [];
+  const sharedMatches = shared.length
+    ? await prisma.match.findMany({
+        where: { id: { in: shared.map((series) => series.matchId) } },
+        select: {
+          id: true,
+          seasonId: true,
+          week: true,
+          phase: true,
+          bracketSlot: true,
+          scheduledAt: true,
+          homeTeam: { select: { name: true } },
+          awayTeam: { select: { name: true } },
+        },
+      })
+    : [];
+  const sharedRounds = await loadPlayoffRoundsBySeason(
+    sharedMatches.map((match) => match.seasonId),
+  );
+  const sharedMatchById = new Map(sharedMatches.map((m) => [m.id, m]));
+  const sharedLinks: SeriesLinkView[] = shared.flatMap((series) => {
+    const match = sharedMatchById.get(series.matchId);
+    if (!match) return [];
+    return [
+      {
+        matchId: series.matchId,
+        label: `${matchRoundLabel(match, sharedRounds.get(match.seasonId) ?? 0)} · ${match.homeTeam.name} vs ${match.awayTeam.name}`,
+        playedAt:
+          series.startTime > 0
+            ? new Date(series.startTime * 1000)
+            : match.scheduledAt,
+        meetings: series.meetings,
+      },
+    ];
+  });
+  const rivalSeries = sharedLinks.filter((s) => s.meetings.opposite.games > 0);
+  const teammateSeries = sharedLinks.filter(
+    (s) => s.meetings.together.games > 0,
+  );
+
   // Only compare when BOTH sides actually have games on record.
   const contested = !!sumA && !!sumB && sumA.games > 0 && sumB.games > 0;
   const rows: StatRow[] =
@@ -232,7 +299,14 @@ export default async function ComparePage({
             b: String(sumB.games),
             edge: 0,
           },
-          row("Wins", sumA.wins, sumB.wins, { contested }),
+          // Nor are wins: more games means more wins, and win rate below
+          // already makes the comparison.
+          {
+            label: "Wins",
+            a: String(sumA.wins),
+            b: String(sumB.wins),
+            edge: 0,
+          },
           row("Win rate", sumA.winRate, sumB.winRate, {
             fmt: (n) => `${n}%`,
             contested,
@@ -359,6 +433,9 @@ export default async function ComparePage({
                     {met.opposite.games === 1 ? "" : "s"}.
                   </p>
                 )}
+                {rivalSeries.length > 0 ? (
+                  <SeriesLinks series={rivalSeries} label="as rivals" />
+                ) : null}
                 {met.together.games > 0 && (
                   <p>
                     🤝 As teammates:{" "}
@@ -369,6 +446,9 @@ export default async function ComparePage({
                     {met.together.games === 1 ? "" : "s"} together.
                   </p>
                 )}
+                {teammateSeries.length > 0 ? (
+                  <SeriesLinks series={teammateSeries} label="as teammates" />
+                ) : null}
               </CardBody>
             </Card>
           )}
@@ -482,6 +562,66 @@ export default async function ComparePage({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+type SeriesLinkView = {
+  matchId: string;
+  label: string;
+  playedAt: Date | null;
+  meetings: Meetings;
+};
+
+/** Series shown before the rest fold behind "Show N more". */
+const SERIES_PREVIEW = 5;
+
+/**
+ * One link per shared series (newest first) under its head-to-head line. A
+ * plain <details> for the tail keeps this page free of client JS.
+ */
+function SeriesLinks({
+  series,
+  label,
+}: {
+  series: SeriesLinkView[];
+  /** "as rivals" / "as teammates", for the list's spoken name. */
+  label: string;
+}) {
+  const item = (s: SeriesLinkView) => (
+    <li key={s.matchId} className="min-w-0 [overflow-wrap:anywhere]">
+      <Link href={`/matches/${s.matchId}`} className={textLink()}>
+        {s.label}
+      </Link>
+      {s.playedAt ? (
+        <span className="text-muted">
+          {" · "}
+          <LocalTime
+            ts={s.playedAt.getTime()}
+            variant="date"
+            initial={formatMatchTime(s.playedAt, "date")}
+          />
+        </span>
+      ) : null}
+    </li>
+  );
+  // space-y-2: every link carries TAP_SAFE, and stacked hit boxes need 8px
+  // between rows so they touch without overlapping.
+  return (
+    <div className="pb-2 pl-6 text-xs">
+      <ul aria-label={`Series ${label}`} className="space-y-2">
+        {series.slice(0, SERIES_PREVIEW).map(item)}
+      </ul>
+      {series.length > SERIES_PREVIEW ? (
+        <details className="mt-2">
+          <summary className={textLink("cursor-pointer text-xs")}>
+            Show {series.length - SERIES_PREVIEW} more
+          </summary>
+          <ul className="mt-2 space-y-2">
+            {series.slice(SERIES_PREVIEW).map(item)}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }

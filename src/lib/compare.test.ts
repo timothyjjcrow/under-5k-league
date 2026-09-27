@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareDefaults,
   meetings,
+  sharedSeries,
   type MeetingGame,
 } from "./compare";
 
@@ -64,6 +65,56 @@ describe("meetings", () => {
       "b",
     );
     expect(m.opposite.games + m.together.games).toBe(0);
+  });
+});
+
+describe("sharedSeries", () => {
+  const at = (matchId: string, startTime: number, g: MeetingGame) => ({
+    ...g,
+    matchId,
+    startTime,
+  });
+
+  it("groups the games both played by series, newest first", () => {
+    const series = sharedSeries(
+      [
+        at("m1", 100, game(true, [["a", true], ["b", false]])),
+        at("m1", 200, game(false, [["a", true], ["b", false]])),
+        at("m2", 500, game(true, [["a", true], ["b", true]])),
+        at("m3", 900, game(true, [["a", true], ["c", false]])), // no b
+      ],
+      "a",
+      "b",
+    );
+    expect(series.map((s) => s.matchId)).toEqual(["m2", "m1"]);
+    expect(series[1]).toEqual({
+      matchId: "m1",
+      startTime: 100,
+      meetings: {
+        opposite: { games: 2, aWins: 1, bWins: 1 },
+        together: { games: 0, wins: 0, losses: 0 },
+      },
+    });
+    expect(series[0].meetings.together).toEqual({
+      games: 1,
+      wins: 1,
+      losses: 0,
+    });
+  });
+
+  it("puts series with no known start time last", () => {
+    const series = sharedSeries(
+      [
+        at("old", 0, game(true, [["a", true], ["b", false]])),
+        at("new", 50, game(true, [["a", true], ["b", false]])),
+      ],
+      "a",
+      "b",
+    );
+    expect(series.map((s) => [s.matchId, s.startTime])).toEqual([
+      ["new", 50],
+      ["old", 0],
+    ]);
   });
 });
 
