@@ -156,11 +156,11 @@ export function LeagueResultsMap({
                                 result === "W"
                                   ? "border-success/25 bg-success/15 text-success"
                                   : result === "L"
-                                    ? "border-danger/20 bg-danger/10 text-danger"
+                                    ? "border-danger/20 bg-danger/10 text-danger-soft"
                                     : result === "D"
                                       ? "border-accent/25 bg-accent/10 text-accent"
                                       : live
-                                        ? "border-danger/50 bg-danger/10 text-danger"
+                                        ? "border-danger/50 bg-danger/10 text-danger-soft"
                                         : "border-dashed border-line bg-surface-2/20 text-muted",
                               )}
                             >
