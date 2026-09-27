@@ -122,7 +122,11 @@ describe("side-game live-state integrity", () => {
 
   it("Pick'em transitions at kickoff and preserves void history", () => {
     expect(PICKEM).toMatch(/const voided = buckets\.voided;/);
-    expect(PICKEM).toMatch(/Your void picks/);
+    // Void picks stay in the viewer's one "Your picks" list, marked void.
+    expect(PICKEM).toMatch(
+      /pickHistory\(\[\.\.\.lockedForReview, \.\.\.graded, \.\.\.voided\]/,
+    );
+    expect(PICKEM).toMatch(/label: "Void pick"/);
     expect(PICKEM).toMatch(
       /<PickemDeadlineRefresh targetMs=\{nextOpenDeadline\}/,
     );

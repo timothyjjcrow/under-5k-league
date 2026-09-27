@@ -364,12 +364,17 @@ test("complete-season public pages agree on the champion and recap", async ({
       exact: true,
     }),
   ).toBeVisible();
+  // One "Your picks" list: the graded call and the void one, each marked.
+  const yourPicks = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /^Your picks/ }),
+  });
   await expect(
-    page.getByRole("heading", { name: "Your graded picks" }),
+    yourPicks.getByRole("img", { name: "Correct pick" }),
   ).toBeVisible();
+  await expect(yourPicks.getByRole("img", { name: "Void pick" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /Your void picks/ }),
-  ).toBeVisible();
+    page.getByRole("heading", { name: /Your (graded|void|locked) picks/ }),
+  ).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/pickem completed side game");
 
   assertNoErrors();
@@ -670,11 +675,14 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   }
 
   await page.goto(`/pickem?season=${archivedSeasonId}`);
+  const archivedPicks = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /^Your picks/ }),
+  });
   await expect(
-    page.getByRole("heading", { name: "Your graded picks" }),
+    archivedPicks.getByRole("img", { name: "Correct pick" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /Your void picks/ }),
+    archivedPicks.getByRole("img", { name: "Void pick" }),
   ).toBeVisible();
 
   assertNoErrors();

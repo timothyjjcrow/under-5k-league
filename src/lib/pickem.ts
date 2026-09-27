@@ -192,6 +192,76 @@ export function pickemStandings(
   return rows;
 }
 
+/**
+ * How one pick came out: right or wrong once the series has a winner, void on
+ * a draw or no-contest, null while the match is still undecided. The same
+ * grading as pickemStandings (a unit test pins that they agree).
+ */
+export type PickResult = "right" | "wrong" | "void";
+
+export function pickResult(
+  match: PickemMatchLike,
+  pickedTeamId: string,
+): PickResult | null {
+  if (match.status !== MATCH_STATUS.COMPLETED) return null;
+  if (!match.winnerTeamId) return "void";
+  return pickedTeamId === match.winnerTeamId ? "right" : "wrong";
+}
+
+/**
+ * "2 of 3 called it": of everyone who picked a decided match, how many named
+ * the winner. Null when there is no winner to call (undecided or a draw) or
+ * nobody picked it, so a caller never prints "0 of 0".
+ */
+export function calledItCount(
+  predictions: PredictionLike[],
+  match: PickemMatchLike,
+): { called: number; total: number } | null {
+  if (match.status !== MATCH_STATUS.COMPLETED || !match.winnerTeamId) {
+    return null;
+  }
+  let called = 0;
+  let total = 0;
+  for (const p of predictions) {
+    if (p.matchId !== match.id) continue;
+    total++;
+    if (p.pickedTeamId === match.winnerTeamId) called++;
+  }
+  return total > 0 ? { called, total } : null;
+}
+
+export type PickHistoryRow<T> = {
+  match: T;
+  pickedTeamId: string;
+  result: PickResult | null;
+};
+
+/**
+ * A viewer's picks on matches that no longer take one, as ONE list, newest
+ * first (latest week first, then latest kickoff), each with how it came out.
+ * /pickem used to split these into locked, void and graded sections with the
+ * graded ones oldest first, so the result someone came to check sat at the
+ * bottom of the third list. `matches` must hold only closed matches; open
+ * ones belong to the pick cards.
+ */
+export function pickHistory<
+  T extends PickemMatchLike & { week: number },
+>(matches: T[], picks: ReadonlyMap<string, string>): PickHistoryRow<T>[] {
+  // A TBD kickoff sorts after any real one in its week.
+  const at = (m: T) => m.scheduledAt?.getTime() ?? 0;
+  // Reversed first so the stable sort leaves same-week, same-time rows in
+  // newest-created-first order.
+  return [...matches]
+    .reverse()
+    .flatMap((match) => {
+      const pickedTeamId = picks.get(match.id);
+      return pickedTeamId
+        ? [{ match, pickedTeamId, result: pickResult(match, pickedTeamId) }]
+        : [];
+    })
+    .sort((a, b) => b.match.week - a.match.week || at(b.match) - at(a.match));
+}
+
 /** Community pick split for one match: how many chose each side. */
 export function pickSplit(
   predictions: PredictionLike[],

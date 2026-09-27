@@ -6,10 +6,13 @@ import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import {
+  calledItCount,
   groupOpenByWeek,
   partitionPickemMatches,
   PICKEM_RANKING_NOTE,
   pickemStandings,
+  pickHistory,
+  type PickResult,
   pickSplit,
 } from "@/lib/pickem";
 import { LocalTime } from "@/components/local-time";
@@ -41,6 +44,21 @@ import {
 } from "@/lib/schedule";
 
 type PickemSearchParams = { season?: string | string[] };
+
+/** The mark on each row of "Your picks". */
+const PICK_MARK: Record<
+  PickResult | "locked",
+  { glyph: string; label: string; className: string }
+> = {
+  right: { glyph: "✓", label: "Correct pick", className: "text-success" },
+  wrong: { glyph: "✗", label: "Wrong pick", className: "text-danger-soft" },
+  locked: {
+    glyph: "🔒",
+    label: "Locked, waiting for the result",
+    className: "",
+  },
+  void: { glyph: "➖", label: "Void pick", className: "text-muted" },
+};
 
 export async function generateMetadata({
   searchParams,
@@ -198,6 +216,10 @@ export default async function PickemPage({
     : [...buckets.locked, ...buckets.open];
   const graded = buckets.graded;
   const voided = buckets.voided;
+  // Every closed match the viewer picked, as one newest-first list.
+  const history = viewer
+    ? pickHistory([...lockedForReview, ...graded, ...voided], myPicks)
+    : [];
   const nextOpenDeadline = open.reduce<number | null>((next, match) => {
     const at = match.scheduledAt?.getTime();
     return at == null || (next != null && next <= at) ? next : at;
@@ -449,152 +471,77 @@ export default async function PickemPage({
         />
       ) : null}
 
-      {viewer && lockedForReview.some((m) => myPicks.has(m.id)) ? (
+      {history.length > 0 ? (
         <section className="space-y-4">
-          <SectionTitle aside="· submitted and no longer editable">
-            Your locked picks
-          </SectionTitle>
+          <SectionTitle aside="· newest first">Your picks</SectionTitle>
           <Card>
             <CardBody className="divide-y divide-line/60 p-0">
-              {lockedForReview
-                .filter((m) => myPicks.has(m.id))
-                .map((m) => {
-                  const pick = myPicks.get(m.id)!;
-                  const split = pickSplit(predictions, m.id, m.homeTeamId);
-                  const total = split.home + split.away;
-                  return (
-                    <div
-                      key={m.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
+              {history.map(({ match: m, pickedTeamId: pick, result }) => {
+                const mark = PICK_MARK[result ?? "locked"];
+                // Locked rows show how the crowd split; decided ones how
+                // many called it. Draws have neither.
+                const split =
+                  result === null
+                    ? pickSplit(predictions, m.id, m.homeTeamId)
+                    : null;
+                const splitTotal = split ? split.home + split.away : 0;
+                const called = calledItCount(predictions, m);
+                return (
+                  <div
+                    key={m.id}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5 text-sm"
+                  >
+                    <span
+                      role="img"
+                      aria-label={mark.label}
+                      title={mark.label}
+                      className={cn("w-5 shrink-0 text-center", mark.className)}
                     >
-                      <span aria-hidden className="shrink-0">
-                        🔒
-                      </span>
+                      <span aria-hidden>{mark.glyph}</span>
+                    </span>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
+                    >
+                      {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                      {result === null ? (
+                        "vs "
+                      ) : (
+                        <>
+                          <span className="font-mono text-xs">
+                            {m.homeScore}–{m.awayScore}
+                          </span>{" "}
+                        </>
+                      )}
+                      {teamName.get(m.awayTeamId) ?? "?"}
+                    </Link>
+                    <span className="w-full pl-8 text-xs text-muted sm:w-auto sm:pl-0">
+                      you picked{" "}
                       <Link
-                        href={`/matches/${m.id}`}
-                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
+                        href={`/teams/${pick}`}
+                        className="font-medium text-fg hover:text-info hover:underline"
                       >
-                        {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"} vs{" "}
+                        {teamName.get(pick) ?? "?"}
+                      </Link>
+                      {result === "void"
+                        ? " · void (draw or no-contest)"
+                        : null}
+                      {called
+                        ? ` · ${called.called} of ${called.total} called it`
+                        : null}
+                    </span>
+                    {split && splitTotal > 0 ? (
+                      <span className="w-full pl-8 text-xs text-muted sm:w-auto sm:pl-0">
+                        crowd: {Math.round((split.home / splitTotal) * 100)}%{" "}
+                        {teamName.get(m.homeTeamId) ?? "?"}
+                        {" · "}
+                        {Math.round((split.away / splitTotal) * 100)}%{" "}
                         {teamName.get(m.awayTeamId) ?? "?"}
-                      </Link>
-                      <span className="shrink-0 text-xs text-muted">
-                        you picked{" "}
-                        <Link
-                          href={`/teams/${pick}`}
-                          className="font-medium text-fg hover:text-info hover:underline"
-                        >
-                          {teamName.get(pick) ?? "?"}
-                        </Link>
                       </span>
-                      {total > 0 ? (
-                        <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
-                          crowd: {Math.round((split.home / total) * 100)}%{" "}
-                          {teamName.get(m.homeTeamId) ?? "?"}
-                          {" · "}
-                          {Math.round((split.away / total) * 100)}%{" "}
-                          {teamName.get(m.awayTeamId) ?? "?"}
-                        </span>
-                      ) : null}
-                    </div>
-                  );
-                })}
-            </CardBody>
-          </Card>
-        </section>
-      ) : null}
-
-      {viewer && voided.some((m) => myPicks.has(m.id)) ? (
-        <section className="space-y-4">
-          <SectionTitle aside="· draw or no-contest — no point awarded">
-            Your void picks
-          </SectionTitle>
-          <Card>
-            <CardBody className="divide-y divide-line/60 p-0">
-              {voided
-                .filter((m) => myPicks.has(m.id))
-                .map((m) => {
-                  const pick = myPicks.get(m.id)!;
-                  return (
-                    <div
-                      key={m.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-sm"
-                    >
-                      <span role="img" aria-label="Void pick">
-                        <span aria-hidden>➖</span>
-                      </span>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
-                      >
-                        {roundLabel(m)}: {teamName.get(m.homeTeamId) ?? "?"}{" "}
-                        <span className="font-mono text-xs">
-                          {m.homeScore}–{m.awayScore}
-                        </span>{" "}
-                        {teamName.get(m.awayTeamId) ?? "?"}
-                      </Link>
-                      <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
-                        you picked{" "}
-                        <Link
-                          href={`/teams/${pick}`}
-                          className="hover:text-info hover:underline"
-                        >
-                          {teamName.get(pick) ?? "?"}
-                        </Link>
-                      </span>
-                    </div>
-                  );
-                })}
-            </CardBody>
-          </Card>
-        </section>
-      ) : null}
-
-      {/* `graded` counts every decided match; without the myPicks filter here
-          a viewer who never predicted got a "Your graded picks" heading over
-          an empty bordered card. */}
-      {viewer && graded.some((m) => myPicks.has(m.id)) ? (
-        <section className="space-y-4">
-          <SectionTitle>Your graded picks</SectionTitle>
-          <Card>
-            <CardBody className="divide-y divide-line/60 p-0">
-              {graded
-                .filter((m) => myPicks.has(m.id))
-                .map((m) => {
-                  const pick = myPicks.get(m.id)!;
-                  const right = pick === m.winnerTeamId;
-                  return (
-                    <div
-                      key={m.id}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5 text-sm"
-                    >
-                      <span
-                        role="img"
-                        aria-label={right ? "Correct pick" : "Wrong pick"}
-                      >
-                        <span aria-hidden>{right ? "✅" : "❌"}</span>
-                      </span>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="min-w-0 flex-1 basis-48 truncate hover:text-info hover:underline"
-                      >
-                        {roundLabel(m)}: {teamName.get(m.homeTeamId)}{" "}
-                        <span className="font-mono text-xs">
-                          {m.homeScore}–{m.awayScore}
-                        </span>{" "}
-                        {teamName.get(m.awayTeamId)}
-                      </Link>
-                      <span className="w-full pl-7 text-xs text-muted sm:w-auto sm:pl-0">
-                        you picked{" "}
-                        <Link
-                          href={`/teams/${pick}`}
-                          className="hover:text-info hover:underline"
-                        >
-                          {teamName.get(pick)}
-                        </Link>
-                      </span>
-                    </div>
-                  );
-                })}
+                    ) : null}
+                  </div>
+                );
+              })}
             </CardBody>
           </Card>
         </section>

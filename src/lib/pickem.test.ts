@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  calledItCount,
   groupOpenByWeek,
   pickemControlFor,
   pickemStandings,
+  pickHistory,
+  pickResult,
   pickSplit,
   partitionPickemMatches,
   predictionOpen,
@@ -134,6 +137,102 @@ describe("pickSplit", () => {
       "home",
     );
     expect(split).toEqual({ home: 2, away: 1 });
+  });
+});
+
+describe("pickResult", () => {
+  it("grades right, wrong and void, and waits on an undecided match", () => {
+    expect(pickResult(m("m1", "COMPLETED", "A"), "A")).toBe("right");
+    expect(pickResult(m("m1", "COMPLETED", "A"), "B")).toBe("wrong");
+    expect(pickResult(m("m1", "COMPLETED", null), "A")).toBe("void");
+    expect(pickResult(m("m1", "LIVE"), "A")).toBeNull();
+    expect(pickResult(m("m1", "SCHEDULED"), "A")).toBeNull();
+  });
+
+  it("agrees with the oracle board's grading", () => {
+    const matches = [
+      m("m1", "COMPLETED", "A"),
+      m("m2", "COMPLETED", null),
+      m("m3", "LIVE"),
+      m("m4", "COMPLETED", "B"),
+    ];
+    const picks = [p("m1", "u", "A"), p("m2", "u", "A"), p("m3", "u", "A"), p("m4", "u", "A")];
+    const [row] = pickemStandings(picks, matches);
+    const results = picks.map((pick) =>
+      pickResult(matches.find((match) => match.id === pick.matchId)!, pick.pickedTeamId),
+    );
+    expect(results.filter((r) => r === "right")).toHaveLength(row.correct);
+    expect(results.filter((r) => r === "right" || r === "wrong")).toHaveLength(row.graded);
+  });
+});
+
+describe("calledItCount", () => {
+  const picks = [
+    p("m1", "u1", "A"),
+    p("m1", "u2", "A"),
+    p("m1", "u3", "B"),
+    p("m2", "u1", "B"),
+  ];
+
+  it("counts who named the winner out of everyone who picked", () => {
+    expect(calledItCount(picks, m("m1", "COMPLETED", "A"))).toEqual({ called: 2, total: 3 });
+    expect(calledItCount(picks, m("m1", "COMPLETED", "B"))).toEqual({ called: 1, total: 3 });
+  });
+
+  it("has nothing to say without a winner or without picks", () => {
+    expect(calledItCount(picks, m("m1", "COMPLETED", null))).toBeNull();
+    expect(calledItCount(picks, m("m1", "LIVE"))).toBeNull();
+    expect(calledItCount(picks, m("m9", "COMPLETED", "A"))).toBeNull();
+  });
+});
+
+describe("pickHistory", () => {
+  const at = (iso: string) => new Date(iso);
+  const row = (
+    id: string,
+    week: number,
+    status: string,
+    winnerTeamId: string | null,
+    scheduledAt: Date | null,
+  ) => ({ ...m(id, status, winnerTeamId, scheduledAt), week });
+
+  it("lists only picked matches, newest first, each with how it came out", () => {
+    const matches = [
+      row("w1", 1, "COMPLETED", "A", at("2026-08-01T20:00:00Z")),
+      row("w2a", 2, "COMPLETED", null, at("2026-08-08T20:00:00Z")),
+      row("w2b", 2, "COMPLETED", "B", at("2026-08-08T22:00:00Z")),
+      row("w3", 3, "LIVE", null, at("2026-08-15T20:00:00Z")),
+      row("unpicked", 3, "COMPLETED", "A", at("2026-08-15T20:00:00Z")),
+    ];
+    const picks = new Map([
+      ["w1", "A"],
+      ["w2a", "A"],
+      ["w2b", "A"],
+      ["w3", "B"],
+    ]);
+    expect(
+      pickHistory(matches, picks).map((h) => [h.match.id, h.result]),
+    ).toEqual([
+      ["w3", null],
+      ["w2b", "wrong"],
+      ["w2a", "void"],
+      ["w1", "right"],
+    ]);
+  });
+
+  it("puts a TBD kickoff after the timed ones in its week", () => {
+    const matches = [
+      row("tbd", 4, "COMPLETED", "A", null),
+      row("timed", 4, "COMPLETED", "A", at("2026-08-22T20:00:00Z")),
+    ];
+    const picks = new Map([
+      ["tbd", "A"],
+      ["timed", "A"],
+    ]);
+    expect(pickHistory(matches, picks).map((h) => h.match.id)).toEqual([
+      "timed",
+      "tbd",
+    ]);
   });
 });
 
