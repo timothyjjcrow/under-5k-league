@@ -298,21 +298,36 @@ test("complete-season public pages agree on the champion and recap", async ({
     page.getByRole("img", { name: "Champion crowned" }),
   ).toBeVisible();
 
+  // The recap lives on the season's own page; /recap redirects there.
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\/[^/?#]+$/);
+  const seasonPage = new URL(page.url()).pathname;
   await expect(
-    page.getByRole("heading", { name: "Season Recap" }),
+    page.getByRole("heading", {
+      name: "Season 9 (fixture)",
+      exact: true,
+      level: 1,
+    }),
   ).toBeVisible();
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(champion, { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Season awards")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Season awards" }),
+  ).toBeVisible();
   await expect(
     page.getByText("Completed series", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Imported games", { exact: true })).toBeVisible();
   await expectStatValue(page, "Completed series", 35);
   await expectStatValue(page, "Imported games", 74);
+
+  // A finished season's boards point at that page too.
+  await page.goto("/leaders");
+  await expect(
+    page.getByRole("link", { name: "Season recap →" }),
+  ).toHaveAttribute("href", seasonPage);
 
   await page.goto("/fantasy");
   await expect(
@@ -398,11 +413,17 @@ test("complete champion and recap remain usable at 360px", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
 
+  // "/recap" lands on the season page, awards included.
   for (const path of ["/", "/schedule", "/recap"] as const) {
     await page.goto(path);
     await expect(
       page.getByText("Season 9 (fixture) Champion", { exact: true }),
     ).toBeVisible();
+    if (path === "/recap") {
+      await expect(
+        page.getByRole("region", { name: "Season awards" }),
+      ).toBeVisible();
+    }
     await expectNoHorizontalOverflow(page, `${path} completed postseason`);
   }
 
@@ -558,6 +579,7 @@ test("a conflicting stored champion is never presented as the title holder", asy
   );
 
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\//);
   await expect(
     page.getByText("Champion state needs review", { exact: true }),
   ).toBeVisible();
@@ -576,6 +598,7 @@ test("a champion recap remains complete without imported Dota games", async ({
   const assertNoErrors = trackPageErrors(page);
 
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\//);
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
@@ -637,6 +660,14 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   await expect(
     page.getByRole("heading", { name: "Regular season results" }),
   ).toBeVisible();
+  // The season's recap is part of its page now.
+  await expect(
+    page.getByRole("region", { name: "Season awards" }),
+  ).toBeVisible();
+  await expectStatValue(page, "Completed series", 35);
+  await expect(
+    page.getByRole("link", { name: "Season recap →" }),
+  ).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/seasons/[id] archived postseason");
 
   for (const [path, heading] of [
@@ -663,22 +694,17 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
     await expectNoHorizontalOverflow(page, `${path} archived stats`);
   }
 
-  await page.goto(`/seasons/${archivedSeasonId}`);
-  await page.getByRole("link", { name: "Season recap →" }).click();
-  await expect(page).toHaveURL(/\/recap\?season=/);
-  await expect(
-    page.getByRole("heading", { name: "Season Recap" }),
-  ).toBeVisible();
+  // An old recap link (the champion post in Discord) lands on the same page.
+  await page.goto(`/recap?season=${archivedSeasonId}`);
+  await expect(page).toHaveURL(
+    new RegExp(`/seasons/${archivedSeasonId}$`),
+  );
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText(champion!, { exact: true }).first(),
+    page.getByRole("region", { name: "Season awards" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("region", { name: "Playoff bracket" }),
-  ).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/recap archived postseason");
 
   await page.goto(
     "/api/auth/dev?name=Side%20Game%20Viewer&steamId=76561190000992001&redirect=/",

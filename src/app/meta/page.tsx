@@ -14,6 +14,7 @@ import {
   seasonScopeMetadata,
 } from "@/lib/season-scope";
 import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
+import { finishedSeasonLink } from "@/lib/season-choices";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGameScores } from "@/lib/cached-queries";
 import {
@@ -127,6 +128,8 @@ export default async function MetaPage({
     .filter((game) => game.lines.length > 0);
 
   const meta = heroMeta(metaGames);
+  // A finished season's page holds its champion and awards.
+  const finishedLink = finishedSeasonLink(season);
   const seasonSubtitle = season.isActive
     ? season.name
     : season.name + " · archived";
@@ -135,12 +138,12 @@ export default async function MetaPage({
       title="Hero meta"
       subtitle={seasonSubtitle + " · The heroes the league picks, and who plays them most"}
       action={
-        !season.isActive ? (
+        finishedLink ? (
           <Link
-            href={"/seasons/" + season.id}
+            href={finishedLink.href}
             className={buttonClasses("secondary", "sm")}
           >
-            Season archive →
+            {finishedLink.label}
           </Link>
         ) : undefined
       }

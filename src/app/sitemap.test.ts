@@ -27,6 +27,8 @@ describe("public sitemap", () => {
     }
     expect(urls).not.toContain("https://league.example/privacy");
     expect(urls).not.toContain("https://league.example/terms");
+    // A redirect, not a page: the recap is part of each season's page.
+    expect(urls).not.toContain("https://league.example/recap");
     expect(new Set(urls).size).toBe(urls.length);
   });
 

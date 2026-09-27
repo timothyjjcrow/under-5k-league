@@ -12,7 +12,6 @@ describe("public champion presentation wiring", () => {
     "src/app/schedule/page.tsx",
     "src/app/teams/page.tsx",
     "src/app/teams/[id]/page.tsx",
-    "src/app/recap/page.tsx",
     "src/app/seasons/page.tsx",
     "src/app/seasons/[id]/page.tsx",
     "src/app/hall-of-fame/page.tsx",
@@ -31,8 +30,8 @@ describe("public champion presentation wiring", () => {
       ["src/app/**/*.tsx", "src/components/**/*.tsx"],
       80,
     ).filter((f) => !f.path.startsWith("src/app/admin/"));
-    // Five public <Bracket> call sites today (the dashboard has two, then
-    // /schedule, /recap and /seasons/[id]); far fewer means the scan broke.
+    // Four public <Bracket> call sites today (the dashboard has two, then
+    // /schedule and /seasons/[id]); fewer means the scan broke.
     const bracketCalls = publicUi.reduce(
       (n, f) => n + (f.text.match(/<Bracket\s/g)?.length ?? 0),
       0,

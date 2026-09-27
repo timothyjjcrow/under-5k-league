@@ -353,7 +353,9 @@ describe("discord message formatters", () => {
     const msg = championMessage("Season 1", "Zai's Team", "season/one");
     expect(msg).toContain("**Zai's Team**");
     expect(msg).toContain("champions");
-    expect(msg).toContain("/recap?season=season%2Fone");
+    // Straight to the season page (old /recap?season= posts redirect there).
+    expect(msg).toContain("/seasons/season%2Fone>");
+    expect(msg).not.toContain("/recap");
   });
 
   it("escapes a season name in the champion announcement", () => {

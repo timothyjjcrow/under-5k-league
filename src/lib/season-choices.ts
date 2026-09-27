@@ -1,8 +1,10 @@
 // Pure rules for the season-scoped pages (Leaders, Hero meta, Record book,
-// Pick'em, Fantasy): which seasons their one season picker offers and where
-// each choice links.
+// Pick'em, Fantasy): which seasons their one season picker offers, where each
+// choice links, and the link from a finished season's boards to its page.
 // The database side (which seasons have data, resolving ?season=) lives in
 // season-scope.ts.
+
+import { SEASON_STATUS } from "./constants";
 
 /** A season a page can switch to. */
 export type SeasonChoice = { id: string; name: string; isActive: boolean };
@@ -62,4 +64,22 @@ export function seasonHref(
 ): string {
   if (season.isActive && !allSeasons) return basePath;
   return `${basePath}?${new URLSearchParams({ season: season.id })}`;
+}
+
+/**
+ * The link from a finished season's boards to that season's own page, which
+ * holds its champion, bracket and season awards. None while the season is
+ * still running: that page would only repeat the boards.
+ */
+export function finishedSeasonLink(season: {
+  id: string;
+  isActive: boolean;
+  status: string;
+}): { href: string; label: string } | null {
+  const href = `/seasons/${encodeURIComponent(season.id)}`;
+  if (!season.isActive) return { href, label: "Season archive →" };
+  if (season.status === SEASON_STATUS.COMPLETE) {
+    return { href, label: "Season recap →" };
+  }
+  return null;
 }

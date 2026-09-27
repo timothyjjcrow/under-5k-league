@@ -344,7 +344,6 @@ test("public statistics metadata is route-specific and invalid archives are noin
     ["/leaders", /season leaders/i],
     ["/meta", /heroes .+ players pick/i],
     ["/records", /all-time single-game/i],
-    ["/recap", /awards, superlatives/i],
     ["/fantasy", /salary-capped fantasy five/i],
     ["/pickem", /Call every .+ match/i],
   ] as const) {
@@ -370,7 +369,7 @@ test("public statistics metadata is route-specific and invalid archives are noin
   // archive lookup. Next 16 therefore documents this as a 200 response with a
   // not-found UI and an injected noindex directive. Preserve the shared page
   // loading experience and verify the complete browser-visible contract.
-  for (const path of ["/leaders", "/meta", "/records", "/recap", "/fantasy", "/pickem"]) {
+  for (const path of ["/leaders", "/meta", "/records", "/fantasy", "/pickem"]) {
     for (const query of [
       "season=definitely-missing",
       "season=one&season=two",
@@ -386,6 +385,21 @@ test("public statistics metadata is route-specific and invalid archives are noin
       );
     }
   }
+
+  // /recap only redirects now. Mid-season it opens Leaders; a link to a
+  // season that doesn't exist lands on that season's (not found) page; and a
+  // repeated key is a plain 404 rather than a guess at which season.
+  await page.goto("/recap");
+  await expect(page).toHaveURL(/\/leaders$/);
+  await page.goto("/recap?season=definitely-missing");
+  await expect(page).toHaveURL(/\/seasons\/definitely-missing$/);
+  await expect(
+    page.getByRole("heading", { name: "Page not found" }),
+  ).toBeVisible();
+  const repeatedRecap = await page.request.get("/recap?season=one&season=two", {
+    maxRedirects: 0,
+  });
+  expect(repeatedRecap.status()).toBe(404);
 
   // Player history uses the same one-season selector, but a malformed key
   // previously fell back to "All seasons" instead of rejecting the URL.

@@ -10,6 +10,7 @@ import {
   seasonScopeMetadata,
 } from "@/lib/season-scope";
 import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
+import { finishedSeasonLink } from "@/lib/season-choices";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
@@ -94,9 +95,14 @@ export default async function LeadersPage({
       </NoSeasonYet>
     );
   }
-  // Keep archived-season navigation on that season across the stat pages.
-  const seasonQS =
-    seasonParam && !season.isActive ? `?season=${season.id}` : "";
+  // A finished season's page holds its champion and awards: link it from an
+  // archived season's boards, and from the current one once its final is in.
+  const finishedLink = finishedSeasonLink(season);
+  const titleAction = finishedLink ? (
+    <Link href={finishedLink.href} className={buttonClasses("secondary", "sm")}>
+      {finishedLink.label}
+    </Link>
+  ) : undefined;
 
   // Parse each game's players JSON once and reuse the lines for both the
   // boards and the weekly-honors card (the dashboard's League pulse does the
@@ -173,16 +179,7 @@ export default async function LeadersPage({
         <PageTitle
           title="Leaders"
           subtitle={season.isActive ? season.name : `${season.name} · archived`}
-          action={
-            !season.isActive ? (
-              <Link
-                href={`/seasons/${season.id}`}
-                className={buttonClasses("secondary", "sm")}
-              >
-                Season archive →
-              </Link>
-            ) : undefined
-          }
+          action={titleAction}
         />
         <StatsNav
           active="leaders"
@@ -576,24 +573,7 @@ export default async function LeadersPage({
       <PageTitle
         title="Leaders"
         subtitle={`${season.name}${season.isActive ? "" : " · archived"} · From complete 5v5 box scores. Per-game boards need at least ${rateFloor} game${rateFloor === 1 ? "" : "s"}; equal values share a rank.`}
-        action={
-          <div className="flex flex-wrap gap-2">
-            {!season.isActive ? (
-              <Link
-                href={`/seasons/${season.id}`}
-                className={buttonClasses("secondary", "sm")}
-              >
-                Season archive →
-              </Link>
-            ) : null}
-            <Link
-              href={`/recap${seasonQS}`}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Season recap →
-            </Link>
-          </div>
-        }
+        action={titleAction}
       />
       <StatsNav
         active="leaders"

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  finishedSeasonLink,
   seasonHref,
   seasonSwitcherChoices,
   showSeasonSwitcher,
@@ -90,5 +91,27 @@ describe("seasonHref", () => {
     expect(
       seasonHref("/records", { id: "s3", isActive: true }, { allSeasons: true }),
     ).toBe("/records?season=s3");
+  });
+});
+
+describe("finishedSeasonLink", () => {
+  it("points an archived season's boards at its season page", () => {
+    expect(
+      finishedSeasonLink({ id: "s 1", isActive: false, status: "PLAYOFFS" }),
+    ).toEqual({ href: "/seasons/s%201", label: "Season archive →" });
+  });
+
+  it("calls the current season's page its recap once the final is played", () => {
+    expect(
+      finishedSeasonLink({ id: "s3", isActive: true, status: "COMPLETE" }),
+    ).toEqual({ href: "/seasons/s3", label: "Season recap →" });
+  });
+
+  it("links nothing while the current season is still being played", () => {
+    for (const status of ["SIGNUPS", "DRAFT", "REGULAR_SEASON", "PLAYOFFS"]) {
+      expect(finishedSeasonLink({ id: "s3", isActive: true, status })).toBe(
+        null,
+      );
+    }
   });
 });

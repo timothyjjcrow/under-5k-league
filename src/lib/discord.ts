@@ -274,8 +274,10 @@ export function championMessage(
   teamName: string,
   seasonId: string,
 ): string {
-  const recap = `${resolveSiteUrl()}/recap?${new URLSearchParams({ season: seasonId })}`;
-  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — recap at <${recap}>`;
+  // The season's own page holds the champion, bracket and awards. Older posts
+  // link /recap?season=, which redirects there.
+  const recap = `${resolveSiteUrl()}/seasons/${encodeURIComponent(seasonId)}`;
+  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — season recap at <${recap}>`;
 }
 
 export function freeAgentSignedMessage(

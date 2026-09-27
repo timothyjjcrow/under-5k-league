@@ -172,7 +172,8 @@ test("warm public statistics refresh on the first read after real admin correcti
         seasonRecords: `/records?season=${fixture.seasonId}`,
         leaders: `/leaders?season=${fixture.seasonId}`,
         meta: `/meta?season=${fixture.seasonId}`,
-        recap: `/recap?season=${fixture.seasonId}`,
+        // No recap: season awards live on a FINISHED season's own page, and
+        // this regular-season fixture's /recap just redirects to Leaders.
         scouting: `/matches/${fixture.scoutingId}#match-scouting`,
       };
       await page.goto(`/api/auth/dev?name=Public+cache+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin`);
@@ -196,9 +197,7 @@ test("warm public statistics refresh on the first read after real admin correcti
       // /hall-of-fame (career) is only its "No champion yet" note in this
       // regular-season fixture, so it is read for errors but carries no
       // player statistics to compare.
-      for (const key of ["leaders", "recap"]) {
-        expect(warm[key].html, `${key} includes the owned imported game before removal`).toContain(playerLink(fixture.playerId));
-      }
+      expect(warm.leaders.html, "leaders includes the owned imported game before removal").toContain(playerLink(fixture.playerId));
       expect(warm.player.html).toContain(`href="/matches/${fixture.matchId}"`);
       const sample = await originalMetaSample(warm.meta);
       expect(sample, "the season meta states how many complete games it counts").not.toBeNull();
@@ -241,7 +240,7 @@ test("warm public statistics refresh on the first read after real admin correcti
       expect(afterRemove?.value, "game correction commits a new public data revision").toBeTruthy();
       expect(afterRemove?.value).not.toBe(afterRename?.value);
       const corrected = await readTogether(context, paths);
-      for (const key of ["records", "seasonRecords", "leaders", "recap"]) {
+      for (const key of ["records", "seasonRecords", "leaders"]) {
         expect(corrected[key].html, `${key} first response excludes the removed game's participant statistics`).not.toContain(playerLink(fixture.playerId));
       }
       expect(corrected.player.html).toContain("No games recorded yet");

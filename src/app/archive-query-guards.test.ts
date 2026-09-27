@@ -13,7 +13,6 @@ const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
  */
 describe("archived season query wiring", () => {
   it.each([
-    "src/app/recap/page.tsx",
     "src/app/fantasy/page.tsx",
     "src/app/pickem/page.tsx",
     "src/app/players/[id]/page.tsx",
@@ -24,18 +23,28 @@ describe("archived season query wiring", () => {
     expect(source).toMatch(/=== null\) notFound\(\)/);
     expect(source).toMatch(/season\?: string \| string\[\]/);
   });
+
+  it("rejects repeated season keys in the /recap redirect", () => {
+    // A route handler reads the raw URL, so it must ask for EVERY value:
+    // searchParams.get() would quietly take the first of a repeated key.
+    const source = read("src/app/recap/route.ts");
+    expect(source).toContain('searchParams.getAll("season")');
+    expect(source).toContain("singleSearchParam(");
+    expect(source).toMatch(/=== null\) notFound\(\)/);
+    expect(source).not.toMatch(/searchParams\.get\("season"\)/);
+  });
 });
 
 describe("every page that takes ?season= normalizes it", () => {
-  // The four pages above were the ones found first; any page that accepts a
+  // The pages above were the ones found first; any page that accepts a
   // season id has the same string[] hazard, including ones added later.
   const seasonPages = sourceFiles("src/app/**/page.tsx", 20).filter((f) =>
     /season\?:\s*string/.test(f.text),
   );
 
   it("finds the season-scoped pages (guard is not vacuous)", () => {
-    // Ten today: the four above plus leaders, meta, records, scrims and two
-    // admin pages.
+    // Nine today: the three above plus leaders, meta, records, scrims and
+    // two admin pages.
     expect(seasonPages.length).toBeGreaterThanOrEqual(8);
   });
 
