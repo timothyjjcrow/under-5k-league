@@ -325,6 +325,12 @@ test("teams say where each one stands in the playoffs", async ({ page }) => {
     page.locator("#main p", { hasText: /^Out in the quarterfinal \(lost 1–2 to / }),
   ).toBeVisible();
   await expect(page.getByText(/^Seed #[5-8]$/)).toBeVisible();
+  // It met its quarterfinal opponent in the round robin too, so that one
+  // opponent, and only that one, is in its Head-to-head card.
+  await expect(
+    page.getByRole("heading", { name: "Head-to-head", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#team-rivals li")).toHaveCount(1);
   await expectNoHorizontalOverflow(page, "/teams/[id] eliminated");
   assertNoErrors();
 });

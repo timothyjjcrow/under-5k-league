@@ -3,6 +3,7 @@ import {
   formByTeam,
   headToHead,
   recentForm,
+  rematches,
   resultFor,
   seriesRecordSpoken,
   seriesRecordText,
@@ -82,6 +83,37 @@ describe("headToHead", () => {
       m({ homeTeamId: A, awayTeamId: B, status: "SCHEDULED", winnerTeamId: null }),
     ];
     expect(headToHead(A, matches)).toEqual([]);
+  });
+});
+
+describe("rematches", () => {
+  it("keeps only opponents met in more than one completed series", () => {
+    const matches = [
+      m({ homeTeamId: A, awayTeamId: B, winnerTeamId: A }),
+      m({ homeTeamId: A, awayTeamId: C, winnerTeamId: C }),
+      // The playoff rematch with B, drawn this time.
+      m({ homeTeamId: B, awayTeamId: A, winnerTeamId: null, homeScore: 1, awayScore: 1 }),
+      // Still to play: not a meeting yet.
+      m({ homeTeamId: C, awayTeamId: A, status: "SCHEDULED", winnerTeamId: null }),
+    ];
+    expect(rematches(headToHead(A, matches))).toEqual([
+      {
+        opponentId: B,
+        wins: 1,
+        losses: 0,
+        draws: 1,
+        gamesFor: 3,
+        gamesAgainst: 2,
+      },
+    ]);
+  });
+
+  it("is empty for a single round robin", () => {
+    const matches = [
+      m({ homeTeamId: A, awayTeamId: B }),
+      m({ homeTeamId: A, awayTeamId: C }),
+    ];
+    expect(rematches(headToHead(A, matches))).toEqual([]);
   });
 });
 

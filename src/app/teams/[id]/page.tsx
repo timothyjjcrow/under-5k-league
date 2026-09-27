@@ -23,6 +23,7 @@ import type { TeamScenario } from "@/lib/scenarios";
 import {
   headToHead,
   recentForm,
+  rematches,
   teamFixtureOrder,
 } from "@/lib/team-matches";
 import {
@@ -255,7 +256,9 @@ export default async function TeamPage({
       const oppS = isHome ? m.awayScore : m.homeScore;
       return myS - oppS;
     });
-  const h2h = headToHead(id, myMatches).sort(
+  // Only opponents met more than once: a single meeting is already on the
+  // Matches list, so the card would repeat it.
+  const h2h = rematches(headToHead(id, myMatches)).sort(
     (a, b) => b.wins - a.wins || a.losses - b.losses,
   );
   const spent = team.members.reduce((sum, m) => sum + m.price, 0);
@@ -973,7 +976,7 @@ export default async function TeamPage({
           <CardHeader
             title="Head-to-head"
             headingLevel={2}
-            subtitle="Completed series by opponent"
+            subtitle="Opponents met more than once"
           />
           <CardBody className="p-0">
             <ul className="divide-y divide-line/60">

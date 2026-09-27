@@ -118,6 +118,15 @@ export function headToHead(
   return [...map.values()];
 }
 
+/**
+ * The head-to-head rows worth their own card: opponents met in more than one
+ * completed series (a tiebreaker week, a playoff rematch, a double round
+ * robin). A single meeting is already the result on the team's match list.
+ */
+export function rematches(rows: readonly HeadToHead[]): HeadToHead[] {
+  return rows.filter((r) => r.wins + r.draws + r.losses > 1);
+}
+
 export type FixtureOrderMatch = {
   id: string;
   status: string;

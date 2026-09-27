@@ -364,9 +364,12 @@ test("team page renders roster, form, and the what-we-need card", async ({
   await page.locator('#main a[href^="/teams/"]').first().click();
   await expect(page).toHaveURL(/\/teams\/.+/);
   await expect(page.getByText("Roster").first()).toBeVisible();
+  // A single round robin meets each opponent once, and those results are
+  // already the Matches list, so there is no Head-to-head card to repeat
+  // them (the postseason spec covers a playoff rematch).
   await expect(
     page.getByRole("heading", { name: "Head-to-head", exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   // On a phone the page leads with the next or live series, then the
   // roster, then the full fixture list.
   const top = (selector: string) =>
