@@ -166,6 +166,7 @@ import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
 import { normalizeTeamLogoUrl } from "@/lib/team-logo";
 import { hasConfirmedScrimConflict } from "@/lib/scrim-schedule-conflict";
+import { seedsFromFirstRound } from "@/lib/bracket-view";
 
 /**
  * Thrown from inside a `$transaction` callback when a precondition that was
@@ -3256,12 +3257,18 @@ export async function startPlayoffs(
       mentionsOf([a.discordId]),
     );
   }
+  // Seeds come from the frozen first-round pairings, the same source the
+  // bracket on the site labels them from.
+  const seeds = seedsFromFirstRound(bracket);
   await sendDiscordMessage(
     playoffsStartedMessage(
       season.name,
       bracket.map((m) => ({
         home: name.get(m.homeTeamId) ?? "?",
         away: name.get(m.awayTeamId) ?? "?",
+        homeSeed: seeds.get(m.homeTeamId) ?? null,
+        awaySeed: seeds.get(m.awayTeamId) ?? null,
+        whenMs: m.scheduledAt?.getTime() ?? null,
       })),
     ),
   );
