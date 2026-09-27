@@ -137,6 +137,16 @@ export function mirrorLayout(rounds: BracketRound[]): MirrorLayout | null {
 }
 
 /**
+ * How many columns the drawn bracket puts side by side: each earlier round
+ * appears once per wing, plus the final. A 2-team bracket is the final alone
+ * (one column, fits a phone); a 4-team bracket is semifinal, final,
+ * semifinal (three columns, wider than a phone).
+ */
+export function bracketColumnCount(rounds: BracketRound[]): number {
+  return rounds.length === 0 ? 0 : rounds.length * 2 - 1;
+}
+
+/**
  * Seed numbers derived from the FIRST-ROUND pairings frozen in the DB.
  * createPlayoffBracket pairs slots by `seedOrder` (R0M0 = 1 vs N, R0M1 =
  * next pair…), so the pairings themselves encode every team's seed —

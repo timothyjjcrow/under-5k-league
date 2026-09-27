@@ -251,7 +251,16 @@ test("the playoff bracket scrolls inside itself at 360px, not across the page", 
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/schedule");
 
+  // Phones lead with the round list; the drawn bracket (wider than a phone
+  // once it has wings) is folded underneath it until asked for.
+  const section = page.locator("#playoff-bracket");
   const scroller = page.getByRole("region", { name: "Playoff bracket" });
+  await expect(scroller).toBeHidden();
+  await expect(
+    section.getByRole("button", { name: /^Quarterfinals/ }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/schedule postseason round list");
+  await section.locator("summary").filter({ hasText: "Full bracket" }).click();
   await expect(scroller).toBeVisible();
   const dimensions = await scroller.evaluate((element) => ({
     clientWidth: element.clientWidth,

@@ -35,7 +35,11 @@ import {
 import { formatMatchTime } from "@/lib/match-time";
 import { ChampionBanner } from "@/components/champion-banner";
 import { ByeWeekNote } from "@/components/bye-week-note";
-import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
+import {
+  bracketColumnCount,
+  buildBracketRounds,
+  seedsFromFirstRound,
+} from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
 import {
@@ -561,6 +565,7 @@ export default async function SchedulePage() {
     (d) => fmtWhen(d) ?? "",
     teamLogoUrl,
   );
+  const bracketFoldsOnPhones = bracketColumnCount(bracketRoundsView) > 1;
   const postseasonPhase =
     season.status === "PLAYOFFS" || season.status === "COMPLETE";
   const showTiebreakers =
@@ -609,8 +614,17 @@ export default async function SchedulePage() {
       {playoff.length > 0 ? (
         <>
           {/* Bracket owns horizontal scrolling; the card clips its intrinsic
-              desktop width so phones never gain document-level overflow. */}
-          <Card className="overflow-hidden">
+              desktop width so phones never gain document-level overflow.
+              A bracket with wings is wider than a phone, so below tablet
+              width the round list leads and the drawn bracket folds away
+              under it. The final alone fits, so it always shows. */}
+          <Card
+            className={
+              bracketFoldsOnPhones
+                ? "hidden overflow-hidden md:block"
+                : "overflow-hidden"
+            }
+          >
             <CardBody className="p-0 pt-4">
               <Bracket
                 rounds={bracketRoundsView}
@@ -620,6 +634,21 @@ export default async function SchedulePage() {
           </Card>
           {playoffRoundViews.length > 0 ? (
             <ScheduleWeeks weeks={playoffRoundViews} teams={[]} />
+          ) : null}
+          {bracketFoldsOnPhones ? (
+            <div className="md:hidden">
+              <AnalysisDisclosure
+                title="Full bracket"
+                description="Every round side by side. Tap a team to trace its path to the final."
+              >
+                <div className="min-w-0 overflow-hidden">
+                  <Bracket
+                    rounds={bracketRoundsView}
+                    championTeamId={championPresentation.championTeamId}
+                  />
+                </div>
+              </AnalysisDisclosure>
+            </div>
           ) : null}
         </>
       ) : (

@@ -156,7 +156,7 @@ function WingColumn({
   const outEdge = wing === "left" ? "right-0" : "left-0";
   const outBorder = wing === "left" ? "border-r" : "border-l";
   return (
-    <div className={cn("flex w-48 flex-col sm:w-60", "-ml-px first:ml-0")}>
+    <div className={cn("flex w-48 flex-col sm:w-52", "-ml-px first:ml-0")}>
       <h3
         className={cn(
           "mb-2 h-5 px-4 text-sm font-medium uppercase tracking-wide text-muted",
@@ -165,11 +165,14 @@ function WingColumn({
       >
         {round.name}
       </h3>
-      <div className="flex flex-1 flex-col">
+      {/* Equal rows (grid 1fr) rather than flex-1 slots: a slot whose names
+          wrap to two lines grows every slot in its column with it, so each
+          pair's midpoint still meets the next round's card. */}
+      <div className="grid flex-1 auto-rows-fr">
         {round.slots.map((m, i) => (
           <div
             key={m?.id ?? `tbd-${wing}-${i}`}
-            className="relative flex min-h-[7.5rem] flex-1 items-center px-4 py-2"
+            className="relative flex min-h-[7.5rem] items-center px-4 py-2"
           >
             {receives ? (
               <span
@@ -226,14 +229,15 @@ function FinalColumn({
 }) {
   const crowned = trace.championTeamId != null;
   return (
-    <div className={cn("flex w-48 flex-col sm:w-60", hasWings && "-ml-px")}>
+    <div className={cn("flex w-48 flex-col sm:w-52", hasWings && "-ml-px")}>
       <h3 className="mb-2 h-5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted">
         {finalName}
       </h3>
       <div className="flex flex-1 flex-col">
         {/* Extra headroom so the trophy floats clear of the card even in a
-            4-team bracket where every column is only one slot tall. */}
-        <div className="relative flex min-h-[13rem] flex-1 items-center px-4 py-2">
+            4-team bracket where every column is only one slot tall, and
+            when both finalists' names run to two lines. */}
+        <div className="relative flex min-h-[14.5rem] flex-1 items-center px-4 py-2">
           {hasWings ? (
             <>
               <span
@@ -246,24 +250,28 @@ function FinalColumn({
               />
             </>
           ) : null}
-          <span
-            role="img"
-            aria-label={crowned ? "Champion crowned" : "The trophy awaits"}
-            title={crowned ? "Champion crowned" : "The trophy awaits"}
-            className={cn(
-              "pointer-events-none absolute inset-x-0 bottom-[calc(50%+3.1rem)] text-center text-4xl transition-all",
-              crowned
-                ? "drop-shadow-[0_0_14px_rgba(251,191,36,0.45)]"
-                : "opacity-40 grayscale",
+          {/* The trophy rides on the card itself, so a taller card (names
+              wrapped to two lines) never slides up under it. */}
+          <div className="relative min-w-0 flex-1">
+            <span
+              role="img"
+              aria-label={crowned ? "Champion crowned" : "The trophy awaits"}
+              title={crowned ? "Champion crowned" : "The trophy awaits"}
+              className={cn(
+                "pointer-events-none absolute inset-x-0 bottom-full mb-1.5 text-center text-4xl transition-all",
+                crowned
+                  ? "drop-shadow-[0_0_14px_rgba(251,191,36,0.45)]"
+                  : "opacity-40 grayscale",
+              )}
+            >
+              🏆
+            </span>
+            {final ? (
+              <MatchCard match={final} isFinal trace={trace} />
+            ) : (
+              <TbdCard />
             )}
-          >
-            🏆
-          </span>
-          {final ? (
-            <MatchCard match={final} isFinal trace={trace} />
-          ) : (
-            <TbdCard />
-          )}
+          </div>
         </div>
       </div>
     </div>
@@ -423,7 +431,14 @@ function TeamRow({
         size={18}
         className="shrink-0 rounded"
       />
-      <span className={cn("min-w-0 flex-1 truncate", won && "font-semibold")}>
+      {/* Two lines, then an ellipsis: "Radiant Raiders" reads whole in a
+          narrow column instead of as "Radian…". */}
+      <span
+        className={cn(
+          "min-w-0 flex-1 leading-tight [overflow-wrap:anywhere] line-clamp-2",
+          won && "font-semibold",
+        )}
+      >
         {side.name}
       </span>
       {isChampion ? (
