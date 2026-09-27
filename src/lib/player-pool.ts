@@ -59,8 +59,8 @@ export type PoolPubRecord = {
 export type PoolLastSeason = {
   seasonName: string;
   teamName: string;
-  /** Completed series this player appeared in for that team, the profile's
-   *  "Seasons played" count; null when none were recorded. */
+  /** Completed series this player appeared in for that team, the series
+   *  record the profile's Seasons card shows; null when none were recorded. */
   record: { wins: number; losses: number; draws: number } | null;
   /** What that team paid for them at the auction; null for a captain, a $0
    *  free-agent signing, or someone who played for a team without a roster
