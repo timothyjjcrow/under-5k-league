@@ -43,7 +43,7 @@ export const metadata: Metadata = {
   description: DESCRIPTION,
   applicationName: LEAGUE_CONFIG.name,
   icons: {
-    icon: LEAGUE_CONFIG.branding.icon,
+    icon: [...LEAGUE_CONFIG.branding.icons],
     apple: LEAGUE_CONFIG.branding.appleIcon,
   },
   openGraph: {

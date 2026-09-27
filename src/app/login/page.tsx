@@ -69,11 +69,11 @@ export default async function LoginPage({
           <div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={LEAGUE_CONFIG.branding.logo}
+              src={LEAGUE_CONFIG.branding.navLogo}
               style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
               alt={`${LEAGUE_CONFIG.name} — amateur Dota 2 league`}
-              width={LEAGUE_CONFIG.branding.logoWidth}
-              height={LEAGUE_CONFIG.branding.logoHeight}
+              width={LEAGUE_CONFIG.branding.navWidth}
+              height={LEAGUE_CONFIG.branding.navHeight}
               className="mx-auto w-44 max-w-full sm:w-52"
             />
             <h1 className="mt-3 font-display text-2xl font-semibold text-fg">

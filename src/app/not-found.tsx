@@ -21,13 +21,15 @@ export default function NotFound() {
           className="animate-hero-glow pointer-events-none absolute left-1/2 top-0 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand/25 blur-3xl"
         />
         <div className="relative flex flex-col items-center gap-4 px-6 py-12 text-center">
+          {/* The header's emblem: already downloaded, so a 404 costs no
+              second logo. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={LEAGUE_CONFIG.branding.logo}
+            src={LEAGUE_CONFIG.branding.navLogo}
             style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
             alt={LEAGUE_CONFIG.name}
-            width={LEAGUE_CONFIG.branding.logoWidth}
-            height={LEAGUE_CONFIG.branding.logoHeight}
+            width={LEAGUE_CONFIG.branding.navWidth}
+            height={LEAGUE_CONFIG.branding.navHeight}
             className="animate-hero-float h-20 w-auto"
           />
           <div>
