@@ -121,10 +121,18 @@ test("fully-played past weeks start collapsed and expand on click", async ({
   // aria-expanded and would otherwise be .first().
   const collapsed = page.locator('#main button[aria-expanded="false"]').first();
   await expect(collapsed).toBeVisible();
-  await collapsed.click();
-  await expect(
-    page.locator('#main button[aria-expanded="true"]').first(),
-  ).toBeVisible();
+  const weekName = (await collapsed.getAttribute("aria-label"))!;
+  const week = page.getByRole("button", { name: weekName, exact: true });
+  // A closed week still lists each series' score on one line, and every line
+  // opens its match.
+  const results = page.getByRole("list", { name: `${weekName} results` });
+  const firstResult = results.getByRole("link").first();
+  await expect(firstResult).toHaveAttribute("href", /^\/matches\//);
+  await expect(firstResult).toHaveText(/\d–\d/);
+  await week.click();
+  await expect(week).toHaveAttribute("aria-expanded", "true");
+  // Expanded, the week shows the full match cards instead.
+  await expect(results).toHaveCount(0);
 
   assertNoErrors();
 });

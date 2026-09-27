@@ -229,6 +229,18 @@ export function ScheduleWeeks({
           // a list that is ALL earlier weeks needs no divider.
           const earlierHeading =
             w.earlier && index > 0 && !visibleWeeks[index - 1].earlier;
+          const shownByes = filterTeam
+            ? w.byes.filter((b) => b.id === filterTeam)
+            : w.byes;
+          const byeRow =
+            shownByes.length > 0 ? (
+              <div className="flex items-center gap-2 border-t border-line-soft px-4 py-3 text-xs text-muted first:border-t-0 sm:px-5">
+                <span className="rounded bg-surface-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider">
+                  Bye
+                </span>
+                <span>{shownByes.map((b) => b.name).join(", ")}</span>
+              </div>
+            ) : null;
           return (
             <Fragment key={w.week}>
               {earlierHeading ? (
@@ -333,7 +345,27 @@ export function ScheduleWeeks({
                     </span>
                   </span>
                 </h3>
-                {collapsed ? null : (
+                {collapsed ? (
+                  // A closed week still says who won: one line per series,
+                  // each opening its match. Expanding shows the full cards.
+                  w.matches.length > 0 || byeRow ? (
+                    <div className="border-t border-line-soft">
+                      {w.matches.length > 0 ? (
+                        <ul
+                          aria-label={`${w.label ?? `Week ${w.week}`} results`}
+                          className="divide-y divide-line-soft"
+                        >
+                          {w.matches.map((m) => (
+                            <li key={m.id}>
+                              <ResultLine match={m} />
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {byeRow}
+                    </div>
+                  ) : null
+                ) : (
                   <div className="border-t border-line-soft">
                     <div
                       className={cn(
@@ -346,22 +378,7 @@ export function ScheduleWeeks({
                         <MatchRow key={m.id} match={m} />
                       ))}
                     </div>
-                    {w.byes.length > 0 &&
-                    (!filterTeam || w.byes.some((b) => b.id === filterTeam)) ? (
-                      <div className="flex items-center gap-2 border-t border-line-soft px-4 py-3 text-xs text-muted sm:px-5">
-                        <span className="rounded bg-surface-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider">
-                          Bye
-                        </span>
-                        <span>
-                          {(filterTeam
-                            ? w.byes.filter((b) => b.id === filterTeam)
-                            : w.byes
-                          )
-                            .map((b) => b.name)
-                            .join(", ")}
-                        </span>
-                      </div>
-                    ) : null}
+                    {byeRow}
                   </div>
                 )}
               </div>
@@ -436,6 +453,47 @@ function WeekProgress({
         />
       )}
     </span>
+  );
+}
+
+/** One series on one line: a closed week's results at a glance. */
+function ResultLine({ match: m }: { match: MatchView }) {
+  const scored = m.done || m.live;
+  const name = (winner: boolean) =>
+    m.done ? (winner ? "font-semibold text-fg" : "text-muted") : "text-fg";
+  return (
+    <Link
+      href={`/matches/${m.id}`}
+      className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 px-4 py-2 text-sm transition-colors hover:bg-surface-2/60 sm:px-5"
+    >
+      <span className={cn("text-right [overflow-wrap:anywhere]", name(m.homeWin))}>
+        {m.homeName}
+      </span>{" "}
+      <span
+        className={cn(
+          "whitespace-nowrap font-mono tabular-nums",
+          m.live ? "text-danger" : m.done ? "text-fg" : "text-muted",
+        )}
+      >
+        {m.live ? <span className="sr-only">live </span> : null}
+        {scored ? `${m.homeScore}–${m.awayScore}` : "vs"}
+        {m.done && m.forfeit ? (
+          <span
+            aria-hidden
+            title="Forfeit: this score was ruled, not played"
+            className="ml-1 font-sans text-[10px] font-semibold text-muted"
+          >
+            F
+          </span>
+        ) : null}
+      </span>{" "}
+      <span className={cn("[overflow-wrap:anywhere]", name(m.awayWin))}>
+        {m.awayName}
+        {m.done && m.forfeit ? (
+          <span className="sr-only"> (forfeit)</span>
+        ) : null}
+      </span>
+    </Link>
   );
 }
 
