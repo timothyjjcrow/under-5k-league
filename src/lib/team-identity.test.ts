@@ -29,6 +29,45 @@ describe("normalizeTeamName", () => {
     expect(teamNameKey(" Zai's   TEAM")).toBe(teamNameKey("zai's team"));
     expect(teamNameKey("Zai's Team")).not.toBe(teamNameKey("Zai's Team 2"));
   });
+
+  // A captain can rename all season; a name that only LOOKS like another
+  // team's must still count as that team's name.
+  it.each([
+    "Radiant Raccoons\u200B",
+    "Radiant\u200B Raccoons",
+    "\uFEFFRadiant Raccoons",
+    "Radiant\u200D Raccoons",
+    "Radiant \u2800Raccoons",
+    "Radiant\u3164 Raccoons",
+    "Radi\u00ADant Raccoons",
+    "Radiant \u202ERaccoons\u202C",
+    "\uFF32adiant Raccoons",
+  ])("sees through invisible and look-alike characters: %j", (name) => {
+    expect(teamNameKey(name)).toBe(teamNameKey("Radiant Raccoons"));
+  });
+
+  it("drops invisible characters from the stored name", () => {
+    expect(normalizeTeamName("Radiant\u200B Raccoons\u2060")).toBe("Radiant Raccoons");
+    expect(normalizeTeamName("Radiant \u202ERaccoons")).toBe("Radiant Raccoons");
+  });
+
+  it("keeps emoji sequences whole", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Squad";
+    expect(normalizeTeamName(family)).toBe(family);
+    expect(normalizeTeamName("\u2764\uFE0F Hearts")).toBe("\u2764\uFE0F Hearts");
+    expect(teamNameKey("\u2764\uFE0F Hearts")).toBe(teamNameKey("\u2764 Hearts"));
+  });
+
+  it.each([
+    "\u200B\u200B\u200B",
+    "\u200D",
+    "\u3164",
+    "\u2800 \u2800",
+    "\uFE0F",
+    "\u0301",
+  ])("treats a name with nothing visible in it as no name: %j", (name) => {
+    expect(normalizeTeamName(name)).toBe("");
+  });
 });
 
 describe("canEditTeamIdentity", () => {

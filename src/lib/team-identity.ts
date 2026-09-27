@@ -5,21 +5,46 @@ import { normalizeTeamLogoUrl } from "./team-logo";
 export const TEAM_NAME_MAX_LENGTH = 60;
 
 /**
- * The stored form of a typed team name: control characters and runs of
- * whitespace collapse to one space (a name is always one line), then trim and
- * cap. An empty result means "no name".
+ * Characters that draw nothing: format characters (zero-width spaces, bidi
+ * overrides, soft hyphens, the byte-order mark) plus the blank "letters" and
+ * "symbols" that other categories miss (Hangul fillers, the blank braille
+ * cell, the combining grapheme joiner, Khmer inherent vowels). The zero-width
+ * joiner is kept in a stored name because emoji sequences use it; the key
+ * below drops it too.
+ */
+const INVISIBLE = /(?!\u200D)[\p{Cf}\u034F\u115F\u1160\u17B4\u17B5\u2800\u3164\uFFA0]/gu;
+const INVISIBLE_IN_KEY = /[\p{Cf}\u034F\u115F\u1160\u17B4\u17B5\u2800\u3164\uFFA0\uFE00-\uFE0F]/gu;
+/** Something a reader can see: a letter, digit, punctuation mark or symbol. */
+const VISIBLE = /[\p{L}\p{N}\p{P}\p{S}]/u;
+
+/**
+ * The stored form of a typed team name: invisible characters are dropped,
+ * control characters and runs of whitespace collapse to one space (a name is
+ * always one line), then trim and cap. An empty result means "no name",
+ * including a name with nothing visible in it.
  */
 export function normalizeTeamName(raw: string): string {
-  return raw
+  const name = raw
+    .replace(INVISIBLE, "")
     .replace(/[\u0000-\u001F\u007F\s]+/g, " ")
     .trim()
     .slice(0, TEAM_NAME_MAX_LENGTH)
     .trim();
+  return VISIBLE.test(name.replace(INVISIBLE_IN_KEY, "")) ? name : "";
 }
 
-/** Two names that read the same in a standings table are the same name. */
+/**
+ * Two names that read the same in a standings table are the same name: case,
+ * spacing, invisible characters, emoji variation selectors and compatibility
+ * forms (full-width letters, ligatures) don't make a different name.
+ */
 export function teamNameKey(name: string): string {
-  return normalizeTeamName(name).toLowerCase();
+  return normalizeTeamName(name)
+    .replace(INVISIBLE_IN_KEY, "")
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 /**

@@ -255,6 +255,26 @@ describe("editTeamIdentity — the captain's own team page", () => {
     expect((await teamRow(home.team.id)).name).toBe("Zai's Team");
   });
 
+  it("sees through invisible characters, and refuses a name that shows nothing", async () => {
+    const { home, away } = await league();
+    signIn(away.user);
+    const lookAlike = await editTeamIdentity(
+      empty,
+      fd({ teamId: away.team.id, name: "Zai's\u200B Team\u2060" }),
+    );
+    expect(lookAlike?.error).toBe(
+      "Another team is already called Zai's Team. Pick a different name.",
+    );
+    const blank = await editTeamIdentity(
+      empty,
+      fd({ teamId: away.team.id, name: "\u200B\u3164\u2800" }),
+    );
+    expect(blank?.error).toBe("Enter a team name");
+    expect((await teamRow(away.team.id)).name).toBe("Fear's Team");
+    expect((await teamRow(home.team.id)).name).toBe("Zai's Team");
+    expect(vi.mocked(sendDiscordMessage)).not.toHaveBeenCalled();
+  });
+
   it("keeps a name on one line", async () => {
     const { home } = await league();
     signIn(home.user);
