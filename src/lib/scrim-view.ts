@@ -2,7 +2,10 @@
 
 import { SCRIM_STATUS } from "./constants";
 import { seriesLobbyRule } from "./match-hosting";
-import { SCRIM_PAST_GRACE_MS } from "./scrim-window";
+import {
+  SCRIM_DETECT_WINDOW_AFTER_MS,
+  SCRIM_PAST_GRACE_MS,
+} from "./scrim-window";
 
 /**
  * The one line on a booked scrim that settles who makes the lobby. The
@@ -114,4 +117,26 @@ export function scrimBookedToast(m: {
     );
   }
   return parts.join(" ");
+}
+
+/**
+ * Bookings that start before this moment and still have no games are "Not
+ * played": 36 hours after kickoff — the end of the window a scrim game can be
+ * matched to — they leave "Booked" and join the history. Display only: the
+ * row stays SCHEDULED, so a captain who did play can still add the game by
+ * match ID (the import judges the game's own start time, not today's date).
+ */
+export function scrimNotPlayedCutoff(nowMs: number): Date {
+  return new Date(nowMs - SCRIM_DETECT_WINDOW_AFTER_MS);
+}
+
+export function isScrimNotPlayed(
+  status: string,
+  scheduledAtMs: number,
+  nowMs: number,
+): boolean {
+  return (
+    status === SCRIM_STATUS.SCHEDULED &&
+    scheduledAtMs < scrimNotPlayedCutoff(nowMs).getTime()
+  );
 }

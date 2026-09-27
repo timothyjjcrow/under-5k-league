@@ -12,7 +12,11 @@ import { formatMatchTime } from "@/lib/match-time";
 import { heroById } from "@/lib/heroes";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { scrimHostLine, scrimJoinCheck } from "@/lib/scrim-view";
+import {
+  isScrimNotPlayed,
+  scrimHostLine,
+  scrimJoinCheck,
+} from "@/lib/scrim-view";
 import {
   describeScrimConflict,
   findConfirmedScrimConflict,
@@ -131,7 +135,8 @@ function ScrimSide({
   );
 }
 
-function statusBadge(status: string) {
+function statusBadge(status: string, notPlayed: boolean) {
+  if (notPlayed) return <Badge>Not played</Badge>;
   if (status === SCRIM_STATUS.OPEN) return <Badge tone="info">Open</Badge>;
   if (status === SCRIM_STATUS.SCHEDULED)
     return <Badge tone="success">Booked</Badge>;
@@ -158,6 +163,7 @@ async function openScrimJoinCheck(
   },
   viewerId: string | null,
   seasonOpen: boolean,
+  nowMs: number,
 ) {
   const viewerTeam = viewerId
     ? await prisma.team.findUnique({
@@ -205,7 +211,7 @@ async function openScrimJoinCheck(
     hostTeamId: scrim.hostTeamId,
     hostWithdrawn: scrim.hostTeam.withdrawn,
     scheduledAtMs: scrim.scheduledAt.getTime(),
-    nowMs: Date.now(),
+    nowMs,
     viewerTeamClash,
   });
 }
@@ -248,10 +254,18 @@ export default async function ScrimDetailPage({
 
   const seasonOpen =
     scrim.season.isActive && scrim.season.status !== SEASON_STATUS.COMPLETE;
+  // One server snapshot for the join verdict and the "Not played" label.
+  // eslint-disable-next-line react-hooks/purity -- async server component
+  const nowMs = Date.now();
   const joinCheck =
     scrim.status === SCRIM_STATUS.OPEN
-      ? await openScrimJoinCheck(scrim, viewer?.id ?? null, seasonOpen)
+      ? await openScrimJoinCheck(scrim, viewer?.id ?? null, seasonOpen, nowMs)
       : null;
+  const notPlayed = isScrimNotPlayed(
+    scrim.status,
+    scrim.scheduledAt.getTime(),
+    nowMs,
+  );
 
   const teamManager = (team: typeof scrim.hostTeam | null) =>
     !!viewer &&
@@ -272,6 +286,7 @@ export default async function ScrimDetailPage({
     );
   const booked =
     !!scrim.opponentTeam &&
+    !notPlayed &&
     (scrim.status === SCRIM_STATUS.SCHEDULED ||
       scrim.status === SCRIM_STATUS.LIVE);
   const canManageResults =
@@ -302,6 +317,9 @@ export default async function ScrimDetailPage({
       (viewer?.role === "ADMIN" ||
         (scrim.season.isActive &&
           scrim.season.status !== SEASON_STATUS.COMPLETE)));
+
+  const showResultTools =
+    !!scrim.opponentTeam && canManageResults && canRecordResults;
 
   return (
     <div className="space-y-6">
@@ -374,7 +392,7 @@ export default async function ScrimDetailPage({
               )}
             </div>
             <div className="space-y-1 text-left sm:text-right">
-              <div>{statusBadge(scrim.status)}</div>
+              <div>{statusBadge(scrim.status, notPlayed)}</div>
               <p className="text-sm text-muted">
                 <LocalTime
                   ts={scrim.scheduledAt.getTime()}
@@ -390,6 +408,21 @@ export default async function ScrimDetailPage({
               ) : null}
             </div>
           </div>
+          {notPlayed ? (
+            <p className="border-t border-line-soft pt-3 text-sm text-muted">
+              No games were recorded within 36 hours of the start, so this
+              booking is listed as not played.
+              {showResultTools ? (
+                <>
+                  {" "}If you did play it,{" "}
+                  <Link href="#results" className={textLink()}>
+                    add the game by its match ID
+                  </Link>
+                  .
+                </>
+              ) : null}
+            </p>
+          ) : null}
           {booked && scrim.opponentTeam ? (
             <div className="space-y-1 border-t border-line-soft pt-3 text-sm">
               <p>
@@ -551,7 +584,7 @@ export default async function ScrimDetailPage({
         </CardBody>
       </Card>
 
-      {scrim.opponentTeam && canManageResults && canRecordResults ? (
+      {showResultTools ? (
         <Card id="results">
           <CardHeader
             title="Find scrim games"

@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { SCRIM_STATUS } from "./constants";
-import { scrimBookedToast, scrimHostLine, scrimJoinCheck } from "./scrim-view";
-import { SCRIM_PAST_GRACE_MS } from "./scrim-window";
+import {
+  isScrimNotPlayed,
+  scrimBookedToast,
+  scrimHostLine,
+  scrimJoinCheck,
+  scrimNotPlayedCutoff,
+} from "./scrim-view";
+import {
+  SCRIM_DETECT_WINDOW_AFTER_MS,
+  SCRIM_PAST_GRACE_MS,
+} from "./scrim-window";
 
 describe("scrimHostLine", () => {
   it("says the posting captain hosts and who gets the lobby details", () => {
@@ -126,5 +135,28 @@ describe("scrimBookedToast", () => {
     expect(scrimBookedToast({ ...base, hostWithdrawn: 3 })).toContain(
       "Radiant Raccoons's 3 other open times within four hours of it were withdrawn.",
     );
+  });
+});
+
+describe("isScrimNotPlayed", () => {
+  const NOW = Date.UTC(2026, 9, 4, 3, 0);
+  const edge = NOW - SCRIM_DETECT_WINDOW_AFTER_MS;
+
+  it("marks a booking not played 36 hours after its start", () => {
+    expect(SCRIM_DETECT_WINDOW_AFTER_MS).toBe(36 * 60 * 60 * 1000);
+    expect(isScrimNotPlayed(SCRIM_STATUS.SCHEDULED, edge - 1, NOW)).toBe(true);
+    expect(isScrimNotPlayed(SCRIM_STATUS.SCHEDULED, edge, NOW)).toBe(false);
+    expect(scrimNotPlayedCutoff(NOW).getTime()).toBe(edge);
+  });
+
+  it("only ever applies to a booking with no games", () => {
+    for (const status of [
+      SCRIM_STATUS.OPEN,
+      SCRIM_STATUS.LIVE,
+      SCRIM_STATUS.COMPLETED,
+      SCRIM_STATUS.CANCELLED,
+    ]) {
+      expect(isScrimNotPlayed(status, edge - 1, NOW)).toBe(false);
+    }
   });
 });

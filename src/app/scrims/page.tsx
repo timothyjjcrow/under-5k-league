@@ -8,7 +8,11 @@ import { getSessionUser } from "@/lib/auth";
 import { singleActiveSeason } from "@/lib/season";
 import { SCRIM_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { formatMatchTime } from "@/lib/match-time";
-import { scrimJoinCheck } from "@/lib/scrim-view";
+import {
+  isScrimNotPlayed,
+  scrimJoinCheck,
+  scrimNotPlayedCutoff,
+} from "@/lib/scrim-view";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
@@ -128,7 +132,13 @@ export default async function ScrimsPage({
         seasonId: season.id,
         status: { in: [SCRIM_STATUS.OPEN, SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
         OR: [
-          { status: { not: SCRIM_STATUS.OPEN } },
+          { status: SCRIM_STATUS.LIVE },
+          // A booking still without games 36h after kickoff moves to the
+          // history as "Not played" instead of sitting in Booked forever.
+          {
+            status: SCRIM_STATUS.SCHEDULED,
+            scheduledAt: { gte: scrimNotPlayedCutoff(now.getTime()) },
+          },
           { status: SCRIM_STATUS.OPEN, scheduledAt: { gte: now } },
         ],
       },
@@ -374,7 +384,7 @@ export default async function ScrimsPage({
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <Suspense fallback={<p role="status">Loading practice history…</p>}><ScrimHistory seasonId={season.id} page={listPage(query.historyPage)} /></Suspense>
+        <Suspense fallback={<p role="status">Loading practice history…</p>}><ScrimHistory seasonId={season.id} page={listPage(query.historyPage)} nowMs={now.getTime()} /></Suspense>
         <Suspense fallback={<p role="status">Loading all-time practice statistics…</p>}><ScrimStatistics seasonId={season.id} teams={teams} /></Suspense>
       </div>
 
@@ -441,12 +451,23 @@ export default async function ScrimsPage({
 async function ScrimHistory({
   seasonId,
   page,
+  nowMs,
 }: {
   seasonId: string;
   page: number;
+  nowMs: number;
 }) {
   const results = await prisma.scrim.findMany({
-    where: { seasonId, status: SCRIM_STATUS.COMPLETED },
+    where: {
+      seasonId,
+      OR: [
+        { status: SCRIM_STATUS.COMPLETED },
+        {
+          status: SCRIM_STATUS.SCHEDULED,
+          scheduledAt: { lt: scrimNotPlayedCutoff(nowMs) },
+        },
+      ],
+    },
     orderBy: [{ scheduledAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     skip: (page - 1) * 20,
     take: 21,
@@ -460,7 +481,7 @@ async function ScrimHistory({
     <Card id="history">
       <CardHeader
         title="Scrim history"
-        subtitle="Practice results only — never league results."
+        subtitle="Practice results only — never league results. A booking with no games 36 hours after it started is listed as not played."
         headingLevel={2}
       />
       <CardBody className="space-y-2">
@@ -476,9 +497,17 @@ async function ScrimHistory({
               <span className="min-w-0 truncate">
                 {scrim.hostTeam.name} vs {scrim.opponentTeam?.name}
               </span>
-              <span className="shrink-0 font-mono tabular-nums">
-                {scrim.hostScore}–{scrim.awayScore}
-              </span>
+              {isScrimNotPlayed(
+                scrim.status,
+                scrim.scheduledAt.getTime(),
+                nowMs,
+              ) ? (
+                <Badge className="shrink-0">Not played</Badge>
+              ) : (
+                <span className="shrink-0 font-mono tabular-nums">
+                  {scrim.hostScore}–{scrim.awayScore}
+                </span>
+              )}
             </Link>
           ))
         )}
