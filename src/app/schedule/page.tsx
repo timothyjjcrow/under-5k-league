@@ -20,7 +20,7 @@ import {
   tiebreakerResultLine,
 } from "@/components/tiebreaker-bracket-view";
 import type { ScenarioReport } from "@/lib/scenarios";
-import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
+import { SeasonGrid } from "@/components/season-grid";
 import {
   byeTeamsByWeek,
   byKickoff,
@@ -75,7 +75,6 @@ import {
   buttonClasses,
   textLink,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import {
   canViewAvailabilitySummary,
   hasActiveLeagueParticipation,
@@ -970,9 +969,12 @@ export default async function SchedulePage() {
       ) : null}
 
       {hasFixtures && teams.length > 1 ? (
-        <AnalysisDisclosure title="Head-to-head results grid">
+        <AnalysisDisclosure
+          title="Head-to-head results grid"
+          description="Each row shows that team's results"
+        >
           <SeasonGrid
-            standings={standings}
+            teamIds={standings.map((s) => s.teamId)}
             teamName={teamName}
             teamLogoUrl={teamLogoUrl}
             matches={matches}
@@ -1017,177 +1019,6 @@ function ReportResultPrompt({
         Report result →
       </Link>
     </div>
-  );
-}
-
-// The season at a glance: a who's-played-who grid in standings order — every
-// cell is that meeting's result from the ROW team's side, linking to the
-// match. Wide by nature, so it scrolls inside its own container on phones.
-function SeasonGrid({
-  standings,
-  teamName,
-  teamLogoUrl,
-  matches,
-}: {
-  standings: ReturnType<typeof computeStandings>;
-  teamName: Map<string, string>;
-  teamLogoUrl: Map<string, string | null>;
-  matches: CrossMatch[];
-}) {
-  const order = standings.map((s) => s.teamId);
-  const table = crossTable(order, matches);
-  const rankOf = new Map(order.map((id, i) => [id, i + 1]));
-
-  const cellChip = (rowId: string, cell: CrossCell) => {
-    const rowName = teamName.get(rowId) ?? "?";
-    const label = cell.played
-      ? `${rowName} ${
-          cell.result === "W" ? "won" : cell.result === "L" ? "lost" : "drew"
-        } ${cell.score} in week ${cell.week}`
-      : cell.live
-        ? `Week ${cell.week} — series in progress`
-        : `Week ${cell.week} — not played yet`;
-    return (
-      <Link
-        key={cell.matchId}
-        href={`/matches/${cell.matchId}`}
-        aria-label={label}
-        title={label}
-        className={cn(
-          "flex min-h-12 min-w-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-transparent px-2 py-2 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
-          cell.result === "W" &&
-            "bg-success/15 text-success hover:bg-success/25",
-          cell.result === "L" && "bg-danger/10 text-danger-soft hover:bg-danger/20",
-          cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
-          !cell.played && "text-muted hover:text-info",
-        )}
-      >
-        <span className="text-[10px] font-semibold uppercase">
-          {cell.played ? cell.result : cell.live ? "Live" : `W${cell.week}`}
-        </span>
-        <span>{cell.played ? cell.score : "vs"}</span>
-      </Link>
-    );
-  };
-
-  return (
-    // overflow-hidden on the CARD is load-bearing: Chrome adds the inner
-    // scroller's full table width to the page's scroll area through the
-    // card otherwise, giving every phone a 100px+ horizontal page scroll
-    // (caught by the mid-season mobile e2e). It also clips the table's
-    // square corners to the card radius while scrolling.
-    <Card className="overflow-hidden">
-      <CardHeader
-        title="Head-to-head results"
-        subtitle="Each row shows that team's results"
-      />
-      <CardBody className="overflow-x-auto p-0">
-        <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
-          <caption className="sr-only">
-            W = win, D = draw, L = loss. Scores are from the row team&apos;s
-            perspective.
-          </caption>
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-10 border-b border-line bg-surface px-4 py-2" />
-              {order.map((colId) => (
-                <th
-                  key={colId}
-                  scope="col"
-                  className="border-b border-line px-1.5 py-2 text-center"
-                >
-                  <Link
-                    href={`/teams/${colId}`}
-                    title={teamName.get(colId) ?? "?"}
-                    className="inline-flex min-h-11 min-w-6 flex-col items-center justify-center gap-1 py-1 -my-1"
-                  >
-                    <TeamCrest
-                      name={teamName.get(colId) ?? "?"}
-                      seed={colId}
-                      logoUrl={teamLogoUrl.get(colId)}
-                      size={22}
-                      className="rounded"
-                    />
-                    <span className="max-w-28 whitespace-normal text-xs font-medium">
-                      {teamName.get(colId)}
-                    </span>
-                    <span
-                      aria-hidden
-                      className="font-mono text-[10px] tabular-nums text-muted"
-                    >
-                      #{rankOf.get(colId)}
-                    </span>
-                  </Link>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {order.map((rowId) => (
-              <tr key={rowId}>
-                <th
-                  scope="row"
-                  className="sticky left-0 z-10 border-b border-line/60 bg-surface px-4 py-1.5 text-left font-normal"
-                >
-                  <Link
-                    href={`/teams/${rowId}`}
-                    className="flex min-h-11 min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
-                  >
-                    <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
-                      {rankOf.get(rowId)}
-                    </span>
-                    <TeamCrest
-                      name={teamName.get(rowId) ?? "?"}
-                      seed={rowId}
-                      logoUrl={teamLogoUrl.get(rowId)}
-                      size={20}
-                      className="shrink-0 rounded"
-                    />
-                    <span className="min-w-0 whitespace-normal text-xs [overflow-wrap:anywhere]">
-                      {teamName.get(rowId) ?? "?"}
-                    </span>
-                  </Link>
-                </th>
-                {order.map((colId) => {
-                  if (colId === rowId) {
-                    return (
-                      // Stays in the accessibility tree (empty, not
-                      // aria-hidden) so screen readers keep every row's
-                      // column mapping aligned with the header row.
-                      <td
-                        key={colId}
-                        className="border-b border-line/60 bg-surface-2/60 px-1.5 py-1.5"
-                      />
-                    );
-                  }
-                  const meetings = table.cells.get(rowId)!.get(colId)!;
-                  return (
-                    <td
-                      key={colId}
-                      className="border-b border-line/60 px-1.5 py-1.5 text-center align-middle"
-                    >
-                      {meetings.length === 0 ? (
-                        <span
-                          role="img"
-                          aria-label="No meeting scheduled"
-                          className="text-xs text-muted"
-                        >
-                          <span aria-hidden>—</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex flex-col gap-0.5">
-                          {meetings.map((cell) => cellChip(rowId, cell))}
-                        </span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </CardBody>
-    </Card>
   );
 }
 

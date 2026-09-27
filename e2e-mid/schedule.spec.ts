@@ -45,7 +45,7 @@ test("schedule renders weeks, cards, the LIVE chip, and the calendar menu", asyn
     .filter({ hasText: "Head-to-head results grid" })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Head-to-head results", exact: true }),
+    page.getByRole("table", { name: /^Head-to-head results\./ }),
   ).toBeVisible();
   // One "Add to calendar" control: Apple/Outlook subscribe, Google Calendar
   // and a download, all for the whole league when no team is picked.

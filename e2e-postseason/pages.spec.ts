@@ -603,6 +603,11 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   await expect(
     page.getByRole("heading", { name: "Regular season results" }),
   ).toBeVisible();
+  // The season page uses Schedule's head-to-head grid, the league's one
+  // results grid.
+  await expect(
+    page.getByRole("table", { name: /^Head-to-head results\./ }),
+  ).toBeVisible();
   await expectNoHorizontalOverflow(page, "/seasons/[id] archived postseason");
 
   for (const [path, heading] of [

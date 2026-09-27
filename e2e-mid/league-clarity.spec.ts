@@ -76,7 +76,7 @@ test("schedule keeps analysis discoverable and labels filtered counts for the se
     .filter({ hasText: "Head-to-head results grid" })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Head-to-head results", exact: true }),
+    page.getByRole("table", { name: /^Head-to-head results\./ }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page, "expanded league analysis");
   await page

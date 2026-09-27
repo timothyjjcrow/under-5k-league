@@ -8,7 +8,7 @@ import { projectPlayoffField } from "@/lib/playoff-field";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { StandingsTable } from "@/components/standings-table-server";
-import { LeagueResultsMap } from "@/components/league-results-map";
+import { SeasonGrid } from "@/components/season-grid";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
 import {
@@ -373,12 +373,20 @@ export default async function SeasonArchivePage({
       {weeks.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Regular season results</SectionTitle>
-          <LeagueResultsMap
-            standings={standings}
-            matches={regular}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-          />
+          <Card className="min-w-0 overflow-hidden">
+            <CardHeader
+              title="Head-to-head results"
+              subtitle="Each row shows that team's results"
+            />
+            <CardBody className="p-0">
+              <SeasonGrid
+                teamIds={standings.map((row) => row.teamId)}
+                teamName={teamName}
+                teamLogoUrl={teamLogoUrl}
+                matches={regular}
+              />
+            </CardBody>
+          </Card>
           <details className="group rounded-xl border border-line-soft bg-surface">
             <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden sm:px-5">
               <span>
