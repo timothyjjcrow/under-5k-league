@@ -4,6 +4,7 @@ import {
   roundRobin,
   byeTeamsByWeek,
   orderScheduleWeeks,
+  weekStartsCollapsed,
   remainingSchedule,
   seedOrder,
   playoffFirstRound,
@@ -533,6 +534,32 @@ describe("orderScheduleWeeks", () => {
         (w) => w.week,
       ),
     ).toEqual([2, 4, 1]);
+  });
+});
+
+describe("weekStartsCollapsed", () => {
+  it("closes a finished week before the current one", () => {
+    expect(weekStartsCollapsed({ week: 2, completed: 3, total: 3 }, 3)).toBe(true);
+  });
+
+  it("keeps the current week, later weeks and unfinished weeks open", () => {
+    expect(weekStartsCollapsed({ week: 3, completed: 3, total: 3 }, 3)).toBe(false);
+    expect(weekStartsCollapsed({ week: 4, completed: 3, total: 3 }, 3)).toBe(false);
+    expect(weekStartsCollapsed({ week: 2, completed: 2, total: 3 }, 3)).toBe(false);
+  });
+
+  it("closes every finished week once no week is current", () => {
+    expect(weekStartsCollapsed({ week: 7, completed: 3, total: 3 }, null)).toBe(true);
+    expect(weekStartsCollapsed({ week: 7, completed: 3, total: 3 }, undefined)).toBe(true);
+  });
+
+  it("closes one team's finished week even while the rest of it is open", () => {
+    // Under a team filter the header counts that team's series only.
+    expect(weekStartsCollapsed({ week: 2, completed: 1, total: 1 }, 3)).toBe(true);
+  });
+
+  it("never closes a week with nothing in it (a filtered bye week)", () => {
+    expect(weekStartsCollapsed({ week: 2, completed: 0, total: 0 }, 3)).toBe(false);
   });
 });
 

@@ -91,9 +91,6 @@ test("schedule keeps analysis discoverable and labels filtered counts for the se
   await expect(page.locator("#this-week")).toContainText(
     "0 of 1 series complete",
   );
-  await expect(
-    page.getByText("Team fixtures · League standings below"),
-  ).toBeVisible();
   noErrors();
 });
 

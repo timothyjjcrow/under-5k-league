@@ -1,16 +1,18 @@
 "use client";
 
 // The /schedule scoreboards: a team filter, compact completed weeks,
-// and visible progress for each round. Fully played past weeks start closed.
+// and visible progress for each round. Fully played past weeks start closed
+// (under a team filter too) and show one line of results per series.
 // The server page serializes everything (dates preformatted so hydration
 // never disagrees on locale); this component only filters and toggles.
 
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
+import { weekStartsCollapsed } from "@/lib/schedule";
 import type { playoffPathLines } from "@/components/playoff-outlook";
 
 export type RsvpSide = {
@@ -126,10 +128,6 @@ export function ScheduleWeeks({
   };
 
   const currentWeek = weeks.find((w) => w.isCurrent)?.week;
-  const defaultCollapsed = (w: WeekView) =>
-    w.total > 0 &&
-    w.completed === w.total &&
-    (currentWeek == null || w.week < currentWeek);
 
   const visibleWeeks = useMemo(() => {
     if (!filterTeam) return weeks;
@@ -172,16 +170,6 @@ export function ScheduleWeeks({
               ))}
             </select>
           </label>
-          {filterTeam ? (
-            <button
-              type="button"
-              onClick={() => setFilterTeam(null)}
-              aria-pressed={!filterTeam}
-              className="min-h-11 rounded-lg border border-line px-4 text-sm font-medium text-muted hover:bg-surface-2 hover:text-fg"
-            >
-              All teams
-            </button>
-          ) : null}
           <div
             className="hidden min-h-11 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted sm:ml-auto sm:flex"
             aria-label="Match status legend"
@@ -205,11 +193,6 @@ export function ScheduleWeeks({
               Upcoming
             </span>
           </div>
-          {filterTeam ? (
-            <p className="w-full text-xs text-muted">
-              Team fixtures · League standings below
-            </p>
-          ) : null}
         </div>
       ) : null}
 
@@ -219,12 +202,12 @@ export function ScheduleWeeks({
             ? w.matches.filter((match) => match.done).length
             : w.completed;
           const total = filterTeam ? w.matches.length : w.total;
-          // A team filter means the reader is scanning one team's season —
-          // collapsing weeks would just hide what they asked for.
-          const collapsed = filterTeam
-            ? false
-            : (collapsedOverride[w.week] ?? defaultCollapsed(w));
-          const canToggle = !filterTeam;
+          // The same collapse rules apply under a team filter: a finished
+          // past week is one line of results, not a full card, so a player's
+          // own season never buries the standings below it.
+          const collapsed =
+            collapsedOverride[w.week] ??
+            weekStartsCollapsed({ week: w.week, completed, total }, currentWeek);
           // Only a heading when something current or upcoming sits above it;
           // a list that is ALL earlier weeks needs no divider.
           const earlierHeading =
@@ -272,38 +255,32 @@ export function ScheduleWeeks({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                      {canToggle ? (
-                        <button
-                          type="button"
-                          aria-label={w.label ?? `Week ${w.week}`}
-                          aria-expanded={!collapsed}
-                          onClick={() => setWeekCollapsed(w.week, !collapsed)}
-                          className="flex min-h-11 items-center gap-2 rounded text-base font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+                      <button
+                        type="button"
+                        aria-label={w.label ?? `Week ${w.week}`}
+                        aria-expanded={!collapsed}
+                        onClick={() => setWeekCollapsed(w.week, !collapsed)}
+                        className="flex min-h-11 items-center gap-2 rounded text-base font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+                      >
+                        <span>{w.label ?? `Week ${w.week}`}</span>
+                        <svg
+                          aria-hidden
+                          viewBox="0 0 16 16"
+                          className={cn(
+                            "h-4 w-4 text-muted transition-transform",
+                            collapsed ? "-rotate-90" : "",
+                          )}
+                          fill="none"
                         >
-                          <span>{w.label ?? `Week ${w.week}`}</span>
-                          <svg
-                            aria-hidden
-                            viewBox="0 0 16 16"
-                            className={cn(
-                              "h-4 w-4 text-muted transition-transform",
-                              collapsed ? "-rotate-90" : "",
-                            )}
-                            fill="none"
-                          >
-                            <path
-                              d="m4 6 4 4 4-4"
-                              stroke="currentColor"
-                              strokeWidth="1.5"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </button>
-                      ) : (
-                        <span className="inline-flex min-h-11 items-center text-base font-semibold text-fg">
-                          {w.label ?? `Week ${w.week}`}
-                        </span>
-                      )}
+                          <path
+                            d="m4 6 4 4 4-4"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
                       {w.isCurrent ? (
                         <Badge tone="accent">This week</Badge>
                       ) : null}
@@ -387,6 +364,75 @@ export function ScheduleWeeks({
         })}
       </div>
     </div>
+  );
+}
+
+/** URL flag that keeps the regular-season fold open across a match visit. */
+const FOLD_PARAM = "results";
+
+/**
+ * The finished regular season during the playoffs: one section that starts
+ * closed, so the bracket above and the standings below stay within reach
+ * instead of sitting either side of every week's results. It opens by itself
+ * when the URL shows the reader was already inside it: a team picked, a week
+ * opened, or a return from one of its matches.
+ */
+export function ScheduleFold({
+  id,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  const params = useSearchParams();
+  const [initiallyOpen] = useState(
+    () =>
+      params.has("team") ||
+      params.has("weeks") ||
+      params.get(FOLD_PARAM) === "open",
+  );
+  return (
+    <details
+      id={id}
+      open={initiallyOpen}
+      onToggle={(event) => {
+        const url = new URL(window.location.href);
+        if (event.currentTarget.open) url.searchParams.set(FOLD_PARAM, "open");
+        else url.searchParams.delete(FOLD_PARAM);
+        window.history.replaceState(
+          null,
+          "",
+          url.pathname + url.search + url.hash,
+        );
+      }}
+      className="group scroll-mt-24 rounded-xl border border-line bg-surface/40 open:bg-surface/60"
+    >
+      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-5 py-4 transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0">
+          <h2 className="text-lg font-semibold leading-snug">{title}</h2>
+          {description ? (
+            <span className="mt-0.5 block text-xs text-muted">
+              {description}
+            </span>
+          ) : null}
+        </span>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-5 w-5 shrink-0 text-muted transition-transform group-open:rotate-180"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </summary>
+      <div className="border-t border-line-soft p-3 sm:p-5">{children}</div>
+    </details>
   );
 }
 

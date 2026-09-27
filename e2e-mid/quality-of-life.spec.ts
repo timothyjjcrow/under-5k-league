@@ -66,7 +66,7 @@ test("schedule selection survives reload and back navigation on a phone", async 
   await expect(team).toHaveValue(selectedTeam);
   await team.selectOption({ label: "Dire Straits" });
   await expect(team).toHaveValue(selectedTeam);
-  await page.getByRole("button", { name: "All teams", exact: true }).click();
+  await team.selectOption({ label: "All teams" });
   await expect(page).toHaveURL(/team=all/);
   await page.goBack();
   await expect(page).toHaveURL(filteredUrl);

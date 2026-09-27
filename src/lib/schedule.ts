@@ -499,6 +499,24 @@ export function orderScheduleWeeks<T extends { week: number }>(
 }
 
 /**
+ * Does a /schedule week (or playoff round) start closed? Only once every
+ * series it SHOWS is final and it lies before the current week. The counts
+ * are the ones on the week's header, so under a team filter a past week
+ * closes as soon as that team's own series is final: a player's season
+ * reads as one line per finished week instead of a stack of full cards.
+ */
+export function weekStartsCollapsed(
+  week: { week: number; completed: number; total: number },
+  currentWeek: number | null | undefined,
+): boolean {
+  return (
+    week.total > 0 &&
+    week.completed === week.total &&
+    (currentWeek == null || week.week < currentWeek)
+  );
+}
+
+/**
  * Each team's unplayed regular-season opponents, in week order — the
  * "run-in" a playoff race is decided by.
  */

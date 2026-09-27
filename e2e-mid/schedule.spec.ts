@@ -137,7 +137,7 @@ test("fully-played past weeks start collapsed and expand on click", async ({
   assertNoErrors();
 });
 
-test("the team filter narrows the week rows and All teams restores them", async ({
+test("the team filter narrows the week rows and the All teams option restores them", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
@@ -146,26 +146,35 @@ test("the team filter narrows the week rows and All teams restores them", async 
   // count() doesn't auto-wait — anchor on rendered content first so the
   // streamed page is actually there before counting.
   await expect(page.getByText("Week 1").first()).toBeVisible();
+  const fixtures = page.locator("#fixtures");
   await expect(
-    page.getByRole("link", { name: "details →" }).first(),
+    fixtures.getByRole("link", { name: "details →" }).first(),
   ).toBeVisible();
-  const allRows = await page.getByRole("link", { name: "details →" }).count();
-  expect(allRows).toBeGreaterThan(0);
+  // Each series shows once, as a card in an open week or as a result line in
+  // a closed one, so count distinct match links.
+  const seriesShown = () =>
+    fixtures
+      .locator('a[href^="/matches/"]')
+      .evaluateAll(
+        (links) => new Set(links.map((link) => link.getAttribute("href"))).size,
+      );
+  const allSeries = await seriesShown();
+  expect(allSeries).toBeGreaterThan(5);
 
   // The labeled selector exposes every team without sideways scrolling.
-  const allTeams = page.getByRole("button", { name: "All teams" });
-  await page
-    .getByRole("combobox", { name: "Show matches for" })
-    .selectOption({ index: 1 });
-  await expect(allTeams).toBeVisible();
-  // Filtering force-expands collapsed weeks, so the count isn't simply
-  // smaller — but in the fixture's 6-team single round robin every team
-  // plays exactly once a week: 5 rows, one per week.
-  await expect(page.getByRole("link", { name: "details →" })).toHaveCount(5);
-  await allTeams.click();
-  await expect(page.getByRole("link", { name: "details →" })).toHaveCount(
-    allRows,
-  );
+  const team = page.getByRole("combobox", { name: "Show matches for" });
+  await team.selectOption({ index: 1 });
+  // The fixture's 6-team single round robin gives every team one series a
+  // week: 5 series. Finished earlier weeks stay closed as one-line results
+  // under the filter instead of expanding the whole season.
+  await expect.poll(seriesShown).toBe(5);
+  await expect(
+    fixtures.getByRole("list", { name: /^Week \d+ results$/ }),
+  ).not.toHaveCount(0);
+  // The dropdown's own "All teams" option is the one way back.
+  await expect(page.getByRole("button", { name: "All teams" })).toHaveCount(0);
+  await team.selectOption({ label: "All teams" });
+  await expect.poll(seriesShown).toBe(allSeries);
 
   assertNoErrors();
 });

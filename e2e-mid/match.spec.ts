@@ -183,8 +183,6 @@ test("captains can report an open series and get a clear correction handoff once
 
   // Capture the dynamically staged captain's team from the match itself, then
   // use the team filter to reach a completed fixture for the same captain.
-  // Filtering expands every week; current fixtures come first, then earlier
-  // weeks newest first, so the last row is the team's oldest completed series.
   const captainTeam = page.locator('#main a[href^="/teams/"]').first();
   const captainTeamName = (await captainTeam.textContent())?.trim();
   expect(captainTeamName).toBeTruthy();
@@ -192,13 +190,16 @@ test("captains can report an open series and get a clear correction handoff once
   await page
     .getByRole("combobox", { name: "Show matches for" })
     .selectOption({ label: captainTeamName! });
-  // Scope out the separate "Your next match" check-in banner, which carries
-  // its own details link above the five filtered regular-season rows.
-  const teamMatches = page
+  // Filtered weeks keep the collapse rules: the team's finished earlier weeks
+  // are one-line results, newest first, and each line opens its match. Scope
+  // to #fixtures, clear of the separate "Your next match" check-in banner.
+  const latestResult = page
     .locator("#fixtures")
-    .getByRole("link", { name: "details →" });
-  await expect(teamMatches).toHaveCount(5);
-  await teamMatches.last().click();
+    .getByRole("list", { name: /^Week \d+ results$/ })
+    .first()
+    .getByRole("link");
+  await expect(latestResult).toHaveCount(1);
+  await latestResult.click();
 
   await expect(
     page.getByText("Series complete", { exact: true }),

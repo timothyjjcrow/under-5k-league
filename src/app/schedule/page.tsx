@@ -49,6 +49,7 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { AUTO_SYNC } from "@/lib/constants";
 import { CheckinBanner } from "@/components/checkin-banner";
 import {
+  ScheduleFold,
   ScheduleWeeks,
   type MatchView,
   type RsvpSide,
@@ -590,6 +591,20 @@ export default async function SchedulePage() {
     </section>
   ) : null;
 
+  const regularWeeks = (
+    <ScheduleWeeks
+      weeks={orderScheduleWeeks(weekViews, progress.focusWeek)}
+      initialTeamId={[...myTeamIds][0]}
+      teams={[...teams]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((t) => ({
+          id: t.id,
+          name: t.name,
+          logoUrl: t.logoUrl,
+        }))}
+    />
+  );
+
   return (
     <div className="space-y-6">
       <PageTitle
@@ -754,74 +769,78 @@ export default async function SchedulePage() {
         </section>
       ) : null}
 
-      <div id="fixtures" className="scroll-mt-24 space-y-8">
-        <section className="space-y-4">
-          <SectionTitle>Regular season</SectionTitle>
-          {!hasFixtures ? (
-            (() => {
-              const copy = emptyScheduleCopy(season.status, draft?.status);
-              const showMatchNight =
-                season.status === "SIGNUPS" ||
-                season.status === "DRAFT" ||
-                season.status === "REGULAR_SEASON";
-              const links = [
-                teams.length > 0 ? (
-                  <Link key="teams" href="/teams" className={textLink("text-sm")}>
-                    See the teams →
-                  </Link>
-                ) : null,
-                viewer?.role === "ADMIN" ? (
-                  <Link
-                    key="admin"
-                    href="/admin#adm-schedule"
-                    className={textLink("text-sm")}
-                  >
-                    Open schedule controls →
-                  </Link>
-                ) : null,
-              ].filter(Boolean);
-              return (
-                <EmptyState
-                  title={copy.title}
-                  description={copy.description}
-                  action={
-                    showMatchNight || links.length > 0 ? (
-                      <div className="flex w-full max-w-md flex-col gap-3">
-                        {showMatchNight ? (
-                          <ScheduleCallout
-                            label={season.matchSchedule}
-                            description={calloutDescription(season.status)}
-                            className="text-left"
-                          />
-                        ) : null}
-                        {links.length > 0 ? (
-                          <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
-                            {links}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : undefined
-                  }
-                />
-              );
-            })()
-          ) : (
-            <>
-              <ScheduleWeeks
-                weeks={orderScheduleWeeks(weekViews, progress.focusWeek)}
-                initialTeamId={[...myTeamIds][0]}
-                teams={[...teams]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((t) => ({
-                    id: t.id,
-                    name: t.name,
-                    logoUrl: t.logoUrl,
-                  }))}
-              />
-            </>
-          )}
-        </section>
-      </div>
+      {postseasonPhase && hasFixtures ? (
+        // The playoffs lead the page; the finished regular season folds into
+        // one closed section so the standings stay close to the bracket.
+        <ScheduleFold
+          id="fixtures"
+          title="Regular-season results"
+          description={`${weeks.length} week${weeks.length === 1 ? "" : "s"} · ${status.completed} of ${status.total} series played`}
+        >
+          {regularWeeks}
+        </ScheduleFold>
+      ) : (
+        <div id="fixtures" className="scroll-mt-24 space-y-8">
+          <section className="space-y-4">
+            <SectionTitle>Regular season</SectionTitle>
+            {!hasFixtures ? (
+              (() => {
+                const copy = emptyScheduleCopy(season.status, draft?.status);
+                const showMatchNight =
+                  season.status === "SIGNUPS" ||
+                  season.status === "DRAFT" ||
+                  season.status === "REGULAR_SEASON";
+                const links = [
+                  teams.length > 0 ? (
+                    <Link
+                      key="teams"
+                      href="/teams"
+                      className={textLink("text-sm")}
+                    >
+                      See the teams →
+                    </Link>
+                  ) : null,
+                  viewer?.role === "ADMIN" ? (
+                    <Link
+                      key="admin"
+                      href="/admin#adm-schedule"
+                      className={textLink("text-sm")}
+                    >
+                      Open schedule controls →
+                    </Link>
+                  ) : null,
+                ].filter(Boolean);
+                return (
+                  <EmptyState
+                    title={copy.title}
+                    description={copy.description}
+                    action={
+                      showMatchNight || links.length > 0 ? (
+                        <div className="flex w-full max-w-md flex-col gap-3">
+                          {showMatchNight ? (
+                            <ScheduleCallout
+                              label={season.matchSchedule}
+                              description={calloutDescription(season.status)}
+                              className="text-left"
+                            />
+                          ) : null}
+                          {links.length > 0 ? (
+                            <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
+                              {links}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : undefined
+                    }
+                  />
+                );
+              })()
+            ) : (
+              regularWeeks
+            )}
+          </section>
+        </div>
+      )}
 
       {hasFixtures ? (
         <AnalysisDisclosure title="Match times & calendar help">
