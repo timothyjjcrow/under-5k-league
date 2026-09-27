@@ -2,7 +2,12 @@ import Link from "next/link";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
 import { getPublicGameSnapshot } from "@/lib/public-game-snapshot";
-import { careerGameCounts, topCounts, type HofRow } from "@/lib/hall-of-fame";
+import {
+  careerGameCounts,
+  rankCounts,
+  topPlaces,
+  type HofBoardRows,
+} from "@/lib/hall-of-fame";
 import { appearanceCareers } from "@/lib/appearance-careers";
 import { impactPointsRule, pointsByPlayer } from "@/lib/fantasy";
 import { pickemStandings } from "@/lib/pickem";
@@ -32,10 +37,20 @@ type Board = {
   id: string;
   title: string;
   subtitle: string;
-  rows: HofRow[];
+  top: HofBoardRows;
   format: (value: number) => string;
-  detail: (userId: string) => string;
+  /** A supporting line under the name; null when it would only say "0". */
+  detail: (userId: string) => string | null;
 };
+
+/** Board values rounded to the one decimal they are shown with. */
+const tenths = (value: number) => Math.round(value * 10);
+
+/** "3 series wins with an appearance"; null for zero, which says nothing. */
+function countLine(count: number | undefined, one: string, many: string): string | null {
+  if (!count) return null;
+  return `${count} ${count === 1 ? one : many}`;
+}
 
 function BoardCard({ board, userOf }: { board: Board; userOf: Map<string, User> }) {
   return (
@@ -45,27 +60,36 @@ function BoardCard({ board, userOf }: { board: Board; userOf: Map<string, User> 
           <h3 className="font-display text-xl font-bold">{board.title}</h3>
           <p className="mt-1 text-sm leading-relaxed text-muted">{board.subtitle}</p>
         </div>
-        {board.rows.length === 0 ? (
+        {board.top.rows.length === 0 ? (
           <p className="rounded-lg bg-surface-2/50 p-4 text-sm text-muted">Nobody has qualified yet.</p>
         ) : (
-          <ol className="space-y-2">
-            {board.rows.map((row, index) => {
-              const user = userOf.get(row.userId);
-              return (
-                <li key={row.userId} className={`flex min-w-0 items-center gap-3 rounded-lg px-3 py-3 ${index === 0 ? "border border-accent/30 bg-accent/10" : "bg-surface-2/50"}`}>
-                  <span className={`w-5 shrink-0 text-center font-mono text-sm font-bold tabular-nums ${index === 0 ? "text-accent" : "text-muted"}`}>{index + 1}</span>
-                  <Avatar name={user?.name ?? "Former player"} src={user?.avatar} size={32} />
-                  <div className="min-w-0 flex-1">
-                    {user ? (
-                      <PlayerLink userId={row.userId} className="block truncate text-sm font-semibold">{user.name}</PlayerLink>
-                    ) : <span className="block truncate text-sm font-semibold text-muted">Former player</span>}
-                    <p className="truncate text-xs text-muted">{board.detail(row.userId)}</p>
-                  </div>
-                  <strong className="shrink-0 font-display text-xl tabular-nums">{board.format(row.value)}</strong>
-                </li>
-              );
-            })}
-          </ol>
+          <>
+            <ol className="space-y-2">
+              {board.top.rows.map((row) => {
+                const user = userOf.get(row.userId);
+                const detail = board.detail(row.userId);
+                const first = row.place === 1;
+                return (
+                  <li key={row.userId} className={`flex min-w-0 items-center gap-3 rounded-lg px-3 py-3 ${first ? "border border-accent/30 bg-accent/10" : "bg-surface-2/50"}`}>
+                    <span className={`w-5 shrink-0 text-center font-mono text-sm font-bold tabular-nums ${first ? "text-accent" : "text-muted"}`}>{row.place}</span>
+                    <Avatar name={user?.name ?? "Former player"} src={user?.avatar} size={32} />
+                    <div className="min-w-0 flex-1">
+                      {user ? (
+                        <PlayerLink userId={row.userId} className="block truncate text-sm font-semibold">{user.name}</PlayerLink>
+                      ) : <span className="block truncate text-sm font-semibold text-muted">Former player</span>}
+                      {detail ? <p className="truncate text-xs text-muted">{detail}</p> : null}
+                    </div>
+                    <strong className="shrink-0 font-display text-xl tabular-nums">{board.format(row.value)}</strong>
+                  </li>
+                );
+              })}
+            </ol>
+            {board.top.moreTied > 0 ? (
+              <p className="mt-2 px-3 text-xs text-muted">
+                +{board.top.moreTied} more tied at {board.format(board.top.rows[board.top.rows.length - 1].value)}
+              </p>
+            ) : null}
+          </>
         )}
       </CardBody>
     </Card>
@@ -118,58 +142,55 @@ export default async function HallOfFamePage() {
   const impact = pointsByPlayer(trustedGames);
   const winRate = [...gameCounts].filter(([, count]) => count.games >= 5)
     .map(([userId, count]) => ({ userId, value: count.wins / count.games * 100, games: count.games }))
-    .sort((a, b) => b.value - a.value || b.games - a.games || a.userId.localeCompare(b.userId))
-    .slice(0, 5);
+    .sort((a, b) => b.value - a.value || b.games - a.games || a.userId.localeCompare(b.userId));
   const impactPerGame = [...impact].flatMap(([userId, points]) => {
     const gameCount = gameCounts.get(userId)?.games ?? 0;
     return gameCount >= 5 ? [{ userId, value: points / gameCount, games: gameCount }] : [];
   }).filter((row) => row.value > 0)
-    .sort((a, b) => b.value - a.value || b.games - a.games || a.userId.localeCompare(b.userId))
-    .slice(0, 5);
+    .sort((a, b) => b.value - a.value || b.games - a.games || a.userId.localeCompare(b.userId));
   const oracle = pickemStandings(predictions, matches)
     .filter((standing) => standing.graded >= 3)
-    .sort((a, b) => b.accuracy - a.accuracy || b.graded - a.graded || a.userId.localeCompare(b.userId))
-    .slice(0, 5);
+    .sort((a, b) => b.accuracy - a.accuracy || b.graded - a.graded || a.userId.localeCompare(b.userId));
   const oracleOf = new Map(oracle.map((standing) => [standing.userId, standing]));
   const number = new Intl.NumberFormat("en-US");
   const pointsNumber = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   const careerBoards: Board[] = [
     {
       id: "titles", title: "🏆 Championship contributions", subtitle: "Appeared for a title-winning team during its championship season, including substitutes and former members.",
-      rows: topCounts(titles), format: (value) => `${value}×`,
-      detail: (id) => `${seriesWins.get(id) ?? 0} series wins with an appearance`,
+      top: topPlaces(rankCounts(titles)), format: (value) => `${value}×`,
+      detail: (id) => countLine(seriesWins.get(id), "series win with an appearance", "series wins with an appearance"),
     },
     {
       id: "series", title: "⚔️ Series wins", subtitle: "Completed victories with at least one recorded appearance for the winning team. Counted once per series.",
-      rows: topCounts(seriesWins), format: (value) => number.format(value),
-      detail: (id) => `${titles.get(id) ?? 0} championship contributions`,
+      top: topPlaces(rankCounts(seriesWins)), format: (value) => number.format(value),
+      detail: (id) => countLine(titles.get(id), "championship contribution", "championship contributions"),
     },
   ];
   const performanceBoards: Board[] = [
     {
       id: "game-wins", title: "🎮 Game wins", subtitle: "Actual Dota games played and won in trusted box scores.",
-      rows: topCounts(gameWins), format: (value) => number.format(value),
+      top: topPlaces(rankCounts(gameWins)), format: (value) => number.format(value),
       detail: (id) => `${gameCounts.get(id)?.wins ?? 0}/${gameCounts.get(id)?.games ?? 0} games won`,
     },
     {
       id: "win-rate", title: "📈 Game win rate", subtitle: "At least five imported games to qualify.",
-      rows: winRate, format: (value) => `${Math.round(value)}%`,
+      top: topPlaces(winRate, { placeKey: Math.round }), format: (value) => `${Math.round(value)}%`,
       detail: (id) => `${gameCounts.get(id)?.wins ?? 0}/${gameCounts.get(id)?.games ?? 0} games won`,
     },
     {
       id: "impact-pace", title: "✨ Impact points per game", subtitle: "Career average, with at least five imported games to qualify.",
-      rows: impactPerGame, format: (value) => value.toFixed(1),
+      top: topPlaces(impactPerGame, { placeKey: tenths }), format: (value) => value.toFixed(1),
       detail: (id) => `${gameCounts.get(id)?.games ?? 0} games played`,
     },
     {
       id: "impact-total", title: "🎯 Career impact points", subtitle: "Every trusted imported game added together.",
-      rows: topCounts(impact), format: (value) => pointsNumber.format(value),
+      top: topPlaces(rankCounts(impact), { placeKey: tenths }), format: (value) => pointsNumber.format(value),
       detail: (id) => `${gameCounts.get(id)?.games ?? 0} games played`,
     },
   ];
   const oracleBoard: Board = {
     id: "oracle", title: "🔮 Pick'em accuracy", subtitle: "Correct picks divided by graded picks; at least three to qualify.",
-    rows: oracle.map((standing) => ({ userId: standing.userId, value: Math.round(standing.accuracy * 100) })),
+    top: topPlaces(oracle.map((standing) => ({ userId: standing.userId, value: Math.round(standing.accuracy * 100) }))),
     format: (value) => `${value}%`,
     detail: (id) => `${oracleOf.get(id)?.correct ?? 0}/${oracleOf.get(id)?.graded ?? 0} correct picks`,
   };
@@ -186,7 +207,7 @@ export default async function HallOfFamePage() {
     .filter((member) => championTeamIds.includes(member.teamId))
     .map((member) => member.userId);
   const everyUserId = [...new Set([
-    ...boards.flatMap((board) => board.rows.map((row) => row.userId)),
+    ...boards.flatMap((board) => board.top.rows.map((row) => row.userId)),
     ...championRosterIds,
   ])];
   const users = everyUserId.length
@@ -198,7 +219,7 @@ export default async function HallOfFamePage() {
   const userOf = new Map(users.map((user) => [user.id, user]));
   const featuredChampion = champions[0];
   const featuredTeam = featuredChampion ? teamOf.get(featuredChampion.teamId) : null;
-  const hasCareerRows = boards.some((board) => board.rows.length > 0);
+  const hasCareerRows = boards.some((board) => board.top.rows.length > 0);
 
   return (
     <div className="space-y-8">
