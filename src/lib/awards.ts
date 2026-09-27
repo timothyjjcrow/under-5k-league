@@ -159,7 +159,7 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       key: "mvp",
       title: "MVP",
       emoji: "🏆",
-      blurb: `Most points per game, scored like Player of the Week (min ${n(mvpFloor, "game")})`,
+      blurb: `Most impact points per game, the Player of the Week score (min ${n(mvpFloor, "game")})`,
       value: `${(a.pointsTenths / a.games / 10).toFixed(1)} pts/game`,
       detail: `over ${n(a.games, "game")}`,
     }),

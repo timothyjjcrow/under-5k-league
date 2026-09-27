@@ -8,6 +8,7 @@ import { getSeasonGamesForRecap } from "@/lib/cached-queries";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import { computeSeasonAwards, type Award } from "@/lib/awards";
+import { impactPointsRule } from "@/lib/fantasy";
 import { summarizeRecapGames } from "@/lib/recap";
 import { heroById } from "@/lib/heroes";
 import { formatMatchTime } from "@/lib/match-time";
@@ -313,6 +314,12 @@ export default async function RecapPage({
 
       <div className="space-y-4">
         <SectionTitle>Season awards</SectionTitle>
+        {awards.some((a) => a.key === "mvp") ? (
+          <p className="text-sm leading-relaxed text-muted">
+            The MVP is ranked by impact points, the Player of the Week score:{" "}
+            {impactPointsRule()}.
+          </p>
+        ) : null}
         {awards.length > 0 ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {awards.map((a) => (

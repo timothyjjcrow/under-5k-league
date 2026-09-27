@@ -1743,6 +1743,21 @@ describe("freeAgentSignedMessage addresses the signed player", () => {
   });
 });
 
+describe("weeklyHonorsMessage", () => {
+  it("names the Player of the Week score impact points, as /leaders does", () => {
+    const message = weeklyHonorsMessage({
+      week: 4,
+      playerName: "Winner",
+      playerPoints: 134.2,
+      heroName: "Lina",
+      teamName: "Team",
+      teamGameWins: 2,
+    });
+    expect(message).toContain("134.2 impact points on Lina");
+    expect(message).not.toMatch(/fantasy/i);
+  });
+});
+
 describe("weeklyHonorsMessage corrections", () => {
   it("clearly labels a corrected award", () => {
     const message = weeklyHonorsMessage({

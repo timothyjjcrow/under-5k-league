@@ -122,7 +122,8 @@ test("Hall of Fame puts career rates and champion history in context", async ({ 
   await expect(page.getByRole("heading", { name: "Hall of Fame" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Career honors" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Game performance" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Fantasy per game" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Impact points per game" })).toBeVisible();
+  await expect(page.getByText(/Impact points are the Player of the Week score/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Champion history" })).toBeVisible();
   await page.setViewportSize({ width: 360, height: 812 });
   await expectNoHorizontalOverflow(page, "/hall-of-fame");

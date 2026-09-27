@@ -854,7 +854,7 @@ export function weeklyHonorsMessage(honors: {
   ];
   if (honors.playerName) {
     lines.push(
-      `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} fantasy pts${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+      `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
     );
   }
   if (honors.teamName) {

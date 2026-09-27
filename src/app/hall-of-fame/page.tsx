@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getPublicGameSnapshot } from "@/lib/public-game-snapshot";
 import { careerGameCounts, topCounts, type HofRow } from "@/lib/hall-of-fame";
 import { appearanceCareers } from "@/lib/appearance-careers";
-import { pointsByPlayer } from "@/lib/fantasy";
+import { impactPointsRule, pointsByPlayer } from "@/lib/fantasy";
 import { pickemStandings } from "@/lib/pickem";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -113,12 +113,14 @@ export default async function HallOfFamePage() {
   })).filter((game) => game.players.length === 10);
   const gameCounts = careerGameCounts(trustedGames);
   const gameWins = new Map([...gameCounts].map(([id, count]) => [id, count.wins]));
-  const fantasy = pointsByPlayer(trustedGames);
+  // Impact points: the per-game score behind Player of the Week and match
+  // MVPs (fantasy scores the same way, but most readers never play it).
+  const impact = pointsByPlayer(trustedGames);
   const winRate = [...gameCounts].filter(([, count]) => count.games >= 5)
     .map(([userId, count]) => ({ userId, value: count.wins / count.games * 100, games: count.games }))
     .sort((a, b) => b.value - a.value || b.games - a.games || a.userId.localeCompare(b.userId))
     .slice(0, 5);
-  const fantasyPerGame = [...fantasy].flatMap(([userId, points]) => {
+  const impactPerGame = [...impact].flatMap(([userId, points]) => {
     const gameCount = gameCounts.get(userId)?.games ?? 0;
     return gameCount >= 5 ? [{ userId, value: points / gameCount, games: gameCount }] : [];
   }).filter((row) => row.value > 0)
@@ -155,13 +157,13 @@ export default async function HallOfFamePage() {
       detail: (id) => `${gameCounts.get(id)?.wins ?? 0}/${gameCounts.get(id)?.games ?? 0} games won`,
     },
     {
-      id: "fantasy-pace", title: "✨ Fantasy per game", subtitle: "Role-aware production with at least five games.",
-      rows: fantasyPerGame, format: (value) => value.toFixed(1),
+      id: "impact-pace", title: "✨ Impact points per game", subtitle: "Career average, with at least five imported games to qualify.",
+      rows: impactPerGame, format: (value) => value.toFixed(1),
       detail: (id) => `${gameCounts.get(id)?.games ?? 0} games played`,
     },
     {
-      id: "fantasy-total", title: "🎯 Fantasy total", subtitle: "Career points across every trusted imported game.",
-      rows: topCounts(fantasy), format: (value) => pointsNumber.format(value),
+      id: "impact-total", title: "🎯 Career impact points", subtitle: "Every trusted imported game added together.",
+      rows: topCounts(impact), format: (value) => pointsNumber.format(value),
       detail: (id) => `${gameCounts.get(id)?.games ?? 0} games played`,
     },
   ];
@@ -265,6 +267,9 @@ export default async function HallOfFamePage() {
 
       <section id="performance" className="scroll-mt-24 space-y-3">
         <SectionTitle aside="Trusted imported box scores only">Game performance</SectionTitle>
+        <p className="text-sm leading-relaxed text-muted">
+          Impact points are the Player of the Week score: {impactPointsRule()}.
+        </p>
         <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
           {performanceBoards.map((board) => <BoardCard key={board.id} board={board} userOf={userOf} />)}
         </div>
@@ -328,7 +333,7 @@ export default async function HallOfFamePage() {
       <p className="border-t border-line-soft pt-4 text-xs leading-relaxed text-muted">
         Player contributions use {careers.coverage.trustedGames} trusted game{careers.coverage.trustedGames === 1 ? "" : "s"} of {careers.coverage.importedGames} imported.
         {careers.coverage.unattributedLines > 0 ? ` ${careers.coverage.unattributedLines} player lines lack a verified player/team pairing and cannot receive a team contribution.` : ""}
-        {" "}Manual results without box scores still count for teams; they do not invent individual appearances. Historical totals change when a result is corrected. Fantasy uses the current role-aware scoring rules for every imported game.
+        {" "}Manual results without box scores still count for teams; they do not invent individual appearances. Historical totals change when a result is corrected. Impact points use the current scoring rules for every imported game.
       </p>
     </div>
   );
