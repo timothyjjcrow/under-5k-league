@@ -12,8 +12,7 @@
 // Pure on purpose (no React, no Prisma): the client header, the server footer
 // and the unit tests all import it.
 
-import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
-import { featureAvailability } from "./features-lifecycle";
+import { DRAFT_STATUS, REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import { draftPhasePresentation, seasonPhaseLabel } from "./season-copy";
 
 /**
@@ -79,15 +78,18 @@ const teamsExist = ({ phase }: NavState) =>
 
 // Schedule, Fantasy and Pick'em have nothing to show until the auction has
 // sold every roster: before that they open onto "opens after the draft"
-// screens (Fantasy narrows this further, below). This is the feature tour's
-// own POST_AUCTION rule, so the menus and the tour agree. A completed auction
-// can publish fixtures before the admin moves the season on, which is why
-// this reads the auction and not the phase.
+// screens (Fantasy narrows this further, below). A completed auction can
+// publish fixtures before the admin moves the season on, which is why this
+// reads the auction and not only the phase: DRAFT alone is not enough, since
+// the auction can still be waiting, live or paused inside it.
 const afterAuction = ({
   phase,
   draftStatus,
 }: Pick<NavState, "phase" | "draftStatus">) =>
-  featureAvailability("POST_AUCTION", phase, draftStatus).available;
+  (phase === SEASON_STATUS.DRAFT && draftStatus === DRAFT_STATUS.COMPLETE) ||
+  phase === SEASON_STATUS.REGULAR_SEASON ||
+  phase === SEASON_STATUS.PLAYOFFS ||
+  phase === SEASON_STATUS.COMPLETE;
 
 const resultsPhase = ({ phase }: NavState) =>
   phase === SEASON_STATUS.REGULAR_SEASON ||
@@ -181,8 +183,8 @@ const NAV_PAGES: readonly NavPage[] = [
     footer: true,
   },
   {
-    href: "/features",
-    label: "Feature tour",
+    href: "/how-it-works",
+    label: "How it works",
     group: "league",
     visible: always,
     footer: true,
@@ -380,8 +382,8 @@ export function exploreNav(state: NavState): NavSection[] {
 /**
  * The footer's few links. It used to repeat every page from the header and
  * Explore (up to 16 links, a second site map under every page); it now keeps
- * the league's news, the tour and past seasons, all of which Explore lists
- * too.
+ * the league's news, How it works and past seasons, all of which Explore
+ * lists too.
  */
 export function footerNav(state: NavState): NavLink[] {
   return NAV_PAGES.filter((page) => page.footer && page.visible(state)).map(

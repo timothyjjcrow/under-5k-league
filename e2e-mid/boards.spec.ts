@@ -345,7 +345,7 @@ test("public stat and content pages stay inside a 360px viewport", async ({
     "/records",
     "/players/compare",
     "/news",
-    "/features",
+    "/how-it-works",
   ]) {
     await page.goto(path);
     await expectNoHorizontalOverflow(page, path);

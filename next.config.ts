@@ -53,6 +53,14 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "64kb",
     },
   },
+  // The feature tour became the one-screen How it works page. Old links
+  // (Discord posts, bookmarks, search results) keep working; a #section in
+  // the old address carries over, and #join lands on the join steps.
+  async redirects() {
+    return [
+      { source: "/features", destination: "/how-it-works", permanent: true },
+    ];
+  },
   async headers() {
     return [
       { source: "/:path*", headers: SECURITY_HEADERS },

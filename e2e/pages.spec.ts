@@ -148,7 +148,7 @@ test("home renders the season timeline, pool composition, and footer", async ({
 test("internal pages keep the active league phase visible in the header", async ({
   page,
 }) => {
-  await page.goto("/features");
+  await page.goto("/how-it-works");
   await expect(
     page.getByRole("link", {
       name: "League status: Season 1 — Signups open",
@@ -240,8 +240,8 @@ test("phones get one menu: the tab bar's sheet, plus the avatar's account menu",
   for (const label of ["Hall of Fame", "Record book", "Compare players"]) {
     await expect(sheet.getByRole("link", { name: label })).toHaveCount(0);
   }
-  // The tour lives in Explore's League group, listed once; Merch once too.
-  await expect(sheet.getByRole("link", { name: "Feature tour" })).toHaveCount(1);
+  // How it works lives in Explore's League group, listed once; Merch once too.
+  await expect(sheet.getByRole("link", { name: "How it works" })).toHaveCount(1);
   await expect(sheet.getByRole("link", { name: /Merch/ })).toHaveCount(1);
   // No page is both a tab and an entry in the sheet.
   for (const label of await dock.getByRole("link").allTextContents()) {
@@ -255,7 +255,7 @@ test("desktop Explore menu keeps evergreen league pages discoverable", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/features");
+  await page.goto("/how-it-works");
   const button = page.getByRole("button", { name: /Explore/ });
   await expect(button).toBeVisible();
   await button.click();

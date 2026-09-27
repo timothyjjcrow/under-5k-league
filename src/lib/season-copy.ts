@@ -87,7 +87,7 @@ export function draftPhasePresentation(
 
 /**
  * The ONE name for the league's current phase, used by every phase chip: the
- * header chip, the footer, the dashboard hero and the feature tour. They
+ * header chip, the footer and the dashboard hero. They
  * used to keep three hand-copied maps with different
  * wording, and the footer's said "Draft in progress" for an auction that had
  * not started (or had already finished), because a season-phase map cannot

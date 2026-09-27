@@ -120,12 +120,12 @@ describe("site navigation", () => {
     expect(full.map((section) => section.links.map((l) => l.label))).toEqual([
       ["Scrims", "Fantasy", "Pick'em"],
       ["Leaders", "Hero meta", "Record book", "Compare players"],
-      ["League news", "Feature tour", "Hall of Fame", "Season history"],
+      ["League news", "How it works", "Hall of Fame", "Season history"],
     ]);
   });
 
   // During the live auction these three open onto "opens after the draft"
-  // screens, so the menus wait for the auction like the feature tour does.
+  // screens, so the menus wait for the whole auction, not just the phase.
   it("offers Schedule, Fantasy and Pick'em only once the auction is complete", () => {
     const locked = ["/schedule", "/fantasy", "/pickem"];
     // A manager who entered keeps Fantasy after the lock, so this holds for
@@ -165,7 +165,7 @@ describe("site navigation", () => {
         "/inhouse",
         "/scrims",
         "/news",
-        "/features",
+        "/how-it-works",
       ]) {
         expect(listed, href).toContain(href);
       }
@@ -301,13 +301,13 @@ describe("footer", () => {
     }
     expect(hrefs(footerNav(state(SEASON_STATUS.SIGNUPS)))).toEqual([
       "/news",
-      "/features",
+      "/how-it-works",
     ]);
     expect(
       footerNav(
         state(SEASON_STATUS.REGULAR_SEASON, null, { hasHistory: true }),
       ).map((link) => link.label),
-    ).toEqual(["League news", "Feature tour", "Season history"]);
+    ).toEqual(["League news", "How it works", "Season history"]);
   });
 });
 

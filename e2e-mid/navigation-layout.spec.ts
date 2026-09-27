@@ -34,7 +34,7 @@ test.beforeEach(async ({ page }) => {
   // Expire the previous fixture before asserting archived-season navigation.
   expect((await page.request.post("/api/test/cache")).ok()).toBe(true);
   await page.goto(
-    `/api/auth/dev?name=${encodeURIComponent(displayName)}&steamId=76561190000991001&admin=1&redirect=/features`,
+    `/api/auth/dev?name=${encodeURIComponent(displayName)}&steamId=76561190000991001&admin=1&redirect=/how-it-works`,
   );
 });
 
@@ -134,7 +134,7 @@ for (const phase of [
       where: { id: season.id },
       data: { status: phase ?? season.status, isActive: phase !== null },
     });
-    await page.goto("/features");
+    await page.goto("/how-it-works");
 
     for (const width of desktopWidths) {
       await test.step(`${width}px`, async () => {
@@ -154,7 +154,7 @@ for (const phase of [
           explore.getByRole("link", { name: "Season history" }),
         ).toBeVisible();
         await expect(
-          explore.getByRole("link", { name: "Feature tour" }),
+          explore.getByRole("link", { name: "How it works" }),
         ).toHaveAttribute("aria-current", "page");
         await page.keyboard.press("Escape");
         await expect(exploreButton).toBeFocused();
@@ -214,7 +214,7 @@ test("desktop disclosures work by keyboard, dismiss each other, and follow links
   await exploreButton.click();
   await expect(account).toHaveCount(0);
   await expect(explore).toBeVisible();
-  await explore.getByRole("link", { name: "Feature tour" }).click();
+  await explore.getByRole("link", { name: "How it works" }).click();
   await expect(explore).toHaveCount(0);
 
   await accountButton.click();

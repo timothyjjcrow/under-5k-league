@@ -33,7 +33,7 @@ describe("public sitemap", () => {
       "/records",
       "/players/compare",
       "/news",
-      "/features",
+      "/how-it-works",
       "/hall-of-fame",
       "/seasons",
       "/recap",
@@ -42,6 +42,8 @@ describe("public sitemap", () => {
     ]) {
       expect(listed).toContain(`https://league.example${path}`);
     }
+    // The old feature tour redirects to /how-it-works.
+    expect(listed).not.toContain("https://league.example/features");
     expect(listed).not.toContain("https://league.example/privacy");
     expect(listed).not.toContain("https://league.example/terms");
     expect(new Set(listed).size).toBe(listed.length);

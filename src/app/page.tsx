@@ -173,8 +173,8 @@ export default async function Home() {
               Review {latestSeason.name} <LinkArrow />
             </Link>
           ) : (
-            <Link href="/features" className={buttonClasses("secondary")}>
-              See what the league offers
+            <Link href="/how-it-works" className={buttonClasses("secondary")}>
+              How it works
             </Link>
           )}
           <DiscordButton />
@@ -218,11 +218,11 @@ export default async function Home() {
     : "Sign in to stand in";
   let heroAction: ReactNode = null;
   if (season.status === "SIGNUPS") {
-    // The feature tour rides along during signups — new visitors can't see
-    // most of the league (draft, fantasy, pick'em…) until later phases.
+    // How it works rides along during signups: the draft, match nights and
+    // who can join, on one screen, for visitors deciding whether to sign up.
     const tourLink = (
-      <Link href="/features" className={buttonClasses("secondary", "lg")}>
-        See what you&apos;re joining
+      <Link href="/how-it-works" className={buttonClasses("secondary", "lg")}>
+        How it works
       </Link>
     );
     heroAction = !user ? (
@@ -1176,8 +1176,8 @@ function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <InviteLink />
-        <Link href="/features" className={textLink("text-sm")}>
-          What&apos;s coming <LinkArrow />
+        <Link href="/how-it-works" className={textLink("text-sm")}>
+          How it works <LinkArrow />
         </Link>
       </div>
       <p className="mt-2 text-xs text-muted">
