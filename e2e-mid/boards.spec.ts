@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { MID_DB_URL } from "../playwright.midseason.config";
 import {
   expectNoCollapsedTruncation,
   expectNoHorizontalOverflow,
@@ -7,6 +9,12 @@ import {
   expectTapTargets,
   trackPageErrors,
 } from "./helpers";
+
+// Read-only: season ids for the season-scoped pages.
+const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
+test.afterAll(async () => {
+  await db.$disconnect();
+});
 
 // The stat roll-up pages — all recompute from every stored Game and all were
 // previously untested in a browser. Each check: key cards render, the
@@ -112,25 +120,32 @@ test("hero meta explains its sample and lets players explore the pool", async ({
   assertNoErrors();
 });
 
-test("the record book groups performances and filters by season", async ({ page }) => {
+test("the record book lists records compactly and scopes by season", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/records");
   await expect(page.getByRole("heading", { name: "Record book" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Impact & team play" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Economy & lane" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Match stories" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "View match →" }).first()).toBeVisible();
-  const season = page.getByRole("combobox", { name: "Season" });
-  const firstSeason = await season.locator('option:not([value=""])').first().getAttribute("value");
-  expect(firstSeason).toBeTruthy();
-  await season.selectOption(firstSeason!);
-  await page.getByRole("button", { name: "View records" }).click();
-  await expect(page).toHaveURL(new RegExp(`/records\\?season=${firstSeason}`));
+  await expect(page.getByRole("heading", { name: "Player records" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Match records" })).toBeVisible();
+  await expect(page.getByText(/Most kills$/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Match →" }).first()).toBeVisible();
+  // No record names a player for their worst game.
+  await expect(page.getByText(/Most deaths|Wild card/)).toHaveCount(0);
+  await expect(page.getByText(/tie goes to whoever set the mark first/)).toBeVisible();
+  // One season of games: "All seasons" would be the same list, so no picker
+  // and no separate submit button.
+  const picker = page.getByRole("navigation", { name: "Choose a season for records" });
+  await expect(picker).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "View records" })).toHaveCount(0);
+  // A season link still works, and keeps a way back to the all-time book.
+  const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
+  await page.goto(`/records?season=${season.id}`);
   await expect(page.getByRole("heading", { name: "Record book" })).toBeVisible();
+  await expect(picker.getByRole("link", { name: "All seasons" })).toHaveAttribute("href", "/records");
+  await expect(picker.getByRole("link", { name: season.name })).toHaveAttribute("aria-current", "page");
   const statsNav = page.getByRole("navigation", { name: "Statistics" });
-  await expect(statsNav.getByRole("link", { name: "Leaders" })).toHaveAttribute("href", `/leaders?season=${firstSeason}`);
-  await expect(statsNav.getByRole("link", { name: "Hero meta" })).toHaveAttribute("href", `/meta?season=${firstSeason}`);
-  await expect(statsNav.getByRole("link", { name: "Record book" })).toHaveAttribute("href", `/records?season=${firstSeason}`);
+  await expect(statsNav.getByRole("link", { name: "Leaders" })).toHaveAttribute("href", `/leaders?season=${season.id}`);
+  await expect(statsNav.getByRole("link", { name: "Hero meta" })).toHaveAttribute("href", `/meta?season=${season.id}`);
+  await expect(statsNav.getByRole("link", { name: "Record book" })).toHaveAttribute("href", `/records?season=${season.id}`);
   await page.setViewportSize({ width: 360, height: 812 });
   await expectNoHorizontalOverflow(page, "/records");
   assertNoErrors();

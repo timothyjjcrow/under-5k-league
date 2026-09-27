@@ -189,7 +189,8 @@ test("warm public statistics refresh on the first read after real admin correcti
       const warmedAt = Date.now();
       const warm = await readTogether(context, paths);
       for (const key of ["records", "seasonRecords"]) {
-        expect(warm[key].html).toContain(`${fixture.playerName} set the kills mark at 9999.`);
+        expect(warm[key].html).toContain(playerLink(fixture.playerId));
+        expect(warm[key].text).toContain("9,999");
         expect(warm[key].html).toContain(`${fixture.homeName} vs Cache Away`);
       }
       for (const key of ["career", "leaders", "recap"]) {
