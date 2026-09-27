@@ -97,7 +97,9 @@ describe("reschedule service (integration)", () => {
 
     await expect(
       proposeReschedule(home.captainId, match.id, NIGHT),
-    ).rejects.toThrow(/booked scrim within four hours/i);
+    ).rejects.toThrow(
+      `That time is within four hours of the ${home.name} vs ${practiceOpponent.name} scrim on `,
+    );
     expect(await pendingFor(match.id)).toBeNull();
 
     await prisma.scrim.update({
@@ -113,7 +115,9 @@ describe("reschedule service (integration)", () => {
 
     await expect(
       respondReschedule(away.captainId, pending!.id, true),
-    ).rejects.toThrow(/now has a booked scrim within four hours/i);
+    ).rejects.toThrow(
+      `That time is now within four hours of the ${home.name} vs ${practiceOpponent.name} scrim on `,
+    );
     expect(
       (await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
         .scheduledAt,

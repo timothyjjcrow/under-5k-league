@@ -36,7 +36,15 @@ import {
   releaseAnnouncementClaim,
 } from "./announcement-marker";
 import { UserFacingError } from "./user-facing-error";
-import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import { describeScrimYield } from "./scrim-schedule-conflict";
+import {
+  ScrimClashChangedError,
+  yieldScrimsToOfficialFixture,
+  type OfficialFixtureScrimClash,
+} from "./scrim-service";
+import { playoffRoundLabel, scrimYieldedMessage } from "./scrim-discord";
+import { mentionUsers } from "./discord-mentions";
+import { logAdminAction } from "./admin-log";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
@@ -49,31 +57,74 @@ class StaleBracketError extends Error {}
 /** The bracket-build snapshot lost a race before its guarded phase write. */
 class BracketBuildRaceError extends Error {}
 
-/** A dated playoff round would double-book at least one participating team. */
-class PlayoffScrimConflictError extends Error {}
-
 const BRACKET_BUILD_RACE_MESSAGE =
   "The season, standings, or playoff bracket changed while it was being built — reload and try again";
 
-const PLAYOFF_SCRIM_CONFLICT_MESSAGE =
-  "A playoff team has a booked scrim within four hours of that round's kickoff. Move or cancel the scrim before building the bracket.";
+/** Who the activity log names when no admin pressed anything. */
+const AUTOMATION_ACTOR: HistoryActor = {
+  id: "system",
+  name: "League automation",
+};
 
-async function assertNoPlayoffScrimConflict(
+/**
+ * A playoff round's night beats any practice booked near it (see
+ * yieldScrimsToOfficialFixture). Cancel the booked scrims, keep the ones
+ * already under way, and hand both back for reporting after commit.
+ */
+function yieldScrimsToRound(
   tx: Prisma.TransactionClient,
   seasonId: string,
   pairings: Array<{ home: string; away: string }>,
   scheduledAt: Date | null,
-): Promise<void> {
-  if (!scheduledAt || pairings.length === 0) return;
-  if (
-    await hasConfirmedScrimConflict(tx, {
-      seasonId,
-      teamIds: [...new Set(pairings.flatMap((p) => [p.home, p.away]))],
-      scheduledAt,
-    })
-  ) {
-    throw new PlayoffScrimConflictError();
+): Promise<OfficialFixtureScrimClash[]> {
+  return yieldScrimsToOfficialFixture(tx, {
+    seasonId,
+    teamIds: [...new Set(pairings.flatMap((p) => [p.home, p.away]))],
+    scheduledAt,
+  });
+}
+
+/**
+ * Post-commit and best-effort: each overridden scrim's two captains hear it on
+ * Discord (mentioned, never a league broadcast), and the admin reads the same
+ * facts in the activity log. A failed send or log never undoes the round.
+ */
+async function reportScrimYields(
+  seasonId: string,
+  clashes: OfficialFixtureScrimClash[],
+  round: { pairs: number; scheduledAt: Date | null },
+  actor?: HistoryActor,
+): Promise<string[]> {
+  if (clashes.length === 0 || !round.scheduledAt) return [];
+  const fixtureLabel = playoffRoundLabel(round.pairs);
+  for (const clash of clashes) {
+    try {
+      await sendDiscordMessage(
+        scrimYieldedMessage({
+          scrimId: clash.id,
+          hostTeamName: clash.hostTeamName,
+          opponentTeamName: clash.opponentTeamName,
+          scrimAtMs: clash.scheduledAt.getTime(),
+          cancelled: clash.cancelled,
+          fixtureLabel,
+          fixtureAtMs: round.scheduledAt.getTime(),
+        }),
+        await mentionUsers(clash.captainIds),
+      );
+    } catch {
+      console.error("[playoffs] SCRIM_YIELD_ANNOUNCEMENT_FAILED");
+    }
   }
+  const sentences = clashes.map((clash) =>
+    describeScrimYield(clash, fixtureLabel, round.scheduledAt!),
+  );
+  await logAdminAction({
+    action: "yieldScrimsToPlayoffs",
+    summary: sentences.join(" "),
+    seasonId,
+    actor: actor ?? AUTOMATION_ACTOR,
+  });
+  return sentences;
 }
 
 // Bracket slots are encoded as `R{round}M{match}` e.g. "R0M1".
@@ -274,15 +325,21 @@ export async function createPlayoffBracket(
   seasonId: string,
   claim?: PlayoffBracketClaim,
   actor?: HistoryActor,
-): Promise<{ standDowns: StandDown[]; removedGameCount: number }> {
+): Promise<{
+  standDowns: StandDown[];
+  removedGameCount: number;
+  /** One admin-facing sentence per practice scrim the first round overrode. */
+  scrimNotes: string[];
+}> {
   // Test seam immediately before the authoritative snapshot. Every input used
   // below is read after this point, so a result, withdrawal, game import or
   // phase change that lands while an admin is looking at a stale page is either
   // included in the new bracket or refused — never silently overwritten.
   await raceHook("playoffs.create.beforeTx");
 
+  let built;
   try {
-    return await prisma.$transaction(
+    built = await prisma.$transaction(
       async (tx) => {
         const season = await tx.season.findUnique({ where: { id: seasonId } });
         if (!season) throw new UserFacingError("No season");
@@ -423,11 +480,11 @@ export async function createPlayoffBracket(
               Math.max(Date.now(), lastTiebreakerKickoff + 1),
             )
           : null;
-        // Do this before teardown. The transaction would roll a teardown back
-        // on failure, but checking first also keeps the intent explicit: reset
-        // never destroys the current bracket merely to discover the replacement
-        // round would collide with a confirmed casual booking.
-        await assertNoPlayoffScrimConflict(
+        // League fixtures win: a practice scrim booked near the first
+        // round's night is cancelled (or, if already under way, kept and
+        // reported) rather than blocking the bracket. Same transaction as the
+        // build, so a failed build keeps the scrim booked.
+        const scrimClashes = await yieldScrimsToRound(
           tx,
           seasonId,
           pairings,
@@ -462,22 +519,33 @@ export async function createPlayoffBracket(
 
         return {
           ...removed,
+          scrimClashes,
+          round: { pairs: pairings.length, scheduledAt: playoffScheduledAt },
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (error instanceof PlayoffScrimConflictError) {
-      throw new UserFacingError(PLAYOFF_SCRIM_CONFLICT_MESSAGE);
-    }
     if (
       error instanceof BracketBuildRaceError ||
+      error instanceof ScrimClashChangedError ||
       isSerializationConflict(error)
     ) {
       throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
     }
     throw error;
   }
+  const scrimNotes = await reportScrimYields(
+    seasonId,
+    built.scrimClashes,
+    built.round,
+    actor,
+  );
+  return {
+    standDowns: built.standDowns,
+    removedGameCount: built.removedGameCount,
+    scrimNotes,
+  };
 }
 
 /**
@@ -831,8 +899,9 @@ export async function advancePlayoffBracket(
   });
   if (exists) return false; // cheap fast path; the claim below is the real guard
   await raceHook("playoffs.advance.beforeBuild");
+  let built;
   try {
-    await prisma.$transaction(
+    built = await prisma.$transaction(
       async (tx) => {
         // Re-assert the build's INPUTS inside the transaction — everything
         // above was read at default isolation, several round trips ago. The
@@ -899,10 +968,11 @@ export async function advancePlayoffBracket(
         const scheduledAt = seasonNow.firstMatchNight
           ? upcomingMatchNight(seasonNow.firstMatchNight, week, Date.now())
           : null;
-        // Leave the build marker unclaimed while a casual booking blocks this
-        // round. Reconciliation can retry the same winners after that scrim is
-        // completed or cancelled; no result needs to be replayed.
-        await assertNoPlayoffScrimConflict(
+        // League fixtures win. A practice scrim booked near this round's
+        // night used to leave the build marker unclaimed and the round (the
+        // final included) unbuilt until someone noticed and cancelled it; it
+        // is now cancelled here, or kept and reported if already under way.
+        const scrimClashes = await yieldScrimsToRound(
           tx,
           seasonId,
           pairings,
@@ -923,13 +993,13 @@ export async function advancePlayoffBracket(
           })),
         });
         await stampResultChange(tx);
+        return { scrimClashes, scheduledAt };
       },
       // Serializable so the reset (also Serializable, touching the same
       // marker/match/season rows) and this build are guaranteed to serialize —
       // one of them aborts with P2034 instead of interleaving.
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
-    return true;
   } catch (e) {
     // Someone else is building (or already built) this exact round.
     if (isUniqueViolation(e)) return false;
@@ -937,10 +1007,14 @@ export async function advancePlayoffBracket(
     if (isSerializationConflict(e)) return false;
     // The bracket we computed from no longer exists as we read it.
     if (e instanceof StaleBracketError) return false;
-    // A confirmed scrim owns this time for now. Do not turn a successfully
-    // recorded series result into a failed request; the scheduled reconciler
-    // calls this idempotent advance again after the conflict is cleared.
-    if (e instanceof PlayoffScrimConflictError) return false;
+    // A clashing scrim changed mid-build; the reconciler retries the same
+    // idempotent advance on its next run.
+    if (e instanceof ScrimClashChangedError) return false;
     throw e;
   }
+  await reportScrimYields(seasonId, built.scrimClashes, {
+    pairs: pairings.length,
+    scheduledAt: built.scheduledAt,
+  });
+  return true;
 }

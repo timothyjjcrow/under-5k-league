@@ -11,7 +11,10 @@ import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
-import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import {
+  describeScrimConflict,
+  findConfirmedScrimConflict,
+} from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
 import { rescheduleDeadline } from "./schedule";
 import { isSerializationConflict } from "./prisma-errors";
@@ -233,15 +236,14 @@ export async function proposeReschedule(
         // a notification and approval task that cannot change anything.
         if (match.scheduledAt?.getTime() === proposedTime.getTime())
           throw new UserFacingError("That is already this match's kickoff");
-        if (
-          await hasConfirmedScrimConflict(tx, {
-            seasonId: match.seasonId,
-            teamIds: [match.homeTeamId, match.awayTeamId],
-            scheduledAt: proposedTime,
-          })
-        ) {
+        const scrimClash = await findConfirmedScrimConflict(tx, {
+          seasonId: match.seasonId,
+          teamIds: [match.homeTeamId, match.awayTeamId],
+          scheduledAt: proposedTime,
+        });
+        if (scrimClash) {
           throw new UserFacingError(
-            "One of these teams has a booked scrim within four hours of that time",
+            `That time is within four hours of ${describeScrimConflict(scrimClash)}. Pick another time, or cancel that scrim on its page first.`,
           );
         }
         await assertFitsLeagueCalendar(
@@ -375,15 +377,14 @@ export async function respondReschedule(
         assertSaneProposedTime(request.proposedTime);
         if (match.scheduledAt?.getTime() === request.proposedTime.getTime())
           throw new UserFacingError("That is already this match's kickoff");
-        if (
-          await hasConfirmedScrimConflict(tx, {
-            seasonId: match.seasonId,
-            teamIds: [match.homeTeamId, match.awayTeamId],
-            scheduledAt: request.proposedTime,
-          })
-        ) {
+        const scrimClash = await findConfirmedScrimConflict(tx, {
+          seasonId: match.seasonId,
+          teamIds: [match.homeTeamId, match.awayTeamId],
+          scheduledAt: request.proposedTime,
+        });
+        if (scrimClash) {
           throw new UserFacingError(
-            "One of these teams now has a booked scrim within four hours of that time",
+            `That time is now within four hours of ${describeScrimConflict(scrimClash)}. Cancel that scrim on its page first, or propose another time.`,
           );
         }
         await assertFitsLeagueCalendar(

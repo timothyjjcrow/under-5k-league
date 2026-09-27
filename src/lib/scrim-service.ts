@@ -16,7 +16,8 @@ import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
 import {
-  hasConfirmedScrimConflict,
+  describeScrimConflict,
+  findConfirmedScrimConflict,
   scrimCollisionRange,
 } from "./scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
@@ -199,7 +200,7 @@ async function assertTeamTimeAvailable(
       },
       select: { id: true },
     }),
-    hasConfirmedScrimConflict(db, {
+    findConfirmedScrimConflict(db, {
       seasonId,
       teamIds: [team.id],
       scheduledAt,
@@ -213,7 +214,7 @@ async function assertTeamTimeAvailable(
   }
   if (scrimConflict) {
     throw new UserFacingError(
-      `${team.name} already has a confirmed scrim within four hours of that time`,
+      `${team.name} already has ${describeScrimConflict(scrimConflict)}, within four hours of that time`,
     );
   }
 }
@@ -337,6 +338,84 @@ async function managementAccess(
     teamId: affiliatedSides[0] ?? null,
     isAdmin: admin,
   };
+}
+
+/** A booked scrim an official fixture overrode (see yieldScrimsToOfficialFixture). */
+export type OfficialFixtureScrimClash = {
+  id: string;
+  scheduledAt: Date;
+  hostTeamName: string;
+  opponentTeamName: string | null;
+  /** Both sides' captains: the people told about it. */
+  captainIds: string[];
+  /** true: it was only booked and is now cancelled. false: already under
+   *  way (LIVE, games recorded), so it was kept and only reported. */
+  cancelled: boolean;
+};
+
+/** A clashing scrim changed between this transaction's read and its write. */
+export class ScrimClashChangedError extends Error {}
+
+/**
+ * League fixtures win. A playoff round is built for its night whether or not
+ * a team booked practice near it: this cancels every BOOKED (SCHEDULED) scrim
+ * of these teams within four hours of `scheduledAt`, and reports the ones
+ * already under way (LIVE — games recorded, which cancelling would throw
+ * away) without touching them. Callers announce both after their transaction
+ * commits.
+ *
+ * This used to be a refusal, and for the automatic round build that meant a
+ * booked practice silently stopped the next round (the final included) from
+ * existing until someone happened to cancel the scrim.
+ *
+ * Runs inside the caller's transaction and THROWS ScrimClashChangedError
+ * (never returns) if a scrim moved under it, so the caller rolls back.
+ */
+export async function yieldScrimsToOfficialFixture(
+  tx: Db,
+  options: { seasonId: string; teamIds: string[]; scheduledAt: Date | null },
+): Promise<OfficialFixtureScrimClash[]> {
+  if (!options.scheduledAt || options.teamIds.length === 0) return [];
+  const clashes = await tx.scrim.findMany({
+    where: {
+      seasonId: options.seasonId,
+      scheduledAt: scrimCollisionRange(options.scheduledAt),
+      status: { in: [SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
+      OR: [
+        { hostTeamId: { in: options.teamIds } },
+        { opponentTeamId: { in: options.teamIds } },
+      ],
+    },
+    orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      status: true,
+      scheduledAt: true,
+      hostTeam: { select: { name: true, captainId: true } },
+      opponentTeam: { select: { name: true, captainId: true } },
+    },
+  });
+  const booked = clashes
+    .filter((scrim) => scrim.status === SCRIM_STATUS.SCHEDULED)
+    .map((scrim) => scrim.id);
+  if (booked.length > 0) {
+    const cancelled = await tx.scrim.updateMany({
+      where: { id: { in: booked }, status: SCRIM_STATUS.SCHEDULED },
+      data: { status: SCRIM_STATUS.CANCELLED },
+    });
+    if (cancelled.count !== booked.length) throw new ScrimClashChangedError();
+  }
+  return clashes.map((scrim) => ({
+    id: scrim.id,
+    scheduledAt: scrim.scheduledAt,
+    hostTeamName: scrim.hostTeam.name,
+    opponentTeamName: scrim.opponentTeam?.name ?? null,
+    captainIds: [
+      scrim.hostTeam.captainId,
+      ...(scrim.opponentTeam ? [scrim.opponentTeam.captainId] : []),
+    ],
+    cancelled: scrim.status === SCRIM_STATUS.SCHEDULED,
+  }));
 }
 
 /** A captain posts one available scrim time for their current active team. */
