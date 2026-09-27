@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  bidAllowanceLine,
   teamNeed,
   maxBid,
   canBid,
@@ -536,5 +537,33 @@ describe("openSeatsLabel", () => {
   it("says nothing for a full roster", () => {
     expect(openSeatsLabel(0)).toBeNull();
     expect(openSeatsLabel(-1)).toBeNull();
+  });
+});
+
+describe("bidAllowanceLine", () => {
+  it("says how high the captain can go and what the cap keeps back", () => {
+    expect(bidAllowanceLine({ maxBid: 101, need: 4, minBid: 1 })).toBe(
+      "You can bid up to $101 (keeps $1 for each of 3 more seats).",
+    );
+    expect(bidAllowanceLine({ maxBid: 50, need: 2, minBid: 2 })).toBe(
+      "You can bid up to $50 (keeps $2 for 1 more seat).",
+    );
+  });
+
+  it("names the last seat instead of reserving for nothing", () => {
+    expect(bidAllowanceLine({ maxBid: 104, need: 1, minBid: 1 })).toBe(
+      "You can bid up to $104. This is your last open seat.",
+    );
+  });
+
+  it("agrees with maxBid about what is kept back", () => {
+    // The line explains the cap, so the two must never tell different
+    // stories: budget - kept-back reserve === the number the line quotes.
+    const budget = 104;
+    const rosterCount = 2; // captain + one purchase, 5-seat roster
+    const cap = maxBid({ id: "t", budget, rosterCount }, 5, 1);
+    expect(bidAllowanceLine({ maxBid: cap, need: 3, minBid: 1 })).toBe(
+      "You can bid up to $102 (keeps $1 for each of 2 more seats).",
+    );
   });
 });

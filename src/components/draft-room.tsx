@@ -26,6 +26,7 @@ import {
 } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
+  bidAllowanceLine,
   draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
@@ -173,42 +174,68 @@ function ClockExpiryObserver({
   return null;
 }
 
+// The typed-amount box, with Max as a quiet link inside it. It starts EMPTY
+// (hinted with the cap) rather than pre-filled: the +$1 button already offers
+// the next price, and a pre-filled box had to be reset on every rival bid,
+// wiping whatever a captain was halfway through typing.
 function ExactBidControl({
   currentBid,
   maxBid,
   pending,
   submit,
+  onMax,
 }: {
   currentBid: number;
   maxBid: number;
   pending: boolean;
   submit: (amount: number) => void;
+  onMax: () => void;
 }) {
-  const [amount, setAmount] = useState(Math.min(currentBid + 1, maxBid));
+  const [raw, setRaw] = useState("");
+  const amount = raw.trim() === "" ? null : Number(raw);
   const valid =
-    Number.isSafeInteger(amount) && amount > currentBid && amount <= maxBid;
+    amount !== null &&
+    Number.isSafeInteger(amount) &&
+    amount > currentBid &&
+    amount <= maxBid;
 
   return (
-    <label className="col-span-2 flex items-center gap-2 sm:ml-1">
-      <span className="text-xs text-muted">Exact bid</span>
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (valid && !pending) submit(amount);
+      }}
+      className="flex w-full min-w-0 items-center gap-2 sm:w-auto"
+    >
       <input
         type="number"
+        inputMode="numeric"
         min={currentBid + 1}
         max={maxBid}
-        value={amount}
-        onChange={(event) => setAmount(Number(event.target.value))}
-        className="h-9 min-w-0 flex-1 rounded-md border border-line bg-surface-2/50 px-2 text-center text-sm sm:w-20 sm:flex-none"
+        value={raw}
+        placeholder={`up to $${maxBid}`}
+        onChange={(event) => setRaw(event.target.value)}
+        className="h-10 min-w-0 flex-1 rounded-md border border-line bg-surface-2/50 px-2 text-center text-sm sm:h-8 sm:w-28 sm:flex-none"
         aria-label="Exact bid amount"
       />
       <button
-        type="button"
+        type="submit"
         disabled={pending || !valid}
-        onClick={() => submit(amount)}
-        className={buttonClasses("accent", "sm")}
+        className={buttonClasses("accent", "sm", "shrink-0")}
       >
-        Bid ${amount}
+        {amount !== null && Number.isFinite(amount) ? `Bid $${amount}` : "Bid"}
       </button>
-    </label>
+      {/* Spends the whole cap, so it is the QUIETEST control here, and it
+          still asks first. */}
+      <button
+        type="button"
+        disabled={pending || maxBid <= currentBid}
+        onClick={onMax}
+        className="inline-flex h-10 shrink-0 items-center rounded px-1 text-xs text-muted underline decoration-line underline-offset-4 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50 sm:h-8"
+      >
+        Max ${maxBid}
+      </button>
+    </form>
   );
 }
 
@@ -1489,40 +1516,46 @@ export function DraftRoom({
                 {me.canBid ? (
                   <div
                     aria-busy={reqPending}
-                    className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-4"
+                    className="mt-4 space-y-3 border-t border-line pt-4"
                   >
-                    <span className="text-sm text-muted">
-                      Your max ${me.myMaxBid} · budget ${me.myBudget}
-                      {myTeam && myTeam.need > 1
-                        ? ` · winning at $${state.currentBid + 1} leaves $${
-                            me.myBudget - (state.currentBid + 1)
-                          } for ${myTeam.need - 1} more ${
-                            myTeam.need - 1 === 1 ? "seat" : "seats"
-                          }`
-                        : ""}
-                    </span>
-                    <div className="ml-auto grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
-                      {[1, 5, 10].map((d) => (
-                        <button
-                          key={d}
-                          disabled={
-                            pending || state.currentBid + d > me.myMaxBid
-                          }
-                          onClick={() => quickBid(d)}
-                          aria-label={`Bid $${state.currentBid + d}`}
-                          title={`Bid $${state.currentBid + d}`}
-                          className={buttonClasses("secondary", "sm")}
-                        >
-                          {/* Show the amount that will actually be submitted —
-                              "+$5" alone hid the absolute price. */}
-                          +${d} → ${state.currentBid + d}
-                        </button>
-                      ))}
-                      <button
-                        disabled={pending || me.myMaxBid <= state.currentBid}
-                        onClick={() => {
-                          // One tap here commits the entire remaining budget —
-                          // make it deliberate.
+                    <p className="text-sm text-muted">
+                      {bidAllowanceLine({
+                        maxBid: me.myMaxBid,
+                        need: myTeam?.need ?? 1,
+                        minBid: state.minBid,
+                      })}
+                    </p>
+                    {/* +$1, +$5 and a typed amount. +$10 went: the box
+                        covers any bigger jump, and six controls under a
+                        30-second clock was four more than a captain needs. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+                        {[1, 5].map((d) => (
+                          <button
+                            key={d}
+                            disabled={
+                              pending || state.currentBid + d > me.myMaxBid
+                            }
+                            onClick={() => quickBid(d)}
+                            aria-label={`Bid $${state.currentBid + d}`}
+                            title={`Bid $${state.currentBid + d}`}
+                            className={buttonClasses("secondary", "sm")}
+                          >
+                            {/* Show the amount that will actually be submitted —
+                                "+$5" alone hid the absolute price. */}
+                            +${d} → ${state.currentBid + d}
+                          </button>
+                        ))}
+                      </div>
+                      <ExactBidControl
+                        key={state.currentLotId ?? state.nominatedPlayer.userId}
+                        currentBid={state.currentBid}
+                        maxBid={me.myMaxBid}
+                        pending={pending}
+                        submit={(amount) => act("/api/draft/bid", { amount })}
+                        onMax={() => {
+                          // One tap here commits the entire remaining
+                          // budget — make it deliberate.
                           if (
                             window.confirm(
                               `Bid your maximum $${me.myMaxBid}? That's everything you can spend on this player.`,
@@ -1531,16 +1564,6 @@ export function DraftRoom({
                             act("/api/draft/bid", { amount: me.myMaxBid });
                           }
                         }}
-                        className={buttonClasses("primary", "sm")}
-                      >
-                        Max ${me.myMaxBid}
-                      </button>
-                      <ExactBidControl
-                        key={`${state.nominatedPlayer.userId}:${state.currentBid}:${me.myMaxBid}`}
-                        currentBid={state.currentBid}
-                        maxBid={me.myMaxBid}
-                        pending={pending}
-                        submit={(amount) => act("/api/draft/bid", { amount })}
                       />
                     </div>
                   </div>

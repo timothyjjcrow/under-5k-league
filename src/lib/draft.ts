@@ -319,3 +319,25 @@ export function openSeatsLabel(need: number): string | null {
   if (need <= 0) return null;
   return `${need} open ${need === 1 ? "seat" : "seats"}`;
 }
+
+/**
+ * The one line above a captain's bid buttons: how high they can go, and why
+ * not higher. `need` counts the seats still to fill INCLUDING the one being
+ * auctioned; the cap keeps `minBid` back for each of the others (see maxBid).
+ *
+ * It deliberately does not mention the current price. The old line did
+ * ("winning at $4 leaves $100 for 3 more seats"), so its length changed with
+ * every bid and it re-wrapped — moving the buttons under a captain's thumb.
+ */
+export function bidAllowanceLine(o: {
+  maxBid: number;
+  need: number;
+  minBid?: number;
+}): string {
+  const minBid = o.minBid ?? DEFAULTS.MIN_BID;
+  const others = o.need - 1;
+  const head = `You can bid up to $${o.maxBid}`;
+  if (others <= 0) return `${head}. This is your last open seat.`;
+  if (others === 1) return `${head} (keeps $${minBid} for 1 more seat).`;
+  return `${head} (keeps $${minBid} for each of ${others} more seats).`;
+}
