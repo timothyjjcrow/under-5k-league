@@ -1795,6 +1795,9 @@ function AvailableList({
   const [role, setRole] = useState<string | null>(null);
   const [sort, setSort] = useState<PoolSort>("mmr");
   const shown = filterAndSortPlayers(state.available, { query, role, sort });
+  // The lot's player stays in "Available" until they sell, so say which row it
+  // is — otherwise the top of the list reads like nobody is up yet.
+  const onBlockId = state.nominatedPlayer?.userId ?? null;
 
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/80">
@@ -1809,9 +1812,11 @@ function AvailableList({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search players…"
             aria-label="Search available players"
-            className="h-8 w-full rounded-md border border-line bg-surface-2/50 px-2.5 text-sm outline-none focus:border-accent/60"
+            className="h-11 w-full rounded-md border border-line bg-surface-2/50 px-2.5 text-sm outline-none focus:border-accent/60 sm:h-9"
           />
-          <div className="flex flex-wrap items-center gap-1">
+          {/* One row at every width, the desktop side column included: the
+              three sort chips used to wrap "Name" onto a line of its own. */}
+          <div className="flex items-center gap-1">
             <div
               role="group"
               aria-label="Filter by role"
@@ -1821,7 +1826,7 @@ function AvailableList({
                 onClick={() => setRole(null)}
                 aria-pressed={role === null}
                 className={cn(
-                  "min-h-9 rounded-md px-2 py-1 text-xs",
+                  "min-h-11 rounded-md px-2 py-1 text-xs sm:min-h-9",
                   role === null
                     ? "bg-accent/20 text-fg ring-1 ring-accent/40"
                     : "text-muted hover:bg-surface-2",
@@ -1837,7 +1842,7 @@ function AvailableList({
                   aria-pressed={role === r.key}
                   onClick={() => setRole(role === r.key ? null : r.key)}
                   className={cn(
-                    "min-h-9 rounded-md px-2 py-1 text-xs tabular-nums",
+                    "min-h-11 rounded-md px-2 py-1 text-xs tabular-nums sm:min-h-9",
                     role === r.key
                       ? "bg-accent/20 text-fg ring-1 ring-accent/40"
                       : "text-muted hover:bg-surface-2",
@@ -1847,33 +1852,35 @@ function AvailableList({
                 </button>
               ))}
             </div>
-            <span className="mx-1 h-4 w-px bg-line" aria-hidden />
-            {(["mmr", "rank", "name"] as const).map((s) => (
-              <button
-                key={s}
-                aria-label={`Sort by ${s}`}
-                aria-pressed={sort === s}
-                onClick={() => setSort(s)}
-                className={cn(
-                  "min-h-9 rounded-md px-2 py-1 text-xs capitalize",
-                  sort === s
-                    ? "bg-accent/20 text-fg ring-1 ring-accent/40"
-                    : "text-muted hover:bg-surface-2",
-                )}
-              >
-                {s}
-              </button>
-            ))}
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as PoolSort)}
+              aria-label="Sort players"
+              className="ml-auto h-11 min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-xs outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9"
+            >
+              <option value="mmr">Sort: MMR</option>
+              <option value="rank">Sort: Rank</option>
+              <option value="name">Sort: Name</option>
+            </select>
           </div>
         </div>
       ) : null}
-      <div className="max-h-[30rem] space-y-1 overflow-y-auto p-3">
+      {/* Its own scroll box only beside the auction on desktop. On a phone the
+          list flows with the page: a scroller inside a scrolling page made a
+          swipe move one or the other, unpredictably. */}
+      <div className="space-y-1 p-3 lg:max-h-[30rem] lg:overflow-y-auto">
         {shown.map((p) => {
+          const onBlock = p.userId === onBlockId;
           const rowContent = (
             <>
               <span className="flex min-w-0 items-center gap-2">
                 <Avatar name={p.name} src={p.avatar} size={20} />
                 <span className="truncate">{p.name}</span>
+                {onBlock ? (
+                  <span className="shrink-0">
+                    <Badge tone="accent">on the block</Badge>
+                  </span>
+                ) : null}
               </span>
               <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
                 <RoleBadges roles={p.roles} />
@@ -1891,7 +1898,9 @@ function AvailableList({
                 "flex items-center rounded-md",
                 selected === p.userId
                   ? "bg-accent/15 ring-1 ring-accent/40"
-                  : "",
+                  : onBlock
+                    ? "bg-accent/5"
+                    : "",
               )}
             >
               {canNominate ? (
