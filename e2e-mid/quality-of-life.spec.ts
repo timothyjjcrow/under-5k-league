@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { MID_DB_URL } from "../playwright.midseason.config";
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // This suite writes only to the explicitly configured disposable fixture.
@@ -335,5 +336,33 @@ test("scrim history pages preserve full team records and invalid season links fa
     }
   } finally {
     await db.scrim.deleteMany({ where: { id: { in: ids } } });
+  }
+});
+
+test("a broken link lands on a titled 404 with a way on", async ({ page }) => {
+  // An unknown address, and an old Discord link to a fixture that no longer
+  // exists: both used to show just the league name in the tab.
+  for (const path of ["/this-page-does-not-exist", "/matches/no-such-match"]) {
+    await page.goto(path);
+    await expect(page).toHaveTitle(`Page not found · ${LEAGUE_CONFIG.name}`);
+    const main = page.locator("#main");
+    await expect(
+      main.getByRole("heading", { name: "Page not found", exact: true }),
+    ).toBeVisible();
+    await expect(
+      main.getByRole("link", { name: "Back to home" }),
+    ).toHaveAttribute("href", "/");
+    await expect(
+      main.getByRole("link", { name: "Schedule", exact: true }),
+    ).toHaveAttribute("href", "/schedule");
+    const discord = main.getByRole("link", { name: "Ask on Discord" });
+    if (LEAGUE_CONFIG.discordInviteUrl) {
+      await expect(discord).toHaveAttribute(
+        "href",
+        LEAGUE_CONFIG.discordInviteUrl,
+      );
+    } else {
+      await expect(discord).toHaveCount(0);
+    }
   }
 });

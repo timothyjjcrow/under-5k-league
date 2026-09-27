@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
-import { buttonClasses } from "@/components/ui";
+import { DiscordButton, buttonClasses } from "@/components/ui";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 
 export default function Error({
   error,
@@ -40,7 +41,10 @@ export default function Error({
             </h1>
             <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted">
               We couldn&apos;t load this page. Try again; if the problem keeps
-              happening, share the reference below with a league administrator.
+              happening,{" "}
+              {LEAGUE_CONFIG.discordInviteUrl
+                ? "ask a league admin on Discord and share the reference below."
+                : "share the reference below with a league admin."}
             </p>
             {error.digest ? (
               <p className="mt-1.5 font-mono text-[11px] text-muted">
@@ -58,6 +62,10 @@ export default function Error({
             <Link href="/" className={buttonClasses("secondary")}>
               Back to home
             </Link>
+            <Link href="/schedule" className={buttonClasses("secondary")}>
+              Schedule
+            </Link>
+            <DiscordButton label="Ask on Discord" />
           </div>
         </div>
       </div>

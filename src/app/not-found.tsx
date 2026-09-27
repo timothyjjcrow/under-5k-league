@@ -1,6 +1,12 @@
+import type { Metadata } from "next";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
-import { buttonClasses } from "@/components/ui";
+import { DiscordButton, buttonClasses } from "@/components/ui";
+
+// Every notFound() in the app renders this file, so its title replaces the
+// page's own: the tab read just "GGD2L" for an old Discord link to a
+// fixture that no longer exists.
+export const metadata: Metadata = { title: "Page not found" };
 
 export default function NotFound() {
   return (
@@ -35,16 +41,18 @@ export default function NotFound() {
               Page not found
             </h1>
             <p className="mt-2 text-muted">
-              This page is lost in the fog of war.
+              This page is lost in the fog of war. The link may be out of
+              date.
             </p>
           </div>
           <div className="flex flex-wrap justify-center gap-2">
             <Link href="/" className={buttonClasses("primary")}>
               Back to home
             </Link>
-            <Link href="/players" className={buttonClasses("secondary")}>
-              Browse players
+            <Link href="/schedule" className={buttonClasses("secondary")}>
+              Schedule
             </Link>
+            <DiscordButton label="Ask on Discord" />
           </div>
         </div>
       </div>
