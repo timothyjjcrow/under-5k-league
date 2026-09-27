@@ -30,7 +30,13 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   await expect(
     page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
-  await expect(page.getByRole("radio", { name: /Standin/ })).toBeChecked();
+  // Mid-season only a standin signup is possible, so the form offers no
+  // greyed-out Full player choice and its button says what it does.
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Register as a standin", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Make sure you can play before you sign up")).toHaveCount(0);
 
   assertNoErrors();
 });

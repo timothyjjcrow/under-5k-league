@@ -175,9 +175,8 @@ export default async function MePage({
   );
   // Post-signups, PLAYER stays available only to those already registered as
   // one, withdrawn included (matches registrationGate — standins can't upgrade
-  // mid-season), and not to a withdrawn player while the auction runs. The
-  // locked tile must also not stay default-checked: disabled radios don't
-  // submit, so the form would silently fall back to PLAYER and get rejected.
+  // mid-season), and not to a withdrawn player while the auction runs. When
+  // it isn't, the form has no choice to show: it registers a standin.
   const signupChoice = {
     seasonStatus: season?.status ?? "",
     draftStatus: draft?.status,
@@ -544,7 +543,17 @@ export default async function MePage({
               </div>
             ) : (
               <>
-                <ScheduleCallout label={season.matchSchedule} />
+                <ScheduleCallout
+                  label={season.matchSchedule}
+                  description={
+                    playerLocked ||
+                    (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN)
+                      ? "Games run weekly. Captains book standins for this night when one of their players can't make it."
+                      : isRegistered
+                        ? "Games run weekly on this night."
+                        : undefined
+                  }
+                />
                 {!reg && previous ? (
                   <div className="flex items-start gap-2 rounded-lg border border-info/40 bg-info/10 px-3 py-2 text-xs">
                     <span aria-hidden>↩️</span>
@@ -573,60 +582,68 @@ export default async function MePage({
                     Steam and Dota data.
                   </p>
 
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      Participation
-                    </label>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <RadioTile
-                        name="type"
-                        value="PLAYER"
-                        defaultChecked={
-                          !playerLocked && form?.type !== "STANDIN"
-                        }
-                        title="Full player"
-                        desc="Get drafted onto a team and play every week."
-                        disabled={playerLocked}
-                      />
-                      <RadioTile
-                        name="type"
-                        value="STANDIN"
-                        defaultChecked={
-                          playerLocked || form?.type === "STANDIN"
-                        }
-                        title="Standin"
-                        desc="Fill in for teams when someone can't play."
-                      />
-                    </div>
-                    {/* Captain volunteering is a signup-phase choice for full
-                        players, so it sits with the participation choice and
-                        only while signups are open. Afterwards the server keeps
-                        the stored answer (a missing box submits nothing). */}
-                    {signupsOpen ? (
-                      <label className="mt-2 flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-                        <input
-                          type="checkbox"
-                          name="wantsCaptain"
-                          defaultChecked={form?.wantsCaptain ?? false}
-                          className="h-4 w-4 accent-[var(--color-brand)]"
-                        />
-                        <span className="text-sm">
-                          <span className="block">
-                            I&apos;d like to be considered as a team captain
-                          </span>
-                          <span className="block text-xs text-muted">
-                            Full players only.
-                          </span>
+                  {playerLocked ? (
+                    /* Only a standin signup is possible here (signups closed,
+                       and this viewer was never a full player), so there is
+                       no choice to make: no greyed-out Full player tile, no
+                       captain box, no draft wording. */
+                    <div>
+                      <p className="mb-1.5 text-sm font-medium">Participation</p>
+                      <input type="hidden" name="type" value="STANDIN" />
+                      <div className="rounded-lg border border-accent bg-accent/10 p-3">
+                        <span className="block text-sm font-medium">Standin</span>
+                        <span className="block text-xs text-muted">
+                          Fill in for teams when someone can&apos;t play.
+                          Full-player signups are closed for this season.
                         </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium">
+                        Participation
                       </label>
-                    ) : (
-                      <p className="mt-2 text-xs text-muted">
-                        Full-player signups are closed. Standins can still
-                        register through the draft, regular season and playoffs
-                        when teams may need cover.
-                      </p>
-                    )}
-                  </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <RadioTile
+                          name="type"
+                          value="PLAYER"
+                          defaultChecked={form?.type !== "STANDIN"}
+                          title="Full player"
+                          desc="Get drafted onto a team and play every week."
+                        />
+                        <RadioTile
+                          name="type"
+                          value="STANDIN"
+                          defaultChecked={form?.type === "STANDIN"}
+                          title="Standin"
+                          desc="Fill in for teams when someone can't play."
+                        />
+                      </div>
+                      {/* Captain volunteering is a signup-phase choice for
+                          full players, so it sits with the participation
+                          choice and only while signups are open. Afterwards
+                          the server keeps the stored answer (a missing box
+                          submits nothing). */}
+                      {signupsOpen ? (
+                        <label className="mt-2 flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
+                          <input
+                            type="checkbox"
+                            name="wantsCaptain"
+                            defaultChecked={form?.wantsCaptain ?? false}
+                            className="h-4 w-4 accent-[var(--color-brand)]"
+                          />
+                          <span className="text-sm">
+                            <span className="block">
+                              I&apos;d like to be considered as a team captain
+                            </span>
+                            <span className="block text-xs text-muted">
+                              Full players only.
+                            </span>
+                          </span>
+                        </label>
+                      ) : null}
+                    </div>
+                  )}
 
                   <div>
                     <label
@@ -758,7 +775,7 @@ export default async function MePage({
                       htmlFor="captainNote"
                       className="mb-1.5 block text-sm font-medium"
                     >
-                      Note for captains / drafters (public)
+                      Note for captains (public)
                     </label>
                     <textarea
                       id="captainNote"
@@ -776,7 +793,11 @@ export default async function MePage({
 
                   <div className="flex flex-wrap gap-3">
                     <SubmitButton>
-                      {isRegistered ? "Update signup" : "Join the season"}
+                      {isRegistered
+                        ? "Update signup"
+                        : playerLocked
+                          ? "Register as a standin"
+                          : "Join the season"}
                     </SubmitButton>
                   </div>
                 </ActionForm>
@@ -999,27 +1020,20 @@ function RadioTile({
   title,
   desc,
   defaultChecked,
-  disabled,
 }: {
   name: string;
   value: string;
   title: string;
   desc: string;
   defaultChecked?: boolean;
-  disabled?: boolean;
 }) {
   return (
-    <label
-      className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition-colors has-[:checked]:border-accent has-[:checked]:bg-accent/10 ${
-        disabled ? "opacity-50" : "border-line hover:border-muted/60"
-      }`}
-    >
+    <label className="flex cursor-pointer gap-3 rounded-lg border border-line p-3 transition-colors hover:border-muted/60 has-[:checked]:border-accent has-[:checked]:bg-accent/10">
       <input
         type="radio"
         name={name}
         value={value}
         defaultChecked={defaultChecked}
-        disabled={disabled}
         className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
       />
       <span>
