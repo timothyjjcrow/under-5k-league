@@ -128,9 +128,26 @@ export type PickemStanding = {
   graded: number;
   /** correct / graded, 0..1 (0 when nothing graded). */
   accuracy: number;
+  /** Board place. Equal records (same correct, same graded) share one: 1, 1, 3. */
+  place: number;
 };
 
-/** Grade every prediction against completed matches and rank the oracles. */
+/**
+ * How every pick'em board ranks, in the words both /pickem and the Hall of
+ * Fame print under it, so the rule and its explanation can't drift apart.
+ */
+export const PICKEM_RANKING_NOTE =
+  "Most correct picks ranks first; a tie goes to fewer misses. Equal records share a place.";
+
+/**
+ * Grade every prediction against completed matches and rank the oracles.
+ *
+ * THE pick'em ranking, used by /pickem's oracle board and the Hall of Fame
+ * alike: most correct picks first, then fewest misses (at equal correct picks
+ * that is the better accuracy, and it still separates 0/1 from 0/4). Equal
+ * records share a place, the way Leaders does; the user id only keeps the
+ * order inside a shared place stable and never decides one.
+ */
 export function pickemStandings(
   predictions: PredictionLike[],
   matches: PickemMatchLike[],
@@ -149,6 +166,7 @@ export function pickemStandings(
       correct: 0,
       graded: 0,
       accuracy: 0,
+      place: 0,
     };
     row.graded++;
     if (p.pickedTeamId === winner) row.correct++;
@@ -161,9 +179,16 @@ export function pickemStandings(
   rows.sort(
     (a, b) =>
       b.correct - a.correct ||
-      b.accuracy - a.accuracy ||
+      a.graded - b.graded ||
       a.userId.localeCompare(b.userId),
   );
+  rows.forEach((row, index) => {
+    const above = rows[index - 1];
+    row.place =
+      above && above.correct === row.correct && above.graded === row.graded
+        ? above.place
+        : index + 1;
+  });
   return rows;
 }
 

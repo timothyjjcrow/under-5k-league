@@ -53,6 +53,23 @@ describe("topPlaces", () => {
     expect(board.rows.map((r) => r.place)).toEqual([1, 1, 3]);
   });
 
+  it("places by rankValue when the shown value isn't the whole record", () => {
+    // Pick'em shows correct picks but places the record: 3/4 and 3/5 read
+    // "3" yet do not share a place; two 3/4s do.
+    const board = topPlaces([
+      { userId: "a", value: 3, rankValue: -1 },
+      { userId: "b", value: 3, rankValue: -1 },
+      { userId: "c", value: 3, rankValue: -3 },
+      { userId: "d", value: 1, rankValue: -4 },
+    ]);
+    expect(board.rows.map((r) => [r.userId, r.value, r.place])).toEqual([
+      ["a", 3, 1],
+      ["b", 3, 1],
+      ["c", 3, 3],
+      ["d", 1, 4],
+    ]);
+  });
+
   it("handles short and empty boards", () => {
     expect(topPlaces([])).toEqual({ rows: [], moreTied: 0 });
     expect(topPlaces(rows([3, 1])).rows).toHaveLength(2);

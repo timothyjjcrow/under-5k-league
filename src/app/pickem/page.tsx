@@ -8,6 +8,7 @@ import { getSessionUser } from "@/lib/auth";
 import {
   groupOpenByWeek,
   partitionPickemMatches,
+  PICKEM_RANKING_NOTE,
   pickemStandings,
   pickSplit,
 } from "@/lib/pickem";
@@ -232,7 +233,7 @@ export default async function PickemPage({
             headingLevel={2}
           />
           <CardBody className="divide-y divide-line/60 p-0">
-            {standings.map((s, i) => (
+            {standings.map((s) => (
               <div
                 key={s.userId}
                 className={cn(
@@ -240,8 +241,16 @@ export default async function PickemPage({
                   viewer?.id === s.userId && "bg-info/[0.07]",
                 )}
               >
-                <span className="w-6 text-center text-muted">
-                  {i === 0 ? "🔮" : i + 1}
+                {/* Equal records share a place, so several rows can be 🔮. */}
+                <span className="w-6 shrink-0 text-center text-muted">
+                  {s.place === 1 ? (
+                    <>
+                      <span aria-hidden>🔮</span>
+                      <span className="sr-only">1</span>
+                    </>
+                  ) : (
+                    s.place
+                  )}
                 </span>
                 <Avatar
                   name={userName.get(s.userId) ?? "?"}
@@ -269,6 +278,7 @@ export default async function PickemPage({
                 </span>
               </div>
             ))}
+            <p className="px-5 py-3 text-xs text-muted">{PICKEM_RANKING_NOTE}</p>
           </CardBody>
         </Card>
       ) : null}

@@ -75,6 +75,54 @@ describe("pickemStandings", () => {
       matches,
     );
     expect(rows.map((r) => r.userId)).toEqual(["sniper", "spray"]);
+    expect(rows.map((r) => r.place)).toEqual([1, 2]);
+  });
+
+  it("ranks more correct picks above a better rate", () => {
+    const many = [1, 2, 3, 4, 5].map((i) => m(`w${i}`, "COMPLETED", "A"));
+    const rows = pickemStandings(
+      [
+        p("w1", "volume", "A"),
+        p("w2", "volume", "A"),
+        p("w3", "volume", "A"),
+        p("w4", "volume", "B"),
+        p("w5", "volume", "B"), // 3/5
+        p("w1", "sniper", "A"),
+        p("w2", "sniper", "A"), // 2/2
+      ],
+      many,
+    );
+    expect(rows.map((r) => [r.userId, r.place])).toEqual([
+      ["volume", 1],
+      ["sniper", 2],
+    ]);
+  });
+
+  it("lets equal records share a place and never splits them by id", () => {
+    const many = [1, 2, 3, 4].map((i) => m(`w${i}`, "COMPLETED", "A"));
+    const rows = pickemStandings(
+      [
+        // "zed" and "amy" are both 2/3; "bob" is 2/4; "cat" 0/1; "dan" 0/4.
+        ...["w1", "w2"].map((id) => p(id, "zed", "A")),
+        p("w3", "zed", "B"),
+        ...["w1", "w2"].map((id) => p(id, "amy", "A")),
+        p("w4", "amy", "B"),
+        ...["w1", "w2"].map((id) => p(id, "bob", "A")),
+        p("w3", "bob", "B"),
+        p("w4", "bob", "B"),
+        p("w1", "cat", "B"),
+        ...["w1", "w2", "w3", "w4"].map((id) => p(id, "dan", "B")),
+      ],
+      many,
+    );
+    expect(rows.map((r) => [r.userId, r.place])).toEqual([
+      ["amy", 1],
+      ["zed", 1],
+      ["bob", 3],
+      // No correct picks: fewer misses still ranks higher.
+      ["cat", 4],
+      ["dan", 5],
+    ]);
   });
 });
 

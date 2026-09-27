@@ -5,7 +5,14 @@
 
 import { competitionRanks } from "./leader-ranking";
 
-export type HofRow = { userId: string; value: number };
+export type HofRow = {
+  userId: string;
+  value: number;
+  /** What places compare when it isn't the shown value: pick'em shows
+   *  correct picks but places whole records (see pickemStandings). Higher is
+   *  better, and equal rankValues share a place. */
+  rankValue?: number;
+};
 
 export type CareerGameCount = { games: number; wins: number };
 
@@ -68,7 +75,9 @@ export function topPlaces(
     placeKey?: (value: number) => number;
   } = {},
 ): HofBoardRows {
-  const places = competitionRanks(sorted.map((row) => placeKey(row.value)));
+  const places = competitionRanks(
+    sorted.map((row) => row.rankValue ?? placeKey(row.value)),
+  );
   let end = Math.min(limit, sorted.length);
   while (end < sorted.length && places[end] <= limit) end++;
   const shown = Math.min(end, Math.max(limit, maxRows));

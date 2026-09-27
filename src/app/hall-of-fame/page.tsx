@@ -10,7 +10,7 @@ import {
 } from "@/lib/hall-of-fame";
 import { appearanceCareers } from "@/lib/appearance-careers";
 import { impactPointsRule, pointsByPlayer } from "@/lib/fantasy";
-import { pickemStandings } from "@/lib/pickem";
+import { PICKEM_RANKING_NOTE, pickemStandings } from "@/lib/pickem";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { shareMetadata } from "@/lib/share-metadata";
@@ -182,9 +182,11 @@ export default async function HallOfFamePage() {
     return gameCount >= 5 ? [{ userId, value: points / gameCount, games: gameCount }] : [];
   }).filter((row) => row.value > 0)
     .sort((a, b) => b.value - a.value || b.games - a.games || a.userId.localeCompare(b.userId));
+  // The same ranking as /pickem's oracle board, over every season. Nobody
+  // without a correct call makes a Hall of Fame board; they all rank last,
+  // so dropping them leaves every other place unchanged.
   const oracle = pickemStandings(predictions, matches)
-    .filter((standing) => standing.graded >= 3)
-    .sort((a, b) => b.accuracy - a.accuracy || b.graded - a.graded || a.userId.localeCompare(b.userId));
+    .filter((standing) => standing.correct > 0);
   const oracleOf = new Map(oracle.map((standing) => [standing.userId, standing]));
   const number = new Intl.NumberFormat("en-US");
   const pointsNumber = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -223,10 +225,15 @@ export default async function HallOfFamePage() {
     },
   ] : [];
   const oracleBoard: Board = {
-    id: "oracle", title: "🔮 Pick'em accuracy", subtitle: "Correct picks divided by graded picks; at least three to qualify.",
-    top: topPlaces(oracle.map((standing) => ({ userId: standing.userId, value: Math.round(standing.accuracy * 100) }))),
-    format: (value) => `${value}%`,
-    detail: (id) => `${oracleOf.get(id)?.correct ?? 0}/${oracleOf.get(id)?.graded ?? 0} correct picks`,
+    id: "oracle", title: "🔮 Pick'em calls", subtitle: "Correct picks across every season.",
+    // Places come from pickemStandings (-place: higher is better), so equal
+    // records share one here exactly as they do on /pickem.
+    top: topPlaces(oracle.map((standing) => ({ userId: standing.userId, value: standing.correct, rankValue: -standing.place }))),
+    format: (value) => number.format(value),
+    detail: (id) => {
+      const standing = oracleOf.get(id);
+      return standing ? `${standing.correct}/${standing.graded} right · ${Math.round(standing.accuracy * 100)}%` : null;
+    },
   };
   const hasRows = (list: Board[]) => list.some((board) => board.top.rows.length > 0);
   // Sections with nothing on any board are left out rather than shown empty.
@@ -341,14 +348,14 @@ export default async function HallOfFamePage() {
 
       {showPickem ? (
         <section id="prediction" className="scroll-mt-24 space-y-3">
-          <SectionTitle aside="A rate with a visible sample">Pick&apos;em</SectionTitle>
+          <SectionTitle aside="Correct calls across every season">Pick&apos;em</SectionTitle>
           <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
             <BoardCard board={oracleBoard} userOf={userOf} />
             <Card tone="quiet">
               <CardBody>
                 <h3 className="font-display text-xl font-bold">How this is ranked</h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted">
-                  Pick&apos;em ranks by accuracy after three graded picks. Draws and unfinished matches are not graded. The correct/graded line shows exactly how much evidence sits behind each percentage.
+                  {PICKEM_RANKING_NOTE} This is the same order as the season&apos;s oracle board on Pick&apos;em, counted over every season. Draws and unfinished matches aren&apos;t graded.
                 </p>
                 <Link href="/pickem" className="mt-4 inline-block text-sm font-semibold text-info hover:underline">Make a pick →</Link>
               </CardBody>
