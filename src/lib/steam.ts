@@ -177,7 +177,7 @@ export type SteamProfile = {
  * that rank sync follows. It used to return a `Player NNNNN` placeholder, and
  * the login path wrote that straight over the user's real name and avatar: one
  * rotated STEAM_API_KEY renamed every player who signed in that night, with no
- * way back except each of them hitting "Refresh from Steam".
+ * way back except each of them hitting "Refresh my Steam & Dota info".
  */
 export async function fetchSteamProfile(
   steamId: string,
