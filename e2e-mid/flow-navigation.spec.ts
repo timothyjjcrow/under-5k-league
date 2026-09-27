@@ -62,13 +62,18 @@ test("phone dock opens league tools in one tap and keeps feedback clear", async 
     "href",
     "/teams",
   );
-  // A short landscape screen still leaves the bottom menu controls reachable.
+  // A short landscape screen still leaves the whole menu reachable: the
+  // sheet sits between the header and the tab bar and scrolls to Merch.
   await page.setViewportSize({ width: 844, height: 390 });
-  await page.getByRole("button", { name: "Open menu" }).click();
-  const menuBounds = (await page.locator("#mobile-nav").boundingBox())!;
-  expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(
+  await exploreButton.click();
+  const sheetBounds = (await explore.boundingBox())!;
+  expect(sheetBounds.y).toBeGreaterThanOrEqual(80);
+  expect(sheetBounds.y + sheetBounds.height).toBeLessThanOrEqual(
     (await dock.boundingBox())!.y,
   );
+  const merch = explore.getByRole("link", { name: /Merch/ });
+  await merch.scrollIntoViewIfNeeded();
+  await expect(merch).toBeInViewport();
   noErrors();
 });
 

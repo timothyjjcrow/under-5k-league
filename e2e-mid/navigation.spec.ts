@@ -57,32 +57,26 @@ test("league tools live under Explore on desktop and mobile", async ({
   await expect(desktopExplore).toHaveCount(0);
   await expect(desktopExploreButton).toBeFocused();
 
+  // Phones have one menu: the sheet behind the tab bar's last slot.
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.getByRole("button", { name: "Open menu" }).click();
-  const mobileMenu = page.locator("#mobile-nav");
-  const mobileExploreButton = mobileMenu.getByRole("button", {
-    name: "Explore",
+  await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(0);
+  await page
+    .getByRole("navigation", { name: "Quick navigation" })
+    .getByRole("button", { name: "Explore league" })
+    .click();
+  const sheet = page.getByRole("navigation", {
+    name: "Explore league",
+    exact: true,
   });
-  await expect(mobileExploreButton).toHaveAttribute("aria-expanded", "false");
   for (const label of EXPLORE_LINKS) {
     await expect(
-      mobileMenu.getByRole("link", { name: label, exact: true }),
-    ).toHaveCount(0);
-  }
-
-  await mobileExploreButton.click();
-  const mobileExplore = mobileMenu.getByRole("group", { name: "Explore" });
-  for (const label of EXPLORE_LINKS) {
-    await expect(
-      mobileExplore.getByRole("link", { name: label, exact: true }),
+      sheet.getByRole("link", { name: label, exact: true }),
     ).toBeVisible();
   }
-  await mobileExplore
-    .getByRole("link", { name: "Hero meta", exact: true })
-    .click();
+  await sheet.getByRole("link", { name: "Hero meta", exact: true }).click();
   await expect(page).toHaveURL(/\/meta$/);
   await expect(
     page.getByRole("heading", { name: "Hero meta", exact: true }),
   ).toBeVisible();
-  await expect(page.locator("#mobile-nav")).toHaveCount(0);
+  await expect(sheet).toHaveCount(0);
 });

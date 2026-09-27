@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
-import { exploreNav, seasonNav, type NavLink, type NavState } from "./site-nav";
+import {
+  exploreNav,
+  phoneDock,
+  seasonNav,
+  type NavLink,
+  type NavState,
+} from "./site-nav";
 
 const PHASES = [null, ...Object.values(SEASON_STATUS)];
 const DRAFTS = [null, ...Object.values(DRAFT_STATUS)];
@@ -191,6 +197,66 @@ describe("site navigation", () => {
   });
 });
 
+describe("phone tab bar and its sheet", () => {
+  it("never lists a page both as a tab and in the sheet, and drops none", () => {
+    for (const s of allStates()) {
+      for (const myTeamId of [null, "team-1"]) {
+        const items = seasonNav(s, myTeamId);
+        const { tabs, sheet } = phoneDock(
+          items,
+          myTeamId ? `/teams/${myTeamId}` : null,
+        );
+        expect(tabs.length).toBeLessThanOrEqual(3);
+        expect(tabs[0]).toMatchObject({ href: "/", label: "Home" });
+        const tabHrefs = hrefs(tabs);
+        expect(new Set(tabHrefs).size).toBe(tabHrefs.length);
+        for (const href of hrefs(sheet)) {
+          expect(tabHrefs, href).not.toContain(href);
+        }
+        expect([...tabHrefs, ...hrefs(sheet)].sort()).toEqual(
+          hrefs(items).sort(),
+        );
+      }
+    }
+  });
+
+  it("keeps the season's current focus and the viewer's team one tap away", () => {
+    const signups = seasonNav(state(SEASON_STATUS.SIGNUPS));
+    expect(hrefs(phoneDock(signups, null).tabs)).toEqual([
+      "/",
+      "/inhouse",
+      "/players",
+    ]);
+    expect(phoneDock(signups, null).sheet).toEqual([]);
+
+    const live = seasonNav(
+      state(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS),
+    );
+    expect(hrefs(phoneDock(live, null).tabs)).toEqual([
+      "/",
+      "/draft",
+      "/teams",
+    ]);
+    expect(hrefs(phoneDock(live, null).sheet)).toEqual([
+      "/players",
+      "/inhouse",
+    ]);
+
+    const regular = seasonNav(state(SEASON_STATUS.REGULAR_SEASON), "team-1");
+    const dock = phoneDock(regular, "/teams/team-1");
+    expect(dock.tabs.map((tab) => tab.label)).toEqual([
+      "Home",
+      "Schedule",
+      "My Team",
+    ]);
+    expect(dock.sheet.map((link) => link.label)).toEqual([
+      "Players",
+      "Inhouse",
+      "Teams",
+    ]);
+  });
+});
+
 describe("navigation surfaces", () => {
   const source = (file: string) =>
     readFileSync(path.resolve(process.cwd(), file), "utf8");
@@ -212,5 +278,13 @@ describe("navigation surfaces", () => {
       expect(file, name).not.toMatch(/\blabel:\s*["'`]/);
       expect(file, name).not.toMatch(/PHASE_LABEL|PHASE_TONE/);
     }
+  });
+
+  // Phones had a ☰ menu, the tab bar's sheet and the footer listing the same
+  // pages. The tab bar's sheet is now the only phone menu.
+  it("gives phones one menu, built from the tab bar's leftovers", () => {
+    expect(header).toContain("phoneDock(");
+    expect(header).not.toContain("Open menu");
+    expect(header).not.toContain('id="mobile-nav"');
   });
 });

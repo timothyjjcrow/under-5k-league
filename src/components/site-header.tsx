@@ -10,7 +10,9 @@ import { MerchLink } from "@/components/merch-link";
 import { seasonPhaseLabel, seasonPhaseTone } from "@/lib/season-copy";
 import {
   exploreNav,
+  phoneDock,
   seasonNav,
+  type DockIconName,
   type NavLink,
   type NavSection,
 } from "@/lib/site-nav";
@@ -69,32 +71,30 @@ export function SiteHeader({
   const phaseLabel = seasonPhaseLabel(phase, draftStatus);
   const phaseTone = seasonPhaseTone(phase);
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
-  const [open, setOpen] = useState(false);
+  // Three disclosures: the desktop Explore dropdown, the account menu (every
+  // width) and the phone tab bar's sheet. Phones used to add a ☰ menu and an
+  // Explore section inside it, which listed the same pages again.
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [desktopExploreOpen, setDesktopExploreOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [mobileExploreOpen, setMobileExploreOpen] = useState(false);
-  const [mobilePanel, setMobilePanel] = useState<"menu" | "explore">("menu");
-  const buttonRef = useRef<HTMLButtonElement>(null);
   const exploreButtonRef = useRef<HTMLButtonElement>(null);
   const accountButtonRef = useRef<HTMLButtonElement>(null);
   const desktopExploreRef = useRef<HTMLDivElement>(null);
   const accountRef = useRef<HTMLDivElement>(null);
-  const headerRef = useRef<HTMLElement>(null);
   const dockRef = useRef<HTMLElement>(null);
-  const discoveryRef = useRef<HTMLElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
   const dockExploreRef = useRef<HTMLButtonElement>(null);
 
-  // Close the mobile menu whenever the route changes (e.g. a link was tapped).
+  // Close every menu whenever the route changes (e.g. a link was tapped).
   // Adjusted DURING RENDER rather than in an effect: React's documented way to
   // reset state when an input changes, and it avoids the extra committed frame
   // where the menu is still open on the new route.
   const [menuPath, setMenuPath] = useState(pathname);
   if (menuPath !== pathname) {
     setMenuPath(pathname);
-    setOpen(false);
+    setSheetOpen(false);
     setDesktopExploreOpen(false);
     setAccountOpen(false);
-    setMobileExploreOpen(false);
   }
 
   // Switching between the desktop bar and phone dock must not leave a hidden
@@ -102,51 +102,43 @@ export function SiteHeader({
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 64rem)");
     function closePanels() {
-      setOpen(false);
+      setSheetOpen(false);
       setDesktopExploreOpen(false);
-      setMobileExploreOpen(false);
       setAccountOpen(false);
     }
     desktop.addEventListener("change", closePanels);
     return () => desktop.removeEventListener("change", closePanels);
   }, []);
 
-  // Escape returns focus to the disclosure's own trigger. Clicking outside a
-  // desktop dropdown closes it even when the click is elsewhere in the header.
+  // Escape returns focus to the open menu's own trigger. A press anywhere
+  // outside a menu (and outside the tab bar, for the sheet) closes it.
   useEffect(() => {
-    if (!open && !desktopExploreOpen && !accountOpen) return;
+    if (!sheetOpen && !desktopExploreOpen && !accountOpen) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        const returnTo = accountOpen
-          ? accountButtonRef.current
-          : open
-            ? mobilePanel === "explore"
-              ? dockExploreRef.current
-              : buttonRef.current
-            : exploreButtonRef.current;
-        setOpen(false);
-        setDesktopExploreOpen(false);
-        setMobileExploreOpen(false);
-        setAccountOpen(false);
-        returnTo?.focus();
-      }
+      if (e.key !== "Escape") return;
+      const returnTo = accountOpen
+        ? accountButtonRef.current
+        : sheetOpen
+          ? dockExploreRef.current
+          : exploreButtonRef.current;
+      setSheetOpen(false);
+      setDesktopExploreOpen(false);
+      setAccountOpen(false);
+      returnTo?.focus();
     }
     function onPointerDown(e: PointerEvent) {
-      if (!desktopExploreRef.current?.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (!desktopExploreRef.current?.contains(target)) {
         setDesktopExploreOpen(false);
       }
-      if (!accountRef.current?.contains(e.target as Node)) {
+      if (!accountRef.current?.contains(target)) {
         setAccountOpen(false);
       }
       if (
-        headerRef.current &&
-        !headerRef.current.contains(e.target as Node) &&
-        !dockRef.current?.contains(e.target as Node) &&
-        !discoveryRef.current?.contains(e.target as Node)
+        !sheetRef.current?.contains(target) &&
+        !dockRef.current?.contains(target)
       ) {
-        setOpen(false);
-        setDesktopExploreOpen(false);
-        setMobileExploreOpen(false);
+        setSheetOpen(false);
       }
     }
     document.addEventListener("keydown", onKeyDown);
@@ -155,43 +147,22 @@ export function SiteHeader({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open, desktopExploreOpen, accountOpen, mobilePanel]);
+  }, [sheetOpen, desktopExploreOpen, accountOpen]);
 
   const adminActive = pathname.startsWith("/admin");
 
-  // The primary row and the Explore groups never share a page, so the phone
-  // menu's Explore section needs no de-duplication.
   const exploreActive = exploreSections.some((section) =>
     section.links.some((item) => isActive(pathname, item.href, myTeamHref)),
   );
-  const hasPage = (href: string) => items.some((item) => item.href === href);
-  // The tab bar picks three primary pages, under the same names.
-  const dockSlots = [
-    { href: "/", icon: "home" },
-    {
-      href: hasPage("/draft")
-        ? "/draft"
-        : hasPage("/schedule")
-          ? "/schedule"
-          : "/inhouse",
-      icon: "matches",
-    },
-    {
-      href: myTeamHref ?? (hasPage("/teams") ? "/teams" : "/players"),
-      icon: "team",
-    },
-  ] as const;
-  const dockItems = dockSlots.flatMap(({ href, icon }) => {
-    const item = items.find((link) => link.href === href);
-    return item ? [{ ...item, icon }] : [];
-  });
+  // Three pages in the tab bar; the sheet behind its last slot lists the rest.
+  const dock = phoneDock(items, myTeamHref);
+  const sheetActive =
+    exploreActive ||
+    dock.sheet.some((item) => isActive(pathname, item.href, myTeamHref));
 
   return (
     <>
-      <header
-        ref={headerRef}
-        className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur"
-      >
+      <header className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur">
         <div className="mx-auto flex h-20 w-full max-w-7xl items-center gap-3 px-4 sm:px-6 xl:gap-4">
           <Link
             href="/"
@@ -211,10 +182,8 @@ export function SiteHeader({
           </Link>
 
           {/* Internal pages need league context without making users scroll to
-            the footer or open the phone menu. Keep it inside the existing
-            80px header (draft-room sticky offsets depend on that height) and
-            hide it only on the narrowest screens, where the menu still carries
-            the same name + phase. */}
+            the footer. Keep it inside the existing 80px header (draft-room
+            sticky offsets depend on that height). */}
           {pathname !== "/" && seasonName && phase ? (
             <Link
               href="/"
@@ -228,7 +197,7 @@ export function SiteHeader({
 
           {/* The desktop row fits from 1024px, including a rostered admin in
             draft or postseason. Keep Explore beside its sibling links and
-            reserve the right edge for merch and the account disclosure. */}
+            reserve the right edge for merch and the account menu. */}
           <div className="relative hidden min-w-0 flex-1 items-center gap-1 lg:flex">
             <nav
               aria-label="Primary"
@@ -255,8 +224,8 @@ export function SiteHeader({
               })}
             </nav>
 
-            {/* Evergreen club/discovery pages stay reachable on wide screens too.
-            The phone menu already exposes these below the phase navigation. */}
+            {/* Evergreen club/discovery pages stay reachable on wide screens
+              too. On phones they live in the tab bar's sheet. */}
             <div ref={desktopExploreRef} className="shrink-0">
               <button
                 ref={exploreButtonRef}
@@ -298,25 +267,22 @@ export function SiteHeader({
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             {user ? (
               <div ref={accountRef} className="relative">
-                <Link
-                  href="/me"
-                  aria-label={`My profile — ${user.name}`}
-                  className="flex min-h-11 items-center rounded-full border border-line p-1 text-sm hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:hidden"
-                >
-                  <Avatar name={user.name} src={user.avatar} size={28} />
-                </Link>
+                {/* One account menu at every width. On phones the avatar alone
+                  is the trigger; it used to be a plain link to the profile,
+                  with Admin and Log out hidden in the ☰ menu. */}
                 <button
                   ref={accountButtonRef}
                   type="button"
                   aria-label={`Account — ${user.name}`}
                   aria-expanded={accountOpen}
-                  aria-controls="desktop-account-nav"
+                  aria-controls="account-nav"
                   onClick={() => {
                     setAccountOpen((value) => !value);
                     setDesktopExploreOpen(false);
+                    setSheetOpen(false);
                   }}
                   className={cn(
-                    "hidden min-h-10 items-center gap-2 rounded-full border py-1 pl-1 pr-2 text-sm transition-colors hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:flex",
+                    "flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full border p-1 text-sm transition-colors hover:border-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:min-h-10 lg:pr-2",
                     accountOpen || adminActive || pathname === "/me"
                       ? "border-accent/40 bg-accent/5"
                       : "border-line",
@@ -326,13 +292,15 @@ export function SiteHeader({
                   <span className="hidden max-w-32 truncate xl:block">
                     {user.name}
                   </span>
-                  <ChevronIcon open={accountOpen} />
+                  <span className="hidden lg:block">
+                    <ChevronIcon open={accountOpen} />
+                  </span>
                 </button>
                 {accountOpen ? (
                   <nav
-                    id="desktop-account-nav"
+                    id="account-nav"
                     aria-label="Account"
-                    className="absolute right-0 top-full z-40 mt-3 hidden max-h-[calc(100dvh-6rem)] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface p-2 shadow-xl shadow-black/30 lg:block"
+                    className="absolute right-0 top-full z-40 mt-3 max-h-[calc(100dvh-6rem)] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface p-2 shadow-xl shadow-black/30"
                   >
                     <p className="mb-1 break-words border-b border-line-soft px-3 pb-3 pt-2 text-sm font-semibold">
                       {user.name}
@@ -384,149 +352,8 @@ export function SiteHeader({
                 Sign in
               </Link>
             ) : null}
-
-            {/* Menu toggle — below the desktop breakpoint. */}
-            <button
-              ref={buttonRef}
-              type="button"
-              onClick={() => {
-                const next = !open || mobilePanel !== "menu";
-                setMobilePanel("menu");
-                setOpen(next);
-                if (!next) setMobileExploreOpen(false);
-              }}
-              aria-label={
-                open && mobilePanel === "menu" ? "Close menu" : "Open menu"
-              }
-              aria-expanded={open && mobilePanel === "menu"}
-              aria-controls="mobile-nav"
-              className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:hidden"
-            >
-              {open && mobilePanel === "menu" ? <CloseIcon /> : <MenuIcon />}
-            </button>
           </div>
         </div>
-
-        {/* Mobile dropdown: holds every nav link + account actions so nothing is
-          ever clipped. Overlays content (absolute) to avoid a layout jump. */}
-        {open && mobilePanel === "menu" ? (
-          <nav
-            id="mobile-nav"
-            aria-label="Primary"
-            className="absolute inset-x-0 top-full max-h-[min(70vh,calc(100dvh-5rem-var(--mobile-dock-height)-0.5rem))] overflow-y-auto overscroll-contain border-b border-line/80 bg-bg/95 shadow-lg backdrop-blur lg:hidden"
-          >
-            <div className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
-              {items.map((item) => {
-                const active =
-                  !exploreActive && isActive(pathname, item.href, myTeamHref);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setOpen(false)}
-                    aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                      active
-                        ? "bg-accent/15 text-fg"
-                        : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                    )}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-
-              <MerchLink className="my-2 w-full" />
-
-              {/* Explore is a disclosure on phones too; the four dense league
-                tools no longer expand the primary menu unless requested. */}
-              <div className="mt-1 border-t border-line/80 pt-2">
-                <button
-                  type="button"
-                  aria-expanded={mobileExploreOpen}
-                  aria-controls="mobile-explore-nav"
-                  onClick={() => setMobileExploreOpen((value) => !value)}
-                  className={cn(
-                    "flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                    exploreActive ? "bg-accent/15 text-fg" : "text-muted",
-                  )}
-                >
-                  Explore
-                  <span aria-hidden>{mobileExploreOpen ? "↑" : "↓"}</span>
-                </button>
-                {mobileExploreOpen ? (
-                  <div
-                    id="mobile-explore-nav"
-                    role="group"
-                    aria-label="Explore"
-                    className="mt-2 rounded-xl border border-line-soft bg-surface p-3"
-                  >
-                    <ExploreLinks
-                      sections={exploreSections}
-                      pathname={pathname}
-                      myTeamHref={myTeamHref}
-                      onNavigate={() => setOpen(false)}
-                    />
-                  </div>
-                ) : null}
-              </div>
-
-              {(user?.role === "ADMIN" || user || seasonName) && (
-                <div className="mt-1 space-y-1 border-t border-line/80 pt-2">
-                  {user?.role === "ADMIN" ? (
-                    <Link
-                      href="/admin"
-                      aria-current={adminActive ? "page" : undefined}
-                      className={cn(
-                        "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                        adminActive
-                          ? "bg-surface-2 text-accent"
-                          : "text-accent/80 hover:bg-surface-2/60 hover:text-accent",
-                      )}
-                    >
-                      Admin
-                    </Link>
-                  ) : null}
-                  {user ? (
-                    <Link
-                      href="/me"
-                      aria-current={
-                        isActive(pathname, "/me", null) ? "page" : undefined
-                      }
-                      className={cn(
-                        "block rounded-lg px-3 py-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                        isActive(pathname, "/me", null)
-                          ? "bg-accent/15 text-fg"
-                          : "text-muted hover:bg-surface-2/60 hover:text-fg",
-                      )}
-                    >
-                      My profile
-                    </Link>
-                  ) : null}
-                  {user ? (
-                    <form action="/api/auth/logout" method="POST">
-                      <button
-                        type="submit"
-                        className="block w-full rounded-lg px-3 py-3 text-left text-sm font-medium text-muted hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5"
-                      >
-                        Log out
-                      </button>
-                    </form>
-                  ) : null}
-                  {seasonName ? (
-                    <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted">
-                      {phase ? (
-                        <Badge tone={phaseTone}>{phaseLabel}</Badge>
-                      ) : null}
-                      <span>{seasonName}</span>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          </nav>
-        ) : null}
       </header>
       <nav
         ref={dockRef}
@@ -534,7 +361,7 @@ export function SiteHeader({
         className="mobile-dock fixed inset-x-0 bottom-0 z-40 border-t border-line bg-bg/95 px-3 pt-1.5 shadow-[0_-8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl lg:hidden"
       >
         <div className="mx-auto grid max-w-lg grid-cols-4 gap-1">
-          {dockItems.map((item) => {
+          {dock.tabs.map((item) => {
             const active =
               isActive(pathname, item.href, myTeamHref) ||
               (item.href === "/schedule" && pathname.startsWith("/matches/"));
@@ -543,7 +370,7 @@ export function SiteHeader({
                 key={item.href}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                onClick={() => setOpen(false)}
+                onClick={() => setSheetOpen(false)}
                 className={cn(
                   "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
                   active
@@ -560,15 +387,15 @@ export function SiteHeader({
             ref={dockExploreRef}
             type="button"
             aria-label="Explore league"
-            aria-expanded={open && mobilePanel === "explore"}
+            aria-expanded={sheetOpen}
             aria-controls="mobile-discovery"
             onClick={() => {
-              setOpen(!(open && mobilePanel === "explore"));
-              setMobilePanel("explore");
+              setSheetOpen((value) => !value);
+              setAccountOpen(false);
             }}
             className={cn(
               "flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-              exploreActive || (open && mobilePanel === "explore")
+              sheetActive || sheetOpen
                 ? "bg-accent/10 text-accent"
                 : "text-muted hover:bg-surface-2 hover:text-fg",
             )}
@@ -578,9 +405,11 @@ export function SiteHeader({
           </button>
         </div>
       </nav>
-      {open && mobilePanel === "explore" ? (
+      {/* The one phone menu: every page the tab bar doesn't hold, the Explore
+        groups, then Merch. A solid panel, so the page never shows through. */}
+      {sheetOpen ? (
         <nav
-          ref={discoveryRef}
+          ref={sheetRef}
           id="mobile-discovery"
           aria-label="Explore league"
           className="mobile-discovery fixed inset-x-3 z-40 mx-auto max-h-[calc(100dvh-11rem)] max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-3 shadow-2xl shadow-black/50 lg:hidden"
@@ -593,7 +422,7 @@ export function SiteHeader({
               type="button"
               aria-label="Close explore"
               onClick={() => {
-                setOpen(false);
+                setSheetOpen(false);
                 dockExploreRef.current?.focus();
               }}
               className="grid h-11 w-11 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg"
@@ -601,30 +430,34 @@ export function SiteHeader({
               <CloseIcon />
             </button>
           </div>
-          <div className="mb-3 grid grid-cols-3 gap-1 border-b border-line-soft pb-3">
-            {items
-              .filter((item) => !["/", myTeamHref].includes(item.href))
-              .map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setOpen(false)}
-                  aria-current={
-                    isActive(pathname, item.href, myTeamHref)
-                      ? "page"
-                      : undefined
-                  }
-                  className="flex min-h-11 items-center justify-center rounded-lg bg-surface-2/60 px-2 text-center text-xs font-medium hover:bg-surface-3"
-                >
-                  {item.label}
-                </Link>
-              ))}
-          </div>
+          {dock.sheet.length > 0 ? (
+            <div className="mb-3 grid grid-cols-3 gap-1 border-b border-line-soft pb-3">
+              {dock.sheet.map((item) => {
+                const active = isActive(pathname, item.href, myTeamHref);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setSheetOpen(false)}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "flex min-h-11 items-center justify-center rounded-lg px-2 text-center text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+                      active
+                        ? "bg-accent/15 text-fg"
+                        : "bg-surface-2/60 hover:bg-surface-3",
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
+          ) : null}
           <ExploreLinks
             sections={exploreSections}
             pathname={pathname}
             myTeamHref={myTeamHref}
-            onNavigate={() => setOpen(false)}
+            onNavigate={() => setSheetOpen(false)}
             compact
           />
           <MerchLink className="mt-3 w-full" />
@@ -652,7 +485,7 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
-function DockIcon({ name }: { name: "home" | "matches" | "team" | "explore" }) {
+function DockIcon({ name }: { name: DockIconName | "explore" }) {
   return (
     <svg
       width="22"
@@ -688,25 +521,6 @@ function DockIcon({ name }: { name: "home" | "matches" | "team" | "explore" }) {
           <path d="m16 8-2 6-6 2 2-6Z" />
         </>
       ) : null}
-    </svg>
-  );
-}
-
-function MenuIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <line x1="3" y1="6" x2="21" y2="6" />
-      <line x1="3" y1="12" x2="21" y2="12" />
-      <line x1="3" y1="18" x2="21" y2="18" />
     </svg>
   );
 }

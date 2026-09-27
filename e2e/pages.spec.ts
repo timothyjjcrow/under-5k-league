@@ -156,35 +156,57 @@ test("internal pages keep the active league phase visible in the header", async 
   ).toBeVisible();
 });
 
-test("mobile menu surfaces club pages and My profile", async ({ page }) => {
+test("phones get one menu: the tab bar's sheet, plus the avatar's account menu", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  // Signed in, so the account group carries My profile.
   await page.goto(
     "/api/auth/dev?name=Menu+Tester&steamId=76561190000000042&redirect=/",
   );
-  const profile = page.getByRole("link", { name: "My profile — Menu Tester" });
-  const menuButton = page.getByRole("button", { name: "Open menu" });
-  await expect(profile).toHaveCSS("min-height", "44px");
-  await expect(menuButton).toHaveCSS("height", "44px");
-  await menuButton.click();
-  const menu = page.locator("#mobile-nav");
-  const exploreButton = menu.getByRole("button", { name: "Explore" });
-  await expect(exploreButton).toHaveAttribute("aria-expanded", "false");
-  await exploreButton.click();
-  const explore = menu.getByRole("group", { name: "Explore" });
+  // The ☰ menu is gone: it listed the same pages as the tab bar's sheet.
+  await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(0);
+
+  // The avatar opens the same account menu as on desktop.
+  const account = page.getByRole("button", { name: "Account — Menu Tester" });
+  await expect(account).toHaveCSS("min-height", "44px");
+  await account.click();
+  const accountMenu = page.getByRole("navigation", {
+    name: "Account",
+    exact: true,
+  });
   await expect(
-    explore.getByRole("link", { name: "League news" }),
+    accountMenu.getByRole("link", { name: "My profile" }),
   ).toBeVisible();
-  await expect(menu.getByRole("link", { name: "Hall of Fame" })).toBeVisible();
-  await expect(menu.getByRole("link", { name: "Record book" })).toBeVisible();
   await expect(
-    menu.getByRole("link", { name: "Compare players" }),
+    accountMenu.getByRole("button", { name: "Log out" }),
   ).toBeVisible();
-  await expect(menu.getByRole("link", { name: "My profile" })).toBeVisible();
-  // The tour lives in Explore's League group on every surface, under one
-  // name, and is never repeated in the primary list.
-  await expect(explore.getByRole("link", { name: "Feature tour" })).toBeVisible();
-  await expect(menu.getByRole("link", { name: "Feature tour" })).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(accountMenu).toHaveCount(0);
+  await expect(account).toBeFocused();
+
+  const dock = page.getByRole("navigation", { name: "Quick navigation" });
+  await dock.getByRole("button", { name: "Explore league" }).click();
+  const sheet = page.getByRole("navigation", {
+    name: "Explore league",
+    exact: true,
+  });
+  for (const label of [
+    "League news",
+    "Hall of Fame",
+    "Record book",
+    "Compare players",
+  ]) {
+    await expect(sheet.getByRole("link", { name: label })).toBeVisible();
+  }
+  // The tour lives in Explore's League group, listed once; Merch once too.
+  await expect(sheet.getByRole("link", { name: "Feature tour" })).toHaveCount(1);
+  await expect(sheet.getByRole("link", { name: /Merch/ })).toHaveCount(1);
+  // No page is both a tab and an entry in the sheet.
+  for (const label of await dock.getByRole("link").allTextContents()) {
+    await expect(
+      sheet.getByRole("link", { name: label.trim(), exact: true }),
+    ).toHaveCount(0);
+  }
 });
 
 test("desktop Explore menu keeps evergreen league pages discoverable", async ({

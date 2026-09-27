@@ -1,8 +1,8 @@
 // The site's navigation, defined ONCE.
 //
 // Every surface that lists pages builds its list from this file: the desktop
-// header row, the Explore dropdown, the phone menu and its Explore section, the
-// phone tab bar and its Explore sheet, and the footer. Before this, the header
+// header row, the Explore dropdown, the phone tab bar and its one menu sheet,
+// and the footer. Before this, the header
 // and footer each kept their own lists, so the same page had up to three names
 // ("Meta"/"Hero meta", "News"/"League news", "Features"/"Feature tour",
 // "History"/"Past seasons"/"Season history") and two different groupings, and
@@ -17,8 +17,8 @@ import { featureAvailability } from "./features-lifecycle";
 
 /**
  * `season` pages are the league's own chapter and sit in the primary row (the
- * desktop header, the phone menu, the tab bar's chips). The other three are
- * the Explore groups, in this order everywhere.
+ * desktop header, the phone tab bar and the top of its sheet). The other
+ * three are the Explore groups, in this order everywhere.
  */
 export type NavGroup = "season" | "play" | "stats" | "league";
 
@@ -142,6 +142,51 @@ export function seasonNav(
     }
   }
   return links;
+}
+
+export type DockIconName = "home" | "matches" | "team";
+
+export type DockTab = NavLink & { icon: DockIconName };
+
+/**
+ * The phone tab bar and its one menu sheet. The bar holds three pages (Home,
+ * the season's current focus, and the viewer's team or the player list) and
+ * a last slot that opens the sheet. The sheet lists every OTHER primary page,
+ * so no page is ever both a tab and a sheet entry; the Explore groups follow
+ * it. Phones used to have a ☰ menu as well, which listed the same pages a
+ * third time.
+ */
+export function phoneDock(
+  items: NavLink[],
+  myTeamHref: string | null,
+): { tabs: DockTab[]; sheet: NavLink[] } {
+  const has = (href: string) => items.some((item) => item.href === href);
+  const slots: { href: string; icon: DockIconName }[] = [
+    { href: "/", icon: "home" },
+    {
+      href: has("/draft")
+        ? "/draft"
+        : has("/schedule")
+          ? "/schedule"
+          : "/inhouse",
+      icon: "matches",
+    },
+    {
+      href:
+        myTeamHref && has(myTeamHref)
+          ? myTeamHref
+          : has("/teams")
+            ? "/teams"
+            : "/players",
+      icon: "team",
+    },
+  ];
+  const tabs = slots.flatMap(({ href, icon }) => {
+    const item = items.find((link) => link.href === href);
+    return item ? [{ ...item, icon }] : [];
+  });
+  const inTabs = new Set(tabs.map((tab) => tab.href));
+  return { tabs, sheet: items.filter((item) => !inTabs.has(item.href)) };
 }
 
 export type NavSection = { group: NavGroup; label: string; links: NavLink[] };
