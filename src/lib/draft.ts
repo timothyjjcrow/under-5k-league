@@ -1,4 +1,5 @@
 import { DEFAULTS } from "./constants";
+import { roleCoverage } from "./pool-stats";
 
 // Pure auction-draft rules. DB effects live in the server actions; these
 // functions just encode the math so they can be unit-tested in isolation.
@@ -471,4 +472,35 @@ export function lotWatcherLine(s: {
   if (!s.available.some((p) => p.userId === id)) return null;
   const left = s.available.length;
   return `You're still available: ${left} ${left === 1 ? "player" : "players"} left in the pool.`;
+}
+
+/**
+ * A captain's own standing, in one line at the top of the live room: money
+ * left, seats to fill and the most they can bid. It used to show only inside a
+ * lot while they could bid — never during their own nomination turn, when they
+ * set the opening price.
+ */
+export function captainStatusLine(o: {
+  budget: number;
+  need: number;
+  maxBid: number;
+}): string {
+  if (o.need <= 0) return `$${o.budget} left · roster full`;
+  return `$${o.budget} left · ${openSeatsLabel(o.need)} · max bid $${o.maxBid}`;
+}
+
+/**
+ * Position keys ("1".."5") that nobody on this roster lists. Roles are
+ * self-declared and most players list several, so this is a guide to where to
+ * look, never a requirement. Empty when nobody on the roster has listed any
+ * role: five "missing" chips for a captain who skipped the question is noise.
+ */
+export function uncoveredRoles(
+  members: readonly { roles: string | null }[],
+): string[] {
+  const coverage = roleCoverage(
+    members.map((m) => ({ roles: m.roles ?? "" })),
+  );
+  if (coverage.every((role) => role.count === 0)) return [];
+  return coverage.filter((role) => role.count === 0).map((role) => role.key);
 }

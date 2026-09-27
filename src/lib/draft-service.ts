@@ -1147,6 +1147,14 @@ export async function getDraftState(
         teams,
         captainMmrs: playerRegs,
       });
+      // Members' self-declared roles, for the captain's "roles to cover"
+      // hint. Already selected for the pool, so this costs no query.
+      const rolesByUser = new Map(
+        playerRegs.map((registration) => [
+          registration.userId,
+          registration.roles,
+        ]),
+      );
       const teamViews = teams.map((team) => ({
         id: team.id,
         name: team.name,
@@ -1162,6 +1170,7 @@ export async function getDraftState(
           price: member.price,
           isCaptain: member.isCaptain,
           rankTier: member.user.rankTier,
+          roles: rolesByUser.get(member.userId) ?? "",
         })),
       }));
 

@@ -27,6 +27,7 @@ import {
 import { DOTA_ROLES } from "@/lib/roles";
 import {
   bidAllowanceLine,
+  captainStatusLine,
   draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
@@ -40,6 +41,7 @@ import {
   outbidLine,
   rosterDisplayOrder,
   stripDraftTitleFlag,
+  uncoveredRoles,
 } from "@/lib/draft";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
@@ -310,6 +312,9 @@ export function DraftRoom({
   // can show.
   const [offsetMsState, setOffsetMs] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
+  // The pool's position filter lives here, not in <AvailableList>, so the
+  // captain's "roles to cover" chips at the top of the room can set it.
+  const [poolRole, setPoolRole] = useState<string | null>(null);
   const [nomAmount, setNomAmount] = useState(1);
   // Recent sales + "SOLD!" flash — derived client-side by diffing successive
   // polled states, so no changes to the server-authoritative draft engine.
@@ -1178,9 +1183,83 @@ export function DraftRoom({
 
   const paused = state.status === "PAUSED";
 
+  // A captain's roles-to-cover chip: filter the pool to that position and
+  // bring the pool into view if it is below the fold (phones). Pressing the
+  // active one again clears the filter, like the pool's own chips.
+  const findRole = (key: string) => {
+    if (poolRole === key) {
+      setPoolRole(null);
+      return;
+    }
+    setPoolRole(key);
+    document.getElementById("player-pool")?.scrollIntoView({
+      block: "nearest",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  };
+  const rolesToCover =
+    myTeam && myTeam.need > 0 ? uncoveredRoles(myTeam.members) : [];
+
   // While the auction runs, "Your team" and the sound toggle ride in the lot
   // card's header instead of taking two rows of their own above the clock.
-  const liveTeamLine = me.rosterTeamId ? (
+  // A captain's version is their standing in the auction — money, seats, bid
+  // cap and the positions nobody on the roster plays yet — which used to show
+  // only inside a lot they could bid on, never during their own nomination.
+  const liveTeamLine = myTeam ? (
+    <span className="min-w-0 flex-1">
+      <Link
+        href={`/teams/${myTeam.id}`}
+        target="_blank"
+        rel="noreferrer"
+        title="Open your team's roster in a new tab"
+        className={textLink("font-medium")}
+      >
+        {myTeam.name}
+        <span aria-hidden> ↗</span>
+      </Link>
+      {" · "}
+      {captainStatusLine({
+        budget: me.myBudget,
+        need: myTeam.need,
+        maxBid: me.myMaxBid,
+      })}
+      {rolesToCover.length > 0 ? (
+        <>
+          {" · roles to cover "}
+          <span
+            role="group"
+            aria-label="Positions nobody on your team plays yet"
+            className="inline-flex flex-wrap gap-1 align-middle"
+          >
+            {rolesToCover.map((key) => {
+              const role = DOTA_ROLES.find((r) => r.key === key);
+              const name = role ? `${role.short} (${role.label})` : key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => findRole(key)}
+                  aria-pressed={poolRole === key}
+                  aria-label={`Show ${name} players in the pool`}
+                  title={`Nobody on your team lists ${name}. Tap to show those players in the pool.`}
+                  className={cn(
+                    "inline-flex h-6 min-w-6 items-center justify-center rounded border px-1 text-[11px] font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                    poolRole === key
+                      ? "border-accent/60 bg-accent/20 text-fg"
+                      : "border-line text-muted hover:border-accent/60 hover:text-fg",
+                  )}
+                >
+                  {key}
+                </button>
+              );
+            })}
+          </span>
+        </>
+      ) : null}
+    </span>
+  ) : me.rosterTeamId ? (
     <span className="min-w-0 truncate">
       Your team:{" "}
       <Link
@@ -1782,6 +1861,8 @@ export function DraftRoom({
           <div id="player-pool" className="scroll-mt-32 lg:order-2">
             <AvailableList
               state={state}
+              role={poolRole}
+              onRoleChange={setPoolRole}
               canNominate={me.canNominate}
               selected={selected}
               onPick={(userId) => {
@@ -1913,17 +1994,21 @@ function DraftAdminToolbar({
 // search, position filters, and sorting instead of one long MMR-sorted list.
 function AvailableList({
   state,
+  role,
+  onRoleChange: setRole,
   canNominate,
   selected,
   onPick,
 }: {
   state: DraftState;
+  /** The position filter, owned by the room (see `poolRole`). */
+  role: string | null;
+  onRoleChange: (role: string | null) => void;
   canNominate: boolean;
   selected: string | null;
   onPick: (userId: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [role, setRole] = useState<string | null>(null);
   const [sort, setSort] = useState<PoolSort>("mmr");
   const shown = filterAndSortPlayers(state.available, { query, role, sort });
   // The lot's player stays in "Available" until they sell, so say which row it

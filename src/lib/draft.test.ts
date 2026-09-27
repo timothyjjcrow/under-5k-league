@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   bidAllowanceLine,
+  captainStatusLine,
+  uncoveredRoles,
   teamNeed,
   maxBid,
   canBid,
@@ -733,5 +735,46 @@ describe("lotWatcherLine", () => {
         nominatedPlayer: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("captainStatusLine", () => {
+  it("gives money left, seats to fill and the bid cap in one line", () => {
+    expect(captainStatusLine({ budget: 92, need: 3, maxBid: 90 })).toBe(
+      "$92 left · 3 open seats · max bid $90",
+    );
+    expect(captainStatusLine({ budget: 40, need: 1, maxBid: 40 })).toBe(
+      "$40 left · 1 open seat · max bid $40",
+    );
+  });
+
+  it("drops the cap once the roster is full", () => {
+    expect(captainStatusLine({ budget: 12, need: 0, maxBid: 0 })).toBe(
+      "$12 left · roster full",
+    );
+  });
+});
+
+describe("uncoveredRoles", () => {
+  it("lists the positions nobody on the roster plays, in position order", () => {
+    expect(uncoveredRoles([{ roles: "3,1" }, { roles: "1" }])).toEqual([
+      "2",
+      "4",
+      "5",
+    ]);
+  });
+
+  it("is empty when every position is covered", () => {
+    expect(uncoveredRoles([{ roles: "1,2,3" }, { roles: "4,5" }])).toEqual([]);
+  });
+
+  it("is empty when nobody has listed a role at all", () => {
+    // A captain who skipped the question would otherwise get five chips.
+    expect(uncoveredRoles([{ roles: "" }, { roles: null }])).toEqual([]);
+    expect(uncoveredRoles([])).toEqual([]);
+  });
+
+  it("ignores junk in the stored string", () => {
+    expect(uncoveredRoles([{ roles: "1, 2,9,x,3,4" }])).toEqual(["5"]);
   });
 });

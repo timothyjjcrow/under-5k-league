@@ -150,6 +150,9 @@ describe("durable draft and roster history", () => {
     expect(done.recentSales.map((sale) => [sale.name, sale.auto])).toEqual([
       ["Second", false], ["Purchase", true],
     ]);
+    // Rostered players carry their listed roles (the captain's roles-to-cover hint).
+    const teamA = done.teams.find((team) => team.id === f.a.team.id)!;
+    expect(teamA.members.find((m) => m.userId === f.p.id)?.roles).toBe("4,5");
   });
 
   it("records automatic lots and an ineligible nominee as a void without a sale", async () => {
