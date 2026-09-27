@@ -30,8 +30,10 @@ import {
   draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
+  lotHeadingLead,
   maxBid,
   nextNominatorIndex,
+  nominationTurnTeamId,
   openSeatsLabel,
   outbidLatchAfter,
   rosterDisplayOrder,
@@ -97,7 +99,9 @@ function CompactClock({
   );
 }
 
-// The big bid clock in the "on the block" banner (ping dot under 5s).
+// The big bid clock in the "on the block" banner (ping dot under 5s). The
+// small lead-in says WHICH clock this is: the header beside it names the team
+// that nominated, and a bare "27s" there read as that team's turn.
 function BidClock({
   endsAtMs,
   offsetMs,
@@ -115,6 +119,9 @@ function BidClock({
         seconds <= 5 ? "text-danger" : "text-accent",
       )}
     >
+      <span className="font-sans text-xs font-normal text-muted">
+        <span className="hidden sm:inline">Bidding </span>closes in
+      </span>
       {seconds <= 5 ? (
         <span className="relative flex h-2.5 w-2.5">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
@@ -1375,7 +1382,8 @@ export function DraftRoom({
                 </p>
               ) : (
                 <h2 className="line-clamp-2 min-w-0 text-sm font-normal text-muted [overflow-wrap:anywhere]">
-                  On the clock: <span className="text-fg">{nominatorName}</span>
+                  {lotHeadingLead({ lotLive: !!state.nominatedPlayer })}{" "}
+                  <span className="text-fg">{nominatorName}</span>
                   {nextNominatorName ? (
                     <span className="hidden sm:inline">
                       {" "}
@@ -2189,8 +2197,9 @@ function TeamsGrid({ state }: { state: DraftState }) {
       className="grid grid-cols-1 gap-4 sm:grid-cols-2"
     >
       {state.teams.map((t) => {
-        const onClock =
-          state.status === "IN_PROGRESS" && t.id === state.nominatorTeamId;
+        // Only while the team still has to nominate — during a live lot the
+        // ring and badge belong to the high bidder, not whoever put it up.
+        const onClock = nominationTurnTeamId(state) === t.id;
         const highBid = t.id === state.currentBidTeamId;
         // Derived from the roster, not me.myTeamId (that's captain-only) —
         // drafted players get a persistent home marker too.

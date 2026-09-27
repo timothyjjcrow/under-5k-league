@@ -341,3 +341,31 @@ export function bidAllowanceLine(o: {
   if (others === 1) return `${head} (keeps $${minBid} for 1 more seat).`;
   return `${head} (keeps $${minBid} for each of ${others} more seats).`;
 }
+
+/**
+ * The team the room shows as ON THE CLOCK, or null.
+ *
+ * Only while that team still has a nomination to make. Once its player is on
+ * the block the countdown is the BIDDING clock, and a gold "on clock" badge on
+ * the nominator read as though that team were winning, or had to act, while a
+ * rival held the high bid. PAUSED is excluded too: nothing is ticking.
+ */
+export function nominationTurnTeamId(s: {
+  status: string;
+  nominatorTeamId: string | null;
+  nominatedPlayer: unknown;
+}): string | null {
+  return s.status === "IN_PROGRESS" && !s.nominatedPlayer
+    ? s.nominatorTeamId
+    : null;
+}
+
+/**
+ * The words before the nominating team's name in the lot card's header.
+ * "On the clock" belongs to the nomination turn only; while a lot is live the
+ * team is just who put the player up, and the clock beside it is the bidding
+ * clock.
+ */
+export function lotHeadingLead(o: { lotLive: boolean }): string {
+  return o.lotLive ? "Nominated by" : "On the clock:";
+}

@@ -8,7 +8,9 @@ import {
   draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
+  lotHeadingLead,
   nextNominatorIndex,
+  nominationTurnTeamId,
   mmrWeightedBudgets,
   openSeatsLabel,
   rosterDisplayOrder,
@@ -565,5 +567,49 @@ describe("bidAllowanceLine", () => {
     expect(bidAllowanceLine({ maxBid: cap, need: 3, minBid: 1 })).toBe(
       "You can bid up to $102 (keeps $1 for each of 2 more seats).",
     );
+  });
+});
+
+describe("nominationTurnTeamId", () => {
+  const lot = { userId: "p1" };
+  it("names the nominator while they still have a nomination to make", () => {
+    expect(
+      nominationTurnTeamId({
+        status: "IN_PROGRESS",
+        nominatorTeamId: "t2",
+        nominatedPlayer: null,
+      }),
+    ).toBe("t2");
+  });
+
+  it("names nobody once their player is on the block", () => {
+    // The countdown is the bidding clock now; a gold "on clock" badge on the
+    // nominator read as though they held the lot.
+    expect(
+      nominationTurnTeamId({
+        status: "IN_PROGRESS",
+        nominatorTeamId: "t2",
+        nominatedPlayer: lot,
+      }),
+    ).toBeNull();
+  });
+
+  it("names nobody while paused, before the start, or after the end", () => {
+    for (const status of ["PAUSED", "NOT_STARTED", "COMPLETE"]) {
+      expect(
+        nominationTurnTeamId({
+          status,
+          nominatorTeamId: "t2",
+          nominatedPlayer: null,
+        }),
+      ).toBeNull();
+    }
+  });
+});
+
+describe("lotHeadingLead", () => {
+  it("says 'On the clock' only for a nomination turn", () => {
+    expect(lotHeadingLead({ lotLive: false })).toBe("On the clock:");
+    expect(lotHeadingLead({ lotLive: true })).toBe("Nominated by");
   });
 });
