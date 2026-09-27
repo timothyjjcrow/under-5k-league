@@ -189,7 +189,7 @@ export default async function PlayersPage() {
     const entry: PoolScout = {};
     if (lastSeasons[p.userId]) entry.lastSeason = lastSeasons[p.userId];
     if (inhouseInfo[p.userId]) entry.inhouse = inhouseInfo[p.userId];
-    const pub = poolPubRecord(p.user.pubStats);
+    const pub = poolPubRecord(p.user.pubStats, p.user.pubStatsAt);
     if (pub) entry.pub = pub;
     // The quote fallback only ships when it would render (payload trimming).
     if (!hasText(p.captainNote) && hasText(p.statement)) {

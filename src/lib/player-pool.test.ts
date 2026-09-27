@@ -264,23 +264,52 @@ describe("sortByInhouseRecord", () => {
 });
 
 describe("scouting token copy", () => {
+  const now = Date.UTC(2026, 8, 3);
   const pub = {
     recentWins: 54,
     recentLosses: 46,
     lastPlayedAt: null,
+    checkedAt: null,
     topHeroes: [{ heroId: 14, games: 220, wins: 121 }],
   };
 
   it("pubToken names the recent window — a win rate must never read as lifetime", () => {
-    expect(pubToken(pub)).toBe("Pubs 54% in last 100");
+    expect(pubToken(pub, now)).toBe("Pubs 54% in last 100");
     // A 37-game account states its real window, not "last 100".
     expect(
-      pubToken({ ...pub, recentWins: 20, recentLosses: 17 }),
+      pubToken({ ...pub, recentWins: 20, recentLosses: 17 }, now),
     ).toBe("Pubs 54% in last 37");
   });
 
+  it("pubToken says when the snapshot was taken", () => {
+    expect(pubToken({ ...pub, checkedAt: now - 3 * 86_400_000 }, now)).toBe(
+      "Pubs 54% in last 100 · checked 3d ago",
+    );
+    expect(pubToken({ ...pub, checkedAt: now - 130 * 86_400_000 }, now)).toBe(
+      "Pubs 54% in last 100 · checked 4mo ago",
+    );
+  });
+
+  it("pubTitle gives last played only while the snapshot is fresh", () => {
+    const day = 86_400_000;
+    const fresh = {
+      ...pub,
+      checkedAt: now - 2 * day,
+      lastPlayedAt: Math.floor((now - 9 * day) / 1000),
+    };
+    expect(pubTitle(fresh, now)).toBe(
+      "Last 100 pub games: 54W–46L · last played 7d ago · checked 2d ago",
+    );
+    expect(pubTitle({ ...fresh, checkedAt: now - 90 * day }, now)).toBe(
+      "Last 100 pub games: 54W–46L · checked 3mo ago",
+    );
+    expect(pubTitle(pub, now)).toBe(
+      "Last 100 pub games: 54W–46L · checked at an unknown time",
+    );
+  });
+
   it("pubToken and pubTitle carry no lifetime games figure", () => {
-    expect(pubToken(pub)).not.toMatch(/games/i);
+    expect(pubToken(pub, now)).not.toMatch(/games/i);
     expect(pubTitle(pub, Date.UTC(2026, 7, 1))).not.toMatch(/lifetime/i);
   });
 

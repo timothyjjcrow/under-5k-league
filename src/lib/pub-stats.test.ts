@@ -5,6 +5,8 @@ import {
   parsePubStats,
   poolPubRecord,
   pubActivity,
+  pubCheckedAgo,
+  pubLastPlayed,
   pubStatsFresh,
   pubWinRate,
   type PubStats,
@@ -108,6 +110,57 @@ describe("pubActivity", () => {
   });
 });
 
+describe("pubCheckedAgo", () => {
+  const now = Date.UTC(2026, 8, 3);
+  it("says how old the snapshot is, and nothing when unknown", () => {
+    expect(pubCheckedAgo(null, now)).toBeNull();
+    expect(pubCheckedAgo(now - 3_600_000, now)).toBe("today");
+    expect(pubCheckedAgo(now - 3 * 86_400_000, now)).toBe("3d ago");
+    expect(pubCheckedAgo(now - 100 * 86_400_000, now)).toBe("3mo ago");
+    // A clock a little ahead of ours is still "today", never negative.
+    expect(pubCheckedAgo(now + 60_000, now)).toBe("today");
+  });
+});
+
+describe("pubLastPlayed", () => {
+  const now = Date.UTC(2026, 8, 3);
+  const day = 86_400_000;
+  const secs = (ms: number) => Math.floor(ms / 1000);
+
+  it("measures last played at the check, not today", () => {
+    const checkedAt = now - 5 * day;
+    const activity = pubLastPlayed(
+      { lastPlayedAt: secs(checkedAt - 20 * day), checkedAt },
+      now,
+    );
+    // 20 days before the check, although 25 days before today.
+    expect(activity).toEqual({ label: "2w ago", quiet: false });
+    expect(
+      pubLastPlayed(
+        { lastPlayedAt: secs(checkedAt - PUB_QUIET_DAYS * day), checkedAt },
+        now,
+      )?.quiet,
+    ).toBe(true);
+  });
+
+  it("says nothing once the snapshot is past the refresh window", () => {
+    const checkedAt = now - PUB_STATS_REFRESH_MS - 1;
+    expect(
+      pubLastPlayed(
+        { lastPlayedAt: secs(checkedAt - 200 * day), checkedAt },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("says nothing when the check time or last game is unknown", () => {
+    expect(
+      pubLastPlayed({ lastPlayedAt: secs(now - 90 * day), checkedAt: null }, now),
+    ).toBeNull();
+    expect(pubLastPlayed({ lastPlayedAt: null, checkedAt: now }, now)).toBeNull();
+  });
+});
+
 describe("pubStatsFresh", () => {
   const now = Date.UTC(2026, 7, 1);
   it("never fetched = stale; recent = fresh; past the window = stale", () => {
@@ -121,13 +174,16 @@ describe("pubStatsFresh", () => {
 
 describe("poolPubRecord", () => {
   it("carries the recent window, last-played, and top-3 heroes — never the lifetime games figure", () => {
-    const rec = poolPubRecord(JSON.stringify(good));
+    const checked = new Date(Date.UTC(2026, 7, 1));
+    const rec = poolPubRecord(JSON.stringify(good), checked);
     expect(rec).toEqual({
       recentWins: 54,
       recentLosses: 46,
       lastPlayedAt: 1_722_200_000,
+      checkedAt: checked.getTime(),
       topHeroes: good.topHeroes, // fixture has 2; capped at 3
     });
+    expect(poolPubRecord(JSON.stringify(good), null)?.checkedAt).toBeNull();
     expect(rec && "totalGames" in rec).toBe(false);
   });
 
@@ -140,15 +196,18 @@ describe("poolPubRecord", () => {
         wins: 25,
       })),
     };
-    expect(poolPubRecord(JSON.stringify(five))?.topHeroes).toHaveLength(3);
+    expect(
+      poolPubRecord(JSON.stringify(five), null)?.topHeroes,
+    ).toHaveLength(3);
   });
 
   it("is null with nothing scoutable: no blob, garbage, or an empty recent window", () => {
-    expect(poolPubRecord(null)).toBeNull();
-    expect(poolPubRecord("garbage")).toBeNull();
+    expect(poolPubRecord(null, null)).toBeNull();
+    expect(poolPubRecord("garbage", null)).toBeNull();
     expect(
       poolPubRecord(
         JSON.stringify({ ...good, recentWins: 0, recentLosses: 0 }),
+        null,
       ),
     ).toBeNull();
   });

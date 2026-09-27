@@ -1,7 +1,7 @@
 // Pure filtering + sorting for the player-pool UI. Kept DB-free so it's
 // unit-testable and reusable on client and server.
 import { heroById } from "./heroes";
-import { pubActivity, pubWinRate } from "./pub-stats";
+import { pubCheckedAgo, pubLastPlayed, pubWinRate } from "./pub-stats";
 import { parseRoles } from "./roles";
 
 export type PoolPlayer = {
@@ -44,6 +44,8 @@ export type PoolPubRecord = {
   recentLosses: number;
   /** Epoch SECONDS of their newest visible pub game, or null. */
   lastPlayedAt: number | null;
+  /** Epoch MS the snapshot was taken, or null when unknown. */
+  checkedAt: number | null;
   /** Most-played heroes across their whole pub history, top 3 by games. */
   topHeroes: { heroId: number; games: number; wins: number }[];
 };
@@ -148,22 +150,33 @@ export function inhouseTitle(ih: PoolInhouseRecord): string {
     : `Provisional — ${ih.games} inhouse game${ih.games === 1 ? "" : "s"}`;
 }
 
-/** "Pubs 54% in last 100" — the win rate NAMES its recent window, so nobody
- *  reads a hot (or cold) streak as a lifetime figure. The window is however
- *  many games OpenDota could see, so a 37-game account honestly reads
- *  "in last 37". Deliberately no games-played volume figure. */
-export function pubToken(pub: PoolPubRecord): string {
+/** "Pubs 54% in last 100 · checked 3d ago" — the win rate NAMES its recent
+ *  window, so nobody reads a hot (or cold) streak as a lifetime figure, and
+ *  says when the snapshot was taken, so a months-old one never reads as
+ *  current. The window is however many games OpenDota could see, so a
+ *  37-game account honestly reads "in last 37". Deliberately no games-played
+ *  volume figure. */
+export function pubToken(pub: PoolPubRecord, nowMs: number): string {
   const rate = pubWinRate(pub);
   const window = pub.recentWins + pub.recentLosses;
+  const checked = pubCheckedAgo(pub.checkedAt, nowMs);
+  const suffix = checked ? ` · checked ${checked}` : "";
   // poolPubRecord filters empty windows, but stay honest if one slips in.
-  if (rate == null) return "Pubs — no visible games";
-  return `Pubs ${Math.round(rate * 100)}% in last ${window}`;
+  if (rate == null) return `Pubs — no visible games${suffix}`;
+  return `Pubs ${Math.round(rate * 100)}% in last ${window}${suffix}`;
 }
 
 export function pubTitle(pub: PoolPubRecord, nowMs: number): string {
   const window = pub.recentWins + pub.recentLosses;
-  const activity = pubActivity(pub.lastPlayedAt, nowMs);
-  return `Last ${window} pub games: ${pub.recentWins}W–${pub.recentLosses}L · last played ${activity?.label ?? "unknown"}`;
+  const checked = pubCheckedAgo(pub.checkedAt, nowMs);
+  const activity = pubLastPlayed(pub, nowMs);
+  return [
+    `Last ${window} pub games: ${pub.recentWins}W–${pub.recentLosses}L`,
+    activity ? `last played ${activity.label}` : null,
+    `checked ${checked ?? "at an unknown time"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** Hover text for a most-played-hero icon: "Pudge — 220 pub games, 55% won". */

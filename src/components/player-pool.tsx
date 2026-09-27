@@ -34,7 +34,7 @@ import {
   type PoolSort,
   type PoolStatusFilter,
 } from "@/lib/player-pool";
-import { pubActivity } from "@/lib/pub-stats";
+import { pubLastPlayed } from "@/lib/pub-stats";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
 
@@ -388,9 +388,9 @@ export function PlayerPool({
               const sc = scout?.[p.userId];
               const ih = sc?.inhouse;
               const pub = sc?.pub;
-              const activity = pub
-                ? pubActivity(pub.lastPlayedAt, nowMs)
-                : null;
+              // Measured when the snapshot was taken, and only while it is
+              // recent: an old snapshot says nothing about last week.
+              const activity = pub ? pubLastPlayed(pub, nowMs) : null;
               // One quote line per row: the captain note (written TO captains)
               // beats the player's own goals; the goals fill the slot when no
               // note exists. `statement` is only sent when it would render.
@@ -459,7 +459,7 @@ export function PlayerPool({
                           className="tabular-nums"
                           title={pubTitle(pub, nowMs)}
                         >
-                          {pubToken(pub)}
+                          {pubToken(pub, nowMs)}
                         </span>
                       ) : null}
                       {pub && pub.topHeroes.length > 0 ? (

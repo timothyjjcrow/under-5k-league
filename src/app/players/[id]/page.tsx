@@ -38,7 +38,12 @@ import { leagueRecords, toRecordGames, type PlayerRecord } from "@/lib/records";
 import { formatNetWorth, cn, hasText } from "@/lib/utils";
 import { rankMedalName } from "@/lib/rank";
 import { pubTitle, pubToken } from "@/lib/player-pool";
-import { parsePubStats, poolPubRecord, pubActivity } from "@/lib/pub-stats";
+import {
+  parsePubStats,
+  poolPubRecord,
+  pubCheckedAgo,
+  pubLastPlayed,
+} from "@/lib/pub-stats";
 import {
   Avatar,
   Badge,
@@ -279,13 +284,21 @@ export default async function PlayerProfilePage({
   // Pub scouting (public data — same visibility rule as the medal): the token
   // gate comes from poolPubRecord (null when nothing is scoutable), the hero
   // card uses the full stored top-5. One clock for every recency label.
+  // The pub numbers show only for an ACTIVE signup this season, the people
+  // captains scout and the admin sync keeps refreshing. Anyone else's
+  // snapshot is whatever OpenDota said at their last refresh, which can be
+  // months old, so it isn't shown as if it were current.
   // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
-  const pubScout = poolPubRecord(user.pubStats);
-  const pubActivityNow = pubScout
-    ? pubActivity(pubScout.lastPlayedAt, nowMs)
+  const pubScout = activeReg
+    ? poolPubRecord(user.pubStats, user.pubStatsAt)
     : null;
+  const pubLast = pubScout ? pubLastPlayed(pubScout, nowMs) : null;
   const pubHeroes = parsePubStats(user.pubStats)?.topHeroes ?? [];
+  const pubCheckedLabel = pubCheckedAgo(
+    user.pubStatsAt?.getTime() ?? null,
+    nowMs,
+  );
 
   // Seasons card: every season they played in, were rostered in, or stood in
   // for, with the champion resolved the same way every public page does.
@@ -782,15 +795,17 @@ export default async function PlayerProfilePage({
                     className="tabular-nums"
                     title={pubTitle(pubScout, nowMs)}
                   >
-                    {pubToken(pubScout)}
+                    {pubToken(pubScout, nowMs)}
                   </span>
                 ) : null}
-                {pubActivityNow?.quiet ? (
+                {pubLast?.quiet ? (
                   /* The consequence is part of the text, not a tooltip: a
                      phone never shows a title, and "last played 5mo ago"
-                     alone doesn't say why a captain should care. */
-                  <span title="No visible pub games in over two months, so the listed MMR may describe who they used to be">
-                    last played {pubActivityNow.label} · MMR may be stale
+                     alone doesn't say why a captain should care. Measured
+                     when the snapshot was taken, and only while it is
+                     recent (pubLastPlayed). */
+                  <span title="No visible pub games in over two months when their pub stats were last checked, so the listed MMR may describe who they used to be">
+                    last played {pubLast.label} · MMR may be stale
                   </span>
                 ) : null}
                 {user.profileUrl ? (
@@ -1374,6 +1389,12 @@ export default async function PlayerProfilePage({
                     <div className="space-y-2">
                       <div className="text-xs font-medium uppercase tracking-wide text-muted">
                         Most played (pubs)
+                        {pubCheckedLabel ? (
+                          <span className="font-normal normal-case tracking-normal">
+                            {" "}
+                            · checked {pubCheckedLabel}
+                          </span>
+                        ) : null}
                       </div>
                       <HeroPool
                         heroes={pubHeroes}
