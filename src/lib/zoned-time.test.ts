@@ -178,4 +178,13 @@ describe("yourTimeHint", () => {
     expect(yourTimeHint(night, BERLIN, "Europe/Paris", "en-GB")).toBeNull();
     expect(yourTimeHint(NaN, BERLIN, LA, "en-GB")).toBeNull();
   });
+
+  it("stays silent instead of throwing on a zone the browser can't name", () => {
+    // Chrome reports "Etc/Unknown" when it can't map the OS zone, and Intl
+    // refuses to build a formatter for it. The field calls this from its
+    // sync effect, so a throw would break every admin scheduling box.
+    expect(() => new Intl.DateTimeFormat("en", { timeZone: "Etc/Unknown" })).toThrow(RangeError);
+    expect(yourTimeHint(night, BERLIN, "Etc/Unknown", "en-GB")).toBeNull();
+    expect(yourTimeHint(night, BERLIN, "", "en-GB")).toBeNull();
+  });
 });
