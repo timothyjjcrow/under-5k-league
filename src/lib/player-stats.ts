@@ -263,12 +263,14 @@ export function currentStreak(linesNewestFirst: PlayerGameLine[]): Streak {
 
 // ---------- Leaderboards ----------
 
+// No wins or win-rate key on purpose: those boards ranked a TEAM's record
+// (every regular on the best team tied at the top), and standings plus Team of
+// the Week already show it. Kills and assists are PER GAME for the same reason
+// — a season total rewarded whoever's team played extra series.
 export type LeaderboardKey =
-  | "wins"
   | "kda"
-  | "winRate"
-  | "kills"
-  | "assists"
+  | "killsPerGame"
+  | "assistsPerGame"
   | "games"
   | "gpm"
   | "netWorth";
@@ -278,19 +280,18 @@ export type LeaderEntry = { id: string; summary: PlayerSummary };
 export type LeaderRow = { id: string; value: number; summary: PlayerSummary };
 
 const LEADER_VALUE: Record<LeaderboardKey, (s: PlayerSummary) => number> = {
-  wins: (s) => s.wins,
   kda: (s) => s.kda,
-  winRate: (s) => s.winRate,
-  kills: (s) => s.kills,
-  assists: (s) => s.assists,
+  killsPerGame: (s) => s.avgKills,
+  assistsPerGame: (s) => s.avgAssists,
   games: (s) => s.games,
   gpm: (s) => s.avgGpm ?? 0,
   netWorth: (s) => s.avgNetWorth ?? 0,
 };
 
 /**
- * Rank players by a stat. Rate stats (kda, winRate) take a `minGames` floor so
- * a single lucky game can't top the board. Ties break on games played.
+ * Rank players by a stat. Rate stats (kda, the per-game boards) take a
+ * `minGames` floor so a single lucky game can't top the board. Ties break on
+ * games played.
  */
 export function topBy(
   entries: LeaderEntry[],

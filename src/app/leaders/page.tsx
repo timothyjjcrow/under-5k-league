@@ -22,6 +22,7 @@ import {
 import type { PlayerStat } from "@/lib/match-import";
 import { careerReportCard, percentLabel } from "@/lib/benchmarks";
 import { weeklyHonors } from "@/lib/honors";
+import { impactPointsRule } from "@/lib/fantasy";
 import {
   HONOR_WEEK_STATE,
   isNoPerformanceHonorWeek,
@@ -30,7 +31,6 @@ import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
 import { formatNetWorth } from "@/lib/utils";
 import {
   buttonClasses,
-  Avatar,
   Card,
   CardBody,
   CardHeader,
@@ -340,26 +340,23 @@ export default async function LeadersPage({
   const maxGames = Math.max(1, ...entries.map((e) => e.summary.games));
   const rateFloor = Math.min(3, maxGames);
 
+  // Every board ranks what the PLAYER did. Total wins and win rate are gone
+  // on purpose (they followed the team's record, so the top of each was the
+  // best team's regulars — standings and Team of the Week already show it),
+  // and kills/assists are per game so a player whose team played extra series
+  // can't outrank a better one on volume. "Most games" stays as the one board
+  // that recognises showing up.
   const boards: {
     title: string;
     description: string;
     valueUnit: string;
-    category: "winning" | "teamfights" | "economy";
+    category: "teamfights" | "economy";
     key: LeaderboardKey;
     minGames?: number;
     format: (r: LeaderRow) => string;
     rankValue?: (r: LeaderRow) => number;
     hint: (r: LeaderRow) => string;
   }[] = [
-    {
-      title: "Most wins",
-      description: "Games won across this season.",
-      valueUnit: "game wins",
-      category: "winning",
-      key: "wins",
-      format: (r) => `${r.value}`,
-      hint: (r) => `${r.summary.wins}–${r.summary.losses}`,
-    },
     {
       title: "Best KDA",
       description: "Kills plus assists for each death.",
@@ -372,32 +369,26 @@ export default async function LeadersPage({
         `${r.summary.avgKills}/${r.summary.avgDeaths}/${r.summary.avgAssists}`,
     },
     {
-      title: "Highest win rate",
-      description: "Share of games won, with a game minimum.",
-      valueUnit: "of games won",
-      category: "winning",
-      key: "winRate",
+      title: "Kills per game",
+      description: "Enemy heroes taken down, averaged over games played.",
+      valueUnit: "kills / game",
+      category: "teamfights",
+      key: "killsPerGame",
       minGames: rateFloor,
-      format: (r) => `${r.value}%`,
-      hint: (r) => `${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
+      format: (r) => r.value.toFixed(1),
+      hint: (r) =>
+        `${r.summary.kills} kills in ${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
     },
     {
-      title: "Most kills",
-      description: "Total enemy heroes taken down.",
-      valueUnit: "kills",
+      title: "Assists per game",
+      description: "Kills set up for teammates, averaged over games played.",
+      valueUnit: "assists / game",
       category: "teamfights",
-      key: "kills",
-      format: (r) => `${r.value}`,
-      hint: (r) => `${r.summary.avgKills}/game`,
-    },
-    {
-      title: "Most assists",
-      description: "Total kills set up for teammates.",
-      valueUnit: "assists",
-      category: "teamfights",
-      key: "assists",
-      format: (r) => `${r.value}`,
-      hint: (r) => `${r.summary.avgAssists}/game`,
+      key: "assistsPerGame",
+      minGames: rateFloor,
+      format: (r) => r.value.toFixed(1),
+      hint: (r) =>
+        `${r.summary.assists} assists in ${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
     },
     {
       title: "Most games",
@@ -536,53 +527,136 @@ export default async function LeadersPage({
     honorsByWeek.length > 0 ||
     inProgressWeeks.length > 0 ||
     awaitingBoxScoreWeeks.length > 0;
-  const spotlights = [
-    {
-      label: "Winningest player",
-      measure: "Game wins",
-      row: boardRows.get("wins")?.[0],
-      href: "#metric-wins",
-    },
-    {
-      label: "In every fight",
-      measure: "Kill involvement",
-      row: participationRows[0] ?? boardRows.get("assists")?.[0],
-      href: participationRows.length ? "#metric-participation" : "#metric-assists",
-    },
-    {
-      label: "Standout report card",
-      measure: "World benchmark",
-      row: reportRows[0],
-      href: "#metric-report",
-    },
-  ].filter((item) => item.row != null);
-
   const categories = [
     {
-      id: "winning",
-      index: "01",
-      title: "Winning",
-      description: "Results first: total wins and sustained success across the schedule.",
-    },
-    {
       id: "teamfights",
-      index: "02",
+      index: "01",
       title: "Teamfights",
       description: "Who finishes fights, creates chances, joins kills and sustains teammates.",
     },
     {
       id: "economy",
-      index: "03",
+      index: "02",
       title: "Resources & presence",
       description: "Gold, net worth and the players who put in the most games.",
     },
   ] as const;
 
+  const honorsCard = hasHonors ? (
+    <Card id="weekly-honors" className="scroll-mt-24">
+      <CardHeader
+        headingLevel={2}
+        title="Weekly honors"
+        subtitle={`Regular season only. Player of the Week earns the most impact points: ${impactPointsRule()}.`}
+        action={
+          <details className="group max-w-sm text-sm">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60 [&::-webkit-details-marker]:hidden">
+              How honors unlock
+              <svg
+                aria-hidden
+                viewBox="0 0 16 16"
+                fill="none"
+                className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none"
+              >
+                <path
+                  d="m4 6 4 4 4-4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </summary>
+            <p className="pb-2 text-xs leading-relaxed text-muted">
+              Official after every regular match is final and every played
+              series has a complete attributed 5v5 box score.
+            </p>
+          </details>
+        }
+      />
+      <CardBody className="divide-y divide-line/60 p-0">
+        {inProgressWeeks.length > 0 ? (
+          <p className="px-5 py-3 text-sm text-muted">
+            Week {inProgressWeeks[0].week} is still in progress. Its honors
+            will appear after the full slate is final.
+          </p>
+        ) : null}
+        {awaitingBoxScoreWeeks.length > 0 ? (
+          <p className="px-5 py-3 text-sm text-muted">
+            Week {awaitingBoxScoreWeeks[0].week} is final, but honors are
+            waiting for complete, valid 5v5 box scores from every played
+            series.
+          </p>
+        ) : null}
+        {honorsByWeek.map(({ week, honors }) =>
+          !honors.player && !honors.team ? (
+            <p key={week} className="px-5 py-3 text-sm text-muted">
+              Week {week} is final with no played games, so no performance
+              honors were awarded.
+            </p>
+          ) : (
+            <div
+              key={week}
+              className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-sm"
+            >
+              <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
+                Week {week}
+              </span>
+              {honors.player ? (
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span aria-hidden>⭐</span>
+                  {userMap.has(honors.player.userId) ? (
+                    <PlayerLink
+                      userId={honors.player.userId}
+                      className="font-medium"
+                    >
+                      {userMap.get(honors.player.userId)!.name}
+                    </PlayerLink>
+                  ) : (
+                    <span className="font-medium text-muted">
+                      Former player
+                    </span>
+                  )}
+                  <span className="text-xs text-muted">
+                    {honors.player.points} impact points
+                    {honors.player.heroId != null
+                      ? ` · ${heroById(honors.player.heroId)?.name ?? `Hero #${honors.player.heroId}`}`
+                      : ""}
+                  </span>
+                </span>
+              ) : null}
+              {honors.team ? (
+                <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
+                  <span aria-hidden>🛡️</span>
+                  <Link
+                    href={`/teams/${honors.team.teamId}`}
+                    className="py-1 -my-1 font-medium hover:text-info"
+                  >
+                    {teamNameOf.get(honors.team.teamId) ?? "?"}
+                  </Link>
+                  <span className="text-xs text-muted">
+                    {honors.team.gameWins} game win
+                    {honors.team.gameWins === 1 ? "" : "s"}
+                  </span>
+                </span>
+              ) : null}
+            </div>
+          ),
+        )}
+      </CardBody>
+    </Card>
+  ) : null;
+
   return (
     <div className="space-y-6">
+      {/* The page opens on Weekly honors — the part that changes every week
+          and the part the Discord honors post links here for — then the
+          boards. There is no banner, no "#1 on each board" highlight cards
+          and no tile strip any more: on a phone they pushed the first board
+          ~1,500px down and honors to the bottom of a ~9,500px page. */}
       <PageTitle
         title="Leaders"
-        subtitle={`${season.name}${season.isActive ? "" : " · archived"}`}
+        subtitle={`${season.name}${season.isActive ? "" : " · archived"} · From complete 5v5 box scores. Per-game boards need at least ${rateFloor} game${rateFloor === 1 ? "" : "s"}; equal values share a rank.`}
         action={
           <div className="flex flex-wrap gap-2">
             {!season.isActive ? (
@@ -613,78 +687,15 @@ export default async function LeadersPage({
         unusableGames={unusableGames}
         unmappedLines={unmappedLines}
       />
-      <section aria-labelledby="leaders-intro" className="overflow-hidden rounded-2xl border border-line bg-gradient-to-br from-surface-3 via-surface to-bg p-5 sm:p-7">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-accent">Season snapshot</p>
-            <h2 id="leaders-intro" className="mt-2 font-display text-3xl font-semibold uppercase leading-tight tracking-wide text-fg sm:text-4xl">
-              Who is setting the pace?
-            </h2>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted">
-              Explore results, teamfight impact and economy from verified match box scores. Every board keeps a player’s actual season rank when you search.
-            </p>
-          </div>
-          <details className="max-w-md text-sm text-muted">
-            <summary className="min-h-11 cursor-pointer py-3 font-medium text-info hover:text-fg">How these boards work</summary>
-            <p className="pb-2 text-xs leading-relaxed">
-              Only complete 5v5 box scores count. Rate boards need {rateFloor} eligible game{rateFloor === 1 ? "" : "s"}; reported economy stats use that many reported games. Equal displayed values share a rank. Kill involvement is the share of a player’s team kills they scored or assisted, weighted by team kills across games.
-            </p>
-          </details>
-        </div>
-        {spotlights.length > 0 ? (
-          <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3">
-            {spotlights.map(({ label, measure, row, href }) =>
-              row ? (
-                <div key={label} className="rounded-xl border border-line/80 bg-bg/55 p-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">{label}</p>
-                  <div className="mt-3 flex items-center gap-3">
-                    <Avatar name={row.name} src={row.avatar} size={36} />
-                    <div className="min-w-0 flex-1">
-                      {row.hasProfile === false ? (
-                        <p className="truncate text-sm font-semibold text-fg">{row.name}</p>
-                      ) : (
-                        <PlayerLink userId={row.id} className="block truncate text-sm font-semibold">{row.name}</PlayerLink>
-                      )}
-                      <p className="truncate text-xs text-muted">{row.team ?? measure}</p>
-                    </div>
-                    <span className="font-display text-2xl font-semibold tabular-nums text-accent">{row.valueLabel}</span>
-                  </div>
-                  <a href={href} className="mt-3 inline-flex min-h-11 items-center text-xs font-medium text-info hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60">
-                    View {measure.toLowerCase()} board →
-                  </a>
-                </div>
-              ) : null,
-            )}
-          </div>
-        ) : null}
-      </section>
-      <dl className="flex flex-wrap gap-x-8 gap-y-3 rounded-xl border border-line bg-surface/60 px-5 py-4">
-        <div>
-          <dt className="text-xs text-muted">Complete 5v5 games</dt>
-          <dd className="mt-1 font-display text-xl font-semibold tabular-nums text-cyan-300">
-            {games.filter((game) => game.lines.length > 0).length}
-            <span className="ml-1 text-sm font-normal text-muted">/ {gameRows.length} imported</span>
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted">Players with stats</dt>
-          <dd className="mt-1 font-display text-xl font-semibold tabular-nums">{entries.length}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted">Rate minimum</dt>
-          <dd className="mt-1 font-display text-xl font-semibold tabular-nums">
-            {rateFloor}<span className="ml-1 text-sm font-normal text-muted">game{rateFloor === 1 ? "" : "s"}</span>
-          </dd>
-        </div>
-      </dl>
       <SectionNav
         label="Leaderboard sections"
         items={[
+          ...(hasHonors ? [{ id: "weekly-honors", label: "Weekly honors" }] : []),
           ...categories.map((category) => ({ id: category.id, label: category.title })),
           ...(reportRows.length ? [{ id: "report-card", label: "Report card" }] : []),
-          ...(hasHonors ? [{ id: "weekly-honors", label: "Weekly honors" }] : []),
         ]}
       />
+      {honorsCard}
       {categories.map((category) => (
         <section key={category.id} id={category.id} aria-labelledby={`${category.id}-title`} className="scroll-mt-24 space-y-4">
           <div className="flex items-start gap-4 border-b border-line-soft pb-3">
@@ -704,7 +715,6 @@ export default async function LeadersPage({
                 rows={boardRows.get(board.key) ?? []}
                 valueUnit={board.valueUnit}
                 previewCount={3}
-                scaleMax={board.key === "winRate" ? 100 : undefined}
               />
             ))}
             {category.id === "teamfights" && participationRows.length > 0 ? (
@@ -749,97 +759,6 @@ export default async function LeadersPage({
             />
           </div>
         </section>
-      ) : null}
-
-      {hasHonors ? (
-        <Card id="weekly-honors" className="scroll-mt-24">
-          <CardHeader
-            headingLevel={2}
-            title="Weekly honors"
-            subtitle="Regular-season awards"
-            action={
-              <details className="max-w-sm text-sm">
-                <summary className="flex min-h-11 cursor-pointer items-center text-muted hover:text-fg">
-                  How honors unlock
-                </summary>
-                <p className="pb-2 text-xs leading-relaxed text-muted">
-                  Official after every regular match is final and every played
-                  series has a complete attributed 5v5 box score.
-                </p>
-              </details>
-            }
-          />
-          <CardBody className="divide-y divide-line/60 p-0">
-            {inProgressWeeks.length > 0 ? (
-              <p className="px-5 py-3 text-sm text-muted">
-                Week {inProgressWeeks[0].week} is still in progress. Its honors
-                will appear after the full slate is final.
-              </p>
-            ) : null}
-            {awaitingBoxScoreWeeks.length > 0 ? (
-              <p className="px-5 py-3 text-sm text-muted">
-                Week {awaitingBoxScoreWeeks[0].week} is final, but honors are
-                waiting for complete, valid 5v5 box scores from every played
-                series.
-              </p>
-            ) : null}
-            {honorsByWeek.map(({ week, honors }) =>
-              !honors.player && !honors.team ? (
-                <p key={week} className="px-5 py-3 text-sm text-muted">
-                  Week {week} is final with no played games, so no performance
-                  honors were awarded.
-                </p>
-              ) : (
-                <div
-                  key={week}
-                  className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-sm"
-                >
-                  <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
-                    Week {week}
-                  </span>
-                  {honors.player ? (
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span aria-hidden>⭐</span>
-                      {userMap.has(honors.player.userId) ? (
-                        <PlayerLink
-                          userId={honors.player.userId}
-                          className="font-medium"
-                        >
-                          {userMap.get(honors.player.userId)!.name}
-                        </PlayerLink>
-                      ) : (
-                        <span className="font-medium text-muted">
-                          Former player
-                        </span>
-                      )}
-                      <span className="text-xs text-muted">
-                        {honors.player.points} pts
-                        {honors.player.heroId != null
-                          ? ` · ${heroById(honors.player.heroId)?.name ?? `Hero #${honors.player.heroId}`}`
-                          : ""}
-                      </span>
-                    </span>
-                  ) : null}
-                  {honors.team ? (
-                    <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
-                      <span aria-hidden>🛡️</span>
-                      <Link
-                        href={`/teams/${honors.team.teamId}`}
-                        className="py-1 -my-1 font-medium hover:text-info"
-                      >
-                        {teamNameOf.get(honors.team.teamId) ?? "?"}
-                      </Link>
-                      <span className="text-xs text-muted">
-                        {honors.team.gameWins} game win
-                        {honors.team.gameWins === 1 ? "" : "s"}
-                      </span>
-                    </span>
-                  ) : null}
-                </div>
-              ),
-            )}
-          </CardBody>
-        </Card>
       ) : null}
     </div>
   );

@@ -12,12 +12,43 @@ import {
 // previously untested in a browser. Each check: key cards render, the
 // interactive bits respond, and nothing crashed client-side.
 
-test("leaders groups metrics and preserves ranks through search", async ({ page }) => {
+test("leaders opens on weekly honors and ranks what each player did", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/leaders");
   await expect(page.getByRole("heading", { name: "Leaders" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Winning", level: 2 })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Teamfights", level: 2 })).toBeVisible();
+  const honors = page.getByRole("heading", { name: "Weekly honors", level: 2 });
+  const teamfights = page.getByRole("heading", { name: "Teamfights", level: 2 });
+  await expect(honors).toBeVisible();
+  await expect(teamfights).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Resources & presence", level: 2 }),
+  ).toBeVisible();
+  // Honors lead the page: they change every week and the Discord honors
+  // post links here for them. They used to sit ~7,900px down on a phone.
+  expect((await honors.boundingBox())!.y).toBeLessThan(
+    (await teamfights.boundingBox())!.y,
+  );
+  await expect(page.getByText(/is still in progress/i)).toBeVisible();
+  // "Impact points" are defined right where Player of the Week shows them.
+  await expect(
+    page.getByText(/earns the most impact points: \+2 per kill/),
+  ).toBeVisible();
+  // The "How honors unlock" disclosure carries a visible marker.
+  const unlock = page.locator("#weekly-honors summary");
+  await expect(unlock.locator("svg")).toBeVisible();
+  await unlock.click();
+  await expect(
+    page.getByText(/Official after every regular match is final/),
+  ).toBeVisible();
+  // No team-record boards, no highlight cards, no per-board search: kills
+  // and assists are per game, and "Most games" still recognises showing up.
+  await expect(page.getByRole("heading", { name: "Winning", level: 2 })).toHaveCount(0);
+  await expect(page.locator("#metric-wins, #metric-winRate")).toHaveCount(0);
+  await expect(page.getByText("Who is setting the pace?")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Find player" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Kills per game", level: 3 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Assists per game", level: 3 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Most games", level: 3 })).toBeVisible();
   await expect(page.locator("#metric-participation")).toBeVisible();
   const toggle = page.getByRole("button", { name: /Show all/ }).first();
   await expect(toggle).toBeVisible();
@@ -25,17 +56,6 @@ test("leaders groups metrics and preserves ranks through search", async ({ page 
   await expect(
     page.getByRole("button", { name: /Show top 3/ }).first(),
   ).toBeVisible();
-  const wins = page.locator("#metric-wins");
-  await wins.getByRole("button", { name: "Find player" }).click();
-  const search = wins.getByRole("searchbox", { name: /Find a player or team/i });
-  await search.fill("no-such-league-player");
-  await expect(wins.getByText("No player or team matches that search.")).toBeVisible();
-  await search.fill("");
-  await expect(wins.getByRole("button", { name: /Show top 3/ })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Weekly honors", level: 2 }),
-  ).toBeVisible();
-  await expect(page.getByText(/is still in progress/i)).toBeVisible();
   // A 55th-percentile player should fill about 55% of the scale, even when
   // they lead this league. Relative-to-leader scaling would incorrectly fill it.
   const reportLeader = page.locator("#metric-report li").first();
