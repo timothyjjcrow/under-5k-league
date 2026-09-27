@@ -9,7 +9,10 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
-import { projectPlayoffField } from "@/lib/playoff-field";
+import {
+  projectPlayoffField,
+  publicDeadHeatTeamIds,
+} from "@/lib/playoff-field";
 import { TiebreakerNotice } from "@/components/tiebreaker-notice";
 import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
 import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
@@ -329,6 +332,10 @@ export default async function SchedulePage() {
   }
   const playoffField = projectPlayoffField(teams, matches);
   const standings = playoffField.standings;
+  // A tie mid-season is just a tie. Only once the regular season is over (or
+  // tiebreaker fixtures exist) does it get a tiebreaker badge that holds back
+  // its seeds and the projected matchups.
+  const shownDeadHeatTeamIds = publicDeadHeatTeamIds(playoffField, matches);
   const teamForm = formByTeam(
     teams.map((t) => t.id),
     matches,
@@ -861,7 +868,7 @@ export default async function SchedulePage() {
                 : undefined
             }
             playoffSeedByTeam={playoffField.seedByTeam}
-            unresolvedPlayoffTeamIds={playoffField.seedingDeadHeatTeamIds}
+            unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
             clinch={clinchFromReport(stakesReport)}
             playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
             viewerTeamId={[...myTeamIds][0]}
@@ -886,7 +893,7 @@ export default async function SchedulePage() {
             teamName={teamName}
             teamLogoUrl={teamLogoUrl}
             report={stakesReport}
-            unresolvedTeamIds={playoffField.seedingDeadHeatTeamIds}
+            unresolvedTeamIds={shownDeadHeatTeamIds}
             tiebreakerError={playoffField.tiebreakers.error}
           />
           <RunIn

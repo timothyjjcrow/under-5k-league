@@ -15,7 +15,10 @@ import {
   standingsMovement,
 } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
-import { projectPlayoffField } from "@/lib/playoff-field";
+import {
+  projectPlayoffField,
+  publicDeadHeatTeamIds,
+} from "@/lib/playoff-field";
 import { TiebreakerNotice } from "@/components/tiebreaker-notice";
 import { regularSeasonStatus } from "@/lib/schedule-status";
 import { type ScenarioReport } from "@/lib/scenarios";
@@ -2120,7 +2123,10 @@ async function SeasonView({
                     : undefined
                 }
                 playoffSeedByTeam={playoffField.seedByTeam}
-                unresolvedPlayoffTeamIds={playoffField.seedingDeadHeatTeamIds}
+                unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
+                  playoffField,
+                  matches,
+                )}
                 clinch={clinchFromReport(report)}
             playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
                 viewerTeamId={myTeam?.id}

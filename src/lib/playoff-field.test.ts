@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { projectPlayoffField } from "./playoff-field";
+import {
+  projectPlayoffField,
+  publicDeadHeatTeamIds,
+  tiebreakersInPlay,
+} from "./playoff-field";
 import type { MatchLike } from "./standings";
 
 function result(
@@ -181,5 +185,72 @@ describe("projectPlayoffField", () => {
     expect(projection.bracketSize).toBe(0);
     expect(projection.seededTeamIds).toEqual([]);
     expect(projection.pairings).toEqual([]);
+  });
+});
+
+describe("public tiebreaker badges", () => {
+  const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }));
+  // d, e and f are level on every standings tiebreak across the cut.
+  const played = [
+    ...["b", "c", "d", "e", "f"].map((away) => result("a", away, 2, 0)),
+    ...["c", "d", "e", "f"].map((away) => result("b", away, 2, 0)),
+    ...["d", "e", "f"].map((away) => result("c", away, 2, 0)),
+    result("d", "e", 1, 1),
+    result("d", "f", 1, 1),
+    result("e", "f", 1, 1),
+  ];
+  const unplayed = (
+    homeTeamId: string,
+    awayTeamId: string,
+    status: string,
+    phase = "REGULAR",
+  ): MatchLike => ({
+    homeTeamId,
+    awayTeamId,
+    homeScore: 0,
+    awayScore: 0,
+    winnerTeamId: null,
+    phase,
+    status,
+  });
+
+  it("keeps a mid-season dead heat off the public badges", () => {
+    for (const status of ["SCHEDULED", "LIVE"]) {
+      const matches = [...played, unplayed("a", "b", status)];
+      const projection = projectPlayoffField(teams, matches);
+      // The projection itself still sees the tie (admin tools read it)...
+      expect(projection.seedingDeadHeatTeamIds).toEqual(["d", "e", "f"]);
+      // ...but the public table and playoff picture do not badge it yet.
+      expect(tiebreakersInPlay(matches)).toBe(false);
+      expect(publicDeadHeatTeamIds(projection, matches)).toEqual([]);
+    }
+  });
+
+  it("badges the tie once every regular-season fixture is final", () => {
+    const projection = projectPlayoffField(teams, played);
+    expect(tiebreakersInPlay(played)).toBe(true);
+    expect(publicDeadHeatTeamIds(projection, played)).toEqual(["d", "e", "f"]);
+  });
+
+  it("badges the tie once tiebreaker fixtures exist", () => {
+    const matches = [
+      ...played,
+      unplayed("a", "b", "SCHEDULED"),
+      unplayed("d", "e", "SCHEDULED", "TIEBREAKER"),
+    ];
+    const projection = projectPlayoffField(teams, matches);
+    expect(tiebreakersInPlay(matches)).toBe(true);
+    expect(publicDeadHeatTeamIds(projection, matches)).toEqual(
+      projection.seedingDeadHeatTeamIds,
+    );
+  });
+
+  it("never badges a league with no regular-season results yet", () => {
+    const fresh = projectPlayoffField(teams, []);
+    expect(fresh.seedingDeadHeatTeamIds.length).toBeGreaterThan(0);
+    expect(tiebreakersInPlay([])).toBe(false);
+    expect(publicDeadHeatTeamIds(fresh, [])).toEqual([]);
+    const scheduled = [unplayed("a", "b", "SCHEDULED")];
+    expect(publicDeadHeatTeamIds(fresh, scheduled)).toEqual([]);
   });
 });
