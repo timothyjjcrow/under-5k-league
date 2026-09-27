@@ -1224,8 +1224,10 @@ export function DraftRoom({
 
   if (state.status === "COMPLETE") {
     const shortTeams = state.teams.filter((team) => team.need > 0);
+    // Auction purchases only: $0 rows are free-agent signings, which an
+    // admin can make once the auction is over.
     const bought = state.teams.reduce(
-      (n, t) => n + t.members.filter((m) => !m.isCaptain).length,
+      (n, t) => n + t.members.filter((m) => !m.isCaptain && m.price > 0).length,
       0,
     );
     // The auction is over, so this is a results page: what happened, the
@@ -1261,7 +1263,7 @@ export function DraftRoom({
           </div>
           <h2 className="mt-1 text-lg font-semibold">The draft is complete</h2>
           <p className="text-sm text-muted">
-            {bought} player{bought === 1 ? "" : "s"} bought for{" "}
+            {bought} player{bought === 1 ? "" : "s"} bought across{" "}
             {state.teams.length} team{state.teams.length === 1 ? "" : "s"}.{" "}
             {shortTeams.length === 0
               ? "Every roster is full."
