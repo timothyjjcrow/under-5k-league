@@ -575,6 +575,8 @@ export type WeekReminderInput = {
   fixtures: WeekReminderFixture[];
   /** Pick'em is still open on at least one of these fixtures. */
   pickemOpen?: boolean;
+  /** Teams with no regular fixture this week (an odd number of teams). */
+  byeTeamNames?: string[];
 };
 
 export type WeekReminderAnnouncement = {
@@ -653,7 +655,15 @@ export function weekReminderAnnouncement(
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week} matches`
     : m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
+  // With an odd number of teams one rests each week. The reminder is the one
+  // post that reaches players who don't open the site, so it names them too:
+  // otherwise the resting team watches everyone else check in and wonders.
+  const byes = m.isPlayoff || m.isTiebreaker ? [] : (m.byeTeamNames ?? []);
+  const byeLine = byes.length
+    ? `💤 Bye: ${byes.map((team) => `**${name(team)}**`).join(", ")} — no match this week.\n`
+    : "";
   const footer =
+    byeLine +
     "RSVP on your match page so captains can plan standins early." +
     // The reminder is the one weekly post everyone sees; pick'em otherwise
     // relies on people remembering to visit the page before kickoff.

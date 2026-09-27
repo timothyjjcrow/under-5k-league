@@ -857,6 +857,32 @@ describe("weekReminderMessage", () => {
     expect(closed).not.toContain("pickem");
   });
 
+  it("names the teams sitting out the week, above the RSVP line", () => {
+    const msg = weekReminderMessage({
+      week: 1,
+      isPlayoff: false,
+      fixtures: [],
+      byeTeamNames: ["Team One", "[free mmr](https://evil.test)"],
+    });
+    expect(msg).toMatch(
+      /\n💤 Bye: \*\*Team One\*\*, \*\*.+\*\* — no match this week\.\nRSVP on your match page/,
+    );
+    // Team names are captain-typed: the masked link must stay inert.
+    expect(msg).toContain("\\[free mmr\\]");
+    expect(msg).not.toContain("](");
+  });
+
+  it("leaves the bye line out of playoff and tiebreaker weeks, and when nobody rests", () => {
+    for (const extra of [{ isPlayoff: true }, { isTiebreaker: true }]) {
+      const msg = weekReminderMessage({
+        week: 6, isPlayoff: false, fixtures: [], byeTeamNames: ["Team One"], ...extra,
+      });
+      expect(msg).not.toContain("Bye");
+    }
+    expect(weekReminderMessage({ week: 1, isPlayoff: false, fixtures: [], byeTeamNames: [] }))
+      .not.toContain("Bye");
+  });
+
   it("labels playoff rounds without a week number", () => {
     const msg = weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [] });
     expect(msg).toContain("Playoff matches");
