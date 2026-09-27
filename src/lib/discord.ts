@@ -139,8 +139,87 @@ export function draftStartedAnnouncement(
   };
 }
 
-export function draftCompleteMessage(seasonName: string): string {
-  return `✅ **The ${seasonName} draft is complete — the auction has closed.** See every roster — including any open seats still needing free agents or standins — at <${resolveSiteUrl()}/teams>`;
+export type DraftRosterPlayer = DraftReminderPerson & {
+  /** What the team paid; 0 prints no price. */
+  price: number;
+};
+
+export type DraftRosterTeam = {
+  name: string;
+  captainName: string;
+  /** Non-captain roster members, in the order to list them. */
+  players: DraftRosterPlayer[];
+  /** Seats the draft left empty (a pool that ran dry). */
+  openSeats: number;
+};
+
+export type DraftCompleteInput = {
+  /** Admin-authored, so not escaped (the draftScheduledMessage rule). */
+  seasonName: string;
+  /** Teams in draft order. */
+  teams: DraftRosterTeam[];
+};
+
+/**
+ * The draft is over: one post listing every team, which replaces the old
+ * line-per-sale posts. It mentions each drafted player who linked Discord,
+ * once, on their team's line, so a player who wasn't watching learns their
+ * team and captain from the channel. Captains are named, not pinged: they
+ * were in the room. Whole team lines are packed in draft order under
+ * Discord's 2,000 characters; teams that don't fit are counted and left to
+ * the teams page, and their players are never allowlisted.
+ */
+export function draftCompleteAnnouncement(
+  m: DraftCompleteInput,
+): DraftReminderAnnouncement {
+  const site = resolveSiteUrl();
+  const header = `✅ **The ${m.seasonName} draft is complete! Here are the teams:**`;
+  const anyOpen = m.teams.some((t) => t.openSeats > 0);
+  const footer = anyOpen
+    ? `Open seats get filled with free agents, and standins cover until then. Every roster: <${site}/teams>`
+    : `Every roster: <${site}/teams>`;
+  const teamLine = (t: DraftRosterTeam): string => {
+    const seats =
+      t.openSeats > 0
+        ? `, ${t.openSeats} open seat${t.openSeats === 1 ? "" : "s"}`
+        : "";
+    const roster = t.players.length
+      ? t.players
+          .map((p) => `${personLabel(p)}${p.price > 0 ? ` $${p.price}` : ""}`)
+          .join(", ")
+      : "no players bought";
+    return `**${name(t.name)}** (captain ${name(t.captainName)}${seats}): ${roster}`;
+  };
+  const render = (shown: number): string => {
+    const hidden = m.teams.length - shown;
+    const more =
+      hidden > 0
+        ? [
+            `…and ${hidden} more team${hidden === 1 ? "" : "s"} on the teams page.`,
+          ]
+        : [];
+    return [header, ...m.teams.slice(0, shown).map(teamLine), ...more, footer].join(
+      "\n",
+    );
+  };
+  const fits = (content: string) => content.length <= DISCORD_CONTENT_MAX;
+  if (!fits(render(0))) {
+    // Defensive last resort for an absurd season name or site URL: still
+    // deliverable, and it names nobody, so nobody is allowlisted.
+    return {
+      content:
+        "✅ **The draft is complete!** Every roster is on the league site's teams page.",
+      mentionUserIds: [],
+    };
+  }
+  let shown = 0;
+  while (shown < m.teams.length && fits(render(shown + 1))) shown += 1;
+  return {
+    content: render(shown),
+    mentionUserIds: mentionIdsOf(
+      m.teams.slice(0, shown).flatMap((t) => t.players),
+    ),
+  };
 }
 
 export function regularSeasonStartedMessage(seasonName: string): string {
@@ -179,7 +258,7 @@ export function draftAbortedMessage(
   return `🛑 **The ${seasonName} auction was aborted and the season is back in Signups.** ${playersReturned} non-captain roster member(s) returned to the pool${matchesRemoved ? `; ${matchesRemoved} unplayed fixture(s) were cleared` : ""}. Wait for the admin to announce the restart: <${resolveSiteUrl()}>`;
 }
 
-/** Draft-night superlatives, appended right after the complete message. */
+/** Draft-night superlatives, posted right after the teams (draftCompleteAnnouncement). */
 export function draftRecapMessage(r: {
   biggestSpend: { name: string; teamName: string; price: number } | null;
   bestValue: { name: string; teamName: string; price: number } | null;
@@ -205,16 +284,6 @@ export function draftRecapMessage(r: {
     );
   }
   return lines.join("\n");
-}
-
-export function playerSoldMessage(
-  playerName: string,
-  teamName: string,
-  price: number,
-): string {
-  const tag =
-    price >= 50 ? " 💸 big spender!" : price <= 1 ? " — a steal!" : "";
-  return `💰 **${name(playerName)}** → **${name(teamName)}** for **$${price}**${tag}`;
 }
 
 /** "the semifinals", "the grand final", "Round 3" — a round name mid-sentence. */

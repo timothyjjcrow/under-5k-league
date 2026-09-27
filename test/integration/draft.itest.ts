@@ -359,12 +359,13 @@ describe("draft auction — claim guards", () => {
     });
     expect(teamA.budget).toBe(93); // decremented exactly once
 
-    // The 💰 sale announcement fires once (the recap may also name the
-    // player — that's a different message).
-    const saleSends = mockSend.mock.calls
+    // Star was the whole pool, so this sale finished the draft: the teams
+    // post fires once (the recap may also name the player; that's a
+    // different message).
+    const teamsPosts = mockSend.mock.calls
       .map((c) => String(c[0]))
-      .filter((m) => m.startsWith("💰") && m.includes("Star"));
-    expect(saleSends).toHaveLength(1);
+      .filter((m) => m.includes("Here are the teams") && m.includes("Star"));
+    expect(teamsPosts).toHaveLength(1);
   });
 
   it("the stall resolver auto-nominates once — one opening bid row, second call no-ops", async () => {
@@ -414,18 +415,29 @@ describe("draft auction — claim guards", () => {
     expect(draft.nominatedUserId).toBe(p1.id); // the live lot survived
   });
 
-  it("completion announces the recap alongside the complete message", async () => {
+  it("a sale posts nothing; completion posts the teams, then the recap", async () => {
     // teamSize 2 → each captain needs exactly one player.
     const season = await makeSeason({ teamSize: 2, draftBudget: 50 });
     const capA = await makeCaptain(season.id, "Captain A", 100, 0);
     const capB = await makeCaptain(season.id, "Captain B", 100, 1);
     const p1 = await makePlayer(season.id, "First Buy", 4000);
     const p2 = await makePlayer(season.id, "Last Buy", 3000);
+    await prisma.user.update({
+      where: { id: p1.id },
+      data: { discordId: "910000000000000001" },
+    });
+    await prisma.user.update({
+      where: { id: capA.user.id },
+      data: { discordId: "910000000000000002" },
+    });
     await startDraftState(season.id);
 
     await nominatePlayer(season.id, sessionFor(capA.user), p1.id, 9);
     await expireClock(season.id);
     expect(await resolveExpiredNomination(season.id)).toBe(true);
+    // One sale mid-draft: the room shows it, Discord hears nothing.
+    expect(mockSend).not.toHaveBeenCalled();
+
     await nominatePlayer(season.id, sessionFor(capB.user), p2.id, 3);
     await expireClock(season.id);
     expect(await resolveExpiredNomination(season.id)).toBe(true);
@@ -435,10 +447,20 @@ describe("draft auction — claim guards", () => {
         .status,
     ).toBe(DRAFT_STATUS.COMPLETE);
 
-    const sends = mockSend.mock.calls.map((c) => String(c[0]));
-    expect(sends.some((m) => m.includes("draft is complete"))).toBe(true);
-    const recap = sends.find((m) => m.includes("Draft night in numbers"));
-    expect(recap).toBeTruthy();
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    const [teamsPost, teamsMentions] = mockSend.mock.calls[0];
+    expect(teamsPost).toContain("draft is complete! Here are the teams:");
+    expect(teamsPost).toContain(
+      "**Captain A's Team** (captain Captain A): <@910000000000000001> $9",
+    );
+    expect(teamsPost).toContain(
+      "**Captain B's Team** (captain Captain B): Last Buy $3",
+    );
+    // The drafted player who linked is pinged; the linked captain is not.
+    expect(teamsMentions).toEqual({ users: ["910000000000000001"] });
+
+    const recap = String(mockSend.mock.calls[1][0]);
+    expect(recap).toContain("Draft night in numbers");
     expect(recap).toContain("First Buy"); // $9 — the biggest buy
   });
 });

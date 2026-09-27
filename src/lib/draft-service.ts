@@ -30,11 +30,11 @@ import type {
 } from "./draft-http";
 import { weekReminderPrefix } from "./settings";
 import {
-  draftCompleteMessage,
+  draftCompleteAnnouncement,
   draftRecapMessage,
-  playerSoldMessage,
   sendDiscordMessage,
 } from "./discord";
+import { mentionsOf } from "./discord-mentions";
 import { canViewLeagueContact } from "./visibility";
 import { captureRosterTenure, closeRosterTenure } from "./roster-history";
 import {
@@ -99,9 +99,10 @@ async function bidDeadline(
  */
 export async function resolveExpiredNomination(seasonId: string): Promise<boolean> {
   // Set inside the transaction when this call is the one that finishes the
-  // draft / lands the sale; Discord pings go out only after the commit.
-  let completedSeasonName: string | null = null;
-  let sale: { player: string; team: string; price: number } | null = null;
+  // draft; the Discord posts go out only after the commit. A single sale posts
+  // nothing: the room shows it live, and the teams post at the end tags every
+  // drafted player once instead of ~25 one-line posts that tagged nobody.
+  let completed: CompletedDraft | null = null;
   const resolved = await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (
@@ -176,13 +177,6 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         where: { id: draft.currentBidTeamId },
         data: { budget: { decrement: draft.currentBid } },
       });
-      const [soldUser, soldTeam] = await Promise.all([
-        tx.user.findUnique({ where: { id: draft.nominatedUserId } }),
-        tx.team.findUnique({ where: { id: draft.currentBidTeamId } }),
-      ]);
-      if (soldUser && soldTeam) {
-        sale = { player: soldUser.name, team: soldTeam.name, price: draft.currentBid };
-      }
     } else {
       await voidDraftLot(tx, draft, "NOMINEE_NO_LONGER_ELIGIBLE", null);
       await tx.bid.deleteMany({ where: { draftId: draft.id, userId: draft.nominatedUserId } });
@@ -227,7 +221,7 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
       });
       await setDraftRunStatus(tx, draft, "COMPLETE");
-      completedSeasonName = season.name;
+      completed = { name: season.name, teamSize: season.teamSize };
     } else {
       await tx.draft.update({
         where: { seasonId },
@@ -242,15 +236,61 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     }
     return true;
   });
-  if (sale) {
-    const s = sale as { player: string; team: string; price: number };
-    await sendDiscordMessage(playerSoldMessage(s.player, s.team, s.price));
-  }
-  if (completedSeasonName) {
-    await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
-    await sendDraftRecap(seasonId);
-  }
+  if (completed) await announceDraftComplete(seasonId, completed);
   return resolved;
+}
+
+/** The season a resolver just finished the draft for. */
+type CompletedDraft = { name: string; teamSize: number };
+
+/**
+ * The draft-complete posts, after the commit: the teams (every drafted player
+ * who linked Discord mentioned once), then the draft-night recap. Best-effort
+ * like every send: a failed read or send never touches the finished draft.
+ */
+async function announceDraftComplete(
+  seasonId: string,
+  season: CompletedDraft,
+): Promise<void> {
+  try {
+    const teams = await prisma.team.findMany({
+      where: { seasonId },
+      orderBy: [{ draftOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: {
+        name: true,
+        captain: { select: { name: true } },
+        _count: { select: { members: true } },
+        members: {
+          where: { isCaptain: false },
+          orderBy: [{ price: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+          select: {
+            price: true,
+            user: { select: { name: true, discordId: true } },
+          },
+        },
+      },
+    });
+    const announcement = draftCompleteAnnouncement({
+      seasonName: season.name,
+      teams: teams.map((team) => ({
+        name: team.name,
+        captainName: team.captain.name,
+        players: team.members.map((member) => ({
+          name: member.user.name,
+          discordId: member.user.discordId,
+          price: member.price,
+        })),
+        openSeats: Math.max(0, season.teamSize - team._count.members),
+      })),
+    });
+    await sendDiscordMessage(
+      announcement.content,
+      mentionsOf(announcement.mentionUserIds),
+    );
+    await sendDraftRecap(seasonId);
+  } catch {
+    // The draft is already committed; a lost post is the only cost.
+  }
 }
 
 /**
@@ -282,7 +322,7 @@ async function sendDraftRecap(seasonId: string): Promise<void> {
 export async function resolveStalledNomination(
   seasonId: string,
 ): Promise<boolean> {
-  let completedSeasonName: string | null = null;
+  let completed: CompletedDraft | null = null;
   const resolved = await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (
@@ -354,7 +394,7 @@ export async function resolveStalledNomination(
         });
         if (done.count === 0) return false;
         await setDraftRunStatus(tx, draft, "COMPLETE");
-        completedSeasonName = season.name;
+        completed = { name: season.name, teamSize: season.teamSize };
       } else {
         const adv = await tx.draft.updateMany({
           where: {
@@ -405,7 +445,7 @@ export async function resolveStalledNomination(
       });
       if (done.count === 0) return false;
       await setDraftRunStatus(tx, draft, "COMPLETE");
-      completedSeasonName = season.name;
+      completed = { name: season.name, teamSize: season.teamSize };
       return true;
     }
 
@@ -450,10 +490,7 @@ export async function resolveStalledNomination(
     await appendAcceptedDraftBid(tx, lot, bid, nominator.name);
     return true;
   });
-  if (completedSeasonName) {
-    await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
-    await sendDraftRecap(seasonId);
-  }
+  if (completed) await announceDraftComplete(seasonId, completed);
   return resolved;
 }
 
