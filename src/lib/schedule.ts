@@ -272,12 +272,137 @@ export function roundName(roundIndex: number, totalRounds: number): string {
 /**
  * Human label for a match's slot in the season: playoff matches carry a
  * continuing week number in the DB, so raw "Week N" reads wrong for them.
+ * Phase-only (every playoff round reads "Playoffs"); prefer matchRoundLabel
+ * wherever the season's bracket is at hand.
  */
 export function matchPhaseLabel(phase: string, week: number): string {
   if (phase === MATCH_PHASE.FINAL) return "Grand final";
   if (phase === MATCH_PHASE.PLAYOFF) return "Playoffs";
   if (phase === MATCH_PHASE.TIEBREAKER) return `Tiebreaker week ${week}`;
   return `Week ${week}`;
+}
+
+/** A fixture as far as naming it goes. */
+export type RoundLabelMatch = {
+  phase: string;
+  week: number;
+  bracketSlot?: string | null;
+  bestOf?: number | null;
+};
+
+/** Round index of a real single-elimination slot ("R1M0" → 1), else null. */
+function bracketRoundOf(match: RoundLabelMatch): number | null {
+  return /^R\d+M\d+$/.test(match.bracketSlot ?? "")
+    ? slotRound(match.bracketSlot)
+    : null;
+}
+
+/** Singular form of roundName, for one match: "Semifinal", not "Semifinals". */
+function playoffMatchName(roundIndex: number, totalRounds: number): string {
+  const fromEnd = totalRounds - roundIndex;
+  if (fromEnd <= 1) return "Grand final";
+  if (fromEnd === 2) return "Semifinal";
+  if (fromEnd === 3) return "Quarterfinal";
+  return `Round ${roundIndex + 1}`;
+}
+
+/**
+ * How many rounds a season's playoff bracket has, read from its first-round
+ * fixtures (0 = no bracket yet). Pass any of the season's matches: regular,
+ * tiebreaker and other non-bracket rows are ignored. The first round is what
+ * fixes the depth, so this stays right before later rounds exist.
+ */
+export function playoffTotalRounds(
+  matches: readonly { phase: string; bracketSlot: string | null }[],
+): number {
+  return groupPlayoffRounds(
+    matches.filter(
+      (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+    ),
+  ).totalRounds;
+}
+
+/**
+ * The one name a fixture goes by wherever a single match is labelled:
+ * "Week 3", "Tiebreaker", "Quarterfinal", "Semifinal", "Grand final".
+ *
+ * Playoff rows keep counting weeks in the database, so "Week 9" and a bare
+ * "Playoffs" both read wrong for a semifinal. `totalRounds` comes from
+ * `playoffTotalRounds` over the season's matches; when it can't place the
+ * match (no bracket rows, a legacy row without a slot) a PLAYOFF match falls
+ * back to "Playoffs" rather than guessing. Only the FINAL phase is ever called
+ * "Grand final" — the word "Final" belongs to that match alone.
+ *
+ * `bestOf: true` appends the series length ("Semifinal · Bo3") for postseason
+ * fixtures; a regular week's series length is a season-wide constant, so it
+ * is left off there.
+ */
+export function matchRoundLabel(
+  match: RoundLabelMatch,
+  totalRounds: number,
+  options: { bestOf?: boolean } = {},
+): string {
+  let label: string;
+  if (match.phase === MATCH_PHASE.FINAL) label = "Grand final";
+  else if (match.phase === MATCH_PHASE.PLAYOFF) {
+    const round = bracketRoundOf(match);
+    label =
+      round !== null && totalRounds > round + 1
+        ? playoffMatchName(round, totalRounds)
+        : "Playoffs";
+  } else if (match.phase === MATCH_PHASE.TIEBREAKER) label = "Tiebreaker";
+  else label = `Week ${match.week}`;
+  if (
+    options.bestOf &&
+    match.phase !== MATCH_PHASE.REGULAR &&
+    match.bestOf != null &&
+    match.bestOf > 0
+  ) {
+    label += ` · Bo${match.bestOf}`;
+  }
+  return label;
+}
+
+/**
+ * Heading for a group of fixtures that share a week number (pick'em groups
+ * its open matches that way): the round's name when the whole group is one
+ * playoff round ("Semifinals"), "Tiebreaker" for a tiebreaker group, and
+ * "Week N" otherwise.
+ */
+export function roundGroupLabel(
+  matches: readonly RoundLabelMatch[],
+  totalRounds: number,
+): string {
+  const first = matches[0];
+  if (!first) return "";
+  const groupName = (m: RoundLabelMatch): string => {
+    if (m.phase === MATCH_PHASE.PLAYOFF) {
+      const round = bracketRoundOf(m);
+      return round !== null && totalRounds > round + 1
+        ? roundName(round, totalRounds)
+        : "Playoffs";
+    }
+    return matchRoundLabel(m, totalRounds);
+  };
+  const name = groupName(first);
+  return matches.every((m) => groupName(m) === name)
+    ? name
+    : `Week ${first.week}`;
+}
+
+/**
+ * Where a knockout series' winner goes next: the following round's name
+ * ("Semifinals", "Grand final"), or null for the grand final itself, a
+ * non-bracket match, or a slot this bracket can't place.
+ */
+export function nextPlayoffRoundName(
+  match: RoundLabelMatch,
+  totalRounds: number,
+): string | null {
+  if (match.phase !== MATCH_PHASE.PLAYOFF) return null;
+  const round = bracketRoundOf(match);
+  if (round === null || totalRounds <= round + 1) return null;
+  return roundName(round + 1, totalRounds);
 }
 
 /**

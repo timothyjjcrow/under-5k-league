@@ -19,6 +19,7 @@ import {
   byeTeamsByWeek,
   byKickoff,
   groupPlayoffRounds,
+  matchRoundLabel,
   pickBracketSize,
   playoffFirstRound,
   remainingSchedule,
@@ -497,9 +498,10 @@ export default async function SchedulePage() {
   const tiebreakerBrackets = buildTiebreakerBrackets({ projection: playoffField, teams, matches });
   const playoffRoundViews: WeekView[] = playoffGrouping.rounds.map((r) => {
     const night = earliestScheduled(r.matches);
+    const seriesLengths = [...new Set(r.matches.map((m) => m.bestOf))];
     return {
       week: r.matches[0]?.week ?? r.round + 1,
-      label: roundName(r.round, playoffGrouping.totalRounds),
+      label: `${roundName(r.round, playoffGrouping.totalRounds)}${seriesLengths.length === 1 ? ` · Best of ${seriesLengths[0]}` : ""}`,
       completed: r.matches.filter((m) => m.status === "COMPLETED").length,
       total: r.matches.length,
       isCurrent: false,
@@ -646,7 +648,7 @@ export default async function SchedulePage() {
           matchId={myNextMatch.id}
           scheduleRevision={myNextMatch.scheduleRevision}
           remainingGames={myNextMatch.status === "LIVE"}
-          heading={`Your next match — ${myNextMatch.phase === "TIEBREAKER" ? "Tiebreaker week · " : ""}Week ${myNextMatch.week}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
+          heading={`Your next match — ${matchRoundLabel(myNextMatch, playoffGrouping.totalRounds, { bestOf: true })}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
           when={fmtWhen(myNextMatch.scheduledAt)}
           whenTs={myNextMatch.scheduledAt?.getTime()}
           myRsvp={myRsvp}

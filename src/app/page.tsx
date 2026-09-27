@@ -22,9 +22,10 @@ import { type ScenarioReport } from "@/lib/scenarios";
 import {
   bracketRounds,
   byKickoff,
-  matchPhaseLabel,
+  matchRoundLabel,
   focusSlate,
   isRelevantOpenMatch,
+  playoffTotalRounds,
   roundName,
   slotRound,
 } from "@/lib/schedule";
@@ -449,7 +450,11 @@ export default async function Home() {
       <Suspense
         fallback={<Skeleton className="h-32 w-full rounded-[var(--radius)]" />}
       >
-        <MyNextMatch seasonId={season.id} userId={user.id} />
+        <MyNextMatch
+          seasonId={season.id}
+          userId={user.id}
+          playoffRounds={playoffTotalRounds(matches)}
+        />
       </Suspense>
     ) : season.status === "SIGNUPS" && isActiveReg ? (
       <SignupsAside snapshot={snapshot} />
@@ -688,9 +693,12 @@ async function LeagueNews() {
 async function MyNextMatch({
   seasonId,
   userId,
+  playoffRounds,
 }: {
   seasonId: string;
   userId: string;
+  /** playoffTotalRounds of the season, so a playoff fixture reads "Semifinal". */
+  playoffRounds: number;
 }) {
   const myTeams = await prisma.teamMember.findMany({
     where: { seasonId, userId },
@@ -786,7 +794,7 @@ async function MyNextMatch({
     <div className="space-y-2">
       <CheckinBanner
         variant="panel"
-        eyebrow={`Your next match · ${matchPhaseLabel(next.phase, next.week)}`}
+        eyebrow={`Your next match · ${matchRoundLabel(next, playoffRounds, { bestOf: true })}`}
         matchId={next.id}
         scheduleRevision={next.scheduleRevision}
         remainingGames={next.status === "LIVE"}
@@ -1832,6 +1840,7 @@ async function SeasonView({
   const standings = playoffField.standings;
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
+  const playoffRounds = playoffTotalRounds(matches);
   const teamForm = formByTeam(
     teams.map((t) => t.id),
     matches,
@@ -2215,8 +2224,7 @@ async function SeasonView({
                       </div>
                     ) : null}
                     <div className="text-xs uppercase text-muted">
-                      {matchPhaseLabel(myNextMatch.phase, myNextMatch.week)} ·
-                      next up
+                      {matchRoundLabel(myNextMatch, playoffRounds)} · next up
                     </div>
                     <div className="mt-1 font-medium">
                       vs{" "}
@@ -2301,7 +2309,7 @@ async function SeasonView({
                         className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
                       >
                         <div className="text-xs uppercase text-muted">
-                          {matchPhaseLabel(m.phase, m.week)}
+                          {matchRoundLabel(m, playoffRounds)}
                           {m.scheduledAt ? (
                             <>
                               {" · "}
@@ -2355,8 +2363,8 @@ async function SeasonView({
                         className="block space-y-1.5 px-4 py-3 text-sm transition-colors hover:bg-surface-2/60"
                       >
                         <p className="text-xs text-muted">
-                          {matchPhaseLabel(m.phase, m.week)} ·{" "}
-                          {m.forfeit ? "Forfeit" : "Final"}
+                          {matchRoundLabel(m, playoffRounds)} ·{" "}
+                          {m.forfeit ? "Forfeit" : "Final score"}
                         </p>
                         {[
                           { id: m.homeTeamId, score: m.homeScore },
@@ -2461,6 +2469,7 @@ async function ThisWeek({
   // Same helper the "Coming up" card partitions against — see focusSlate.
   const { slate: focus, title } = focusSlate(season.status, matches);
   if (focus.length === 0) return null;
+  const playoffRounds = playoffTotalRounds(matches);
 
   const [avail, standinRows] = await Promise.all([
     showCheckins
@@ -2551,7 +2560,7 @@ async function ThisWeek({
               >
                 <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11px] text-muted">
                   <span className="uppercase tracking-wider">
-                    {matchPhaseLabel(m.phase, m.week)}
+                    {matchRoundLabel(m, playoffRounds, { bestOf: true })}
                   </span>
                   {m.status === "LIVE" ? (
                     <span

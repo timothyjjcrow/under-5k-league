@@ -58,7 +58,7 @@ function ResultRow({
   const label = done
     ? m.forfeit
       ? "Forfeit"
-      : "Final"
+      : "Final score"
     : live
       ? "Live"
       : m.scheduledAt

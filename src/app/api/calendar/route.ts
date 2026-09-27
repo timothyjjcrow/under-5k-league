@@ -2,19 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { buildCalendar } from "@/lib/ics";
-import { matchPhaseLabel } from "@/lib/schedule";
+import { MATCH_PHASE } from "@/lib/constants";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
 import { resolveSiteUrl } from "@/lib/site-url";
 
 export const dynamic = "force-dynamic";
 
-function safeCalendarFilename(value: string): string {
-  const slug = value
+function slugify(value: string): string {
+  return value
     .normalize("NFKD")
     .replace(/[^a-z0-9]+/gi, "-")
     .replace(/^-+|-+$/g, "")
     .toLowerCase()
     .slice(0, 80);
-  return `ld2l-${slug || "league"}-schedule.ics`;
+}
+
+function safeCalendarFilename(value: string): string {
+  // "ggd2l-…" for the US league, "ggd2l-europe-…" for Europe.
+  const league = slugify(LEAGUE_CONFIG.name) || "league";
+  return `${league}-${slugify(value) || "league"}-schedule.ics`;
 }
 
 /**
@@ -61,6 +68,21 @@ export async function GET(req: NextRequest) {
     },
     orderBy: { scheduledAt: "asc" },
   });
+  // A team feed doesn't hold the whole bracket, so read its depth from the
+  // season's playoff rows — that is what lets an event say "Semifinal".
+  const playoffRounds = matches.some(
+    (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+  )
+    ? playoffTotalRounds(
+        await prisma.match.findMany({
+          where: {
+            seasonId: season.id,
+            phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+          },
+          select: { phase: true, bracketSlot: true },
+        }),
+      )
+    : 0;
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const site = resolveSiteUrl();
@@ -74,13 +96,15 @@ export async function GET(req: NextRequest) {
     matches.map((m) => ({
       uid: `${m.id}@${host}`,
       stamp: m.createdAt,
+      // The UID format must never change: calendar apps key events on it, so
+      // a new format would give every subscriber a duplicate of each match.
       // Every retime path bumps scheduleRevision, so a subscribed calendar
       // replaces its copy instead of keeping the old kickoff.
       sequence: m.scheduleRevision,
       start: m.scheduledAt as Date,
       // One rough hour per possible game, plus warm-up slack.
       durationMinutes: m.bestOf * 60 + 30,
-      summary: `${matchPhaseLabel(m.phase, m.week)}: ${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`,
+      summary: `${matchRoundLabel(m, playoffRounds)}: ${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`,
       description: `${season.name} · best of ${m.bestOf}`,
       url: `${site}/matches/${m.id}`,
     })),

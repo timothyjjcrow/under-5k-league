@@ -38,12 +38,7 @@ import {
 } from "@/lib/league-lifecycle";
 import { pickemControlFor } from "@/lib/pickem";
 import { PickemTray } from "@/components/pickem-pick-form";
-import {
-  groupPlayoffRounds,
-  matchPhaseLabel,
-  roundName,
-  slotRound,
-} from "@/lib/schedule";
+import { groupPlayoffRounds, matchRoundLabel } from "@/lib/schedule";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
@@ -200,13 +195,10 @@ export default async function MatchDetailPage({
     match.season,
     postseason,
   );
-  const postseasonLabel =
-    match.phase === "PLAYOFF"
-      ? roundName(
-          slotRound(match.bracketSlot),
-          groupPlayoffRounds(postseason).totalRounds,
-        )
-      : matchPhaseLabel(match.phase, match.week);
+  const postseasonLabel = matchRoundLabel(
+    match,
+    groupPlayoffRounds(postseason).totalRounds,
+  );
   const tiebreakerStage = parseTiebreakerStage(match.bracketSlot)?.stage;
   const viewer = await getSessionUser();
   const isCaptain =
