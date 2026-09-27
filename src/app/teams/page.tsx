@@ -125,7 +125,7 @@ export default async function TeamsPage() {
     matches,
   );
 
-  // Draft-night superlatives (biggest spend, best steal, …) — MMR from signups.
+  // Captains' signup MMR sets the projected (MMR-weighted) draft budgets.
   const registrationUserIds = [
     ...new Set([
       ...teams.map((team) => team.captainId),
@@ -152,20 +152,14 @@ export default async function TeamsPage() {
         registration.type === REGISTRATION_TYPE.PLAYER,
     ),
   });
-  const hasAuctionReceipts = draft?.activeRunId && draft.activeRun?.provenance === "COMMAND";
-  const recap = draftRecap(hasAuctionReceipts
-    ? await readDraftSales(prisma, draft.activeRunId!)
-    : teams.flatMap((t) =>
-      t.members.map((m) => ({
-        name: m.user.name,
-        teamName: t.name,
-        teamId: t.id,
-        price: m.price,
-        isCaptain: m.isCaptain,
-        mmr: null,
-      })),
-    ),
-  );
+  // Draft-night superlatives come from the auction's own receipts. A season
+  // drafted before receipts were recorded has no card: today's roster prices
+  // aren't the auction's (moves and refunds change them), and the full
+  // "Draft night" recap returns with the next draft.
+  const recap =
+    draft?.activeRunId && draft.activeRun?.provenance === "COMMAND"
+      ? draftRecap(await readDraftSales(prisma, draft.activeRunId))
+      : null;
 
   const championPresentation = resolveChampionPresentation(season, matches);
   // Once the bracket exists, each card says where the team stands in it.
@@ -517,11 +511,11 @@ export default async function TeamsPage() {
 
       <PowerRankingsCard rows={power} teams={powerTeams} frozen={powerFrozen} />
 
-      {recap.totalSpent > 0 ? (
+      {recap && recap.totalSpent > 0 ? (
         <Card>
           <CardHeader
-            title={hasAuctionReceipts ? (isDraft ? "Draft night — so far" : "Draft night") : "Surviving roster prices"}
-            subtitle={hasAuctionReceipts ? `$${recap.totalSpent} total spent · original auction values` : `$${recap.totalSpent} in current roster rows · original auction history is incomplete`}
+            title={isDraft ? "Draft night — so far" : "Draft night"}
+            subtitle={`$${recap.totalSpent} spent at the auction`}
           />
           <CardBody className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
             {recap.biggestSpend ? (
