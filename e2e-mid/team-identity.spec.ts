@@ -57,5 +57,10 @@ test("a captain edits their own team from its page with a live crest preview", a
   await expect(
     page.locator("summary", { hasText: "Edit team name and logo" }),
   ).toHaveCount(0);
+
+  // On /teams the teammate's own card, and only that one, is tagged.
+  await page.goto("/teams");
+  const rosters = page.getByRole("region", { name: "Team rosters" });
+  await expect(rosters.getByText("Your team", { exact: true })).toHaveCount(1);
   noErrors();
 });

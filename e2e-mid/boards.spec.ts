@@ -400,9 +400,9 @@ test("teams roster chips do not overlap on a phone", async ({ page }) => {
   await expect
     .poll(() => page.locator('#main a[href^="/players/"]').count())
     .toBeGreaterThan(4);
-  // Page-wide: this covers both the wrapped roster chips and each team title's
-  // neighboring captain link. PlayerLink's TAP_SAFE outdent makes insufficient
-  // title/subtitle spacing a real ambiguous tap target, not a visual-only gap.
+  // Page-wide: this covers both the wrapped roster chips and each team title
+  // beside its crest link. PlayerLink's TAP_SAFE outdent makes insufficient
+  // spacing a real ambiguous tap target, not a visual-only gap.
   await expectNoOverlappingTargets(page, "/teams rosters");
   await expectNoHorizontalOverflow(page, "/teams");
   assertNoErrors();

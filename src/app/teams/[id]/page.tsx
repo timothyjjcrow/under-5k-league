@@ -56,6 +56,7 @@ import { playoffStatuses } from "@/lib/playoff-status";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { SeriesRecord } from "@/components/series-record";
+import { rosterOrder } from "@/lib/team-roster";
 import { teamHueVar } from "@/lib/team-hues";
 import {
   Avatar,
@@ -647,7 +648,7 @@ export default async function TeamPage({
             {team.members.length === 0 ? (
               <p className="text-sm text-muted">No players yet.</p>
             ) : (
-              team.members.map((m) => (
+              rosterOrder(team.members).map((m) => (
                 <div
                   key={m.id}
                   className="flex items-center gap-3 rounded-lg border border-line/60 bg-surface-2/20 px-3 py-2 text-sm"

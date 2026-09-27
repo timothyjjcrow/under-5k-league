@@ -313,7 +313,9 @@ test("teams say where each one stands in the playoffs", async ({ page }) => {
     expect(text).toMatch(/^Out in the quarterfinal \(lost 1–2 to .+\)$/);
   }
   const rosters = page.getByRole("region", { name: "Team rosters" });
-  await expect(rosters.getByText(/^Seed 0[1-8]$/)).toHaveCount(8);
+  // Each card's summary line leads with its seed ("Seed 2 · Regular season
+  // 5W 0D 2L · 15 pts").
+  await expect(rosters.getByText(/^Seed [1-8]$/)).toHaveCount(8);
   await expectNoHorizontalOverflow(page, "/teams playoffs");
 
   // The last card is a quarterfinal loser; its page says so and shows its seed.
