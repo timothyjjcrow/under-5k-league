@@ -185,6 +185,7 @@ export async function announceSeriesResultOnce(match: {
       forfeit: true,
       seasonId: true,
       bracketSlot: true,
+      _count: { select: { games: true } },
     },
   });
   if (!current || current.status !== MATCH_STATUS.COMPLETED) {
@@ -228,6 +229,7 @@ export async function announceSeriesResultOnce(match: {
       awayScore: current.awayScore,
       label: matchRoundLabel(current, playoffRounds),
       forfeit: current.forfeit,
+      hasGames: current._count.games > 0,
       knockout:
         current.phase === MATCH_PHASE.PLAYOFF
           ? { nextRound: nextPlayoffRoundName(current, playoffRounds) }

@@ -145,6 +145,17 @@ describe("series-result announcement retry", () => {
         awayTeamId: charlie.id,
       },
     });
+    // An imported game is what makes the link a box score.
+    await prisma.game.create({
+      data: {
+        matchId: semi.id,
+        dotaMatchId: `semi-${semi.id}`,
+        radiantWin: true,
+        radiantTeamId: alpha.id,
+        direTeamId: delta.id,
+        winnerTeamId: alpha.id,
+      },
+    });
     const input = {
       id: semi.id,
       homeTeamId: alpha.id,
@@ -170,6 +181,19 @@ describe("series-result announcement retry", () => {
         new RegExp(`Box score: <[^>]+/matches/${semi.id}>$`),
       );
     }
+  });
+
+  it("links the match page, not a box score, for a manual score with no games", async () => {
+    // An admin-recorded result for a played series whose data is private (or
+    // a ticketless lobby): not a forfeit, but there is no box score to open.
+    const match = await setupDecidedMatch();
+    expect(await announceSeriesResultOnce(match)).toBe(true);
+    const [content] = mockSend.mock.calls[0] ?? [];
+    expect(content).toContain("**Home** take the series!");
+    expect(content).toMatch(
+      new RegExp(`Match page: <[^>]+/matches/${match.id}>$`),
+    );
+    expect(content).not.toContain("Box score");
   });
 
   it("treats historical sent markers and active v2 claims as final/in flight", async () => {

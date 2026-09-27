@@ -195,6 +195,10 @@ export function matchResultMessage(m: {
   /** Ruled/defaulted result — say so, or the channel reads a no-show as a
    *  played sweep. */
   forfeit?: boolean;
+  /** Any Game row recorded for this series. A manual score (private match
+   *  data, a ticketless lobby, a forfeit) has none, so its page shows no box
+   *  score and the link must not promise one. */
+  hasGames?: boolean;
   /** Set for a knockout playoff series before the grand final: the winner
    *  moves on to `nextRound` (null when the bracket can't name it) and the
    *  loser is out. The grand final gets no such line — crowning the champion
@@ -215,8 +219,9 @@ export function matchResultMessage(m: {
       : m.forfeit
         ? `${line} — **${winner}** take the series by forfeit.`
         : `${line} — **${winner}** take the series!`;
-  // A ruled result may have no games to show, so don't promise a box score.
-  const link = `${m.forfeit ? "Match page" : "Box score"}: <${resolveSiteUrl()}/matches/${m.matchId}>`;
+  // Only promise a box score when a game was actually imported: a manual
+  // score (forfeit or not) opens on "no games recorded".
+  const link = `${m.hasGames ? "Box score" : "Match page"}: <${resolveSiteUrl()}/matches/${m.matchId}>`;
   return `${tail} ${link}`;
 }
 
