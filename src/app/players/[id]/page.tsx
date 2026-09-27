@@ -13,7 +13,8 @@ import {
 import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { getRosterHistory } from "@/lib/player-roster-history";
 import { appearanceCareers } from "@/lib/appearance-careers";
-import { PlayerTeamHistory } from "@/components/player-team-history";
+import { profileSeasonRows } from "@/lib/profile-seasons";
+import { PlayerSeasons } from "@/components/player-seasons";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
@@ -66,6 +67,7 @@ import {
 import {
   INHOUSE_STATUS,
   MATCH_PHASE,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
 } from "@/lib/constants";
 import { PROVISIONAL_GAMES } from "@/lib/inhouse-stats";
@@ -162,6 +164,7 @@ export default async function PlayerProfilePage({
     recentInhouse,
     recordRows,
     viewerRegistration,
+    coversServed,
   ] = await Promise.all([
     season
       ? prisma.registration.findUnique({
@@ -208,6 +211,23 @@ export default async function PlayerProfilePage({
           select: { status: true },
         })
       : null,
+    // Cover they actually served: bookings on COMPLETED matches (pending ones
+    // are /me's to-do list, not history). Feeds the Seasons card's
+    // "Stood in for N matches" credit.
+    prisma.standinAssignment.findMany({
+      where: { standinUserId: id, match: { status: MATCH_STATUS.COMPLETED } },
+      select: {
+        matchId: true,
+        teamId: true,
+        match: {
+          select: {
+            seasonId: true,
+            homeTeam: { select: { id: true, name: true, logoUrl: true } },
+            awayTeam: { select: { id: true, name: true, logoUrl: true } },
+          },
+        },
+      },
+    }),
   ]);
   const recentInhousePlayedAt = recentInhouse
     ? inhousePlayedAt(recentInhouse)
@@ -273,17 +293,71 @@ export default async function PlayerProfilePage({
     : null;
   const pubHeroes = parsePubStats(user.pubStats)?.topHeroes ?? [];
 
-  const careerSeasonIds = [...new Set(games.map((game) => game.match.seasonId))];
-  const careerMatches = careerSeasonIds.length
-    ? await prisma.match.findMany({ where: { seasonId: { in: careerSeasonIds } } }) : [];
-  const careerSeasons = new Map(games.map((game) => [game.match.seasonId, game.match.season]));
-  const champions = [...careerSeasons.values()].flatMap((row) => {
-    const teamId = resolveChampionPresentation(row, careerMatches.filter((match) => match.seasonId === row.id)).championTeamId;
-    return teamId ? [{ seasonId: row.id, teamId }] : [];
+  // Seasons card: every season they played in, were rostered in, or stood in
+  // for, with the champion resolved the same way every public page does.
+  const careerSeasonIds = [
+    ...new Set([
+      ...games.map((game) => game.match.seasonId),
+      ...rosterHistory.map((row) => row.seasonId),
+      ...coversServed.map((cover) => cover.match.seasonId),
+    ]),
+  ];
+  const [careerSeasonRows, careerMatches] = careerSeasonIds.length
+    ? await Promise.all([
+        prisma.season.findMany({
+          where: { id: { in: careerSeasonIds } },
+          select: {
+            id: true,
+            name: true,
+            createdAt: true,
+            status: true,
+            championTeamId: true,
+          },
+        }),
+        prisma.match.findMany({ where: { seasonId: { in: careerSeasonIds } } }),
+      ])
+    : [[], []];
+  const champions = new Map(
+    careerSeasonRows.flatMap((row) => {
+      const teamId = resolveChampionPresentation(
+        row,
+        careerMatches.filter((match) => match.seasonId === row.id),
+      ).championTeamId;
+      return teamId ? [[row.id, teamId] as const] : [];
+    }),
+  );
+  const careerRows = appearanceCareers(
+    games,
+    careerMatches,
+    [...champions].map(([seasonId, teamId]) => ({ seasonId, teamId })),
+  ).rows.filter((row) => row.userId === id);
+  const careerTeamList = [
+    ...games.flatMap((game) => [game.match.homeTeam, game.match.awayTeam]),
+    ...coversServed.flatMap((cover) => [
+      cover.match.homeTeam,
+      cover.match.awayTeam,
+    ]),
+    ...rosterHistory.flatMap((row) =>
+      row.teamId
+        ? [{ id: row.teamId, name: row.teamName, logoUrl: row.teamLogoUrl }]
+        : [],
+    ),
+  ];
+  const teamLogos = new Map(
+    careerTeamList.map((team) => [team.id, team.logoUrl ?? null]),
+  );
+  const seasonRows = profileSeasonRows({
+    seasons: new Map(careerSeasonRows.map((row) => [row.id, row])),
+    appearances: careerRows,
+    tenures: rosterHistory,
+    covers: coversServed.map((cover) => ({
+      seasonId: cover.match.seasonId,
+      teamId: cover.teamId,
+      matchId: cover.matchId,
+    })),
+    teamNames: new Map(careerTeamList.map((team) => [team.id, team.name])),
+    champions,
   });
-  const careerRows = appearanceCareers(games, careerMatches, champions).rows.filter((row) => row.userId === id);
-  const careerTeams = [...new Map(games.flatMap((game) => [game.match.homeTeam, game.match.awayTeam]
-    .map((team) => [team.id, { id: team.id, name: team.name, seasonId: game.match.seasonId, seasonName: game.match.season.name }] as const))).values()];
 
   // Pull this player's line out of each imported game — every season's games.
   // The parsed box score is kept so achievements can identify each game's MVP;
@@ -570,10 +644,7 @@ export default async function PlayerProfilePage({
     heldRecords.length > 0 ||
     connectionsVisible;
   const careerVisible =
-    badges.length > 0 ||
-    careerRows.length > 0 ||
-    rosterHistory.length > 0 ||
-    !!recentInhouse;
+    badges.length > 0 || seasonRows.length > 0 || !!recentInhouse;
   const sectionItems = [
     { id: "player-overview", label: "Overview" },
     { id: "player-matches", label: "Matches" },
@@ -1384,7 +1455,7 @@ export default async function PlayerProfilePage({
             </Card>
           ) : null}
 
-          <PlayerTeamHistory appearances={careerRows} teams={careerTeams} tenures={rosterHistory} />
+          <PlayerSeasons rows={seasonRows} teamLogos={teamLogos} />
 
           {/* Inhouse career — only stream for players with a completed game. */}
           {recentInhouse ? (
