@@ -74,13 +74,24 @@ export default async function RootLayout({
       getPublicReadSignals(),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
-  const myTeam =
+  const [myTeam, draft] = await Promise.all([
     user && season
-      ? await prisma.teamMember.findFirst({
+      ? prisma.teamMember.findFirst({
           where: { seasonId: season.id, userId: user.id },
           select: { teamId: true },
         })
-      : null;
+      : null,
+    // The menus hide Schedule, Fantasy and Pick'em until the auction is
+    // complete, and the phase chips name the auction's state. Only the DRAFT
+    // phase needs it: one indexed row, one column.
+    season?.status === "DRAFT"
+      ? prisma.draft.findUnique({
+          where: { seasonId: season.id },
+          select: { status: true },
+        })
+      : null,
+  ]);
+  const draftStatus = draft?.status ?? null;
 
   return (
     <html
@@ -97,6 +108,7 @@ export default async function RootLayout({
           phase={season?.status ?? null}
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}
+          draftStatus={draftStatus}
           hasHistory={hasHistory}
         />
         <main
@@ -108,6 +120,7 @@ export default async function RootLayout({
         <SiteFooter
           seasonName={season?.name ?? null}
           phase={season?.status ?? null}
+          draftStatus={draftStatus}
           hasHistory={hasHistory}
         />
         <Toaster />

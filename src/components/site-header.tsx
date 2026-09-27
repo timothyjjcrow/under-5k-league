@@ -7,110 +7,20 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge } from "@/components/ui";
 import { MerchLink } from "@/components/merch-link";
-import { scheduleDestinationLabel } from "@/lib/season-copy";
+import { seasonPhaseLabel, seasonPhaseTone } from "@/lib/season-copy";
+import {
+  exploreNav,
+  seasonNav,
+  type NavLink,
+  type NavSection,
+} from "@/lib/site-nav";
 import { cn } from "@/lib/utils";
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups",
-  DRAFT: "Draft",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Complete",
-};
-
-const PHASE_TONE: Record<string, "brand" | "accent" | "success" | "info"> = {
-  SIGNUPS: "info",
-  DRAFT: "accent",
-  REGULAR_SEASON: "success",
-  PLAYOFFS: "accent",
-  COMPLETE: "brand",
-};
 
 type HeaderUser = {
   name: string;
   avatar: string | null;
   role: string;
 } | null;
-
-type NavItem = { href: string; label: string };
-
-// Which nav links are visible depends on the season phase — this is the core of
-// "hide what isn't relevant right now".
-function navItems(
-  phase: string | null,
-  myTeamId: string | null,
-  hasHistory: boolean,
-) {
-  const items: NavItem[] = [
-    { href: "/", label: "Home" },
-    { href: "/players", label: "Players" },
-    // Inhouse is a standalone pick-up mode — always available, season or not.
-    { href: "/inhouse", label: "Inhouse" },
-  ];
-  const teamsExist =
-    phase === "DRAFT" ||
-    phase === "REGULAR_SEASON" ||
-    phase === "PLAYOFFS" ||
-    phase === "COMPLETE";
-  // The feature tour matters most before the season unlocks everything —
-  // once mid-season links crowd in, it lives in the footer instead.
-  if (!teamsExist || phase === "DRAFT") {
-    items.push({ href: "/features", label: "Features" });
-  }
-  if (teamsExist) {
-    items.push({ href: "/teams", label: "Teams" });
-  }
-  if (myTeamId) items.push({ href: `/teams/${myTeamId}`, label: "My Team" });
-  if (phase === "DRAFT") {
-    items.push({ href: "/draft", label: "Draft" });
-    // A completed auction can publish fixtures before the admin advances the
-    // phase. The page itself explains the locked/in-progress state earlier in
-    // DRAFT, so hiding this link only made a valid published schedule a secret.
-    items.push({ href: "/schedule", label: "Schedule" });
-  }
-  if (
-    phase === "REGULAR_SEASON" ||
-    phase === "PLAYOFFS" ||
-    phase === "COMPLETE"
-  ) {
-    items.push({
-      href: "/schedule",
-      label: scheduleDestinationLabel(phase),
-    });
-  }
-  // The recap is the season's headline once it wraps; in-season it's reachable
-  // from the Leaders page ("awards so far") to keep the nav from crowding.
-  if (phase === "COMPLETE") items.push({ href: "/recap", label: "Recap" });
-  // Past seasons only exist once one has been archived.
-  if (hasHistory) items.push({ href: "/seasons", label: "History" });
-  return items;
-}
-
-// High-density stats and side games live under Explore so the primary bar
-// stays readable at ordinary laptop widths. Their phase gates are unchanged:
-// Fantasy/Pick'em open with the completed auction, while Leaders/Meta join
-// once regular-season results can exist.
-function phaseExploreItems(phase: string | null): NavItem[] {
-  if (phase === "DRAFT") {
-    return [
-      { href: "/fantasy", label: "Fantasy" },
-      { href: "/pickem", label: "Pick'em" },
-    ];
-  }
-  if (
-    phase === "REGULAR_SEASON" ||
-    phase === "PLAYOFFS" ||
-    phase === "COMPLETE"
-  ) {
-    return [
-      { href: "/leaders", label: "Leaders" },
-      { href: "/meta", label: "Meta" },
-      { href: "/fantasy", label: "Fantasy" },
-      { href: "/pickem", label: "Pick'em" },
-    ];
-  }
-  return [];
-}
 
 // Highlight the current section. "/teams" (index) and "My Team" (/teams/<id>)
 // overlap, so the more specific "My Team" wins on that exact page.
@@ -137,21 +47,27 @@ export function SiteHeader({
   phase,
   seasonName,
   myTeamId,
+  draftStatus = null,
   hasHistory = false,
 }: {
   user: HeaderUser;
   phase: string | null;
   seasonName: string | null;
   myTeamId: string | null;
+  /** The active season's auction status; only read during DRAFT. */
+  draftStatus?: string | null;
   hasHistory?: boolean;
 }) {
   const pathname = usePathname();
-  const items = navItems(phase, myTeamId, hasHistory);
-  // Keep the desktop row focused on the current season. Evergreen Features
-  // and History remain in Explore; the phone menu has room for the full list.
-  const desktopItems = items.filter(
-    (item) => !["/", "/features", "/seasons"].includes(item.href),
-  );
+  // Every list below comes from src/lib/site-nav.ts, which the footer shares:
+  // one name, one group and one visibility rule per page.
+  const navState = { phase, draftStatus, hasHistory };
+  const items = seasonNav(navState, myTeamId);
+  // The logo is the home link on wide screens.
+  const desktopItems = items.filter((item) => item.href !== "/");
+  const exploreSections = exploreNav(navState);
+  const phaseLabel = seasonPhaseLabel(phase, draftStatus);
+  const phaseTone = seasonPhaseTone(phase);
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
   const [open, setOpen] = useState(false);
   const [desktopExploreOpen, setDesktopExploreOpen] = useState(false);
@@ -243,45 +159,32 @@ export function SiteHeader({
 
   const adminActive = pathname.startsWith("/admin");
 
-  const exploreItems: NavItem[] = [
-    ...phaseExploreItems(phase),
-    // Scrim archives stay useful between seasons, but this side mode belongs
-    // with the other secondary league tools so the primary bar never scrolls.
-    { href: "/scrims", label: "Scrims" },
-    { href: "/news", label: "League news" },
-    { href: "/features", label: "Feature tour" },
-    { href: "/records", label: "Record book" },
-    { href: "/players/compare", label: "Compare players" },
-    { href: "/hall-of-fame", label: "Hall of Fame" },
-    ...(hasHistory ? [{ href: "/seasons", label: "Past seasons" }] : []),
-  ];
-  // The mobile primary menu already carries phase-native links such as
-  // Features and History. Filter those duplicates while keeping the same
-  // Explore ownership for Leaders, Meta, Fantasy and Pick'em on every size.
-  const primaryHrefs = new Set(items.map((item) => item.href));
-  const mobileExploreItems = exploreItems.filter(
-    (item) => !primaryHrefs.has(item.href),
+  // The primary row and the Explore groups never share a page, so the phone
+  // menu's Explore section needs no de-duplication.
+  const exploreActive = exploreSections.some((section) =>
+    section.links.some((item) => isActive(pathname, item.href, myTeamHref)),
   );
-  const exploreActive = exploreItems.some((item) =>
-    isActive(pathname, item.href, myTeamHref),
-  );
-  const mobileExploreActive = mobileExploreItems.some((item) =>
-    isActive(pathname, item.href, myTeamHref),
-  );
-  const hasTeams = items.some((item) => item.href === "/teams");
-  const dockItems = [
-    { href: "/", label: "Home", icon: "home" as const },
-    phase === "DRAFT"
-      ? { href: "/draft", label: "Draft", icon: "matches" as const }
-      : items.some((item) => item.href === "/schedule")
-        ? { href: "/schedule", label: "Matches", icon: "matches" as const }
-        : { href: "/inhouse", label: "Inhouse", icon: "matches" as const },
+  const hasPage = (href: string) => items.some((item) => item.href === href);
+  // The tab bar picks three primary pages, under the same names.
+  const dockSlots = [
+    { href: "/", icon: "home" },
     {
-      href: myTeamHref ?? (hasTeams ? "/teams" : "/players"),
-      label: myTeamHref ? "My Team" : hasTeams ? "Teams" : "Players",
-      icon: "team" as const,
+      href: hasPage("/draft")
+        ? "/draft"
+        : hasPage("/schedule")
+          ? "/schedule"
+          : "/inhouse",
+      icon: "matches",
     },
-  ];
+    {
+      href: myTeamHref ?? (hasPage("/teams") ? "/teams" : "/players"),
+      icon: "team",
+    },
+  ] as const;
+  const dockItems = dockSlots.flatMap(({ href, icon }) => {
+    const item = items.find((link) => link.href === href);
+    return item ? [{ ...item, icon }] : [];
+  });
 
   return (
     <>
@@ -289,7 +192,7 @@ export function SiteHeader({
         ref={headerRef}
         className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur"
       >
-        <div className="mx-auto flex h-20 w-full max-w-7xl items-center gap-3 px-4 sm:px-6 lg:gap-4">
+        <div className="mx-auto flex h-20 w-full max-w-7xl items-center gap-3 px-4 sm:px-6 xl:gap-4">
           <Link
             href="/"
             aria-label={`${LEAGUE_CONFIG.name} — home`}
@@ -315,13 +218,11 @@ export function SiteHeader({
           {pathname !== "/" && seasonName && phase ? (
             <Link
               href="/"
-              aria-label={`League status: ${seasonName} — ${PHASE_LABEL[phase] ?? phase}`}
+              aria-label={`League status: ${seasonName} — ${phaseLabel}`}
               className="hidden shrink-0 items-center gap-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:flex"
-              title={`${seasonName} · ${PHASE_LABEL[phase] ?? phase}`}
+              title={`${seasonName} · ${phaseLabel}`}
             >
-              <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
-                {PHASE_LABEL[phase] ?? phase}
-              </Badge>
+              <Badge tone={phaseTone}>{phaseLabel}</Badge>
             </Link>
           ) : null}
 
@@ -380,7 +281,7 @@ export function SiteHeader({
                   className="absolute left-0 top-full z-40 mt-3 max-h-[70vh] w-[34rem] max-w-[calc(100vw-3rem)] overflow-y-auto rounded-xl border border-line bg-surface p-4 shadow-xl shadow-black/30"
                 >
                   <ExploreLinks
-                    items={exploreItems}
+                    sections={exploreSections}
                     pathname={pathname}
                     myTeamHref={myTeamHref}
                     onNavigate={() => setDesktopExploreOpen(false)}
@@ -517,8 +418,7 @@ export function SiteHeader({
             <div className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
               {items.map((item) => {
                 const active =
-                  !mobileExploreActive &&
-                  isActive(pathname, item.href, myTeamHref);
+                  !exploreActive && isActive(pathname, item.href, myTeamHref);
                 return (
                   <Link
                     key={item.href}
@@ -549,7 +449,7 @@ export function SiteHeader({
                   onClick={() => setMobileExploreOpen((value) => !value)}
                   className={cn(
                     "flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-surface-2/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:py-2.5",
-                    mobileExploreActive ? "bg-accent/15 text-fg" : "text-muted",
+                    exploreActive ? "bg-accent/15 text-fg" : "text-muted",
                   )}
                 >
                   Explore
@@ -563,7 +463,7 @@ export function SiteHeader({
                     className="mt-2 rounded-xl border border-line-soft bg-surface p-3"
                   >
                     <ExploreLinks
-                      items={mobileExploreItems}
+                      sections={exploreSections}
                       pathname={pathname}
                       myTeamHref={myTeamHref}
                       onNavigate={() => setOpen(false)}
@@ -617,9 +517,7 @@ export function SiteHeader({
                   {seasonName ? (
                     <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted">
                       {phase ? (
-                        <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
-                          {PHASE_LABEL[phase] ?? phase}
-                        </Badge>
+                        <Badge tone={phaseTone}>{phaseLabel}</Badge>
                       ) : null}
                       <span>{seasonName}</span>
                     </div>
@@ -723,7 +621,7 @@ export function SiteHeader({
               ))}
           </div>
           <ExploreLinks
-            items={mobileExploreItems}
+            sections={exploreSections}
             pathname={pathname}
             myTeamHref={myTeamHref}
             onNavigate={() => setOpen(false)}
@@ -831,27 +729,14 @@ function CloseIcon() {
   );
 }
 
-// Group the existing destinations without changing their season gates or URLs.
-const EXPLORE_GROUPS = [
-  { label: "Play", paths: ["/scrims", "/fantasy", "/pickem"] },
-  {
-    label: "Statistics",
-    paths: ["/leaders", "/meta", "/players/compare", "/records"],
-  },
-  {
-    label: "League",
-    paths: ["/news", "/features", "/hall-of-fame", "/seasons"],
-  },
-];
-
 function ExploreLinks({
-  items,
+  sections,
   pathname,
   myTeamHref,
   onNavigate,
   compact = false,
 }: {
-  items: NavItem[];
+  sections: NavSection[];
   pathname: string;
   myTeamHref: string | null;
   onNavigate: () => void;
@@ -864,29 +749,20 @@ function ExploreLinks({
         compact ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-3",
       )}
     >
-      {EXPLORE_GROUPS.map((group) => {
-        const links = group.paths.flatMap((path) =>
-          items.filter((item) => item.href === path),
-        );
-        if (!links.length) return null;
+      {sections.map((section) => {
+        const wide = compact && section.group === "league";
         return (
           <div
-            key={group.label}
-            className={cn(
-              compact && group.label === "League" && "col-span-2 sm:col-span-1",
-            )}
+            key={section.group}
+            className={cn(wide && "col-span-2 sm:col-span-1")}
           >
             <p className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-muted">
-              {group.label}
+              {section.label}
             </p>
             <div
-              className={cn(
-                compact &&
-                  group.label === "League" &&
-                  "grid grid-cols-3 gap-1 sm:grid-cols-1",
-              )}
+              className={cn(wide && "grid grid-cols-3 gap-1 sm:grid-cols-1")}
             >
-              {links.map((item) => {
+              {section.links.map((item: NavLink) => {
                 const active = isActive(pathname, item.href, myTeamHref);
                 return (
                   <Link

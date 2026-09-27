@@ -41,9 +41,8 @@ for (const archived of [false, true]) {
       directory.getByRole("link", { name: "Season recap", exact: true }),
     ).toHaveCount(archived ? 0 : 1);
     if (!archived) {
-      await expect(
-        page.locator("main").getByText(/^Season complete/),
-      ).toBeVisible();
+      // The tour's status link carries the shared phase label.
+      await expect(page.locator("main").getByText(/^Complete\W*$/)).toBeVisible();
       await expect(
         directory.getByRole("link", { name: "Fantasy", exact: true }),
       ).toHaveAttribute("href", "/fantasy");
@@ -146,9 +145,15 @@ test("mid-playoffs renders the real bracket and supports tracing a run", async (
   await expect(
     page.getByRole("heading", { name: "Season 9 (fixture)" }),
   ).toBeVisible();
+  // The schedule keeps one name in every phase; the page's own heading is
+  // what says "Playoffs".
+  const primaryNav = page.getByRole("navigation", { name: "Primary" }).first();
   await expect(
-    page.getByRole("link", { name: "Playoffs", exact: true }).first(),
+    primaryNav.getByRole("link", { name: "Schedule", exact: true }),
   ).toBeVisible();
+  await expect(
+    primaryNav.getByRole("link", { name: "Playoffs", exact: true }),
+  ).toHaveCount(0);
   const bracket = page.getByRole("region", { name: "Playoff bracket" });
   await expect(bracket).toBeVisible();
   await expect(
@@ -282,7 +287,10 @@ test("complete-season public pages agree on the champion and recap", async ({
 
   const champion = await championName(page);
   await expect(
-    page.getByRole("link", { name: "Season results", exact: true }).first(),
+    page
+      .getByRole("navigation", { name: "Primary" })
+      .first()
+      .getByRole("link", { name: "Schedule", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Won the grand final")).toBeVisible();
   await expect(

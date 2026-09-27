@@ -152,7 +152,7 @@ for (const phase of [
         });
         await expectPanelFits(explore);
         await expect(
-          explore.getByRole("link", { name: "Past seasons" }),
+          explore.getByRole("link", { name: "Season history" }),
         ).toBeVisible();
         await expect(
           explore.getByRole("link", { name: "Feature tour" }),

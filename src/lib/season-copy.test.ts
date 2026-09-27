@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   draftPhasePresentation,
   phaseSubtitle,
-  scheduleDestinationLabel,
+  seasonPhaseLabel,
+  seasonPhaseTone,
 } from "./season-copy";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 
@@ -108,15 +109,66 @@ describe("draftPhasePresentation", () => {
   });
 });
 
-describe("scheduleDestinationLabel", () => {
-  it("tracks the route's phase-specific purpose", () => {
-    expect(scheduleDestinationLabel(SEASON_STATUS.DRAFT)).toBe("Schedule");
-    expect(scheduleDestinationLabel(SEASON_STATUS.REGULAR_SEASON)).toBe(
-      "Schedule",
+describe("seasonPhaseLabel", () => {
+  it("names every phase once, without repeating the season beside it", () => {
+    expect(seasonPhaseLabel(SEASON_STATUS.SIGNUPS)).toBe("Signups open");
+    expect(seasonPhaseLabel(SEASON_STATUS.REGULAR_SEASON)).toBe(
+      "Regular season",
     );
-    expect(scheduleDestinationLabel(SEASON_STATUS.PLAYOFFS)).toBe("Playoffs");
-    expect(scheduleDestinationLabel(SEASON_STATUS.COMPLETE)).toBe(
-      "Season results",
+    expect(seasonPhaseLabel(SEASON_STATUS.PLAYOFFS)).toBe("Playoffs");
+    // Every chip sits beside the season's name: "Season 7 · Complete".
+    expect(seasonPhaseLabel(SEASON_STATUS.COMPLETE)).toBe("Complete");
+    for (const status of Object.values(SEASON_STATUS)) {
+      expect(seasonPhaseLabel(status, DRAFT_STATUS.COMPLETE)).not.toMatch(
+        /^season/i,
+      );
+    }
+  });
+
+  // The footer used to say "Draft in progress" whatever the auction was
+  // doing: before it started, while paused, and after every roster was sold.
+  it("says what the auction is doing inside the draft phase", () => {
+    expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, null)).toBe("Draft setup");
+    expect(
+      seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.NOT_STARTED),
+    ).toBe("Draft setup");
+    expect(
+      seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS),
+    ).toBe("Draft live");
+    expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.PAUSED)).toBe(
+      "Draft paused",
     );
+    expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE)).toBe(
+      "Draft complete",
+    );
+    for (const draftStatus of Object.values(DRAFT_STATUS)) {
+      expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, draftStatus)).toBe(
+        draftPhasePresentation(draftStatus).badge,
+      );
+    }
+  });
+
+  it("ignores the auction outside the draft phase", () => {
+    expect(
+      seasonPhaseLabel(SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE),
+    ).toBe("Regular season");
+  });
+
+  it("covers the offseason and unknown states", () => {
+    expect(seasonPhaseLabel(null)).toBe("Between seasons");
+    expect(seasonPhaseLabel(undefined)).toBe("Between seasons");
+    expect(seasonPhaseLabel("SOMETHING_NEW")).toBe("SOMETHING_NEW");
+  });
+});
+
+describe("seasonPhaseTone", () => {
+  it("gives each phase its badge colour and anything else neutral", () => {
+    expect(seasonPhaseTone(SEASON_STATUS.SIGNUPS)).toBe("info");
+    expect(seasonPhaseTone(SEASON_STATUS.DRAFT)).toBe("accent");
+    expect(seasonPhaseTone(SEASON_STATUS.REGULAR_SEASON)).toBe("success");
+    expect(seasonPhaseTone(SEASON_STATUS.PLAYOFFS)).toBe("accent");
+    expect(seasonPhaseTone(SEASON_STATUS.COMPLETE)).toBe("brand");
+    expect(seasonPhaseTone(null)).toBe("neutral");
+    expect(seasonPhaseTone("SOMETHING_NEW")).toBe("neutral");
   });
 });

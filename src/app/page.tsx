@@ -98,6 +98,8 @@ import {
   HISTORY_PHASE_LABEL,
   draftPhasePresentation,
   phaseSubtitle,
+  seasonPhaseLabel,
+  seasonPhaseTone,
 } from "@/lib/season-copy";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
@@ -112,22 +114,6 @@ import {
   canViewAvailabilitySummary,
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups open",
-  DRAFT: "Draft",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Season complete",
-};
-
-const PHASE_TONE: Record<string, "brand" | "accent" | "success" | "info"> = {
-  SIGNUPS: "info",
-  DRAFT: "accent",
-  REGULAR_SEASON: "success",
-  PLAYOFFS: "accent",
-  COMPLETE: "brand",
-};
 
 const PHASE_ORDER = [
   "SIGNUPS",
@@ -467,9 +453,7 @@ export default async function Home() {
     <div className="space-y-8">
       <Hero
         phase={season.status}
-        phaseLabel={
-          season.status === "DRAFT" ? draftPresentation.badge : undefined
-        }
+        phaseLabel={seasonPhaseLabel(season.status, snapshot.draftStatus)}
         active={season.status === "DRAFT" ? draftPresentation.live : undefined}
         title={season.name}
         subtitle={phaseSubtitle(season.status, {
@@ -950,14 +934,14 @@ function Hero({
             )}
           >
             {phase ? (
-              <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+              <Badge tone={seasonPhaseTone(phase)}>
                 {live ? (
                   <span
                     aria-hidden
                     className="animate-live-pulse mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-current"
                   />
                 ) : null}
-                {phaseLabel ?? PHASE_LABEL[phase] ?? phase}
+                {phaseLabel ?? seasonPhaseLabel(phase)}
               </Badge>
             ) : null}
             {/* Persistent league fact: the Dota region every game is played on.

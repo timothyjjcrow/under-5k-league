@@ -19,7 +19,7 @@ import {
   type FeatureAvailability,
   type FeatureGate,
 } from "@/lib/features-lifecycle";
-import { draftPhasePresentation } from "@/lib/season-copy";
+import { seasonPhaseLabel } from "@/lib/season-copy";
 import { FeatureDirectory } from "./feature-directory";
 import { TOUR_GROUPS } from "./tour-content";
 import {
@@ -187,17 +187,7 @@ export default async function FeaturesPage() {
   }));
   const regionName = LEAGUE_CONFIG.region === "eu" ? "Europe" : "United States";
   const softLimit = season?.maxMmr ?? SOFT_MMR_LIMIT;
-  const phaseLabel =
-    phase === "DRAFT"
-      ? draftPhasePresentation(draftStatus).badge
-      : ((
-          {
-            SIGNUPS: "Signups open",
-            REGULAR_SEASON: "Regular season",
-            PLAYOFFS: "Playoffs",
-            COMPLETE: "Season complete",
-          } as Record<string, string>
-        )[phase ?? ""] ?? "Between seasons");
+  const phaseLabel = seasonPhaseLabel(phase, draftStatus);
   const numbers = [
     { label: "league players", value: players },
     { label: "games recorded", value: games },

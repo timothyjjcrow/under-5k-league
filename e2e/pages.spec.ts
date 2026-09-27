@@ -151,7 +151,7 @@ test("internal pages keep the active league phase visible in the header", async 
   await page.goto("/features");
   await expect(
     page.getByRole("link", {
-      name: "League status: Season 1 — Signups",
+      name: "League status: Season 1 — Signups open",
     }),
   ).toBeVisible();
 });
@@ -181,9 +181,10 @@ test("mobile menu surfaces club pages and My profile", async ({ page }) => {
     menu.getByRole("link", { name: "Compare players" }),
   ).toBeVisible();
   await expect(menu.getByRole("link", { name: "My profile" })).toBeVisible();
-  // SIGNUPS phase: Features is already an inline nav item — Explore must not
-  // duplicate it.
-  await expect(menu.getByRole("link", { name: "Features" })).toHaveCount(1);
+  // The tour lives in Explore's League group on every surface, under one
+  // name, and is never repeated in the primary list.
+  await expect(explore.getByRole("link", { name: "Feature tour" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "Feature tour" })).toHaveCount(1);
 });
 
 test("desktop Explore menu keeps evergreen league pages discoverable", async ({

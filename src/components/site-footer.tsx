@@ -1,26 +1,8 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { Badge, DiscordButton } from "@/components/ui";
-import { scheduleDestinationLabel } from "@/lib/season-copy";
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups open",
-  DRAFT: "Draft in progress",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Season complete",
-};
-
-const PHASE_TONE: Record<
-  string,
-  "brand" | "accent" | "success" | "info" | "neutral"
-> = {
-  SIGNUPS: "info",
-  DRAFT: "accent",
-  REGULAR_SEASON: "success",
-  PLAYOFFS: "accent",
-  COMPLETE: "brand",
-};
+import { seasonPhaseLabel, seasonPhaseTone } from "@/lib/season-copy";
+import { exploreNav, seasonNav, type NavSection } from "@/lib/site-nav";
 
 const FOOTER_LINK_CLASS =
   "rounded py-1 text-sm leading-6 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
@@ -28,62 +10,26 @@ const FOOTER_LINK_CLASS =
 export function SiteFooter({
   seasonName,
   phase,
+  draftStatus = null,
   hasHistory = false,
 }: {
   seasonName: string | null;
   phase: string | null;
+  /** The active season's auction status; only read during DRAFT. */
+  draftStatus?: string | null;
   hasHistory?: boolean;
 }) {
   const year = new Date().getFullYear();
-  const teamsExist =
-    phase === "DRAFT" ||
-    phase === "REGULAR_SEASON" ||
-    phase === "PLAYOFFS" ||
-    phase === "COMPLETE";
-  const midSeason =
-    phase === "REGULAR_SEASON" || phase === "PLAYOFFS" || phase === "COMPLETE";
-
-  // "League" — the surfaces tied to the current season. The PHASE GATING
-  // mirrors site-header.tsx; labels and extra links (calendar, Features)
-  // deliberately differ per surface — don't "fix" them into agreement.
-  const leagueLinks: { href: string; label: string }[] = [
-    { href: "/", label: "Home" },
-    { href: "/players", label: "Players" },
-    { href: "/inhouse", label: "Inhouse" },
-    { href: "/scrims", label: "Scrims" },
+  // The same pages, names and groups as the header and its Explore menu
+  // (src/lib/site-nav.ts): the header's primary row, then Explore's groups.
+  // The footer has no "My Team": it is the same for every viewer.
+  const navState = { phase, draftStatus, hasHistory };
+  const sections: NavSection[] = [
+    { group: "season", label: LEAGUE_CONFIG.name, links: seasonNav(navState) },
+    ...exploreNav(navState),
   ];
-  if (teamsExist) {
-    leagueLinks.push({ href: "/teams", label: "Teams" });
-  }
-  if (phase === "DRAFT") {
-    leagueLinks.push({ href: "/draft", label: "Draft" });
-    leagueLinks.push({ href: "/schedule", label: "Schedule" });
-    leagueLinks.push({ href: "/fantasy", label: "Fantasy" });
-    leagueLinks.push({ href: "/pickem", label: "Pick'em" });
-  }
-  if (midSeason) {
-    leagueLinks.push({
-      href: "/schedule",
-      label: scheduleDestinationLabel(phase),
-    });
-    leagueLinks.push({ href: "/leaders", label: "Leaders" });
-    leagueLinks.push({ href: "/meta", label: "Hero meta" });
-    leagueLinks.push({ href: "/fantasy", label: "Fantasy" });
-    leagueLinks.push({ href: "/pickem", label: "Pick'em" });
-  }
-  if (phase === "COMPLETE")
-    leagueLinks.push({ href: "/recap", label: "Season recap" });
   // The .ics feed is a file download, so it renders as a plain <a> below.
   const showCalendar = phase === "REGULAR_SEASON" || phase === "PLAYOFFS";
-
-  // "Club" — evergreen, season-independent surfaces.
-  const clubLinks: { href: string; label: string }[] = [
-    { href: "/news", label: "News" },
-  ];
-  if (hasHistory) clubLinks.push({ href: "/seasons", label: "Past seasons" });
-  clubLinks.push({ href: "/hall-of-fame", label: "Hall of Fame" });
-  clubLinks.push({ href: "/records", label: "Record book" });
-  clubLinks.push({ href: "/features", label: "Features" });
 
   return (
     <footer className="mt-8 border-t border-line-soft bg-bg">
@@ -108,62 +54,56 @@ export function SiteFooter({
             />
           </Link>
 
-          <div className="grid w-full gap-8 sm:grid-cols-[minmax(0,1.45fr)_minmax(10rem,0.75fr)] sm:gap-10">
-            <nav aria-label="Footer — league" className="min-w-0">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                League
-              </span>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1">
-                {leagueLinks.map((l) => (
-                  <Link
-                    key={l.href}
-                    href={l.href}
-                    className={FOOTER_LINK_CLASS}
-                  >
-                    {l.label}
-                  </Link>
-                ))}
-                {showCalendar ? (
-                  <a
-                    href="/api/calendar"
-                    className={`${FOOTER_LINK_CLASS} inline-flex items-center gap-2 whitespace-nowrap`}
-                  >
-                    <svg
-                      aria-hidden="true"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="h-3.5 w-3.5 shrink-0"
-                    >
-                      <path d="M7 3v3M17 3v3M4.5 9.5h15" />
-                      <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
-                    </svg>
-                    Calendar (.ics)
-                  </a>
-                ) : null}
+          <nav
+            aria-label="Footer"
+            className="grid w-full grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4"
+          >
+            {sections.map((section) => (
+              <div key={section.group} className="min-w-0">
+                <p
+                  id={`footer-nav-${section.group}`}
+                  className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted"
+                >
+                  {section.label}
+                </p>
+                <ul
+                  aria-labelledby={`footer-nav-${section.group}`}
+                  className="mt-3 flex flex-col items-start gap-y-1"
+                >
+                  {section.links.map((l) => (
+                    <li key={l.href}>
+                      <Link href={l.href} className={FOOTER_LINK_CLASS}>
+                        {l.label}
+                      </Link>
+                    </li>
+                  ))}
+                  {section.group === "season" && showCalendar ? (
+                    <li>
+                      <a
+                        href="/api/calendar"
+                        className={`${FOOTER_LINK_CLASS} inline-flex items-center gap-2 whitespace-nowrap`}
+                      >
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="h-3.5 w-3.5 shrink-0"
+                        >
+                          <path d="M7 3v3M17 3v3M4.5 9.5h15" />
+                          <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
+                        </svg>
+                        Calendar (.ics)
+                      </a>
+                    </li>
+                  ) : null}
+                </ul>
               </div>
-            </nav>
-
-            <nav aria-label="Footer — club" className="min-w-0">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                Club
-              </span>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-1">
-                {clubLinks.map((l) => (
-                  <Link
-                    key={l.href}
-                    href={l.href}
-                    className={FOOTER_LINK_CLASS}
-                  >
-                    {l.label}
-                  </Link>
-                ))}
-              </div>
-            </nav>
-          </div>
+            ))}
+          </nav>
         </div>
 
         <div className="mt-10 grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
@@ -175,8 +115,8 @@ export function SiteFooter({
               <span className="inline-flex max-w-full flex-wrap items-center justify-center gap-2">
                 <span>{seasonName}</span>
                 {phase ? (
-                  <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
-                    {PHASE_LABEL[phase] ?? phase}
+                  <Badge tone={seasonPhaseTone(phase)}>
+                    {seasonPhaseLabel(phase, draftStatus)}
                   </Badge>
                 ) : null}
               </span>

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const EXPLORE_LINKS = [
   "Leaders",
-  "Meta",
+  "Hero meta",
   "Fantasy",
   "Pick'em",
   "Scrims",
@@ -77,7 +77,9 @@ test("league tools live under Explore on desktop and mobile", async ({
       mobileExplore.getByRole("link", { name: label, exact: true }),
     ).toBeVisible();
   }
-  await mobileExplore.getByRole("link", { name: "Meta", exact: true }).click();
+  await mobileExplore
+    .getByRole("link", { name: "Hero meta", exact: true })
+    .click();
   await expect(page).toHaveURL(/\/meta$/);
   await expect(
     page.getByRole("heading", { name: "Hero meta", exact: true }),

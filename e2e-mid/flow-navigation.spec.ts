@@ -16,7 +16,7 @@ test("phone dock opens league tools in one tap and keeps feedback clear", async 
     dock.getByRole("link", { name: "My Team", exact: true }),
   ).toBeVisible();
   await expect(
-    dock.getByRole("link", { name: "Matches", exact: true }),
+    dock.getByRole("link", { name: "Schedule", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   for (const target of await dock.locator("a, button").all()) {
     const bounds = (await target.boundingBox())!;
@@ -36,7 +36,7 @@ test("phone dock opens league tools in one tap and keeps feedback clear", async 
   await expect(explore).toHaveCount(0);
   await expect(exploreButton).toBeFocused();
   await exploreButton.click();
-  await explore.getByRole("link", { name: "Meta", exact: true }).click();
+  await explore.getByRole("link", { name: "Hero meta", exact: true }).click();
   await expect(page).toHaveURL(/\/meta$/);
   await expect(explore).toHaveCount(0);
   await page.evaluate(() =>
