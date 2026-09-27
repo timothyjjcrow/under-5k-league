@@ -1,6 +1,10 @@
 import { AddToCalendar } from "@/components/add-to-calendar";
 import { resolveSiteUrl } from "@/lib/site-url";
-import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
+import {
+  PlayoffOutlook,
+  PlayoffOutlookFootnote,
+  playoffPathLines,
+} from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { leagueProgress, progressSummary } from "@/lib/league-progress";
 import Link from "next/link";
@@ -1159,11 +1163,22 @@ function PlayoffPicture({
                     {teamName.get(n.teamId) ?? "?"}
                   </Link>
                   <div className="w-full">
-                    <PlayoffOutlook scenario={n.scenario} teamNames={teamName} />
+                    <PlayoffOutlook
+                      scenario={n.scenario}
+                      teamNames={teamName}
+                      compact
+                    />
                   </div>
                 </li>
               ))}
             </ul>
+            {/* One "How this works" for the whole tracker, not one per card. */}
+            <div className="mt-2">
+              <PlayoffOutlookFootnote
+                scenarios={raceNotes.map((n) => n.scenario)}
+                teamNames={teamName}
+              />
+            </div>
           </div>
         ) : null}
       </CardBody>

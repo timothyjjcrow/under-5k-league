@@ -108,6 +108,24 @@ export function playoffPathLines(
   return lines;
 }
 
+/** "Playoff order: #2." or "Possible playoff order: #1–#3." */
+function playoffOrderLine(outlook: ScenarioOutlook): string {
+  return outlook.bestRank === outlook.worstRank
+    ? `Playoff order: #${outlook.bestRank}.`
+    : `Possible playoff order: #${outlook.bestRank}–#${outlook.worstRank}.`;
+}
+
+function mayNeedQualificationTiebreaker(scenario: TeamScenario): boolean {
+  return (scenario.outlook?.qualificationTiebreaker ?? 0) > 0 ||
+    Object.values(scenario.paths ?? {}).some((path) => path && path.qualificationTiebreaker > 0);
+}
+
+const TIEBREAKER_FORMAT_NOTE =
+  "Tiebreakers use BO1 knockouts: up to three games per team in one weekend. Published brackets keep their original format.";
+
+const COUNTS_NOTE =
+  "Counts are result combinations, not qualification odds. Assumes normally completed series; administrative rulings or score corrections can change outcomes.";
+
 /** Every counted result gives the same qualification verdict. */
 function settled(outlook: ScenarioOutlook | undefined) {
   return !!outlook && (outlook.qualified === outlook.total ||
@@ -136,8 +154,6 @@ export function PlayoffOutlook({
   const folded = lines.length === 1 && lines[0].key === "any";
   const paths = folded && settled(outlook) ? [] : lines;
   const tiedGroups = outlook?.qualificationTies ?? [];
-  const mayNeedQualificationTiebreaker = (outlook?.qualificationTiebreaker ?? 0) > 0 ||
-    Object.values(scenario.paths ?? {}).some((path) => path && path.qualificationTiebreaker > 0);
   return (
     <div
       data-testid="playoff-outlook"
@@ -187,28 +203,89 @@ export function PlayoffOutlook({
               </ul>
             ) : null}
             {outlook ? (
-              <p className="text-muted">
-                {outlook.bestRank === outlook.worstRank
-                  ? `Playoff order: #${outlook.bestRank}.`
-                  : `Possible playoff order: #${outlook.bestRank}–#${outlook.worstRank}.`}
-              </p>
+              <p className="text-muted">{playoffOrderLine(outlook)}</p>
             ) : null}
-            {mayNeedQualificationTiebreaker ? (
-              <p className="text-[11px] text-muted">
-                Tiebreakers use BO1 knockouts: up to three games per team in one weekend.
-                Published brackets keep their original format.
-              </p>
+            {mayNeedQualificationTiebreaker(scenario) ? (
+              <p className="text-[11px] text-muted">{TIEBREAKER_FORMAT_NOTE}</p>
             ) : null}
             {paths.length > 0 || (outlook && outlook.total > 1) ? (
-              <p className="text-[11px] text-muted">
-                Counts are result combinations, not qualification odds. Assumes
-                normally completed series; administrative rulings or score corrections
-                can change outcomes.
-              </p>
+              <p className="text-[11px] text-muted">{COUNTS_NOTE}</p>
             ) : null}
           </div>
         </details>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * One "How this works" for a list of compact outlooks (the Schedule playoff
+ * tracker), instead of the same disclosure repeated on every team's card:
+ * each team's counts and playoff order in one list, then the rules once.
+ */
+export function PlayoffOutlookFootnote({
+  scenarios,
+  teamNames,
+}: {
+  scenarios: readonly TeamScenario[];
+  teamNames?: Map<string, string>;
+}) {
+  const withOutlook = scenarios.filter((scenario) => scenario.outlook);
+  const tiedGroups = [
+    ...new Map(
+      withOutlook
+        .flatMap((scenario) => scenario.outlook?.qualificationTies ?? [])
+        .map((group) => [`${[...group.teamIds].sort().join(":")}:${group.spots}`, group]),
+    ).entries(),
+  ];
+  const anyTiebreaker = scenarios.some(mayNeedQualificationTiebreaker);
+  const anyCounts = scenarios.some(
+    (scenario) =>
+      Object.values(scenario.paths ?? {}).some(Boolean) ||
+      (scenario.outlook?.total ?? 0) > 1,
+  );
+  if (withOutlook.length === 0 && !anyCounts) return null;
+  const name = (id: string) => teamNames?.get(id) ?? id;
+  // Certain once any team in the group has a tiebreaker in every case.
+  const certainTie = (teamIds: readonly string[]) =>
+    withOutlook.some(
+      (scenario) =>
+        teamIds.includes(scenario.teamId) &&
+        scenario.outlook!.qualificationTiebreaker === scenario.outlook!.total,
+    );
+  return (
+    <details
+      data-testid="playoff-outlook-footnote"
+      className="group text-xs leading-relaxed text-muted [overflow-wrap:anywhere]"
+    >
+      <summary className="w-fit cursor-pointer py-1 text-[11px] font-medium text-info hover:underline">
+        How this works
+      </summary>
+      <div className="mt-1 space-y-2 border-l border-line pl-3">
+        {withOutlook.length > 0 ? (
+          <ul className="space-y-1">
+            {withOutlook.map((scenario) => (
+              <li key={scenario.teamId}>
+                <strong className="text-fg">{name(scenario.teamId)}:</strong>{" "}
+                {outlookSummary(scenario.outlook!)} {playoffOrderLine(scenario.outlook!)}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {tiedGroups.length > 0 ? (
+          <ul className="space-y-1">
+            {tiedGroups.map(([key, group]) => (
+              <li key={key}>
+                {certainTie(group.teamIds) ? "Tiebreaker" : "Possible tiebreaker"}:{" "}
+                {group.teamIds.map(name).join(", ")}{" "}
+                for {group.spots} playoff place{group.spots === 1 ? "" : "s"}.
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {anyTiebreaker ? <p className="text-[11px]">{TIEBREAKER_FORMAT_NOTE}</p> : null}
+        {anyCounts ? <p className="text-[11px]">{COUNTS_NOTE}</p> : null}
+      </div>
+    </details>
   );
 }

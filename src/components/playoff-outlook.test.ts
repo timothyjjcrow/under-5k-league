@@ -1,7 +1,14 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PlayoffOutlook, outlookSummary, shortOutlook, playoffStatusLine, playoffPathLines } from "./playoff-outlook";
+import {
+  PlayoffOutlook,
+  PlayoffOutlookFootnote,
+  outlookSummary,
+  shortOutlook,
+  playoffStatusLine,
+  playoffPathLines,
+} from "./playoff-outlook";
 import type { ScenarioOutlook, TeamScenario } from "@/lib/scenarios";
 
 const result = (overrides: Partial<ScenarioOutlook> = {}): ScenarioOutlook => ({
@@ -194,5 +201,42 @@ describe("playoff outlook presentation", () => {
       expect(html.match(/qualify in 3 of 6; eliminated in 3 of 6\./g)).toHaveLength(1);
     });
   });
-});
 
+  describe("one shared footnote for a list of teams", () => {
+    const names = new Map([["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]);
+    const footnote = (scenarios: TeamScenario[]) => renderToStaticMarkup(
+      createElement(PlayoffOutlookFootnote, { scenarios, teamNames: names }));
+
+    it("states each team's counts and order once, then the rules once", () => {
+      const scenarios = [
+        team({ teamId: "alpha", outlook: result({ total: 3, qualified: 3, bestRank: 1, worstRank: 2 }) }),
+        team({ teamId: "bravo", nextMatchId: "m",
+          outlook: result({ total: 3, qualified: 1, qualificationTiebreaker: 1, eliminated: 1,
+            qualificationTies: [{ teamIds: ["bravo", "charlie"], spots: 1 }] }),
+          paths: { win: result({ qualified: 1 }), draw: result({ qualificationTiebreaker: 1 }),
+            loss: result({ eliminated: 1 }) } }),
+        team({ teamId: "charlie", outlook: result({ total: 3, eliminated: 2, qualificationTiebreaker: 1,
+          qualificationTies: [{ teamIds: ["charlie", "bravo"], spots: 1 }] }) }),
+      ];
+      const html = footnote(scenarios);
+      expect(html.match(/<details/g)).toHaveLength(1);
+      expect(html.match(/How this works/g)).toHaveLength(1);
+      expect(html).toContain("Alpha:</strong> Qualified for playoffs. Possible playoff order: #1–#2.");
+      expect(html).toContain("qualify in 1 of 3; qualification tiebreaker in 1 of 3; eliminated in 1 of 3.");
+      // The same tie seen from both teams is listed once.
+      expect(html.match(/Possible tiebreaker: /g)).toHaveLength(1);
+      expect(html.match(/BO1 knockouts/g)).toHaveLength(1);
+      expect(html.match(/not qualification odds/g)).toHaveLength(1);
+
+      // The tracker cards themselves carry no disclosure of their own.
+      for (const scenario of scenarios) {
+        const card = renderToStaticMarkup(createElement(PlayoffOutlook, { scenario, compact: true }));
+        expect(card).not.toMatch(/<details|How this works/);
+      }
+    });
+
+    it("renders nothing when there is nothing to explain", () => {
+      expect(footnote([team({ teamId: "alpha" })])).toBe("");
+    });
+  });
+});
