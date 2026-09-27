@@ -27,17 +27,15 @@ ledger and check the live product before presenting them as current.
 ## How a team gets its jersey
 
 `getTeamJersey` (`src/lib/team-jerseys.ts`) links a jersey set to a team by
-its players, never by the team's name. A team in the US league shows a set
-when at least three of its current players are players the set was made for
-(the five personalized products above). Case, accents and surrounding spaces
-in a Steam name are ignored.
+the team's ID, never by its name. Each set in `JERSEYS` carries the US
+league's production `Team.id` it was made for (read from the live database on
+2026-09-27), so a rename by a captain or admin or a new logo never drops it;
+the live My Team Sucks was still called `w4tkins's Team` in the league, which
+previously needed a hand-written name alias.
 
-Production team ids cannot be known from this repository, but each set names
-the five players it was made for, so the roster is the stable identity. A
-rename by a captain or admin, a new logo, or a team name carried into a new
-season never changes it; the live My Team Sucks roster matched even while the
-league still called the team `w4tkins's Team`, which previously needed a
-hand-written name alias. Three of five is a majority, so no two teams in one
-season can claim the same set, and a team keeps its jerseys through one or two
-roster changes or Steam renames. If more of a team's players change, update
-the player names in `JERSEYS` to their current Steam names.
+Where the Team rows are not the production ones (fixtures, a restored copy),
+the fallback is the roster: a team shows a set when at least three of its
+current players are players the set was made for (the five personalized
+products above), ignoring case, accents and surrounding spaces in Steam names.
+Three of five is a majority, so no two teams in one season can claim the same
+set. If a set is ever made for a new team, add that team's production id.

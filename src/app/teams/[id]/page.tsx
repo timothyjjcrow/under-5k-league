@@ -120,7 +120,10 @@ export default async function TeamPage({
   });
   if (!team) notFound();
   const jersey = team.season.isActive
-    ? getTeamJersey(team.members.map((member) => member.user))
+    ? getTeamJersey({
+        id: team.id,
+        roster: team.members.map((member) => member.user),
+      })
     : null;
   const viewer = await getSessionUser();
   // The captain (or an admin) edits the team's name and logo right here, all

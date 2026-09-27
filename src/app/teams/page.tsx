@@ -212,7 +212,12 @@ export default async function TeamsPage() {
   // Teams with a Fourthwall jersey link to its preview on their own page.
   const withJersey = new Set(
     teams
-      .filter((team) => getTeamJersey(team.members.map((m) => m.user)))
+      .filter((team) =>
+        getTeamJersey({
+          id: team.id,
+          roster: team.members.map((m) => m.user),
+        }),
+      )
       .map((team) => team.id),
   );
 
