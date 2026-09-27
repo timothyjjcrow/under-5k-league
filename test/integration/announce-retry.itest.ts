@@ -727,6 +727,50 @@ describe("weekly-honors announcement retry", () => {
     return { season, match };
   }
 
+  describe("pick'em Oracle of the Week line", () => {
+    const honorsPosts = () =>
+      mockSend.mock.calls
+        .map((call) => String(call[0]))
+        .filter((content) => content.includes("honors are in"));
+
+    it("names the best record inside the one honors post and marker", async () => {
+      const { season, match } = await setupCompletedWeek();
+      const seer = await makeUser("Seer");
+      const doubter = await makeUser("Doubter");
+      await prisma.prediction.createMany({
+        data: [
+          { matchId: match.id, userId: seer.id, pickedTeamId: match.homeTeamId },
+          { matchId: match.id, userId: doubter.id, pickedTeamId: match.awayTeamId },
+        ],
+      });
+
+      await maybeAnnounceWeekHonors(season.id, 1);
+      await maybeAnnounceWeekHonors(season.id, 1);
+
+      const posts = honorsPosts();
+      expect(posts).toHaveLength(1);
+      expect(posts[0]).toContain(
+        "🔮 Pick'em Oracle of the Week: **Seer** (1 of 1 picks right)",
+      );
+      expect(posts[0]).not.toContain("Doubter");
+      expect(await markerCount(`honorsAnnounced:${season.id}:1`)).toBe(1);
+    });
+
+    it("leaves the line out when nobody called a match", async () => {
+      const { season, match } = await setupCompletedWeek();
+      const doubter = await makeUser("Doubter");
+      await prisma.prediction.create({
+        data: { matchId: match.id, userId: doubter.id, pickedTeamId: match.awayTeamId },
+      });
+
+      await maybeAnnounceWeekHonors(season.id, 1);
+
+      const posts = honorsPosts();
+      expect(posts).toHaveLength(1);
+      expect(posts[0]).not.toMatch(/Oracle/);
+    });
+  });
+
   it("retries after a failed send, then stays once-only", async () => {
     const { season } = await setupCompletedWeek();
     mockSend.mockResolvedValue(false);

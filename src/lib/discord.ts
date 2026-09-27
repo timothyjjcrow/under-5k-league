@@ -852,6 +852,9 @@ export function draftReminderAnnouncement(
   return { content, mentionUserIds };
 }
 
+/** Oracle-of-the-week names shown before "and N more". */
+const ORACLE_NAMES_SHOWN = 5;
+
 export function weeklyHonorsMessage(honors: {
   week: number;
   playerName: string | null;
@@ -861,6 +864,9 @@ export function weeklyHonorsMessage(honors: {
   teamGameWins: number;
   /** A prior award was retracted by a result/box-score correction. */
   corrected?: boolean;
+  /** Pick'em's best record that week (everyone tied on it); omitted when
+   *  nobody called a match right. */
+  oracle?: { names: string[]; correct: number; graded: number } | null;
 }): string {
   const lines = [
     honors.corrected
@@ -875,6 +881,22 @@ export function weeklyHonorsMessage(honors: {
   if (honors.teamName) {
     lines.push(
       `🛡️ Team of the Week: **${name(honors.teamName)}** (${honors.teamGameWins} game win${honors.teamGameWins === 1 ? "" : "s"})`,
+    );
+  }
+  if (honors.oracle && honors.oracle.names.length > 0) {
+    const { names, correct, graded } = honors.oracle;
+    const shown = names
+      .slice(0, ORACLE_NAMES_SHOWN)
+      .map((n) => `**${name(n)}**`);
+    const more = names.length - shown.length;
+    const list =
+      more > 0
+        ? `${shown.join(", ")} and ${more} more`
+        : shown.length > 1
+          ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`
+          : shown[0];
+    lines.push(
+      `🔮 Pick'em Oracle${names.length === 1 ? "" : "s"} of the Week: ${list} (${correct} of ${graded} picks right${names.length === 1 ? "" : " each"})`,
     );
   }
   if (honors.corrected && !honors.playerName && !honors.teamName) {

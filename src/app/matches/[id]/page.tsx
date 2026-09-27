@@ -40,7 +40,7 @@ import {
   postAuctionWorkOpen,
   standinAssignmentOpen,
 } from "@/lib/league-lifecycle";
-import { pickemControlFor } from "@/lib/pickem";
+import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { groupPlayoffRounds, matchRoundLabel } from "@/lib/schedule";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
@@ -210,6 +210,23 @@ export default async function MatchDetailPage({
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
   const showCaptainTools = isCaptain && match.season.isActive;
+  // A finished match tells a signed-in picker how their pick'em call went,
+  // so nobody has to go back to /pickem to find out.
+  const pickemCalls =
+    viewer && match.status === "COMPLETED"
+      ? await prisma.prediction.findMany({
+          where: { matchId: match.id },
+          select: { matchId: true, userId: true, pickedTeamId: true },
+        })
+      : [];
+  const myCall = pickemCalls.find((call) => call.userId === viewer?.id);
+  const pickVerdict = myCall
+    ? pickemControlFor(match, {
+        signedIn: true,
+        canPlay: false,
+        pickedTeamId: myCall.pickedTeamId,
+      })
+    : null;
   const hasSeriesScore =
     match.status === "COMPLETED" ||
     match.status === "LIVE" ||
@@ -398,6 +415,25 @@ export default async function MatchDetailPage({
             ) : (
               <span>Kickoff time TBD</span>
             )}
+            {pickVerdict ? (
+              <PickemTray
+                control={pickVerdict}
+                matchId={match.id}
+                roundLabel={postseasonLabel}
+                home={{
+                  id: match.homeTeamId,
+                  name: match.homeTeam.name,
+                  logoUrl: match.homeTeam.logoUrl,
+                }}
+                away={{
+                  id: match.awayTeamId,
+                  name: match.awayTeam.name,
+                  logoUrl: match.awayTeam.logoUrl,
+                }}
+                locksAt={null}
+                called={calledItCount(pickemCalls, match)}
+              />
+            ) : null}
             {showCaptainTools ? (
               <a href="#match-tools" className={buttonClasses("primary", "sm")}>
                 {match.status === "COMPLETED"

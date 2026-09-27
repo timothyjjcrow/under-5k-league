@@ -67,9 +67,10 @@ export function partitionPickemMatches<T extends PickemMatchLike>(
  * can't disagree about when a match still takes a call.
  *
  * - `open`: the one-tap pick control, pressed on `pickedTeamId` if any.
- * - `locked`: the viewer's own pick as plain text, nothing else. Never the
- *   community split: /pickem reveals it in locked review, and a fixture card
- *   is not the place to grow a second copy of that.
+ * - `locked`: the viewer's own pick as plain text, with how it came out once
+ *   the match is decided (`result`, from pickResult). Never the community
+ *   split: /pickem reveals it in locked review, and a fixture card is not the
+ *   place to grow a second copy of that.
  * - `null`: nothing new at all. Signed-out viewers always land here (the
  *   control would be an ask with nothing behind it), and so does a locked
  *   match the viewer never picked.
@@ -82,7 +83,7 @@ export function partitionPickemMatches<T extends PickemMatchLike>(
  */
 export type PickemControl =
   | { kind: "open"; pickedTeamId: string | null }
-  | { kind: "locked"; pickedTeamId: string };
+  | { kind: "locked"; pickedTeamId: string; result: PickResult | null };
 
 export function pickemControlFor(
   match: PickemMatchLike & { homeTeamId: string; awayTeamId: string },
@@ -104,7 +105,9 @@ export function pickemControlFor(
   if (viewer.canPlay && predictionOpen(match, now)) {
     return { kind: "open", pickedTeamId: picked };
   }
-  return picked ? { kind: "locked", pickedTeamId: picked } : null;
+  return picked
+    ? { kind: "locked", pickedTeamId: picked, result: pickResult(match, picked) }
+    : null;
 }
 
 /**
@@ -190,6 +193,21 @@ export function pickemStandings(
         : index + 1;
   });
   return rows;
+}
+
+/**
+ * Oracle of the week: the players sharing first place when one week's
+ * matches are ranked like the oracle board (most correct, then fewest
+ * misses), so a tie is everyone with that same record. Empty when nobody
+ * called one right. The caller passes the week's regular-season matches.
+ */
+export function weekOracles(
+  predictions: PredictionLike[],
+  matches: PickemMatchLike[],
+): PickemStanding[] {
+  return pickemStandings(predictions, matches).filter(
+    (row) => row.place === 1 && row.correct > 0,
+  );
 }
 
 /**

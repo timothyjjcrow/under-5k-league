@@ -10,6 +10,7 @@ import {
   partitionPickemMatches,
   predictionOpen,
   predictionOpenWhere,
+  weekOracles,
 } from "./pickem";
 
 const m = (
@@ -137,6 +138,40 @@ describe("pickSplit", () => {
       "home",
     );
     expect(split).toEqual({ home: 2, away: 1 });
+  });
+});
+
+describe("weekOracles", () => {
+  const week = [
+    m("m1", "COMPLETED", "A"),
+    m("m2", "COMPLETED", "B"),
+    m("m3", "COMPLETED", null), // draw: nobody's pick counts
+  ];
+
+  it("names everyone sharing the best record, and only them", () => {
+    const oracles = weekOracles(
+      [
+        p("m1", "amy", "A"),
+        p("m2", "amy", "B"), // 2/2
+        p("m1", "bob", "A"),
+        p("m2", "bob", "B"),
+        p("m3", "bob", "A"), // 2/2 (the draw is void)
+        p("m1", "cat", "A"),
+        p("m2", "cat", "A"), // 1/2
+      ],
+      week,
+    );
+    expect(oracles.map((o) => [o.userId, o.correct, o.graded])).toEqual([
+      ["amy", 2, 2],
+      ["bob", 2, 2],
+    ]);
+  });
+
+  it("is empty when nobody picked or nobody called one", () => {
+    expect(weekOracles([], week)).toEqual([]);
+    expect(weekOracles([p("m1", "amy", "B"), p("m3", "bob", "A")], week)).toEqual(
+      [],
+    );
   });
 });
 
@@ -385,7 +420,7 @@ describe("pickemControlFor", () => {
   it("locks at kickoff: the pick becomes plain text, no pick means nothing", () => {
     expect(
       pickemControlFor(fixture("SCHEDULED", earlier), viewer("home"), now),
-    ).toEqual({ kind: "locked", pickedTeamId: "home" });
+    ).toEqual({ kind: "locked", pickedTeamId: "home", result: null });
     expect(
       pickemControlFor(fixture("SCHEDULED", earlier), viewer(), now),
     ).toBeNull();
@@ -394,14 +429,16 @@ describe("pickemControlFor", () => {
   });
 
   it("treats LIVE, graded and void matches as locked whatever the kickoff says", () => {
-    for (const match of [
-      fixture("LIVE", later),
-      fixture("COMPLETED", earlier, "home"),
-      fixture("COMPLETED", earlier, null),
-    ]) {
+    for (const [match, result] of [
+      [fixture("LIVE", later), null],
+      [fixture("COMPLETED", earlier, "home"), "wrong"],
+      [fixture("COMPLETED", earlier, "away"), "right"],
+      [fixture("COMPLETED", earlier, null), "void"],
+    ] as const) {
       expect(pickemControlFor(match, viewer("away"), now)).toEqual({
         kind: "locked",
         pickedTeamId: "away",
+        result,
       });
       expect(pickemControlFor(match, viewer(), now)).toBeNull();
     }
@@ -415,7 +452,7 @@ describe("pickemControlFor", () => {
     ).toBeNull();
     expect(
       pickemControlFor(fixture("SCHEDULED", later), viewer("home", false), now),
-    ).toEqual({ kind: "locked", pickedTeamId: "home" });
+    ).toEqual({ kind: "locked", pickedTeamId: "home", result: null });
   });
 
   it("ignores a pick that names neither side", () => {

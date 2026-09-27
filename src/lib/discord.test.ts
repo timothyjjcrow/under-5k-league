@@ -1555,6 +1555,7 @@ describe("no player-supplied name can inject markdown", () => {
       heroName: "Pudge",
       teamName: EVIL,
       teamGameWins: 2,
+      oracle: { names: [EVIL, EVIL], correct: 1, graded: 1 },
     }),
     inhouseLobbyMessage([{ name: EVIL, discordId: null }]),
     inhouseResultMessage({
@@ -1791,6 +1792,54 @@ describe("weeklyHonorsMessage", () => {
     });
     expect(message).toContain("134.2 impact points on Lina");
     expect(message).not.toMatch(/fantasy/i);
+  });
+
+  const base = {
+    week: 4,
+    playerName: "Winner",
+    playerPoints: 50,
+    heroName: "Lina",
+    teamName: "Team",
+    teamGameWins: 2,
+  };
+
+  it("adds the pick'em oracle inside the same post, before the link", () => {
+    const lines = weeklyHonorsMessage({
+      ...base,
+      oracle: { names: ["Seer"], correct: 3, graded: 3 },
+    }).split("\n");
+    expect(lines).toContain(
+      "🔮 Pick'em Oracle of the Week: **Seer** (3 of 3 picks right)",
+    );
+    expect(lines.at(-1)).toMatch(/^Full leaderboards: /);
+  });
+
+  it("lists every tied oracle, then caps a long tie", () => {
+    expect(
+      weeklyHonorsMessage({
+        ...base,
+        oracle: { names: ["A", "B", "C"], correct: 2, graded: 2 },
+      }),
+    ).toContain(
+      "🔮 Pick'em Oracles of the Week: **A**, **B** and **C** (2 of 2 picks right each)",
+    );
+    expect(
+      weeklyHonorsMessage({
+        ...base,
+        oracle: {
+          names: ["A", "B", "C", "D", "E", "F", "G"],
+          correct: 1,
+          graded: 1,
+        },
+      }),
+    ).toContain("**A**, **B**, **C**, **D**, **E** and 2 more (1 of 1");
+  });
+
+  it("leaves the line out when there is no oracle", () => {
+    expect(weeklyHonorsMessage(base)).not.toMatch(/Oracle/);
+    expect(
+      weeklyHonorsMessage({ ...base, oracle: { names: [], correct: 0, graded: 0 } }),
+    ).not.toMatch(/Oracle/);
   });
 });
 

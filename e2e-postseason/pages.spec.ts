@@ -377,6 +377,19 @@ test("complete-season public pages agree on the champion and recap", async ({
   ).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/pickem completed side game");
 
+  // The finished match itself tells the picker how the call went. The
+  // seeded viewer is the only one who picked it, and picked the winner.
+  await yourPicks
+    .getByRole("img", { name: "Correct pick" })
+    .locator("xpath=..")
+    .getByRole("link")
+    .first()
+    .click();
+  await expect(page).toHaveURL(/\/matches\//);
+  await expect(page.getByText(/Your pick:/)).toContainText(
+    "(1 of 1 called it)",
+  );
+
   assertNoErrors();
 });
 

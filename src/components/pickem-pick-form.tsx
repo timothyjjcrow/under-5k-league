@@ -154,7 +154,10 @@ export function PickemPickForm({
  *
  * Open: a small label plus the two-button form. Locked: the viewer's own pick
  * as one quiet line, and deliberately nothing else; the community split is
- * /pickem's locked review, not a second copy on every card.
+ * /pickem's locked review, not a second copy on every card. Once the match is
+ * decided the line says how the pick went ("✓", "✗", void), and a caller that
+ * has every pick on the match (the finished match page) adds how many called
+ * it.
  */
 export function PickemTray({
   control,
@@ -163,6 +166,7 @@ export function PickemTray({
   home,
   away,
   locksAt,
+  called,
   className,
 }: {
   control: PickemControl;
@@ -172,6 +176,8 @@ export function PickemTray({
   home: PickemSide;
   away: PickemSide;
   locksAt: number | null;
+  /** A decided match: how many of its pickers named the winner. */
+  called?: { called: number; total: number } | null;
   className?: string;
 }) {
   if (control.kind === "locked") {
@@ -182,7 +188,28 @@ export function PickemTray({
         <span className="font-medium text-fg [overflow-wrap:anywhere]">
           {picked.name}
         </span>{" "}
-        · locked
+        {control.result === "right" ? (
+          <>
+            <span aria-hidden className="font-semibold text-success">
+              ✓
+            </span>
+            <span className="sr-only">, right</span>
+          </>
+        ) : control.result === "wrong" ? (
+          <>
+            <span aria-hidden className="font-semibold text-danger-soft">
+              ✗
+            </span>
+            <span className="sr-only">, wrong</span>
+          </>
+        ) : control.result === "void" ? (
+          "· void (draw or no-contest)"
+        ) : (
+          "· locked"
+        )}
+        {control.result && control.result !== "void" && called
+          ? ` (${called.called} of ${called.total} called it)`
+          : null}
       </p>
     );
   }
