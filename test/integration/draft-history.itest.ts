@@ -276,3 +276,21 @@ describe("durable draft and roster history", () => {
     expect(await prisma.bid.count({ where: { userId: f.p.id } })).toBe(0);
   });
 });
+
+describe("the finished draft room's recap", () => {
+  it("is built from the auction's sale records once the draft is complete", async () => {
+    const f = await setup(); await start(f);
+    await sell(f, f.p.id, 7);
+    expect((await getDraftState(f.season.id, null))!.recap).toBeNull();
+    await sell(f, f.q.id, 2);
+    const done = (await getDraftState(f.season.id, null))!;
+    expect(done.status).toBe("COMPLETE");
+    expect(done.recap).toMatchObject({
+      biggestSpend: { name: "Purchase", price: 7, teamName: f.a.team.name },
+      bestValue: { name: "Second", price: 2, mmr: 2800 },
+      topSpender: { teamId: f.a.team.id, spent: 7 },
+      bargainHunter: { teamId: f.b.team.id, spent: 2 },
+      totalSpent: 9,
+    });
+  });
+});

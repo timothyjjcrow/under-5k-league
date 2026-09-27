@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { loadStartDraftPreflight } from "@/lib/draft-start-preflight";
+import {
+  loadRegularSeasonStep,
+  loadStartDraftPreflight,
+} from "@/lib/draft-room-admin";
 import { prisma } from "@/lib/prisma";
 import {
   makeCaptain,
   makePlayer,
   makeSeason,
+  makeTeam,
   startDraftState,
 } from "./factories";
 
-// The draft room's Start draft button reads these rows itself (the admin
-// panel has its own loader), so pin that it sees the same teams, pool,
-// confirmations and captain medals that /admin's Captains & draft card does.
+// The draft room's admin controls read their rows themselves (the admin
+// panel has its own loader), so pin that they see the same state and build
+// the same confirms as /admin.
 
 async function setupSeason() {
   const season = await makeSeason({
@@ -76,5 +80,37 @@ describe("loadStartDraftPreflight", () => {
       where: { id: season.id },
     });
     expect(await loadStartDraftPreflight(current)).toBeNull();
+  });
+});
+
+describe("loadRegularSeasonStep", () => {
+  it("offers the Regular season phase button's confirm in the Draft phase", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    expect(await loadRegularSeasonStep(season)).toEqual({
+      confirmation:
+        "Start the Regular season? League navigation and match tools update immediately, and Discord receives a league-start announcement.",
+    });
+  });
+
+  it("offers nothing outside the Draft phase", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    expect(await loadRegularSeasonStep(season)).toBeNull();
+  });
+
+  it("offers nothing when the phase policy refuses the move", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+        week: 1,
+        phase: "PLAYOFF",
+        bracketSlot: "R1M1",
+      },
+    });
+    expect(await loadRegularSeasonStep(season)).toBeNull();
   });
 });

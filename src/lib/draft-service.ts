@@ -1219,9 +1219,19 @@ export async function getDraftState(
         )
         .sort((a, b) => b.at - a.at)
         .slice(0, 8);
-      const recentSales = historyRun?.provenance === "COMMAND"
-        ? (await readDraftSales(tx, historyRun.id)).slice(0, 8)
-        : observedSales;
+      const commandSales = historyRun?.provenance === "COMMAND"
+        ? await readDraftSales(tx, historyRun.id)
+        : null;
+      const recentSales = commandSales ? commandSales.slice(0, 8) : observedSales;
+      // The finished room's recap: the same draftRecap math over the same
+      // auction records as the /teams "Draft night" card and the Discord
+      // recap. Only once the auction is over, and only from a recorded run
+      // (a draft that predates auction records has no original prices or
+      // MMR to recap; its rosters still show what each player cost).
+      const recap =
+        draft?.status === DRAFT_STATUS.COMPLETE && commandSales
+          ? draftRecap(commandSales)
+          : null;
       const nominatedPlayer = draft?.nominatedUserId
         ? (playerRegs.find(
             (registration) => registration.userId === draft.nominatedUserId,
@@ -1280,6 +1290,7 @@ export async function getDraftState(
         })),
         lotBidsTruncated: lotBidRows.length > 8,
         recentSales,
+        recap,
         nominatedPlayer: nominatedPlayer
           ? {
               userId: nominatedPlayer.userId,

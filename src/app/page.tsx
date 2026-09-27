@@ -1593,9 +1593,18 @@ function StatBar({
 // A read-only glance at the live auction so the dashboard tells the story
 // without opening the draft room: who's on the block, what's left in the
 // pool, and the latest sales. Never resolves clocks — that stays in /draft.
+// Live and paused auctions only: once the draft is complete there is nothing
+// to watch, and the hero's "Review the draft results" link and the rosters
+// below already cover it.
 async function DraftPulse({ seasonId }: { seasonId: string }) {
   const draft = await prisma.draft.findUnique({ where: { seasonId } });
-  if (!draft || draft.status === DRAFT_STATUS.NOT_STARTED) return null;
+  if (
+    !draft ||
+    (draft.status !== DRAFT_STATUS.IN_PROGRESS &&
+      draft.status !== DRAFT_STATUS.PAUSED)
+  ) {
+    return null;
+  }
 
   const rostered = await prisma.teamMember.findMany({
     where: { seasonId },
@@ -1667,13 +1676,11 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
             </div>
           ) : (
             <p className="mt-2 text-sm text-muted">
-              {draft.status === DRAFT_STATUS.COMPLETE
-                ? "The draft is complete."
-                : draft.status === DRAFT_STATUS.PAUSED
-                  ? "The draft is paused."
-                  : nominatorTeam
-                    ? `${nominatorTeam.name} is on the clock to nominate.`
-                    : "Waiting on the next nomination…"}
+              {draft.status === DRAFT_STATUS.PAUSED
+                ? "The draft is paused."
+                : nominatorTeam
+                  ? `${nominatorTeam.name} is on the clock to nominate.`
+                  : "Waiting on the next nomination…"}
             </p>
           )}
         </div>

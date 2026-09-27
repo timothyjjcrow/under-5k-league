@@ -85,6 +85,7 @@ import {
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { DraftRecapCard } from "@/components/draft-recap-card";
 import type { ActionResult } from "@/lib/action-result";
 
 // A single line in "Recent sales": the tested content (see @/lib/draft-feed)
@@ -276,6 +277,7 @@ export function DraftRoom({
   undoAction,
   voidLotAction,
   adminStart,
+  adminFinish,
 }: {
   pollMs?: number;
   seasonId: string;
@@ -289,6 +291,11 @@ export function DraftRoom({
    * page, plus why Start is unavailable when it is.
    */
   adminStart?: { control: ReactNode; blocker: string | null };
+  /**
+   * Admins only, in the Draft phase: the finished auction's next step (the
+   * Regular season phase button from /admin, same action and confirm).
+   */
+  adminFinish?: ReactNode;
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
@@ -1217,6 +1224,16 @@ export function DraftRoom({
 
   if (state.status === "COMPLETE") {
     const shortTeams = state.teams.filter((team) => team.need > 0);
+    const bought = state.teams.reduce(
+      (n, t) => n + t.members.filter((m) => !m.isCaptain).length,
+      0,
+    );
+    // The auction is over, so this is a results page: what happened, the
+    // recap, and the final rosters with what each player cost. Admins get
+    // the one thing left to do here (start the Regular season), not a list
+    // of places to go.
+    const showNextStep =
+      me.isAdmin && !!adminFinish && state.seasonStatus === "DRAFT";
     return (
       <div className="space-y-6">
         {/* Same strip as every other branch — undoLastSale can re-open a
@@ -1239,29 +1256,41 @@ export function DraftRoom({
           aria-live="polite"
           className="rounded-[var(--radius)] border border-success/40 bg-success/10 p-6 text-center"
         >
-          <div className="text-2xl">✅</div>
-          <div className="mt-1 text-lg font-semibold">
-            The draft is complete!
+          <div className="text-2xl" aria-hidden>
+            ✅
           </div>
-          <div className="text-sm text-muted">
+          <h2 className="mt-1 text-lg font-semibold">The draft is complete</h2>
+          <p className="text-sm text-muted">
+            {bought} player{bought === 1 ? "" : "s"} bought for{" "}
+            {state.teams.length} team{state.teams.length === 1 ? "" : "s"}.{" "}
             {shortTeams.length === 0
-              ? "All roster seats were filled. Schedule setup is next."
-              : `${shortTeams.length} team${shortTeams.length === 1 ? "" : "s"} still ${shortTeams.length === 1 ? "has" : "have"} open seats; admins can use free-agent signings after advancing the league.`}
-          </div>
+              ? "Every roster is full."
+              : `${shortTeams.length} team${shortTeams.length === 1 ? " still has" : "s still have"} open seats: an admin can sign free agents to fill them, and standins can cover games until then.`}
+          </p>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             <Link href="/teams" className={buttonClasses("secondary", "sm")}>
               View teams
             </Link>
-            <Link href="/schedule" className={buttonClasses("secondary", "sm")}>
-              View schedule
-            </Link>
-            {me.isAdmin ? (
-              <Link href="/admin" className={buttonClasses("accent", "sm")}>
-                Continue league setup
-              </Link>
-            ) : null}
           </div>
         </div>
+        {showNextStep ? (
+          <section
+            aria-label="Next step"
+            className="flex flex-col items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-4 text-center"
+          >
+            <p className="text-sm">
+              <span className="font-semibold">
+                Next step: start the Regular season.
+              </span>{" "}
+              <span className="text-muted">
+                Until you do, automatic result sync, match-night check-in and
+                the weekly Discord reminder stay off.
+              </span>
+            </p>
+            {adminFinish}
+          </section>
+        ) : null}
+        {state.recap ? <DraftRecapCard recap={state.recap} /> : null}
         <TeamsGrid state={state} />
       </div>
     );
@@ -2458,6 +2487,7 @@ function TeamsGrid({
   // out. Outside a live lot there is nothing to bid on, so the cards show just
   // the budget (a waiting-room "max $77" meant nothing to anyone).
   const nominationLive = !!state.nominatedPlayer;
+  const finished = state.status === "COMPLETE";
   return (
     <section
       aria-label="Team rosters"
@@ -2505,8 +2535,8 @@ function TeamsGrid({
                   />
                   <Link
                     href={`/teams/${t.id}`}
-                    target={state.status === "COMPLETE" ? undefined : "_blank"}
-                    rel={state.status === "COMPLETE" ? undefined : "noreferrer"}
+                    target={finished ? undefined : "_blank"}
+                    rel={finished ? undefined : "noreferrer"}
                     className="truncate hover:text-info hover:underline"
                   >
                     {t.name}
@@ -2542,17 +2572,31 @@ function TeamsGrid({
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
-                <Badge
-                  tone="accent"
-                  title={
-                    state.budgetsProjected
-                      ? "Projected starting budget; finalized when the auction starts"
-                      : "Remaining auction budget"
-                  }
-                >
-                  ${t.budget}
-                  {state.budgetsProjected ? " projected" : null}
-                </Badge>
+                {/* Once the auction is over, leftover budget is worth
+                    nothing; what a team spent is the number people compare
+                    (purchases only, like the recap's spend totals). */}
+                {finished ? (
+                  <Badge title="What this team spent at the auction">
+                    $
+                    {t.members.reduce(
+                      (sum, m) => sum + (m.isCaptain ? 0 : m.price),
+                      0,
+                    )}{" "}
+                    spent
+                  </Badge>
+                ) : (
+                  <Badge
+                    tone="accent"
+                    title={
+                      state.budgetsProjected
+                        ? "Projected starting budget; finalized when the auction starts"
+                        : "Remaining auction budget"
+                    }
+                  >
+                    ${t.budget}
+                    {state.budgetsProjected ? " projected" : null}
+                  </Badge>
+                )}
                 {!nominationLive ? null : t.need === 0 ? (
                   <span className="text-[10px] text-muted">full</span>
                 ) : (

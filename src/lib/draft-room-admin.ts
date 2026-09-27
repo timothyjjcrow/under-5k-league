@@ -1,5 +1,12 @@
 import { captainMmrWarning, unverifiedCaptainMmrsFor } from "./captain-mmr";
-import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
+import {
+  DRAFT_STATUS,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+  SEASON_STATUS,
+} from "./constants";
 import { draftReadinessCounts } from "./draft-readiness";
 import {
   draftRosterCounts,
@@ -8,6 +15,15 @@ import {
   startDraftConfirm,
 } from "./draft-setup";
 import { prisma } from "./prisma";
+import {
+  recoverablePostseasonBracket,
+  seasonPhasePolicy,
+} from "./season-phase-policy";
+
+// Admin controls the draft room renders itself, so an admin running draft
+// night from a phone doesn't have to leave the room for /admin. Each one is
+// built from the same helpers and posts to the same server action as its
+// /admin twin, so the guards and the confirm text are the same in both places.
 
 export type StartDraftPreflight = {
   /** Start draft's confirm before the Discord line (StartDraftControl adds it). */
@@ -87,4 +103,45 @@ export async function loadStartDraftPreflight(season: {
     ),
   });
   return { confirm, canStart, blocker };
+}
+
+/**
+ * The finished room's one next step for an admin: move the season to Regular
+ * season (the /admin next-step banner's DRAFT + auction-complete step), with
+ * the phase button's own confirm from seasonPhasePolicy. Built for the
+ * finished auction (the room shows it only once its poll sees COMPLETE,
+ * which can happen after this page rendered), so the draft status is taken
+ * as COMPLETE here; setSeasonPhase re-checks the real state when pressed.
+ * Null outside the Draft phase or when the policy would refuse the move.
+ */
+export async function loadRegularSeasonStep(season: {
+  id: string;
+  status: string;
+  championTeamId: string | null;
+}): Promise<{ confirmation: string } | null> {
+  if (season.status !== SEASON_STATUS.DRAFT) return null;
+  const matches = await prisma.match.findMany({
+    where: { seasonId: season.id },
+    select: {
+      status: true,
+      phase: true,
+      bracketSlot: true,
+      _count: { select: { games: true } },
+    },
+  });
+  const postseason = matches.filter(
+    (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+  );
+  const policy = seasonPhasePolicy({
+    current: season.status,
+    target: SEASON_STATUS.REGULAR_SEASON,
+    draftStatus: DRAFT_STATUS.COMPLETE,
+    matchCount: matches.length,
+    hasPlayedResult: matches.some((m) => m.status === MATCH_STATUS.COMPLETED),
+    hasImportedGame: matches.some((m) => m._count.games > 0),
+    postseasonMatchCount: postseason.length,
+    postseasonBracketReady: recoverablePostseasonBracket(postseason),
+    hasChampion: season.championTeamId != null,
+  });
+  return policy.available ? { confirmation: policy.confirmation } : null;
 }

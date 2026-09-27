@@ -1,9 +1,16 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
-import { loadStartDraftPreflight } from "@/lib/draft-start-preflight";
+import { prisma } from "@/lib/prisma";
+import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  loadRegularSeasonStep,
+  loadStartDraftPreflight,
+} from "@/lib/draft-room-admin";
 import { DraftRoom } from "@/components/draft-room";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   StartDraftControl,
   StartDraftForm,
@@ -12,6 +19,7 @@ import { EmptyState, PageTitle, buttonClasses } from "@/components/ui";
 import {
   pauseDraftAction,
   resumeDraftAction,
+  setSeasonPhase,
   undoLastSaleAction,
   voidCurrentLotAction,
 } from "@/app/actions/admin";
@@ -42,12 +50,38 @@ export default async function DraftPage() {
     );
   }
 
+  // Once the season has left the Draft phase, the draft is history and its
+  // home is /teams (rosters, prices and the draft-night recap). A live or
+  // paused auction outside Draft is a stranded state an admin must still be
+  // able to see, so that one keeps the room.
+  if (
+    season.status !== SEASON_STATUS.SIGNUPS &&
+    season.status !== SEASON_STATUS.DRAFT
+  ) {
+    const draft = await prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    });
+    if (
+      draft?.status !== DRAFT_STATUS.IN_PROGRESS &&
+      draft?.status !== DRAFT_STATUS.PAUSED
+    ) {
+      redirect("/teams");
+    }
+  }
+
   // Admins get Start draft in the waiting room: the same form, action and
   // confirm as /admin's Captains & draft card (see admin-start-draft.tsx),
-  // loaded only for them and only while there is something to start.
+  // loaded only for them and only while there is something to start. Once
+  // the auction is finished, the room offers them the next step instead.
   const user = await getSessionUser();
-  const preflight =
-    user?.role === "ADMIN" ? await loadStartDraftPreflight(season) : null;
+  const isAdmin = user?.role === "ADMIN";
+  const [preflight, regularSeasonStep] = isAdmin
+    ? await Promise.all([
+        loadStartDraftPreflight(season),
+        loadRegularSeasonStep(season),
+      ])
+    : [null, null];
   const adminStart = preflight
     ? {
         blocker: preflight.blocker,
@@ -74,6 +108,23 @@ export default async function DraftPage() {
         ),
       }
     : undefined;
+  // Same action and confirm as the Regular season phase button on /admin.
+  const adminFinish = regularSeasonStep ? (
+    <ActionForm
+      action={setSeasonPhase}
+      hidden={{
+        expectedActiveSeasonId: season.id,
+        phase: SEASON_STATUS.REGULAR_SEASON,
+      }}
+    >
+      <SubmitButton
+        variant="accent"
+        confirm={regularSeasonStep.confirmation}
+      >
+        Start the Regular season
+      </SubmitButton>
+    </ActionForm>
+  ) : undefined;
 
   return (
     <div className="space-y-4">
@@ -97,6 +148,7 @@ export default async function DraftPage() {
         undoAction={undoLastSaleAction}
         voidLotAction={voidCurrentLotAction}
         adminStart={adminStart}
+        adminFinish={adminFinish}
       />
     </div>
   );
