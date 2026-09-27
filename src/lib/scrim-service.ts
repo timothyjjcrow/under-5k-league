@@ -22,6 +22,8 @@ import {
 } from "./scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 import { SCRIM_PAST_GRACE_MS } from "./scrim-window";
+import { raceHook } from "./race-hook";
+import { scrimEndedMessage } from "./scrim-view";
 
 const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000;
 export { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
@@ -777,6 +779,103 @@ export async function cancelScrim(
     }
     throw error;
   }
+}
+
+/**
+ * Either captain (or a verified admin) calls a half-played series at its
+ * current score: a best-of-3 abandoned at 1–0 because someone had to leave
+ * otherwise sat LIVE forever, since a live scrim can't be cancelled. The
+ * leader wins; a level score ends as a draw with no winner.
+ *
+ * ONE guarded claim is the whole write. It re-asserts LIVE and the exact
+ * score this request judged, so a game recorded in the gap (an import or the
+ * auto-fetch) wins and the captain is told the new score, instead of the
+ * series being frozen at a stale one.
+ */
+export async function endScrimSeries(
+  viewerId: string,
+  isAdmin: boolean,
+  scrimId: string,
+): Promise<{
+  message: string;
+  hostScore: number;
+  awayScore: number;
+  winnerTeamId: string | null;
+}> {
+  const [scrim, admin] = await Promise.all([
+    prisma.scrim.findUnique({
+      where: { id: scrimId },
+      select: {
+        id: true,
+        status: true,
+        hostScore: true,
+        awayScore: true,
+        hostTeamId: true,
+        opponentTeamId: true,
+        hostTeam: { select: { captainId: true, name: true } },
+        opponentTeam: { select: { captainId: true, name: true } },
+      },
+    }),
+    assertedAdmin(prisma, viewerId, isAdmin),
+  ]);
+  if (!scrim) throw new UserFacingError("Scrim not found");
+  const isCaptain =
+    scrim.hostTeam.captainId === viewerId ||
+    scrim.opponentTeam?.captainId === viewerId;
+  if (!isCaptain && !admin) {
+    throw new UserFacingError(
+      "Only either team's captain or an admin can end this series",
+    );
+  }
+  if (scrim.status !== SCRIM_STATUS.LIVE || !scrim.opponentTeam) {
+    throw new UserFacingError(
+      scrim.status === SCRIM_STATUS.COMPLETED
+        ? "This scrim series is already final"
+        : "Only a series with games recorded can be ended early — cancel an unplayed scrim instead",
+    );
+  }
+  const { hostScore, awayScore } = scrim;
+  const winnerTeamId =
+    hostScore > awayScore
+      ? scrim.hostTeamId
+      : awayScore > hostScore
+        ? scrim.opponentTeamId
+        : null;
+
+  await raceHook("scrim.endSeries.beforeClaim");
+  const ended = await prisma.scrim.updateMany({
+    where: {
+      id: scrim.id,
+      status: SCRIM_STATUS.LIVE,
+      hostScore: scrim.hostScore,
+      awayScore: scrim.awayScore,
+    },
+    data: { status: SCRIM_STATUS.COMPLETED, winnerTeamId },
+  });
+  if (ended.count === 0) {
+    const now = await prisma.scrim.findUnique({
+      where: { id: scrim.id },
+      select: { status: true, hostScore: true, awayScore: true },
+    });
+    throw new UserFacingError(
+      now?.status === SCRIM_STATUS.COMPLETED
+        ? `This series just finished at ${now.hostScore}–${now.awayScore} — nothing to end`
+        : now?.status === SCRIM_STATUS.LIVE
+          ? `A game was just recorded and the score is now ${now.hostScore}–${now.awayScore} — check it, then end the series if you still want to`
+          : "The recorded games just changed — reload before ending this series",
+    );
+  }
+  return {
+    message: scrimEndedMessage({
+      hostTeamName: scrim.hostTeam.name,
+      awayTeamName: scrim.opponentTeam.name,
+      hostScore,
+      awayScore,
+    }),
+    hostScore,
+    awayScore,
+    winnerTeamId,
+  };
 }
 
 /** Add one account-only, per-scrim guest to the viewer's participating side. */

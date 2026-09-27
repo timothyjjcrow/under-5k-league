@@ -140,3 +140,35 @@ export function isScrimNotPlayed(
     scheduledAtMs < scrimNotPlayedCutoff(nowMs).getTime()
   );
 }
+
+type ScrimScore = {
+  hostTeamName: string;
+  awayTeamName: string;
+  hostScore: number;
+  awayScore: number;
+};
+
+function scrimEndOutcome(m: ScrimScore) {
+  const score = `${m.hostScore}–${m.awayScore}`;
+  if (m.hostScore === m.awayScore) return { score, winner: null };
+  return {
+    score,
+    winner: m.hostScore > m.awayScore ? m.hostTeamName : m.awayTeamName,
+  };
+}
+
+/** The confirm on "End series": what the current score makes final. */
+export function scrimEndConfirm(m: ScrimScore): string {
+  const { score, winner } = scrimEndOutcome(m);
+  return winner
+    ? `End this series at ${score}? ${winner} win it, and no more games can be added.`
+    : `End this series level at ${score}, with no winner? No more games can be added.`;
+}
+
+/** The toast after a series is ended at its current score. */
+export function scrimEndedMessage(m: ScrimScore): string {
+  const { score, winner } = scrimEndOutcome(m);
+  return winner
+    ? `Series ended at ${score}. ${winner} win it.`
+    : `Series ended level at ${score}, with no winner.`;
+}

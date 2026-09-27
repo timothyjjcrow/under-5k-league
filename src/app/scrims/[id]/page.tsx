@@ -14,6 +14,7 @@ import { parseGamePlayers } from "@/lib/player-stats";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import {
   isScrimNotPlayed,
+  scrimEndConfirm,
   scrimHostLine,
   scrimJoinCheck,
 } from "@/lib/scrim-view";
@@ -30,6 +31,7 @@ import {
   addScrimGuest,
   autoDetectScrimGames,
   cancelScrim,
+  endScrimSeries,
   importScrimGame,
   joinScrim,
   removeScrimGuest,
@@ -296,6 +298,10 @@ export default async function ScrimDetailPage({
     (viewer.role === "ADMIN" ||
       scrim.hostTeam.captainId === viewer.id ||
       scrim.opponentTeam?.captainId === viewer.id);
+  // Same people as Cancel: a series that can't be finished is called at its
+  // current score rather than left LIVE forever (a live scrim can't cancel).
+  const canEndSeries =
+    canCancel && scrim.status === SCRIM_STATUS.LIVE && !!scrim.opponentTeam;
   const participantByAccount = new Map(
     scrim.participants.map((participant) => [
       participant.dotaAccountId,
@@ -449,6 +455,29 @@ export default async function ScrimDetailPage({
           ) : null}
         </CardBody>
       </Card>
+
+      {canEndSeries && scrim.opponentTeam ? (
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <ActionForm action={endScrimSeries} hidden={{ scrimId: scrim.id }}>
+            <SubmitButton
+              variant="secondary"
+              size="sm"
+              confirm={scrimEndConfirm({
+                hostTeamName: scrim.hostTeam.name,
+                awayTeamName: scrim.opponentTeam.name,
+                hostScore: scrim.hostScore,
+                awayScore: scrim.awayScore,
+              })}
+            >
+              End series at {scrim.hostScore}–{scrim.awayScore}
+            </SubmitButton>
+          </ActionForm>
+          <p className="text-xs text-muted">
+            Can&apos;t play the rest? Either captain can end the series at the
+            current score.
+          </p>
+        </div>
+      ) : null}
 
       {canCancel &&
       mutable &&

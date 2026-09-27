@@ -19,6 +19,7 @@ import {
   addTeamCoach as addCoachInService,
   cancelScrim as cancelInService,
   createScrim as createInService,
+  endScrimSeries as endSeriesInService,
   joinScrim as joinInService,
   removeScrimGuest as removeGuestInService,
   removeTeamCoach as removeCoachInService,
@@ -365,6 +366,32 @@ export async function removeScrimGame(
         error,
         "Couldn't remove that scrim game — try again",
         "scrim.game-remove",
+      ),
+    };
+  }
+}
+
+export async function endScrimSeries(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const auth = await currentUser();
+  if (!auth.ok) return auth.result;
+  const scrimId = str(formData, "scrimId");
+  try {
+    const ended = await endSeriesInService(
+      auth.user.id,
+      auth.user.role === "ADMIN",
+      scrimId,
+    );
+    refreshScrims(scrimId);
+    return { ok: true, message: ended.message };
+  } catch (error) {
+    return {
+      error: actionErrorMessage(
+        error,
+        "Couldn't end that series — reload and try again",
+        "scrim.end-series",
       ),
     };
   }

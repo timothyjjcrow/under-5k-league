@@ -3,6 +3,8 @@ import { SCRIM_STATUS } from "./constants";
 import {
   isScrimNotPlayed,
   scrimBookedToast,
+  scrimEndConfirm,
+  scrimEndedMessage,
   scrimHostLine,
   scrimJoinCheck,
   scrimNotPlayedCutoff,
@@ -158,5 +160,33 @@ describe("isScrimNotPlayed", () => {
     ]) {
       expect(isScrimNotPlayed(status, edge - 1, NOW)).toBe(false);
     }
+  });
+});
+
+describe("ending a series at its current score", () => {
+  const score = {
+    hostTeamName: "Radiant Raccoons",
+    awayTeamName: "Dire Straits",
+    hostScore: 0,
+    awayScore: 1,
+  };
+
+  it("names the leader as the winner", () => {
+    expect(scrimEndConfirm(score)).toBe(
+      "End this series at 0–1? Dire Straits win it, and no more games can be added.",
+    );
+    expect(scrimEndedMessage(score)).toBe(
+      "Series ended at 0–1. Dire Straits win it.",
+    );
+  });
+
+  it("ends a level series with no winner", () => {
+    const level = { ...score, hostScore: 1, awayScore: 1 };
+    expect(scrimEndConfirm(level)).toBe(
+      "End this series level at 1–1, with no winner? No more games can be added.",
+    );
+    expect(scrimEndedMessage(level)).toBe(
+      "Series ended level at 1–1, with no winner.",
+    );
   });
 });
