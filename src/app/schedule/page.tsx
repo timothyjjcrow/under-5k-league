@@ -27,9 +27,11 @@ import {
   playoffFirstRound,
   remainingSchedule,
   roundName,
+  teamByeWeek,
 } from "@/lib/schedule";
 import { formatMatchTime } from "@/lib/match-time";
 import { ChampionBanner } from "@/components/champion-banner";
+import { ByeWeekNote } from "@/components/bye-week-note";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
@@ -322,6 +324,15 @@ export default async function SchedulePage() {
               sideRoster(m, m.awayTeamId).includes(viewer.id)),
         )
     : undefined;
+  // A rostered viewer whose team rests this week is told so above the
+  // check-in for the match after it.
+  const viewerTeam = teams.find((t) => myTeamIds.has(t.id));
+  const viewerByeWeek =
+    viewerTeam &&
+    !viewerTeam.withdrawn &&
+    (season.status === "REGULAR_SEASON" || season.status === "DRAFT")
+      ? teamByeWeek(matches, viewerTeam.id, scheduleNow)
+      : null;
   const myRsvp = myNextMatch
     ? ((rsvpsByMatch.get(myNextMatch.id) ?? []).find(
         (r) => r.userId === viewer!.id,
@@ -649,6 +660,10 @@ export default async function SchedulePage() {
           </div>
         }
       />
+
+      {viewerByeWeek != null ? (
+        <ByeWeekNote week={viewerByeWeek} who="Your team" />
+      ) : null}
 
       {myNextMatch ? (
         <CheckinBanner

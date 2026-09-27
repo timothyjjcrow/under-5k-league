@@ -303,17 +303,19 @@ export function ScheduleWeeks({
                     </span>
                   </span>
                   <span className="shrink-0 text-right text-xs font-normal text-muted">
-                    <span
-                      className={cn(
-                        "block font-mono text-sm tabular-nums",
-                        completed === total && total > 0
-                          ? "text-success"
-                          : "text-fg",
-                      )}
-                    >
-                      {completed}
-                      <span className="text-muted"> of {total}</span>
-                    </span>
+                    {/* A filtered bye week has nothing to count: "0 of 0"
+                        only buried the one word that matters. */}
+                    {total ? (
+                      <span
+                        className={cn(
+                          "block font-mono text-sm tabular-nums",
+                          completed === total ? "text-success" : "text-fg",
+                        )}
+                      >
+                        {completed}
+                        <span className="text-muted"> of {total}</span>
+                      </span>
+                    ) : null}
                     {/* "Final" is the grand final's word alone — a round
                         header reading "Grand final · 0 / 1 FINAL" said it twice
                         and meant two different things. */}

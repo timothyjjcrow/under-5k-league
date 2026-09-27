@@ -471,6 +471,30 @@ export function byeTeamsByWeek<
 }
 
 /**
+ * The league's current regular week when THIS team sits it out, else null.
+ * With an odd number of teams one team rests each week (roundRobin rotates
+ * the bye), and the first team in draft order always rests week 1, so on
+ * opening night its players watch everyone else check in. Every surface that
+ * shows the team's next match should say so rather than jump silently to the
+ * week after. "Current" is the earliest week still holding an open, relevant
+ * regular fixture: the week /schedule badges "This week" (leagueProgress's
+ * focusWeek). A team with no fixtures at all has no bye to report.
+ */
+export function teamByeWeek<
+  T extends SlateMatch & { homeTeamId: string; awayTeamId: string },
+>(matches: T[], teamId: string, nowMs: number): number | null {
+  const regular = matches.filter((m) => m.phase === MATCH_PHASE.REGULAR);
+  const plays = (m: T) => m.homeTeamId === teamId || m.awayTeamId === teamId;
+  if (!regular.some(plays)) return null;
+  const openWeeks = regular
+    .filter((m) => isRelevantOpenMatch(m, nowMs))
+    .map((m) => m.week);
+  if (openWeeks.length === 0) return null;
+  const week = Math.min(...openWeeks);
+  return regular.some((m) => m.week === week && plays(m)) ? null : week;
+}
+
+/**
  * The order /schedule reads its regular weeks in: the league's current week,
  * then the weeks still to come in order, then the earlier weeks NEWEST first
  * (flagged `earlier`, so the list can head them "Earlier weeks"). A player

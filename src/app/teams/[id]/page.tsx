@@ -18,7 +18,12 @@ import { seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import type { TeamScenario } from "@/lib/scenarios";
 import { headToHead, recentForm } from "@/lib/team-matches";
-import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
+import {
+  matchRoundLabel,
+  playoffTotalRounds,
+  teamByeWeek,
+} from "@/lib/schedule";
+import { ByeWeekNote } from "@/components/bye-week-note";
 import { roleCoverage } from "@/lib/pool-stats";
 import {
   summarizePlayerGames,
@@ -271,6 +276,24 @@ export default async function TeamPage({
     nowMs,
     team.season.isActive && team.season.status !== SEASON_STATUS.COMPLETE,
   );
+  // Resting this week: say so before the spotlight shows a match a week away.
+  const byeWeek =
+    team.season.isActive &&
+    !team.withdrawn &&
+    (team.season.status === SEASON_STATUS.REGULAR_SEASON ||
+      team.season.status === SEASON_STATUS.DRAFT)
+      ? teamByeWeek(allMatches, id, nowMs)
+      : null;
+  const byeNext =
+    byeWeek != null && featuredMatch && featuredMatch.status !== "COMPLETED"
+      ? `${matchRoundLabel(featuredMatch, playoffRounds)} vs ${
+          teamName.get(
+            featuredMatch.homeTeamId === id
+              ? featuredMatch.awayTeamId
+              : featuredMatch.homeTeamId,
+          ) ?? "?"
+        }`
+      : null;
   const sectionItems = [
     { id: "team-overview", label: "Overview" },
     { id: "team-matches", label: "Matches" },
@@ -436,6 +459,10 @@ export default async function TeamPage({
             rulings for its opponents.
           </p>
         </div>
+      ) : null}
+
+      {byeWeek != null ? (
+        <ByeWeekNote week={byeWeek} who={team.name} next={byeNext} />
       ) : null}
 
       <SectionNav items={sectionItems} label="Team sections" sticky />

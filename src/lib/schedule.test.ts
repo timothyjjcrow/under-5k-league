@@ -4,6 +4,7 @@ import {
   roundRobin,
   byeTeamsByWeek,
   orderScheduleWeeks,
+  teamByeWeek,
   weekStartsCollapsed,
   remainingSchedule,
   seedOrder,
@@ -499,6 +500,78 @@ describe("byeTeamsByWeek", () => {
   it("ignores playoff matches", () => {
     const byes = byeTeamsByWeek([m(9, "a", "b", "PLAYOFF")], ["a", "b", "c"]);
     expect(byes.size).toBe(0);
+  });
+});
+
+describe("teamByeWeek", () => {
+  const now = Date.parse("2026-10-01T12:00:00Z");
+  const day = 86_400_000;
+  const m = (
+    id: string,
+    week: number,
+    home: string,
+    away: string,
+    status = "SCHEDULED",
+    phase = "REGULAR",
+  ) => ({
+    id,
+    week,
+    homeTeamId: home,
+    awayTeamId: away,
+    status,
+    phase,
+    scheduledAt: new Date(now + (week - 1) * 7 * day + day),
+  });
+  // Five teams: a rests week 1, b rests week 2.
+  const season = [
+    m("1a", 1, "b", "c"),
+    m("1b", 1, "d", "e"),
+    m("2a", 2, "a", "c"),
+    m("2b", 2, "d", "e"),
+  ];
+
+  it("names the current week when the team sits it out", () => {
+    expect(teamByeWeek(season, "a", now)).toBe(1);
+    expect(teamByeWeek(season, "b", now)).toBeNull();
+  });
+
+  it("moves on with the league's current week", () => {
+    const weekOneDone = season.map((match) =>
+      match.week === 1 ? { ...match, status: "COMPLETED" } : match,
+    );
+    expect(teamByeWeek(weekOneDone, "a", now)).toBeNull();
+    expect(teamByeWeek(weekOneDone, "b", now)).toBe(2);
+  });
+
+  it("says nothing once no regular week is open", () => {
+    const done = season.map((match) => ({ ...match, status: "COMPLETED" }));
+    expect(teamByeWeek(done, "a", now)).toBeNull();
+    expect(
+      teamByeWeek(
+        [...done, m("f", 9, "b", "c", "SCHEDULED", "PLAYOFF")],
+        "a",
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not call a team with no fixtures at all a bye", () => {
+    expect(teamByeWeek(season, "z", now)).toBeNull();
+  });
+
+  it("skips an overdue week that is no longer current", () => {
+    const stale = [
+      {
+        ...m("0a", 1, "b", "c"),
+        scheduledAt: new Date(now - 30 * day),
+      },
+      m("2a", 2, "a", "c"),
+      m("2b", 2, "d", "e"),
+    ];
+    // Week 1's only open result is long overdue, so week 2 is current and a
+    // plays in it; b, with no week-2 fixture, is the one resting.
+    expect(teamByeWeek(stale, "a", now)).toBeNull();
+    expect(teamByeWeek(stale, "b", now)).toBe(2);
   });
 });
 
