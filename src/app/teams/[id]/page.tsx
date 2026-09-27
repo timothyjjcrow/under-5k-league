@@ -1,4 +1,5 @@
-import { calendarFeedLinks } from "@/lib/calendar-links";
+import { AddToCalendar } from "@/components/add-to-calendar";
+import { resolveSiteUrl } from "@/lib/site-url";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
 import Link from "next/link";
@@ -337,6 +338,13 @@ export default async function TeamPage({
   // any result, the draft numbers), then the roster, then every fixture.
   const showOverview = !played || featuredMatch != null;
   const fixtureList = teamFixtureOrder(myMatches);
+  // The same "Add to calendar" menu as Schedule, offering this team's feed
+  // (or the whole league's), once the team has a kickoff time to add.
+  const showCalendar =
+    team.season.isActive &&
+    (team.season.status === SEASON_STATUS.REGULAR_SEASON ||
+      team.season.status === SEASON_STATUS.PLAYOFFS) &&
+    myMatches.some((m) => m.scheduledAt);
   const sectionItems = [
     ...(showOverview ? [{ id: "team-overview", label: "Overview" }] : []),
     { id: "team-roster", label: "Roster" },
@@ -361,40 +369,20 @@ export default async function TeamPage({
           >
             {team.season.isActive ? "← All teams" : "← Season archive"}
           </ContextBackLink>
+          {/* The standings sit behind the rank badge beside the team's
+              name, and the calendar in the Matches card. */}
           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
             {team.season.isActive ? (
               <Link href="/scrims" className={textLink("text-sm")}>
                 Scrims →
               </Link>
             ) : null}
-            {team.season.isActive &&
-            (team.season.status === "REGULAR_SEASON" ||
-              team.season.status === "PLAYOFFS") ? (
-              <>
-                <a
-                  href={calendarFeedLinks(team.id).subscribe}
-                  className={textLink("text-sm")}
-                  title="Add this team's matches to your calendar app — moved matches update on their own"
-                >
-                  📅 Subscribe to calendar
-                </a>
-                <a
-                  href={calendarFeedLinks(team.id).download}
-                  className={textLink("text-sm")}
-                  title="Download this team's active-season .ics calendar file"
-                >
-                  Download .ics
-                </a>
-              </>
-            ) : null}
-            {team.season.isActive && team.season.status === "DRAFT" ? (
-              <Link href="/draft" className={textLink("text-sm")}>
-                Draft room →
-              </Link>
-            ) : team.season.isActive ? (
-              <Link href="/schedule#standings" className={textLink("text-sm")}>
-                Standings →
-              </Link>
+            {team.season.isActive ? (
+              team.season.status === SEASON_STATUS.DRAFT ? (
+                <Link href="/draft" className={textLink("text-sm")}>
+                  Draft room →
+                </Link>
+              ) : null
             ) : (
               <Link
                 href={`/seasons/${team.seasonId}`}
@@ -464,11 +452,25 @@ export default async function TeamPage({
                   {team.name}
                 </h1>
                 {seed ? (
-                  <Badge tone="accent">Seed #{seed}</Badge>
+                  <StandingBadge
+                    href={
+                      team.season.isActive
+                        ? "/schedule#playoff-bracket"
+                        : undefined
+                    }
+                    where="in the playoff bracket"
+                  >
+                    Seed #{seed}
+                  </StandingBadge>
                 ) : played && rank > 0 ? (
-                  <Badge tone="accent">
+                  <StandingBadge
+                    href={
+                      team.season.isActive ? "/schedule#standings" : undefined
+                    }
+                    where="in the standings"
+                  >
                     #{rank} of {allTeams.length}
-                  </Badge>
+                  </StandingBadge>
                 ) : null}
                 {championPresentation.championTeamId === team.id ? (
                   <Badge tone="accent">🏆 Champion</Badge>
@@ -742,22 +744,38 @@ export default async function TeamPage({
         ) : null}
       </section>
 
-      <Card id="team-matches" className="scroll-mt-40 overflow-hidden">
+      {/* No overflow-hidden on the card: it would clip the calendar menu.
+          The body clips the rows' hover background to the corners instead. */}
+      <Card id="team-matches" className="scroll-mt-40">
         <CardHeader
           title="Matches"
           headingLevel={2}
           action={
             team.season.isActive ? (
-              <Link
-                href={`/schedule?team=${team.id}#fixtures`}
-                className={textLink("text-sm")}
-              >
-                Team schedule →
-              </Link>
+              // Full width on phones so the calendar button, and the menu
+              // under it, keep to the card's right edge.
+              <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 sm:w-auto">
+                <Link
+                  href={`/schedule?team=${team.id}#fixtures`}
+                  className={textLink("text-sm")}
+                >
+                  Team schedule →
+                </Link>
+                {showCalendar ? (
+                  <div className="ml-auto">
+                    <AddToCalendar
+                      site={resolveSiteUrl()}
+                      teams={[{ id: team.id, name: team.name }]}
+                      initialTeamId={team.id}
+                      align="end"
+                    />
+                  </div>
+                ) : null}
+              </div>
             ) : undefined
           }
         />
-        <CardBody className="p-0">
+        <CardBody className="overflow-hidden rounded-b-[var(--radius)] p-0">
           {myMatches.length === 0 ? (
             <div className="p-5">
               <EmptyState title="No matches scheduled yet" />
@@ -971,6 +989,39 @@ export default async function TeamPage({
         </section>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The team's place beside its name ("#2 of 8", "Seed #2"). In the active
+ * season it opens that table on Schedule; an archived team's page links its
+ * season archive separately.
+ */
+function StandingBadge({
+  href,
+  where,
+  children,
+}: {
+  href?: string;
+  /** Spoken after the badge text when it is a link: "in the standings". */
+  where: string;
+  children: React.ReactNode;
+}) {
+  if (!href) return <Badge tone="accent">{children}</Badge>;
+  return (
+    <Link
+      href={href}
+      className="group rounded-full py-1 -my-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+    >
+      <Badge
+        tone="accent"
+        className="transition-colors group-hover:border-accent/70 group-hover:bg-accent/25"
+      >
+        {children}
+        <span className="sr-only"> {where}</span>
+        <span aria-hidden>→</span>
+      </Badge>
+    </Link>
   );
 }
 

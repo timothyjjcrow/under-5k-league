@@ -20,12 +20,19 @@ export function AddToCalendar({
   site,
   teams,
   initialTeamId,
+  align = "start",
 }: {
   /** Canonical site origin, resolved on the server. */
   site: string;
   teams: { id: string; name: string }[];
   /** The reader's own team, offered when the URL picks none. */
   initialTeamId?: string | null;
+  /**
+   * Which edge of the button the menu lines up with. "start" (below the
+   * button on phones, right-aligned from `sm` up) suits a button at the left
+   * of a phone screen; "end" suits one kept at the right edge of a card.
+   */
+  align?: "start" | "end";
 }) {
   const params = useSearchParams();
   const teamId = scheduleFilterTeamId(
@@ -81,7 +88,12 @@ export function AddToCalendar({
       {open ? (
         <div
           id={panelId}
-          className="absolute left-0 top-full z-30 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-2 shadow-xl shadow-black/30 sm:left-auto sm:right-0"
+          className={cn(
+            "absolute top-full z-30 mt-2 rounded-xl border border-line bg-surface p-2 shadow-xl shadow-black/30",
+            align === "end"
+              ? "right-0 w-[min(20rem,calc(100vw-4rem))]"
+              : "left-0 w-[min(20rem,calc(100vw-2rem))] sm:left-auto sm:right-0",
+          )}
         >
           {team ? (
             <div

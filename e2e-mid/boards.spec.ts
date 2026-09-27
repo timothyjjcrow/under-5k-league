@@ -379,6 +379,28 @@ test("team page renders roster, form, and the what-we-need card", async ({
     expect(await top("#team-overview")).toBeLessThan(rosterTop);
   }
   await expectNoHorizontalOverflow(page, "/teams/[id]");
+
+  // The rank badge opens the standings, and the Matches card carries the
+  // same "Add to calendar" menu as Schedule, offering this team's feed.
+  const teamId = new URL(page.url()).pathname.split("/").pop();
+  await expect(
+    page.getByRole("link", { name: /^#\d+ of \d+ in the standings$/ }),
+  ).toHaveAttribute("href", "/schedule#standings");
+  const matches = page.locator("#team-matches");
+  await matches
+    .getByRole("button", { name: "Add to calendar", exact: true })
+    .click();
+  const download = matches.getByRole("link", {
+    name: "Download .ics file",
+    exact: true,
+  });
+  await expect(download).toHaveAttribute(
+    "href",
+    `/api/calendar?team=${teamId}`,
+  );
+  await expectNoHorizontalOverflow(page, "/teams/[id] calendar menu");
+  await page.keyboard.press("Escape");
+  await expect(download).toHaveCount(0);
   assertNoErrors();
 });
 
