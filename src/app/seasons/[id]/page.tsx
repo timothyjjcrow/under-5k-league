@@ -176,7 +176,7 @@ export default async function SeasonArchivePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [season, gameCount] = await Promise.all([
+  const [season, gameCount, fantasyEntry] = await Promise.all([
     prisma.season.findUnique({
       where: { id },
       include: {
@@ -191,6 +191,12 @@ export default async function SeasonArchivePage({
       },
     }),
     prisma.game.count({ where: { match: { seasonId: id } } }),
+    // Fantasy is linked when the season had managers; otherwise the page
+    // would open onto "Entries 0".
+    prisma.fantasyRoster.findFirst({
+      where: { seasonId: id },
+      select: { id: true },
+    }),
   ]);
   if (!season) notFound();
 
@@ -264,12 +270,14 @@ export default async function SeasonArchivePage({
           ) : null}
           {/* Fantasy and pick'em can have useful season state even when no
               OpenDota Game rows were imported. */}
-          <Link
-            href={`/fantasy?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Fantasy
-          </Link>
+          {fantasyEntry ? (
+            <Link
+              href={`/fantasy?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Fantasy
+            </Link>
+          ) : null}
           <Link
             href={`/pickem?season=${season.id}`}
             className={buttonClasses("secondary", "sm")}
