@@ -15,6 +15,10 @@ import {
 } from "@/lib/constants";
 import { draftSetupOpen } from "@/lib/draft-setup";
 import {
+  parseSeenDraftSchedule,
+  seenScheduleIsCurrent,
+} from "@/lib/draft-readiness";
+import {
   medalProvesIneligible,
   registrationGate,
   registrationSeasonClosedError,
@@ -88,21 +92,16 @@ export async function confirmDraftReadiness(
     return { error: "Sign in required" };
   }
 
-  const revisionRaw = str(formData, "draftRevision").trim();
-  const draftAtRaw = str(formData, "draftAtTs").trim();
+  const seen = parseSeenDraftSchedule(
+    str(formData, "draftRevision"),
+    str(formData, "draftAtTs"),
+  );
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
-  const expectedRevision = Number(revisionRaw);
-  const expectedDraftAt = Number(draftAtRaw);
-  if (
-    !/^\d+$/.test(revisionRaw) ||
-    !Number.isSafeInteger(expectedRevision) ||
-    expectedRevision < 0 ||
-    !/^\d+$/.test(draftAtRaw) ||
-    !Number.isSafeInteger(expectedDraftAt) ||
-    expectedDraftAt <= 0
-  ) {
+  if (!seen) {
     return { error: "Reload the page and review the draft time again." };
   }
+  const expectedRevision = seen.revision;
+  const expectedDraftAt = seen.atMs;
 
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
@@ -469,6 +468,24 @@ export async function saveRegistration(
   const resetDraftConfirmation =
     !!existing &&
     (existing.type !== type || existing.status !== REGISTRATION_STATUS.ACTIVE);
+  // Joining the draft pool from a form that showed the draft time counts as
+  // confirming it: the player has just read "Draft night: …" and pressed
+  // Join, and asking again in a box above the button they pressed left many
+  // unconfirmed. Only for a real join (new, returning from withdrawn, or a
+  // standin becoming a full player), never an ordinary edit, and only when
+  // the season's schedule still matches what the page showed. That last check
+  // runs INSIDE the write's transaction below, so a stale tab can't confirm a
+  // time the player never saw.
+  const seenDraft =
+    type === REGISTRATION_TYPE.PLAYER &&
+    (!existing || resetDraftConfirmation) &&
+    str(formData, "seenDraftSeasonId").trim() === season.id
+      ? parseSeenDraftSchedule(
+          str(formData, "seenDraftRevision"),
+          str(formData, "seenDraftAtTs"),
+        )
+      : null;
+  let confirmedDraft = false;
   const registrationData = {
     type,
     mmr: check.mmr,
@@ -503,7 +520,13 @@ export async function saveRegistration(
           ] = await Promise.all([
             tx.season.findUnique({
               where: { id: season.id },
-              select: { isActive: true, status: true, updatedAt: true },
+              select: {
+                isActive: true,
+                status: true,
+                updatedAt: true,
+                draftRevision: true,
+                draftAt: true,
+              },
             }),
             tx.draft.findUnique({
               where: { seasonId: season.id },
@@ -564,13 +587,31 @@ export async function saveRegistration(
           // but before this write. SERIALIZABLE must choose one winner.
           await raceHook("registration.saveRegistration.afterLifecycleGate");
 
+          // The draft time the form showed, judged against the schedule this
+          // transaction read (the revision, the time, and setup still open).
+          // A mismatch is not an error: the player joins, unconfirmed, and
+          // /me asks them to confirm the current time as before.
+          const confirmNow =
+            !!seenDraft &&
+            seenScheduleIsCurrent(seenDraft, currentSeason) &&
+            draftSetupOpen(currentSeason.status, currentDraft?.status);
+          const writeData = confirmNow
+            ? {
+                ...registrationData,
+                draftConfirmedRevision: seenDraft.revision,
+                draftConfirmedAt: new Date(),
+                draftConfirmedFor: new Date(seenDraft.atMs),
+              }
+            : registrationData;
+          confirmedDraft = confirmNow;
+
           const revived = await tx.registration.updateMany({
             where: {
               seasonId: season.id,
               userId: user.id,
               status: statusClaim,
             },
-            data: registrationData,
+            data: writeData,
           });
           if (revived.count === 1) return false;
 
@@ -583,7 +624,7 @@ export async function saveRegistration(
             data: {
               seasonId: season.id,
               userId: user.id,
-              ...registrationData,
+              ...writeData,
             },
           });
           return true;
@@ -684,7 +725,8 @@ export async function saveRegistration(
           // The adjustment note already names the medal — don't say it twice.
           (mmrNote ? "" : medalLabel)) +
       mmrNote +
-      lockedMmrNote,
+      lockedMmrNote +
+      (confirmedDraft ? " · you're down as ready for draft night" : ""),
   };
 }
 

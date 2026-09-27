@@ -48,3 +48,42 @@ export function draftReadinessCounts(
   }
   return { ready, awaiting, stale, total: registrations.length };
 }
+
+/** The draft schedule a page showed: its revision and time, as posted back. */
+export type SeenDraftSchedule = { revision: number; atMs: number };
+
+/**
+ * Read the draft revision and time a form carried back in hidden fields.
+ * Both are untrusted browser values: anything that is not a whole,
+ * non-negative revision and a positive epoch is refused (null), never
+ * coerced into a schedule the player did not see.
+ */
+export function parseSeenDraftSchedule(
+  revisionRaw: string,
+  draftAtRaw: string,
+): SeenDraftSchedule | null {
+  const revisionText = revisionRaw.trim();
+  const atText = draftAtRaw.trim();
+  if (!/^\d+$/.test(revisionText) || !/^\d+$/.test(atText)) return null;
+  const revision = Number(revisionText);
+  const atMs = Number(atText);
+  if (!Number.isSafeInteger(revision) || revision < 0) return null;
+  if (!Number.isSafeInteger(atMs) || atMs <= 0) return null;
+  return { revision, atMs };
+}
+
+/**
+ * Is the schedule the player saw still the season's current one? Both the
+ * revision and the time must match: the revision alone would accept a time
+ * moved away and back, the time alone a stale tab from before that move.
+ */
+export function seenScheduleIsCurrent(
+  seen: SeenDraftSchedule,
+  season: { draftRevision: number; draftAt: Date | null },
+): boolean {
+  return (
+    !!season.draftAt &&
+    season.draftRevision === seen.revision &&
+    season.draftAt.getTime() === seen.atMs
+  );
+}

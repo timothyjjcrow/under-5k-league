@@ -91,6 +91,20 @@ test("a player confirms the draft schedule and admin sees the readiness change",
 }) => {
   const name = `Draft Ready ${Date.now()}`;
   const steamId = "7656118" + String(Date.now()).slice(-10);
+  const joinerName = `Draft Joiner ${Date.now()}`;
+  const joinerSteamId = "7656117" + String(Date.now()).slice(-10);
+
+  // Signed up BEFORE a draft time exists: they confirm it later on /me.
+  const playerContext = await browser.newContext();
+  const playerPage = await playerContext.newPage();
+  await playerPage.goto(
+    `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/me`,
+  );
+  await playerPage.getByLabel("Dota 2 MMR").fill("3100");
+  await playerPage
+    .getByRole("button", { name: /Join the season|Update signup/ })
+    .click();
+  await expect(playerPage.getByText("Playing").first()).toBeVisible();
 
   // Schedule draft night from the real admin form. The datetime-local helper
   // converts this league-time value to the epoch the confirmation action
@@ -102,20 +116,10 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   await page.getByRole("button", { name: "Set draft night" }).click();
   await expect(page.getByText(/^0\/\d+ ready$/)).toBeVisible();
 
-  const playerContext = await browser.newContext();
-  const playerPage = await playerContext.newPage();
-  await playerPage.goto(
-    `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/me`,
-  );
-  await playerPage.getByLabel("Dota 2 MMR").fill("3100");
-  await playerPage
-    .getByRole("button", { name: /Join the season|Update signup/ })
-    .click();
-  await expect(playerPage.getByText("Playing").first()).toBeVisible();
+  await playerPage.reload();
   await expect(
     playerPage.getByRole("button", { name: "Confirm I’m ready for draft" }),
   ).toBeVisible();
-
   await playerPage
     .getByRole("button", { name: "Confirm I’m ready for draft" })
     .click();
@@ -123,11 +127,31 @@ test("a player confirms the draft schedule and admin sees the readiness change",
     playerPage.getByText("Ready for draft ✓", { exact: true }),
   ).toBeVisible();
 
+  // Joining AFTER the time is posted counts as confirming it: the form showed
+  // the time, so there is no second step.
+  const joinerContext = await browser.newContext();
+  const joinerPage = await joinerContext.newPage();
+  await joinerPage.goto(
+    `/api/auth/dev?name=${encodeURIComponent(joinerName)}&steamId=${joinerSteamId}&redirect=/me`,
+  );
+  await expect(
+    joinerPage.getByText(/Joining as a full player confirms/),
+  ).toBeVisible();
+  await joinerPage.getByLabel("Dota 2 MMR").fill("3000");
+  await joinerPage.getByRole("button", { name: "Join the season" }).click();
+  await expect(
+    joinerPage.getByText("Ready for draft ✓", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    joinerPage.getByRole("button", { name: "Confirm I’m ready for draft" }),
+  ).toHaveCount(0);
+  await joinerContext.close();
+
   await page.reload();
-  const playerRow = page
-    .locator(".max-h-80 div.rounded-lg", { hasText: name })
-    .first();
-  await expect(playerRow.getByText("ready ✓", { exact: true })).toBeVisible();
+  for (const who of [name, joinerName]) {
+    const row = page.locator(".max-h-80 div.rounded-lg", { hasText: who }).first();
+    await expect(row.getByText("ready ✓", { exact: true })).toBeVisible();
+  }
 
   // Moving the date must invalidate the old acknowledgement rather than
   // leaving a misleading permanent ready flag.

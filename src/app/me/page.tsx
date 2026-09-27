@@ -190,6 +190,14 @@ export default async function MePage({
     ? draftReadiness(reg, season?.draftRevision ?? 0)
     : DRAFT_READINESS.AWAITING;
 
+  // Someone who can press Join as a full player right now: that submit also
+  // confirms the draft time printed above the form (saveRegistration).
+  const joinConfirmsDraft =
+    !(isRegistered && reg?.type === REGISTRATION_TYPE.PLAYER) &&
+    !playerLocked &&
+    !registrationRemoved &&
+    !seasonRegistrationClosed &&
+    !rejoinPaused;
   const needsDraftConfirmation = !!(
     season?.draftAt &&
     draftConfirmationOpen &&
@@ -292,6 +300,12 @@ export default async function MePage({
                   eventLabel="Draft"
                   passedLabel={DRAFT_PASSED_LABEL}
                 />
+                {joinConfirmsDraft ? (
+                  <span className="mt-0.5 block text-xs">
+                    Joining as a full player confirms you&apos;ve seen this
+                    time and plan to be there.
+                  </span>
+                ) : null}
               </p>
             ) : null}
             {season.draftAt &&
@@ -568,7 +582,23 @@ export default async function MePage({
                   saved={isRegistered}
                   summary={reg && isRegistered ? signupSummary(reg) : undefined}
                 >
-                <ActionForm action={saveRegistration} trackChanges className="space-y-5">
+                <ActionForm
+                  action={saveRegistration}
+                  trackChanges
+                  className="space-y-5"
+                  // The draft time printed above this form. Joining the pool
+                  // with it counts as confirming it; the server stamps that
+                  // only if these still match the season when it saves.
+                  hidden={
+                    season.draftAt && draftConfirmationOpen
+                      ? {
+                          seenDraftSeasonId: season.id,
+                          seenDraftRevision: String(season.draftRevision),
+                          seenDraftAtTs: String(season.draftAt.getTime()),
+                        }
+                      : undefined
+                  }
+                >
                   {/* Said once, in neutral colours: the accent box this used
                       to be looked exactly like the "Confirmation needed" box,
                       and each field then repeated "shown publicly". The
