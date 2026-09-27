@@ -19,7 +19,7 @@ import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
-import { weekStartsCollapsed } from "@/lib/schedule";
+import { scheduleFilterTeamId, weekStartsCollapsed } from "@/lib/schedule";
 import type { PlayoffPathLine } from "@/components/playoff-outlook";
 
 export type RsvpSide = {
@@ -100,11 +100,11 @@ export function ScheduleWeeks({
   teams: { id: string; name: string; logoUrl?: string | null }[];
 }) {
   const params = useSearchParams();
-  const requestedTeam = params.get("team");
-  const candidate = requestedTeam === null ? initialTeamId : requestedTeam;
-  const filterTeam = teams.some((team) => team.id === candidate)
-    ? candidate!
-    : null;
+  const filterTeam = scheduleFilterTeamId(
+    params.get("team"),
+    initialTeamId,
+    teams.map((team) => team.id),
+  );
   const setFilterTeam = (team: string | null) => {
     const url = new URL(window.location.href);
     url.searchParams.set("team", team ?? "all");

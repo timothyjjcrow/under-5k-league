@@ -1,4 +1,5 @@
-import { calendarFeedLinks } from "@/lib/calendar-links";
+import { AddToCalendar } from "@/components/add-to-calendar";
+import { resolveSiteUrl } from "@/lib/site-url";
 import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { leagueProgress, progressSummary } from "@/lib/league-progress";
@@ -50,7 +51,7 @@ import {
 } from "@/lib/availability";
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
-import { AUTO_SYNC } from "@/lib/constants";
+import { AUTO_SYNC, MATCH_SCHEDULE } from "@/lib/constants";
 import { CheckinBanner } from "@/components/checkin-banner";
 import {
   ScheduleFold,
@@ -103,16 +104,14 @@ function pickRsvp(side: TeamAvailability, expected: number): RsvpSide {
   return { confirmed: side.confirmed, out: side.out, expected };
 }
 
+// Only shown before any fixture exists (SIGNUPS, DRAFT, REGULAR_SEASON);
+// once fixtures exist the match night rides in the page subtitle.
 function calloutDescription(status: string): string {
   if (status === "SIGNUPS")
     return "Games run weekly. Confirm this slot works before you sign up.";
   if (status === "DRAFT")
     return "This is the default weekly slot. Exact kickoffs appear once the schedule is published.";
-  if (status === "REGULAR_SEASON")
-    return "Use the exact kickoffs below, then check in for the next match you're playing.";
-  if (status === "PLAYOFFS")
-    return "Playoff nights may move by round. Use the exact kickoff shown for each match.";
-  return "The season is complete. The fixtures and results below are read-only history.";
+  return "Use the exact kickoffs below, then check in for the next match you're playing.";
 }
 
 function emptyScheduleCopy(status: string, draftStatus?: string | null) {
@@ -644,19 +643,21 @@ export default async function SchedulePage() {
     </section>
   ) : null;
 
+  const sortedTeams = [...teams]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((t) => ({ id: t.id, name: t.name, logoUrl: t.logoUrl }));
   const regularWeeks = (
     <ScheduleWeeks
       weeks={orderScheduleWeeks(weekViews, progress.focusWeek)}
       initialTeamId={[...myTeamIds][0]}
-      teams={[...teams]
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((t) => ({
-          id: t.id,
-          name: t.name,
-          logoUrl: t.logoUrl,
-        }))}
+      teams={sortedTeams}
     />
   );
+  const hasTimes = matches.some((m) => m.scheduledAt);
+  const calendarTeams = sortedTeams.map(({ id, name }) => ({ id, name }));
+  const matchNight =
+    season.matchSchedule?.trim() ||
+    (MATCH_SCHEDULE.announced ? MATCH_SCHEDULE.label : null);
 
   return (
     <div className="space-y-6">
@@ -672,34 +673,26 @@ export default async function SchedulePage() {
         }
         // The week and the series count stand in for the progress ring the
         // home page carries: this page leads with the fixtures themselves.
+        // The weekly slot is quoted in the league's zone; each fixture's own
+        // kickoff renders in the reader's.
         subtitle={[
           season.name,
           season.status === "REGULAR_SEASON" ? progressSummary(progress) : null,
-          "Local kickoff times",
+          hasTimes && season.status !== "COMPLETE" && matchNight
+            ? `Match night ${matchNight}`
+            : null,
+          hasTimes ? "Kickoffs shown in your time zone" : null,
         ]
           .filter(Boolean)
           .join(" · ")}
         action={
-          <div className="flex flex-wrap items-center gap-3">
-            {matches.some((m) => m.scheduledAt) ? (
-              <>
-                <a
-                  href={calendarFeedLinks().subscribe}
-                  className={buttonClasses("secondary", "sm")}
-                  title="Add the league calendar to your calendar app — moved matches update on their own"
-                >
-                  Subscribe ↗
-                </a>
-                <a
-                  href="/api/calendar"
-                  className={buttonClasses("secondary", "sm")}
-                  title="Download the active season's calendar feed"
-                >
-                  Calendar ↗
-                </a>
-              </>
-            ) : null}
-          </div>
+          hasTimes ? (
+            <AddToCalendar
+              site={resolveSiteUrl()}
+              teams={calendarTeams}
+              initialTeamId={[...myTeamIds][0]}
+            />
+          ) : undefined
         }
       />
 
@@ -872,35 +865,6 @@ export default async function SchedulePage() {
           </section>
         </div>
       )}
-
-      {hasFixtures ? (
-        <AnalysisDisclosure title="Match times & calendar help">
-          <ScheduleCallout
-            label={season.matchSchedule}
-            description={calloutDescription(season.status)}
-          />
-          <p className="text-sm leading-relaxed text-muted">
-            The time on each fixture is its published kickoff. A time-change
-            request is only a proposal until accepted. Open a match for check-in,
-            rescheduling, and result details.
-          </p>
-          <p className="text-sm leading-relaxed text-muted">
-            Subscribing keeps your calendar in step when a match moves. A
-            downloaded file is a one-time copy.
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <a
-              href={calendarFeedLinks().subscribe}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Subscribe in your calendar app
-            </a>
-            <a href="/api/calendar" className={buttonClasses("secondary", "sm")}>
-              Download league calendar (.ics)
-            </a>
-          </div>
-        </AnalysisDisclosure>
-      ) : null}
 
       {hasFixtures ? (
         <Card id="standings" className="scroll-mt-24">

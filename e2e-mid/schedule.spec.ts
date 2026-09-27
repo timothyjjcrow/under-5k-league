@@ -19,9 +19,9 @@ async function login(
 }
 
 // /schedule mid-season: week list with collapse/filter behavior, the LIVE
-// score chip, the playoff-race cards, the season grid, and the calendar link.
+// score chip, the playoff-race cards, the season grid, and the calendar menu.
 
-test("schedule renders weeks, cards, the LIVE chip, and the calendar link", async ({
+test("schedule renders weeks, cards, the LIVE chip, and the calendar menu", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
@@ -47,10 +47,41 @@ test("schedule renders weeks, cards, the LIVE chip, and the calendar link", asyn
   await expect(
     page.getByRole("heading", { name: "Head-to-head results", exact: true }),
   ).toBeVisible();
-  // Two calendar links exist (schedule header + footer) — either proves it.
+  // One "Add to calendar" control: Apple/Outlook subscribe, Google Calendar
+  // and a download, all for the whole league when no team is picked.
+  const addToCalendar = page.getByRole("button", {
+    name: "Add to calendar",
+    exact: true,
+  });
+  await addToCalendar.click();
   await expect(
-    page.getByRole("link", { name: "Calendar ↗", exact: true }),
-  ).toHaveAttribute("href", /\/api\/calendar/);
+    page.getByRole("link", { name: "Apple Calendar or Outlook", exact: true }),
+  ).toHaveAttribute("href", /^webcal:\/\/[^/]+\/api\/calendar$/);
+  await expect(
+    page.getByRole("link", { name: /^Google Calendar/ }),
+  ).toHaveAttribute(
+    "href",
+    /^https:\/\/calendar\.google\.com\/calendar\/render\?cid=webcal%3A%2F%2F/,
+  );
+  const download = page.getByRole("link", {
+    name: "Download .ics file",
+    exact: true,
+  });
+  await expect(download).toHaveAttribute("href", "/api/calendar");
+  await expectNoHorizontalOverflow(page, "/schedule calendar menu");
+  await page.keyboard.press("Escape");
+  await expect(download).toHaveCount(0);
+  await expect(addToCalendar).toBeFocused();
+
+  // Picking a team in the fixture filter offers that team's feed, with the
+  // whole league one tap away.
+  await page
+    .getByRole("combobox", { name: "Show matches for" })
+    .selectOption({ index: 1 });
+  await addToCalendar.click();
+  await expect(download).toHaveAttribute("href", /^\/api\/calendar\?team=/);
+  await page.getByRole("button", { name: "Whole league", exact: true }).click();
+  await expect(download).toHaveAttribute("href", "/api/calendar");
 
   assertNoErrors();
 });

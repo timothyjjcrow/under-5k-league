@@ -22,6 +22,7 @@ import {
   upcomingMatchNight,
   rescheduleDeadline,
   leagueMonthWindow,
+  scheduleFilterTeamId,
 } from "./schedule";
 import { LEAGUE_CONFIG } from "./league-config";
 
@@ -411,6 +412,22 @@ describe("groupPlayoffRounds", () => {
 
   it("returns empty when there are no playoff matches", () => {
     expect(groupPlayoffRounds([])).toEqual({ totalRounds: 0, rounds: [] });
+  });
+});
+
+describe("scheduleFilterTeamId", () => {
+  const ids = ["a", "b"];
+  it("starts on the reader's own team when the URL names none", () => {
+    expect(scheduleFilterTeamId(null, "b", ids)).toBe("b");
+    expect(scheduleFilterTeamId(null, undefined, ids)).toBeNull();
+  });
+  it("follows the team picked in the URL, and 'all' clears it", () => {
+    expect(scheduleFilterTeamId("a", "b", ids)).toBe("a");
+    expect(scheduleFilterTeamId("all", "b", ids)).toBeNull();
+  });
+  it("ignores a team that isn't one of this page's teams", () => {
+    expect(scheduleFilterTeamId("gone", "b", ids)).toBeNull();
+    expect(scheduleFilterTeamId(null, "gone", ids)).toBeNull();
   });
 });
 

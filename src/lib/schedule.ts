@@ -540,6 +540,22 @@ export function weekStartsCollapsed(
   );
 }
 
+/**
+ * The team a /schedule reader is looking at: an explicit `?team=` in the URL
+ * wins ("all", or an id that isn't one of these teams, means no team), and
+ * without one it is the reader's own team. The fixture filter and the
+ * calendar control both read it, so "Add to calendar" offers the team whose
+ * matches are on screen.
+ */
+export function scheduleFilterTeamId(
+  requested: string | null,
+  initialTeamId: string | null | undefined,
+  teamIds: readonly string[],
+): string | null {
+  const candidate = requested === null ? initialTeamId : requested;
+  return candidate != null && teamIds.includes(candidate) ? candidate : null;
+}
+
 /** Match index encoded in a bracket slot like "R2M1" (null when absent). */
 export function slotIndex(slot: string | null | undefined): number | null {
   const m = slot?.match(/M(\d+)$/);
