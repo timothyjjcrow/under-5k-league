@@ -1,7 +1,8 @@
 import * as React from "react";
 import Link from "next/link";
 import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
-import { cn, initials } from "@/lib/utils";
+import { cn, initials, teamInitials } from "@/lib/utils";
+import { teamHueVar } from "@/lib/team-hues";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { type Hero, heroById, heroIcon, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
@@ -488,17 +489,6 @@ export function Avatar({
 // ---------- Team crest ----------
 
 /**
- * Deterministic hue (0–359) from a stable seed, so each team gets a consistent
- * color identity. Seed on the team id (not the name) so editing the name keeps
- * the color.
- */
-export function teamHue(seed: string): number {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
-  return h;
-}
-
-/**
  * A team's configured logo, or a deterministic generated monogram when the
  * team has not configured one. Crests are decorative wherever they appear;
  * the adjacent team name remains the accessible label.
@@ -519,10 +509,12 @@ export function TeamCrest({
   className?: string;
 }) {
   const src = logoUrl?.trim();
-  const hue = teamHue(seed);
+  // The season hue from the layout's stylesheet, else the hash hue.
+  const hue = teamHueVar(seed);
   return (
     <span
       aria-hidden
+      data-team-hue={seed}
       className={cn(
         "relative grid shrink-0 place-items-center overflow-hidden rounded-xl font-display font-bold uppercase text-white shadow ring-1 ring-white/15",
         className,
@@ -534,7 +526,7 @@ export function TeamCrest({
         backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
       }}
     >
-      {initials(name)}
+      {teamInitials(name)}
       {src ? (
         <TeamLogoImage key={src} src={src} size={size} fit={imageFit} />
       ) : null}

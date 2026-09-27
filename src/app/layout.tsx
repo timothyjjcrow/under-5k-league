@@ -23,6 +23,7 @@ import { prisma } from "@/lib/prisma";
 import { resolveSiteUrl } from "@/lib/site-url";
 import { getPublicReadSignals } from "@/lib/public-read-signals";
 import { getPublicHasHistory } from "@/lib/public-navigation";
+import { getTeamHueStyleSheet } from "@/lib/team-hue-snapshot";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION =
@@ -62,7 +63,7 @@ export const viewport: Viewport = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [user, season, hasHistory, publicReadSignals] =
+  const [user, season, hasHistory, publicReadSignals, teamHueCss] =
     await Promise.all([
       getSessionUser(),
       getActiveSeason(),
@@ -72,6 +73,9 @@ export default async function RootLayout({
       // heartbeat that loses the import claim can see the cursor advance and
       // refresh the stale RSC payload.
       getPublicReadSignals(),
+      // Crest colours are decoration: without them crests use their
+      // fallback hue, so a failure here must never take the page down.
+      getTeamHueStyleSheet().catch(() => ""),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
   const myTeam =
@@ -89,6 +93,11 @@ export default async function RootLayout({
       data-scroll-behavior="smooth"
     >
       <body className="flex min-h-full flex-col">
+        {teamHueCss ? (
+          // Each season's teams get evenly spaced crest colours (see
+          // lib/team-hues.ts). Only team ids and integers go in here.
+          <style dangerouslySetInnerHTML={{ __html: teamHueCss }} />
+        ) : null}
         <a href="#main" className="skip-link">
           Skip to main content
         </a>

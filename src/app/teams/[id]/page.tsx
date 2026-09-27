@@ -55,6 +55,7 @@ import {
 import { playoffStatuses } from "@/lib/playoff-status";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
+import { teamHueVar } from "@/lib/team-hues";
 import {
   Avatar,
   Badge,
@@ -70,7 +71,6 @@ import {
   Sparkline,
   Stat,
   TeamCrest,
-  teamHue,
   textLink,
 } from "@/components/ui";
 
@@ -265,7 +265,8 @@ export default async function TeamPage({
   const hasRoleData = coverage.some((r) => r.count > 0);
   // Which player prefers which roles → per-row badges in the roster card.
   const rolesByUser = new Map(rosterRegs.map((r) => [r.userId, r.roles]));
-  const hue = teamHue(team.id);
+  // The season hue its crest wears (published by the root layout).
+  const hue = teamHueVar(team.id);
   // The roster's most-commonly listed hero → a faint banner backdrop. Kept
   // subtle so the team's color identity (crest + glow) stays dominant.
   const heroCounts = new Map<number, number>();
@@ -429,6 +430,7 @@ export default async function TeamPage({
           />
           <div
             aria-hidden
+            data-team-hue={team.id}
             className="animate-hero-glow pointer-events-none absolute -left-8 top-0 h-40 w-40 -translate-y-1/3 rounded-full blur-3xl"
             style={{ backgroundColor: `hsl(${hue} 70% 50% / 0.22)` }}
           />
