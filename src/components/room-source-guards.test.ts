@@ -436,4 +436,26 @@ describe("live rooms share one status line", () => {
       ).toEqual([]);
     }
   });
+
+  // The status line and the pause note come and go between polls (a lost bid
+  // response, a 429, the admin resuming). Rendered above the lot card they
+  // pushed the lot and its bid buttons down and back up under a captain's
+  // thumb, so the live view renders them below the controls instead.
+  it("draft-room: the live view's status line sits below the bid controls", () => {
+    const src = code("draft-room.tsx");
+    const live = src.indexOf("const lotStale");
+    const zone = src.indexOf("ref={bannerRef}", live);
+    const primer = src.indexOf("<AuctionPrimer", zone);
+    expect(live).toBeGreaterThan(-1);
+    expect(zone).toBeGreaterThan(live);
+    expect(primer).toBeGreaterThan(zone);
+    const aboveCard = src.slice(live, zone);
+    expect(aboveCard).not.toContain("{roomAlerts}");
+    expect(aboveCard).not.toContain("paused the auction");
+    const card = src.slice(zone, primer);
+    const controls = card.indexOf("<ExactBidControl");
+    expect(controls).toBeGreaterThan(-1);
+    expect(card.indexOf("{roomAlerts}")).toBeGreaterThan(controls);
+    expect(card.indexOf("paused the auction")).toBeGreaterThan(controls);
+  });
 });

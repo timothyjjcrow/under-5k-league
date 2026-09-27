@@ -1377,9 +1377,13 @@ export function DraftRoom({
     </button>
   ) : null;
 
+  // Dim the (stale) clocks while polling is dead: they're ticking on the last
+  // state we saw, not the live auction. Everything in the lot card dims
+  // except the status slot that explains why.
+  const lotStale = connectionUnavailable || disconnected;
+
   return (
     <div className="space-y-6">
-      {roomAlerts}
       {/* Screen readers hear each nomination and bid as it lands ("Team 3
           bid on Pudge, $8"); sighted viewers read it off the lot card. */}
       <p role="status" className="sr-only">
@@ -1404,16 +1408,6 @@ export function DraftRoom({
           undoAction={undoAction}
           voidLotAction={voidLotAction}
         />
-      ) : null}
-      {paused ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
-        >
-          ⏸️ The admin paused the auction — clocks are parked and nothing can
-          sell. Stay put; it resumes with a fresh clock.
-        </div>
       ) : null}
       {/* Compact clock bar — pins under the site header while the captain is
           deep in the player pool, so the auction never disappears. */}
@@ -1534,9 +1528,6 @@ export function DraftRoom({
           !!me.userId &&
             state.nominatedPlayer?.userId === me.userId &&
             "border-accent/70 ring-2 ring-accent/30",
-          // Dim the (stale) clocks while polling is dead — they're ticking on
-          // the last state we saw, not the live auction.
-          (connectionUnavailable || disconnected) && "opacity-50",
         )}
       >
         {/* The ACTION ZONE — clock, player, price and the bid controls, in
@@ -1545,7 +1536,9 @@ export function DraftRoom({
             compact bar takes over the moment the controls themselves scroll
             away rather than once the whole card has gone. */}
         <div ref={bannerRef}>
-          <div className="border-b border-line">
+          <div
+            className={cn("border-b border-line", lotStale && "opacity-50")}
+          >
             {/* FIXED HEIGHT (min-h-14, two text lines at most): a sale and a
                 clock running out used to insert banners ABOVE the card, which
                 pushed the lot and its buttons ~110px down and back again right
@@ -1636,7 +1629,7 @@ export function DraftRoom({
             ) : null}
           </div>
 
-          <div className="p-5">
+          <div className={cn("p-5", lotStale && "opacity-50")}>
             {state.nominatedPlayer ? (
               <>
                 {/* Price beside the name, then straight into the controls:
@@ -1870,10 +1863,35 @@ export function DraftRoom({
               </div>
             )}
           </div>
+          {/* The room's status line and the pause note sit BELOW the
+              controls, undimmed. Above the card they came and went between
+              polls (a lost bid response, a 429, the admin resuming) and
+              pushed the lot and its bid buttons down and back up under a
+              captain's thumb; here they move only the scouting detail. */}
+          {connectionStatus || paused ? (
+            <div className="space-y-2 px-5 pb-5">
+              {roomAlerts}
+              {paused ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
+                >
+                  ⏸️ The admin paused the auction — clocks are parked and
+                  nothing can sell. Stay put; it resumes with a fresh clock.
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {state.nominatedPlayer ? (
-          <div className="space-y-3 border-t border-line px-5 py-3 text-sm">
+          <div
+            className={cn(
+              "space-y-3 border-t border-line px-5 py-3 text-sm",
+              lotStale && "opacity-50",
+            )}
+          >
             {state.lotBids.length > 1 ? (
               // The lot's audit trail (newest first) — kills "who bid
               // what?" disputes without leaving the card.
