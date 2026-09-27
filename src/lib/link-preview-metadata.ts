@@ -1,19 +1,16 @@
 // generateMetadata for pages whose link preview names the season or the
-// fixture. Each loader reads only what its preview needs: the active season
-// (request-cached, and already read by the root layout), a count, or a few
-// small rows. The sentences themselves live in link-preview.ts.
+// fixture. Each loader reads only what its preview needs: request-cached
+// reads the page itself also makes (the active season, Home's snapshot), or
+// a few small rows. The sentences themselves live in link-preview.ts.
 
 import type { Metadata } from "next";
 import { prisma } from "./prisma";
 import { getActiveSeason } from "./season";
+import { getSessionUser } from "./auth";
+import { getSeasonMatches, getSeasonSnapshot } from "./queries";
 import { LEAGUE_CONFIG } from "./league-config";
 import { shareMetadata } from "./share-metadata";
-import {
-  MATCH_PHASE,
-  REGISTRATION_STATUS,
-  REGISTRATION_TYPE,
-  SEASON_STATUS,
-} from "./constants";
+import { MATCH_PHASE, SEASON_STATUS } from "./constants";
 import { resolveChampionPresentation } from "./champion-presentation";
 import { groupPlayoffRounds, matchRoundLabel } from "./schedule";
 import {
@@ -32,42 +29,27 @@ const SEASON_PAGE_PATHS: Record<SeasonPage, string> = {
 
 /**
  * Home: "Copy invite link" shares this page, so its preview carries the
- * season. The tab keeps the plain league name.
+ * season. The tab keeps the plain league name. Every read here is one Home's
+ * page makes in the same request (its snapshot, and its match list once the
+ * season is complete), so the preview adds no queries.
  */
 export async function homeMetadata(): Promise<Metadata> {
-  const season = await getActiveSeason();
-  const [playerCount, draft, champion] = season
-    ? await Promise.all([
-        season.status === SEASON_STATUS.SIGNUPS
-          ? prisma.registration.count({
-              where: {
-                seasonId: season.id,
-                status: REGISTRATION_STATUS.ACTIVE,
-                type: REGISTRATION_TYPE.PLAYER,
-              },
-            })
-          : Promise.resolve(0),
-        season.status === SEASON_STATUS.DRAFT
-          ? prisma.draft.findUnique({
-              where: { seasonId: season.id },
-              select: { status: true },
-            })
-          : Promise.resolve(null),
-        season.status === SEASON_STATUS.COMPLETE
-          ? championName(season)
-          : Promise.resolve(null),
-      ])
-    : [0, null, null];
+  const user = await getSessionUser();
+  const snapshot = await getSeasonSnapshot(user?.id);
+  const season = snapshot?.season;
   const preview = homePreview(
-    season
+    snapshot && season
       ? {
           name: season.name,
           status: season.status,
-          draftStatus: draft?.status ?? null,
-          playerCount,
+          draftStatus: snapshot.draftStatus,
+          playerCount: snapshot.playerCount,
           draftAt: season.draftAt,
           matchSchedule: season.matchSchedule,
-          championName: champion,
+          championName:
+            season.status === SEASON_STATUS.COMPLETE
+              ? await championName(season, snapshot.teams)
+              : null,
         }
       : null,
     Date.now(),
@@ -78,35 +60,20 @@ export async function homeMetadata(): Promise<Metadata> {
   };
 }
 
-/** The champion Home may name: the bracket must agree with the season row. */
-async function championName(season: {
-  id: string;
-  status: string;
-  championTeamId: string | null;
-}): Promise<string | null> {
+/**
+ * The champion Home may name, by the resolver Home's page uses: the bracket
+ * must agree with the season row.
+ */
+async function championName(
+  season: { id: string; status: string; championTeamId: string | null },
+  teams: readonly { id: string; name: string }[],
+): Promise<string | null> {
   if (!season.championTeamId) return null;
-  const postseason = await prisma.match.findMany({
-    where: {
-      seasonId: season.id,
-      phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
-    },
-    select: {
-      id: true,
-      phase: true,
-      bracketSlot: true,
-      status: true,
-      winnerTeamId: true,
-      homeTeamId: true,
-      awayTeamId: true,
-    },
-  });
-  const { championTeamId } = resolveChampionPresentation(season, postseason);
-  if (!championTeamId) return null;
-  const team = await prisma.team.findUnique({
-    where: { id: championTeamId },
-    select: { name: true },
-  });
-  return team?.name ?? null;
+  const { championTeamId } = resolveChampionPresentation(
+    season,
+    await getSeasonMatches(season.id),
+  );
+  return teams.find((team) => team.id === championTeamId)?.name ?? null;
 }
 
 /** Schedule, Teams, Players and Draft: the page's name and the season. */

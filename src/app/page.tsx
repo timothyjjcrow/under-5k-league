@@ -8,7 +8,11 @@ import { getSeasonGameLeaders } from "@/lib/cached-queries";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
-import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
+import {
+  getSeasonMatches,
+  getSeasonSnapshot,
+  type SeasonSnapshot,
+} from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import {
   computeStandings,
@@ -305,10 +309,8 @@ export default async function Home() {
     season.status === "COMPLETE";
   const [matches, gamesOnRecord] = showsMatches
     ? await Promise.all([
-        prisma.match.findMany({
-          where: { seasonId: season.id },
-          orderBy: [{ week: "asc" }],
-        }),
+        // Request-cached: the link preview reads it for the champion.
+        getSeasonMatches(season.id),
         prisma.game.count({ where: { match: { seasonId: season.id } } }),
       ])
     : [[] as Match[], 0];

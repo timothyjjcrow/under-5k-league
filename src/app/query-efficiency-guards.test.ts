@@ -6,6 +6,8 @@ const read = (...path: string[]) => readFileSync(join(__dirname, ...path), "utf8
 const HOME = read("page.tsx");
 const LAYOUT = read("layout.tsx");
 const PUBLIC_NAVIGATION = read("../lib/public-navigation.ts");
+const QUERIES = read("../lib/queries.ts");
+const LINK_PREVIEW_METADATA = read("../lib/link-preview-metadata.ts");
 
 describe("shared-shell query efficiency", () => {
   it("checks for archived seasons without counting every archived row", () => {
@@ -18,10 +20,13 @@ describe("shared-shell query efficiency", () => {
   // Every page renders the layout, so the header's "Join Season N" costs one
   // unique-key row for signed-in viewers during signups and nothing else.
   it("reads the viewer's signup for the join button with one unique-key lookup", () => {
-    expect(LAYOUT.match(/prisma\.registration\./g)).toHaveLength(1);
-    expect(LAYOUT).toContain("prisma.registration.findUnique({");
+    expect(LAYOUT).not.toMatch(/prisma\.registration\./);
     expect(LAYOUT).toMatch(
-      /user && season\?\.status === "SIGNUPS"\s*\?\s*prisma\.registration/,
+      /user && season\?\.status === "SIGNUPS"\s*\?\s*getViewerRegistration\(season\.id, user\.id\)/,
+    );
+    expect(QUERIES.match(/prisma\.registration\.findUnique\(\{/g)).toHaveLength(1);
+    expect(QUERIES).toMatch(
+      /getViewerRegistration = cache\([\s\S]*?prisma\.registration\.findUnique\(\{\s*where: \{ seasonId_userId:/,
     );
   });
 
@@ -46,8 +51,40 @@ describe("shared-shell query efficiency", () => {
   });
 
   it("reads the viewer's fantasy entry with one unique-key lookup", () => {
-    expect(LAYOUT.match(/prisma\.fantasyRoster\./g)).toHaveLength(1);
-    expect(LAYOUT).toContain("prisma.fantasyRoster.findUnique({");
+    expect(LAYOUT).not.toMatch(/prisma\.fantasyRoster\./);
+    expect(LAYOUT).toContain("getViewerFantasyEntered(season.id, user.id)");
+    expect(QUERIES.match(/prisma\.fantasyRoster\./g)).toHaveLength(1);
+    expect(QUERIES).toMatch(
+      /getViewerFantasyEntered = cache\([\s\S]*?prisma\.fantasyRoster\.findUnique\(\{\s*where: \{ seasonId_userId:/,
+    );
+  });
+
+  // During DRAFT the layout, Home's snapshot and Home's link preview all need
+  // the auction status: one request-cached read, never one each.
+  it("shares the auction status through one request-cached read", () => {
+    expect(LAYOUT).not.toMatch(/prisma\.draft\./);
+    expect(LAYOUT).toContain("getSeasonDraftStatus(season.id)");
+    expect(QUERIES.match(/prisma\.draft\./g)).toHaveLength(1);
+    expect(QUERIES).toMatch(/getSeasonDraftStatus = cache\(/);
+  });
+});
+
+describe("homepage link preview query efficiency", () => {
+  // generateMetadata runs on every Home render. It reuses the page's own
+  // request-cached snapshot and match list instead of re-reading the draft,
+  // the signup count or the champion.
+  it("reuses Home's cached snapshot and match list", () => {
+    expect(QUERIES).toMatch(/export const getSeasonSnapshot = cache\(/);
+    expect(QUERIES).toMatch(/export const getSeasonMatches = cache\(/);
+    expect(LINK_PREVIEW_METADATA).toContain("getSeasonSnapshot(user?.id)");
+    expect(HOME).toContain("getSeasonSnapshot(user?.id)");
+    expect(HOME).toContain("getSeasonMatches(season.id)");
+    const home = LINK_PREVIEW_METADATA.slice(
+      LINK_PREVIEW_METADATA.indexOf("export async function homeMetadata"),
+      LINK_PREVIEW_METADATA.indexOf("export async function seasonPageMetadata"),
+    );
+    expect(home).toContain("getSeasonMatches(season.id)");
+    expect(home).not.toMatch(/prisma\./);
   });
 });
 

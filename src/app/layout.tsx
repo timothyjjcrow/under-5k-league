@@ -28,6 +28,11 @@ import {
   getPublicLeagueContent,
   getPublicSeasonHasGames,
 } from "@/lib/public-navigation";
+import {
+  getSeasonDraftStatus,
+  getViewerFantasyEntered,
+  getViewerRegistration,
+} from "@/lib/queries";
 import { joinSeasonCta, type NavContent } from "@/lib/site-nav";
 import { siteDescription } from "@/lib/link-preview";
 
@@ -83,7 +88,9 @@ export default async function RootLayout({
       getPublicLeagueContent(null),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
-  const [myTeam, draft, registration, seriesLive, seasonHasGames, fantasyRoster] =
+  // The draft status, the viewer's signup and their fantasy entry are
+  // request-cached (queries.ts): Home's page and link preview reuse them.
+  const [myTeam, draftStatus, registration, seriesLive, seasonHasGames, fantasyEntered] =
     await Promise.all([
       user && season
         ? prisma.teamMember.findFirst({
@@ -94,21 +101,11 @@ export default async function RootLayout({
       // The menus hide Schedule, Fantasy and Pick'em until the auction is
       // complete, and the phase chips name the auction's state. Only the
       // DRAFT phase needs it: one indexed row, one column.
-      season?.status === "DRAFT"
-        ? prisma.draft.findUnique({
-            where: { seasonId: season.id },
-            select: { status: true },
-          })
-        : null,
+      season?.status === "DRAFT" ? getSeasonDraftStatus(season.id) : null,
       // During signups the header offers "Join Season N" to anyone who
       // hasn't joined: one unique-key row, signed-in viewers only.
       user && season?.status === "SIGNUPS"
-        ? prisma.registration.findUnique({
-            where: {
-              seasonId_userId: { seasonId: season.id, userId: user.id },
-            },
-            select: { status: true },
-          })
+        ? getViewerRegistration(season.id, user.id)
         : null,
       // The header's "Series live" chip: one indexed row behind the shared
       // public snapshot, and only while matches can be live.
@@ -132,21 +129,15 @@ export default async function RootLayout({
       (season?.status === "REGULAR_SEASON" ||
         season?.status === "PLAYOFFS" ||
         season?.status === "COMPLETE")
-        ? prisma.fantasyRoster.findUnique({
-            where: {
-              seasonId_userId: { seasonId: season.id, userId: user.id },
-            },
-            select: { id: true },
-          })
-        : null,
+        ? getViewerFantasyEntered(season.id, user.id)
+        : false,
     ]);
-  const draftStatus = draft?.status ?? null;
   const navContent: NavContent = {
     hasHistory,
     hasGames: leagueContent.hasGames,
     hasChampion: leagueContent.hasChampion,
     fantasyLocked: season?.fantasyLockedAt != null || seasonHasGames,
-    fantasyEntered: fantasyRoster !== null,
+    fantasyEntered,
   };
   const join = joinSeasonCta({
     phase: season?.status ?? null,
