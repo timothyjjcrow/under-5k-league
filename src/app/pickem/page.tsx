@@ -3,7 +3,12 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { getActiveSeason } from "@/lib/season";
+import {
+  loadSeasonChoices,
+  resolveSeasonScope,
+  seasonScopeMetadata,
+} from "@/lib/season-scope";
+import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
 import { getSessionUser } from "@/lib/auth";
 import {
   calledItCount,
@@ -21,7 +26,6 @@ import { formatMatchTime } from "@/lib/match-time";
 import {
   Avatar,
   Badge,
-  buttonClasses,
   Card,
   CardBody,
   CardHeader,
@@ -35,7 +39,6 @@ import { cn } from "@/lib/utils";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { PickemPickForm } from "@/components/pickem-pick-form";
 import { PickemDeadlineRefresh } from "@/components/pickem-deadline-refresh";
-import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import {
   matchRoundLabel,
@@ -65,27 +68,15 @@ export async function generateMetadata({
 }: {
   searchParams: Promise<PickemSearchParams>;
 }): Promise<Metadata> {
-  const seasonId = singleSearchParam((await searchParams).season);
-  if (seasonId === null) notFound();
-  const generic = () =>
-    shareMetadata(
-      "Pick'em",
-      `Call every ${LEAGUE_CONFIG.name} match before kickoff and climb the season's oracle board.`,
-      "/pickem",
-    );
-  if (!seasonId) return generic();
-  const season = await prisma.season.findUnique({
-    where: { id: seasonId },
-    select: { name: true, isActive: true },
+  return seasonScopeMetadata((await searchParams).season, {
+    path: "/pickem",
+    title: "Pick'em",
+    description: `Call every ${LEAGUE_CONFIG.name} match before kickoff and climb the season's oracle board.`,
+    archived: (name) => ({
+      title: `${name} Pick'em`,
+      description: `Final predictions and oracle standings from ${name}.`,
+    }),
   });
-  if (!season) notFound();
-  if (season.isActive) return generic();
-  const path = `/pickem?${new URLSearchParams({ season: seasonId })}`;
-  return shareMetadata(
-    `${season.name} Pick'em`,
-    `Final predictions and oracle standings from ${season.name}.`,
-    path,
-  );
 }
 
 export default async function PickemPage({
@@ -95,49 +86,12 @@ export default async function PickemPage({
 }) {
   const seasonParam = singleSearchParam((await searchParams).season);
   if (seasonParam === null) notFound();
-  // ?season=<id> shows an archived season's oracle board (the leaders/meta/
-  // recap pattern). Prediction rows hang off Match and outlive archival, so
-  // without this the season's oracle champion became unreachable the moment
-  // season N+1 was created.
-  const season = seasonParam
-    ? await prisma.season.findUnique({ where: { id: seasonParam } })
-    : await getActiveSeason();
-  if (seasonParam && !season) notFound();
-  if (!season) {
-    const archived = await prisma.season.findMany({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true },
-    });
-    return (
-      <div>
-        <PageTitle title="Pick'em" />
-        <EmptyState
-          title="No active season"
-          description={
-            archived.length > 0
-              ? "Browse a past season's oracle board instead."
-              : undefined
-          }
-          action={
-            archived.length > 0 ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                {archived.map((s) => (
-                  <Link
-                    key={s.id}
-                    href={`/pickem?season=${s.id}`}
-                    className={buttonClasses("secondary", "sm")}
-                  >
-                    {s.name} →
-                  </Link>
-                ))}
-              </div>
-            ) : undefined
-          }
-        />
-      </div>
-    );
-  }
+  // ?season=<id> shows an archived season's oracle board. Prediction rows
+  // hang off Match and outlive archival, so without this the season's oracle
+  // champion became unreachable the moment season N+1 was created. With no
+  // season running the page opens on the most recent one.
+  const season = await resolveSeasonScope(seasonParam);
+  if (!season) return <NoSeasonYet title="Pick'em" />;
   // Structurally read-only: savePrediction resolves the ACTIVE season itself,
   // and predictionOpen returns true for any SCHEDULED match with no kickoff —
   // so an archived season would otherwise render live pick buttons that can
@@ -145,22 +99,32 @@ export default async function PickemPage({
   const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
-  const [draft, matches, teams, predictions, users] = await Promise.all([
-    prisma.draft.findUnique({
-      where: { seasonId: season.id },
-      select: { status: true },
-    }),
-    prisma.match.findMany({
-      where: { seasonId: season.id },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
-    }),
-    prisma.team.findMany({ where: { seasonId: season.id } }),
-    prisma.prediction.findMany({ where: { match: { seasonId: season.id } } }),
-    prisma.user.findMany({
-      where: { predictions: { some: { match: { seasonId: season.id } } } },
-      select: { id: true, name: true, avatar: true },
-    }),
-  ]);
+  const [draft, matches, teams, predictions, users, seasonChoices] =
+    await Promise.all([
+      prisma.draft.findUnique({
+        where: { seasonId: season.id },
+        select: { status: true },
+      }),
+      prisma.match.findMany({
+        where: { seasonId: season.id },
+        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+      }),
+      prisma.team.findMany({ where: { seasonId: season.id } }),
+      prisma.prediction.findMany({ where: { match: { seasonId: season.id } } }),
+      prisma.user.findMany({
+        where: { predictions: { some: { match: { seasonId: season.id } } } },
+        select: { id: true, name: true, avatar: true },
+      }),
+      loadSeasonChoices("predictions", season.id),
+    ]);
+  const switcher = (
+    <SeasonSwitcher
+      label="pick'em"
+      basePath="/pickem"
+      seasons={seasonChoices}
+      selectedId={season.id}
+    />
+  );
 
   const phaseOpen = postAuctionWorkOpen(season.status, draft?.status);
   const canPlay = !readOnly && phaseOpen;
@@ -172,6 +136,7 @@ export default async function PickemPage({
           title="Pick'em"
           subtitle={`${season.name}${readOnly ? " · archived" : ""}`}
         />
+        {switcher}
         <EmptyState
           title={
             readOnly || season.status === "COMPLETE"
@@ -246,6 +211,7 @@ export default async function PickemPage({
           )
         }
       />
+      {switcher}
 
       {standings.length > 0 ? (
         <Card>

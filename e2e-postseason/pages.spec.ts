@@ -470,6 +470,22 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     await expectNoHorizontalOverflow(page, `${path} offseason`);
   }
 
+  // With no season running, the season pages open on the last season
+  // instead of an empty "No active season" screen.
+  for (const [path, heading] of [
+    ["/leaders", "Leaders"],
+    ["/pickem", "Pick'em"],
+  ] as const) {
+    await page.goto(path);
+    await expect(
+      page.getByRole("heading", { name: heading, level: 1 }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Season 9 \(fixture\) · archived/).first(),
+    ).toBeVisible();
+    await expect(page.getByText("No active season")).toHaveCount(0);
+  }
+
   await page.goto("/seasons");
   await expect(page.getByText("Current", { exact: true })).toHaveCount(0);
   await expect(

@@ -8,7 +8,12 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { notFound } from "next/navigation";
-import { getActiveSeason } from "@/lib/season";
+import {
+  loadSeasonChoices,
+  resolveSeasonScope,
+  seasonScopeMetadata,
+} from "@/lib/season-scope";
+import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGameScores } from "@/lib/cached-queries";
 import {
@@ -26,7 +31,6 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
-import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 
 type MetaSearchParams = { season?: string | string[] };
@@ -36,39 +40,19 @@ export async function generateMetadata({
 }: {
   searchParams: Promise<MetaSearchParams>;
 }): Promise<Metadata> {
-  const seasonId = singleSearchParam((await searchParams).season);
-  if (seasonId === null) notFound();
-  if (!seasonId) {
-    return shareMetadata(
-      "Hero meta",
+  return seasonScopeMetadata((await searchParams).season, {
+    path: "/meta",
+    title: "Hero meta",
+    description:
       "The heroes " +
-        LEAGUE_CONFIG.name +
-        " players pick, win with, and make their signatures each season.",
-      "/meta",
-    );
-  }
-  const season = await prisma.season.findUnique({
-    where: { id: seasonId },
-    select: { name: true, isActive: true },
+      LEAGUE_CONFIG.name +
+      " players pick, win with, and make their signatures each season.",
+    archived: (name) => ({
+      title: name + " hero meta",
+      description:
+        "Hero pick rates, win rates, and player favorites from " + name + ".",
+    }),
   });
-  if (!season) notFound();
-  if (season.isActive) {
-    return shareMetadata(
-      "Hero meta",
-      "The heroes " +
-        LEAGUE_CONFIG.name +
-        " players pick, win with, and make their signatures each season.",
-      "/meta",
-    );
-  }
-  const path = "/meta?" + new URLSearchParams({ season: seasonId });
-  return shareMetadata(
-    season.name + " hero meta",
-    "Hero pick rates, win rates, and player favorites from " +
-      season.name +
-      ".",
-    path,
-  );
 }
 
 export default async function MetaPage({
@@ -78,48 +62,21 @@ export default async function MetaPage({
 }) {
   const seasonParam = singleSearchParam((await searchParams).season);
   if (seasonParam === null) notFound();
-  const season = seasonParam
-    ? await prisma.season.findUnique({ where: { id: seasonParam } })
-    : await getActiveSeason();
-  if (seasonParam && !season) notFound();
+  // ?season=<id> shows an archived season; with no season running the page
+  // opens on the most recent one (resolveSeasonScope).
+  const season = await resolveSeasonScope(seasonParam);
   if (!season) {
-    const archived = await prisma.season.findMany({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true },
-    });
     return (
-      <div>
-        <PageTitle title="Hero meta" />
+      <NoSeasonYet title="Hero meta">
         <StatsNav active="meta" />
-        <EmptyState
-          title="No active season"
-          description={
-            archived.length > 0
-              ? "Browse a past season's meta instead."
-              : undefined
-          }
-          action={
-            archived.length > 0 ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                {archived.map((s) => (
-                  <Link
-                    key={s.id}
-                    href={"/meta?season=" + s.id}
-                    className={buttonClasses("secondary", "sm")}
-                  >
-                    {s.name} →
-                  </Link>
-                ))}
-              </div>
-            ) : undefined
-          }
-        />
-      </div>
+      </NoSeasonYet>
     );
   }
 
-  const games = await getSeasonGameScores(season.id);
+  const [games, seasonChoices] = await Promise.all([
+    getSeasonGameScores(season.id),
+    loadSeasonChoices("games", season.id),
+  ]);
   const importedGames = games.length;
   const decodedGames = games.map((game) => ({
     game,
@@ -189,6 +146,14 @@ export default async function MetaPage({
       }
     />
   );
+  const switcher = (
+    <SeasonSwitcher
+      label="hero meta"
+      basePath="/meta"
+      seasons={seasonChoices}
+      selectedId={season.id}
+    />
+  );
   const dataNotice = (
     <StatsDataNotice
       invalidLines={invalidLines}
@@ -208,6 +173,7 @@ export default async function MetaPage({
           active="meta"
           seasonId={season.isActive ? undefined : season.id}
         />
+        {switcher}
         {dataNotice}
         <EmptyState
           title={games.length > 0 ? "No usable box scores" : "No games yet"}
@@ -278,6 +244,7 @@ export default async function MetaPage({
         active="meta"
         seasonId={season.isActive ? undefined : season.id}
       />
+      {switcher}
       {dataNotice}
       <div className="space-y-2 rounded-xl border border-line bg-surface p-4 text-sm sm:p-5">
         <p id="meta-sample" className="text-muted">

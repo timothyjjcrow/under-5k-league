@@ -4,7 +4,12 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { heroById } from "@/lib/heroes";
 import { notFound } from "next/navigation";
-import { getActiveSeason } from "@/lib/season";
+import {
+  loadSeasonChoices,
+  resolveSeasonScope,
+  seasonScopeMetadata,
+} from "@/lib/season-scope";
+import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
@@ -39,7 +44,6 @@ import {
   PlayerLink,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
-import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import {
   killParticipationByPlayer,
@@ -53,33 +57,15 @@ export async function generateMetadata({
 }: {
   searchParams: Promise<LeadersSearchParams>;
 }): Promise<Metadata> {
-  const seasonId = singleSearchParam((await searchParams).season);
-  if (seasonId === null) notFound();
-  if (!seasonId) {
-    return shareMetadata(
-      "Leaders",
-      `${LEAGUE_CONFIG.name} season leaders, weekly honors, career benchmarks, and player performance boards.`,
-      "/leaders",
-    );
-  }
-  const season = await prisma.season.findUnique({
-    where: { id: seasonId },
-    select: { name: true, isActive: true },
+  return seasonScopeMetadata((await searchParams).season, {
+    path: "/leaders",
+    title: "Leaders",
+    description: `${LEAGUE_CONFIG.name} season leaders, weekly honors, career benchmarks, and player performance boards.`,
+    archived: (name) => ({
+      title: `${name} leaders`,
+      description: `Weekly honors and player performance leaders from ${name}.`,
+    }),
   });
-  if (!season) notFound();
-  if (season.isActive) {
-    return shareMetadata(
-      "Leaders",
-      `${LEAGUE_CONFIG.name} season leaders, weekly honors, career benchmarks, and player performance boards.`,
-      "/leaders",
-    );
-  }
-  const path = `/leaders?${new URLSearchParams({ season: seasonId })}`;
-  return shareMetadata(
-    `${season.name} leaders`,
-    `Weekly honors and player performance leaders from ${season.name}.`,
-    path,
-  );
 }
 
 type DisplayUser = {
@@ -88,43 +74,6 @@ type DisplayUser = {
   rankTier: number | null;
 };
 
-function SeasonSwitcher({
-  seasons,
-  selectedId,
-}: {
-  seasons: { id: string; name: string; isActive: boolean }[];
-  selectedId: string;
-}) {
-  if (seasons.length < 2) return null;
-  return (
-    <nav
-      aria-label="Choose a season for leaders"
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-line bg-surface/55 px-4 py-3"
-    >
-      <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-        Season
-      </span>
-      <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
-        {seasons.map((option) => (
-          <Link
-            key={option.id}
-            href={option.isActive ? "/leaders" : `/leaders?season=${option.id}`}
-            aria-current={option.id === selectedId ? "page" : undefined}
-            className={
-              option.id === selectedId
-                ? "inline-flex min-h-10 shrink-0 items-center rounded-lg border border-accent/50 bg-accent/10 px-3 text-xs font-semibold text-fg"
-                : "inline-flex min-h-10 shrink-0 items-center rounded-lg border border-line px-3 text-xs text-muted transition-colors hover:border-info/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
-            }
-          >
-            {option.name}
-            {option.isActive ? " · Current" : ""}
-          </Link>
-        ))}
-      </div>
-    </nav>
-  );
-}
-
 export default async function LeadersPage({
   searchParams,
 }: {
@@ -132,49 +81,17 @@ export default async function LeadersPage({
 }) {
   const seasonParam = singleSearchParam((await searchParams).season);
   if (seasonParam === null) notFound();
-  // ?season=<id> shows an archived season's boards (recap's pattern) —
-  // otherwise leaderboards vanish forever the moment a season is archived.
+  // ?season=<id> shows an archived season's boards; with no season running
+  // the page opens on the most recent one (resolveSeasonScope).
   const [season, viewer] = await Promise.all([
-    seasonParam
-      ? prisma.season.findUnique({ where: { id: seasonParam } })
-      : getActiveSeason(),
+    resolveSeasonScope(seasonParam),
     getSessionUser(),
   ]);
-  if (seasonParam && !season) notFound();
   if (!season) {
-    const archived = await prisma.season.findMany({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true },
-    });
     return (
-      <div>
-        <PageTitle title="Leaders" />
+      <NoSeasonYet title="Leaders">
         <StatsNav active="leaders" />
-        <EmptyState
-          title="No active season"
-          description={
-            archived.length > 0
-              ? "Browse a past season's boards instead."
-              : undefined
-          }
-          action={
-            archived.length > 0 ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                {archived.map((s) => (
-                  <Link
-                    key={s.id}
-                    href={`/leaders?season=${s.id}`}
-                    className={buttonClasses("secondary", "sm")}
-                  >
-                    {s.name} →
-                  </Link>
-                ))}
-              </div>
-            ) : undefined
-          }
-        />
-      </div>
+      </NoSeasonYet>
     );
   }
   // Keep archived-season navigation on that season across the stat pages.
@@ -187,10 +104,7 @@ export default async function LeadersPage({
   const [gameRows, honorReadiness, seasonOptions] = await Promise.all([
     getSeasonGameLeaders(season.id),
     getSeasonHonorReadiness(season.id),
-    prisma.season.findMany({
-      select: { id: true, name: true, isActive: true },
-      orderBy: { createdAt: "desc" },
-    }),
+    loadSeasonChoices("games", season.id),
   ]);
   const decodedRows = gameRows.map((game) => ({
     game,
@@ -274,7 +188,12 @@ export default async function LeadersPage({
           active="leaders"
           seasonId={season.isActive ? undefined : season.id}
         />
-        <SeasonSwitcher seasons={seasonOptions} selectedId={season.id} />
+        <SeasonSwitcher
+          label="leaders"
+          basePath="/leaders"
+          seasons={seasonOptions}
+          selectedId={season.id}
+        />
         <StatsDataNotice
           invalidLines={invalidLines}
           malformedGames={malformedGames}
@@ -680,7 +599,12 @@ export default async function LeadersPage({
         active="leaders"
         seasonId={season.isActive ? undefined : season.id}
       />
-      <SeasonSwitcher seasons={seasonOptions} selectedId={season.id} />
+      <SeasonSwitcher
+        label="leaders"
+        basePath="/leaders"
+        seasons={seasonOptions}
+        selectedId={season.id}
+      />
       <StatsDataNotice
         invalidLines={invalidLines}
         malformedGames={malformedGames}

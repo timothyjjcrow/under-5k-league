@@ -35,27 +35,22 @@ const PICKEM_BUTTON = read("..", "components", "pickem-submit-button.tsx");
 const PICK_FORM = read("..", "components", "pickem-pick-form.tsx");
 const MATCH = read("matches", "[id]", "page.tsx");
 const SEASON_ARCHIVE = read("seasons", "[id]", "page.tsx");
+const SEASON_SCOPE = read("..", "lib", "season-scope.ts");
 
 describe("side-game archive: both pages resolve ?season=", () => {
   for (const [name, src] of [
     ["fantasy", FANTASY],
     ["pickem", PICKEM],
   ] as const) {
-    it(`${name} accepts a season param and 404s an unknown one`, () => {
+    it(`${name} accepts a season param and resolves it through the shared scope`, () => {
       expect(src, `${name} takes searchParams`).toMatch(
         /type \w+SearchParams = \{ season\?: string \| string\[\] \}/,
       );
       expect(src, `${name} rejects a repeated season key`).toContain(
         "if (seasonParam === null) notFound()",
       );
-      expect(
-        src,
-        `${name} resolves the param before the active season`,
-      ).toMatch(/seasonParam\s*\n?\s*\?\s*await prisma\.season\.findUnique/);
-      // An unknown id must 404, not silently fall back to the live season —
-      // that would render this season's data under someone else's link.
-      expect(src, `${name} notFounds an unknown season`).toMatch(
-        /if \(seasonParam && !season\) notFound\(\)/,
+      expect(src, `${name} resolves the season through the shared scope`).toMatch(
+        /const season = await resolveSeasonScope\(seasonParam\);/,
       );
     });
 
@@ -65,6 +60,15 @@ describe("side-game archive: both pages resolve ?season=", () => {
       );
     });
   }
+
+  it("the shared scope reads the param before the active season and 404s an unknown one", () => {
+    // An unknown id must 404, not silently fall back to the live season —
+    // that would render this season's data under someone else's link.
+    // (Behaviour is pinned in test/integration/season-scope.itest.ts.)
+    expect(SEASON_SCOPE).toMatch(
+      /if \(seasonParam\) \{\s*const season = await prisma\.season\.findUnique\(\{\s*where: \{ id: seasonParam \},\s*\}\);\s*if \(!season\) notFound\(\);\s*return season;\s*\}/,
+    );
+  });
 });
 
 describe("side-game archive: an archived season is STRUCTURALLY read-only", () => {

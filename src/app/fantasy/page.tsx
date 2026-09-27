@@ -5,7 +5,12 @@ import { notFound } from "next/navigation";
 import { getSeasonGameScores } from "@/lib/cached-queries";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
-import { getActiveSeason } from "@/lib/season";
+import {
+  loadSeasonChoices,
+  resolveSeasonScope,
+  seasonScopeMetadata,
+} from "@/lib/season-scope";
+import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
 import { getSessionUser } from "@/lib/auth";
 import {
   fantasyCap,
@@ -34,35 +39,10 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
-import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import { parseRoles } from "@/lib/roles";
 
 type FantasySearchParams = { season?: string | string[] };
-
-function FantasySeasonSwitcher({
-  season,
-  pastSeasons,
-}: {
-  season: { id: string; name: string; isActive: boolean };
-  pastSeasons: { id: string; name: string }[];
-}) {
-  if (pastSeasons.length === 0 && season.isActive) return null;
-  return (
-    <nav aria-label="Fantasy seasons" className="flex flex-wrap items-center gap-2 text-xs text-muted">
-      <span>Season:</span>
-      {season.isActive ? (
-        <Badge tone="info">{season.name}</Badge>
-      ) : (
-        <Link href="/fantasy" className={buttonClasses("secondary", "sm")}>Current season</Link>
-      )}
-      {pastSeasons.filter((past) => past.id !== season.id).map((past) => (
-        <Link key={past.id} href={`/fantasy?season=${past.id}`} className={buttonClasses("secondary", "sm")}>{past.name}</Link>
-      ))}
-      {!season.isActive ? <Badge tone="neutral">{season.name}</Badge> : null}
-    </nav>
-  );
-}
 
 function ScoringGuide() {
   return (
@@ -102,27 +82,15 @@ export async function generateMetadata({
 }: {
   searchParams: Promise<FantasySearchParams>;
 }): Promise<Metadata> {
-  const seasonId = singleSearchParam((await searchParams).season);
-  if (seasonId === null) notFound();
-  const generic = () =>
-    shareMetadata(
-      "Fantasy",
-      `Build a salary-capped fantasy five from the drafted league and score from real ${LEAGUE_CONFIG.name} games.`,
-      "/fantasy",
-    );
-  if (!seasonId) return generic();
-  const season = await prisma.season.findUnique({
-    where: { id: seasonId },
-    select: { name: true, isActive: true },
+  return seasonScopeMetadata((await searchParams).season, {
+    path: "/fantasy",
+    title: "Fantasy",
+    description: `Build a salary-capped fantasy five from the drafted league and score from real ${LEAGUE_CONFIG.name} games.`,
+    archived: (name) => ({
+      title: `${name} fantasy`,
+      description: `Final fantasy standings and rosters from ${name}.`,
+    }),
   });
-  if (!season) notFound();
-  if (season.isActive) return generic();
-  const path = `/fantasy?${new URLSearchParams({ season: seasonId })}`;
-  return shareMetadata(
-    `${season.name} fantasy`,
-    `Final fantasy standings and rosters from ${season.name}.`,
-    path,
-  );
 }
 
 export default async function FantasyPage({
@@ -132,57 +100,20 @@ export default async function FantasyPage({
 }) {
   const seasonParam = singleSearchParam((await searchParams).season);
   if (seasonParam === null) notFound();
-  // ?season=<id> shows an archived season's fantasy league (the leaders/meta/
-  // recap pattern). FantasyRoster rows outlive archival — they cascade only on
-  // season DELETE — so without this every past season's fantasy champion
-  // became unreachable the instant season N+1 was created: the data survived
-  // and no page could render it.
-  const season = seasonParam
-    ? await prisma.season.findUnique({ where: { id: seasonParam } })
-    : await getActiveSeason();
-  if (seasonParam && !season) notFound();
-  if (!season) {
-    const archived = await prisma.season.findMany({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true },
-    });
-    return (
-      <div>
-        <PageTitle title="Fantasy" />
-        <EmptyState
-          title="No active season"
-          description={
-            archived.length > 0
-              ? "Browse a past season's fantasy league instead."
-              : undefined
-          }
-          action={
-            archived.length > 0 ? (
-              <div className="flex flex-wrap justify-center gap-2">
-                {archived.map((s) => (
-                  <Link
-                    key={s.id}
-                    href={`/fantasy?season=${s.id}`}
-                    className={buttonClasses("secondary", "sm")}
-                  >
-                    {s.name} →
-                  </Link>
-                ))}
-              </div>
-            ) : undefined
-          }
-        />
-      </div>
-    );
-  }
+  // ?season=<id> shows an archived season's fantasy league. FantasyRoster
+  // rows outlive archival (they cascade only on season DELETE), so without
+  // this every past season's fantasy champion became unreachable the instant
+  // season N+1 was created. With no season running the page opens on the
+  // most recent one.
+  const season = await resolveSeasonScope(seasonParam);
+  if (!season) return <NoSeasonYet title="Fantasy" />;
   // STRUCTURALLY read-only, not merely visually: saveFantasyRoster resolves
   // the ACTIVE season itself, so a picker rendered over an archived season
   // would silently edit the CURRENT season's roster with no error anywhere.
   const readOnly = !season.isActive;
 
   const viewer = await getSessionUser();
-  const [draft, members, regs, games, gameCount, rosters, pastSeasons] = await Promise.all([
+  const [draft, members, regs, games, gameCount, rosters, seasonChoices] = await Promise.all([
     prisma.draft.findUnique({
       where: { seasonId: season.id },
       select: { status: true },
@@ -205,12 +136,16 @@ export default async function FantasyPage({
       where: { seasonId: season.id },
       include: { user: true, picks: { include: { player: true } } },
     }),
-    prisma.season.findMany({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true },
-    }),
+    loadSeasonChoices("fantasy", season.id),
   ]);
+  const switcher = (
+    <SeasonSwitcher
+      label="fantasy"
+      basePath="/fantasy"
+      seasons={seasonChoices}
+      selectedId={season.id}
+    />
+  );
 
   const phaseOpen = postAuctionWorkOpen(season.status, draft?.status);
   const isFinal = readOnly || season.status === "COMPLETE";
@@ -221,7 +156,7 @@ export default async function FantasyPage({
           title="Fantasy"
           subtitle={`${season.name}${readOnly ? " · archived" : ""}`}
         />
-        <FantasySeasonSwitcher season={season} pastSeasons={pastSeasons} />
+        {switcher}
         <EmptyState
           title={
             isFinal
@@ -244,7 +179,7 @@ export default async function FantasyPage({
     return (
       <div className="space-y-6">
         <PageTitle title="Fantasy" subtitle={season.name} />
-        <FantasySeasonSwitcher season={season} pastSeasons={pastSeasons} />
+        {switcher}
         <EmptyState
           title="Fantasy opens after the draft"
           description="When the auction is complete, build your five before the first league game is imported."
@@ -390,7 +325,7 @@ export default async function FantasyPage({
         <a href="#scoring" className={buttonClasses("secondary", "sm")}>Scoring rules</a>
       </nav>
 
-      <FantasySeasonSwitcher season={season} pastSeasons={pastSeasons} />
+      {switcher}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card tone="feature"><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Entries</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{rosters.length}</div><p className="mt-1 text-xs text-muted">{locked ? "Locked fantasy fives" : "Saved fantasy fives"}</p></CardBody></Card>

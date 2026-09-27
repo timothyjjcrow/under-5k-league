@@ -25,6 +25,8 @@ import {
   textLink,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
+import { SeasonSwitcher } from "@/components/season-scope";
+import { seasonSwitcherChoices } from "@/lib/season-choices";
 import { shareMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 
@@ -109,43 +111,6 @@ function GameRecordRow({ record, matchup, season }: { record: GameRecord; matchu
   );
 }
 
-function SeasonSwitcher({
-  seasons,
-  selectedId,
-}: {
-  seasons: { id: string; name: string }[];
-  selectedId: string | undefined;
-}) {
-  const options = [{ id: "", name: "All seasons" }, ...seasons];
-  return (
-    <nav
-      aria-label="Choose a season for records"
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-line bg-surface/55 px-4 py-3"
-    >
-      <span className="text-xs font-semibold uppercase tracking-wide text-muted">Season</span>
-      <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
-        {options.map((option) => {
-          const current = option.id === (selectedId ?? "");
-          return (
-            <Link
-              key={option.id || "all"}
-              href={option.id ? `/records?season=${option.id}` : "/records"}
-              aria-current={current ? "page" : undefined}
-              className={
-                current
-                  ? "inline-flex min-h-10 shrink-0 items-center rounded-lg border border-accent/50 bg-accent/10 px-3 text-xs font-semibold text-fg"
-                  : "inline-flex min-h-10 shrink-0 items-center rounded-lg border border-line px-3 text-xs text-muted transition-colors hover:border-info/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
-              }
-            >
-              {option.name}
-            </Link>
-          );
-        })}
-      </div>
-    </nav>
-  );
-}
-
 export default async function RecordsPage({
   searchParams,
 }: {
@@ -153,7 +118,10 @@ export default async function RecordsPage({
 }) {
   const [games, seasons, query, champion] = await Promise.all([
     getAllGamesForRecords(),
-    prisma.season.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, name: true } }),
+    prisma.season.findMany({
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true, name: true, isActive: true },
+    }),
     searchParams,
     hasOfficialChampion(),
   ]);
@@ -177,13 +145,19 @@ export default async function RecordsPage({
     game.matchId,
     `${game.match.homeTeam.name} vs ${game.match.awayTeam.name}`,
   ]));
-  // With one season of games there is no season picker: "All seasons" and
-  // that season are the same list. A selected season keeps the picker so
-  // there is always a way back to the all-time book.
+  // The picker offers the seasons with games (and a picked one). With one
+  // season of games there is no picker: "All seasons" and that season are
+  // the same list. A picked season keeps it as the way back to the all-time
+  // book.
   const seasonIdsWithGames = new Set(games.map((game) => game.match.seasonId));
   const multiSeason = seasonIdsWithGames.size >= 2;
-  const switcherSeasons = seasons.filter((season) =>
-    seasonIdsWithGames.has(season.id) || season.id === selectedSeason?.id);
+  const switcherSeasons = seasonSwitcherChoices(
+    seasons.map((season) => ({
+      ...season,
+      hasData: seasonIdsWithGames.has(season.id),
+    })),
+    { selectedId: selectedSeason?.id, includeActive: false },
+  );
   // Name each record's season only in the multi-season all-time view.
   const seasonLabel = (seasonId: string) =>
     !selectedSeason && multiSeason ? (seasonName.get(seasonId) ?? null) : null;
@@ -207,9 +181,13 @@ export default async function RecordsPage({
       />
       <StatsNav active="records" seasonId={selectedSeason?.id} />
       <StatsDataNotice {...analysis.diagnostics} />
-      {multiSeason || selectedSeason ? (
-        <SeasonSwitcher seasons={switcherSeasons} selectedId={selectedSeason?.id} />
-      ) : null}
+      <SeasonSwitcher
+        label="records"
+        basePath="/records"
+        seasons={switcherSeasons}
+        selectedId={selectedSeason?.id ?? null}
+        allSeasons
+      />
 
       {categoryCount === 0 ? (
         <EmptyState
