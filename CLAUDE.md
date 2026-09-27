@@ -2451,6 +2451,59 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   says ✓/✗/void once decided (home cards included), and a COMPLETED match
   page shows a signed-in picker "Your pick: X ✓ (2 of 3 called it)".
 
+## Scrims (practice games — Tim's call: they stay)
+
+Captains post an OPEN time, another team's captain claims it (SCHEDULED),
+games import by player IDs (LIVE → COMPLETED), and nothing touches league
+standings. Services: `scrim-service.ts` (post/claim/cancel/end, guests,
+coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
+`scrim-view.ts`, `scrim-discord.ts`, `scrim-schedule-conflict.ts`.
+
+- **League fixtures win over scrims.** A playoff round is ALWAYS built: its
+  build transaction calls `yieldScrimsToOfficialFixture`, which cancels every
+  BOOKED (SCHEDULED) scrim of those teams within four hours of the round's
+  night and keeps a LIVE one (games recorded) but reports it. It used to be
+  a refusal, and on the automatic path that meant a booked practice silently
+  stopped the next round (the final included) from existing. Each clash is
+  announced to that scrim's two captains (mentioned, names escaped), logged
+  to the admin activity log ("League automation" when no admin acted), and
+  appended to the Start playoffs toast. The cancel is an EQUIVALENT claim in
+  the ratchet (it runs inside the Serializable build and cancels exactly the
+  ids it just read).
+- **Every refusal names the scrim.** `findConfirmedScrimConflict` returns the
+  booking and `describeScrimConflict` prints "the A vs B scrim on <league
+  time>" — admin schedule tools, reschedule propose/accept, tiebreakers and
+  scrim booking all use it. "A booked scrim" alone sent people hunting.
+  KNOWN GAP: the automatic tiebreaker continuation can still be blocked by a
+  clashing scrim (it now says which); it does not yield the way playoff
+  rounds do.
+- **A booked scrim's page says who to talk to**: both captains, their
+  `<DiscordTag>` behind `canViewLeagueContact` (signed-in league members and
+  either side's staff; never the public), and `scrimHostLine` — the posting
+  captain hosts, region from `LEAGUE_CONFIG.gameServerRegion`.
+- **An open scrim's page has the Join button** (one click, no confirm), or
+  the reason the viewer can't claim it: pure `scrimJoinCheck`, shared with
+  the /scrims list, including the viewer's own clash within four hours. Its
+  grace for a just-started time is `SCRIM_PAST_GRACE_MS`, the service's own.
+- **Pings go only to the captains who must act** (`mentionUsers`, sent by the
+  action after commit, best-effort): a new time → every other non-withdrawn
+  captain; a claim → the posting captain (who hosts, who to message, which of
+  their open times the booking withdrew); a cancel → the captain who didn't
+  cancel (both, for an admin; nobody, for your own unclaimed time). joinScrim
+  reads the offers its overlap sweep withdraws with the SAME WHERE in the
+  same Serializable snapshot — don't fold that into the sweep's WHERE, which
+  is a protected claim.
+- **"Not played" is display only.** A SCHEDULED booking 36h
+  (`SCRIM_DETECT_WINDOW_AFTER_MS`) after kickoff leaves Booked for the
+  history (`scrimNotPlayedCutoff`/`isScrimNotPlayed`). The row stays
+  SCHEDULED, so a late "Add game" still works (the import judges the game's
+  own start time); statistics count COMPLETED only.
+- **`endScrimSeries`**: either captain or a verified admin (not coaches)
+  ends a LIVE series at its current score; leader wins, level = no winner.
+  One guarded `updateMany` re-asserting LIVE + both scores (spelled
+  `hostScore: scrim.hostScore` on purpose — the ratchet can't see shorthand
+  keys), seam `scrim.endSeries.beforeClaim`, protected in the baseline.
+
 ## Interactive bracket (done)
 
 - `src/components/bracket.tsx` (`"use client"`) draws the classic CENTERED

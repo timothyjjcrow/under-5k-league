@@ -322,6 +322,18 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   community split before lock, and preserves the viewer's locked or void pick.
   A deadline refresh moves the whole card into its authoritative locked state.
   COMPLETE and archive views are structurally read-only.
+- _Scrims_: `/scrims` is casual practice outside every league table. A
+  captain posts an OPEN time; another captain claims it in one click from the
+  list or the scrim's own page (`scrimJoinCheck` explains a refusal there),
+  which books it and withdraws both teams' other open times within four
+  hours. Games import by player IDs (`scrim-result-service.ts`); either
+  captain or an admin can end a LIVE series at its current score through one
+  guarded claim that re-asserts status and score. A booking with no games
+  36 hours after kickoff is listed as "Not played" (display only, so a late
+  game can still be added). Posts, claims and cancels ping only the captains
+  who must act. League fixtures win: a playoff round build cancels booked
+  scrims within four hours of its night and reports LIVE ones, and every
+  schedule refusal names the scrim that caused it.
 
 **Playoffs.** `startPlayoffs` calls `createPlayoffBracket`
 (`src/lib/playoff-service.ts`). The rendered Start, Reset, and Return-to-regular
