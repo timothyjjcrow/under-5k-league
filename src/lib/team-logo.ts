@@ -4,13 +4,29 @@ export type TeamLogoUrlResult =
   | { logoUrl: string | null }
   | { error: string };
 
+const DISCORD_ATTACHMENT_LOGO_ERROR =
+  "Discord image links stop working after about a day, and the crest falls back to initials. Upload the logo somewhere permanent (Imgur, for example) and paste that image link instead.";
+
+/**
+ * A file uploaded to Discord. Its links are signed and expire (the `ex=`
+ * parameter), so a crest pasted from a Discord message quietly turns back into
+ * initials a day later. Server icons, avatars and emoji on the same CDN are
+ * permanent and stay allowed.
+ */
+function isDiscordAttachment(url: URL): boolean {
+  return (
+    /(^|\.)discordapp\.(com|net)$/.test(url.hostname) &&
+    /^\/(ephemeral-)?attachments\//.test(url.pathname)
+  );
+}
+
 /**
  * Normalize an admin-supplied team logo location.
  *
  * Production pages are HTTPS, so accepting HTTP would create a logo that the
  * browser blocks as mixed content. Root-relative paths remain useful for
  * artwork deployed with the app, while protocol-relative and data URLs are
- * deliberately refused.
+ * deliberately refused, and so are Discord attachment links, which expire.
  */
 export function normalizeTeamLogoUrl(raw: string): TeamLogoUrlResult {
   const value = raw.trim();
@@ -40,6 +56,7 @@ export function normalizeTeamLogoUrl(raw: string): TeamLogoUrlResult {
   if (url.username || url.password) {
     return { error: "Team logo URLs cannot include credentials" };
   }
+  if (isDiscordAttachment(url)) return { error: DISCORD_ATTACHMENT_LOGO_ERROR };
   const canonical = url.toString();
   if (canonical.length > TEAM_LOGO_URL_MAX_LENGTH) {
     return {

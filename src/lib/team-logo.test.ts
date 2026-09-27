@@ -31,6 +31,28 @@ describe("normalizeTeamLogoUrl", () => {
     expect(normalizeTeamLogoUrl(value)).toHaveProperty("error");
   });
 
+  it.each([
+    "https://cdn.discordapp.com/attachments/1/2/logo.png?ex=66f00000&is=66ee0000&hm=abc&",
+    "https://media.discordapp.net/attachments/1/2/logo.png?ex=66f00000&is=66ee0000&hm=abc&=&format=webp",
+    "https://CDN.DISCORDAPP.COM/attachments/1/2/logo.png",
+    "https://cdn.discordapp.com/ephemeral-attachments/1/2/logo.png",
+  ])("refuses expiring Discord attachment links with a way forward: %s", (value) => {
+    const result = normalizeTeamLogoUrl(value);
+    expect(result).toHaveProperty("error");
+    expect("error" in result && result.error).toMatch(
+      /stop working after about a day.*permanent/,
+    );
+  });
+
+  it("keeps permanent Discord images such as emoji and server icons", () => {
+    for (const value of [
+      "https://cdn.discordapp.com/emojis/123456789.png",
+      "https://cdn.discordapp.com/icons/1/abc.png",
+    ]) {
+      expect(normalizeTeamLogoUrl(value)).toEqual({ logoUrl: value });
+    }
+  });
+
   it("bounds stored URLs", () => {
     expect(
       normalizeTeamLogoUrl(
