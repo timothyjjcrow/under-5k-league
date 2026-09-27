@@ -50,13 +50,24 @@ const TEST_FILE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/;
 const TEST_PREFIXES = ["e2e/", "test/"];
 const DOC_PREFIXES = ["docs/"];
 
+// Only the Cloudflare automation worker drives the production scheduler. The
+// Dota lobby bot and relay under ops/ are hosted independently (.vercelignore
+// excludes them from the website upload), so they stay strict for review
+// through STRICT_PREFIXES without selecting a scheduler pause.
 const SCHEDULER_PREFIXES = [
-  "ops/",
+  "ops/cloudflare-automation-worker/",
   "src/app/api/cron/",
   "src/app/api/health/automation/",
 ];
 const SCHEDULER_LIBRARY =
   /^src\/lib\/(?:automation(?:-|\.)|cron(?:-|\.)|external-automation-scheduler(?:\.|$))/;
+
+// A plain deletion of a regular file is judged like a modification of that
+// path, except in the schema and scheduler surfaces, where removing a file
+// (a migration, the worker, the cron route or its libraries) still selects
+// every control. Renames, copies and type changes stay fail-closed everywhere.
+const DELETION_FAIL_CLOSED_PREFIXES = ["prisma/", ...SCHEDULER_PREFIXES];
+const DELETED_FILE_MODE = "000000";
 
 function fail(message) {
   throw new Error(`release classifier: ${message}`);
@@ -301,9 +312,23 @@ function impactForStrictPath(path) {
   return { needsDbRelease, needsSchedulerPause };
 }
 
+function isDeletionFailClosedPath(path) {
+  return (
+    DELETION_FAIL_CLOSED_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    SCHEDULER_LIBRARY.test(path)
+  );
+}
+
 function entryModeIsSafe(entry) {
   if (entry.code === "A") {
-    return entry.oldMode === "000000" && entry.newMode === REGULAR_FILE_MODE;
+    return (
+      entry.oldMode === DELETED_FILE_MODE && entry.newMode === REGULAR_FILE_MODE
+    );
+  }
+  if (entry.code === "D") {
+    return (
+      entry.oldMode === REGULAR_FILE_MODE && entry.newMode === DELETED_FILE_MODE
+    );
   }
   return (
     entry.code === "M" &&
@@ -348,12 +373,16 @@ export function classifyEntries(entries) {
       ? `${entry.oldPath} -> ${entry.path}`
       : entry.path;
 
-    if (entry.code !== "A" && entry.code !== "M") {
+    if (
+      (entry.code !== "A" && entry.code !== "M" && entry.code !== "D") ||
+      entry.status !== entry.code ||
+      entry.oldPath !== null
+    ) {
       sawStrict = true;
       needsDbRelease = true;
       needsSchedulerPause = true;
       reasons.push(
-        `${entry.status} ${label}: only additions/modifications qualify`,
+        `${entry.status} ${label}: only additions/modifications and plain deletions qualify`,
       );
       continue;
     }
@@ -363,6 +392,15 @@ export function classifyEntries(entries) {
       needsSchedulerPause = true;
       reasons.push(
         `${entry.status} ${label}: file type or mode is not an unchanged regular 100644 file`,
+      );
+      continue;
+    }
+    if (entry.code === "D" && isDeletionFailClosedPath(entry.path)) {
+      sawStrict = true;
+      needsDbRelease = true;
+      needsSchedulerPause = true;
+      reasons.push(
+        `${entry.status} ${label}: deleting a schema or scheduler file requires database release and scheduler controls`,
       );
       continue;
     }

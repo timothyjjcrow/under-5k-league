@@ -535,6 +535,15 @@ declares the same runtime line used by every CI job.
      `needs_scheduler_pause` flags decide whether the recovery or scheduler
      procedures are also required.
 
+   A plain deletion of a regular file is judged like an edit to that path, so
+   removing a stale doc or dead component needs no maintenance procedure.
+   Deleting anything under `prisma/`, `ops/cloudflare-automation-worker/`, the
+   cron or automation-health routes, or the scheduler libraries still selects
+   both flags; renames, copies, and file-type or mode changes select both
+   everywhere. Only the Cloudflare automation worker under `ops/` is scheduler
+   plumbing; the independently hosted lobby bot and relay stay strict for
+   review without a scheduler pause.
+
    A UI-only or app release does **not** require a fresh database backup or a
    scheduler pause. Its migration gate contains no writer, and the classifier
    reports neither impact flag. Do not force an unknown change into a faster
