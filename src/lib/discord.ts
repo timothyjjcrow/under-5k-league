@@ -117,12 +117,14 @@ export function draftStartedAnnouncement(
 ): DraftReminderAnnouncement {
   const site = resolveSiteUrl();
   const header = `🔨 **The ${m.seasonName} draft is LIVE!** Watch the auction: <${site}/draft>`;
+  // The names lead, so the people pinged read that the line is for them (a
+  // list AFTER "the site nominates for you" read as the players it would pick).
   const call =
-    "Captains, you're on the clock. If your nomination timer runs out, the site nominates for you";
+    "you're on the clock. If your nomination timer runs out, the site nominates for you.";
   const render = (shown: number): string =>
     shown > 0
-      ? `${header}\n${call}: ${peopleList(m.captains, shown)}`
-      : `${header}\n${call}.`;
+      ? `${header}\nCaptains ${peopleList(m.captains, shown)}: ${call}`
+      : `${header}\nCaptains, ${call}`;
   const fits = (content: string) => content.length <= DISCORD_CONTENT_MAX;
   if (!fits(render(0))) {
     // Defensive last resort for an absurd season name or site URL: still

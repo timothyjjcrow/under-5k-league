@@ -594,7 +594,7 @@ describe("draftStartedAnnouncement", () => {
     expect(announcement.content).toBe(
       [
         "🔨 **The Season 1 draft is LIVE!** Watch the auction: <https://league.example/draft>",
-        "Captains, you're on the clock. If your nomination timer runs out, the site nominates for you: <@111111111111111111>, Puppey, Typo",
+        "Captains <@111111111111111111>, Puppey, Typo: you're on the clock. If your nomination timer runs out, the site nominates for you.",
       ].join("\n"),
     );
     // A captain without a real snowflake is named, never pinged.
@@ -608,7 +608,9 @@ describe("draftStartedAnnouncement", () => {
       captains: [],
     });
     expect(announcement.content).toContain("/draft>");
-    expect(announcement.content).toMatch(/the site nominates for you\.$/);
+    expect(announcement.content).toMatch(
+      /\nCaptains, you're on the clock\. .* the site nominates for you\.$/,
+    );
     expect(announcement.mentionUserIds).toEqual([]);
   });
 
@@ -626,7 +628,9 @@ describe("draftStartedAnnouncement", () => {
     });
     expect(delivered).toBe(announcement.content);
     expect(delivered.length).toBeLessThanOrEqual(2_000);
-    expect(delivered).toMatch(/ \+\d+ more$/);
+    expect(delivered).toMatch(
+      / \+\d+ more: you're on the clock\. If your nomination timer runs out, the site nominates for you\.$/,
+    );
     expect(new Set(announcement.mentionUserIds)).toEqual(
       new Set(visibleMentions(delivered)),
     );
