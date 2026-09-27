@@ -64,23 +64,40 @@ export type PlayoffPathLine = {
   detail: string;
 };
 
+/**
+ * What a result leads to, compared exactly. A settled verdict is the same
+ * whatever the other games do; anything mixed compares its counts, because
+ * the short label lumps "qualify in 8 of 9" and "qualify in 1 of 9" together
+ * as "Qualify or out".
+ */
+function verdictKey(outlook: ScenarioOutlook): string {
+  const { total, qualified, qualificationTiebreaker, eliminated } = outlook;
+  if (qualified === total) return "qualified";
+  if (eliminated === total) return "eliminated";
+  if (qualificationTiebreaker === total) return "tiebreaker";
+  return `${qualified}/${qualificationTiebreaker}/${eliminated} of ${total}`;
+}
+
 export function playoffPathLines(
   scenario: TeamScenario | undefined,
   matchId?: string,
 ): PlayoffPathLine[] {
   if (!scenario?.paths || (matchId && scenario.nextMatchId !== matchId)) return [];
-  const lines = (["win", "draw", "loss"] as const).flatMap((outcome) => {
+  const results = (["win", "draw", "loss"] as const).flatMap((outcome) => {
     const result = scenario.paths?.[outcome];
-    return result ? [{
-      key: outcome,
-      label: outcome === "win" ? "Win" : outcome === "draw" ? "Draw" : "Loss",
-      description: shortOutlook(result),
-      detail: outlookSummary(result),
-    }] : [];
+    return result ? [{ outcome, result }] : [];
   });
+  const lines = results.map(({ outcome, result }) => ({
+    key: outcome,
+    label: outcome === "win" ? "Win" : outcome === "draw" ? "Draw" : "Loss",
+    description: shortOutlook(result),
+    detail: outlookSummary(result),
+  }));
   // "Win Qualify · Draw Qualify · Loss Qualify" is three lines that say the
-  // next result changes nothing: fold them into one.
-  if (lines.length > 1 && lines.every((line) => line.description === lines[0].description)) {
+  // next result changes nothing: fold them into one. Only when every result
+  // really leads to the same place, not merely the same short label.
+  const firstKey = results[0] ? verdictKey(results[0].result) : null;
+  if (lines.length > 1 && results.every(({ result }) => verdictKey(result) === firstKey)) {
     return [{
       key: "any",
       label: "Any result",

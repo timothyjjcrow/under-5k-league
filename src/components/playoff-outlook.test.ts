@@ -150,6 +150,37 @@ describe("playoff outlook presentation", () => {
       }
     });
 
+    it("keeps separate lines when results share a short label but not the odds", () => {
+      // All three read "Qualify or out", yet a win keeps the team in the
+      // bracket in 8 of 9 cases and a loss in only 1 of 9.
+      const scenario = team({ nextMatchId: "m",
+        outlook: result({ total: 27, qualified: 13, eliminated: 14 }),
+        paths: {
+          win: result({ total: 9, qualified: 8, eliminated: 1 }),
+          draw: result({ total: 9, qualified: 4, eliminated: 5 }),
+          loss: result({ total: 9, qualified: 1, eliminated: 8 }),
+        } });
+      const lines = playoffPathLines(scenario, "m");
+      expect(lines.map((line) => line.label)).toEqual(["Win", "Draw", "Loss"]);
+      expect(lines.map((line) => line.description)).toEqual(
+        ["Qualify or out", "Qualify or out", "Qualify or out"]);
+      const html = renderToStaticMarkup(createElement(PlayoffOutlook, { scenario, matchId: "m" }));
+      expect(html).not.toContain("Any result");
+      expect(html).toContain("qualify in 8 of 9; eliminated in 1 of 9.");
+      expect(html).toContain("qualify in 1 of 9; eliminated in 8 of 9.");
+    });
+
+    it("folds a settled verdict even when seeding still depends on the result", () => {
+      const scenario = team({ nextMatchId: "m",
+        outlook: result({ total: 3, qualified: 3, seedingTiebreaker: 1 }),
+        paths: {
+          win: result({ qualified: 1 }),
+          draw: result({ qualified: 1 }),
+          loss: result({ qualified: 1, seedingTiebreaker: 1 }),
+        } });
+      expect(playoffPathLines(scenario, "m").map((line) => line.label)).toEqual(["Any result"]);
+    });
+
     it("keeps one line when the result doesn't matter but other games still do", () => {
       const mixed = result({ total: 2, qualified: 1, eliminated: 1 });
       const scenario = team({ nextMatchId: "m", outlook: result({ total: 6, qualified: 3, eliminated: 3 }),
