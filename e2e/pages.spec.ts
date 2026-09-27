@@ -237,7 +237,7 @@ test("phones get one menu: the tab bar's sheet, plus the avatar's account menu",
     exact: true,
   });
   await expect(
-    accountMenu.getByRole("link", { name: "My profile" }),
+    accountMenu.getByRole("link", { name: "My account" }),
   ).toBeVisible();
   await expect(
     accountMenu.getByRole("button", { name: "Log out" }),

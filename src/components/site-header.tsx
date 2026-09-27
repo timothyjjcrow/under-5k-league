@@ -357,7 +357,9 @@ export function SiteHeader({
                       aria-current={pathname === "/me" ? "page" : undefined}
                       className="flex min-h-11 items-center rounded-lg px-3 text-sm text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
                     >
-                      My profile
+                      {/* /me's own name: it is the account and signup page;
+                          "profile" is the public page under /players. */}
+                      My account
                     </Link>
                     {user.role === "ADMIN" ? (
                       <Link
