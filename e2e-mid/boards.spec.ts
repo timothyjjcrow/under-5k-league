@@ -367,6 +367,17 @@ test("team page renders roster, form, and the what-we-need card", async ({
   await expect(
     page.getByRole("heading", { name: "Head-to-head", exact: true }),
   ).toBeVisible();
+  // On a phone the page leads with the next or live series, then the
+  // roster, then the full fixture list.
+  const top = (selector: string) =>
+    page
+      .locator(selector)
+      .evaluate((element) => element.getBoundingClientRect().top);
+  const rosterTop = await top("#team-roster");
+  expect(rosterTop).toBeLessThan(await top("#team-matches"));
+  if ((await page.locator("#team-overview").count()) > 0) {
+    expect(await top("#team-overview")).toBeLessThan(rosterTop);
+  }
   await expectNoHorizontalOverflow(page, "/teams/[id]");
   assertNoErrors();
 });

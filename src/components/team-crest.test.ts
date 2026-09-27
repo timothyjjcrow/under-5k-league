@@ -112,8 +112,17 @@ describe("TeamCrest", () => {
       join(__dirname, "../app/teams/[id]/page.tsx"),
       "utf8",
     );
-    const heroCrest = crestWithName(teamPage, "name={team.name}");
+    // Phones get a 64px crest so the names beside it have room; tablets and
+    // up keep the 112px one. Both fill with the logo.
+    const heroCrests = (teamPage.match(/<TeamCrest[\s\S]*?\/>/g) ?? []).filter(
+      (crest) => crest.includes("name={team.name}"),
+    );
+    expect(heroCrests).toHaveLength(2);
+    const [phoneCrest, heroCrest] = heroCrests;
+    expect(phoneCrest).toContain("size={64}");
+    expect(phoneCrest).toContain("sm:hidden");
     expect(heroCrest).toContain("size={112}");
-    expect(heroCrest).toContain('imageFit="cover"');
+    expect(heroCrest).toMatch(/className="hidden [^"]*sm:grid/);
+    for (const crest of heroCrests) expect(crest).toContain('imageFit="cover"');
   });
 });

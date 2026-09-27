@@ -96,3 +96,43 @@ export function headToHead(
   }
   return [...map.values()];
 }
+
+export type FixtureOrderMatch = {
+  id: string;
+  status: string;
+  week: number;
+  scheduledAt: Date | null;
+};
+
+/**
+ * A team page's fixture list, most useful first: a live series, then the
+ * series still to play by kickoff (untimed ones last), then results newest
+ * first. Results sort by kickoff (untimed as oldest), then week, the same
+ * "latest result" rule as the team's match spotlight.
+ */
+export function teamFixtureOrder<T extends FixtureOrderMatch>(
+  matches: readonly T[],
+): T[] {
+  const kickoff = (m: T, missing: number) =>
+    m.scheduledAt?.getTime() ?? missing;
+  const upcoming = (a: T, b: T) =>
+    kickoff(a, Number.MAX_SAFE_INTEGER) - kickoff(b, Number.MAX_SAFE_INTEGER) ||
+    a.week - b.week ||
+    a.id.localeCompare(b.id);
+  const live = matches.filter((m) => m.status === MATCH_STATUS.LIVE);
+  const open = matches.filter(
+    (m) =>
+      m.status !== MATCH_STATUS.LIVE && m.status !== MATCH_STATUS.COMPLETED,
+  );
+  const done = matches.filter((m) => m.status === MATCH_STATUS.COMPLETED);
+  return [
+    ...live.sort(upcoming),
+    ...open.sort(upcoming),
+    ...done.sort(
+      (a, b) =>
+        kickoff(b, 0) - kickoff(a, 0) ||
+        b.week - a.week ||
+        b.id.localeCompare(a.id),
+    ),
+  ];
+}

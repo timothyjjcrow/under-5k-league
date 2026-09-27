@@ -17,7 +17,11 @@ import { LocalTime } from "@/components/local-time";
 import { seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import type { TeamScenario } from "@/lib/scenarios";
-import { headToHead, recentForm } from "@/lib/team-matches";
+import {
+  headToHead,
+  recentForm,
+  teamFixtureOrder,
+} from "@/lib/team-matches";
 import {
   matchRoundLabel,
   playoffTotalRounds,
@@ -88,12 +92,6 @@ export async function generateMetadata({
     team.name,
     `${team.name} — roster, results, and stats in ${LEAGUE_CONFIG.name}.`,
   );
-}
-
-function fmtDate(d: Date | null): string | null {
-  // Delegates to formatMatchTime — these strings are LocalTime hydration
-  // snapshots, so drifting from the client's formatter causes flicker.
-  return d ? formatMatchTime(d, "full") : null;
 }
 
 export default async function TeamPage({
@@ -332,10 +330,14 @@ export default async function TeamPage({
           ) ?? "?"
         }`
       : null;
+  // The page leads with what's next: the live or next series (or, before
+  // any result, the draft numbers), then the roster, then every fixture.
+  const showOverview = !played || featuredMatch != null;
+  const fixtureList = teamFixtureOrder(myMatches);
   const sectionItems = [
-    { id: "team-overview", label: "Overview" },
-    { id: "team-matches", label: "Matches" },
+    ...(showOverview ? [{ id: "team-overview", label: "Overview" }] : []),
     { id: "team-roster", label: "Roster" },
+    { id: "team-matches", label: "Matches" },
     ...(teamHeroes.length > 0 ? [{ id: "team-heroes", label: "Heroes" }] : []),
     ...(h2h.length > 0 ? [{ id: "team-rivals", label: "Head-to-head" }] : []),
     ...(myScenario && stakesReport && played
@@ -434,18 +436,27 @@ export default async function TeamPage({
             aria-hidden
             className="animate-hero-glow-alt pointer-events-none absolute -right-8 bottom-0 h-40 w-40 translate-y-1/3 rounded-full bg-accent/15 blur-3xl"
           />
-          <div className="relative flex flex-wrap items-center gap-5 p-6">
+          <div className="relative flex items-center gap-4 p-4 sm:gap-5 sm:p-6">
+            {/* A smaller crest on phones leaves the names room to breathe. */}
+            <TeamCrest
+              name={team.name}
+              seed={team.id}
+              logoUrl={team.logoUrl}
+              size={64}
+              imageFit="cover"
+              className="self-start rounded-xl shadow-lg sm:hidden"
+            />
             <TeamCrest
               name={team.name}
               seed={team.id}
               logoUrl={team.logoUrl}
               size={112}
               imageFit="cover"
-              className="rounded-2xl shadow-lg"
+              className="hidden rounded-2xl shadow-lg sm:grid"
             />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
+                <h1 className="font-display text-2xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                   {team.name}
                 </h1>
                 {seed ? (
@@ -461,6 +472,36 @@ export default async function TeamPage({
                 {team.withdrawn ? <Badge tone="danger">Withdrawn</Badge> : null}
               </div>
               <div className="mt-1 text-sm text-muted">{team.season.name}</div>
+              {played && row ? (
+                // Record and points in one line (the badge beside the name
+                // carries the rank, or the playoff seed).
+                <p className="mt-1 text-sm">
+                  {seed ? (
+                    <span className="text-muted">Regular season: </span>
+                  ) : null}
+                  <span className="font-semibold tabular-nums">
+                    <span aria-hidden>
+                      {row.wins}W {row.draws}D {row.losses}L
+                    </span>
+                    <span className="sr-only">
+                      {row.wins} won, {row.draws} drawn, {row.losses} lost
+                    </span>
+                  </span>
+                  <span className="text-muted"> · </span>
+                  <span className="font-semibold tabular-nums">
+                    {row.points}
+                  </span>{" "}
+                  <span className="text-muted">
+                    {row.points === 1 ? "pt" : "pts"}
+                  </span>
+                  {seed && rank > 0 ? (
+                    <span className="text-muted">
+                      {" "}
+                      · #{rank} of {allTeams.length}
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
               {/* The Champion badge beside the name already says it. */}
               {playoffStatus && playoffStatus.kind !== "champion" ? (
                 <PlayoffStatusLine
@@ -540,195 +581,48 @@ export default async function TeamPage({
 
       <SectionNav items={sectionItems} label="Team sections" sticky />
 
-      <section
-        id="team-overview"
-        aria-label="Team overview"
-        className={cn(
-          "scroll-mt-40 grid grid-cols-1 gap-4",
-          featuredMatch && "lg:grid-cols-2",
-        )}
-      >
-        {played ? (
-          <div className="grid min-w-0 grid-cols-2 gap-3">
-            <Stat
-              label="Record"
-              value={`${row?.wins ?? 0}–${row?.losses ?? 0}${
-                (row?.draws ?? 0) > 0 ? `–${row?.draws}` : ""
-              }`}
-            />
-            <Stat label="Points" value={row?.points ?? 0} />
-            <Stat
-              label="Rank"
-              value={rank > 0 ? `#${rank}` : "—"}
-              hint={`of ${allTeams.length}`}
-            />
-            <Stat
-              label="Roster"
-              value={`${team.members.length}/${team.season.teamSize}`}
-            />
-          </div>
-        ) : (
-          <div className="grid min-w-0 grid-cols-2 gap-3">
-            <Stat
-              label={
-                displayBudgets.isProjected ? "Projected budget" : "Budget left"
-              }
-              value={`$${displayBudget}`}
-              hint={
-                displayBudgets.isProjected
-                  ? "Finalized when the auction starts"
-                  : undefined
-              }
-            />
-            <Stat label="Spent" value={`$${spent}`} />
-            <Stat
-              label="Roster"
-              value={`${team.members.length}/${team.season.teamSize}`}
-            />
-            <Stat label="Avg MMR" value={avgMmr ?? "—"} />
-          </div>
-        )}
-
-        {featuredMatch ? (
-          <ProfileMatchSpotlight
-            match={featuredMatch}
-            teams={allTeams}
-            playoffRounds={playoffRounds}
-            nowMs={nowMs}
-          />
-        ) : null}
-      </section>
-
-      <Card id="team-matches" className="scroll-mt-40 overflow-hidden">
-        <CardHeader
-          title="Matches"
-          headingLevel={2}
-          action={
-            team.season.isActive ? (
-              <Link
-                href={`/schedule?team=${team.id}#fixtures`}
-                className={textLink("text-sm")}
-              >
-                Team schedule →
-              </Link>
-            ) : undefined
-          }
-        />
-        <CardBody className="p-0">
-          {myMatches.length === 0 ? (
-            <div className="p-5">
-              <EmptyState title="No matches scheduled yet" />
-            </div>
-          ) : (
-            <ul className="grid grid-cols-1 gap-px bg-line/60 sm:grid-cols-2">
-              {myMatches.map((m) => {
-                const isHome = m.homeTeamId === id;
-                const oppId = isHome ? m.awayTeamId : m.homeTeamId;
-                const myScore = isHome ? m.homeScore : m.awayScore;
-                const oppScore = isHome ? m.awayScore : m.homeScore;
-                const result =
-                  m.winnerTeamId === id
-                    ? "W"
-                    : m.winnerTeamId === null
-                      ? "D"
-                      : "L";
-                const matchState = profileMatchState(m, nowMs);
-                const when = fmtDate(m.scheduledAt);
-                return (
-                  <li key={m.id} className="sm:last:odd:col-span-2">
-                    <Link
-                      href={`/matches/${m.id}`}
-                      className="group flex h-full min-w-0 flex-col gap-3 bg-surface px-5 py-4 text-sm transition-colors hover:bg-surface-2"
-                    >
-                      <span className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                        <span>{matchRoundLabel(m, playoffRounds)}</span>
-                        {m.status === "COMPLETED" ? (
-                          <Badge
-                            tone={
-                              result === "W"
-                                ? "success"
-                                : result === "L"
-                                  ? "danger"
-                                  : "neutral"
-                            }
-                          >
-                            {m.forfeit ? "Forfeit · " : ""}
-                            {result === "W"
-                              ? "Won"
-                              : result === "L"
-                                ? "Lost"
-                                : "Draw"}
-                          </Badge>
-                        ) : (
-                          <Badge
-                            tone={m.status === "LIVE" ? "danger" : "neutral"}
-                          >
-                            {matchState === "Next series"
-                              ? "Upcoming"
-                              : matchState}
-                          </Badge>
-                        )}
-                      </span>
-                      <span className="flex min-w-0 items-center gap-3">
-                        <TeamCrest
-                          name={teamName.get(oppId) ?? "?"}
-                          seed={oppId}
-                          logoUrl={teamLogoUrl.get(oppId)}
-                          size={32}
-                          imageFit="cover"
-                          className="shrink-0 rounded-lg"
-                        />
-                        <span className="min-w-0 flex-1 font-medium leading-snug [overflow-wrap:anywhere]">
-                          <span className="font-normal text-muted">vs </span>
-                          {teamName.get(oppId) ?? "?"}
-                        </span>
-                        {m.status === "COMPLETED" || m.status === "LIVE" ? (
-                          <span className="shrink-0 font-display text-2xl font-semibold tabular-nums">
-                            {myScore}–{oppScore}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="mt-auto flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                        {when && m.scheduledAt ? (
-                          <LocalTime
-                            ts={m.scheduledAt.getTime()}
-                            variant="full"
-                            initial={when}
-                          />
-                        ) : (
-                          <span>
-                            {m.status === "COMPLETED"
-                              ? "Time not recorded"
-                              : "Time TBD"}
-                          </span>
-                        )}
-                        <span className="font-medium text-info group-hover:underline">
-                          Match →
-                        </span>
-                      </span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+      {showOverview ? (
+        <section
+          id="team-overview"
+          aria-label="Team overview"
+          className={cn(
+            "scroll-mt-40 grid grid-cols-1 gap-4",
+            !played && featuredMatch && "lg:grid-cols-2",
           )}
-        </CardBody>
-      </Card>
-
-      {diffTrend.length >= 2 ? (
-        <Card>
-          <CardBody className="flex items-center justify-between gap-4 py-3">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                Game diff by match
-              </div>
-              <div className="text-xs text-muted">
-                last {diffTrend.length} played
-              </div>
+        >
+          {/* Record, points and rank sit in the header once results exist;
+              before that the draft numbers are what this team is about. */}
+          {!played ? (
+            <div className="grid min-w-0 grid-cols-2 gap-3">
+              <Stat
+                label={
+                  displayBudgets.isProjected ? "Projected budget" : "Budget left"
+                }
+                value={`$${displayBudget}`}
+                hint={
+                  displayBudgets.isProjected
+                    ? "Finalized when the auction starts"
+                    : undefined
+                }
+              />
+              <Stat label="Spent" value={`$${spent}`} />
+              <Stat
+                label="Roster"
+                value={`${team.members.length}/${team.season.teamSize}`}
+              />
+              <Stat label="Avg MMR" value={avgMmr ?? "—"} />
             </div>
-            <Sparkline values={diffTrend} width={180} height={40} />
-          </CardBody>
-        </Card>
+          ) : null}
+
+          {featuredMatch ? (
+            <ProfileMatchSpotlight
+              match={featuredMatch}
+              teams={allTeams}
+              playoffRounds={playoffRounds}
+              nowMs={nowMs}
+            />
+          ) : null}
+        </section>
       ) : null}
 
       <section
@@ -740,13 +634,16 @@ export default async function TeamPage({
           <CardHeader
             title="Roster"
             headingLevel={2}
-            subtitle={
-              spent > 0
-                ? displayBudgets.isProjected
-                  ? `Recorded $${spent} · projected start $${displayBudget}`
-                  : `Spent $${spent} · $${displayBudget} left`
-                : undefined
-            }
+            subtitle={[
+              `${team.members.length} of ${team.season.teamSize} players`,
+              ...(spent > 0
+                ? [
+                    displayBudgets.isProjected
+                      ? `Recorded $${spent} · projected start $${displayBudget}`
+                      : `Spent $${spent} · $${displayBudget} left`,
+                  ]
+                : []),
+            ].join(" · ")}
           />
           <CardBody className="space-y-1.5">
             {team.members.length === 0 ? (
@@ -845,6 +742,141 @@ export default async function TeamPage({
           </Card>
         ) : null}
       </section>
+
+      <Card id="team-matches" className="scroll-mt-40 overflow-hidden">
+        <CardHeader
+          title="Matches"
+          headingLevel={2}
+          action={
+            team.season.isActive ? (
+              <Link
+                href={`/schedule?team=${team.id}#fixtures`}
+                className={textLink("text-sm")}
+              >
+                Team schedule →
+              </Link>
+            ) : undefined
+          }
+        />
+        <CardBody className="p-0">
+          {myMatches.length === 0 ? (
+            <div className="p-5">
+              <EmptyState title="No matches scheduled yet" />
+            </div>
+          ) : (
+            <ul className="divide-y divide-line/60">
+              {fixtureList.map((m) => {
+                const isHome = m.homeTeamId === id;
+                const oppId = isHome ? m.awayTeamId : m.homeTeamId;
+                const oppName = teamName.get(oppId) ?? "?";
+                const myScore = isHome ? m.homeScore : m.awayScore;
+                const oppScore = isHome ? m.awayScore : m.homeScore;
+                const done = m.status === "COMPLETED";
+                const live = m.status === "LIVE";
+                const result =
+                  m.winnerTeamId === id
+                    ? "W"
+                    : m.winnerTeamId === null
+                      ? "D"
+                      : "L";
+                const matchState = profileMatchState(m, nowMs);
+                return (
+                  <li key={m.id}>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className="group flex min-h-14 min-w-0 items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2 sm:px-5"
+                    >
+                      <TeamCrest
+                        name={oppName}
+                        seed={oppId}
+                        logoUrl={teamLogoUrl.get(oppId)}
+                        size={28}
+                        imageFit="cover"
+                        className="shrink-0 rounded-lg"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium leading-snug [overflow-wrap:anywhere] group-hover:underline">
+                          <span className="font-normal text-muted">vs </span>
+                          {oppName}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-muted">
+                          {matchRoundLabel(m, playoffRounds)}
+                          {" · "}
+                          {m.scheduledAt ? (
+                            <LocalTime
+                              ts={m.scheduledAt.getTime()}
+                              variant="short"
+                              initial={formatMatchTime(m.scheduledAt, "short")}
+                            />
+                          ) : done ? (
+                            "Time not recorded"
+                          ) : (
+                            "Time TBD"
+                          )}
+                          {done && m.forfeit ? " · Forfeit" : ""}
+                        </span>
+                      </span>
+                      {done || live ? (
+                        <span className="shrink-0 font-display text-lg font-semibold tabular-nums">
+                          {myScore}–{oppScore}
+                        </span>
+                      ) : null}
+                      {done ? (
+                        <Badge
+                          tone={
+                            result === "W"
+                              ? "success"
+                              : result === "L"
+                                ? "danger"
+                                : "neutral"
+                          }
+                          className="w-7 shrink-0 justify-center px-0"
+                        >
+                          <span aria-hidden>{result}</span>
+                          <span className="sr-only">
+                            {result === "W"
+                              ? "Won"
+                              : result === "L"
+                                ? "Lost"
+                                : "Draw"}
+                          </span>
+                        </Badge>
+                      ) : (
+                        <Badge
+                          tone={live ? "danger" : "neutral"}
+                          className="shrink-0"
+                        >
+                          {live
+                            ? "Live"
+                            : matchState === "Awaiting result"
+                              ? "Awaiting result"
+                              : "Upcoming"}
+                        </Badge>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </CardBody>
+      </Card>
+
+      {diffTrend.length >= 2 ? (
+        <Card>
+          <CardBody className="flex items-center justify-between gap-4 py-3">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-muted">
+                Game diff by match
+              </div>
+              <div className="text-xs text-muted">
+                last {diffTrend.length} played
+              </div>
+            </div>
+            <Sparkline values={diffTrend} width={180} height={40} />
+          </CardBody>
+        </Card>
+      ) : null}
 
       {teamHeroes.length > 0 ? (
         <Card id="team-heroes" className="scroll-mt-40">
