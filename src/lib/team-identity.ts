@@ -75,6 +75,24 @@ export type TeamIdentityChange = {
   byCaptain: boolean;
 };
 
+/**
+ * A captain's name and logo changes post to the league channel at most once
+ * per team in this window. Every change is still saved and logged; this only
+ * stops a captain trying names back and forth from flooding the channel and
+ * using up the webhook's rate limit, which other announcements share.
+ */
+export const TEAM_IDENTITY_PING_THROTTLE_SECONDS = 15 * 60;
+
+export function teamIdentityPingKey(teamId: string): string {
+  return `teamIdentityPing:${teamId}`;
+}
+
+/** The toast for a save whose Discord post was held back by the throttle. */
+export function teamIdentityNotPostedMessage(name: string): string {
+  const minutes = Math.round(TEAM_IDENTITY_PING_THROTTLE_SECONDS / 60);
+  return `Saved ${name}. Discord already heard about a change to this team in the last ${minutes} minutes, so this one wasn't posted there.`;
+}
+
 /** One activity-log line naming what changed, old name first. */
 export function teamIdentitySummary(change: TeamIdentityChange): string {
   const logo = change.logoUrl ? "a custom logo" : "the generated crest";
