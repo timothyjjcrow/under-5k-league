@@ -135,3 +135,152 @@ export function signupSummary(reg: SignupSummaryInput): string {
   if (reg.wantsCaptain && !standin) parts.push("Captain volunteer");
   return parts.join(" · ");
 }
+
+export type DiscordNote = { tone: "success" | "danger" | "muted"; text: string };
+
+// The Discord OAuth callback bounces outcomes back to /me as ?discord=<code>.
+// Only KNOWN codes map to copy; the raw query value is never echoed (same
+// injection/phishing hygiene as the login page's ?error=).
+const DISCORD_LINK_NOTES: Record<string, DiscordNote> = {
+  linked: {
+    tone: "success",
+    text: "Discord linked — your handle is now verified.",
+  },
+  joined: {
+    tone: "success",
+    text: "Discord linked and you're in the league server — that's everything.",
+  },
+  joined_pending: {
+    tone: "muted",
+    text: "Discord linked and you've been added to the server — open it and accept the rules, otherwise nobody can ping you.",
+  },
+  join_failed: {
+    tone: "muted",
+    text: "Discord linked. We couldn't add you to the server automatically — join it with the button below.",
+  },
+  denied: {
+    tone: "muted",
+    text: "Discord link cancelled — nothing was changed.",
+  },
+  taken: {
+    tone: "danger",
+    text: "That Discord account is already linked to another player — sign in to that account and unlink it there first.",
+  },
+  state: {
+    tone: "danger",
+    text: "That link attempt expired or didn't start here — try Link Discord again.",
+  },
+  error: {
+    tone: "danger",
+    text: "Discord didn't confirm the link — give it another try.",
+  },
+  unconfigured: {
+    tone: "danger",
+    text: "Discord linking isn't available right now — ask a league admin.",
+  },
+  session: {
+    tone: "danger",
+    text: "Your site session expired while Discord was open. Sign in again, then retry the link.",
+  },
+};
+
+/**
+ * The one-shot note for a ?discord= code. An unknown code gets the generic
+ * error, and the hasOwnProperty guard stops ?discord=__proto__ (or toString)
+ * resolving an inherited value. The note was minted by the CALLBACK, while
+ * the membership check ran just now, so the live answer wins: a player who was
+ * already in the server when the auto-join failed must not read "join it with
+ * the button below" under "In the server ✓" with no such button on the page.
+ */
+export function discordLinkNote(
+  param: string | undefined,
+  membership: AccountMembership,
+): DiscordNote | null {
+  if (!param) return null;
+  if (
+    (param === "join_failed" || param === "joined_pending") &&
+    membership === "member"
+  ) {
+    return DISCORD_LINK_NOTES.joined;
+  }
+  if (param === "join_failed" && membership === "pending") {
+    return DISCORD_LINK_NOTES.joined_pending;
+  }
+  return Object.prototype.hasOwnProperty.call(DISCORD_LINK_NOTES, param)
+    ? DISCORD_LINK_NOTES[param]
+    : DISCORD_LINK_NOTES.error;
+}
+
+/** A button on the Discord card: the OAuth round trip, or the invite link. */
+export type DiscordCta = { kind: "oauth" | "invite"; label: string };
+
+export type DiscordCardCtas = {
+  /** The one main button for this state, or null when nothing is left. */
+  primary: DiscordCta | null;
+  /** The invite, kept beside a one-click OAuth button: when the auto-join
+   *  itself is broken (bot missing CREATE_INSTANT_INVITE, mismatched app),
+   *  OAuth alone bounces the player back to this card forever. */
+  secondary: DiscordCta | null;
+};
+
+export type DiscordCardInput = {
+  linked: boolean;
+  membership: AccountMembership;
+  /** OAuth linking is configured (client id + secret). */
+  linkAvailable: boolean;
+  /** The OAuth consent also carries guilds.join (bot + guild configured). */
+  autoJoins: boolean;
+  /** The league has an invite link (Europe may not). */
+  hasInvite: boolean;
+  /** The one-shot ?discord= code from the OAuth callback, if any. */
+  param?: string;
+};
+
+/**
+ * Which buttons the one Discord card on /me shows. One primary per state,
+ * every label distinct within a state, and an unknown membership (no bot,
+ * Discord slow) never produces a join button on a guess: only the callback's
+ * own one-shot report can ask for one then.
+ */
+export function discordCardCtas(input: DiscordCardInput): DiscordCardCtas {
+  const oneClick = input.linkAvailable && input.autoJoins;
+  const invite = (label: string): DiscordCta | null =>
+    input.hasInvite ? { kind: "invite", label } : null;
+  if (!input.linked) {
+    if (!input.linkAvailable) {
+      return { primary: invite("Join the server"), secondary: null };
+    }
+    return oneClick
+      ? {
+          primary: { kind: "oauth", label: "Link Discord & join the server" },
+          secondary: invite("Use the invite instead"),
+        }
+      : {
+          primary: { kind: "oauth", label: "Link Discord" },
+          secondary: invite("Join the server"),
+        };
+  }
+  if (input.membership === "not-member") {
+    return oneClick
+      ? {
+          // Re-running OAuth re-consents guilds.join with a fresh token: a
+          // real one-click join, and it re-links whichever account the
+          // browser is signed into.
+          primary: { kind: "oauth", label: "Join the server" },
+          secondary: invite("Use the invite instead"),
+        }
+      : { primary: invite("Join the server"), secondary: null };
+  }
+  if (input.membership === "pending") {
+    return { primary: invite("Open Discord"), secondary: null };
+  }
+  if (input.membership === null) {
+    if (input.param === "join_failed") {
+      return { primary: invite("Join the server"), secondary: null };
+    }
+    if (input.param === "joined_pending") {
+      return { primary: invite("Open Discord"), secondary: null };
+    }
+  }
+  return { primary: null, secondary: null };
+}

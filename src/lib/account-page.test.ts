@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   accountNextSteps,
+  discordCardCtas,
+  discordLinkNote,
   signupSummary,
   type AccountStepInput,
+  type DiscordCardInput,
 } from "./account-page";
 
 const base: AccountStepInput = {
@@ -185,5 +188,126 @@ describe("signupSummary", () => {
         wantsCaptain: false,
       }),
     ).toBe("Full player · Carry · 2 heroes");
+  });
+});
+
+describe("discordLinkNote", () => {
+  it("maps known callback codes and never echoes an unknown one", () => {
+    expect(discordLinkNote(undefined, null)).toBeNull();
+    expect(discordLinkNote("linked", null)?.tone).toBe("success");
+    expect(discordLinkNote("taken", null)?.tone).toBe("danger");
+    const generic = discordLinkNote("error", null);
+    expect(discordLinkNote("<script>", null)).toEqual(generic);
+    // Inherited keys must fall back to the generic note, not an empty one.
+    expect(discordLinkNote("__proto__", null)).toEqual(generic);
+    expect(discordLinkNote("toString", null)).toEqual(generic);
+  });
+
+  it("lets the live membership answer beat the callback's report", () => {
+    const joined = discordLinkNote("joined", null);
+    expect(discordLinkNote("join_failed", "member")).toEqual(joined);
+    expect(discordLinkNote("joined_pending", "member")).toEqual(joined);
+    expect(discordLinkNote("join_failed", "pending")).toEqual(
+      discordLinkNote("joined_pending", null),
+    );
+    expect(discordLinkNote("join_failed", null)?.text).toMatch(
+      /couldn't add you/,
+    );
+  });
+});
+
+describe("discordCardCtas", () => {
+  const card: DiscordCardInput = {
+    linked: false,
+    membership: null,
+    linkAvailable: true,
+    autoJoins: true,
+    hasInvite: true,
+  };
+  const ctas = (input: Partial<DiscordCardInput>) =>
+    discordCardCtas({ ...card, ...input });
+
+  it("offers one-click linking with the invite beside it", () => {
+    expect(ctas({})).toEqual({
+      primary: { kind: "oauth", label: "Link Discord & join the server" },
+      secondary: { kind: "invite", label: "Use the invite instead" },
+    });
+  });
+
+  it("never promises the one-click join without a bot", () => {
+    expect(ctas({ autoJoins: false })).toEqual({
+      primary: { kind: "oauth", label: "Link Discord" },
+      secondary: { kind: "invite", label: "Join the server" },
+    });
+  });
+
+  it("falls back to the invite where linking isn't set up", () => {
+    expect(ctas({ linkAvailable: false })).toEqual({
+      primary: { kind: "invite", label: "Join the server" },
+      secondary: null,
+    });
+    expect(ctas({ linkAvailable: false, hasInvite: false })).toEqual({
+      primary: null,
+      secondary: null,
+    });
+  });
+
+  it("keeps an invite beside the one-click join for a linked non-member", () => {
+    expect(ctas({ linked: true, membership: "not-member" })).toEqual({
+      primary: { kind: "oauth", label: "Join the server" },
+      secondary: { kind: "invite", label: "Use the invite instead" },
+    });
+    expect(
+      ctas({ linked: true, membership: "not-member", autoJoins: false }),
+    ).toEqual({
+      primary: { kind: "invite", label: "Join the server" },
+      secondary: null,
+    });
+  });
+
+  it("sends a pending member to Discord and asks nothing once they're in", () => {
+    expect(ctas({ linked: true, membership: "pending" })).toEqual({
+      primary: { kind: "invite", label: "Open Discord" },
+      secondary: null,
+    });
+    expect(ctas({ linked: true, membership: "member" })).toEqual({
+      primary: null,
+      secondary: null,
+    });
+  });
+
+  it("never asks someone to join on an unknown membership, unless the callback said so", () => {
+    expect(ctas({ linked: true, membership: null })).toEqual({
+      primary: null,
+      secondary: null,
+    });
+    expect(
+      ctas({ linked: true, membership: null, param: "join_failed" }).primary,
+    ).toEqual({ kind: "invite", label: "Join the server" });
+    expect(
+      ctas({ linked: true, membership: null, param: "joined_pending" })
+        .primary,
+    ).toEqual({ kind: "invite", label: "Open Discord" });
+    // The live answer wins over the one-shot report.
+    expect(
+      ctas({ linked: true, membership: "member", param: "join_failed" }),
+    ).toEqual({ primary: null, secondary: null });
+  });
+
+  it("never gives two buttons in one state the same name", () => {
+    const states: Partial<DiscordCardInput>[] = [
+      {},
+      { autoJoins: false },
+      { linkAvailable: false },
+      { linked: true, membership: "not-member" },
+      { linked: true, membership: "not-member", autoJoins: false },
+      { linked: true, membership: "pending" },
+      { linked: true, membership: null, param: "join_failed" },
+    ];
+    for (const state of states) {
+      const { primary, secondary } = ctas(state);
+      expect(primary).not.toBeNull();
+      if (secondary) expect(secondary.label).not.toBe(primary?.label);
+    }
   });
 });

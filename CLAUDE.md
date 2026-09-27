@@ -542,10 +542,14 @@ has to justify it.
   TTLs (member 5min, everything else 30s) because a non-member is mid-fix and
   the nag must notice their join fast — and /me's live read calls
   `primeMembershipMemo` so the dashboard can't contradict the profile page.
-  Surfaces: /me's Discord card is three-state (In the server ✓ / Rules pending
-  / Not in the server + a durable CTA strip; the one-shot `?discord=` join
-  button renders only when `membership === null` so two CTAs never stack);
-  `DiscordJoinCard` renders on the dashboard via `DiscordSetupPrompt` for
+  Surfaces: /me has ONE Discord card (`AccountDiscordCard`,
+  `src/components/account-discord-card.tsx`) whose badge and single primary
+  button follow the state (not linked / Not in the server / Rules pending /
+  In the server ✓, plain "Linked ✓" for unknown); the buttons come from pure
+  `discordCardCtas` (`src/lib/account-page.ts`, tested), and the one-shot
+  `?discord=` join button appears only when `membership === null`, so two
+  CTAs never stack; `DiscordJoinCard` renders on the dashboard via
+  `DiscordSetupPrompt` for
   linked-but-not-in/pending ACTIVE players (unknown renders NOTHING); the
   admin card's `getDiscordReachFunnel` extends the reach line with
   in-server/pending/missing/unknown — **unknown is its own count, never lumped
@@ -584,16 +588,21 @@ has to justify it.
     sweep deadline both sit on top of this). The stand-in tests enforce their
     own bucket server-side, so the exact request COUNT is what proves the
     pacing, not just the outcome.
-  - **The join CTAs carry three DISTINCT names on purpose** ("Join the
-    server" = one-click re-OAuth in `DiscordJoinCard`; "Use the invite
-    instead" beside it; "Join via the invite" in /me's strip — and the pending
-    strip says "Open Discord" vs the card's "Open the server"). Two rules
+  - **The join CTAs carry DISTINCT names on purpose** ("Join the server" =
+    one-click re-OAuth; "Use the invite instead" beside it, on the dashboard's
+    `DiscordJoinCard` and on /me's card alike; a pending member gets "Open
+    the server" on the dashboard and "Open Discord" on /me). Two rules
     collide here: one-control-one-name, and **a broken auto-join must always
     leave an invite path visible** — re-OAuth alone bounces a player whose
     join 403s (bot missing CREATE_INSTANT_INVITE, mismatched app) through
-    consent back to the same card forever.
-  - **The live membership answer beats the `?discord=` param** (`/me`'s
-    `discordNoteResolved`): the note was minted by the CALLBACK, and a player
+    consent back to the same card forever. /me's card pins both with a
+    render test (`account-discord-card.test.ts`: no two controls share a
+    name in any state, and the invite sits beside every one-click button).
+    The typed handle there lives behind a "Can't link? Type your handle"
+    disclosure, shown openly only where linking isn't configured.
+  - **The live membership answer beats the `?discord=` param** (pure
+    `discordLinkNote` in `account-page.ts`, tested): the note was minted by
+    the CALLBACK, and a player
     who was already in the server when the auto-join 403'd otherwise reads
     "we couldn't add you — join it with the button below" under an
     "In the server ✓" badge, with no such button on the page.
@@ -653,9 +662,10 @@ has to justify it.
     claimed. When copy follows a JSX expression onto a new source line, use
     the quoted-string form — the plain leading space is line-trimmed
     ("(@gone4)isn't"); this has now bitten three times.
-    COVERAGE LIMIT (stated, not hidden): the three-state /me card, the
-    dashboard join nag and the note-resolution are server-rendered JSX with no
-    automated render test (no jsdom; e2e has no bot env) — the lib layer under
+    COVERAGE LIMIT (stated, not hidden): the dashboard join nag is
+    server-rendered JSX with no automated render test (no jsdom; e2e has no
+    bot env); /me's card and its note resolution now have unit and
+    renderToStaticMarkup tests, but not against a live bot — the lib layer under
     them is fully itested, and they were verified in a real browser via the
     `discord-fixture` launch entry (port 3115): run
     `node scripts/discord-standin.mjs` (a stand-in Discord API on :4310 whose

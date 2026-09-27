@@ -16,7 +16,6 @@ import {
   unlinkDiscord,
   setInhousePingOptIn,
 } from "@/app/actions/registration";
-import { DiscordTag } from "@/components/discord-tag";
 import {
   fetchGuildMember,
   getGuildConfig,
@@ -25,7 +24,7 @@ import {
   type GuildConfig,
   type GuildMemberInfo,
 } from "@/lib/discord-roles";
-import { DiscordJoinCard } from "@/components/discord-setup";
+import { AccountDiscordCard } from "@/components/account-discord-card";
 import {
   AccountNextStepBanner,
   SignupNextSteps,
@@ -36,7 +35,6 @@ import {
   type AccountStepInput,
 } from "@/lib/account-page";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
-import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import {
   effectiveDotaAccountId,
@@ -45,7 +43,6 @@ import {
 import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
-  DISCORD_INVITE_URL,
   HARD_MMR_CEILING,
   MATCH_PHASE,
   REGISTRATION_STATUS,
@@ -77,65 +74,14 @@ import {
   Card,
   CardBody,
   CardHeader,
-  DiscordButton,
   PageTitle,
   RankBadge,
   ScheduleCallout,
   TeamCrest,
-  buttonClasses,
   textLink,
 } from "@/components/ui";
 
 export const metadata = { title: "My account" };
-
-// The Discord OAuth callback bounces outcomes back here as ?discord=<code>.
-// Map only KNOWN codes to copy — never echo the raw query value (same
-// injection/phishing hygiene as the login page's ?error=).
-const DISCORD_LINK_NOTES: Record<
-  string,
-  { tone: "success" | "danger" | "muted"; text: string }
-> = {
-  linked: {
-    tone: "success",
-    text: "Discord linked — your handle is now verified.",
-  },
-  joined: {
-    tone: "success",
-    text: "Discord linked and you're in the league server — that's everything.",
-  },
-  joined_pending: {
-    tone: "muted",
-    text: "Discord linked and you've been added to the server — open it and accept the rules, otherwise nobody can ping you.",
-  },
-  join_failed: {
-    tone: "muted",
-    text: "Discord linked. We couldn't add you to the server automatically — join it with the button below.",
-  },
-  denied: {
-    tone: "muted",
-    text: "Discord link cancelled — nothing was changed.",
-  },
-  taken: {
-    tone: "danger",
-    text: "That Discord account is already linked to another player — sign in to that account and unlink it there first.",
-  },
-  state: {
-    tone: "danger",
-    text: "That link attempt expired or didn't start here — try Link Discord again.",
-  },
-  error: {
-    tone: "danger",
-    text: "Discord didn't confirm the link — give it another try.",
-  },
-  unconfigured: {
-    tone: "danger",
-    text: "Discord linking isn't available right now — ask a league admin.",
-  },
-  session: {
-    tone: "danger",
-    text: "Your site session expired while Discord was open. Sign in again, then retry the link.",
-  },
-};
 
 export default async function MePage({
   searchParams,
@@ -1014,14 +960,6 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
   /** The page's one live member lookup (null without a link or a bot). */
   memberInfo: Promise<GuildMemberInfo>;
 }) {
-  // hasOwnProperty guard: a crafted ?discord=__proto__/constructor/toString
-  // would otherwise resolve an inherited truthy value past the ?? fallback
-  // and render an empty note instead of the generic error copy.
-  const discordNote = discordParam
-    ? Object.prototype.hasOwnProperty.call(DISCORD_LINK_NOTES, discordParam)
-      ? DISCORD_LINK_NOTES[discordParam]
-      : DISCORD_LINK_NOTES.error
-    : null;
   // Server component, so we can check the OAuth app config directly and only
   // offer "Link Discord" when clicking it can actually work.
   const discordLinkAvailable = !!(
@@ -1051,21 +989,6 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
     // two surfaces disagreeing for a memo window.
     primeMembershipMemo(dbUser.discordId, membership);
   }
-  // The ?discord= note was minted by the CALLBACK; the membership check ran
-  // just now — and the callback can be wrong about the present: a player who
-  // was ALREADY in the server when the auto-join 403'd (mismatched app,
-  // missing invite permission) arrives with ?discord=join_failed while the
-  // live check says "member". Rendering the param's copy verbatim put "we
-  // couldn't add you — join it with the button below" directly under an
-  // "In the server ✓" badge, with no such button anywhere on the page. The
-  // live answer wins; the param is still scrubbed either way.
-  const discordNoteResolved =
-    (discordParam === "join_failed" || discordParam === "joined_pending") &&
-    membership === "member"
-      ? DISCORD_LINK_NOTES.joined
-      : discordParam === "join_failed" && membership === "pending"
-        ? DISCORD_LINK_NOTES.joined_pending
-        : discordNote;
   // Inhouse ping opt-in. `on: null` = we genuinely don't know (Discord slow,
   // or the player isn't in the server) — rendered as unknown rather than "off",
   // because showing an unticked box to someone already opted in makes them
@@ -1078,264 +1001,28 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
         : null
       : false,
   };
-  return <section id="profile-discord" className="scroll-mt-24 space-y-4">
-      {/* Signed up but not linked: no separate "one step left" card here any
-          more. The season card sits first on this page and its next-steps
-          list, right under the signup button, points at the Discord card
-          below, which carries the link button; a second card asking the same
-          thing with an identically named button was the ask shown twice. */}
-      {isRegistered &&
-      (membership === "not-member" || membership === "pending") ? (
-        /* Linked but not (fully) in the server — the cohort that LOOKS done.
-           Derived state: it disappears the moment the join/rules step is
-           complete. */
-        <DiscordJoinCard
-          membership={membership}
-          linkAvailable={discordLinkAvailable && discordAutoJoins}
-          handle={dbUser?.discordName}
-        />
-      ) : null}
-
-      {/* The league coordinates on Discord — this is how captains reach their
-          roster for scheduling, check-ins, and standin scrambles. Linking via
-          OAuth proves account ownership; the typed handle is the fallback. */}
-      <Card>
-        <CardHeader
-          headingLevel={2}
-          title="Discord"
-          subtitle={
-            dbUser?.discordId
-              ? membership === "member"
-                ? isCaptain
-                  ? "Linked and in the league's Discord server — your handle is verified, and your team and league admins can reach you."
-                  : "Linked and in the league's Discord server — your handle is verified, and captains can reach you."
-                : "Linked via Discord — your handle is verified, and shown to you, league admins, and active league participants."
-              : dbUser?.discordName
-                ? "Shown to you, league admins, and active league participants on rosters and the player pool."
-                : isCaptain
-                  ? "Add your Discord so your team and league admins can reach you — it's how the league coordinates."
-                  : "Add your Discord so your captain can reach you — it's how the league talks."
-          }
-          action={
-            /* The badge only claims what this render actually verified:
-               membership when the bot could answer, plain "Linked ✓" when it
-               couldn't (no bot, or Discord down) — an unknown must never be
-               downgraded to "Not in the server". */
-            dbUser?.discordId ? (
-              membership === "member" ? (
-                <Badge tone="success">In the server ✓</Badge>
-              ) : membership === "pending" ? (
-                <Badge tone="info">Rules pending</Badge>
-              ) : membership === "not-member" ? (
-                <Badge tone="danger">Not in the server</Badge>
-              ) : (
-                <Badge tone="success">Linked ✓</Badge>
-              )
-            ) : null
-          }
-        />
-        <CardBody className="space-y-3">
-          {discordNoteResolved ? <StripQueryParam param="discord" /> : null}
-          {discordNoteResolved ? (
-            <p
-              role={discordNoteResolved.tone === "danger" ? "alert" : "status"}
-              className={
-                discordNoteResolved.tone === "success"
-                  ? "rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
-                  : discordNoteResolved.tone === "danger"
-                    ? "rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
-                    : "rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm text-muted"
-              }
-            >
-              {discordNoteResolved.text}
-            </p>
-          ) : null}
-          {/* Both of these leave the player linked but not actually reachable,
-              so the note must come with the way out of it. Only rendered when
-              the live membership check below couldn't run (membership null) —
-              when it could, the durable strip carries the same CTA and two
-              stacked join buttons would fight over one click. */}
-          {(discordParam === "join_failed" ||
-            discordParam === "joined_pending") &&
-          membership === null ? (
-            <DiscordButton
-              size="sm"
-              label={
-                discordParam === "joined_pending"
-                  ? "Open the server"
-                  : "Join the server"
-              }
-            />
-          ) : null}
-          {/* Durable membership state — unlike the one-shot ?discord= note,
-              this is re-derived live on every render, so it survives the
-              scrubbed query param and disappears the moment the join (or the
-              rules screen) is actually done. */}
-          {membership === "not-member" ? (
-            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm">
-              <p className="text-danger">
-                {/* "The account you linked", never "you" — the check is about
-                    the linked account BY ID, and the commonest cause of this
-                    state is a player sitting in the server on a DIFFERENT
-                    account than the one they linked. Naming the handle makes
-                    that self-diagnosable. */}
-                The Discord account you linked
-                {dbUser?.discordName ? ` (@${dbUser.discordName})` : ""}
-                {/* Quoted string: JSX line-trimming eats a plain leading
-                    space after an expression across a source-line break. */}
-                {
-                  " isn't in the league's server — that's where scheduling, match-night check-ins and standin scrambles happen, and nothing can reach you until it is. In the server on a different account? Use the Join button above — it re-links whichever account your browser is signed into, so one click fixes both."
-                }
-              </p>
-              <div className="mt-2">
-                {/* The INVITE, deliberately not the one-click OAuth join. This
-                    strip sits directly under the ?discord=join_failed note
-                    ("join it with the button below"), i.e. it renders for the
-                    player whose auto-join just FAILED — offering them the same
-                    OAuth round-trip again is a loop, and the invite works
-                    regardless of the bot's health. The one-click join lives in
-                    the DiscordJoinCard at the top of the page; the distinct
-                    label keeps one accessible name per control. */}
-                <DiscordButton size="sm" label="Join via the invite" />
-              </div>
-            </div>
-          ) : membership === "pending" ? (
-            <div className="rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm">
-              <p className="text-muted">
-                You&apos;re in the server but haven&apos;t accepted its rules
-                yet — until you do, nothing can ping you: not match found, not
-                {isCaptain ? " your team." : " your captain."}
-              </p>
-              <div className="mt-2">
-                {/* "Open Discord", not "Open the server" — the top-of-page
-                    DiscordJoinCard's pending CTA already carries that name,
-                    and two controls with one accessible name is the /players
-                    "Clear filters" defect. */}
-                <DiscordButton size="sm" label="Open Discord" />
-              </div>
-            </div>
-          ) : null}
-          {dbUser?.discordId ? (
-            <>
-              <div className="flex flex-wrap items-center gap-3">
-                <DiscordTag name={dbUser.discordName} verified />
-                <ActionForm action={unlinkDiscord}>
-                  <SubmitButton
-                    variant="secondary"
-                    size="sm"
-                    confirm="Unlink Discord? Your handle disappears from rosters until you link or type one again."
-                  >
-                    Unlink
-                  </SubmitButton>
-                </ActionForm>
-              </div>
-
-              {/* Self-serve opt-in to the inhouse ping role. Only offered when
-                  the league has actually configured one — advertising a
-                  notification that can't fire is worse than not offering it. */}
-              {pingOptIn.available ? (
-                <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-[14rem] flex-1">
-                      <p className="text-sm font-medium">
-                        Ping me for inhouse games
-                      </p>
-                      <p className="text-xs text-muted">
-                        Get a Discord notification when a queue is filling up
-                        and when your match is found. Off by default, and you
-                        can turn it back off here any time.
-                      </p>
-                    </div>
-                    <ActionForm action={setInhousePingOptIn}>
-                      <input
-                        type="hidden"
-                        name="on"
-                        value={pingOptIn.on ? "0" : "1"}
-                      />
-                      <SubmitButton
-                        variant={pingOptIn.on ? "secondary" : "primary"}
-                        size="sm"
-                      >
-                        {pingOptIn.on ? "Turn off" : "Turn on"}
-                      </SubmitButton>
-                    </ActionForm>
-                  </div>
-                  {pingOptIn.on === null ? (
-                    <p className="mt-2 text-xs text-muted">
-                      Couldn&apos;t check your current setting — either Discord
-                      is slow right now, or you&apos;re not in the league&apos;s
-                      server yet.
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-xs text-muted">
-                      Currently <b>{pingOptIn.on ? "on" : "off"}</b>.
-                    </p>
-                  )}
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <>
-              {/* Without the one-click join, getting into the server is its
-                  own trip through the invite. The old "one step left" card
-                  carried that button; with it gone from this page, the invite
-                  lives here so no configuration loses the way in. */}
-              {!discordAutoJoins && DISCORD_INVITE_URL ? (
-                <div>
-                  <DiscordButton size="sm" label="Join the server" />
-                </div>
-              ) : null}
-              {discordLinkAvailable ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <a
-                    href="/api/auth/discord"
-                    className={buttonClasses("primary", "sm")}
-                  >
-                    {discordAutoJoins
-                      ? "Link Discord & join the server"
-                      : "Link Discord"}
-                  </a>
-                  <span className="text-xs text-muted">
-                    {/* This has to describe the real consent screen. With
-                        guilds.join in the scope, the copy must name both the
-                        stable identity we store and the server write it permits. */}
-                    {discordAutoJoins
-                      ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
-                      : "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."}
-                  </span>
-                  {!isRegistered && signupsOpen ? (
-                    <span className="text-xs text-muted">
-                      This leaves the page — if you&apos;ve started filling in
-                      the signup above, save it first.
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-              <ActionForm
-                action={updateDiscordName}
-                className="flex flex-wrap items-center gap-2"
-              >
-                <input
-                  name="discordName"
-                  defaultValue={dbUser?.discordName ?? ""}
-                  placeholder="or type it — e.g. dendi_official"
-                  aria-label="Discord username"
-                  maxLength={40}
-                  className="h-10 w-full max-w-xs rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-                />
-                <SubmitButton variant="secondary" size="sm">
-                  Save
-                </SubmitButton>
-                <span className="text-xs text-muted">
-                  Blank clears it. Legacy Name#1234 tags work too.
-                </span>
-              </ActionForm>
-            </>
-          )}
-        </CardBody>
-      </Card>
-
-  </section>;
+  // The league coordinates on Discord — this is how captains reach their
+  // roster for scheduling, check-ins, and standin scrambles. One card: its
+  // badge and main button follow the state, the invite stays beside any
+  // one-click join, and the typed handle is the fallback.
+  return (
+    <section id="profile-discord" className="scroll-mt-24">
+      <AccountDiscordCard
+        discordId={dbUser?.discordId ?? null}
+        discordName={dbUser?.discordName || null}
+        membership={membership}
+        param={discordParam}
+        linkAvailable={discordLinkAvailable}
+        autoJoins={discordAutoJoins}
+        isCaptain={isCaptain}
+        warnBeforeLeaving={!isRegistered && signupsOpen}
+        pingOptIn={pingOptIn}
+        unlinkAction={unlinkDiscord}
+        saveHandleAction={updateDiscordName}
+        pingAction={setInhousePingOptIn}
+      />
+    </section>
+  );
 }
 
 function RadioTile({
