@@ -1,4 +1,5 @@
 import { SEASON_STATUS } from "./constants";
+import { normalizeTeamLogoUrl } from "./team-logo";
 
 /** Team names are headings, standings rows and Discord lines: one short line. */
 export const TEAM_NAME_MAX_LENGTH = 60;
@@ -84,4 +85,44 @@ export function logoPreviewNote(
   }
   if (image === "loaded") return { text: "Logo preview.", tone: "muted" };
   return { text: "Loading the logo…", tone: "muted" };
+}
+
+/** The name addCaptain gives a new team: "<captain>'s Team". */
+export function defaultTeamName(captainName: string): string {
+  return normalizeTeamName(`${captainName}'s Team`) || "New team";
+}
+
+/**
+ * What a returning captain's new team keeps from the last team they captained
+ * (their own account only — the caller looks up teams by captainId). Nothing
+ * is carried that would be worse than the default: a generated
+ * "<name>'s Team" name, a name another team this season already uses, or a
+ * logo link the logo check would now refuse (an expired Discord upload).
+ */
+export function carriedTeamIdentity(
+  previous: { name: string; logoUrl: string | null } | null,
+  takenNames: readonly string[],
+): { name: string | null; logoUrl: string | null } {
+  if (!previous) return { name: null, logoUrl: null };
+  const name = normalizeTeamName(previous.name);
+  const taken = new Set(takenNames.map(teamNameKey));
+  const keepName =
+    name && !/'s team$/i.test(name) && !taken.has(teamNameKey(name))
+      ? name
+      : null;
+  const logo = normalizeTeamLogoUrl(previous.logoUrl ?? "");
+  return { name: keepName, logoUrl: "logoUrl" in logo ? logo.logoUrl : null };
+}
+
+/** The sentence the "captain added" message ends with when something carried. */
+export function carriedTeamIdentityNote(carried: {
+  name: string | null;
+  logoUrl: string | null;
+}): string {
+  if (carried.name && carried.logoUrl) {
+    return `Their team keeps last time's name, ${carried.name}, and its logo.`;
+  }
+  if (carried.name) return `Their team keeps last time's name, ${carried.name}.`;
+  if (carried.logoUrl) return "Their team keeps its logo from last time.";
+  return "";
 }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   canEditTeamIdentity,
+  carriedTeamIdentity,
+  carriedTeamIdentityNote,
+  defaultTeamName,
   logoPreviewNote,
   normalizeTeamName,
   teamIdentitySummary,
@@ -126,5 +129,63 @@ describe("logoPreviewNote", () => {
       tone: "danger",
       text: expect.stringContaining("didn't load as an image"),
     });
+  });
+});
+
+describe("carriedTeamIdentity", () => {
+  const raccoons = {
+    name: "Radiant Raccoons",
+    logoUrl: "https://cdn.example/raccoon.png",
+  };
+
+  it("keeps last time's name and logo", () => {
+    expect(carriedTeamIdentity(raccoons, ["Zai's Team"])).toEqual(raccoons);
+  });
+
+  it("starts fresh for a first-time captain", () => {
+    expect(carriedTeamIdentity(null, [])).toEqual({ name: null, logoUrl: null });
+  });
+
+  it("never carries a generated name, but still carries the logo", () => {
+    expect(
+      carriedTeamIdentity({ name: "Zai's Team", logoUrl: raccoons.logoUrl }, []),
+    ).toEqual({ name: null, logoUrl: raccoons.logoUrl });
+  });
+
+  it("gives way to a team this season that already uses the name", () => {
+    expect(carriedTeamIdentity(raccoons, ["radiant  RACCOONS"]).name).toBeNull();
+  });
+
+  it("drops a logo the logo check would now refuse", () => {
+    expect(
+      carriedTeamIdentity(
+        {
+          name: "Radiant Raccoons",
+          logoUrl: "https://cdn.discordapp.com/attachments/1/2/logo.png?ex=1",
+        },
+        [],
+      ),
+    ).toEqual({ name: "Radiant Raccoons", logoUrl: null });
+  });
+});
+
+describe("carriedTeamIdentityNote", () => {
+  it("says exactly what was kept", () => {
+    expect(carriedTeamIdentityNote({ name: "Radiant Raccoons", logoUrl: "/r.png" })).toBe(
+      "Their team keeps last time's name, Radiant Raccoons, and its logo.",
+    );
+    expect(carriedTeamIdentityNote({ name: "Radiant Raccoons", logoUrl: null })).toBe(
+      "Their team keeps last time's name, Radiant Raccoons.",
+    );
+    expect(carriedTeamIdentityNote({ name: null, logoUrl: "/r.png" })).toBe(
+      "Their team keeps its logo from last time.",
+    );
+    expect(carriedTeamIdentityNote({ name: null, logoUrl: null })).toBe("");
+  });
+});
+
+describe("defaultTeamName", () => {
+  it("is the captain's name with 's Team", () => {
+    expect(defaultTeamName("Zai")).toBe("Zai's Team");
   });
 });

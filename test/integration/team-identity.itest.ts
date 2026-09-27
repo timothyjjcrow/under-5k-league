@@ -31,12 +31,13 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireAdmin, requireUser } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";
 import { editTeamIdentity } from "@/app/actions/teams";
-import { renameTeam } from "@/app/actions/admin";
+import { addCaptain, renameTeam } from "@/app/actions/admin";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {
   makeCaptain,
+  makePlayer,
   makeSeason,
   makeUser,
   resetDb,
@@ -342,5 +343,130 @@ describe("renameTeam — the admin override on /admin", () => {
     );
     expect(res?.error).toMatch(/Discord image links stop working/);
     expect((await teamRow(home.team.id)).logoUrl).toBeNull();
+  });
+});
+
+describe("addCaptain — a returning captain keeps their team's identity", () => {
+  async function asAdmin() {
+    const admin = await makeUser("Tim", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    vi.mocked(getSessionUser).mockResolvedValue(sessionFor(admin));
+  }
+
+  /** Last season, archived, with `captain` captaining a team called `name`. */
+  async function pastTeam(
+    captainId: string,
+    name: string,
+    logoUrl: string | null,
+    seasonName = "Last season",
+  ) {
+    const past = await makeSeason({
+      name: seasonName,
+      status: SEASON_STATUS.COMPLETE,
+      isActive: false,
+    });
+    return prisma.team.create({
+      data: { seasonId: past.id, name, logoUrl, captainId, budget: 100, draftOrder: 0 },
+    });
+  }
+
+  const designate = (seasonId: string, userId: string) =>
+    addCaptain(empty, fd({ expectedActiveSeasonId: seasonId, userId }));
+
+  const newTeamOf = (seasonId: string, captainId: string) =>
+    prisma.team.findUniqueOrThrow({
+      where: { seasonId_captainId: { seasonId, captainId } },
+      select: { name: true, logoUrl: true },
+    });
+
+  it("starts the new team with last season's name and logo, and says so", async () => {
+    await asAdmin();
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    const zai = await makePlayer(season.id, "Zai", 4000);
+    await pastTeam(zai.id, "Radiant Raccoons", "https://cdn.example/raccoon.png");
+
+    const res = await designate(season.id, zai.id);
+
+    expect(res).toEqual({
+      message:
+        "Zai is now a captain. Their team keeps last time's name, Radiant Raccoons, and its logo.",
+    });
+    expect(await newTeamOf(season.id, zai.id)).toEqual({
+      name: "Radiant Raccoons",
+      logoUrl: "https://cdn.example/raccoon.png",
+    });
+    expect(vi.mocked(sendDiscordMessage).mock.calls[0][0]).toContain(
+      "you now captain Radiant Raccoons",
+    );
+    const [log] = await prisma.adminAction.findMany({ where: { action: "addCaptain" } });
+    expect(log.summary).toBe(
+      `Designated Zai as captain of "Radiant Raccoons" (kept from their last team)`,
+    );
+  });
+
+  it("uses the most recent of several past teams", async () => {
+    await asAdmin();
+    const zai = await makeUser("Zai");
+    // Created newest-first on purpose: the season's own start decides.
+    const newer = await pastTeam(zai.id, "Newer Name", null, "Season 2");
+    const older = await pastTeam(zai.id, "Old Name", null, "Season 1");
+    await prisma.season.update({
+      where: { id: older.seasonId },
+      data: { createdAt: new Date("2025-01-01T00:00:00Z") },
+    });
+    await prisma.season.update({
+      where: { id: newer.seasonId },
+      data: { createdAt: new Date("2026-01-01T00:00:00Z") },
+    });
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: zai.id, type: "PLAYER", status: "ACTIVE", mmr: 4000 },
+    });
+
+    await designate(season.id, zai.id);
+
+    expect((await newTeamOf(season.id, zai.id)).name).toBe("Newer Name");
+  });
+
+  it("never hands another captain's team identity to a new captain", async () => {
+    await asAdmin();
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    const zai = await makePlayer(season.id, "Zai", 4000);
+    const fear = await makePlayer(season.id, "Fear", 4000);
+    const old = await pastTeam(zai.id, "Radiant Raccoons", "https://cdn.example/raccoon.png");
+    // Fear played on Zai's team last season but never captained it.
+    await prisma.teamMember.create({
+      data: { seasonId: old.seasonId, teamId: old.id, userId: fear.id, isCaptain: false, price: 10 },
+    });
+
+    const res = await designate(season.id, fear.id);
+
+    expect(res).toEqual({ message: "Fear is now a captain" });
+    expect(await newTeamOf(season.id, fear.id)).toEqual({
+      name: "Fear's Team",
+      logoUrl: null,
+    });
+  });
+
+  it("keeps the default name when the old one is taken this season, but keeps the logo", async () => {
+    await asAdmin();
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    const other = await makeCaptain(season.id, "Other", 100, 0);
+    await prisma.team.update({
+      where: { id: other.team.id },
+      data: { name: "Radiant Raccoons" },
+    });
+    const zai = await makePlayer(season.id, "Zai", 4000);
+    await pastTeam(zai.id, "Radiant Raccoons", "https://cdn.example/raccoon.png");
+
+    const res = await designate(season.id, zai.id);
+
+    expect(res?.message).toBe(
+      "Zai is now a captain. Their team keeps its logo from last time.",
+    );
+    expect(await newTeamOf(season.id, zai.id)).toEqual({
+      name: "Zai's Team",
+      logoUrl: "https://cdn.example/raccoon.png",
+    });
   });
 });

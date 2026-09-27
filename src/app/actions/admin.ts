@@ -171,7 +171,12 @@ import {
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
 import { saveTeamIdentity } from "@/lib/team-identity-service";
-import { teamIdentitySummary } from "@/lib/team-identity";
+import {
+  carriedTeamIdentity,
+  carriedTeamIdentityNote,
+  defaultTeamName,
+  teamIdentitySummary,
+} from "@/lib/team-identity";
 import { hasConfirmedScrimConflict } from "@/lib/scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
@@ -1006,12 +1011,25 @@ export async function addCaptain(
   }
 
   await raceHook("admin.addCaptain.beforeTx");
-  let added: { name: string; teamName: string; discordId: string | null };
+  let added: {
+    name: string;
+    teamName: string;
+    discordId: string | null;
+    carriedNote: string;
+  };
   try {
     added = await prisma.$transaction(
       async (tx) => {
-        const [currentSeason, draft, user, reg, existing, highest] =
-          await Promise.all([
+        const [
+          currentSeason,
+          draft,
+          user,
+          reg,
+          existing,
+          highest,
+          previousTeam,
+          seasonTeams,
+        ] = await Promise.all([
             tx.season.findUnique({ where: { id: expectedActiveSeasonId } }),
             tx.draft.findUnique({
               where: { seasonId: expectedActiveSeasonId },
@@ -1040,6 +1058,20 @@ export async function addCaptain(
               orderBy: { draftOrder: "desc" },
               select: { draftOrder: true },
             }),
+            // A returning captain's last team, by THIS account as captain only:
+            // a different captain never inherits another team's identity.
+            tx.team.findFirst({
+              where: {
+                captainId: userId,
+                seasonId: { not: expectedActiveSeasonId },
+              },
+              orderBy: [{ season: { createdAt: "desc" } }, { createdAt: "desc" }],
+              select: { name: true, logoUrl: true },
+            }),
+            tx.team.findMany({
+              where: { seasonId: expectedActiveSeasonId },
+              select: { name: true },
+            }),
           ]);
         if (!currentSeason?.isActive) throw new ActiveSeasonChangedError();
         if (!draftSetupOpen(currentSeason.status, draft?.status)) {
@@ -1064,11 +1096,18 @@ export async function addCaptain(
         }
 
         const order = highest ? highest.draftOrder + 1 : 0;
-        const teamName = `${user.name}'s Team`;
+        // Keep last time's name and logo so a returning captain's identity
+        // (and the champions' name) survives the season change.
+        const carried = carriedTeamIdentity(
+          previousTeam,
+          seasonTeams.map((team) => team.name),
+        );
+        const teamName = carried.name ?? defaultTeamName(user.name);
         const team = await tx.team.create({
           data: {
             seasonId: currentSeason.id,
             name: teamName,
+            logoUrl: carried.logoUrl,
             captainId: user.id,
             budget: currentSeason.draftBudget,
             draftOrder: order,
@@ -1084,7 +1123,12 @@ export async function addCaptain(
           },
         });
         await captureRosterTenure(tx, member, { kind: "CAPTAIN_DESIGNATION", mmr: reg.mmr || null, roles: reg.roles, actorId: actor.id });
-        return { name: user.name, teamName, discordId: user.discordId };
+        return {
+          name: user.name,
+          teamName,
+          discordId: user.discordId,
+          carriedNote: carriedTeamIdentityNote(carried),
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -1114,7 +1158,7 @@ export async function addCaptain(
   }
   await logAdminAction({
     action: "addCaptain",
-    summary: `Designated ${added.name} as captain of "${added.teamName}"`,
+    summary: `Designated ${added.name} as captain of "${added.teamName}"${added.carriedNote ? " (kept from their last team)" : ""}`,
     seasonId: season.id,
   });
   await sendDiscordMessage(
@@ -1122,7 +1166,11 @@ export async function addCaptain(
     mentionsOf([added.discordId]),
   );
   refresh();
-  return { message: `${added.name} is now a captain` };
+  return {
+    message: added.carriedNote
+      ? `${added.name} is now a captain. ${added.carriedNote}`
+      : `${added.name} is now a captain`,
+  };
 }
 
 /** Undo captain designation (only allowed before the draft starts). */
