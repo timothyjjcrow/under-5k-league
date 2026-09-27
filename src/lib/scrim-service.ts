@@ -21,8 +21,8 @@ import {
   scrimCollisionRange,
 } from "./scrim-schedule-conflict";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
+import { SCRIM_PAST_GRACE_MS } from "./scrim-window";
 
-const PAST_GRACE_MS = 60 * 60 * 1000;
 const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000;
 export { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
 export const SCRIM_GUEST_LIMIT_PER_TEAM = 5;
@@ -83,7 +83,7 @@ function assertSaneScrimTime(scheduledAt: Date, now = new Date()): void {
   if (!(scheduledAt instanceof Date) || !Number.isFinite(scheduledAt.getTime())) {
     throw new UserFacingError("Choose a valid scrim time");
   }
-  if (scheduledAt.getTime() < now.getTime() - PAST_GRACE_MS) {
+  if (scheduledAt.getTime() < now.getTime() - SCRIM_PAST_GRACE_MS) {
     throw new UserFacingError("That scrim time is in the past");
   }
   if (scheduledAt.getTime() > now.getTime() + MAX_AHEAD_MS) {

@@ -8,6 +8,7 @@ import { getSessionUser } from "@/lib/auth";
 import { singleActiveSeason } from "@/lib/season";
 import { SCRIM_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { formatMatchTime } from "@/lib/match-time";
+import { scrimJoinCheck } from "@/lib/scrim-view";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
@@ -266,11 +267,19 @@ export default async function ScrimsPage({
             />
           ) : (
             open.map((scrim) => {
+              // Same verdict as the scrim's own page, minus the per-row
+              // clash lookup (the service names that clash if it applies).
               const canJoin =
-                seasonOpen &&
-                !!myCaptainTeam &&
-                myCaptainTeam.id !== scrim.hostTeamId &&
-                !myCaptainTeam.withdrawn;
+                scrimJoinCheck({
+                  status: scrim.status,
+                  seasonOpen,
+                  signedIn: !!viewer,
+                  viewerTeam: myCaptainTeam,
+                  hostTeamId: scrim.hostTeamId,
+                  hostWithdrawn: scrim.hostTeam.withdrawn,
+                  scheduledAtMs: scrim.scheduledAt.getTime(),
+                  nowMs: now.getTime(),
+                })?.canJoin === true;
               const canCancel =
                 seasonOpen &&
                 (viewer?.role === "ADMIN" ||

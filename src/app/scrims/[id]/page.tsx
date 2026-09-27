@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import {
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   SCRIM_STATUS,
   SEASON_STATUS,
@@ -11,7 +12,12 @@ import { formatMatchTime } from "@/lib/match-time";
 import { heroById } from "@/lib/heroes";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { scrimHostLine } from "@/lib/scrim-view";
+import { scrimHostLine, scrimJoinCheck } from "@/lib/scrim-view";
+import {
+  describeScrimConflict,
+  findConfirmedScrimConflict,
+  scrimCollisionRange,
+} from "@/lib/scrim-schedule-conflict";
 import { canViewLeagueContact } from "@/lib/visibility";
 import { LocalTime } from "@/components/local-time";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -21,6 +27,7 @@ import {
   autoDetectScrimGames,
   cancelScrim,
   importScrimGame,
+  joinScrim,
   removeScrimGuest,
   removeScrimGame,
 } from "@/app/actions/scrims";
@@ -134,6 +141,75 @@ function statusBadge(status: string) {
   return <Badge>Cancelled</Badge>;
 }
 
+/**
+ * The Join button's verdict for an OPEN time: the viewer's own team (when
+ * they captain one) and anything it already has within four hours, so the
+ * page gives the same answer the service would instead of a button that
+ * errors or no control at all.
+ */
+async function openScrimJoinCheck(
+  scrim: {
+    id: string;
+    seasonId: string;
+    status: string;
+    scheduledAt: Date;
+    hostTeamId: string;
+    hostTeam: { withdrawn: boolean };
+  },
+  viewerId: string | null,
+  seasonOpen: boolean,
+) {
+  const viewerTeam = viewerId
+    ? await prisma.team.findUnique({
+        where: {
+          seasonId_captainId: { seasonId: scrim.seasonId, captainId: viewerId },
+        },
+        select: { id: true, name: true, withdrawn: true },
+      })
+    : null;
+  let viewerTeamClash: string | null = null;
+  if (
+    seasonOpen &&
+    viewerTeam &&
+    viewerTeam.id !== scrim.hostTeamId &&
+    !viewerTeam.withdrawn
+  ) {
+    const [leagueMatch, scrimClash] = await Promise.all([
+      prisma.match.findFirst({
+        where: {
+          seasonId: scrim.seasonId,
+          scheduledAt: scrimCollisionRange(scrim.scheduledAt),
+          status: { not: MATCH_STATUS.COMPLETED },
+          OR: [{ homeTeamId: viewerTeam.id }, { awayTeamId: viewerTeam.id }],
+        },
+        select: { id: true },
+      }),
+      findConfirmedScrimConflict(prisma, {
+        seasonId: scrim.seasonId,
+        teamIds: [viewerTeam.id],
+        scheduledAt: scrim.scheduledAt,
+        exceptScrimId: scrim.id,
+      }),
+    ]);
+    viewerTeamClash = leagueMatch
+      ? "a league match"
+      : scrimClash
+        ? describeScrimConflict(scrimClash)
+        : null;
+  }
+  return scrimJoinCheck({
+    status: scrim.status,
+    seasonOpen,
+    signedIn: !!viewerId,
+    viewerTeam,
+    hostTeamId: scrim.hostTeamId,
+    hostWithdrawn: scrim.hostTeam.withdrawn,
+    scheduledAtMs: scrim.scheduledAt.getTime(),
+    nowMs: Date.now(),
+    viewerTeamClash,
+  });
+}
+
 export default async function ScrimDetailPage({
   params,
 }: {
@@ -168,6 +244,13 @@ export default async function ScrimDetailPage({
           },
           select: { status: true },
         })
+      : null;
+
+  const seasonOpen =
+    scrim.season.isActive && scrim.season.status !== SEASON_STATUS.COMPLETE;
+  const joinCheck =
+    scrim.status === SCRIM_STATUS.OPEN
+      ? await openScrimJoinCheck(scrim, viewer?.id ?? null, seasonOpen)
       : null;
 
   const teamManager = (team: typeof scrim.hostTeam | null) =>
@@ -257,7 +340,37 @@ export default async function ScrimDetailPage({
                   showContact={contactFor(scrim.opponentTeam.captainId)}
                 />
               ) : (
-                <p className="self-center text-muted">Waiting for an opponent</p>
+                <div className="min-w-0 space-y-2 self-center text-sm">
+                  <p className="text-muted">Waiting for an opponent</p>
+                  {joinCheck?.canJoin ? (
+                    <ActionForm
+                      action={joinScrim}
+                      hidden={{ scrimId: scrim.id }}
+                      className="space-y-1"
+                    >
+                      <SubmitButton size="sm">Join scrim</SubmitButton>
+                      <p className="text-xs text-muted">
+                        Books this time for {joinCheck.teamName}.
+                      </p>
+                    </ActionForm>
+                  ) : joinCheck ? (
+                    <p>
+                      {joinCheck.signIn ? (
+                        <>
+                          <Link
+                            href={`/login?returnTo=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
+                            className={textLink()}
+                          >
+                            Sign in
+                          </Link>{" "}
+                          as a team captain to claim this time.
+                        </>
+                      ) : (
+                        joinCheck.reason
+                      )}
+                    </p>
+                  ) : null}
+                </div>
               )}
             </div>
             <div className="space-y-1 text-left sm:text-right">
