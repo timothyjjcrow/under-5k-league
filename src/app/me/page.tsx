@@ -130,7 +130,7 @@ export default async function MePage({
   const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
   // Returning player: no signup for this season yet, but one from a past
   // season — carry those answers into the fresh form so they don't retype.
-  const [previous, standinAssignments, nextTeamMatch] = await Promise.all([
+  const [previous, standinAssignments, nextTeamMatch, seasonFixtures] = await Promise.all([
     season && !reg
       ? prisma.registration.findFirst({
           where: { userId: user.id, NOT: { seasonId: season.id } },
@@ -179,6 +179,14 @@ export default async function MePage({
           },
         })
       : null,
+    // Kickoffs only: the match-night line is the weekly slot most fixtures
+    // use (see match-night.ts).
+    season
+      ? prisma.match.findMany({
+          where: { seasonId: season.id, scheduledAt: { not: null } },
+          select: { scheduledAt: true, status: true },
+        })
+      : [],
   ]);
   const form = reg ?? previous;
   // A playoff fixture (booked cover, or the team's next match) is named by
@@ -679,7 +687,7 @@ export default async function MePage({
                 {(member && nextTeamMatch) ||
                 (standinAssignments?.length ?? 0) > 0 ? null : (
                   <ScheduleCallout
-                    label={seasonMatchNightLabel(season)}
+                    label={seasonMatchNightLabel(season, seasonFixtures)}
                     description={
                       playerLocked ||
                       (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN)

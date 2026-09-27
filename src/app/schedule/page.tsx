@@ -817,7 +817,7 @@ export default async function SchedulePage() {
 
       <AnalysisDisclosure title="Match times & calendar help">
         <ScheduleCallout
-          label={seasonMatchNightLabel(season)}
+          label={seasonMatchNightLabel(season, matches)}
           description={calloutDescription(season.status)}
         />
         <p className="text-sm leading-relaxed text-muted">
