@@ -101,7 +101,7 @@ vi.mock("@/lib/discord", async (importOriginal) => {
 import { sendInhouseDiscordMessage } from "@/lib/discord";
 
 // `logAdminAction` resolves the actor from the session rather than a parameter,
-// so a forced cancel writes "(unknown)" with no cookie jar to read. Everything
+// so an admin cancel writes "(unknown)" with no cookie jar to read. Everything
 // else in auth stays real — inhouse only imports the SessionUser TYPE from it.
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
@@ -1864,38 +1864,17 @@ describe("inhouse betting — voiding against live money", () => {
 
 // ---------------------------------------------------------------------------
 
-describe("inhouse betting — the forced cancel", () => {
-  it("refuses to cancel a LIVE game with confirmed bets, and names the override", async () => {
+describe("inhouse betting — cancelling a live game", () => {
+  it("needs no override for a LIVE game with confirmed bets, and refunds the pot", async () => {
+    // The forced cancel existed only because live pots blocked a plain one.
+    // Betting takes no new stakes, so a legacy pot must not hold the single
+    // active slot: the plain cancel scraps the game and refunds in full.
     const ctx = await readyLobby();
     await placeInhouseBet(ctx.t1[0].session, 100);
     await placeInhouseBet(ctx.t2[0].session, 50);
     expect((await startGame(ctx.t1[0].session)).ok).toBe(true);
 
-    const res = await cancelLobby(ctx.admin);
-    expect(res.ok).toBe(false);
-    if (res.ok) throw new Error("unreachable");
-    // "Nothing happened" is the one answer an admin can't act on: the message
-    // has to say a live pot is why and how to override it.
-    expect(res.error).toContain("Cred staked");
-    expect(res.error).toContain("forced cancel");
-    expect(
-      (
-        await prisma.inhouseLobby.findUniqueOrThrow({
-          where: { id: ctx.lobbyId },
-        })
-      ).status,
-    ).toBe(INHOUSE_STATUS.IN_PROGRESS);
-  });
-
-  it("lets an admin force it through, and writes the pot into the AdminAction", async () => {
-    // Admins are deliberately NOT locked out: an unkillable lobby holds the
-    // single active slot for six hours, which is strictly worse.
-    const ctx = await readyLobby();
-    await placeInhouseBet(ctx.t1[0].session, 100);
-    await placeInhouseBet(ctx.t2[0].session, 50);
-    expect((await startGame(ctx.t1[0].session)).ok).toBe(true);
-
-    expect((await cancelLobby(ctx.admin, { force: true })).ok).toBe(true);
+    expect((await cancelLobby(ctx.admin)).ok).toBe(true);
     expect(
       (
         await prisma.inhouseLobby.findUniqueOrThrow({
@@ -1908,17 +1887,14 @@ describe("inhouse betting — the forced cancel", () => {
       where: { action: "cancelLobby" },
     });
     expect(log).toHaveLength(1);
-    // The numbers that made it destructive live IN the summary — the row is the
-    // whole record, and after the sweeper refunds there is nothing left to join.
-    expect(log[0].summary).toContain("2 confirmed bet(s)");
-    expect(log[0].summary).toContain("150 Cred staked");
+    expect(log[0].summary).toContain(INHOUSE_STATUS.IN_PROGRESS);
 
     expect(await resolveUnsettledBets()).toBe(false);
     expect(await balanceOf(ctx.t1[0].user.id)).toBe(INHOUSE_BETS.START_BALANCE);
     await expectLedgerClosed();
   });
 
-  it("a cancel with no confirmed bets needs no override at all", async () => {
+  it("logs the phase and the players for a betless live cancel", async () => {
     const ctx = await readyLobby();
     expect((await startGame(ctx.t1[0].session)).ok).toBe(true);
     expect((await cancelLobby(ctx.admin)).ok).toBe(true);
@@ -1928,7 +1904,6 @@ describe("inhouse betting — the forced cancel", () => {
     expect(log).toHaveLength(1);
     expect(log[0].summary).toContain(INHOUSE_STATUS.IN_PROGRESS);
     expect(log[0].summary).toContain(`${INHOUSE.LOBBY_SIZE} player(s)`);
-    expect(log[0].summary).toContain("0 confirmed bet(s), 0 Cred staked");
   });
 });
 

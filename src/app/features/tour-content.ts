@@ -215,13 +215,6 @@ export const TOUR_GROUPS: TourGroup[] = [
         linkLabel: "Inhouse history",
       },
       {
-        title: "Inhouse Cred",
-        description:
-          "Back your own side with inhouse Cred before betting closes. Follow your net winnings on a separate ranking beside the Elo ladder.",
-        href: "/inhouse",
-        linkLabel: "Elo & Cred ladder",
-      },
-      {
         title: "Team scrims",
         description:
           "Captains post practice availability and another team claims the slot. Scrims have their own results and statistics, separate from league competition.",

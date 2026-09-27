@@ -32,14 +32,13 @@ async function main() {
   // A fixture DB is reused across runs, so the reset has to reach everything a
   // browsing session can create — not just what this script writes. /inhouse is
   // reachable from every phase (the nav link is season-independent), so a poke
-  // at the queue leaves lobbies, credit accounts and ledger rows behind.
+  // at the queue leaves lobbies behind.
   //
-  // InhouseCreditEntry and AdminAction carry NO foreign key on purpose (a
-  // staking record and an audit record outlive the account — see the model
-  // comments in schema.prisma) and NewsPost's author is SetNull, so
-  // `user.deleteMany()` does not clear these rows, so they have to be named.
-  // Left out, a reseeded "empty" fixture still shows a Cred board with betting
-  // history on it.
+  // InhouseCreditEntry (the retired Cred betting ledger, whose tables are
+  // kept) and AdminAction carry NO foreign key on purpose (those records
+  // outlive the account — see the model comments in schema.prisma) and
+  // NewsPost's author is SetNull, so `user.deleteMany()` does not clear these
+  // rows, so they have to be named.
   await prisma.inhouseCreditEntry.deleteMany({});
   await prisma.adminAction.deleteMany({});
   await prisma.newsPost.deleteMany({});

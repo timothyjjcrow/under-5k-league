@@ -141,7 +141,7 @@
     "src/lib/inhouse-service.ts::applyPick::team#2",
     "src/lib/inhouse-service.ts::applyResult::status#1",
     "src/lib/inhouse-service.ts::autoDetectResult::OR+status#1",
-    "src/lib/inhouse-service.ts::cancelLobby::OR+status#1",
+    "src/lib/inhouse-service.ts::cancelLobby::status#1",
     "src/lib/inhouse-service.ts::castVote::lobby#1",
     "src/lib/inhouse-service.ts::failReadyCheck::status#1",
     "src/lib/inhouse-service.ts::finish::OR+status#1",

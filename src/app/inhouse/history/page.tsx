@@ -277,7 +277,7 @@ export default async function InhouseHistoryPage({
                                 variant="ghost"
                                 size="sm"
                                 className="min-h-11 text-danger hover:underline"
-                                confirm={`Void the ${formatMatchTime(playedAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, everyone's Elo recalculates without it, and any Cred payouts reverse to pre-game balances.`}
+                                confirm={`Void the ${formatMatchTime(playedAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, and everyone's Elo recalculates without it.`}
                               >
                                 void
                               </SubmitButton>

@@ -32,12 +32,6 @@ import {
   wasInReadyCheck,
   type InhouseAlertSnapshot,
 } from "@/lib/inhouse";
-import {
-  betGateError,
-  potView,
-  tierLabel,
-  type BetRow,
-} from "@/lib/inhouse-bets";
 import { inhousePollCadence } from "@/lib/room-poll";
 import { nextClockOffset } from "@/lib/countdown";
 import {
@@ -48,7 +42,6 @@ import {
 } from "@/lib/room-sequence";
 import {
   INHOUSE,
-  INHOUSE_BETS,
   DISCORD_INVITE_URL,
   INHOUSE_SCAN_ACTIONS,
   INHOUSE_SCAN_ACTION_TIMEOUT_MS,
@@ -89,11 +82,6 @@ function sideMeta(isRadiant: boolean) {
         ring: "border-success/50",
         chip: "bg-success/10 text-success border-success/30",
         dot: "bg-success",
-        // The faded half of a pool bar: staked but NOT covered, i.e. Cred that
-        // is coming home whatever happens. Solid vs faded is the whole point of
-        // the bar — a single flat bar would show a 500-vs-20 pot as a rout when
-        // only 20 of it is actually live.
-        soft: "bg-success/25",
       }
     : {
         name: "Dire",
@@ -101,7 +89,6 @@ function sideMeta(isRadiant: boolean) {
         ring: "border-danger/50",
         chip: "bg-danger/10 text-danger border-danger/30",
         dot: "bg-danger",
-        soft: "bg-danger/25",
       };
 }
 
@@ -268,7 +255,6 @@ export function InhouseRoom({
   // otherwise-endless Loading state.
   const hasLoadedRef = useRef(false);
   const latestStateRef = useRef<InhouseState | null>(null);
-  const serverOffsetRef = useRef(0);
 
   const apply = useCallback((s: InhouseState, seq: number) => {
     const { accept, next } = acceptSequence(seqRef.current, seq);
@@ -278,7 +264,6 @@ export function InhouseRoom({
     latestStateRef.current = s;
     hasStakeRef.current = s.me.inLobby || s.me.inQueue;
     const receivedAt = Date.now();
-    serverOffsetRef.current = s.now - receivedAt;
     setOffsetMs((prev) => nextClockOffset(prev, s.now, receivedAt));
     setState(s);
     return true;
@@ -332,9 +317,6 @@ export function InhouseRoom({
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
         lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
-        bettingOpen:
-          (latestStateRef.current?.lobby?.pot?.closesAt ?? 0) >
-          Date.now() + serverOffsetRef.current,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
         // for everyone — fetch once rather than skipping forever (a tab that is
         // HIDDEN at load would otherwise never learn it had a stake).
@@ -427,9 +409,6 @@ export function InhouseRoom({
           // Keep the latest ACCEPTED state through a failed or stale poll.
           hasStake: hasStakeRef.current,
           lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
-          bettingOpen:
-            (latestStateRef.current?.lobby?.pot?.closesAt ?? 0) >
-            Date.now() + serverOffsetRef.current,
           rateLimited,
           reached: !!next,
           failureCount: consecutiveFailures,
@@ -610,7 +589,7 @@ export function InhouseRoom({
         }
         // A successful mutation can commit before its response is truncated by
         // a proxy or a dropped connection. Treat an unreadable success exactly
-        // like a timeout: never invite a duplicate pick/bet, and let the next
+        // like a timeout: never invite a duplicate pick, and let the next
         // authoritative state poll tell the player what happened.
         if (!data || typeof data.now !== "number") {
           reconcileUnknown(
@@ -746,25 +725,6 @@ export function InhouseRoom({
       ? selected
       : null;
 
-  // The one state a PLAIN cancel is guaranteed to refuse: a live game carrying
-  // confirmed bets. `cancelLobby`'s claim has exactly this predicate (the pot
-  // is read off the same confirmed rows the panel renders), so offering the
-  // ordinary button here would be a button whose only outcome is a refusal —
-  // the reason the bet chips are filtered through the gate rather than rendered
-  // and disabled. The admin block swaps in the forced control instead, which is
-  // also what makes that refusal's own sentence ("use the forced cancel") true.
-  const forcedCancel =
-    lobby &&
-    lobby.status === "IN_PROGRESS" &&
-    lobby.pot &&
-    lobby.pot.slips.length > 0
-      ? {
-          code: inhouseLobbyCode(lobby.id),
-          bettors: lobby.pot.slips.length,
-          staked: lobby.pot.pool1 + lobby.pot.pool2,
-        }
-      : null;
-
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -881,17 +841,6 @@ export function InhouseRoom({
               {state.lastResult.eloDelta >= 0 ? "+" : ""}
               {state.lastResult.eloDelta} Elo
             </strong>
-            {/* Only for the people who were in the pot: null means they sat it
-                out, and "+0 Cred" announced to the other eight is noise. */}
-            {state.lastResult.credPending ? (
-              <span className="text-muted">
-                {" "}
-                · Cred settlement is pending; your balance will update
-                automatically
-              </span>
-            ) : state.lastResult.credDelta != null ? (
-              <CredDelta delta={state.lastResult.credDelta} />
-            ) : null}
             .{" "}
             <a
               href={`#result-${state.lastResult.lobbyId}`}
@@ -1005,8 +954,6 @@ export function InhouseRoom({
           key={lobby.id}
           lobby={lobby}
           me={me}
-          offset={offset}
-          serverNow={state.now}
           pending={pending}
           act={act}
         />
@@ -1025,29 +972,25 @@ export function InhouseRoom({
 
       {me.canCancel ? (
         <div className="text-right">
-          {forcedCancel ? (
-            <ForceCancelLobby {...forcedCancel} pending={pending} act={act} />
-          ) : (
-            <button
-              disabled={pending}
-              onClick={async () => {
-                if (
-                  window.confirm(
-                    "Scrap the current inhouse lobby? Everyone goes back into the queue.",
-                  )
-                ) {
-                  // Only claim success once the server agrees — the cancel can
-                  // legitimately lose to a result landing mid-confirm.
-                  if (await act({ action: "cancel" })) {
-                    pushToast("success", "Lobby cancelled — players re-queued");
-                  }
+          <button
+            disabled={pending}
+            onClick={async () => {
+              if (
+                window.confirm(
+                  "Scrap the current inhouse lobby? Everyone goes back into the queue.",
+                )
+              ) {
+                // Only claim success once the server agrees — the cancel can
+                // legitimately lose to a result landing mid-confirm.
+                if (await act({ action: "cancel" })) {
+                  pushToast("success", "Lobby cancelled — players re-queued");
                 }
-              }}
-              className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-            >
-              Admin: cancel this lobby
-            </button>
-          )}
+              }
+            }}
+            className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
+          >
+            Admin: cancel this lobby
+          </button>
         </div>
       ) : null}
 
@@ -1083,252 +1026,6 @@ export function InhouseRoom({
         </div>
       ) : null}
     </div>
-  );
-}
-
-// ---------- Admin: the forced cancel ----------
-
-/**
- * The override for the one state that can lock the WHOLE LEAGUE out of
- * inhouses: a live game with Cred staked on it.
- *
- * `cancelLobby` refuses a plain cancel there and is right to — cancelling a
- * half-played game everyone can see the shape of is otherwise an admin undo for
- * a losing bet. But the lobby holds the single active slot while it stands, so
- * `maybeFormLobby` can form nothing and its own ten are refused the queue, for
- * the six hours until the abandon sweep. That is why the service takes a
- * `force` and says so in its refusal — and until this control existed the
- * refusal named an override reachable only by hand-POSTing `/api/inhouse`,
- * which is the worst of both: a documented escape hatch nobody can take.
- *
- * TYPED confirmation, for the /admin reason: `window.confirm` focuses OK by
- * default, so it is one Enter away, and it looks identical whether it guards a
- * rename or the scrapping of a live game ten people are inside. The token is
- * a stable code derived from the lobby id. It is shown in the dialog rather
- * than kept secret (it is a barrier against reflex, not against knowledge),
- * but it means confirming the exact game being killed instead of reproducing
- * a fixed word — an admin who has the wrong lobby on screen has to notice.
- *
- * Inline rather than `<DangerSubmit>`: that one reads `useFormStatus` and
- * submits a server action, while this room is a fetch client whose pending
- * state comes from `act()`. The mechanism is deliberately identical — exact
- * match, blank on every open, Escape disarms, Enter cannot complete it.
- *
- * It is rendered only while the plain cancel would refuse, so a poll that ends
- * the lobby unmounts it and takes the open dialog with it. That is the right
- * outcome and not a lost edit: the game it names has finished, and a modal
- * still offering to scrap it would be the stale banner this room's toasts exist
- * to avoid.
- */
-function ForceCancelLobby({
-  code,
-  bettors,
-  staked,
-  pending,
-  act,
-}: {
-  /** `inhouseLobbyCode(lobby.id)` — the per-lobby confirmation token. */
-  code: string;
-  bettors: number;
-  staked: number;
-  pending: boolean;
-  act: (body: Record<string, unknown>) => Promise<boolean>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [typed, setTyped] = useState("");
-  const inputId = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  // Trim only — otherwise EXACT. A fuzzy match would let a half-read code
-  // through, and reproducing it exactly IS the whole barrier.
-  const armed = typed.trim() === code;
-
-  const closeDialog = useCallback(() => {
-    setOpen(false);
-    setTyped("");
-  }, []);
-
-  // Keep keyboard focus and page scrolling inside the destructive dialog.
-  // Closing always disarms and returns focus to the trigger, including Escape;
-  // reopening must start from a blank field so a code typed a minute ago can't
-  // linger and auto-arm.
-  useEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    const trigger = triggerRef.current;
-    document.body.style.overflow = "hidden";
-    inputRef.current?.focus();
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeDialog();
-        return;
-      }
-      if (e.key !== "Tab") return;
-
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusable = Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) return;
-
-      const current = document.activeElement;
-      if (e.shiftKey && (current === first || !dialog.contains(current))) {
-        e.preventDefault();
-        last.focus();
-      } else if (
-        !e.shiftKey &&
-        (current === last || !dialog.contains(current))
-      ) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previousOverflow;
-      trigger?.focus();
-    };
-  }, [open, closeDialog]);
-
-  return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={pending}
-        onClick={() => {
-          setTyped("");
-          setOpen(true);
-        }}
-        className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-      >
-        Admin: force-cancel this live game
-      </button>
-      {/* Say WHY the ordinary button isn't here. An admin who came looking for
-          "cancel this lobby" and found a differently-worded control needs to
-          know it isn't a rename — and "nothing happened" is the one answer an
-          admin cannot act on. */}
-      <p className="mt-1 text-[11px] text-muted">
-        A plain cancel is refused while Cred is staked on a live game.
-      </p>
-
-      {open ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div
-            ref={dialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={`${inputId}-title`}
-            aria-describedby={`${inputId}-description`}
-            className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl border border-danger/40 bg-surface p-5 text-left shadow-xl"
-          >
-            <h2
-              id={`${inputId}-title`}
-              className="text-lg font-semibold text-danger"
-            >
-              Force-cancel the live game?
-            </h2>
-            {/* The real numbers, read from the pot this room is already
-                rendering — the /admin rule: a confirm that can't state what
-                dies is a confirm that gets skimmed. */}
-            <div id={`${inputId}-description`}>
-              <ul className="mt-3 space-y-1 text-sm text-fg">
-                {[
-                  `${staked} Cred across ${bettors} ${
-                    bettors === 1 ? "bet" : "bets"
-                  } is refunded in full — nobody wins or loses on this game.`,
-                  "The game is scrapped: no result, no Elo, nothing in the ladder or the history, even if the ten finish it in Dota.",
-                  "All ten go back into the queue and re-confirm on their next poll.",
-                  "It is logged as an admin action, naming the pot.",
-                ].map((c) => (
-                  <li key={c} className="flex gap-2">
-                    <span aria-hidden className="text-danger">
-                      •
-                    </span>
-                    <span className="min-w-0">{c}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-3 rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-xs text-muted">
-                The money is the recoverable half — the server attempts the
-                automatic refund before this action returns, and any interrupted
-                refund is retried on the next page view anywhere on the site.
-                The game is not: once the lobby reads cancelled there is nothing
-                left for a result to attach to. Do this when a live lobby is
-                stuck, because it is holding the one active-lobby slot and
-                nobody in the league can start another game until it clears.
-              </p>
-            </div>
-            <label htmlFor={inputId} className="mt-4 block text-sm text-muted">
-              Type the lobby code <b className="font-mono text-fg">{code}</b> to
-              confirm:
-            </label>
-            <input
-              id={inputId}
-              ref={inputRef}
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              // No single keypress may complete this. There is no enclosing
-              // form here, but Enter still lands on the focused control and
-              // reflex-confirming is the exact thing being prevented.
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.preventDefault();
-              }}
-              autoComplete="off"
-              spellCheck={false}
-              inputMode="numeric"
-              className="mt-1 h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 font-mono text-sm outline-none focus:border-danger/60"
-            />
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeDialog}
-                className={buttonClasses("secondary", "md")}
-              >
-                Keep the game
-              </button>
-              <button
-                type="button"
-                disabled={!armed || pending}
-                onClick={async () => {
-                  closeDialog();
-                  // Only claim success once the server agrees. A forced cancel
-                  // still loses to a result that landed mid-dialog — the claim
-                  // keeps its `status: { in: ACTIVE }` predicate — and telling
-                  // an admin the pot was refunded when the game in fact paid
-                  // out is the worst sentence a money screen can produce.
-                  if (await act({ action: "cancel", force: true })) {
-                    // No figure in this one, unlike the list above. That list
-                    // states what is on the table BEFORE the click, which is
-                    // exactly what a confirm is for; this states what happened,
-                    // and `staked` is a poll old — the window can still be open
-                    // here (Start does not close it), so one more slip may have
-                    // landed. "In full" is true whatever it was, and the
-                    // AdminAction the server writes carries the exact pot.
-                    pushToast(
-                      "success",
-                      "Live game scrapped — players re-queued and Cred refunds are resolving",
-                    );
-                  }
-                }}
-                className={buttonClasses("danger", "md")}
-              >
-                Force-cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </>
   );
 }
 
@@ -2557,21 +2254,13 @@ function TeamColumn({
 function ReadyView({
   lobby,
   me,
-  offset,
-  serverNow,
   pending,
   act,
 }: {
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
-  offset: number;
-  /** The server clock from the last poll — the pot's gate is judged against it
-   *  rather than Date.now(), which would make this render non-idempotent. */
-  serverNow: number;
   pending: boolean;
-  /** Widened from the other phases' `=> void`: placing a bet must only claim
-   *  success once the server agrees, exactly like the admin cancel above. */
-  act: (body: Record<string, unknown>) => Promise<boolean>;
+  act: (body: Record<string, unknown>) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -2611,576 +2300,10 @@ function ReadyView({
         )}
       </div>
 
-      {/* ABOVE the setup card, deliberately: that card is the thing that pulls
-          ten people out of the browser and into the Dota client, and a 45s
-          window rendered underneath it is a window nobody sees. */}
-      {lobby.pot ? (
-        <PotPanel
-          lobby={lobby}
-          pot={lobby.pot}
-          me={me}
-          offset={offset}
-          serverNow={serverNow}
-          pending={pending}
-          act={act}
-        />
-      ) : null}
-
       {me.inLobby || me.isAdmin ? <GameSetupCard lobby={lobby} me={me} /> : null}
 
       <MatchupGrid lobby={lobby} />
     </div>
-  );
-}
-
-// ---------- Betting ----------
-
-type Pot = NonNullable<NonNullable<InhouseState["lobby"]>["pot"]>;
-
-/** Derived, never typed out: the bankruptcy floor's "a game that looks like a
- *  game" bar is stated to players in minutes and enforced in seconds, and two
- *  hand-written copies of one threshold is how copy starts lying. */
-const FLOOR_GAME_MINUTES = Math.round(INHOUSE_BETS.REAL_GAME_SECONDS / 60);
-
-/**
- * The promise a control makes BEFORE it is tapped: "100 staked · 40 covered ·
- * 60 comes home". Only matched Cred is ever at risk, so a panel that showed the
- * stake alone would sell a 100 into an empty pool as if it were a 100 — betting
- * into a vacuum is free bravado, and this sentence is where the panel says so.
- *
- * The `covered` figure always comes from `potView`, the same function the
- * server settles with, never from arithmetic written here. Two definitions of
- * "covered" is the avgKnownMmr mistake with money attached: the button would
- * promise one number and the payout would pay another.
- */
-function stakeOutcome(stake: number, covered: number): string {
-  return `${stake} staked · ${covered} covered · ${stake - covered} comes home`;
-}
-
-/** The same sentence at chip width. "none covered" is the warning, not filler. */
-function stakeOutcomeShort(stake: number, covered: number): string {
-  if (covered <= 0) return "none covered";
-  if (covered >= stake) return "all live";
-  return `${covered} live · ${stake - covered} back`;
-}
-
-/**
- * The viewer's net Cred, beside their Elo swing in the post-game banner. Read
- * from the `betDeltas` the settlement stamped — never re-derived here, because
- * a banner that recomputed the pot would disagree with the ledger the moment
- * anything was voided.
- *
- * Zero is a real outcome and not a rounding artefact (nobody covered your side,
- * or the bet was voided and refunded), so it renders muted with the reason in
- * the title rather than borrowing the win/loss colours.
- */
-function CredDelta({ delta }: { delta: number }) {
-  return (
-    <>
-      {" · "}
-      <strong
-        title={
-          delta === 0
-            ? "Your stake came back in full — either nobody covered your side, or the bet was voided."
-            : `Matched Cred pays even money; anything the other side didn't cover was never at risk.`
-        }
-        className={cn(
-          delta > 0 ? "text-success" : delta < 0 ? "text-danger" : "text-muted",
-        )}
-      >
-        {delta > 0 ? "+" : ""}
-        {delta} Cred
-      </strong>
-    </>
-  );
-}
-
-/**
- * The pot, from the moment teams lock. Two bars, every slip as it lands, and —
- * for the ten who are in the game — one-tap stakes on their OWN side.
- *
- * It renders for spectators too: the slips are the product. The panel is a live
- * argument ("they're 160 ahead — somebody take it"), and an argument nobody can
- * see is one nobody joins.
- *
- * **THE PHASE IS NOT THE WINDOW.** The controls ride `me.canBet` and the clock
- * rides `pot.closesAt` — both the server's decision, both from this payload —
- * never "did the caller pass `act`?". `betsCloseAt` alone closes betting, on
- * purpose (nobody should ever be the person who closed the ante, and Start has
- * to stay instant), so `BETTABLE_STATUSES` deliberately includes IN_PROGRESS.
- * Using the phase as a proxy for the window is what this panel used to do, and
- * it took the chips away the instant any one of the ten pressed Start — for as
- * much as the whole 45 seconds, while the server went on accepting bets and the
- * integration test went on pinning that it does.
- */
-function PotPanel({
-  lobby,
-  pot,
-  me,
-  offset,
-  serverNow,
-  pending = false,
-  act,
-}: {
-  lobby: NonNullable<InhouseState["lobby"]>;
-  /** Passed narrowed by the call site so the hooks below run unconditionally. */
-  pot: Pot;
-  me: InhouseState["me"];
-  offset: number;
-  serverNow: number;
-  pending: boolean;
-  act: (body: Record<string, unknown>) => Promise<boolean>;
-}) {
-  const total = pot.pool1 + pot.pool2;
-  const tier = tierLabel(pot.tier);
-  const balance = me.cred ?? 0;
-  const maxPool = Math.max(pot.pool1, pot.pool2);
-  const myPool = me.myTeam === 1 ? pot.pool1 : me.myTeam === 2 ? pot.pool2 : 0;
-  const theirPool =
-    me.myTeam === 1 ? pot.pool2 : me.myTeam === 2 ? pot.pool1 : 0;
-  // ELIGIBILITY, straight from the server (in the ten, on a side, hasn't bet,
-  // window still open). Affordability is the chips' business below, via the
-  // same `betGateError` the write refuses with.
-  const canBet = me.canBet;
-  // The clock is a call to action, so it rides the window rather than the
-  // phase: a countdown over a closed pot is a taunt, and a pot with seconds
-  // left and no clock is the same lie the other way round.
-  const showClock = pot.closesAt != null;
-  // Same contract as the vote/pick/accept clocks — top-20 is the 80px header.
-  const { ref: bannerRef, offscreen } = useBannerOffscreen(showClock);
-
-  const sideName = (team: number) => {
-    const t = lobby.teams.find((x) => x.team === team);
-    return t ? sideMeta(t.isRadiant).name : `Team ${team}`;
-  };
-
-  // Why this can't just be `stake <= balance`: `betGateError` is the sentence
-  // the SERVER refuses with, so asking it here is what keeps a chip that is
-  // offered and a bet that is accepted the same set. A second opinion about
-  // affordability living in this file is how a disabled button and the toast
-  // explaining it end up telling different stories.
-  const gate = (stake: number) =>
-    betGateError({
-      balance,
-      stake,
-      myTeam: me.myTeam,
-      lobbyStatus: lobby.status,
-      betsCloseAtMs: pot.closesAt,
-      // The server's clock from this payload, NOT Date.now(): calling that
-      // during render makes the render non-idempotent (React may run it twice
-      // and keep either result), and the window is the server's decision
-      // anyway — `closesAt` is already nulled once it has passed.
-      nowMs: serverNow,
-      alreadyBet: !!me.myBet,
-    });
-
-  // What the pot would look like with this stake added to the viewer's side.
-  // `placedAtMs` is 0 for every row on purpose: potView never reads it (the
-  // timestamp only decides the late-bet void at settlement) and the allocation
-  // is ordered by userId, so this is the identical arithmetic the server runs.
-  const placed: BetRow[] = pot.slips.map((s) => ({
-    userId: s.userId,
-    team: s.team,
-    stake: s.stake,
-    placedAtMs: 0,
-  }));
-  const coveredIf = (stake: number): number => {
-    if (!me.userId || me.myTeam == null) return 0;
-    const view = potView([
-      ...placed,
-      { userId: me.userId, team: me.myTeam, stake, placedAtMs: 0 },
-    ]);
-    return view.coveredByUser[me.userId] ?? 0;
-  };
-
-  const step = INHOUSE_BETS.STEP;
-  const toStep = (n: number) => Math.floor(n / step) * step;
-  const maxChip = toStep(Math.min(INHOUSE_BETS.MAX_STAKE, balance));
-  // One-tap amounts, never a text input: a bet that needs typing does not
-  // happen inside 45 seconds with Dota already open. Built from the constants
-  // (so a change to STEP/MAX can't leave an illegal chip on screen) and then
-  // filtered through the gate, which is what drops the ones this balance can't
-  // reach instead of offering a button whose only outcome is a refusal.
-  const chips = [
-    ...new Set([
-      INHOUSE_BETS.MIN_STAKE,
-      INHOUSE_BETS.MIN_STAKE * 2,
-      toStep(INHOUSE_BETS.MAX_STAKE / 2),
-      maxChip,
-    ]),
-  ]
-    .sort((a, b) => a - b)
-    .filter((c) => gate(c) === null);
-
-  // COVER stakes exactly the gap, so it lands on the SHORT side and is matched
-  // at ratio 1.0 — the built-in magnet back toward a balanced pot, and the
-  // reason this button exists at all. Capped at MAX_STAKE and at the balance;
-  // the covered figure still comes from potView rather than that reasoning.
-  const coverAmount = toStep(
-    Math.min(theirPool - myPool, INHOUSE_BETS.MAX_STAKE, balance),
-  );
-  const canCover =
-    canBet &&
-    coverAmount >= INHOUSE_BETS.MIN_STAKE &&
-    gate(coverAmount) === null;
-  // Derived, not asserted: a cover lands on the short side and is therefore
-  // matched in full, but the button quotes potView like every other control
-  // rather than trusting that sentence.
-  const coverCovered = canCover ? coveredIf(coverAmount) : 0;
-
-  // A CLOSED pot nobody joined has nothing to say, and it said it directly
-  // above the lobby password while ten people were trying to leave for the Dota
-  // client. Keyed on the WINDOW, not on whether controls were passed: while the
-  // window is open an empty panel IS the invitation (betting is opt-in and a
-  // quiet night carries no pot at all), and the moment it shuts with nothing in
-  // it there is nothing left to invite. Under the old `!act` test the panel
-  // lingered dead through a whole READY phase whose window had expired, and
-  // vanished from a live one whose window had not.
-  if (pot.closesAt == null && total === 0 && !me.myBet) return null;
-
-  const place = async (stake: number) => {
-    // ONLY the success path speaks. A false return is either a refusal the
-    // route already toasted, or a TIMEOUT — and act() branches on that one
-    // itself, because "your bet didn't go through" beside a balance that
-    // quietly dropped is the worst thing a money screen can say.
-    if (await act({ action: "bet", stake })) {
-      pushToast(
-        "success",
-        `${stake} Cred on ${sideName(me.myTeam ?? 0)} — your slip is in the pot.`,
-      );
-    }
-  };
-
-  return (
-    <>
-      {/* The panel scrolls away while people copy the lobby password, and the
-          window is 45 seconds long. Same compact fixed bar as the other three
-          phases; top-20 matches the 80px header (see useBannerOffscreen). */}
-      {offscreen ? (
-        <button
-          type="button"
-          onClick={scrollToRoomTop}
-          aria-label="Back to the pot"
-          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
-        >
-          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
-            <span className="flex min-w-0 items-center gap-2">
-              <span aria-hidden>💰</span>
-              <span className="truncate font-medium">
-                {total > 0 ? `Pot ${total} Cred` : "Bets open"}
-              </span>
-              {/* Named sides, not "240–160": a bare pair in a one-line bar is
-                  a number nobody can attribute, and which side is which is the
-                  entire question the bar is being glanced at to answer. */}
-              <span className="shrink-0 text-xs text-muted tabular-nums">
-                {lobby.teams
-                  .map(
-                    (t) =>
-                      `${sideMeta(t.isRadiant).name[0]} ${
-                        t.team === 1 ? pot.pool1 : pot.pool2
-                      }`,
-                  )
-                  .join(" · ")}
-              </span>
-              {/* Dropped on phones: everything else in this bar is shrink-0,
-                  so one more fixed-width chip is what tips a 390px viewport
-                  into a horizontal scroll. The numbers earn the space. */}
-              {canBet ? (
-                <Badge tone="accent" className="hidden shrink-0 sm:inline-flex">
-                  Not in yet
-                </Badge>
-              ) : null}
-            </span>
-            <SecondsClock
-              endsAtMs={pot.closesAt}
-              offsetMs={offset}
-              urgentAt={10}
-              label={(s) => `${s} seconds left to bet`}
-            />
-          </div>
-        </button>
-      ) : null}
-
-      <section
-        ref={bannerRef}
-        aria-label="Betting pot"
-        className={cn(
-          "rounded-2xl border bg-surface/90 p-4 sm:p-5",
-          canBet ? "border-accent/40" : "border-line",
-        )}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold">The pot</h3>
-              {tier ? <Badge tone="accent">{tier}</Badge> : null}
-            </div>
-            <div className="mt-0.5 text-xs text-muted">
-              {total > 0
-                ? `${total} Cred staked · ${
-                    pot.matched > 0
-                      ? `${pot.matched} live on each side`
-                      : "nothing live yet"
-                  }`
-                : canBet
-                  ? "Nothing staked yet — back your own side, once, before the clock runs out."
-                  : "No bets on this game."}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            {me.cred != null ? (
-              <span className="text-xs text-muted">
-                Your Cred{" "}
-                <strong className="text-fg tabular-nums">{balance}</strong>
-              </span>
-            ) : null}
-            {showClock ? (
-              <SecondsClock
-                endsAtMs={pot.closesAt}
-                offsetMs={offset}
-                urgentAt={10}
-                label={(s) => `${s} seconds left to bet`}
-              />
-            ) : null}
-          </div>
-        </div>
-
-        {/* Two explicit columns at every width: the sides are only meaningful
-            side by side, and this is the comparison the panel exists to make. */}
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          {lobby.teams.map((t) => {
-            const meta = sideMeta(t.isRadiant);
-            const pool = t.team === 1 ? pot.pool1 : pot.pool2;
-            const live = Math.min(pool, pot.matched);
-            const mine = me.myTeam === t.team;
-            const slips = pot.slips.filter((s) => s.team === t.team);
-            return (
-              <div
-                key={t.team}
-                className={cn(
-                  "min-w-0 rounded-lg border p-3",
-                  mine ? meta.ring : "border-line",
-                  mine ? "bg-surface-2/60" : "bg-surface-2/30",
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    aria-hidden
-                    className={cn("h-2 w-2 shrink-0 rounded-full", meta.dot)}
-                  />
-                  <span className="min-w-0 truncate text-sm font-medium">
-                    {meta.name}
-                  </span>
-                  {mine ? (
-                    <Badge tone={meta.badge} className="shrink-0">
-                      You
-                    </Badge>
-                  ) : null}
-                </div>
-                <div className="mt-2">
-                  <span className="font-display text-3xl font-bold tabular-nums">
-                    {pool}
-                  </span>
-                  <span className="ml-1 text-xs text-muted">Cred</span>
-                </div>
-
-                {/* Purely visual, so it carries its own name: solid = covered
-                    by the other side, faded = coming home either way. */}
-                <div
-                  role="img"
-                  aria-label={`${meta.name}: ${pool} Cred staked, ${live} of it covered`}
-                  className="mt-2 h-2 w-full overflow-hidden rounded-full bg-surface-2"
-                >
-                  <div
-                    aria-hidden
-                    className={cn("h-full rounded-full", meta.soft)}
-                    style={{
-                      width: `${maxPool > 0 ? (pool / maxPool) * 100 : 0}%`,
-                    }}
-                  >
-                    <div
-                      aria-hidden
-                      className={cn("h-full rounded-full", meta.dot)}
-                      style={{
-                        width: `${pool > 0 ? (live / pool) * 100 : 0}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-1.5 flex flex-wrap justify-between gap-1 text-[10px] tabular-nums text-muted">
-                  <span>{live} covered</span>
-                  <span>{pool - live} unmatched</span>
-                </div>
-
-                <ul className="mt-3 space-y-1">
-                  {slips.map((s) => (
-                    <li
-                      key={s.userId}
-                      className="flex items-center gap-1.5 text-xs"
-                    >
-                      {/* Plain text, not a PlayerLink: ten stacked links four
-                          pixels apart is the ambiguous-tap-target case, and
-                          every one of these names is a link in the matchup
-                          grid a screen further down. */}
-                      <span
-                        className={cn(
-                          "min-w-0 flex-1 truncate",
-                          s.userId === me.userId ? "font-semibold" : "",
-                        )}
-                      >
-                        {s.name}
-                      </span>
-                      <span className="shrink-0 font-medium tabular-nums">
-                        {s.stake}
-                      </span>
-                      <span
-                        title={stakeOutcome(s.stake, s.covered)}
-                        className="shrink-0 tabular-nums text-muted"
-                      >
-                        ({s.covered} live)
-                      </span>
-                    </li>
-                  ))}
-                  {slips.length === 0 ? (
-                    <li className="text-xs text-muted">Nobody in yet</li>
-                  ) : null}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
-
-        <p className="mt-3 text-xs text-muted">
-          {pot.matched > 0
-            ? `${pot.matched} Cred is live on each side and pays even money. Everything above that comes home whatever happens.`
-            : total > 0
-              ? "Nothing is live yet — one side has the whole pot, and unmatched Cred is never at risk. It needs a taker."
-              : "Only Cred the other side covers is ever at risk; the rest is returned."}
-        </p>
-
-        {/* The immutable receipt. It stays on screen through IN_PROGRESS, which
-            is when someone starts wondering what they actually have riding. */}
-        {me.myBet ? (
-          <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm">
-            <span aria-hidden>🎟️</span>
-            <span className="min-w-0">
-              Your bet:{" "}
-              <strong className="tabular-nums">{me.myBet.stake} Cred</strong> on{" "}
-              {sideName(me.myBet.team)} —{" "}
-              <span className="text-muted">
-                {me.myBet.covered > 0
-                  ? `${me.myBet.covered} covered, ${me.myBet.stake - me.myBet.covered} comes home`
-                  : "nothing covered yet — as it stands the whole stake comes home"}
-              </span>
-            </span>
-          </div>
-        ) : null}
-
-        {canBet ? (
-          <div className="mt-4 border-t border-line pt-4">
-            {chips.length > 0 ? (
-              <>
-                {theirPool > myPool ? (
-                  <p className="mb-2 text-xs text-muted">
-                    Your side is{" "}
-                    <strong className="text-fg tabular-nums">
-                      {theirPool - myPool}
-                    </strong>{" "}
-                    behind — anything you put in up to that is covered in full.
-                  </p>
-                ) : null}
-
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {chips.map((amount) => {
-                    const covered = coveredIf(amount);
-                    const label =
-                      amount === INHOUSE_BETS.MAX_STAKE
-                        ? `MAX ${amount}`
-                        : amount === maxChip
-                          ? `ALL ${amount}`
-                          : `${amount}`;
-                    return (
-                      <button
-                        key={amount}
-                        type="button"
-                        disabled={pending}
-                        title={stakeOutcome(amount, covered)}
-                        aria-label={`Bet ${amount} Cred on ${sideName(
-                          me.myTeam ?? 0,
-                        )} — ${stakeOutcome(amount, covered)}`}
-                        onClick={() => place(amount)}
-                        className={buttonClasses(
-                          "secondary",
-                          "md",
-                          "h-auto min-h-11 flex-col gap-0 px-2 py-1.5 sm:h-auto sm:min-h-10",
-                        )}
-                      >
-                        <span className="text-base font-bold tabular-nums">
-                          {label}
-                        </span>
-                        <span className="text-[11px] font-normal text-muted">
-                          {stakeOutcomeShort(amount, covered)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {canCover ? (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    title={stakeOutcome(coverAmount, coverCovered)}
-                    aria-label={`Cover the gap with ${coverAmount} Cred — ${stakeOutcome(
-                      coverAmount,
-                      coverCovered,
-                    )}`}
-                    onClick={() => place(coverAmount)}
-                    className={buttonClasses(
-                      "accent",
-                      "md",
-                      "mt-2 h-auto min-h-11 w-full flex-col gap-0 py-1.5 sm:h-auto sm:min-h-10",
-                    )}
-                  >
-                    <span className="font-bold">COVER {coverAmount} →</span>
-                    <span className="text-[11px] font-normal opacity-80">
-                      {stakeOutcome(coverAmount, coverCovered)}
-                    </span>
-                  </button>
-                ) : null}
-
-                {/* The one thing a player must not discover afterwards: a
-                    stake can sit for hours if the game never gets hosted. */}
-                <p className="mt-2 text-[11px] leading-relaxed text-muted">
-                  One bet, your own side, no take-backs. If the game never gets
-                  played everything is refunded — but that can take a few hours.
-                </p>
-              </>
-            ) : (
-              <p className="text-xs text-muted">
-                {gate(INHOUSE_BETS.MIN_STAKE)}
-                {/* THE FLOOR IS A NET, NOT AN ALLOWANCE, and this sentence is
-                    read by the one person who will hold it to the promise: a
-                    player with nothing left. Three things past the balance
-                    decide it, and the first is invisible from here — settlement
-                    only runs on a lobby that had a confirmed bet
-                    (`betSettlement` is stamped by the first bet), and
-                    `applyFloor` lives inside settlement, so a game nobody bet
-                    on tops nobody up however long it ran. Then the game must
-                    have lasted REAL_GAME_SECONDS (which is what stops
-                    four-minute feed-fests being a faucet with a crank on it),
-                    and it pays at most once per UTC day. "After the next game
-                    that runs its course" promised all of that away. */}
-                {balance < INHOUSE_BETS.MIN_STAKE
-                  ? ` There's a top-up back to ${INHOUSE_BETS.FLOOR}, but it's a safety net rather than an allowance: it needs a game you were in that somebody bet on and that ran past ${FLOOR_GAME_MINUTES} minutes, and it pays at most once a day.`
-                  : null}
-              </p>
-            )}
-          </div>
-        ) : null}
-      </section>
-    </>
   );
 }
 
@@ -3268,10 +2391,7 @@ function InProgressView({
   serverNow: number;
   detectMinMinutes: number;
   pending: boolean;
-  /** Widened from `=> void` like ReadyView's: the pot below is still LIVE here
-   *  (Start does not close the window), and placing a bet must only claim
-   *  success once the server agrees. */
-  act: (body: Record<string, unknown>) => Promise<boolean>;
+  act: (body: Record<string, unknown>) => void;
 }) {
   const [matchId, setMatchId] = useState("");
   // Poll-driven (not ticking) — only gates the "auto-scan is live" note, which
@@ -3371,24 +2491,6 @@ function InProgressView({
           </p>
         )}
       </div>
-
-      {/* Still interactive, and that is not an oversight: the window closes on
-          `betsCloseAt`, so a Start pressed at second 20 leaves 25 seconds in
-          which the server accepts bets. Once it does shut the panel becomes the
-          scoreboard people ask about while the game runs — who is in for what,
-          and how much of it is actually live — and it does that off the same
-          payload, with no phase test anywhere in it. */}
-      {lobby.pot ? (
-        <PotPanel
-          lobby={lobby}
-          pot={lobby.pot}
-          me={me}
-          offset={offset}
-          serverNow={serverNow}
-          pending={pending}
-          act={act}
-        />
-      ) : null}
 
       {me.inLobby || me.isAdmin ? <GameSetupCard lobby={lobby} me={me} /> : null}
 

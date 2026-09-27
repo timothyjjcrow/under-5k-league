@@ -2,12 +2,7 @@ import Link from "next/link";
 import { Fragment, Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import {
-  INHOUSE,
-  INHOUSE_BET_OUTCOME,
-  INHOUSE_BETS,
-  INHOUSE_STATUS,
-} from "@/lib/constants";
+import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
 import {
   parseInhouseBox,
   type InhouseBoxPlayer as BoxPlayer,
@@ -31,12 +26,6 @@ import {
 } from "@/lib/inhouse-ladder";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { singleSearchParam } from "@/lib/search-params";
-import { credProfitBoard } from "@/lib/inhouse-bet-service";
-import { credBetView } from "@/lib/inhouse-bets";
-import {
-  loadCredSnapshot,
-  type CredSnapshot,
-} from "@/lib/inhouse-cred-summary";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
@@ -442,79 +431,12 @@ function ResultSummaryLine({
   );
 }
 
-/**
- * The two ladders, side by side: Elo (skill) and net Cred (nerve).
- *
- * Cred lives as a COLUMN on this card rather than a card of its own, and the
- * reason is the page order litigated in CLAUDE.md — a new card above the Elo
- * ladder is the exact mistake that pass fixed, and one below it would separate
- * the two numbers that are only interesting when read against each other.
- * Being #8 in Elo and #1 in Cred is the story; two cards 600px apart is not.
- */
-type CredBoard = {
-  /**
-   * userId → net Cred profit. ABSENCE means "has never bet", which is NOT the
-   * same as 0 (bet and broke even) and must not render as it — a column of
-   * zeroes would say the whole league played and nobody won anything.
-   */
-  net: Map<string, number>;
-  /** userId → rank by profit. Established players only (see `credBoard`). */
-  rank: Map<string, number>;
-  /** The size of the field that rank is out of. */
-  ranked: number;
-  /**
-   * Has anyone in this league ever bet? ONE copy of the predicate, because the
-   * column, the viewer's own cell and the card's subtitle must appear and
-   * disappear together — a subtitle promising a Cred board above a table with
-   * no Cred column is the copy-names-a-control defect the admin guard exists
-   * to catch, and three inlined `size > 0`s is how it would arrive.
-   */
-  hasBets: boolean;
-};
-
-/**
- * Rank the profit board, over the SAME established/provisional split the Elo
- * ladder uses.
- *
- * Provisionals keep their figure (a Cred number is exact from the first bet —
- * unlike a rating, it isn't an estimate that settles down) but are never given
- * a rank: one lucky COVER on one game must not out-rank a season of nerve, for
- * the same reason `rankInhouse` exists at all. Ties break on userId ascending,
- * the repo's total-order convention — without it two players on +120 swap
- * places between renders.
- */
-function credBoard(
-  rows: ReturnType<typeof summarizeInhouse>,
-  net: Map<string, number>,
-): CredBoard {
-  const { ranked } = rankInhouse(rows);
-  const field = ranked
-    .filter((r) => net.has(r.userId))
-    .sort(
-      (a, b) =>
-        (net.get(b.userId) ?? 0) - (net.get(a.userId) ?? 0) ||
-        (a.userId < b.userId ? -1 : 1),
-    );
-  return {
-    net,
-    rank: new Map(field.map((r, i) => [r.userId, i + 1])),
-    ranked: field.length,
-    hasBets: net.size > 0,
-  };
-}
-
 // The full-history Elo ladder (no take window — Elo accumulates over ALL
 // games, per CLAUDE.md).
 async function LadderCard({ meId }: { meId: string | null }) {
-  // Shares the complete-history snapshot with the Discord board and room;
-  // the ledger aggregate stays parallel and retains its independent meaning.
-  const [summary, credNet, mine] = await Promise.all([
-    loadInhouseLadderSummary(),
-    credProfitBoard(),
-    meId ? loadCredSnapshot(meId) : Promise.resolve(null),
-  ]);
+  // Shares the complete-history snapshot with the Discord board and room.
+  const summary = await loadInhouseLadderSummary();
   const leaderboard = summary.records;
-  const cred = credBoard(leaderboard, credNet);
 
   return (
     // overflow-hidden on the CARD: the table scroller inside must not leak
@@ -530,28 +452,20 @@ async function LadderCard({ meId }: { meId: string | null }) {
       />
       <CardBody className="p-0">
         <LadderViewSwitch view="all" />
-        <YourStanding
-          rows={leaderboard}
-          meId={meId}
-          cred={cred}
-          wallet={mine}
-        />
+        <YourStanding rows={leaderboard} meId={meId} />
         <LadderLeaders rows={leaderboard} />
-        <Leaderboard rows={leaderboard} meId={meId} cred={cred} />
-        <LadderKey rows={leaderboard} cred={cred} />
+        <Leaderboard rows={leaderboard} meId={meId} />
+        <LadderKey rows={leaderboard} />
         {/* The table's marks are explained in the visible key above (see
             LadderKey); this fold is only the "why" behind the numbers. */}
         <details className="border-t border-line px-4 py-2 text-xs text-muted sm:px-5">
           <summary className="inline-flex min-h-10 cursor-pointer items-center rounded hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-            How {cred.hasBets ? "Elo & Cred" : "Elo"} work
+            How Elo works
           </summary>
           <p className="max-w-3xl pb-3 leading-relaxed">
             Elo starts at 1000 and moves after every game: beating stronger
             opponents earns more, and losing to weaker ones costs more. Your
             rank appears after {PROVISIONAL_GAMES} games.
-            {cred.hasBets
-              ? " Cred's rank is separate from Elo and counts betting results only, never starting balances or grants."
-              : ""}
           </p>
         </details>
       </CardBody>
@@ -632,40 +546,6 @@ function LadderLeaders({
         </li>
       ))}
     </ol>
-  );
-}
-
-/**
- * A net-Cred figure. Signed and coloured, because the sign IS the story — a
- * bare "120" is unreadable next to a "-120" without it.
- *
- * `null` means the player has never bet, rendered as an em dash rather than 0:
- * the two are different facts and only one of them is a result.
- */
-function CredFigure({
-  net,
-  className,
-}: {
-  net: number | null;
-  className?: string;
-}) {
-  if (net == null) {
-    return (
-      <span className={cn("text-muted", className)} title="No bets placed yet">
-        —
-      </span>
-    );
-  }
-  return (
-    <span
-      className={cn(
-        "font-semibold tabular-nums",
-        net > 0 ? "text-success" : net < 0 ? "text-danger" : "text-muted",
-        className,
-      )}
-    >
-      {net > 0 ? `+${net}` : net}
-    </span>
   );
 }
 
@@ -785,25 +665,19 @@ function GuideStep({ n }: { n: number }) {
 function YourStanding({
   rows,
   meId,
-  cred,
-  wallet,
 }: {
   rows: ReturnType<typeof summarizeInhouse>;
   meId: string | null;
-  cred: CredBoard;
-  wallet: CredSnapshot | null;
 }) {
   if (!meId) return null;
   const me = rows.find((r) => r.userId === meId);
   // No completed game yet: the one place on the page addressed to this viewer
   // tells them how to get onto the board instead of saying nothing.
-  if (!me) return <FirstGameStrip balance={wallet?.balance ?? null} />;
+  if (!me) return <FirstGameStrip />;
   // Rank only counts among established players — provisionals are unranked.
   const { ranked } = rankInhouse(rows);
   const idx = ranked.findIndex((r) => r.userId === meId);
   const toRank = PROVISIONAL_GAMES - me.games;
-  const myCred = cred.net.get(meId) ?? null;
-  const myCredRank = cred.rank.get(meId);
   return (
     // This is the only thing on the page addressed to the signed-in viewer, and
     // it used to be six equal-weight text spans in a flex row — six semantic
@@ -841,24 +715,6 @@ function YourStanding({
         }
         hint={`peak ${me.peak}`}
       />
-      {/* Directly beside Elo, because the pair is the point: these are the
-          viewer's two standings in the same room, and a nerve figure parked
-          after Record and Form reads as a footnote to the skill one. Shown as
-          soon as ANYONE has bet, so a player who hasn't yet learns the second
-          board exists — the em dash is an invitation, not a gap. */}
-      {cred.hasBets ? (
-        <StatCell
-          label="Cred"
-          value={<CredFigure net={myCred} />}
-          hint={
-            myCredRank
-              ? `#${myCredRank} of ${cred.ranked}`
-              : myCred != null
-                ? "provisional"
-                : "net profit"
-          }
-        />
-      ) : null}
       <StatCell
         label="Record"
         value={
@@ -880,91 +736,12 @@ function YourStanding({
           </div>
         </div>
       ) : null}
-      {wallet ? (
-        // The spendable figure, which appeared nowhere outside a live lobby.
-        // Kept apart from the Cred cell above: that one is net profit (the
-        // ladder), this one is what the bet chips can actually spend.
-        <StatCell label="Cred balance" value={wallet.balance} hint="to bet" />
-      ) : null}
       {toRank > 0 ? (
         <Badge tone="neutral" className="self-center">
           provisional · {toRank} more {toRank === 1 ? "game" : "games"} to rank
         </Badge>
       ) : null}
-      {wallet && wallet.bets.length > 0 ? (
-        <RecentBets bets={wallet.bets} />
-      ) : null}
     </div>
-  );
-}
-
-/**
- * The viewer's last few bets, folded under their standing. Every refund names
- * its reason (see `credBetView`), because a bare 0 beside a bet someone
- * remembers placing reads as lost Cred.
- */
-function RecentBets({ bets }: { bets: CredSnapshot["bets"] }) {
-  // Only a game that completed has a box score in the archive to open.
-  const archived = new Set<string>([
-    INHOUSE_BET_OUTCOME.WON,
-    INHOUSE_BET_OUTCOME.LOST,
-    INHOUSE_BET_OUTCOME.VOID_LINEUP,
-    INHOUSE_BET_OUTCOME.VOID_LATE,
-  ]);
-  return (
-    <details className="w-full text-sm">
-      <summary className="inline-flex min-h-10 cursor-pointer items-center rounded text-xs font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-        Your last {bets.length === 1 ? "bet" : `${bets.length} bets`}
-      </summary>
-      <ol className="divide-y divide-line-soft pb-1">
-        {bets.map((bet) => {
-          const view = credBetView(bet);
-          return (
-            <li
-              key={bet.id}
-              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2"
-            >
-              <span className="min-w-0">
-                <span className="block text-xs text-muted">
-                  <LocalTime
-                    ts={bet.playedAt.getTime()}
-                    variant="short"
-                    initial={formatMatchTime(bet.playedAt, "short")}
-                  />
-                </span>
-                {bet.outcome && archived.has(bet.outcome) ? (
-                  <Link
-                    href={`/inhouse/history?game=${bet.lobbyId}#result-${bet.lobbyId}`}
-                    className={textLink()}
-                  >
-                    {view.label}
-                  </Link>
-                ) : (
-                  view.label
-                )}
-                <span className="ml-2 text-xs text-muted tabular-nums">
-                  {bet.stake} staked
-                </span>
-              </span>
-              {view.delta != null ? (
-                <span
-                  className={cn(
-                    "font-semibold tabular-nums",
-                    view.tone === "success"
-                      ? "text-success"
-                      : view.tone === "danger"
-                        ? "text-danger"
-                        : "text-muted",
-                  )}
-                >
-                  {view.delta > 0 ? `+${view.delta}` : view.delta}
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
-    </details>
   );
 }
 
@@ -973,7 +750,7 @@ function RecentBets({ bets }: { bets: CredSnapshot["bets"] }) {
  * explains the current phase; this is the whole path in one glance, because a
  * first-timer can't see what "queue" leads to until they are ten minutes in.
  */
-function FirstGameStrip({ balance }: { balance: number | null }) {
+function FirstGameStrip() {
   const steps: React.ReactNode[] = [
     <>
       <a href="#live-room" className={textLink()}>
@@ -1008,8 +785,7 @@ function FirstGameStrip({ balance }: { balance: number | null }) {
       </ol>
       <p className="mt-2.5 text-xs text-muted">
         Your Elo starts at 1000 and you get a rank after {PROVISIONAL_GAMES}{" "}
-        games. You also have {balance ?? INHOUSE_BETS.START_BALANCE} Cred to bet
-        on your own team once the teams lock.
+        games.
       </p>
     </div>
   );
@@ -1018,11 +794,9 @@ function FirstGameStrip({ balance }: { balance: number | null }) {
 function Leaderboard({
   rows,
   meId,
-  cred,
 }: {
   rows: ReturnType<typeof summarizeInhouse>;
   meId: string | null;
-  cred: CredBoard;
 }) {
   if (rows.length === 0) {
     return (
@@ -1038,19 +812,6 @@ function Leaderboard({
   // after them, dimmed and unranked, until they've played enough to place.
   const { ranked, provisional } = rankInhouse(rows);
   const ordered = [...ranked, ...provisional];
-  // A league that has never bet gets no Cred column at all, rather than a
-  // column of em dashes. Same rule as SceneStats: anything missing is omitted,
-  // never faked — an empty column is a promise the page can't keep.
-  const showCred = cred.hasBets;
-  // Each row's two Cred lookups resolved once, up here, so the row stays an
-  // expression: the Cred figure appears in three places per row (the column,
-  // its rank chip, and the phone's stacked line) and three inline
-  // `cred.net.get(...)`s is the drift the CredBoard type exists to prevent.
-  const rowsView = ordered.map((r) => ({
-    r,
-    net: cred.net.get(r.userId) ?? null,
-    credRank: cred.rank.get(r.userId),
-  }));
   return (
     <div className="overflow-x-auto">
       {/* table-fixed + widths on <col>, per CLAUDE.md's StandingsTable rule: with
@@ -1059,9 +820,8 @@ function Leaderboard({
         this the nine mostly-1-character columns starved the Player name. */}
       <table className="w-full table-fixed text-sm">
         <caption className="sr-only">
-          Inhouse player ratings, records, recent form
-          {showCred ? ", and net Cred profit" : ""}. Provisional players are
-          listed without a rank.
+          Inhouse player ratings, records and recent form. Provisional players
+          are listed without a rank.
         </caption>
         <colgroup>
           <col className="w-11" />
@@ -1069,13 +829,6 @@ function Leaderboard({
           {/* Wide enough for "1045" plus its "+18" delta on ONE line — at 4.5rem
             the delta wrapped and every top row rendered two lines tall. */}
           <col className="w-[5.75rem]" />
-          {/* Cred sits immediately beside Elo — skill then nerve, read as a
-            pair. It is the FIRST thing a phone gives up (w-0 until sm): six
-            fixed columns at 390px starve the Player name to a couple of
-            characters, which is the trap the widths above already document.
-            Phones get the figure under the name instead, so the second board
-            is never invisible on the majority device. */}
-          {showCred ? <col className="w-0 sm:w-[5.5rem]" /> : null}
           <col className="w-9" />
           <col className="w-9" />
           {/* Form moved ahead of Win%/Streak/GP: it is the one at-a-glance signal
@@ -1090,14 +843,6 @@ function Leaderboard({
             <th className="px-4 py-2.5 font-medium sm:px-5">#</th>
             <th className="px-2 py-2.5 font-medium">Player</th>
             <th className="px-2 py-2.5 text-right font-medium">Elo</th>
-            {showCred ? (
-              <th
-                className="hidden px-2 py-2.5 text-right font-medium sm:table-cell"
-                title="Net Cred won or lost betting on your own games — never your balance"
-              >
-                Cred
-              </th>
-            ) : null}
             <th className="px-2 py-2.5 text-center font-medium">W</th>
             <th className="px-2 py-2.5 text-center font-medium">L</th>
             <th className="hidden px-2 py-2.5 text-center font-medium sm:table-cell">
@@ -1115,7 +860,7 @@ function Leaderboard({
           </tr>
         </thead>
         <tbody>
-          {rowsView.map(({ r, net, credRank }, i) => (
+          {ordered.map((r, i) => (
             <tr
               key={r.userId}
               className={cn(
@@ -1151,20 +896,6 @@ function Leaderboard({
                     {r.name}
                   </PlayerLink>
                 </span>
-                {/* The phone's Cred column, stacked under the name because there
-                  is no width for a sixth track (see the colgroup). Rendered
-                  ONLY for players who have actually bet, so it costs nothing
-                  until the economy is used and never grows a row to two lines
-                  to say "—". pl-8 = avatar + gap, so it hangs under the name. */}
-                {showCred && net != null ? (
-                  <span className="mt-0.5 block pl-8 text-[11px] sm:hidden">
-                    <span className="text-muted">Cred </span>
-                    <CredFigure net={net} />
-                    {credRank && credRank <= 3 ? (
-                      <span className="ml-1 text-accent">#{credRank}</span>
-                    ) : null}
-                  </span>
-                ) : null}
               </td>
               <td className="whitespace-nowrap px-2 py-2.5 text-right">
                 <span
@@ -1192,26 +923,6 @@ function Leaderboard({
                   </span>
                 ) : null}
               </td>
-              {showCred ? (
-                <td className="hidden whitespace-nowrap px-2 py-2.5 text-right sm:table-cell">
-                  <CredFigure net={net} />
-                  {/* The divergence chip, and the whole reason Cred is a column
-                    on this table rather than a board of its own: a plain "8" in
-                    the rank column beside a "#1" here is a player who is
-                    mid-table at Dota and top of the league at nerve, legible in
-                    one glance. Top three only — a chip on every row is
-                    wallpaper. `cred.rank` holds established players alone, so
-                    a number built out of one game is never medalled. */}
-                  {credRank && credRank <= 3 ? (
-                    <span
-                      className="ml-1 text-[10px] font-semibold tabular-nums text-accent"
-                      title={`#${credRank} of ${cred.ranked} by net Cred profit — ranked separately from Elo`}
-                    >
-                      #{credRank}
-                    </span>
-                  ) : null}
-                </td>
-              ) : null}
               <td className="px-2 py-2.5 text-center text-success">{r.wins}</td>
               <td className="px-2 py-2.5 text-center text-muted">{r.losses}</td>
               <td className="hidden px-2 py-2.5 sm:table-cell">
@@ -1256,13 +967,11 @@ function Leaderboard({
  */
 function LadderKey({
   rows,
-  cred,
 }: {
   rows: ReturnType<typeof summarizeInhouse>;
-  cred: CredBoard;
 }) {
   if (rows.length === 0) return null;
-  const clauses: React.ReactNode[] = [];
+  const clauses: string[] = [];
   if (rows.some((r) => r.games < PROVISIONAL_GAMES)) {
     clauses.push(
       `A dash instead of a rank means provisional: under ${PROVISIONAL_GAMES} games, listed after the ranked players with a dimmed Elo.`,
@@ -1271,17 +980,6 @@ function LadderKey({
   if (rows.some((r) => r.lastChange !== 0)) {
     clauses.push(
       "The signed figure beside Elo is the swing from their last game.",
-    );
-  }
-  if (cred.hasBets) {
-    clauses.push(
-      <>
-        Cred is the net won or lost betting on their own games, never a balance.
-        {/* The Cred column (its dashes and #1 to #3 marks) is hidden on phones. */}
-        <span className="hidden sm:inline">
-          {" "}A dash there means no bets yet, and #1 to #3 mark the top three by Cred, ranked separately from Elo.
-        </span>
-      </>,
     );
   }
   if (clauses.length === 0) return null;
@@ -1351,7 +1049,7 @@ function LadderViewSwitch({ view }: { view: LadderView }) {
  *
  * It never touches the full-history scan: the loader is windowed on
  * `completedAt` and the Elo figure is the SUM of swings each game already
- * stamped, so no Cred or career data is loaded for this view either.
+ * stamped, so no career data is loaded for this view either.
  */
 async function MonthLadderCard({ meId }: { meId: string | null }) {
   const month = await loadInhouseMonthLadder();

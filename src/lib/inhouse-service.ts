@@ -2131,10 +2131,8 @@ export async function voidLastResult(
 
 export async function cancelLobby(
   viewer: SessionUser,
-  opts?: { force?: boolean },
 ): Promise<InhouseActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  const force = opts?.force === true;
   const lobby = await prisma.inhouseLobby.findFirst({
     where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
   });
@@ -2152,36 +2150,10 @@ export async function cancelLobby(
     // Guarded transition: if the result landed between the admin's read and
     // this write (auto-detect closing the lobby mid-confirm-dialog), the
     // cancel must lose — a played game keeps its result and nobody re-queues.
-    //
-    // Second predicate, unless the admin explicitly forced it: an IN_PROGRESS
-    // lobby with confirmed bets on it must not be cancelled casually, because
-    // under any betting design cancelling a live game IS an undo for a losing
-    // bet — the game is half-played, everyone can see how it is going, and the
-    // sweeper refunds the pot in full. The gate is the reopenMatch pattern
-    // (relation filter in the WHERE, not an `if` above it) so it survives the
-    // result landing between the admin's read and this write.
-    //
-    // Only the IN_PROGRESS branch: the window opens at READY, but a lobby
-    // cancelled there has no result to unwind and nothing to read off, so the
-    // refund is uncontroversial.
-    //
-    // And admins are deliberately NOT locked out. An unkillable lobby holds the
-    // single active slot — no new game can form and its own ten are refused the
-    // queue — for the six hours until the abandon sweep, which is a strictly
-    // worse failure than a forced cancel that leaves an AdminAction behind.
     const claim = await tx.inhouseLobby.updateMany({
       where: {
         id: lobby.id,
         status: { in: INHOUSE_ACTIVE_STATUSES },
-        OR: force
-          ? undefined
-          : [
-              { status: { not: INHOUSE_STATUS.IN_PROGRESS } },
-              {
-                status: INHOUSE_STATUS.IN_PROGRESS,
-                bets: { none: { confirmedAt: { not: null } } },
-              },
-            ],
       },
       data: {
         status: INHOUSE_STATUS.CANCELLED,
@@ -2221,53 +2193,21 @@ export async function cancelLobby(
     return true;
   });
   if (!cancelled) {
-    // The claim now has two ways to lose, and "nothing happened" is the one
-    // answer an admin cannot act on (the reopenMatch lesson). Re-read to say
-    // WHICH — a live pot is the recoverable one, and the sentence has to name
-    // the override, because the admin's next move is the only thing that
-    // unblocks the single active lobby slot.
-    const staked = force
-      ? 0
-      : await prisma.inhouseBet.count({
-          where: {
-            lobbyId: lobby.id,
-            confirmedAt: { not: null },
-            lobby: { status: INHOUSE_STATUS.IN_PROGRESS },
-          },
-        });
-    if (staked > 0) {
-      return {
-        ok: false,
-        error: `${staked} ${
-          staked === 1 ? "player has" : "players have"
-        } Cred staked on this live game — cancelling refunds the pot in full. Use the forced cancel if that's really what you want.`,
-      };
-    }
     return {
       ok: false,
       error: "The lobby just finished — its result is in, nothing to cancel.",
     };
   }
   // Every successful admin cancellation is destructive and therefore gets an
-  // audit row, not only the forced/money-bearing variant. Read after the claim
-  // so a losing cancel logs nothing; stake figures remain stable through a
-  // refund, which changes outcomes and balances but never the original stake.
-  const pot = await prisma.inhouseBet.aggregate({
-    where: { lobbyId: lobby.id, confirmedAt: { not: null } },
-    _sum: { stake: true },
-    _count: { _all: true },
-  });
+  // audit row. Written after the claim so a losing cancel logs nothing.
   await logAdminAction({
     action: "cancelLobby",
-    summary: `${force ? "Force-cancelled" : "Cancelled"} the inhouse (${lobby.status}) with ${
-      players.length
-    } player(s) — ${pot._count._all} confirmed bet(s), ${
-      pot._sum.stake ?? 0
-    } Cred staked`,
+    summary: `Cancelled the inhouse (${lobby.status}) with ${players.length} player(s)`,
   });
 
-  // Synchronous best-effort sweep: the action returns after the canonical
-  // refund path has had a chance to synchronize balances with CANCELLED.
+  // Betting no longer takes new stakes, but a lobby that carried one from
+  // before its removal must still come back in full; this is a no-op
+  // otherwise.
   try {
     await resolveUnsettledBets(lobby.id);
   } catch {

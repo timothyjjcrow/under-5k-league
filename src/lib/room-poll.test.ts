@@ -30,59 +30,6 @@ describe("inhousePollCadence", () => {
     })).toEqual({ skip: false, delayMs: 10000 });
   });
 
-  it("keeps the shared pot fast after Start until betting closes", () => {
-    const game = {
-      ...base,
-      hidden: false,
-      hasStake: true,
-      lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
-    };
-
-    // Membership is sufficient: someone who already placed a wager still
-    // needs fresh opposing stakes and coverage throughout the same window.
-    expect(inhousePollCadence({ ...game, bettingOpen: true })).toEqual({
-      skip: false,
-      delayMs: FAST,
-    });
-    for (const bettingOpen of [false, undefined]) {
-      expect(inhousePollCadence({ ...game, bettingOpen })).toEqual({
-        skip: false,
-        delayMs: INHOUSE.POLL_GAME_MS,
-      });
-    }
-  });
-
-  it("does not speed up spectators or hidden tabs for an open pot", () => {
-    const game = {
-      ...base,
-      lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
-      bettingOpen: true,
-    };
-
-    expect(inhousePollCadence({ ...game, hidden: false, hasStake: false })).toEqual({
-      skip: false,
-      delayMs: IDLE,
-    });
-    expect(inhousePollCadence({ ...game, hidden: true, hasStake: true })).toEqual({
-      skip: false,
-      delayMs: INHOUSE.POLL_KEEPALIVE_MS,
-    });
-    expect(inhousePollCadence({ ...game, hidden: true, hasStake: false })).toEqual({
-      skip: true,
-      delayMs: IDLE,
-    });
-  });
-
-  it("ignores a stale betting flag once the lobby is gone", () => {
-    expect(inhousePollCadence({
-      ...base,
-      hidden: false,
-      hasStake: true,
-      lobbyStatus: null,
-      bettingOpen: true,
-    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_QUEUE_MS });
-  });
-
   it("phase savings never slow a failed-poll retry or change the hidden keepalive", () => {
     for (const lobbyStatus of [null, INHOUSE_STATUS.IN_PROGRESS]) {
       expect(inhousePollCadence({

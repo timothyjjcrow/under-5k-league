@@ -23,7 +23,6 @@ import { roleLabels } from "@/lib/roles";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { matchPhaseLabel } from "@/lib/schedule";
 import { getSessionUser } from "@/lib/auth";
-import { loadCredSnapshot } from "@/lib/inhouse-cred-summary";
 import { DiscordTag } from "@/components/discord-tag";
 import {
   currentStreak,
@@ -1375,7 +1374,7 @@ export default async function PlayerProfilePage({
           {/* Inhouse career — only stream for players with a completed game. */}
           {recentInhouse ? (
             <Suspense fallback={<CardSkeleton rows={3} />}>
-              <InhouseCareerCard userId={user.id} isSelf={isSelf} />
+              <InhouseCareerCard userId={user.id} />
             </Suspense>
           ) : null}
         </section>
@@ -1610,16 +1609,9 @@ function Connection({
 // The player's ladder identity, surfaced where people actually look each
 // other up. Rank comes from the FULL ladder (Elo accumulates globally); the
 // recent-game rows come from a separate small query with box scores.
-async function InhouseCareerCard({
-  userId,
-  isSelf,
-}: {
-  userId: string;
-  isSelf: boolean;
-}) {
-  const [ladder, wallet, recent] = await Promise.all([
+async function InhouseCareerCard({ userId }: { userId: string }) {
+  const [ladder, recent] = await Promise.all([
     loadInhouseLadder(),
-    loadCredSnapshot(userId, 0),
     prisma.inhouseLobby.findMany({
       where: {
         status: INHOUSE_STATUS.COMPLETED,
@@ -1695,37 +1687,6 @@ async function InhouseCareerCard({
             </Badge>
           ) : null}
         </div>
-        {/* Cred was the inhouse ladder's second board and appeared nowhere on
-            a profile. Net profit is public (the ladder shows it to everyone);
-            the spendable balance is shown only to its owner. */}
-        {wallet.net != null || isSelf ? (
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
-            {wallet.net != null ? (
-              <span className="tabular-nums">
-                <span
-                  className={cn(
-                    "font-semibold",
-                    wallet.net > 0
-                      ? "text-success"
-                      : wallet.net < 0
-                        ? "text-danger"
-                        : "text-muted",
-                  )}
-                >
-                  {wallet.net > 0 ? `+${wallet.net}` : wallet.net}
-                </span>
-                <span className="text-muted"> Cred from betting</span>
-              </span>
-            ) : null}
-            {isSelf ? (
-              <span className="tabular-nums text-muted">
-                <span className="font-semibold text-fg">{wallet.balance}</span>{" "}
-                Cred to bet
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-
         <div className="divide-y divide-line/60 border-t border-line/60">
           {games.map(({ lobby, line, won, playedAt }) => {
             const hero = line ? heroById(line.heroId) : null;
