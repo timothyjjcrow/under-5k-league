@@ -6,7 +6,8 @@
  * league ticket (the "Official lobby checklist"). A season without one — Europe
  * before its ticket is issued — showed nothing about who hosts, which server,
  * which mode or how many lobbies. The "How to host" line is now shown to both
- * captains whether or not a ticket exists; the ticket only adds the league id.
+ * captains whether or not a ticket exists: on its own without a ticket, and as
+ * the first line of that checklist (which adds the league id) with one.
  */
 
 /**
@@ -21,13 +22,23 @@ export const MISSING_LEAGUE_TICKET_WARNING =
   "This season has no Dota league ticket. Valve needs about 15 days to issue one; without it, league games may not reach OpenDota and results can't be imported.";
 
 /**
- * What a captain on a ticketless season does when the result doesn't import:
- * paste the match ID, and if OpenDota never got the game, send an admin the
- * score (manual score entry is admin-only). Never "make your match history
- * public" — that is not enough for a private lobby without a ticket.
+ * The ticketless season's note under "How to host": why the result may not
+ * import by itself, pointing at the Report your result card, whose subtitle
+ * (NO_TICKET_REPORT_SUBTITLE) says what to do. Each step is said once. Never
+ * "make your match history public" — that is not enough for a private lobby
+ * without a ticket.
  */
 export const NO_TICKET_RESULT_NOTE =
-  "This season has no league ticket yet, so your result may not appear on its own. If it doesn't, paste the Dota match ID in Report your result below. If that can't find the game either, send an admin the score.";
+  "This season has no league ticket yet, so your result may not appear on its own. If it doesn't, add it in Report your result below.";
+
+/**
+ * The Report your result card on a ticketless season: paste the match ID or
+ * try Auto-fetch, and if OpenDota never got the game, send an admin the score
+ * (manual score entry is admin-only). It must never say "no admin needed" —
+ * without a ticket, an admin may be the only way the result gets in.
+ */
+export const NO_TICKET_REPORT_SUBTITLE =
+  "Played it? Paste the Dota match ID below, or try Auto-fetch games. A pasted ID must fall near this fixture's scheduled match time, so an old scrim or rematch can't claim the result. If neither finds the game, send an admin the score.";
 
 /**
  * How many lobbies a series takes, phrased for its length. Odd series stop at
