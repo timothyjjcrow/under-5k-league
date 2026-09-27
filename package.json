@@ -7,6 +7,10 @@
   },
   "scripts": {
     "dev": "next dev",
+    "fixture:signups": "tsx scripts/fixture-server.ts signups",
+    "fixture:regular": "tsx scripts/fixture-server.ts regular",
+    "fixture:playoffs": "tsx scripts/fixture-server.ts playoffs",
+    "fixture:complete": "tsx scripts/fixture-server.ts complete",
     "build": "next build",
     "build:vercel": "node scripts/vercel-build.mjs",
     "start": "next start",

@@ -18,6 +18,8 @@
 
 # next.js
 /.next/
+# per-server build folders (NEXT_DIST_DIR, e.g. the fixture:* demo servers)
+/.next-*/
 /out/
 
 # production

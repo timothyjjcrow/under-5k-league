@@ -389,8 +389,8 @@ jobs:
       - name: Run e2e (seeds the DB + boots next dev)
         run: npm run test:e2e
       - name: Run mid-season e2e (fixture DB, own port)
-        # Sequential on purpose — Next's project-dir lock allows one dev
-        # server per repo, so the suites can never run simultaneously.
+        # Sequential on purpose — Next allows one dev server per build
+        # folder and all three suites build into .next.
         run: npm run test:e2e:mid
       - name: Run postseason e2e (fixture DB, own port)
         run: npm run test:e2e:postseason

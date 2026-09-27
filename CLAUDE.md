@@ -289,8 +289,8 @@ has to justify it.
   "31 / 30 players to start" over a pegged bar — a fraction above 1 is the
   universal shape of "sold out", rendered to exactly the person deciding
   whether to sign up. `capacityInfo` carries `extra`/`leftover`/`toNextTeam`
-  for that; keep them uncapped. `scripts/seed-signups-fixture.ts` +
-  `.claude/launch.json`'s `signups-fixture` entry seed and serve this state
+  for that; keep them uncapped. `npm run fixture:signups`
+  (`scripts/seed-signups-fixture.ts`) seeds and serves this state
   (seed-fixture.ts has no SIGNUPS mode).
 - **Feedback**: risky server actions return `ActionResult`
   (`src/lib/action-result.ts`) instead of throwing; the UI wraps them in
@@ -304,8 +304,10 @@ has to justify it.
 - Run `npx tsc --noEmit` for a fast type check; `npm test` for unit;
   `npm run test:e2e` for Playwright — fully isolated: it schema-pushes and
   reseeds a DEDICATED `prisma/e2e.db` and serves it on port 3210 (never
-  dev.db/:3000, safe to run any time). Caveat: Next 16's project-dir lock
-  means it can't start while another `next dev` runs from this repo.
+  dev.db/:3000, safe to run any time). Caveat: Next 16 locks one dev server
+  per BUILD FOLDER, and the three browser suites and `npm run dev` all build
+  into `.next`, so only one of them runs at a time (the `fixture:*` demo
+  servers use their own folders and run alongside any of them).
 - `npm run lint:unused-exports` (`scripts/unused-exports.mjs`) lists `src/lib`
   exports that no production file imports: dead, or kept alive only by their
   own tests. Advisory, not a CI gate (test hooks such as `setRaceHook` are
@@ -321,7 +323,8 @@ has to justify it.
   whose failure output names the offending elements and the scroll chain.
   Every spec asserts zero uncaught client errors (`trackPageErrors`) — the
   crash class raw-HTML checks can't see. Can't run SIMULTANEOUSLY with the
-  main e2e (one dev server per repo) — CI runs them sequentially.
+  main e2e (both build into `.next`, one dev server per build folder) — CI
+  runs them sequentially.
 
 ## Roster moves (done)
 
@@ -2887,23 +2890,49 @@ ask it made twice. What that turned into:
 
 ## Verifying UI against a fixture (workflow note)
 
-- `scripts/seed-fixture.ts` seeds a throwaway DB into a demo state:
-  `FIXTURE_MODE=regular` (last week open — clinch marks, run-in, byes with
-  `FIXTURE_TEAMS=5`), `complete` (champion crowned), default (mid-playoffs
-  bracket with a TBD final). It REFUSES any `DATABASE_URL` without "fixture"
-  in it — always pass one explicitly; the generated Prisma client's baked
-  .env can silently point at dev.db.
+- **One command per league state**, each on its own port, database and
+  build folder, so all four run at once from this checkout, beside
+  `npm run dev`:
+
+      npm run fixture:signups    # SIGNUPS, 37 players       → :3111
+      npm run fixture:regular    # last regular week open    → :3116
+      npm run fixture:playoffs   # mid-playoffs, TBD final   → :3117
+      npm run fixture:complete   # champion crowned          → :3118
+
+  `scripts/fixture-server.ts` pushes the schema into
+  `prisma/<state>-fixture.db`, runs the seeder, then serves it with
+  `NEXT_DIST_DIR=.next-fixture-<state>` and dev login on (`/api/auth/dev`,
+  `?admin=1` for an admin). Every start reseeds; `-- --no-seed` serves the
+  existing file and `-- --dry-run` prints the target and commands. Seeder knobs
+  pass through (`PLAYERS`/`CAPTAINS` for signups, `FIXTURE_TEAMS` for the
+  others: `FIXTURE_TEAMS=5 npm run fixture:regular` shows byes). The
+  `.claude/launch.json` entries of the same names run these commands.
+- **Why it works**: Next 16 takes its dev lock inside the build folder, and
+  `next.config.ts` reads `distDir` from `NEXT_DIST_DIR` (only `.next` or
+  `.next-<name>`; unset everywhere else, including deploys). The
+  `.next-*` folders are gitignored and ESLint-ignored, and `tsconfig.json`
+  already lists each fixture folder's `types` globs so starting a server
+  doesn't rewrite it. A new fixture folder name needs the same two tsconfig
+  lines. `next-env.d.ts` (gitignored) follows whichever server started last;
+  that is harmless.
+- `scripts/seed-fixture.ts` seeds the demo states: `FIXTURE_MODE=regular`
+  (last week open — clinch marks, run-in, byes with `FIXTURE_TEAMS=5`),
+  `complete` (champion crowned), default (mid-playoffs bracket with a TBD
+  final). It REFUSES every database except the exact files listed in
+  `src/lib/fixture-database.ts` (the browser suites' and the demo servers');
+  the signups seeder refuses any `DATABASE_URL` without "fixture" in it. The
+  generated Prisma client's baked .env can silently point at dev.db, which is
+  why the launcher always sets the URL itself.
 - Fixture box scores carry the full modern line shape (durations, kill
   scores, benchmarks for report cards — the first two games ever stay
   legacy-shaped to verify degradation), every match gets its league-night
   `scheduledAt` (so `/api/calendar` has VEVENTs), and completed playoff
   matches get games too.
-- The dev server locks its project dir (Next 16) and dev.db may belong to
-  another session — never reseed it. To run a second server: copy the repo
-  elsewhere (`rsync` minus node_modules/.next/dev.db, then
-  `cp -Rc node_modules` — APFS clonefile; a symlink breaks Turbopack), point
-  its `.env` at an absolute fixture `DATABASE_URL`, and `next dev -p 3111`
-  from the copy.
+- dev.db may belong to another session — never reseed it. For any other
+  one-off server, give it its own build folder the same way:
+  `NEXT_DIST_DIR=.next-<name> DATABASE_URL=file:$PWD/prisma/<name>.db npx next dev -p <port>`.
+  Next then appends that folder's two `types` globs to `tsconfig.json` on
+  start; add them on purpose or leave that change out of your commit.
 
 ## Performance (done — keep following these)
 
