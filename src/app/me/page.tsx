@@ -630,13 +630,35 @@ export default async function MePage({
                         desc="Fill in for teams when someone can't play."
                       />
                     </div>
-                    {!signupsOpen ? (
+                    {/* Captain volunteering is a signup-phase choice for full
+                        players, so it sits with the participation choice and
+                        only while signups are open. Afterwards the server keeps
+                        the stored answer (a missing box submits nothing). */}
+                    {signupsOpen ? (
+                      <label className="mt-2 flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
+                        <input
+                          type="checkbox"
+                          name="wantsCaptain"
+                          defaultChecked={form?.wantsCaptain ?? false}
+                          className="h-4 w-4 accent-[var(--color-brand)]"
+                        />
+                        <span className="text-sm">
+                          <span className="block">
+                            I&apos;d like to be considered as a team captain
+                          </span>
+                          <span className="block text-xs text-muted">
+                            Applies to full-player signups only and is public
+                            on the player pool and profile.
+                          </span>
+                        </span>
+                      </label>
+                    ) : (
                       <p className="mt-2 text-xs text-muted">
                         Full-player signups are closed. Standins can still
                         register through the draft, regular season and playoffs
                         when teams may need cover.
                       </p>
-                    ) : null}
+                    )}
                   </div>
 
                   <div>
@@ -700,13 +722,13 @@ export default async function MePage({
                     ) : null}
                   </div>
 
-                  <details className="rounded-lg border border-line p-3">
-                    <summary className="min-h-11 cursor-pointer font-medium">Optional scouting profile</summary>
-                    <div className="space-y-5 pt-3">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
+                  {/* Out of the optional disclosure: one tap each, and the
+                      pool, the home page's role mix and the admin's "blank
+                      signup" check all read them. Still never required. */}
+                  <fieldset>
+                    <legend className="mb-1.5 block text-sm font-medium">
                       Preferred roles
-                    </label>
+                    </legend>
                     <div className="flex flex-wrap gap-2">
                       {DOTA_ROLES.map((r) => (
                         <label
@@ -728,11 +750,15 @@ export default async function MePage({
                       ))}
                     </div>
                     <p className="mt-1 text-xs text-muted">
+                      Optional. Tick every position you&apos;re happy to play.
                       Shown publicly on your player profile and in the player
                       pool.
                     </p>
-                  </div>
+                  </fieldset>
 
+                  <details className="rounded-lg border border-line p-3">
+                    <summary className="min-h-11 cursor-pointer font-medium">Optional scouting profile</summary>
+                    <div className="space-y-5 pt-3">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium">
                       Favorite heroes
@@ -795,26 +821,6 @@ export default async function MePage({
                       Don&apos;t put private contact details here.
                     </p>
                   </div>
-
-                  <label className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-                    <input
-                      type="checkbox"
-                      name="wantsCaptain"
-                      defaultChecked={form?.wantsCaptain ?? false}
-                      disabled={!signupsOpen}
-                      className="h-4 w-4 accent-[var(--color-brand)]"
-                    />
-                    <span className="text-sm">
-                      <span className="block">
-                        I&apos;d like to be considered as a team captain
-                      </span>
-                      <span className="block text-xs text-muted">
-                        {signupsOpen
-                          ? "Applies to full-player signups only and is public on the player pool and profile."
-                          : "Captain volunteering closed when player signups ended."}
-                      </span>
-                    </span>
-                  </label>
 
                     </div>
                   </details>
