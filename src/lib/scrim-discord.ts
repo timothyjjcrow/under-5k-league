@@ -24,6 +24,53 @@ function matchup(hostTeamName: string, opponentTeamName: string | null): string 
     : `**${name(hostTeamName)}**`;
 }
 
+/** To the OTHER captains: a new time they could claim. */
+export function scrimPostedMessage(m: {
+  scrimId: string;
+  hostTeamName: string;
+  whenMs: number;
+  bestOf: number;
+}): string {
+  return `🤝 **${name(m.hostTeamName)}** posted a scrim time: ${stamp(m.whenMs)} (best of ${m.bestOf}). Captains, claim it here: ${scrimLink(m.scrimId)}`;
+}
+
+/**
+ * To the POSTING captain: their time was claimed, who to talk to, and which
+ * of their other open times within four hours were withdrawn by the booking
+ * (joinScrim cancels them, and nothing else says so).
+ */
+export function scrimClaimedMessage(m: {
+  scrimId: string;
+  hostTeamName: string;
+  opponentTeamName: string;
+  opponentCaptainName: string;
+  whenMs: number;
+  bestOf: number;
+  withdrawnHostOffersMs: number[];
+}): string {
+  const withdrawn = m.withdrawnHostOffersMs.length
+    ? ` Your other open ${m.withdrawnHostOffersMs.length === 1 ? "time" : "times"} within four hours (${m.withdrawnHostOffersMs
+        .map((ms) => stamp(ms, "f"))
+        .join(", ")}) ${m.withdrawnHostOffersMs.length === 1 ? "was" : "were"} withdrawn.`
+    : "";
+  return `✅ **${name(m.opponentTeamName)}** claimed your scrim time on ${stamp(m.whenMs)} (best of ${m.bestOf}). You host: make the lobby and send **${name(m.opponentCaptainName)}** the name and password on Discord.${withdrawn} ${scrimLink(m.scrimId)}`;
+}
+
+/** To the captain(s) who didn't cancel it: the booking is off. */
+export function scrimCancelledMessage(m: {
+  hostTeamName: string;
+  opponentTeamName: string | null;
+  whenMs: number;
+  /** Null when an admin who captains neither side cancelled it. */
+  cancellerName: string | null;
+}): string {
+  const who = m.cancellerName ? `**${name(m.cancellerName)}**` : "An admin";
+  const what = m.opponentTeamName
+    ? `the ${matchup(m.hostTeamName, m.opponentTeamName)} scrim`
+    : `${matchup(m.hostTeamName, null)}'s open scrim time`;
+  return `❌ ${who} cancelled ${what} on ${stamp(m.whenMs)}. Post or claim another time: <${resolveSiteUrl()}/scrims>`;
+}
+
 /**
  * To both captains of a scrim an official fixture overrode. League matches
  * come first, so a booked scrim is cancelled; one already under way is kept

@@ -82,3 +82,36 @@ export function scrimJoinCheck(m: {
   }
   return { canJoin: true, teamName: m.viewerTeam.name };
 }
+
+/**
+ * The claiming captain's toast: booked, who hosts (so they know whose
+ * message to wait for), and which OPEN times the booking withdrew — theirs
+ * and the posting team's — because nothing else on the page says so.
+ */
+export function scrimBookedToast(m: {
+  hostTeamName: string;
+  hostCaptainName: string;
+  ownWithdrawn: number;
+  hostWithdrawn: number;
+}): string {
+  const times = (count: number) =>
+    count === 1 ? "open time" : `${count} other open times`;
+  const parts = [
+    `Scrim booked. ${m.hostCaptainName} (${m.hostTeamName}) hosts and will send you the lobby details on Discord.`,
+  ];
+  if (m.ownWithdrawn > 0) {
+    parts.push(
+      m.ownWithdrawn === 1
+        ? "Your other open time within four hours of it was withdrawn."
+        : `Your ${times(m.ownWithdrawn)} within four hours of it were withdrawn.`,
+    );
+  }
+  if (m.hostWithdrawn > 0) {
+    parts.push(
+      m.hostWithdrawn === 1
+        ? `${m.hostTeamName}'s other open time within four hours of it was withdrawn.`
+        : `${m.hostTeamName}'s ${times(m.hostWithdrawn)} within four hours of it were withdrawn.`,
+    );
+  }
+  return parts.join(" ");
+}

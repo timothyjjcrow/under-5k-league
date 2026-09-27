@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SCRIM_STATUS } from "./constants";
-import { scrimHostLine, scrimJoinCheck } from "./scrim-view";
+import { scrimBookedToast, scrimHostLine, scrimJoinCheck } from "./scrim-view";
 import { SCRIM_PAST_GRACE_MS } from "./scrim-window";
 
 describe("scrimHostLine", () => {
@@ -96,5 +96,35 @@ describe("scrimJoinCheck", () => {
     expect(scrimJoinCheck({ ...base, scheduledAtMs: edge })?.canJoin).toBe(true);
     const passed = scrimJoinCheck({ ...base, scheduledAtMs: edge - 1 });
     expect(passed && !passed.canJoin && passed.reason).toMatch(/time has passed/);
+  });
+});
+
+describe("scrimBookedToast", () => {
+  const base = {
+    hostTeamName: "Radiant Raccoons",
+    hostCaptainName: "Raccoon Cap",
+    ownWithdrawn: 0,
+    hostWithdrawn: 0,
+  };
+
+  it("says who hosts", () => {
+    expect(scrimBookedToast(base)).toBe(
+      "Scrim booked. Raccoon Cap (Radiant Raccoons) hosts and will send you the lobby details on Discord.",
+    );
+  });
+
+  it("says which open times the booking withdrew, for each side", () => {
+    expect(scrimBookedToast({ ...base, ownWithdrawn: 1 })).toContain(
+      "Your other open time within four hours of it was withdrawn.",
+    );
+    expect(scrimBookedToast({ ...base, ownWithdrawn: 2 })).toContain(
+      "Your 2 other open times within four hours of it were withdrawn.",
+    );
+    expect(scrimBookedToast({ ...base, hostWithdrawn: 1 })).toContain(
+      "Radiant Raccoons's other open time within four hours of it was withdrawn.",
+    );
+    expect(scrimBookedToast({ ...base, hostWithdrawn: 3 })).toContain(
+      "Radiant Raccoons's 3 other open times within four hours of it were withdrawn.",
+    );
   });
 });

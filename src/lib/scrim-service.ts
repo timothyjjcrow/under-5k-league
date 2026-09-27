@@ -33,6 +33,7 @@ type Db = Prisma.TransactionClient;
 type ScrimAccessRow = {
   id: string;
   seasonId: string;
+  scheduledAt: Date;
   hostTeamId: string;
   opponentTeamId: string | null;
   status: string;
@@ -50,10 +51,33 @@ export type ScrimMutationSummary = {
   scheduledAt: Date;
   bestOf: number;
   status: string;
-  hostTeam: { id: string; name: string };
-  opponentTeam: { id: string; name: string } | null;
+  hostTeam: { id: string; name: string; captainName: string };
+  opponentTeam: { id: string; name: string; captainName: string } | null;
   snapshottedParticipants: number;
   cancelledOpenOffers: number;
+  /**
+   * The OPEN times a booking withdrew (joinScrim cancels each booked team's
+   * other offers within four hours). Reported in the toast and the ping,
+   * because nothing else tells the captains their other times are gone.
+   */
+  withdrawnOffers: { teamId: string; scheduledAt: Date }[];
+  /** The captains the action pings (never the one who acted): every other
+   *  active captain for a new time, the posting captain for a claim. */
+  notifyUserIds: string[];
+};
+
+/** What cancelScrim reports so its action can tell the other side. */
+export type ScrimCancelSummary = {
+  id: string;
+  scheduledAt: Date;
+  hostTeamName: string;
+  opponentTeamName: string | null;
+  /** True when a captain of the scrim cancelled it (named in the ping);
+   *  false for an admin who captains neither side. */
+  byCaptain: boolean;
+  /** The captains who didn't cancel it. Empty when a captain withdraws
+   *  their own unclaimed time — nobody else has to do anything. */
+  notifyUserIds: string[];
 };
 
 export type ScrimManagementAccess = {
@@ -146,7 +170,12 @@ async function requireActiveScrimSeason(db: Db) {
 async function requireCaptainTeam(db: Db, viewerId: string, seasonId: string) {
   const team = await db.team.findUnique({
     where: { seasonId_captainId: { seasonId, captainId: viewerId } },
-    select: { id: true, name: true, withdrawn: true },
+    select: {
+      id: true,
+      name: true,
+      withdrawn: true,
+      captain: { select: { name: true } },
+    },
   });
   if (!team) {
     throw new UserFacingError("Only an active league team captain can do that");
@@ -154,7 +183,12 @@ async function requireCaptainTeam(db: Db, viewerId: string, seasonId: string) {
   if (team.withdrawn) {
     throw new UserFacingError("Withdrawn teams cannot schedule scrims");
   }
-  return team;
+  return {
+    id: team.id,
+    name: team.name,
+    withdrawn: team.withdrawn,
+    captainName: team.captain.name,
+  };
 }
 
 async function assertedAdmin(
@@ -275,6 +309,7 @@ async function loadScrimAccessRow(
     select: {
       id: true,
       seasonId: true,
+      scheduledAt: true,
       hostTeamId: true,
       opponentTeamId: true,
       status: true,
@@ -426,8 +461,9 @@ export async function createScrim(
 ): Promise<ScrimMutationSummary> {
   assertSaneScrimTime(scheduledAt);
   assertBestOf(bestOf);
+  let posted: Omit<ScrimMutationSummary, "notifyUserIds">;
   try {
-    return await prisma.$transaction(
+    posted = await prisma.$transaction(
       async (tx) => {
         assertSaneScrimTime(scheduledAt);
         const season = await requireActiveScrimSeason(tx);
@@ -457,10 +493,11 @@ export async function createScrim(
         }
         return {
           ...scrim,
-          hostTeam: { id: team.id, name: team.name },
+          hostTeam: { id: team.id, name: team.name, captainName: team.captainName },
           opponentTeam: null,
           snapshottedParticipants: participants.length,
           cancelledOpenOffers: 0,
+          withdrawnOffers: [],
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -473,6 +510,22 @@ export async function createScrim(
     }
     throw error;
   }
+  // The captains who could claim it: every other team still in the league.
+  // Read after the commit — a ping list has no business in the transaction.
+  const otherCaptains = await prisma.team.findMany({
+    where: {
+      seasonId: posted.seasonId,
+      withdrawn: false,
+      id: { not: posted.hostTeam.id },
+    },
+    select: { captainId: true },
+  });
+  return {
+    ...posted,
+    notifyUserIds: otherCaptains
+      .map((team) => team.captainId)
+      .filter((captainId) => captainId !== viewerId),
+  };
 }
 
 /** An opposing captain atomically claims an OPEN offer for their own team. */
@@ -496,7 +549,13 @@ export async function joinScrim(
             bestOf: true,
             status: true,
             hostTeam: {
-              select: { id: true, name: true, withdrawn: true },
+              select: {
+                id: true,
+                name: true,
+                withdrawn: true,
+                captainId: true,
+                captain: { select: { name: true } },
+              },
             },
           },
         });
@@ -576,6 +635,25 @@ export async function joinScrim(
           await tx.scrimParticipant.createMany({ data: participants });
         }
 
+        // Which offers the sweep below withdraws, so the toast and the
+        // posting captain's ping can say so. Same WHERE, same Serializable
+        // snapshot: the rows read here are the rows the sweep cancels (a
+        // rival that changes one aborts this transaction instead). An OPEN
+        // offer has no opponent, so its host is the team that posted it.
+        const withdrawing = await tx.scrim.findMany({
+          where: {
+            id: { not: offer.id },
+            seasonId: season.id,
+            status: SCRIM_STATUS.OPEN,
+            scheduledAt: scrimCollisionRange(offer.scheduledAt),
+            OR: [
+              { hostTeamId: { in: [offer.hostTeamId, joiningTeam.id] } },
+              { opponentTeamId: { in: [offer.hostTeamId, joiningTeam.id] } },
+            ],
+          },
+          orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+          select: { hostTeamId: true, scheduledAt: true },
+        });
         const cancelled = await tx.scrim.updateMany({
           where: {
             id: { not: offer.id },
@@ -596,10 +674,23 @@ export async function joinScrim(
           scheduledAt: offer.scheduledAt,
           bestOf: offer.bestOf,
           status: SCRIM_STATUS.SCHEDULED,
-          hostTeam: { id: offer.hostTeam.id, name: offer.hostTeam.name },
-          opponentTeam: { id: joiningTeam.id, name: joiningTeam.name },
+          hostTeam: {
+            id: offer.hostTeam.id,
+            name: offer.hostTeam.name,
+            captainName: offer.hostTeam.captain.name,
+          },
+          opponentTeam: {
+            id: joiningTeam.id,
+            name: joiningTeam.name,
+            captainName: joiningTeam.captainName,
+          },
           snapshottedParticipants: participants.length,
           cancelledOpenOffers: cancelled.count,
+          withdrawnOffers: withdrawing.map((withdrawn) => ({
+            teamId: withdrawn.hostTeamId,
+            scheduledAt: withdrawn.scheduledAt,
+          })),
+          notifyUserIds: [offer.hostTeam.captainId],
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -624,9 +715,9 @@ export async function cancelScrim(
   viewerId: string,
   isAdmin: boolean,
   scrimId: string,
-): Promise<void> {
+): Promise<ScrimCancelSummary> {
   try {
-    await prisma.$transaction(
+    return await prisma.$transaction(
       async (tx) => {
         const season = await requireActiveScrimSeason(tx);
         const [scrim, admin] = await Promise.all([
@@ -663,6 +754,18 @@ export async function cancelScrim(
         if (cancelled.count !== 1) {
           throw new UserFacingError("That scrim can no longer be cancelled");
         }
+        const captainIds = [
+          scrim.hostTeam.captainId,
+          ...(scrim.opponentTeam ? [scrim.opponentTeam.captainId] : []),
+        ];
+        return {
+          id: scrim.id,
+          scheduledAt: scrim.scheduledAt,
+          hostTeamName: scrim.hostTeam.name,
+          opponentTeamName: scrim.opponentTeam?.name ?? null,
+          byCaptain: isCaptain,
+          notifyUserIds: captainIds.filter((id) => id !== viewerId),
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
