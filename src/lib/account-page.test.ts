@@ -10,6 +10,7 @@ import {
   mmrPreviewLine,
   mmrRulesLine,
   rejoinPausedByDraft,
+  returningJoinPlan,
   signupSummary,
   withdrawConfirmText,
   type AccountStepInput,
@@ -545,5 +546,76 @@ describe("favoriteHeroSuggestions", () => {
 
   it("skips a hero id the static table doesn't know", () => {
     expect(favoriteHeroSuggestions("", snapshot([9999, 2]))).toEqual([2]);
+  });
+});
+
+describe("returningJoinPlan", () => {
+  // Legend 3 (tier 53): the medal window is 2965–3964.
+  const LEGEND_3 = 53;
+  const lastSeason = {
+    type: "PLAYER",
+    mmr: 3600,
+    roles: "1,2",
+    favoriteHeroes: "",
+    wantsCaptain: true,
+  };
+  const plan = (
+    extra: Partial<Parameters<typeof returningJoinPlan>[0]> = {},
+    previous: Partial<typeof lastSeason> = {},
+  ) =>
+    returningJoinPlan({
+      seasonName: "Season 10",
+      previous: { ...lastSeason, ...previous },
+      rankTier: LEGEND_3,
+      playerChoiceOpen: true,
+      ...extra,
+    });
+
+  it("offers a former full player one Join button with last season's answers", () => {
+    expect(plan()).toEqual({
+      summary: "Full player · 3600 MMR · Carry, Mid · Captain volunteer",
+      mmrLine: "You'll be listed at 3600 MMR.",
+      buttons: [{ type: "PLAYER", label: "Join Season 10", primary: true }],
+      note: null,
+    });
+  });
+
+  it("gives a former standin two choices instead of pre-setting Standin", () => {
+    const standin = plan({}, { type: "STANDIN" });
+    expect(standin?.buttons.map((b) => [b.type, b.label])).toEqual([
+      ["PLAYER", "Join as a full player"],
+      ["STANDIN", "Join as a standin"],
+    ]);
+    // Standins never enter the captain pool, whatever last season stored.
+    expect(standin?.summary).not.toContain("Captain");
+  });
+
+  it("offers only the standin signup once full-player signups are closed", () => {
+    const closed = plan({ playerChoiceOpen: false });
+    expect(closed?.buttons).toEqual([
+      { type: "STANDIN", label: "Join Season 10 as a standin", primary: true },
+    ]);
+    expect(closed?.note).toMatch(/full-player signups are closed/i);
+    expect(plan({ playerChoiceOpen: false }, { type: "STANDIN" })?.note).toBeNull();
+  });
+
+  it("shows the MMR that will be saved against today's medal", () => {
+    // Last season's number no longer fits the current medal: the clamp
+    // saveRegistration applies is said before the tap, not after.
+    expect(plan({}, { mmr: 4400 })?.mmrLine).toBe(
+      "4400 is outside your medal's range, so you'll be listed at 2965 MMR.",
+    );
+    expect(plan({}, { mmr: 0 })?.mmrLine).toBe(
+      "Left blank, you'll be listed at 2965 MMR, your medal's low end.",
+    );
+    expect(plan({ rankTier: null }, { mmr: 0 })?.mmrLine).toBe(
+      "You'll be listed at an unknown MMR.",
+    );
+  });
+
+  it("offers no one-tap join the signup checks would refuse", () => {
+    // Over the ceiling last season, or a medal that is over it now.
+    expect(plan({ rankTier: null }, { mmr: 5400 })).toBeNull();
+    expect(plan({ rankTier: 80 })).toBeNull();
   });
 });

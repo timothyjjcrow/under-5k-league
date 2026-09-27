@@ -40,11 +40,12 @@ describe("public profile explanations", () => {
 
   it("says once that the signup is public and rejects misleading provider copy", () => {
     // One blanket statement covers every field on the form (it replaced a
-    // per-category list plus a "shown publicly" line under each field). The
-    // medal is named because it is public without being on the form.
+    // per-category list plus a "shown publicly" line under each field), and
+    // sits beside the returning player's one-tap join too. The medal is named
+    // because it is public without being on the form.
     const notice = me.replace(/\s+/g, " ");
     for (const disclosure of [
-      "Everything on this form, and your medal, is public in the player pool and on your profile.",
+      "Everything in your signup, and your medal, is public in the player pool and on your profile.",
       "Your Discord is only shown to league admins and players signed up this season.",
       "Keep contact, health and availability details out of the About you box.",
       "Joining lets the league refresh your public Steam and Dota data.",

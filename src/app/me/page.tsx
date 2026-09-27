@@ -36,6 +36,7 @@ import {
   mmrLeadLine,
   mmrRulesLine,
   rejoinPausedByDraft,
+  returningJoinPlan,
   signupSummary,
   withdrawConfirmText,
   type AccountStepInput,
@@ -69,6 +70,7 @@ import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
 import { MmrField } from "@/components/mmr-field";
 import { SavedSignupForm } from "@/components/saved-signup-form";
+import { ReturningJoinCard } from "@/components/returning-join-card";
 import { AwayDatesCard } from "@/components/away-dates-card";
 import { listAwayFixtures } from "@/lib/availability-service";
 import {
@@ -191,6 +193,37 @@ export default async function MePage({
     ? draftReadiness(reg, season?.draftRevision ?? 0)
     : DRAFT_READINESS.AWAITING;
 
+  // The draft time printed on the signup card, posted back with any join so
+  // saveRegistration can count the join as confirming it (only if the
+  // season still has exactly this schedule when it saves).
+  const seenDraftFields =
+    season?.draftAt && draftConfirmationOpen
+      ? {
+          seenDraftSeasonId: season.id,
+          seenDraftRevision: String(season.draftRevision),
+          seenDraftAtTs: String(season.draftAt.getTime()),
+        }
+      : undefined;
+  // A returning player (a signup from an earlier season, none in this one)
+  // gets a one-tap join of last season's answers, run through the same
+  // saveRegistration as the form. Null when that can't be offered honestly
+  // (the medal or last season's MMR is over the ceiling): the form says why.
+  const returningPlan =
+    season && !reg && previous && !medalBlocked
+      ? returningJoinPlan({
+          seasonName: season.name,
+          previous,
+          rankTier: dbUser?.rankTier ?? null,
+          playerChoiceOpen: !playerLocked,
+        })
+      : null;
+  // The form's Participation default. A returning standin is NOT pre-set to
+  // Standin from last season: neither tile is ticked and the form asks.
+  const typeDefault: string | null = reg
+    ? reg.type
+    : previous?.type === REGISTRATION_TYPE.STANDIN
+      ? null
+      : REGISTRATION_TYPE.PLAYER;
   // Someone who can press Join as a full player right now: that submit also
   // confirms the draft time printed above the form (saveRegistration).
   const joinConfirmsDraft =
@@ -569,7 +602,25 @@ export default async function MePage({
                         : undefined
                   }
                 />
-                {!reg && previous ? (
+                {returningPlan && previous ? (
+                  <ReturningJoinCard
+                    plan={returningPlan}
+                    seasonName={previous.season.name}
+                    roles={previous.roles}
+                    action={saveRegistration}
+                    notice={<SignupPublicNotice />}
+                    hidden={{
+                      ...seenDraftFields,
+                      mmr: previous.mmr > 0 ? String(previous.mmr) : "",
+                      favoriteHeroes: previous.favoriteHeroes,
+                      about: aboutText(previous),
+                      ...(previous.wantsCaptain &&
+                      previous.type === REGISTRATION_TYPE.PLAYER
+                        ? { wantsCaptain: "on" }
+                        : {}),
+                    }}
+                  />
+                ) : !reg && previous ? (
                   <div className="flex items-start gap-2 rounded-lg border border-info/40 bg-info/10 px-3 py-2 text-xs">
                     <span aria-hidden>↩️</span>
                     <span>
@@ -580,8 +631,15 @@ export default async function MePage({
                   </div>
                 ) : null}
                 <SavedSignupForm
-                  saved={isRegistered}
-                  summary={reg && isRegistered ? signupSummary(reg) : undefined}
+                  saved={isRegistered || !!returningPlan}
+                  label={returningPlan ? "Change answers" : undefined}
+                  summary={
+                    reg && isRegistered
+                      ? signupSummary(reg)
+                      : returningPlan
+                        ? "Opens the full signup form"
+                        : undefined
+                  }
                 >
                 <ActionForm
                   action={saveRegistration}
@@ -590,27 +648,10 @@ export default async function MePage({
                   // The draft time printed above this form. Joining the pool
                   // with it counts as confirming it; the server stamps that
                   // only if these still match the season when it saves.
-                  hidden={
-                    season.draftAt && draftConfirmationOpen
-                      ? {
-                          seenDraftSeasonId: season.id,
-                          seenDraftRevision: String(season.draftRevision),
-                          seenDraftAtTs: String(season.draftAt.getTime()),
-                        }
-                      : undefined
-                  }
+                  hidden={seenDraftFields}
                 >
-                  {/* Said once, in neutral colours: the accent box this used
-                      to be looked exactly like the "Confirmation needed" box,
-                      and each field then repeated "shown publicly". */}
-                  <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs leading-relaxed text-muted">
-                    Everything on this form, and your medal, is public in the
-                    player pool and on your profile. Your Discord is only
-                    shown to league admins and players signed up this season.
-                    Keep contact, health and availability details out of the
-                    About you box. Joining lets the league refresh your
-                    public Steam and Dota data.
-                  </p>
+                  {/* The one-tap card above already says it. */}
+                  {returningPlan ? null : <SignupPublicNotice />}
 
                   {playerLocked ? (
                     /* Only a standin signup is possible here (signups closed,
@@ -637,14 +678,16 @@ export default async function MePage({
                         <RadioTile
                           name="type"
                           value="PLAYER"
-                          defaultChecked={form?.type !== "STANDIN"}
+                          defaultChecked={typeDefault === REGISTRATION_TYPE.PLAYER}
+                          required={typeDefault === null}
                           title="Full player"
                           desc="Get drafted onto a team and play every week."
                         />
                         <RadioTile
                           name="type"
                           value="STANDIN"
-                          defaultChecked={form?.type === "STANDIN"}
+                          defaultChecked={typeDefault === REGISTRATION_TYPE.STANDIN}
+                          required={typeDefault === null}
                           title="Standin"
                           desc="Fill in for teams when someone can't play."
                         />
@@ -1017,18 +1060,38 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
   );
 }
 
+/**
+ * The one line that says what joining makes public. Said once, in neutral
+ * colours: the accent box this used to be looked exactly like the
+ * "Confirmation needed" box, and each field then repeated "shown publicly".
+ * Rendered wherever a Join button is, since joining is the consent.
+ */
+function SignupPublicNotice() {
+  return (
+    <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs leading-relaxed text-muted">
+      Everything in your signup, and your medal, is public in the player
+      pool and on your profile. Your Discord is only shown to league admins and
+      players signed up this season. Keep contact, health and availability
+      details out of the About you box. Joining lets the league refresh your
+      public Steam and Dota data.
+    </p>
+  );
+}
+
 function RadioTile({
   name,
   value,
   title,
   desc,
   defaultChecked,
+  required,
 }: {
   name: string;
   value: string;
   title: string;
   desc: string;
   defaultChecked?: boolean;
+  required?: boolean;
 }) {
   return (
     <label className="flex cursor-pointer gap-3 rounded-lg border border-line p-3 transition-colors hover:border-muted/60 has-[:checked]:border-accent has-[:checked]:bg-accent/10">
@@ -1037,6 +1100,7 @@ function RadioTile({
         name={name}
         value={value}
         defaultChecked={defaultChecked}
+        required={required}
         className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
       />
       <span>

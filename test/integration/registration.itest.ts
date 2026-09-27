@@ -1607,3 +1607,55 @@ describe("saveRegistration — the About you box", () => {
     });
   });
 });
+
+// /me's "Welcome back" card posts last season's answers to the same action as
+// the full form. It must get exactly the same checks: the medal clamp and the
+// phase rules, and the MMR the card promised is what is stored.
+describe("saveRegistration — a returning player's one-tap join", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  function oneTap(type: string, mmr: number, roles: string[]) {
+    const fd = new FormData();
+    fd.set("type", type);
+    fd.set("mmr", mmr > 0 ? String(mmr) : "");
+    for (const role of roles) fd.append("roles", role);
+    fd.set("favoriteHeroes", "Lion");
+    fd.set("about", "Support main");
+    return fd;
+  }
+
+  it("saves last season's answers, with today's medal clamp", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Returning Support");
+    // Legend 3 now: last season's 4400 is outside the medal's window.
+    await prisma.user.update({ where: { id: user.id }, data: { rankTier: 53 } });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, oneTap("PLAYER", 4400, ["4", "5"]));
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/MMR set to 2965/);
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      type: "PLAYER",
+      status: "ACTIVE",
+      mmr: 2965,
+      roles: "4,5",
+      favoriteHeroes: "Lion",
+      captainNote: "Support main",
+    });
+  });
+
+  it("still refuses a full-player join once signups have closed", async () => {
+    const season = await makeSeason({ status: "REGULAR_SEASON" });
+    const user = await makeUser("Late Returner");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const refused = await saveRegistration({}, oneTap("PLAYER", 3000, ["1"]));
+    expect(refused?.error).toBeTruthy();
+    expect(await regFor(season.id, user.id)).toBeNull();
+
+    const standin = await saveRegistration({}, oneTap("STANDIN", 3000, ["1"]));
+    expect(standin?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id))?.type).toBe("STANDIN");
+  });
+});

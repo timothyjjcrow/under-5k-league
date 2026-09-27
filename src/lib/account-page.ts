@@ -519,3 +519,74 @@ export function favoriteHeroSuggestions(
     .slice(0, 3)
     .map((h) => h.heroId);
 }
+
+export type ReturningJoinButton = {
+  /** The participation type the button submits. */
+  type: typeof REGISTRATION_TYPE.PLAYER | typeof REGISTRATION_TYPE.STANDIN;
+  label: string;
+  primary: boolean;
+};
+
+export type ReturningJoinPlan = {
+  /** Last season's answers in one line ("Full player · 3600 MMR · Mid"). */
+  summary: string;
+  /** The MMR that will actually be saved, judged against today's medal. */
+  mmrLine: string;
+  buttons: ReturningJoinButton[];
+  /** Said when last season's type isn't on offer any more. */
+  note: string | null;
+};
+
+/**
+ * The one-tap "Welcome back" join on /me for a player with a signup from an
+ * earlier season and none in this one. The buttons submit last season's
+ * answers through the SAME saveRegistration as the full form, so the medal
+ * clamp, the ceiling and the phase rules all still apply; this only decides
+ * what to offer and what to say.
+ *
+ * - A former full player gets one "Join <season>" button.
+ * - A former standin gets two equal choices, full player or standin, instead
+ *   of the form's old habit of pre-selecting Standin from last season.
+ * - Once only a standin signup is possible (signups closed), one standin
+ *   button for everyone.
+ *
+ * Null when a one-tap join can't honestly be offered: last season's MMR is
+ * over the ceiling, or the current medal rules the player out. The full
+ * form, with its warnings, is the place for those.
+ */
+export function returningJoinPlan(input: {
+  seasonName: string;
+  previous: SignupSummaryInput;
+  rankTier: number | null;
+  /** Full player is a real choice right now (fullPlayerChoiceOpen). */
+  playerChoiceOpen: boolean;
+}): ReturningJoinPlan | null {
+  const window = mmrRangeForRankTier(input.rankTier);
+  if (window && window.min > HARD_MMR_CEILING) return null;
+  const preview = mmrPreviewLine({
+    typed: input.previous.mmr > 0 ? String(input.previous.mmr) : "",
+    rankTier: input.rankTier,
+    storedMmr: null,
+    frozen: false,
+  });
+  if (!preview || preview.tone === "danger") return null;
+
+  const { PLAYER, STANDIN } = REGISTRATION_TYPE;
+  const buttons: ReturningJoinButton[] = !input.playerChoiceOpen
+    ? [{ type: STANDIN, label: `Join ${input.seasonName} as a standin`, primary: true }]
+    : input.previous.type === STANDIN
+      ? [
+          { type: PLAYER, label: "Join as a full player", primary: true },
+          { type: STANDIN, label: "Join as a standin", primary: false },
+        ]
+      : [{ type: PLAYER, label: `Join ${input.seasonName}`, primary: true }];
+  return {
+    summary: signupSummary(input.previous),
+    mmrLine: preview.text,
+    buttons,
+    note:
+      !input.playerChoiceOpen && input.previous.type !== STANDIN
+        ? "Full-player signups are closed for this season, so you can join as a standin."
+        : null,
+  };
+}
