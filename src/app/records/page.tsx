@@ -37,7 +37,6 @@ const number = new Intl.NumberFormat("en-US");
 const PLAYER_GROUPS = [
   { id: "impact", title: "Impact & team play", description: "The biggest fight, support, and objective performances.", keys: ["kills", "assists", "heroDamage", "towerDamage", "heroHealing"] },
   { id: "economy", title: "Economy & lane", description: "Gold, experience, and lane control in one game.", keys: ["netWorth", "gpm", "xpm", "lastHits", "denies"] },
-  { id: "wild-card", title: "Wild card", description: "Not every record is one you set out to break.", keys: ["deaths"] },
 ] as const;
 const PLAYER_DESCRIPTION: Record<string, string> = {
   kills: "Finishing blows in a single game",
@@ -50,7 +49,6 @@ const PLAYER_DESCRIPTION: Record<string, string> = {
   xpm: "Experience earned per minute",
   lastHits: "Creeps and units last hit",
   denies: "Friendly units denied",
-  deaths: "The roughest single outing",
 };
 const GAME_DESCRIPTION: Record<string, string> = {
   longest: "A true marathon",

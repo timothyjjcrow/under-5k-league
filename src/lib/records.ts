@@ -122,12 +122,10 @@ const PLAYER_RECORDS: PlayerRecordSpec[] = [
     metric: (l) =>
       l.heroHealing != null && l.heroHealing > 0 ? l.heroHealing : null,
   },
-  {
-    key: "deaths",
-    title: "Most deaths",
-    emoji: "🪦",
-    metric: (l) => l.deaths,
-  },
+  // No "Most deaths" record on purpose: this is a league for learning the
+  // game, and an all-time board that names someone for their worst outing
+  // stays up for good. "Most kills in defeat" keeps the losing-side story
+  // without naming anyone.
 ];
 
 type GameRecordSpec = {

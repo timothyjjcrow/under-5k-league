@@ -149,6 +149,14 @@ describe("leagueRecords", () => {
     expect(book.players.find((r) => r.key === "heroDamage")).toMatchObject({ userId: "pusher", value: 25000 });
   });
 
+  it("never names a player for their worst game", () => {
+    const book = leagueRecords([
+      game({ lines: [line({ userId: "a", deaths: 25 }), line({ userId: "b", deaths: 1 })] }),
+    ]);
+    expect(book.players.map((r) => r.key)).not.toContain("deaths");
+    expect(book.players.some((r) => /death/i.test(r.title))).toBe(false);
+  });
+
   it("keeps game-story records grounded in a reported score", () => {
     const book = leagueRecords([
       game({ matchId: "close", radiantWin: true, radiantScore: 21, direScore: 20 }),
