@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   allHeroesKnown,
-  bestWinRates,
   heroMeta,
-  heroPoolSeenPercent,
   metaMinPicks,
-  type HeroMetaRow,
   type MetaGame,
   type MetaLine,
 } from "./hero-meta";
@@ -191,15 +188,6 @@ describe("catalogue boundary", () => {
     ).toBe(false);
     expect(allHeroesKnown([], known)).toBe(false);
   });
-
-  it("computes pool coverage from known unique ids only", () => {
-    const rows = [{ heroId: 1 }, { heroId: 1 }, { heroId: 99 }] as Pick<
-      HeroMetaRow,
-      "heroId"
-    >[];
-    expect(heroPoolSeenPercent(rows, known)).toBe(33);
-    expect(heroPoolSeenPercent(rows, new Set())).toBe(0);
-  });
 });
 
 describe("metaMinPicks", () => {
@@ -208,47 +196,5 @@ describe("metaMinPicks", () => {
     expect(metaMinPicks(10)).toBe(2);
     expect(metaMinPicks(25)).toBe(3);
     expect(metaMinPicks(60)).toBe(6);
-  });
-});
-
-describe("bestWinRates", () => {
-  it("uses the unrounded rate when displayed percentages tie", () => {
-    const base = heroMeta([
-      { radiantWin: true, lines: [line({ heroId: 1 })] },
-    ]).rows[0];
-    const lowerRate = { ...base, heroId: 1, picks: 27, wins: 17, losses: 10, winRate: 63 };
-    const higherRate = { ...base, heroId: 2, picks: 19, wins: 12, losses: 7, winRate: 63 };
-    expect(bestWinRates([lowerRate, higherRate], 2).map((row) => row.heroId)).toEqual([2, 1]);
-  });
-
-  it("filters below the floor and ranks by rate, then picks", () => {
-    const rows = heroMeta([
-      {
-        radiantWin: true,
-        lines: [
-          line({ heroId: 1, isRadiant: true }),
-          line({ heroId: 2, isRadiant: false }),
-        ],
-      },
-      {
-        radiantWin: true,
-        lines: [
-          line({ heroId: 1, isRadiant: true }),
-          line({ heroId: 3, isRadiant: true }),
-        ],
-      },
-      {
-        radiantWin: true,
-        lines: [
-          line({ heroId: 3, isRadiant: true }),
-          line({ heroId: 4, isRadiant: true }),
-        ],
-      },
-    ]).rows;
-
-    const best = bestWinRates(rows, 2);
-    // Heroes 2 (1 pick, 0%) and 4 (1 pick) are filtered out.
-    expect(best.map((r) => r.heroId)).toEqual([1, 3]);
-    expect(best.every((r) => r.picks >= 2)).toBe(true);
   });
 });

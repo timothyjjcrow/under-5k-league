@@ -567,17 +567,13 @@ describe("seedsFromFirstRound (bracket-view)", () => {
   });
 });
 
-describe("matchPhaseLabel / matchPhaseAbbrev", () => {
+describe("matchPhaseLabel", () => {
   it("labels regular weeks by number and playoff phases by name", async () => {
-    const { matchPhaseLabel, matchPhaseAbbrev } = await import("./schedule");
+    const { matchPhaseLabel } = await import("./schedule");
     expect(matchPhaseLabel("REGULAR", 3)).toBe("Week 3");
     expect(matchPhaseLabel("PLAYOFF", 9)).toBe("Playoffs");
     expect(matchPhaseLabel("FINAL", 10)).toBe("Grand final");
     expect(matchPhaseLabel("TIEBREAKER", 8)).toBe("Tiebreaker week 8");
-    expect(matchPhaseAbbrev("REGULAR", 3)).toBe("W3");
-    expect(matchPhaseAbbrev("PLAYOFF", 9)).toBe("PO");
-    expect(matchPhaseAbbrev("FINAL", 10)).toBe("GF");
-    expect(matchPhaseAbbrev("TIEBREAKER", 8)).toBe("TB");
   });
 });
 

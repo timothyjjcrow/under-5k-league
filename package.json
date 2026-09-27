@@ -11,6 +11,7 @@
     "build:vercel": "node scripts/vercel-build.mjs",
     "start": "next start",
     "lint": "eslint",
+    "lint:unused-exports": "node scripts/unused-exports.mjs",
     "db:generate": "prisma generate",
     "db:push": "node scripts/assert-local-db.mjs \"Pushing the database schema\" && prisma db push",
     "db:seed": "tsx prisma/seed.ts",

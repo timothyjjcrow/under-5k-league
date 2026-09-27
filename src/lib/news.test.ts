@@ -1,40 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NEWS_LIMITS, newsMediaHint, newsPostError, sortNews } from "./news";
-
-describe("sortNews", () => {
-  it("puts pinned posts first, newest first within each group", () => {
-    const posts = [
-      { id: "old", pinned: false, createdAt: 100 },
-      { id: "pinned-old", pinned: true, createdAt: 50 },
-      { id: "new", pinned: false, createdAt: 200 },
-      { id: "pinned-new", pinned: true, createdAt: 150 },
-    ];
-    expect(sortNews(posts).map((p) => p.id)).toEqual([
-      "pinned-new",
-      "pinned-old",
-      "new",
-      "old",
-    ]);
-  });
-
-  it("does not mutate the input", () => {
-    const posts = [
-      { id: "a", pinned: false, createdAt: 1 },
-      { id: "b", pinned: true, createdAt: 2 },
-    ];
-    sortNews(posts);
-    expect(posts.map((p) => p.id)).toEqual(["a", "b"]);
-  });
-
-  it("uses descending id as a stable final tiebreak", () => {
-    const posts = [
-      { id: "a", pinned: false, createdAt: 100 },
-      { id: "c", pinned: false, createdAt: 100 },
-      { id: "b", pinned: false, createdAt: 100 },
-    ];
-    expect(sortNews(posts).map((post) => post.id)).toEqual(["c", "b", "a"]);
-  });
-});
+import { NEWS_LIMITS, newsMediaHint, newsPostError } from "./news";
 
 describe("newsPostError", () => {
   it("accepts a normal post", () => {

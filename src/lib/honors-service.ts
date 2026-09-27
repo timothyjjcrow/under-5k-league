@@ -62,15 +62,6 @@ async function readyWeek(seasonId: string, week: number) {
   return readiness?.state === HONOR_WEEK_STATE.READY ? readiness : null;
 }
 
-/** Compute one week's honors only after the shared publication gate passes. */
-export async function getWeekHonors(
-  seasonId: string,
-  week: number,
-): Promise<WeeklyHonors> {
-  const readiness = await readyWeek(seasonId, week);
-  return readiness ? honorsFor(readiness) : { player: null, team: null };
-}
-
 /**
  * Result repair invalidates an already-published award without deleting its
  * history. Updating the marker inside the same result transaction ensures the

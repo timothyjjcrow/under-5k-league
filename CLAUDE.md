@@ -306,6 +306,12 @@ has to justify it.
   reseeds a DEDICATED `prisma/e2e.db` and serves it on port 3210 (never
   dev.db/:3000, safe to run any time). Caveat: Next 16's project-dir lock
   means it can't start while another `next dev` runs from this repo.
+- `npm run lint:unused-exports` (`scripts/unused-exports.mjs`) lists `src/lib`
+  exports that no production file imports: dead, or kept alive only by their
+  own tests. Advisory, not a CI gate (test hooks such as `setRaceHook` are
+  meant to be test-only). Run it after replacing a lib function and delete the
+  old one WITH its tests, so the suite stops vouching for code the site never
+  runs.
 - `npm run test:e2e:mid` is the MID-SEASON browser suite
   (`playwright.midseason.config.ts`, specs in `e2e-mid/`): its own
   `prisma/e2e-fixture.db` (name satisfies seed-fixture's guard) seeded to
@@ -1000,7 +1006,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   ladder query must fetch ALL completed lobbies (no `take` window — Elo
   accumulates over full history). Tunables in
   `constants.ts` (`INHOUSE`: LOBBY_SIZE 10, TEAM_SIZE 5, VOTE_SECONDS 25,
-  PICK_SECONDS 60; `CAPTAIN_METHOD` labels).
+  PICK_SECONDS 60); the method names are the `CaptainMethod` type in
+  `inhouse.ts`.
 - **Service (DB, transactional)**: `src/lib/inhouse-service.ts` — a state read
   runs heartbeat → abandoned-lobby sweep → bet sweep → formation → ready
   check → captain vote → stalled pick → result detection → board repaint.
@@ -2520,9 +2527,11 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## Hall of Fame (done, branch: bigger-features)
 
-- `/hall-of-fame`: cross-season career boards — 🏆 titles and ⚔️ series wins
-  via pure `careerCounts` (`src/lib/hall-of-fame.ts`, tested; team cuids are
-  globally unique so cross-season membership just works), 🎯 career fantasy
+- `/hall-of-fame`: cross-season career boards — 🏆 championship
+  contributions and ⚔️ series wins via `appearanceCareers`
+  (`src/lib/appearance-careers.ts`), game counts via pure `careerGameCounts`
+  (`src/lib/hall-of-fame.ts`, tested; team cuids are globally unique so
+  cross-season membership just works), 🎯 career fantasy
   points (`pointsByPlayer` over all games ever), 🔮 all-time oracle record
   (`pickemStandings` over all predictions, min 3 graded). Linked from
   `/seasons` and the footer.
@@ -2606,9 +2615,10 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 ## Hero meta page (done)
 
 - `/meta`: league-wide hero report from imported box scores — pick/win rates,
-  most-contested table, best-win-rate board (adaptive `metaMinPicks` floor),
-  signature player per hero, untouched-pool card. Pure `heroMeta`/
-  `bestWinRates` in `src/lib/hero-meta.ts` (tested). Only complete, unique 5v5
+  most-contested table, an "established" win-rate view (adaptive
+  `metaMinPicks` floor), signature player per hero, untouched-pool card. Pure
+  `heroMeta`/`metaMinPicks` in `src/lib/hero-meta.ts` (tested); the explorer
+  UI is `src/components/hero-meta-explorer.tsx`. Only complete, unique 5v5
   boxes enter the denominator; a game containing an unknown hero id is omitted
   as a whole so known-hero coverage cannot exceed 100%, with a catalogue-update
   diagnostic. Deleted signature owners remain visible as `Former player`.
@@ -2672,8 +2682,11 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   (always): `magicNumber`, `eliminationLosses`, focal-match-conditioned
   `winAndIn`/`loseAndOut`, rank ranges. Over the cap it degrades to
   `clinchStatuses` + bounds. `TeamScenario.nextMatchId` names the match the
-  winAndIn family is about; `matchStakes(matchId, …)` suppresses those labels
-  on any other match page. `stakesHeadline` picks the banner line.
+  winAndIn family is about, so a surface must check it before pinning a
+  "win and in" line on a specific match. The per-result paths and outlooks
+  come from `src/lib/scenario-outlook.ts` (tested), and every surface renders
+  them through `src/components/playoff-outlook.tsx` (`PlayoffOutlook`,
+  `playoffStatusLine`, `playoffPathLines`).
 - `src/lib/stakes.ts` (tested) adapts prisma rows → engine inputs and the
   report → the standings `clinch` prop (cut from `pickBracketSize`, same as
   `createPlayoffBracket`; null when everyone makes the bracket).
@@ -2684,8 +2697,9 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## League news (done)
 
-- `NewsPost` model (title/body/pinned/author). Pure `sortNews` (pinned first,
-  newest first) + `newsPostError` validation in `src/lib/news.ts` (tested).
+- `NewsPost` model (title/body/pinned/author). Pages order posts in the query
+  (pinned first, newest first, id last); pure `newsPostError` validation lives
+  in `src/lib/news.ts` (tested).
 - Admin "League news" card (create/pin/delete, always rendered — news is
   season-independent) → `src/app/actions/news.ts`. Create carries a UUID
   request receipt committed with the post, so replays/double-clicks create,
@@ -2774,8 +2788,8 @@ ask it made twice. What that turned into:
 - **This week strip**: the current week's (or open playoff round's) matches
   with kickoff times, standin-aware ✓ check-in counts (shared
   `matchNightRoster` in `availability.ts` — /schedule uses the same helper),
-  and a stakes chip via `matchStakes`/`stakesHeadline` (the long
-  everything-on-the-line label gets a short chip form).
+  and a compact `PlayoffOutlook` for each side whose `nextMatchId` is this
+  fixture (win/draw/loss paths only ever describe a team's next match).
 - **Your team** card: rank/record/points tiles (Record rendered a size down —
   W–L–D wraps at Stat's text-3xl in the narrow column), form strip, stake
   one-liner, next-up tile aligned to the ENGINE's nextMatchId so the "next

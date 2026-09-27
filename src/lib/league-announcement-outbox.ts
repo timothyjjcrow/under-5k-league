@@ -385,23 +385,3 @@ export async function hasPendingLeagueAnnouncements(): Promise<boolean> {
     })) > 0
   );
 }
-
-/** Queue one message and make a bounded immediate attempt in global order. */
-export async function enqueueAndDeliverLeagueAnnouncement(
-  input: {
-    content: string;
-    mentions?: MentionAllowlist;
-    dedupeKey?: string;
-    marker?: LeagueAnnouncementMarker;
-  },
-  send: Send,
-): Promise<boolean> {
-  const event = await enqueueLeagueAnnouncement(input);
-  if (event.status === LEAGUE_ANNOUNCEMENT_STATUS.SENT) return true;
-  try {
-    await deliverLeagueAnnouncements({ send, limit: 1 });
-  } catch {
-    // Persistence is the success boundary; a future drain owns this row.
-  }
-  return true;
-}

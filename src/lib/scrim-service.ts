@@ -339,15 +339,6 @@ async function managementAccess(
   };
 }
 
-/** Read-time access helper for result/reporting services and thin actions. */
-export async function getScrimManagementAccess(
-  viewerId: string,
-  isAdmin: boolean,
-  scrimId: string,
-): Promise<ScrimManagementAccess> {
-  return managementAccess(prisma, viewerId, isAdmin, scrimId);
-}
-
 /** A captain posts one available scrim time for their current active team. */
 export async function createScrim(
   viewerId: string,
