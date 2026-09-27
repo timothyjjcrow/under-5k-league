@@ -494,7 +494,12 @@ export default async function MePage({
                 }
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
+                  {/* The CheckinBanner rule: a floor on the copy column so
+                      the confirm button WRAPS below it on phones. With only
+                      `min-w-0 flex-1` (basis 0) the row never wrapped and
+                      the copy shrank to one word per line (58px at 390px).
+                      min() keeps the floor from overflowing a 320px screen. */}
+                  <div className="min-w-[min(14rem,100%)] flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-medium text-fg">Draft commitment</h3>
                       {myDraftReadiness === DRAFT_READINESS.READY ? (
