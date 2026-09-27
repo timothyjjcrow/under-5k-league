@@ -11,6 +11,9 @@ test("team sections jump to the roster and retain the team in its schedule link"
   await expect(page).toHaveURL(/\/teams\/[^/]+$/);
   const teamId = new URL(page.url()).pathname.split("/").pop();
   const sections = page.getByRole("navigation", { name: "Team sections" });
+  // Below desktop width the bar scrolls away with the page; only the header
+  // stays pinned, so the chips don't take another slice of a phone screen.
+  await expect(sections).toHaveCSS("position", "static");
   await sections.getByRole("link", { name: "Roster", exact: true }).click();
   await expect(page).toHaveURL(/#team-roster$/);
   await expect(page.locator("#team-roster h2").first()).toBeFocused();

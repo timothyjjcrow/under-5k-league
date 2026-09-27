@@ -671,9 +671,11 @@ function AdminAnchor({
 }
 
 /**
- * The jump bar. Sticky under the 80px header (`top-20`, the same offset the
- * draft room's clock bar uses) so it stays reachable however far down the page
- * an admin has scrolled — which on match night is the whole point.
+ * The jump bar. From desktop width it is sticky under the 80px header
+ * (`top-20`, the same offset the draft room's clock bar uses) so it stays
+ * reachable however far down the page an admin has scrolled. On a phone it
+ * scrolls away with the page like every section bar (see SectionNav): pinned,
+ * it cost a fifth of the screen on top of the header and the tab bar.
  */
 function AdminJump({ items }: { items: { id: string; label: string }[] }) {
   return <SectionNav items={items} label="Admin sections" sticky />;

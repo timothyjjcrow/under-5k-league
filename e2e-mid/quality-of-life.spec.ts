@@ -85,7 +85,7 @@ test("schedule selection survives reload and back navigation on a phone", async 
   noErrors();
 });
 
-test("admin jumps reveal closed sections clear of both sticky bars", async ({
+test("admin jumps reveal closed sections clear of the sticky header", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
