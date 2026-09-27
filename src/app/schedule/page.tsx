@@ -110,13 +110,12 @@ function pickRsvp(side: TeamAvailability, expected: number): RsvpSide {
 }
 
 // Only shown before any fixture exists (SIGNUPS, DRAFT, REGULAR_SEASON);
-// once fixtures exist the match night rides in the page subtitle.
+// once fixtures exist the match night rides in the page subtitle. With no
+// fixtures there are no kickoffs below it to point at, in any phase.
 function calloutDescription(status: string): string {
   if (status === "SIGNUPS")
     return "Games run weekly. Confirm this slot works before you sign up.";
-  if (status === "DRAFT")
-    return "This is the default weekly slot. Exact kickoffs appear once the schedule is published.";
-  return "Use the exact kickoffs below, then check in for the next match you're playing.";
+  return "This is the default weekly slot. Exact kickoffs appear once the schedule is published.";
 }
 
 function emptyScheduleCopy(status: string, draftStatus?: string | null) {
