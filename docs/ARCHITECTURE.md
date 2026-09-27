@@ -304,7 +304,12 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   save concurrently, while import, phase, and archive writers remain
   exclusive; transient serialization conflicts retry from a fresh snapshot.
   COMPLETE and `?season=` archive views show read-only standings and roster
-  breakdowns.
+  breakdowns. After the lock the page is the standings and player scores:
+  only a manager's own five gets a lineup section, and the subtitle tells
+  everyone else why they cannot pick. The picker opens the pool most
+  expensive first and keeps count, salary and the one Save button in a bar
+  that sticks above the phone tab bar (`src/lib/fantasy-picker.ts`). The
+  scoring card explains that fantasy scores impact points.
 - _Pick'em_: `/pickem` uses the same post-auction lifecycle boundary. Each
   prediction locks at scheduled kickoff or as soon as the fixture is LIVE or
   COMPLETED. `savePrediction` re-reads the active Season, optional Draft,
@@ -610,7 +615,7 @@ directly.
 | `/matches/[id]`    | Box scores or pre-match preview (scouting, stakes, RSVP, standins, reschedule, captain report) | Always                                                                                             | Game JSON, `scouting.ts`, `PlayoffOutlook`                                                                    |
 | `/leaders`         | 8 stat boards + report-card board + evidence-gated weekly honors                               | Nav from REGULAR_SEASON; direct/archive reads always work                                          | Trusted `getSeasonGameLeaders`, `topBy`, `getSeasonHonorReadiness`                                            |
 | `/meta`            | One sortable table of picked heroes; unpicked pool in one line; 8+ pick win-rate headline      | Nav from REGULAR_SEASON; direct/archive reads always work                                          | `getSeasonGameScores`, `heroMeta`, bundled hero catalogue                                                     |
-| `/fantasy`         | Fantasy-five picker, final fives, scoring, and standings                                       | Nav from DRAFT; interaction after completed auction until first import; COMPLETE/archive read-only | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
+| `/fantasy`         | Fantasy-five picker (sticky Save bar), standings, player scores, impact-points explainer       | Nav from DRAFT; interaction after completed auction until first import; COMPLETE/archive read-only | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
 | `/pickem`          | Match predictions, one "Your picks" history, and oracle board (shared places)                  | Nav from DRAFT; interaction after completed auction until each kickoff; COMPLETE/archive read-only | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
 | `/records`         | Compact trusted single-game record book (no Most deaths), first-achiever tie policy            | Evergreen: Statistics nav, Explore, footer                                                         | `getAllGamesForRecords` (deterministic chronology), `leagueRecords`                                           |
 | `/hall-of-fame`    | Short note until a champion exists; then champions first and shared-place career boards        | Footer link                                                                                        | `appearanceCareers`, all-seasons scans                                                                        |

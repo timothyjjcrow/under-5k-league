@@ -2320,6 +2320,29 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 - `/fantasy`: private live-budget picker before lock, entry count without
   ownership leakage, then live/final standings with per-pick breakdowns and
   locked-roster chips. Discoverable from DRAFT; COMPLETE/archive are read-only.
+- **Tim's call: Fantasy stays, forever.** Menus and home tiles promote it only
+  during the pick window and, after the lock, only to managers (another
+  lane's work); the page itself is always reachable. Three rules on the page:
+  - **After the lock the page is the standings, never a dead end.** The
+    `#lineup` section renders only while picks are open or for the viewer's
+    own five (`!locked || myRoster`); everyone else reads standings and
+    player scores, and the subtitle says in one line why they can't pick
+    ("New fives open after next season's draft"). A season nobody entered
+    gets a compact note where the standings go. The old "Rosters are
+    locked… Catch the next season!" card was all a latecomer saw, and
+    `side-game-archive-guards.test.ts` now refuses that copy.
+  - **The picker's count, salary and Save live in ONE sticky bar**
+    (`sticky bottom-[calc(var(--mobile-dock-height)+0.75rem)]`, so it rides
+    above the phone tab bar and stops at the end of the picker). There is
+    exactly one Save button (source-guarded); on phones it reads "Save"/
+    "Update" with the full "Save fantasy five" as its name. The status line
+    and the pool order are pure in `src/lib/fantasy-picker.ts`; the pool opens
+    PRICE-DESCENDING (fit your stars, then fill under the cap). MMR there is
+    formatted en-US on purpose: `toLocaleString()` in a hydrated client
+    component prints "7.200" in a German browser over the server's "7,200".
+  - **The scoring card leads with "impact points"** — the same `fantasyPoints`
+    score behind match MVPs and Player of the Week — and says a player only
+    scores in games they play (a standin night earns them nothing).
 
 ## MVPs & achievements (done, branch: bigger-features)
 
