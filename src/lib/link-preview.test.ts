@@ -91,7 +91,10 @@ describe("homePreview", () => {
       title: "Season 7 · Draft live",
       description: "The draft is live: captains are bidding for players now.",
     });
-    expect(draft("PAUSED").title).toBe("Season 7 · Draft paused");
+    expect(draft("PAUSED")).toEqual({
+      title: "Season 7 · Draft paused",
+      description: "The draft is paused for now.",
+    });
     expect(draft("COMPLETE").description).toBe(
       "The teams are set. The regular season starts soon.",
     );
@@ -105,7 +108,7 @@ describe("homePreview", () => {
     });
     expect(
       homePreview(
-        season({ status: "REGULAR_SEASON", matchSchedule: " Wednesdays, 8pm ET " }),
+        season({ status: "REGULAR_SEASON", matchSchedule: " Wednesdays, 8pm ET. " }),
         NOW,
       ).description,
     ).toBe("Standings, fixtures and results. Match night: Wednesdays, 8pm ET.");

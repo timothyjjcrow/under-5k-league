@@ -83,7 +83,7 @@ export function homePreview(
         season.draftStatus === DRAFT_STATUS.IN_PROGRESS
           ? "The draft is live: captains are bidding for players now."
           : season.draftStatus === DRAFT_STATUS.PAUSED
-            ? "The draft is paused and picks up again soon."
+            ? "The draft is paused for now."
             : season.draftStatus === DRAFT_STATUS.COMPLETE
               ? "The teams are set. The regular season starts soon."
               : draftNight
@@ -92,7 +92,8 @@ export function homePreview(
       return { title, description };
     }
     case SEASON_STATUS.REGULAR_SEASON: {
-      const night = season.matchSchedule?.trim() ||
+      // Admin-typed; a trailing full stop would double up.
+      const night = season.matchSchedule?.trim().replace(/[.\s]+$/, "") ||
         (LEAGUE_CONFIG.matchSchedule.announced
           ? LEAGUE_CONFIG.matchSchedule.label
           : null);
