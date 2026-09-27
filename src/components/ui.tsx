@@ -1180,7 +1180,11 @@ export function ScheduleCallout({
       <div className="min-w-0 text-sm">
         <div className="font-medium">
           Match night —{" "}
-          <span className="text-info">{label || MATCH_SCHEDULE.label}</span>
+          {/* Neutral, not info blue: blue means "you can click this", and
+              the time is plain text. */}
+          <span className="font-semibold text-fg">
+            {label || MATCH_SCHEDULE.label}
+          </span>
         </div>
         <div className="text-xs text-muted">
           {description ??
