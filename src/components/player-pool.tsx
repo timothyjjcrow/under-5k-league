@@ -316,7 +316,10 @@ export function PlayerPool({
         >
           <option value="mmr">Sort: MMR</option>
           {anyInhouse ? <option value="inhouse">Sort: Inhouse</option> : null}
-          <option value="rank">Sort: Rank</option>
+          {/* "Medal", not "Rank": the Inhouse column beside it shows ladder
+              ranks (#1), and this sorts by Dota medal. The value stays "rank"
+              so shared ?sort=rank links keep working. */}
+          <option value="rank">Sort: Medal</option>
           <option value="name">Sort: Name</option>
         </select>
       </div>
@@ -375,7 +378,7 @@ export function PlayerPool({
               <span className="hidden text-right lg:block">Inhouse</span>
             ) : null}
             <span>Roles</span>
-            <span className="hidden xl:block">Signature heroes</span>
+            <span className="hidden xl:block">Favorite heroes</span>
             <span className="text-right">Status</span>
           </div>
           <ul className="divide-y divide-line/60">
@@ -446,36 +449,42 @@ export function PlayerPool({
                         </span>
                       ) : null}
                       {pub && pub.topHeroes.length > 0 ? (
-                        /* What they ACTUALLY play — the self-typed signature
+                        /* What they ACTUALLY play — the self-picked favorite
                          heroes live in their own column; these are OpenDota's
-                         lifetime most-played. role="img" + a spoken label per
-                         the decorative-indicator convention; each icon's title
-                         names the hero and its record. */
-                        <span
-                          role="img"
-                          aria-label={`Most played: ${pub.topHeroes
-                            .map(
-                              (h) =>
-                                heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
-                            )
-                            .join(", ")}`}
-                          className="flex items-center gap-1"
-                        >
-                          {pub.topHeroes.map((h) => {
-                            const hero = heroById(h.heroId);
-                            // title on the ICON, not a wrapper — the browser
-                            // shows the innermost title, and the img fills any
-                            // span around it.
-                            return hero ? (
-                              <span key={h.heroId} aria-hidden>
-                                <HeroIcon
-                                  hero={hero}
-                                  size={18}
-                                  title={pubHeroTitle(h)}
-                                />
-                              </span>
-                            ) : null;
-                          })}
+                         lifetime most-played. The visible label is what tells
+                         the two icon strips apart on a phone, where both sit
+                         in one row; it is aria-hidden because the strip's own
+                         spoken label already says it. role="img" + a spoken
+                         label per the decorative-indicator convention; each
+                         icon's title names the hero and its record. */
+                        <span className="flex items-center gap-1">
+                          <span aria-hidden>Most played (pubs)</span>
+                          <span
+                            role="img"
+                            aria-label={`Most played (pubs): ${pub.topHeroes
+                              .map(
+                                (h) =>
+                                  heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
+                              )
+                              .join(", ")}`}
+                            className="flex items-center gap-1"
+                          >
+                            {pub.topHeroes.map((h) => {
+                              const hero = heroById(h.heroId);
+                              // title on the ICON, not a wrapper — the browser
+                              // shows the innermost title, and the img fills any
+                              // span around it.
+                              return hero ? (
+                                <span key={h.heroId} aria-hidden>
+                                  <HeroIcon
+                                    hero={hero}
+                                    size={18}
+                                    title={pubHeroTitle(h)}
+                                  />
+                                </span>
+                              ) : null;
+                            })}
+                          </span>
                         </span>
                       ) : null}
                       {activity?.quiet ? (
@@ -578,16 +587,24 @@ export function PlayerPool({
                     </span>
                   ) : null}
 
-                  {/* 4 — roles, and (below md) the hero strip riding along with
-                    them: both answer "what does this player play", and packing
-                    them onto one phone row is what keeps a row to three lines. */}
+                  {/* 4 — roles, and (below md) the favorite-heroes strip riding
+                    along with them: both answer "what does this player play",
+                    and packing them onto one phone row is what keeps a row to
+                    three lines. The strip is labeled here because on a phone
+                    there is no column header, and the meta line above carries
+                    a second (pub most-played) strip. */}
                   <span
                     className={cn(CELL, "flex flex-wrap items-center gap-2")}
                   >
                     <RoleBadges roles={p.roles} />
-                    <span className="md:hidden">
-                      <HeroList value={p.favoriteHeroes} size={22} max={6} />
-                    </span>
+                    {hasText(p.favoriteHeroes) ? (
+                      <span className="flex items-center gap-1.5 md:hidden">
+                        <span className="text-xs text-muted">
+                          Favorite heroes
+                        </span>
+                        <HeroList value={p.favoriteHeroes} size={22} max={6} />
+                      </span>
+                    ) : null}
                   </span>
 
                   {/* 5 — status: standin, captain, team or free agent, and
@@ -631,7 +648,7 @@ export function PlayerPool({
                     ) : null}
                   </span>
 
-                  {/* 6 — signature heroes in their own column, xl only: between
+                  {/* 6 — favorite heroes in their own column, xl only: between
                     md and xl there is no track to spare, and above they ride
                     with the roles. */}
                   <span className={cn(CELL, "hidden xl:order-1 xl:block")}>

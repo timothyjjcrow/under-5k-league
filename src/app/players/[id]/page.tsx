@@ -1187,7 +1187,7 @@ export default async function PlayerProfilePage({
                           </Detail>
                         ) : null}
                         {hasText(selfPickedHeroes) ? (
-                          <Detail label="Wants to play">
+                          <Detail label="Favorite heroes">
                             <HeroList value={selfPickedHeroes} size={24} />
                           </Detail>
                         ) : null}
@@ -1227,7 +1227,7 @@ export default async function PlayerProfilePage({
               >
                 <CardHeader
                   title="Hero pool"
-                  subtitle="League games, public pubs, and heroes they want to play"
+                  subtitle="League games, public pubs, and their favorite heroes"
                 />
                 <CardBody className="space-y-4">
                   {leagueHeroes.length > 0 ? (
@@ -1241,7 +1241,7 @@ export default async function PlayerProfilePage({
                   {hasText(selfPickedHeroes) ? (
                     <div className="space-y-2">
                       <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                        Wants to play
+                        Favorite heroes
                       </div>
                       <HeroList value={selfPickedHeroes} size={26} />
                     </div>
@@ -1249,7 +1249,7 @@ export default async function PlayerProfilePage({
                   {pubHeroes.length > 0 ? (
                     <div className="space-y-2">
                       <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                        In public pubs
+                        Most played (pubs)
                       </div>
                       <HeroPool heroes={pubHeroes} limit={5} />
                     </div>
