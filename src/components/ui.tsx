@@ -25,7 +25,7 @@ const variantClasses: Record<ButtonVariant, string> = {
   secondary:
     "bg-surface-2 text-fg border border-line hover:border-muted/60 hover:bg-surface-2/70",
   ghost: "text-muted hover:text-fg hover:bg-surface-2/60",
-  danger: "bg-danger text-white hover:bg-danger/90",
+  danger: "bg-danger-strong text-white hover:bg-danger-strong/90",
   accent: "bg-accent text-black hover:bg-accent/90",
 };
 
@@ -153,13 +153,21 @@ export function CardBody({
 
 // ---------- Badge ----------
 
+/**
+ * Badge text sits on a 15% tint of its own colour at 12px, so each tone's TEXT
+ * must clear 4.5:1 on that tint over every card surface. The bright tones
+ * (success, accent) do in their own colour; red and blue don't, so brand and
+ * danger use `danger-soft` and info uses `info-soft` (all ≥ 4.6:1 on
+ * surface-2). Red means a problem — a live alarm, a loss, private data — so
+ * good news ("Captain", "Champions", "Current season") uses accent or success.
+ */
 const badgeTones = {
   neutral: "bg-surface-2 text-muted border-line",
-  brand: "bg-brand/15 text-brand border-brand/30",
+  brand: "bg-brand/15 text-danger-soft border-brand/30",
   accent: "bg-accent/15 text-accent border-accent/30",
   success: "bg-success/15 text-success border-success/30",
-  info: "bg-info/15 text-info border-info/30",
-  danger: "bg-danger/15 text-danger border-danger/30",
+  info: "bg-info/15 text-info-soft border-info/30",
+  danger: "bg-danger/15 text-danger-soft border-danger/30",
 } as const;
 
 export function Badge({
@@ -377,7 +385,7 @@ export function PlayerLink({
 
 const FORM_TONE: Record<FormResult, string> = {
   W: "bg-success/15 text-success border-success/30",
-  L: "bg-danger/15 text-danger border-danger/30",
+  L: "bg-danger/15 text-danger-soft border-danger/30",
   D: "bg-surface-2 text-muted border-line",
 };
 

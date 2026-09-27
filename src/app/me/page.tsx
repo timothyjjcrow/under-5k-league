@@ -626,7 +626,7 @@ export default async function MePage({
                 </div>
                 <div className="ml-auto shrink-0">
                   {member.isCaptain ? (
-                    <Badge tone="brand">Captain</Badge>
+                    <Badge tone="accent">Captain</Badge>
                   ) : (
                     <span className="text-sm text-muted">
                       Drafted for{" "}

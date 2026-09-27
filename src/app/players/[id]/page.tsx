@@ -647,7 +647,7 @@ export default async function PlayerProfilePage({
                 {user.role === "ADMIN" ? (
                   <Badge tone="accent">Admin</Badge>
                 ) : null}
-                {isCaptain ? <Badge tone="brand">Captain</Badge> : null}
+                {isCaptain ? <Badge tone="accent">Captain</Badge> : null}
                 {isStandin ? <Badge tone="info">Standin</Badge> : null}
                 {withdrewThisSeason ? (
                   <Badge tone="neutral">Withdrew this season</Badge>
@@ -1198,7 +1198,7 @@ export default async function PlayerProfilePage({
                         ) : null}
                         {activeReg.wantsCaptain ? (
                           <Detail label="Captaincy">
-                            <Badge tone="brand">Wants to captain</Badge>
+                            <Badge tone="accent">Wants to captain</Badge>
                           </Detail>
                         ) : null}
                         {hasText(activeReg.statement) ? (

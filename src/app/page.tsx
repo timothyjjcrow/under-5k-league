@@ -412,7 +412,7 @@ export default async function Home() {
         <span className="font-display text-lg font-semibold">
           {champion.name}
         </span>
-        <Badge tone="brand">🏆 Champions</Badge>
+        <Badge tone="accent">🏆 Champions</Badge>
       </span>
     ) : null;
     heroAction = (

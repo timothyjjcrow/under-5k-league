@@ -60,7 +60,7 @@ function statusBadge(status: string) {
     return <Badge tone="success">Booked</Badge>;
   if (status === SCRIM_STATUS.LIVE) return <Badge tone="accent">Live</Badge>;
   if (status === SCRIM_STATUS.COMPLETED)
-    return <Badge tone="brand">Completed</Badge>;
+    return <Badge tone="success">Completed</Badge>;
   return <Badge>Cancelled</Badge>;
 }
 

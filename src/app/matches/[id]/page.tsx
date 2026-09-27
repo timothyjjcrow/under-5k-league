@@ -1972,7 +1972,7 @@ async function StandinSection({
                     <SubmitButton
                       variant="ghost"
                       size="sm"
-                      className="text-danger"
+                      className="text-danger-soft"
                       confirm={`Remove ${a.standin.name} as standin? Discord is told to stand down.`}
                     >
                       Remove

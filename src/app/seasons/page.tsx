@@ -116,7 +116,7 @@ export default async function SeasonsPage() {
                         {s.name}
                       </span>
                       {s.isActive ? (
-                        <Badge tone="brand">Current</Badge>
+                        <Badge tone="success">Current</Badge>
                       ) : (
                         <Badge tone="neutral">
                           {PHASE_LABEL[s.status] ?? s.status}

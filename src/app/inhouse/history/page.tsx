@@ -276,7 +276,7 @@ export default async function InhouseHistoryPage({
                               <SubmitButton
                                 variant="ghost"
                                 size="sm"
-                                className="min-h-11 text-danger hover:underline"
+                                className="min-h-11 text-danger-soft hover:underline"
                                 confirm={`Void the ${formatMatchTime(playedAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, and everyone's Elo recalculates without it.`}
                               >
                                 void

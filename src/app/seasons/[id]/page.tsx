@@ -229,7 +229,7 @@ export default async function SeasonArchivePage({
         }
         action={
           season.isActive ? (
-            <Badge tone="brand">Current season</Badge>
+            <Badge tone="success">Current season</Badge>
           ) : (
             <Badge tone="neutral">
               {PHASE_LABEL[season.status] ?? season.status}

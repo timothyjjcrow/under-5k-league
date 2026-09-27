@@ -353,7 +353,7 @@ export default async function PlayersPage() {
                         <PlayerLink userId={p.userId} className="font-medium">
                           {p.user.name}
                         </PlayerLink>
-                        <Badge tone="brand">Wants to captain</Badge>
+                        <Badge tone="accent">Wants to captain</Badge>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                         {p.mmr > 0 ? <span>{p.mmr} MMR</span> : null}

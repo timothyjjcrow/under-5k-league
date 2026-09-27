@@ -167,7 +167,7 @@ describe("seasonPhaseTone", () => {
     expect(seasonPhaseTone(SEASON_STATUS.DRAFT)).toBe("accent");
     expect(seasonPhaseTone(SEASON_STATUS.REGULAR_SEASON)).toBe("success");
     expect(seasonPhaseTone(SEASON_STATUS.PLAYOFFS)).toBe("accent");
-    expect(seasonPhaseTone(SEASON_STATUS.COMPLETE)).toBe("brand");
+    expect(seasonPhaseTone(SEASON_STATUS.COMPLETE)).toBe("accent");
     expect(seasonPhaseTone(null)).toBe("neutral");
     expect(seasonPhaseTone("SOMETHING_NEW")).toBe("neutral");
   });

@@ -2283,7 +2283,7 @@ function CaptainControls({
                         {p.mmr}
                       </span>
                       {p.wantsCaptain ? (
-                        <Badge tone="brand" className="shrink-0">
+                        <Badge tone="accent" className="shrink-0">
                           wants C
                         </Badge>
                       ) : null}
@@ -2341,7 +2341,7 @@ function CaptainControls({
                           <SubmitButton
                             variant="ghost"
                             size="sm"
-                            className="text-danger hover:underline"
+                            className="text-danger-soft hover:underline"
                             confirm={
                               season.status === "SIGNUPS"
                                 ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
@@ -2428,7 +2428,7 @@ function CaptainControls({
                             <SubmitButton
                               variant="ghost"
                               size="sm"
-                              className="text-danger hover:underline"
+                              className="text-danger-soft hover:underline"
                               confirm={`Remove ${s.user.name}'s standin signup? They leave the standin lists and can't re-add themselves — you can reinstate them below. Standins still owing cover on an unplayed match are refused (remove the assignment first).`}
                             >
                               remove
@@ -3256,7 +3256,7 @@ function MatchResultRow({
                     <SubmitButton
                       variant="ghost"
                       size="sm"
-                      className="text-danger hover:underline"
+                      className="text-danger-soft hover:underline"
                       confirm={
                         championshipFinalCorrection
                           ? `${conflictingChampionFinal ? "Retract the inconsistent champion" : "Retract the champion"}, remove this imported game, and recompute only the grand final? Earlier rounds stay intact.`
@@ -4024,7 +4024,7 @@ function StandinMatchBlock({
                 <SubmitButton
                   variant="ghost"
                   size="sm"
-                  className="text-xs text-danger hover:underline"
+                  className="text-xs text-danger-soft hover:underline"
                   confirm={`Remove ${a.standin.name} from this match? They are told to stand down in Discord — if this was a mis-click they will have been pinged twice for nothing.`}
                 >
                   remove
@@ -4909,7 +4909,7 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
             <SubmitButton
               variant="secondary"
               size="sm"
-              className="text-danger"
+              className="text-danger-soft"
               confirm="Release this player from their roster? They go back to the free-agent pool, their fee is refunded to the team, and any standin booked to cover them on an unplayed match is cancelled (that standin is told to stand down in Discord)."
             >
               Release player

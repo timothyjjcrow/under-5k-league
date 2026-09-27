@@ -135,7 +135,9 @@ export function seasonPhaseTone(status: string | null | undefined): PhaseTone {
     case SEASON_STATUS.REGULAR_SEASON:
       return "success";
     case SEASON_STATUS.COMPLETE:
-      return "brand";
+      // Gold, like the trophy: red reads as an error, and a finished season
+      // is the league's good news.
+      return "accent";
     default:
       return "neutral";
   }
