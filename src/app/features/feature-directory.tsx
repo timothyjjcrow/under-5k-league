@@ -107,7 +107,7 @@ export function FeatureDirectory({ groups }: { groups: AvailableTourGroup[] }) {
                       prefetch={false}
                       className={styles.directoryLink}
                     >
-                      {feature.linkLabel} <span aria-hidden="true">↗</span>
+                      {feature.linkLabel} <span aria-hidden="true">→</span>
                     </Link>
                   ) : (
                     <p className={styles.availability}>

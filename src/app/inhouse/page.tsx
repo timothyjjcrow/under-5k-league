@@ -124,7 +124,7 @@ export default async function InhousePage({
           subtitle="Queue together. Draft your sides. Play for the ladder."
           action={
             <Link href="/inhouse/history" className={textLink("text-sm")}>
-              Match history ↗
+              Match history <span aria-hidden="true">→</span>
             </Link>
           }
         />

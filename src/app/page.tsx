@@ -2665,7 +2665,7 @@ async function ThisWeek({
                 </div>
                 <p className="flex items-center justify-between border-t border-line-soft pt-3 text-xs text-muted group-hover/match:text-info">
                   <span>Match details & check-in</span>
-                  <span aria-hidden>↗</span>
+                  <span aria-hidden>→</span>
                 </p>
               </Link>
               {pick ? (

@@ -58,7 +58,7 @@ function TourLink({
   return !availability || availability.available ? (
     <Link href={href} prefetch={false} className={styles.textLink}>
       {children}
-      <span aria-hidden="true">↗</span>
+      <span aria-hidden="true">→</span>
     </Link>
   ) : (
     <p className={styles.comingUp}>{availability.unavailableReason}</p>
@@ -272,7 +272,7 @@ export default async function FeaturesPage() {
           <strong>
             <i aria-hidden="true" />
             {phaseLabel}
-            <span aria-hidden="true">↗</span>
+            <span aria-hidden="true">→</span>
           </strong>
         </Link>
       </div>
@@ -479,7 +479,7 @@ export default async function FeaturesPage() {
           <article className={styles.inhouseCard}>
             <div className={styles.playCardTop}>
               <span>THE PICKUP GAME</span>
-              <span aria-hidden="true">↗</span>
+              <span aria-hidden="true">→</span>
             </div>
             <h3>
               Good games.
@@ -774,7 +774,7 @@ export default async function FeaturesPage() {
         <p>Keep up with the league. Take a little of it with you.</p>
         <div>
           <Link href="/news">
-            League news <span aria-hidden="true">↗</span>
+            League news <span aria-hidden="true">→</span>
           </Link>
           <a
             href={LEAGUE_CONFIG.merchUrl}
