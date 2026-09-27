@@ -111,6 +111,67 @@ describe("series-result announcement retry", () => {
     expect(mockSend).toHaveBeenCalledTimes(2); // 1 failed + 1 success
   });
 
+  it("names the playoff round and who advances, on the first send and the retry", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const alpha = await makeTeam(season.id, "Alpha", 0);
+    const bravo = await makeTeam(season.id, "Bravo", 1);
+    const charlie = await makeTeam(season.id, "Charlie", 2);
+    const delta = await makeTeam(season.id, "Delta", 3);
+    // A 4-team bracket: two semifinals, so the grand final is next.
+    const semi = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 8,
+        phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M0",
+        bestOf: 3,
+        homeTeamId: alpha.id,
+        awayTeamId: delta.id,
+        homeScore: 2,
+        awayScore: 1,
+        status: MATCH_STATUS.COMPLETED,
+        winnerTeamId: alpha.id,
+        completedAt: new Date(),
+      },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 8,
+        phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1",
+        bestOf: 3,
+        homeTeamId: bravo.id,
+        awayTeamId: charlie.id,
+      },
+    });
+    const input = {
+      id: semi.id,
+      homeTeamId: alpha.id,
+      awayTeamId: delta.id,
+      homeScore: 2,
+      awayScore: 1,
+      week: 8,
+      phase: MATCH_PHASE.PLAYOFF,
+    };
+    mockSend.mockResolvedValue(false); // Discord down: the retry re-reads the row
+    expect(await announceSeriesResultOnce(input)).toBe(false);
+    mockSend.mockResolvedValue(true);
+    expect(await announceSeriesResultOnce(input)).toBe(true);
+
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    for (const [content] of mockSend.mock.calls) {
+      expect(content).toContain("**Semifinal:** Alpha 2–1 Delta");
+      expect(content).toContain(
+        "**Alpha** advance to the grand final; Delta are eliminated.",
+      );
+      expect(content).not.toContain("Playoffs");
+      expect(content).toMatch(
+        new RegExp(`Box score: <[^>]+/matches/${semi.id}>$`),
+      );
+    }
+  });
+
   it("treats historical sent markers and active v2 claims as final/in flight", async () => {
     const match = await setupDecidedMatch();
     const key = `resultAnnounced:${match.id}`;

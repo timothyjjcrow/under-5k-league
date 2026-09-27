@@ -177,40 +177,70 @@ export function playerSoldMessage(
   return `💰 **${name(playerName)}** → **${name(teamName)}** for **$${price}**${tag}`;
 }
 
+/** "the semifinals", "the grand final", "Round 3" — a round name mid-sentence. */
+function roundPhrase(round: string): string {
+  return /^Round \d+$/.test(round) ? round : `the ${round.toLowerCase()}`;
+}
+
 export function matchResultMessage(m: {
+  matchId: string;
   homeName: string;
   awayName: string;
   homeScore: number;
   awayScore: number;
-  week: number;
-  isPlayoff: boolean;
-  isTiebreaker?: boolean;
+  /** What the site calls this fixture — `matchRoundLabel`: "Week 3",
+   *  "Tiebreaker", "Semifinal", "Grand final". */
+  label: string;
   /** Ruled/defaulted result — say so, or the channel reads a no-show as a
-   *  played sweep. Optional so every existing call site is unchanged. */
+   *  played sweep. */
   forfeit?: boolean;
+  /** Set for a knockout playoff series before the grand final: the winner
+   *  moves on to `nextRound` (null when the bracket can't name it) and the
+   *  loser is out. The grand final gets no such line — crowning the champion
+   *  is the champion post's job. */
+  knockout?: { nextRound: string | null };
 }): string {
-  const label = m.isTiebreaker
-    ? `Tiebreaker week ${m.week}`
-    : m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
   const home = name(m.homeName);
   const away = name(m.awayName);
-  const winner =
-    m.homeScore > m.awayScore ? home : m.awayScore > m.homeScore ? away : null;
-  const line = `⚔️ **${label}:** ${home} ${m.homeScore}–${m.awayScore} ${away}`;
-  const tail = winner
-    ? m.forfeit
-      ? `${line} — **${winner}** take the series by forfeit.`
-      : `${line} — **${winner}** take the series!`
-    : `${line} — a draw!`;
-  return tail;
+  const homeWon = m.homeScore > m.awayScore;
+  const winner = homeWon ? home : m.awayScore > m.homeScore ? away : null;
+  const loser = homeWon ? away : home;
+  const line = `⚔️ **${m.label}:** ${home} ${m.homeScore}–${m.awayScore} ${away}`;
+  const byForfeit = m.forfeit ? " by forfeit" : "";
+  const tail = !winner
+    ? `${line} — a draw!`
+    : m.knockout
+      ? `${line} — **${winner}** advance${m.knockout.nextRound ? ` to ${roundPhrase(m.knockout.nextRound)}` : ""}${byForfeit}; ${loser} are eliminated.`
+      : m.forfeit
+        ? `${line} — **${winner}** take the series by forfeit.`
+        : `${line} — **${winner}** take the series!`;
+  // A ruled result may have no games to show, so don't promise a box score.
+  const link = `${m.forfeit ? "Match page" : "Box score"}: <${resolveSiteUrl()}/matches/${m.matchId}>`;
+  return `${tail} ${link}`;
 }
 
 export function playoffsStartedMessage(
   seasonName: string,
-  pairings: { home: string; away: string }[],
+  pairings: {
+    home: string;
+    away: string;
+    /** Seeds from the first-round pairings (`seedsFromFirstRound`). */
+    homeSeed?: number | null;
+    awaySeed?: number | null;
+    /** Kickoff, epoch ms — rendered in each reader's own timezone. */
+    whenMs?: number | null;
+  }[],
 ): string {
+  const side = (team: string, seed?: number | null) =>
+    seed ? `(${seed}) ${name(team)}` : name(team);
   const lines = pairings
-    .map((p) => `• ${name(p.home)} vs ${name(p.away)}`)
+    .map((p) => {
+      const when =
+        p.whenMs != null && Number.isFinite(p.whenMs)
+          ? ` — <t:${Math.floor(p.whenMs / 1000)}:f>`
+          : "";
+      return `• ${side(p.home, p.homeSeed)} vs ${side(p.away, p.awaySeed)}${when}`;
+    })
     .join("\n");
   return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
 }

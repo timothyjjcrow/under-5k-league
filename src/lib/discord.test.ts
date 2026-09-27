@@ -138,31 +138,102 @@ describe("discord message formatters", () => {
     expect(msg).toContain("/schedule");
   });
 
-  it("announces a decided series with the winner", () => {
+  it("announces a decided series with the winner and links its match page", () => {
     const msg = matchResultMessage({
+      matchId: "m42",
       homeName: "A",
       awayName: "B",
       homeScore: 0,
       awayScore: 2,
-      week: 3,
-      isPlayoff: false,
+      label: "Week 3",
     });
-    expect(msg).toContain("Week 3");
+    expect(msg).toContain("**Week 3:**");
     expect(msg).toContain("A 0–2 B");
-    expect(msg).toContain("**B** take the series");
+    expect(msg).toContain("**B** take the series!");
+    // Ends with the match page, angle-bracketed so Discord doesn't unfurl it.
+    expect(msg).toMatch(/Box score: <https?:\/\/[^>]+\/matches\/m42>$/);
+    expect(msg).not.toMatch(/eliminated|advance/);
   });
 
-  it("labels playoff results and handles draws", () => {
+  it("handles draws", () => {
     const msg = matchResultMessage({
+      matchId: "m1",
       homeName: "A",
       awayName: "B",
       homeScore: 1,
       awayScore: 1,
-      week: 4,
-      isPlayoff: true,
+      label: "Week 4",
     });
-    expect(msg).toContain("Playoffs:");
     expect(msg).toContain("a draw");
+    expect(msg).toMatch(/\/matches\/m1>$/);
+  });
+
+  it("names the playoff round and says who advances and who is out", () => {
+    const semi = matchResultMessage({
+      matchId: "m9",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 2,
+      awayScore: 1,
+      label: "Semifinal",
+      knockout: { nextRound: "Grand final" },
+    });
+    expect(semi).toContain("**Semifinal:** A 2–1 B");
+    expect(semi).toContain(
+      "**A** advance to the grand final; B are eliminated.",
+    );
+    expect(semi).not.toContain("Playoffs");
+
+    const quarter = matchResultMessage({
+      matchId: "m5",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 0,
+      awayScore: 2,
+      label: "Quarterfinal",
+      forfeit: true,
+      knockout: { nextRound: "Semifinals" },
+    });
+    expect(quarter).toContain(
+      "**B** advance to the semifinals by forfeit; A are eliminated.",
+    );
+    // A ruled result may have no box score to show.
+    expect(quarter).toMatch(/Match page: <[^>]+\/matches\/m5>$/);
+
+    const unnamed = matchResultMessage({
+      matchId: "m6",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 2,
+      awayScore: 0,
+      label: "Round 1",
+      knockout: { nextRound: null },
+    });
+    expect(unnamed).toContain("**A** advance; B are eliminated.");
+    expect(
+      matchResultMessage({
+        matchId: "m7",
+        homeName: "A",
+        awayName: "B",
+        homeScore: 2,
+        awayScore: 0,
+        label: "Round 1",
+        knockout: { nextRound: "Round 2" },
+      }),
+    ).toContain("**A** advance to Round 2;");
+  });
+
+  it("leaves the grand final's crowning to the champion post", () => {
+    const msg = matchResultMessage({
+      matchId: "m10",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 3,
+      awayScore: 1,
+      label: "Grand final",
+    });
+    expect(msg).toContain("**Grand final:** A 3–1 B — **A** take the series!");
+    expect(msg).not.toMatch(/champion|eliminated|advance/i);
   });
 
   it("labels tiebreaker results, reminders, and logistics as tiebreakers", () => {
@@ -174,8 +245,8 @@ describe("discord message formatters", () => {
       isTiebreaker: true,
       whenMs: Date.parse("2026-09-12T20:00:00Z"),
     };
-    expect(matchResultMessage({ ...fixture, homeScore: 2, awayScore: 1 }))
-      .toContain("Tiebreaker week 6:");
+    expect(matchResultMessage({ ...fixture, matchId: "m1", label: "Tiebreaker", homeScore: 2, awayScore: 1 }))
+      .toContain("**Tiebreaker:** A 2–1 B");
     expect(weekReminderMessage({ ...fixture, fixtures: [] }))
       .toContain("Tiebreaker week 6 matches");
     expect(rescheduleMessage(fixture)).toContain("Tiebreaker week 6:");
@@ -199,6 +270,17 @@ describe("discord message formatters", () => {
     expect(msg).toContain("A vs D");
     expect(msg).toContain("B vs C");
     expect(msg).toContain("/schedule");
+  });
+
+  it("gives each playoff pairing its seeds and a reader-local kickoff", () => {
+    const whenMs = Date.parse("2026-10-03T01:00:00Z");
+    const msg = playoffsStartedMessage("Season 1", [
+      { home: "A", away: "D", homeSeed: 1, awaySeed: 4, whenMs },
+      { home: "B", away: "C", homeSeed: 2, awaySeed: 3, whenMs: null },
+    ]);
+    expect(msg).toContain(`• (1) A vs (4) D — <t:${whenMs / 1000}:f>`);
+    // No kickoff yet: no dangling separator.
+    expect(msg).toContain("• (2) B vs (3) C\n");
   });
 
   it("announces when a bracket is withdrawn for a standings correction", () => {
@@ -1190,14 +1272,27 @@ describe("no message unfurls a link preview", () => {
       draftCompleteMessage("S1"),
       playerSoldMessage("A", "T", 5),
       matchResultMessage({
+        matchId: "m1",
         homeName: "A",
         awayName: "B",
         homeScore: 2,
         awayScore: 0,
-        week: 1,
-        isPlayoff: false,
+        label: "Week 1",
+      }),
+      matchResultMessage({
+        matchId: "m2",
+        homeName: "A",
+        awayName: "B",
+        homeScore: 2,
+        awayScore: 0,
+        label: "Semifinal",
+        forfeit: true,
+        knockout: { nextRound: "Grand final" },
       }),
       playoffsStartedMessage("S1", [{ home: "A", away: "B" }]),
+      playoffsStartedMessage("S1", [
+        { home: "A", away: "B", homeSeed: 1, awaySeed: 2, whenMs: 1_800_000_000_000 },
+      ]),
       playoffsReturnedToRegularMessage("S1"),
       championMessage("S1", "T", "s1"),
       freeAgentSignedMessage("A", "T"),
@@ -1318,13 +1413,26 @@ describe("no player-supplied name can inject markdown", () => {
     signupMessage(EVIL, 3, 10),
     playerSoldMessage(EVIL, EVIL, 5),
     matchResultMessage({
+      matchId: "m1",
       homeName: EVIL,
       awayName: EVIL,
       homeScore: 2,
       awayScore: 0,
-      week: 1,
-      isPlayoff: false,
+      label: "Week 1",
     }),
+    // The knockout line names both teams again — the winner and the loser.
+    matchResultMessage({
+      matchId: "m1",
+      homeName: EVIL,
+      awayName: EVIL,
+      homeScore: 2,
+      awayScore: 1,
+      label: "Semifinal",
+      knockout: { nextRound: "Grand final" },
+    }),
+    playoffsStartedMessage("Season 1", [
+      { home: EVIL, away: EVIL, homeSeed: 1, awaySeed: 4, whenMs: 1_800_000_000_000 },
+    ]),
     championMessage("Season 1", EVIL, "s1"),
     freeAgentSignedMessage(EVIL, EVIL),
     playerReleasedMessage(EVIL, EVIL),
