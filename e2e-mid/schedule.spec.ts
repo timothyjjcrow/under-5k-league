@@ -106,7 +106,7 @@ test("player check-in and captain reschedule stay synchronized end to end", asyn
     page.getByText("You're confirmed for the match ✓"),
   ).toBeVisible();
   // Readiness stays intentionally off the one-line phone fixture row so team
-  // names and the details target keep their tap space. At the desktop
+  // names and the match link keep their room. At the desktop
   // breakpoint the same refreshed payload exposes the captain roll-up.
   await page.setViewportSize({ width: 1024, height: 812 });
   await expect(
@@ -180,7 +180,7 @@ test("the team filter narrows the week rows and the All teams option restores th
   await expect(page.getByText("Week 1").first()).toBeVisible();
   const fixtures = page.locator("#fixtures");
   await expect(
-    fixtures.getByRole("link", { name: "details →" }).first(),
+    fixtures.getByRole("link", { name: /^Match page: / }).first(),
   ).toBeVisible();
   // Each series shows once, as a card in an open week or as a result line in
   // a closed one, so count distinct match links.

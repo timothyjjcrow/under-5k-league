@@ -17,7 +17,7 @@ test("a completed match page renders the box score with an MVP chip", async ({
   await page
     .getByRole("article", { name: / · Final score$/ })
     .first()
-    .getByRole("link", { name: "details →" })
+    .getByRole("link", { name: /^Match page: / })
     .click();
 
   await expect(page).toHaveURL(/\/matches\//);
@@ -54,7 +54,7 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   // exercising the pre-game scouting state regardless of within-week order.
   const scheduledDetails = page
     .getByRole("article", { name: / · Upcoming$/ })
-    .getByRole("link", { name: "details →" });
+    .getByRole("link", { name: /^Match page: / });
   await expect(scheduledDetails.first()).toBeVisible();
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);

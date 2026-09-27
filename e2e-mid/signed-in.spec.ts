@@ -209,7 +209,7 @@ test("mobile match page has no horizontal page overflow", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/schedule");
-  await page.getByRole("link", { name: "details →" }).first().click();
+  await page.getByRole("link", { name: /^Match page: / }).first().click();
   await expect(page).toHaveURL(/\/matches\//);
   await expectNoHorizontalOverflow(page, "/matches/[id]");
   assertNoErrors();

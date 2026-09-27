@@ -643,11 +643,17 @@ function MatchRow({ match: m }: { match: MatchView }) {
       paths: m.playoffPaths?.away,
     },
   ];
+  // The whole card opens the match page: its one link stretches an overlay
+  // (::after) across the card, so every tap on the card lands there, and
+  // screen readers hear one short, match-specific link per card instead of
+  // two team links and an anonymous "details" (team pages stay a tap away
+  // from the standings and the match page). A control with its own label,
+  // like the reschedule chip, sits above the overlay (relative z-10).
   return (
     <article
       aria-label={`${m.homeName} vs ${m.awayName} · ${status}`}
       className={cn(
-        "flex min-w-0 flex-col bg-surface transition-colors hover:bg-surface-2/60",
+        "relative flex min-w-0 flex-col bg-surface transition-colors hover:bg-surface-2/60",
         m.live && "bg-danger/[0.04]",
       )}
     >
@@ -702,19 +708,18 @@ function MatchRow({ match: m }: { match: MatchView }) {
               className="rounded-lg"
             />
             <div className="min-w-0 flex-1">
-              <Link
-              href={`/teams/${side.id}`}
-              className={cn(
-                "flex min-h-11 min-w-0 items-center py-2 text-sm [overflow-wrap:anywhere] hover:text-info",
-                m.done
-                  ? side.winner
-                    ? "font-semibold text-fg"
-                    : "text-muted"
-                  : "font-medium text-fg",
-              )}
-            >
-              {side.name}
-            </Link>
+              <span
+                className={cn(
+                  "flex min-h-9 min-w-0 items-center py-1 text-sm [overflow-wrap:anywhere]",
+                  m.done
+                    ? side.winner
+                      ? "font-semibold text-fg"
+                      : "text-muted"
+                    : "font-medium text-fg",
+                )}
+              >
+                {side.name}
+              </span>
               {side.paths && side.paths.length > 0 ? (
                 <dl className="space-y-1 pb-2 text-[11px] leading-relaxed">
                   {side.paths.map((path) => (
@@ -776,9 +781,13 @@ function MatchRow({ match: m }: { match: MatchView }) {
         ) : null}
         <Link
           href={`/matches/${m.id}`}
-          className="inline-flex min-h-11 shrink-0 items-center justify-end pl-2 text-xs font-semibold text-info hover:underline"
+          className="inline-flex min-h-11 shrink-0 items-center justify-end pl-2 text-xs font-semibold text-info hover:underline focus-visible:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-info/60"
         >
-          details →
+          Match page
+          <span className="sr-only">
+            : {m.homeName} vs {m.awayName}
+          </span>
+          <span aria-hidden>&nbsp;→</span>
         </Link>
       </div>
       {m.standins.length > 0 ? (
@@ -823,7 +832,7 @@ function RescheduleChip({
       href={`/matches/${matchId}`}
       aria-label={`Time change proposed — ${label}. Open the match page to respond.`}
       title={`Time change proposed — ${label}`}
-      className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+      className="relative z-10 inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
     >
       <span aria-hidden>⏳</span>
     </Link>
