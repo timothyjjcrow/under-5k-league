@@ -15,6 +15,8 @@ import { getSessionUser } from "@/lib/auth";
 import { DiscordTag } from "@/components/discord-tag";
 import { shareMetadata } from "@/lib/share-metadata";
 import { LocalTime } from "@/components/local-time";
+import { Countdown } from "@/components/countdown";
+import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import { seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import type { TeamScenario } from "@/lib/scenarios";
@@ -48,6 +50,7 @@ import { editTeamIdentity } from "@/app/actions/teams";
 import { canEditTeamIdentity } from "@/lib/team-identity";
 import { canViewLeagueContact } from "@/lib/visibility";
 import {
+  DRAFT_STATUS,
   MATCH_PHASE,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
@@ -65,7 +68,6 @@ import {
   Card,
   CardBody,
   CardHeader,
-  EmptyState,
   FormStrip,
   HeroPool,
   PlayerLink,
@@ -257,6 +259,16 @@ export default async function TeamPage({
     (a, b) => b.wins - a.wins || a.losses - b.losses,
   );
   const spent = team.members.reduce((sum, m) => sum + m.price, 0);
+  const draftStatus = team.season.draft?.status;
+  const auctionStarted =
+    draftStatus != null && draftStatus !== DRAFT_STATUS.NOT_STARTED;
+  // Signups, or a draft phase whose auction hasn't finished: fixtures come
+  // after the draft.
+  const draftAhead =
+    team.season.isActive &&
+    (team.season.status === SEASON_STATUS.SIGNUPS ||
+      (team.season.status === SEASON_STATUS.DRAFT &&
+        draftStatus !== DRAFT_STATUS.COMPLETE));
   // Before any result exists, record/points/rank are noise (and the "rank"
   // is just draft order) — show draft-shaped tiles instead.
   const played = allMatches.some((m) => m.status === "COMPLETED");
@@ -348,7 +360,7 @@ export default async function TeamPage({
   const sectionItems = [
     ...(showOverview ? [{ id: "team-overview", label: "Overview" }] : []),
     { id: "team-roster", label: "Roster" },
-    { id: "team-matches", label: "Matches" },
+    ...(myMatches.length > 0 ? [{ id: "team-matches", label: "Matches" }] : []),
     ...(teamHeroes.length > 0 ? [{ id: "team-heroes", label: "Heroes" }] : []),
     ...(h2h.length > 0 ? [{ id: "team-rivals", label: "Head-to-head" }] : []),
     ...(myScenario && stakesReport && played
@@ -378,7 +390,12 @@ export default async function TeamPage({
               </Link>
             ) : null}
             {team.season.isActive ? (
-              team.season.status === SEASON_STATUS.DRAFT ? (
+              team.season.status === SEASON_STATUS.SIGNUPS ? (
+                // The week's job before the draft: scouting the pool.
+                <Link href="/players" className={textLink("text-sm")}>
+                  Player pool →
+                </Link>
+              ) : team.season.status === SEASON_STATUS.DRAFT ? (
                 <Link href="/draft" className={textLink("text-sm")}>
                   Draft room →
                 </Link>
@@ -606,12 +623,15 @@ export default async function TeamPage({
                     : undefined
                 }
               />
-              <Stat label="Spent" value={`$${spent}`} />
               <Stat
                 label="Roster"
                 value={`${team.members.length}/${team.season.teamSize}`}
               />
               <Stat label="Avg MMR" value={avgMmr ?? "—"} />
+              {/* Nothing is spent before the auction opens. */}
+              {auctionStarted || spent > 0 ? (
+                <Stat label="Spent" value={`$${spent}`} />
+              ) : null}
             </div>
           ) : null}
 
@@ -744,43 +764,70 @@ export default async function TeamPage({
         ) : null}
       </section>
 
-      {/* No overflow-hidden on the card: it would clip the calendar menu.
-          The body clips the rows' hover background to the corners instead. */}
-      <Card id="team-matches" className="scroll-mt-40">
-        <CardHeader
-          title="Matches"
-          headingLevel={2}
-          action={
-            team.season.isActive ? (
-              // Full width on phones so the calendar button, and the menu
-              // under it, keep to the card's right edge.
-              <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 sm:w-auto">
-                <Link
-                  href={`/schedule?team=${team.id}#fixtures`}
-                  className={textLink("text-sm")}
-                >
-                  Team schedule →
-                </Link>
-                {showCalendar ? (
-                  <div className="ml-auto">
-                    <AddToCalendar
-                      site={resolveSiteUrl()}
-                      teams={[{ id: team.id, name: team.name }]}
-                      initialTeamId={team.id}
-                      align="end"
+      {myMatches.length === 0 ? (
+        // No fixtures yet: one line saying when they come, not an empty card.
+        <p className="rounded-[var(--radius)] border border-line-soft bg-surface/50 px-4 py-3 text-sm text-muted">
+          {draftAhead ? (
+            <>
+              No matches until after the draft.
+              {team.season.draftAt && !auctionStarted ? (
+                <>
+                  {" "}
+                  🗓️ Draft night:{" "}
+                  <strong className="text-fg">
+                    <LocalTime
+                      ts={team.season.draftAt.getTime()}
+                      variant="full"
+                      initial={formatMatchTime(team.season.draftAt, "full")}
                     />
-                  </div>
-                ) : null}
-              </div>
-            ) : undefined
-          }
-        />
-        <CardBody className="overflow-hidden rounded-b-[var(--radius)] p-0">
-          {myMatches.length === 0 ? (
-            <div className="p-5">
-              <EmptyState title="No matches scheduled yet" />
-            </div>
+                  </strong>{" "}
+                  <Countdown
+                    targetMs={team.season.draftAt.getTime()}
+                    eventLabel="Draft"
+                    passedLabel={DRAFT_PASSED_LABEL}
+                  />
+                </>
+              ) : null}
+            </>
+          ) : team.season.isActive ? (
+            "No matches scheduled yet."
           ) : (
+            "No matches were scheduled for this team."
+          )}
+        </p>
+      ) : (
+        // No overflow-hidden on the card: it would clip the calendar menu.
+        // The body clips the rows' hover background to the corners instead.
+        <Card id="team-matches" className="scroll-mt-40">
+          <CardHeader
+            title="Matches"
+            headingLevel={2}
+            action={
+              team.season.isActive ? (
+                // Full width on phones so the calendar button, and the menu
+                // under it, keep to the card's right edge.
+                <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 sm:w-auto">
+                  <Link
+                    href={`/schedule?team=${team.id}#fixtures`}
+                    className={textLink("text-sm")}
+                  >
+                    Team schedule →
+                  </Link>
+                  {showCalendar ? (
+                    <div className="ml-auto">
+                      <AddToCalendar
+                        site={resolveSiteUrl()}
+                        teams={[{ id: team.id, name: team.name }]}
+                        initialTeamId={team.id}
+                        align="end"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : undefined
+            }
+          />
+          <CardBody className="overflow-hidden rounded-b-[var(--radius)] p-0">
             <ul className="divide-y divide-line/60">
               {fixtureList.map((m) => {
                 const isHome = m.homeTeamId === id;
@@ -875,9 +922,9 @@ export default async function TeamPage({
                 );
               })}
             </ul>
-          )}
-        </CardBody>
-      </Card>
+          </CardBody>
+        </Card>
+      )}
 
       {diffTrend.length >= 2 ? (
         <Card>

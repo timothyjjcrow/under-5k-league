@@ -236,7 +236,12 @@ export default async function TeamsPage() {
         title="Teams"
         subtitle={`${season.name} · ${teams.length} teams`}
         action={
-          isDraft ? (
+          // Signup week has no standings yet; captains are scouting the pool.
+          season.status === SEASON_STATUS.SIGNUPS ? (
+            <Link href="/players" className={textLink("text-sm")}>
+              Player pool →
+            </Link>
+          ) : isDraft ? (
             <Link href="/draft" className={textLink("text-sm")}>
               Draft room →
             </Link>
