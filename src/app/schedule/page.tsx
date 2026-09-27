@@ -1,8 +1,7 @@
 import { calendarFeedLinks } from "@/lib/calendar-links";
 import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
-import { RegularSeasonProgress } from "@/components/league-progress";
-import { leagueProgress } from "@/lib/league-progress";
+import { leagueProgress, progressSummary } from "@/lib/league-progress";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
@@ -594,14 +593,17 @@ export default async function SchedulePage() {
               ? "Playoffs"
               : "Schedule & Standings"
         }
-        subtitle={`${season.name} · Local kickoff times`}
+        // The week and the series count stand in for the progress ring the
+        // home page carries: this page leads with the fixtures themselves.
+        subtitle={[
+          season.name,
+          season.status === "REGULAR_SEASON" ? progressSummary(progress) : null,
+          "Local kickoff times",
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         action={
           <div className="flex flex-wrap items-center gap-3">
-            {currentWeek != null ? (
-              <a href="#this-week" className={buttonClasses("secondary", "sm")}>
-                This week ↓
-              </a>
-            ) : null}
             {matches.some((m) => m.scheduledAt) ? (
               <>
                 <a
@@ -623,32 +625,6 @@ export default async function SchedulePage() {
           </div>
         }
       />
-
-      {regular.length > 0 ? (
-        <Card>
-          <CardBody className="p-4 sm:p-5">
-            <RegularSeasonProgress progress={progress} />
-          </CardBody>
-        </Card>
-      ) : null}
-
-      <nav
-        aria-label="Schedule sections"
-        className="flex flex-wrap gap-2 rounded-xl border border-line bg-surface p-2 text-sm"
-      >
-        <a
-          href="#fixtures"
-          className="inline-flex min-h-11 items-center rounded-lg px-3 font-medium text-muted hover:bg-surface-2 hover:text-fg"
-        >
-          Matches & results
-        </a>
-        <a
-          href="#standings"
-          className="inline-flex min-h-11 items-center rounded-lg px-3 font-medium text-muted hover:bg-surface-2 hover:text-fg"
-        >
-          Standings & analysis
-        </a>
-      </nav>
 
       {myNextMatch ? (
         <CheckinBanner

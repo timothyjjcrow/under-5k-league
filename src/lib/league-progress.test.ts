@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { leagueProgress } from "./league-progress";
+import { leagueProgress, progressSummary } from "./league-progress";
 import { AUTO_SYNC } from "./constants";
 import type { SlateMatch } from "./schedule";
 
@@ -90,5 +90,44 @@ describe("league progress presentation", () => {
     expect(
       leagueProgress([match("old", "SCHEDULED", 2, old)], now),
     ).toMatchObject({ completed: 0, focusWeek: null });
+  });
+});
+
+describe("progress summary line", () => {
+  it("names the current week and the series played", () => {
+    expect(
+      progressSummary(
+        leagueProgress(
+          [
+            match("a", "COMPLETED", 1, new Date(now - 7 * 86_400_000)),
+            match("b", "COMPLETED", 1, new Date(now - 7 * 86_400_000)),
+            match("c", "SCHEDULED", 2, new Date(now + 3600_000)),
+            match("d", "SCHEDULED", 3, new Date(now + 7 * 86_400_000)),
+          ],
+          now,
+        ),
+      ),
+    ).toBe("Week 2 of 3 · 2 of 4 series played");
+  });
+
+  it("drops the week once no fixture is current", () => {
+    const old = new Date(now - (AUTO_SYNC.WINDOW_HOURS + 1) * 3600_000);
+    expect(
+      progressSummary(
+        leagueProgress(
+          [match("a", "COMPLETED", 1, old), match("b", "SCHEDULED", 2, old)],
+          now,
+        ),
+      ),
+    ).toBe("1 of 2 series played");
+    expect(
+      progressSummary(
+        leagueProgress([match("a", "COMPLETED", 1, old)], now),
+      ),
+    ).toBe("1 of 1 series played");
+  });
+
+  it("says nothing before fixtures exist", () => {
+    expect(progressSummary(leagueProgress([], now))).toBeNull();
   });
 });

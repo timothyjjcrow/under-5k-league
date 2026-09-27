@@ -12,10 +12,17 @@ test("home and schedule agree on progress and preserve the full standings behind
     const bar = page.getByRole("progressbar", {
       name: "Regular-season series complete",
     });
-    await expect(bar).toBeVisible();
-    const count = await bar.getAttribute("aria-valuenow");
-    if (progress !== null) expect(count).toBe(progress);
-    progress = count;
+    if (path === "/") {
+      await expect(bar).toBeVisible();
+      progress = `${await bar.getAttribute("aria-valuenow")} of ${await bar.getAttribute("aria-valuemax")} series played`;
+    } else {
+      // Schedule leads with the fixtures: the same count rides the subtitle
+      // instead of repeating the home page's progress ring.
+      await expect(bar).toHaveCount(0);
+      await expect(
+        page.locator("h1 + p").filter({ hasText: progress! }),
+      ).toBeVisible();
+    }
     const overview = page.getByRole("table", {
       name: "League standings overview",
     });
