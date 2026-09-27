@@ -359,16 +359,18 @@ decided authoritative grand final. `resolveChampionPresentation`
 (`src/lib/champion-presentation.ts`) is the shared public boundary: when saved
 postseason rows exist it requires one latest completed FINAL whose participant
 and winner match the stored id; champion-only legacy archives remain trusted.
-Dashboard, schedule, teams, match detail, recap, archive, player careers, Hall
+Dashboard, schedule, teams, match detail, season page, player careers, Hall
 of Fame, feature metrics, bracket trophies, and Discord champion sends all use
 that proof. A hand-entered final can be reopened and an imported final game can
 be removed through dedicated correction commands even when the stored title
 incorrectly names the losing finalist: both atomically clear the
 champion/announcement marker, return to PLAYOFFS, preserve earlier rounds, and
 recrown if the recomputed series is still decided. Earlier rounds are locked by
-the shared `hasLaterBracketRound` rule. `/recap` keeps the champion, bracket,
-and completed series even when there are zero imported Dota games; only
-player-stat awards become unavailable. `/seasons` and `/seasons/[id]` recompute
+the shared `hasLaterBracketRound` rule. A finished season's page
+(`/seasons/[id]`) keeps the champion, bracket, and completed series even when
+there are zero imported Dota games; only its player-stat awards become
+unavailable. `/recap` only redirects there (`src/app/recap/route.ts`,
+`recapDestination`), so old links and Discord champion posts keep working. `/seasons` and `/seasons/[id]` recompute
 archived standings and brackets from stored rows; `/hall-of-fame` rolls up
 cross-season careers (`src/lib/hall-of-fame.ts`, career impact points,
 all-time oracle). `/seasons` also hosts a non-restorable JSON audit archive
@@ -397,7 +399,12 @@ Opening a season from offseason is either `createSeason` with no active id or
 the offseason-only `reactivateSeason` (`src/lib/season.ts`). Reactivation
 compare-and-sets the archived target's rendered `updatedAt`, restores its exact
 phase, and parks legacy live auction clocks before activation; it never
-silently archives a different active season. Every season-settings form also
+silently archives a different active season. The season-scoped public pages
+(Leaders, Hero meta, Pick'em, Fantasy) resolve `?season=` or the active season
+through `resolveSeasonScope` (`src/lib/season-scope.ts`); in offseason they
+open the most recent season (side games read-only) rather than an empty
+screen, and one season switcher appears only when two or more seasons have
+that page's data. Every season-settings form also
 claims the rendered active id and revision. These lifecycle commands run at
 Serializable isolation because "at most one active season" has no database
 constraint. `resultChangedAt` invalidates dependent reads after each committed
@@ -607,9 +614,9 @@ directly.
 | `/pickem`          | Match predictions, one "Your picks" history, and oracle board (shared places)                  | Nav from DRAFT; interaction after completed auction until each kickoff; COMPLETE/archive read-only | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
 | `/records`         | Compact trusted single-game record book (no Most deaths), first-achiever tie policy            | Evergreen: Statistics nav, Explore, footer                                                         | `getAllGamesForRecords` (deterministic chronology), `leagueRecords`                                           |
 | `/hall-of-fame`    | Short note until a champion exists; then champions first and shared-place career boards        | Footer link                                                                                        | `appearanceCareers`, all-seasons scans                                                                        |
-| `/recap`           | Season awards page                                                                             | Nav on COMPLETE; `?season=`                                                                        | `computeSeasonAwards`                                                                                         |
+| `/recap`           | Redirect only: to a finished season's page, or Leaders while the season runs                   | Old links and Discord posts; `?season=`                                                            | `recapDestination`                                                                                            |
 | `/seasons`         | Season history + audit archive/delete; offseason-only reactivation                              | Nav once an archive exists; reactivation disabled while a season is active                         | —                                                                                                             |
-| `/seasons/[id]`    | Season archive: standings, bracket, rosters                                                    | Same                                                                                               | Recomputed from archived rows                                                                                 |
+| `/seasons/[id]`    | Season page: champion, standings, bracket, awards once finished, results, rosters              | Same                                                                                               | Recomputed from archived rows; `computeSeasonAwards`                                                          |
 | `/inhouse`         | Inhouse room + scene stats + Elo ladder + results                                              | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`                                                                      |
 | `/inhouse/history` | Complete completed-lobby archive, 100 rows per `?page=N`, exact-row admin void                 | Always                                                                                             | Stable formation ordering; authoritative played-time fallback                                                 |
 | `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Evergreen: Explore, mobile menu, footer                                                            | `NewsPost`; create request receipts; `NewsMedia`                                                              |

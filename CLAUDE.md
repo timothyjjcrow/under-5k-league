@@ -1780,6 +1780,27 @@ already in the `Setting` table.
   standings, playoff rounds, weekly results, full rosters. Reuses
   `computeStandings`, `groupPlayoffRounds`, and `StandingsTable`; archived
   `/teams/[id]` pages already work since they query by id, not active season.
+- **`/seasons/[id]` is THE page for a finished season** (2026-09): once a
+  season is archived or COMPLETE it also streams `<SeasonAwards>`
+  (`src/components/season-awards.tsx` — the stat strip and award cards that
+  used to be a separate /recap page repeating the champion and bracket).
+  `/recap` is now only a route handler (`src/app/recap/route.ts`, pure
+  `recapDestination` in `recap.ts`, tested) so every old link still lands:
+  `?season=<id>` → that season's page (Leaders while it is still running;
+  an unknown id → the season page's not-found; a repeated key → 404); bare
+  → the current season's page at COMPLETE, Leaders mid-season, else the
+  latest archive. It is a route handler, not a page, so the redirect is a
+  real 307 that Discord unfurls follow. `championMessage` links the season
+  page directly; keep `/recap` working anyway — old champion posts use it.
+- **The season-scoped pages share one scope** (`src/lib/season-scope.ts`):
+  Leaders, Hero meta, Pick'em and Fantasy resolve `?season=` (unknown → 404,
+  never a quiet fallback) or the active season, and with NO active season
+  open the most recent one (read-only for the side games) instead of an
+  empty "No active season" screen. One `<SeasonSwitcher>`
+  (`src/components/season-scope.tsx`, pure choice rules in
+  `season-choices.ts`) renders only when 2+ seasons have that page's data
+  (games / predictions / fantasy entries), plus the viewed and current
+  season. Records uses the same switcher with "All seasons" as its bare page.
 - Admins can **permanently delete an archived season** (test runs/misfires)
   via a confirm-guarded button on `/seasons` → `deleteSeason` (never the
   active season; deletes matches first since Match→Team is RESTRICT, then
