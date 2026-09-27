@@ -276,8 +276,16 @@ export default async function TeamPage({
   const avgMmr = knownMmrs.length
     ? Math.round(knownMmrs.reduce((s, v) => s + v, 0) / knownMmrs.length)
     : null;
+  // Role coverage helps a captain decide whom to buy, so it shows only in
+  // the draft phase before the auction completes. In signups it is all gaps
+  // (only the captain is rostered); after the draft the team can't act on
+  // it, and each player's roles stay on their roster row.
   const coverage = roleCoverage(rosterRegs);
-  const hasRoleData = coverage.some((r) => r.count > 0);
+  const showCoverage =
+    team.season.isActive &&
+    team.season.status === SEASON_STATUS.DRAFT &&
+    draftStatus !== DRAFT_STATUS.COMPLETE &&
+    coverage.some((r) => r.count > 0);
   // Which player prefers which roles → per-row badges in the roster card.
   const rolesByUser = new Map(rosterRegs.map((r) => [r.userId, r.roles]));
   // The season hue its crest wears (published by the root layout).
@@ -724,7 +732,7 @@ export default async function TeamPage({
           </CardBody>
         </Card>
 
-        {hasRoleData ? (
+        {showCoverage ? (
           <Card>
             <CardHeader
               title="Role coverage"
