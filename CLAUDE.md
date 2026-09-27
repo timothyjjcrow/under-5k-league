@@ -1324,9 +1324,16 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
   against a live league, where `resolveStalledNomination` auto-sells an
   undrafted signup onto a mid-season roster on the next poll from any visitor.
   Coverage in `test/integration/season-phase.itest.ts`.
-- **/draft page gates ONLY on "no active season"** — never on season.status:
-  the league parks there during SIGNUPS and a static gate never learns the
-  admin hit start. The room's poll handles waiting → live → complete.
+- **/draft never gates on the phases the room moves through.** With an
+  active season in SIGNUPS or DRAFT it renders whatever the auction's status:
+  the league parks there during SIGNUPS, a static gate never learns the admin
+  hit Start, and the room's poll handles waiting → live → complete. Once the
+  season has LEFT those two phases the page redirects to /teams (rosters,
+  prices and the draft-night recap live there) — EXCEPT while the auction is
+  IN_PROGRESS or PAUSED. That is the stranded-auction state (the flip back
+  into DRAFT is its repair), and the admin must still be able to see it in
+  the room, so don't widen the redirect to cover it. No active season shows
+  the empty state.
 - **Room correctness**: poll/action responses are sequence-ordered (a slow
   tick must not clobber a fresher bid response); the outbid latch is NOT
   cleared just because the captain is priced out (they most need to see it);
