@@ -73,6 +73,19 @@ vi.mock("@/lib/discord", async (importOriginal) => {
 // keep pick-up traffic out of the league-announcement channel.
 import { sendInhouseDiscordMessage } from "@/lib/discord";
 
+// `logAdminAction` resolves the actor from the session rather than a parameter,
+// and there is no cookie jar here to read — without this, the audit write fails
+// and is swallowed (best-effort by design), so no AdminAction row would exist
+// to assert on. Everything else in auth stays real; the inhouse service only
+// imports the SessionUser TYPE from it.
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  return {
+    ...actual,
+    getSessionUser: vi.fn(async () => ({ id: "admin-session", name: "Boss" })),
+  };
+});
+
 const mockRecent = vi.mocked(fetchRecentMatchIds);
 const mockMatch = vi.mocked(fetchOpenDotaMatch);
 const mockSend = vi.mocked(sendInhouseDiscordMessage);
@@ -1057,6 +1070,28 @@ describe("inhouse — misc guards", () => {
     const players = await enqueue(3, () => 3000);
     expect((await leaveQueue(players[0].session)).ok).toBe(true);
     expect(await prisma.inhouseQueueEntry.count()).toBe(2);
+  });
+});
+
+describe("inhouse — cancelling a live game", () => {
+  it("needs no override, frees the slot, and logs the phase and players", async () => {
+    // A live game is cancelled with the same plain control as any other
+    // phase, and every successful admin cancel leaves an audit row.
+    const admin = sessionFor(await makeUser("Live Cancel Admin", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+
+    expect((await cancelLobby(admin)).ok).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+
+    const log = await prisma.adminAction.findMany({
+      where: { action: "cancelLobby" },
+    });
+    expect(log).toHaveLength(1);
+    expect(log[0].summary).toContain(INHOUSE_STATUS.IN_PROGRESS);
+    expect(log[0].summary).toContain(`${INHOUSE.LOBBY_SIZE} player(s)`);
   });
 });
 
@@ -2759,6 +2794,71 @@ describe("inhouse — an admin can void a wrong result", () => {
     ).toBe(INHOUSE_STATUS.CANCELLED);
   });
 
+  it("leaves an audit record and corrects the Discord result", async () => {
+    // The lobby reads CANCELLED like any abandoned game and the claim nulls the
+    // match id, so the AdminAction row is the only record naming the game.
+    const admin = sessionFor(await makeUser("Audit Void Admin", "ADMIN"));
+    const g = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(g.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7200000002,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    expect((await recordMatch(g.players[0].session, "7200000002")).ok).toBe(
+      true,
+    );
+
+    mockSend.mockClear();
+    expect((await voidLastResult(admin)).ok).toBe(true);
+
+    const log = await prisma.adminAction.findMany({
+      where: { action: "voidLastResult" },
+    });
+    expect(log).toHaveLength(1);
+    expect(log[0].summary).toContain("7200000002");
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const msg = mockSend.mock.calls[0][0];
+    expect(msg).toContain("result has been voided");
+    // The anchor back to the post it corrects.
+    expect(msg).toContain("opendota.com/matches/7200000002");
+    // Nobody is being asked to do anything, so nothing may ring a phone.
+    expect(mockSend.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("a losing concurrent void writes no record and sends nothing", async () => {
+    // Post-claim ordering: two admins pressing Void must not produce two audit
+    // rows and two corrections for one voided game.
+    const admin = sessionFor(await makeUser("Race Void Admin", "ADMIN"));
+    const g = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(g.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7200000003,
+        team1,
+        team2,
+        radiantWin: false,
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    expect((await recordMatch(g.players[0].session, "7200000003")).ok).toBe(
+      true,
+    );
+
+    mockSend.mockClear();
+    const results = await raceN(3, () => voidLastResult(admin));
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(
+      await prisma.adminAction.count({ where: { action: "voidLastResult" } }),
+    ).toBe(1);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
   it("voids the NAMED game when a lobbyId is given, not the newest", async () => {
     // The /inhouse/history control targets a specific row — a result landing
     // between the admin's look and their click must never redirect the void.
@@ -3099,6 +3199,87 @@ describe("inhouse — the played game is the truth", () => {
     const deltas = JSON.parse(done.eloDeltas) as Record<string, number>;
     expect(deltas[rowFor(swappedIn).userId]).toBeGreaterThan(0);
     expect(deltas[rowFor(swappedOut).userId]).toBeLessThan(0);
+  });
+
+  it("a request dying between the claim and the side fixes commits neither", async () => {
+    // The COMPLETED claim and the teamFixes loop are one transaction: a
+    // COMPLETED lobby still carrying the DRAFT roster must never be visible,
+    // because the result reconciler stamps Elo off InhouseLobbyPlayer.team and
+    // would credit a slot-swapped player with the side they did not play.
+    const admin = sessionFor(await makeUser("AdminSeam", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const swapper = team1[4]; // drafted team 1, actually plays Dire
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 992004,
+        team1: [...team1.slice(0, 4), team2[0]],
+        team2: [...team2.slice(1), swapper],
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }) as never,
+    );
+
+    // Serverless, a dropped connection, a deploy mid-write: the request that
+    // won the claim is allowed to die before the loop under it lands.
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.applyResult.beforeTeamFixes", async () => {
+        fired = true;
+        throw new Error("the request died mid-claim");
+      }),
+    );
+    await expect(recordMatch(admin, "992004")).rejects.toThrow(
+      "the request died mid-claim",
+    );
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    setRaceHook(null);
+
+    // Everything rolled back together: no result, no announcement, and every
+    // player still on the side the draft put them.
+    const rolledBack = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: { include: { user: true } } },
+    });
+    expect(rolledBack.status).toBe(INHOUSE_STATUS.IN_PROGRESS);
+    expect(rolledBack.winnerTeam).toBeNull();
+    expect(rolledBack.completedAt).toBeNull();
+    expect(
+      rolledBack.players.find((p) => effectiveDotaAccountId(p.user) === swapper)
+        ?.team,
+    ).toBe(1);
+    expect(
+      await prisma.inhouseAnnouncement.count({ where: { lobbyId: lobby.id } }),
+    ).toBe(0);
+
+    // The OpenDota request already happened, so an immediate retry stays
+    // bounded by the provider cooldown even though the write rolled back.
+    await expect(recordMatch(admin, "992004")).resolves.toEqual({
+      ok: false,
+      error: expect.stringMatching(/wait about a minute/i),
+    });
+    await prisma.setting.update({
+      where: {
+        key: providerCooldownKey(
+          "open-dota-match-import",
+          admin.id,
+          `inhouse:${lobby.id}`,
+        ),
+      },
+      data: { value: new Date(0).toISOString() },
+    });
+
+    // Once it expires, the retry is byte-identical to the happy path.
+    expect((await recordMatch(admin, "992004")).ok).toBe(true);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: { include: { user: true } } },
+    });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(
+      done.players.find((p) => effectiveDotaAccountId(p.user) === swapper)
+        ?.team,
+    ).toBe(2);
   });
 
   it("leaves an unswapped game's rosters exactly as drafted", async () => {

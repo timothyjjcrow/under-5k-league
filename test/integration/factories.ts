@@ -52,14 +52,6 @@ export async function resetDb() {
   // cascade; clear them first so lease/backlog state cannot cross test cases.
   await prisma.leagueAnnouncement.deleteMany();
   await prisma.automationRunState.deleteMany();
-  // Cred first: InhouseCreditEntry has NO foreign key at all (the AdminAction
-  // shape — a staking record has to outlive the account), so nothing cascades
-  // it and a missing line here leaks balances between tests. For money math
-  // that is worse than a normal leak: the suite stays green while measuring
-  // the previous test's ledger.
-  await prisma.inhouseCreditEntry.deleteMany();
-  await prisma.inhouseCredit.deleteMany();
-  await prisma.inhouseBet.deleteMany();
   await prisma.inhouseLobbyPlayer.deleteMany();
   await prisma.inhouseLobby.deleteMany();
   await prisma.inhouseQueueEntry.deleteMany();

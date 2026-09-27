@@ -124,7 +124,6 @@ function inputs(
     leagueDeliveryAvailable: false,
     activeLobbies: [],
     queue: [],
-    unsettledBet: false,
     repairableInhouseResult: false,
     leagueOutbox: [],
     inhouseOutboxes: [],
@@ -462,7 +461,6 @@ describe("computeAutomationGateSnapshot", () => {
             startedAt: null,
             detectedAt: null,
             updatedAt: new Date(NOW),
-            betsCloseAt: null,
           },
         ],
       }),
@@ -494,7 +492,6 @@ describe("computeAutomationGateSnapshot", () => {
               startedAt: new Date(startedAt),
               detectedAt: null,
               updatedAt: new Date(NOW),
-              betsCloseAt: null,
             },
           ],
         }),
@@ -610,7 +607,7 @@ describe("computeAutomationGateSnapshot", () => {
     ).toMatchObject({ nextWakeAtMs: idleExpiresAt + 1, reason: "INHOUSE" });
   });
 
-  it("keeps an in-progress betting close ahead of result detection", () => {
+  it("sleeps a just-started game until result detection opens", () => {
     const snapshot = computeAutomationGateSnapshot(
       inputs({
         activeLobbies: [
@@ -622,7 +619,6 @@ describe("computeAutomationGateSnapshot", () => {
             startedAt: new Date(NOW),
             detectedAt: null,
             updatedAt: new Date(NOW),
-            betsCloseAt: new Date(NOW + 45_000),
           },
         ],
       }),
@@ -630,7 +626,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toMatchObject({
-      nextWakeAtMs: NOW + 45_000,
+      nextWakeAtMs: NOW + INHOUSE.DETECT_MIN_MINUTES * 60_000,
       reason: "INHOUSE",
     });
   });

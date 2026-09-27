@@ -1,5 +1,11 @@
 # Inhouse betting — recommendation and implementation plan
 
+> **Historical — this feature was removed.** Cred betting was removed in
+> September 2026 by the owner's decision. The `InhouseBet`, `InhouseCredit` and
+> `InhouseCreditEntry` tables and the `InhouseLobby` bet columns are left
+> dormant (no destructive migration), and nothing in the app reads or writes
+> them. This document is kept only as the record of the original design.
+
 ## The recommendation (what a player experiences)
 
 The last pick lands, teams lock, and the READY screen gets a clock for the first time: **45 seconds, bets open.** Above the lobby name and password sits a two-bar panel — your side's pool and theirs — with one-tap chips (10 / 25 / 50 / MAX 100) and a **COVER** button that stakes exactly the amount needed to match the gap. You can only ever bet on your own team, once, and you cannot take it back. Everyone's stake is public the instant it lands, so the panel is a live argument: "they're 160 ahead — somebody take it." **Only matched Cred is live** — if your side over-stakes, the excess is simply never in play and comes straight back, and the panel says so on the button before you tap ("100 staked · 40 covered · 60 comes home"). Matched Cred pays even money. Forty-five seconds later it locks, they go play, and when OpenDota reports the game the room's existing post-game banner gains one line beside the Elo delta: `+43 Cred · 43 of your 100 was covered`. The Discord result post gains a slips block naming who was in for what. `/inhouse` gains a second ladder — **net Cred**, not balance — where the fourteenth-best player in the league can be first.

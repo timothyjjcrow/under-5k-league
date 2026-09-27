@@ -49,7 +49,6 @@ const lobby = (over: Partial<NonNullable<BoardSnapshot["lobby"]>> = {}) => ({
   acceptEndsAtMs: null,
   acceptedNames: [],
   pendingNames: [],
-  potCred: null,
   ...over,
 });
 
@@ -70,13 +69,6 @@ describe("the board carries no emoji", () => {
       snap({ lobby: lobby({ status: INHOUSE_STATUS.DRAFTING }) }),
       snap({
         lobby: lobby({ status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0 }),
-      }),
-      snap({
-        lobby: lobby({
-          status: INHOUSE_STATUS.IN_PROGRESS,
-          startedAtMs: T0,
-          potCred: 620,
-        }),
       }),
     ];
     for (const s of states) {
@@ -309,62 +301,16 @@ describe("lobby states", () => {
   });
 });
 
-describe("the pot — LIVE only, where it is frozen", () => {
-  const live = (potCred: number | null) =>
-    renderBoard(
+describe("the LIVE state", () => {
+  it("goes straight from the rack to the blurb — no priced line", () => {
+    const rows = renderBoard(
       snap({
-        lobby: lobby({
-          status: INHOUSE_STATUS.IN_PROGRESS,
-          startedAtMs: T0,
-          potCred,
-        }),
+        lobby: lobby({ status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0 }),
       }),
-    );
-
-  it("prices the game under the rack", () => {
-    const rows = live(400).embed.description.split("\n");
+    ).embed.description.split("\n");
     expect(rows[1]).toBe("▰ ▰ ▰ ▰ ▰ │ ▰ ▰ ▰ ▰ ▰");
-    expect(rows[2]).toBe("CONTESTED · 400 CRED ON THE LINE");
-  });
-
-  it("uses the neutral word for an ordinary pot rather than a label on every game", () => {
-    // tierLabel is "" below the contested threshold on purpose: a label on
-    // every single game is wallpaper within a night on a pinned surface.
-    expect(live(120).embed.description).toContain(
-      "PRICED · 120 CRED ON THE LINE",
-    );
-    expect(live(900).embed.description).toContain(
-      "MARQUEE · 900 CRED ON THE LINE",
-    );
-  });
-
-  it("omits the line entirely when nobody bet", () => {
-    // Never "0 CRED ON THE LINE" — the board omits what it doesn't have, the
-    // same rule the empty state's stat fields follow.
-    for (const empty of [null, 0]) {
-      expect(live(empty).embed.description).not.toContain("CRED");
-      expect(live(empty).embed.description.split("\n")[2]).toBe("");
-    }
-  });
-
-  it("is absent from every state where the window is still open", () => {
-    // The 45-second window sits in READY, and the figure moves with every tap
-    // there. A moving number on a pinned message is one PATCH per bet.
-    for (const status of [
-      INHOUSE_STATUS.READY_CHECK,
-      INHOUSE_STATUS.CAPTAIN_VOTE,
-      INHOUSE_STATUS.DRAFTING,
-      INHOUSE_STATUS.READY,
-    ]) {
-      const { embed } = renderBoard(
-        snap({ lobby: lobby({ status, potCred: 400 }) }),
-      );
-      expect(embed.description).not.toContain("CRED");
-    }
-  });
-
-  it("says nothing about sides — Radiant isn't known until the match imports", () => {
-    expect(live(400).embed.description).not.toMatch(/Radiant|Dire/);
+    expect(rows[2]).toBe("");
+    expect(rows.join("\n")).not.toMatch(/\bcred\b|\bstakes?\b|\bpot\b/i);
   });
 });
 
@@ -526,60 +472,20 @@ describe("digest — the cost model", () => {
     expect(a).not.toBe(b);
   });
 
-  it("does not move while a betting window is open", () => {
-    // THE ONE THAT MATTERS FOR COST. Betting opens on the DRAFTING→READY flip
-    // and ten taps land inside the result-settlement window; if the pot reached
-    // the digest here,
-    // the pinned message would PATCH once per bet — and it would do it in the
-    // one phase where every player is looking at Discord.
-    const picking = (potCred: number | null) =>
-      renderBoard(
-        snap({ lobby: lobby({ status: INHOUSE_STATUS.READY, potCred }) }),
-      ).digest;
-    const seen = new Set([null, 0, 10, 250, 1000].map(picking));
-    expect(seen.size).toBe(1);
-  });
-
-  it("repaints once for a pot that lands after Start, then never again", () => {
-    // Pressing Start does NOT close betting, so a late bet can still move the
-    // LIVE figure. Σ confirmed stakes only grows and freezes for good at
-    // betsCloseAt — monotonic-and-then-final, which is this file's own test for
-    // a digest key. The alternative is a pinned message under-reporting the pot
-    // for the rest of the game.
-    const live = (potCred: number | null) =>
+  it("keeps the clock out of the LIVE digest", () => {
+    // Elapsed time renders as <t:…:R>, which keeps counting in every client;
+    // in the digest it would cost one PATCH per BOARD_MIN_SECONDS all game.
+    const live = (nowMs: number) =>
       renderBoard(
         snap({
+          nowMs,
           lobby: lobby({
             status: INHOUSE_STATUS.IN_PROGRESS,
             startedAtMs: T0,
-            potCred,
           }),
         }),
       ).digest;
-    expect(live(300)).not.toBe(live(400));
-    expect(live(400)).toBe(live(400));
-    // ...and the clock still isn't in it, pot or no pot.
-    const a = renderBoard(
-      snap({
-        nowMs: T0,
-        lobby: lobby({
-          status: INHOUSE_STATUS.IN_PROGRESS,
-          startedAtMs: T0,
-          potCred: 400,
-        }),
-      }),
-    ).digest;
-    const b = renderBoard(
-      snap({
-        nowMs: T0 + 3600_000,
-        lobby: lobby({
-          status: INHOUSE_STATUS.IN_PROGRESS,
-          startedAtMs: T0,
-          potCred: 400,
-        }),
-      }),
-    ).digest;
-    expect(a).toBe(b);
+    expect(live(T0)).toBe(live(T0 + 3600_000));
   });
 
   it("tracks accepts landing during a check", () => {

@@ -1,14 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import {
-  INHOUSE_BET_STATUS,
-  INHOUSE_STATUS,
-} from "./constants";
-import {
-  inhouseResultMessage,
-  sendInhouseDiscordMessage,
-  type InhouseBetSlip,
-} from "./discord";
+import { INHOUSE_STATUS } from "./constants";
+import { inhouseResultMessage, sendInhouseDiscordMessage } from "./discord";
 import { parseInhouseBox, type InhouseBoxPlayer } from "./inhouse-box";
 import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
 import { gameMvp } from "./achievements";
@@ -55,7 +48,6 @@ type InhouseResultAnnouncementSource = {
 /** The single result renderer used by both the live path and crash recovery. */
 export function inhouseResultAnnouncementContent(
   result: InhouseResultAnnouncementSource,
-  slips?: InhouseBetSlip[] | null,
 ): string {
   const radiantWin = result.winnerTeam === result.radiantTeam;
   const mvpId = gameMvp(result.boxScore, radiantWin);
@@ -70,7 +62,6 @@ export function inhouseResultAnnouncementContent(
     mvpName: mvp?.name ?? null,
     mvpHero: mvp ? (heroById(mvp.heroId)?.name ?? null) : null,
     dotaMatchId: result.dotaMatchId,
-    slips,
   });
 }
 
@@ -104,48 +95,6 @@ export type InhouseResultReconciliation = {
   created: number;
 };
 
-const RECOVERABLE_BET_OUTCOMES = new Set([
-  "WON",
-  "LOST",
-  "VOID_LINEUP",
-  "VOID_LATE",
-]);
-
-function persistedBetSlips(source: {
-  betSettlement: string | null;
-  bets: {
-    userId: string;
-    stake: number;
-    matched: number | null;
-    outcome: string | null;
-    payout: number | null;
-    user: { name: string };
-  }[];
-}): InhouseBetSlip[] | null {
-  if (source.betSettlement !== INHOUSE_BET_STATUS.SETTLED) return null;
-  const slips: InhouseBetSlip[] = [];
-  for (const bet of source.bets) {
-    if (
-      !bet.outcome ||
-      !RECOVERABLE_BET_OUTCOMES.has(bet.outcome) ||
-      bet.matched === null ||
-      bet.payout === null
-    ) {
-      // A partial settlement must never be rendered as if it were the whole
-      // pot. The money sweeper can finish it and a later heartbeat can retry.
-      return null;
-    }
-    slips.push({
-      name: bet.user.name,
-      stake: bet.stake,
-      matched: bet.matched,
-      outcome: bet.outcome as InhouseBetSlip["outcome"],
-      delta: bet.payout,
-    });
-  }
-  return slips;
-}
-
 async function reconcileOneResult(
   lobbyId: string,
   cutoff: Date,
@@ -162,17 +111,6 @@ async function reconcileOneResult(
                   userId: true,
                   team: true,
                   user: { select: { name: true, avatar: true } },
-                },
-              },
-              bets: {
-                where: { confirmedAt: { not: null } },
-                select: {
-                  userId: true,
-                  stake: true,
-                  matched: true,
-                  outcome: true,
-                  payout: true,
-                  user: { select: { name: true } },
                 },
               },
               announcements: {
@@ -261,22 +199,19 @@ async function reconcileOneResult(
           }
 
           const boxScore = parseInhouseBox(source.boxScore);
-          const content = inhouseResultAnnouncementContent(
-            {
-              winnerTeam: source.winnerTeam,
-              radiantTeam: source.radiantTeam,
-              radiantScore: source.radiantScore,
-              direScore: source.direScore,
-              durationSecs: source.durationSecs,
-              dotaMatchId: source.dotaMatchId,
-              boxScore,
-            },
-            persistedBetSlips(source),
-          );
+          const content = inhouseResultAnnouncementContent({
+            winnerTeam: source.winnerTeam,
+            radiantTeam: source.radiantTeam,
+            radiantScore: source.radiantScore,
+            direScore: source.direScore,
+            durationSecs: source.durationSecs,
+            dotaMatchId: source.dotaMatchId,
+            boxScore,
+          });
 
           // Re-assert both the exact source result and the missing/current
-          // event at the write. Serializable makes a concurrent void, bet
-          // settlement or rival reconciler either win first or retry cleanly.
+          // event at the write. Serializable makes a concurrent void or rival
+          // reconciler either win first or retry cleanly.
           const claim = await tx.inhouseLobby.updateMany({
             where: {
               id: source.id,
@@ -289,7 +224,6 @@ async function reconcileOneResult(
               radiantScore: source.radiantScore,
               direScore: source.direScore,
               boxScore: source.boxScore,
-              betSettlement: source.betSettlement,
               ...(resultEvent
                 ? { announcements: { some: { id: resultEvent.id } } }
                 : {
@@ -310,8 +244,9 @@ async function reconcileOneResult(
           if (claim.count === 0) return "skipped";
 
           if (resultEvent) {
-            // Never rewrite a payload a worker may already have in flight. A
-            // sent/base result is still truthful; Elo recovery remains useful.
+            // Re-render a still-PENDING payload from the committed columns,
+            // but never rewrite one a worker may already have in flight. A
+            // sent result is still truthful; Elo recovery remains useful.
             await tx.inhouseAnnouncement.updateMany({
               where: {
                 id: resultEvent.id,
