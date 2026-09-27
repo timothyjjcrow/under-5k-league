@@ -3151,11 +3151,12 @@ function MatchResultRow({
           className="flex flex-wrap items-end gap-2 text-xs text-muted"
           hidden={{ matchId: m.id, expectedActiveSeasonId }}
         >
-          <label
-            htmlFor={`scheduledAt-${m.id}`}
-            className="flex flex-col gap-1"
-          >
-            <span>Kickoff time</span>
+          {/* The label sits BESIDE the field, not around it: the field now
+              carries its zone name and "your time" hint, and a wrapping label
+              folds both into the box's accessible name ("Kickoff time Pacific
+              time = 9:57 AM your time"). They are its description instead. */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor={`scheduledAt-${m.id}`}>Kickoff time</label>
             <LocalDatetimeField
               id={`scheduledAt-${m.id}`}
               name="scheduledAt"
@@ -3164,7 +3165,7 @@ function MatchResultRow({
               timeZone={LEAGUE_CONFIG.timeZone}
               className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
             />
-          </label>
+          </div>
           <SubmitButton variant="secondary" size="sm">
             {m.scheduledAt ? "Update time" : "Set time"}
           </SubmitButton>
