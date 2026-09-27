@@ -121,8 +121,9 @@ export default function GlobalError({
             <a href="/" style={LINK_STYLE}>
               Back to home
             </a>
-            <a href="/schedule" style={LINK_STYLE}>
-              Schedule
+            {/* Phase-independent: this document can't read the season. */}
+            <a href="/how-it-works" style={LINK_STYLE}>
+              How it works
             </a>
             {LEAGUE_CONFIG.discordInviteUrl ? (
               <a

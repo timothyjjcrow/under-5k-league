@@ -394,6 +394,25 @@ export function exploreNav(state: NavState): NavSection[] {
   })).filter((section) => section.links.length > 0);
 }
 
+/** A listed page's link, under the one name every menu uses. */
+function pageLink(href: string): NavLink {
+  const page = NAV_PAGES.find((candidate) => candidate.href === href);
+  if (!page) throw new Error(`No navigation entry for ${href}`);
+  return { href: page.href, label: page.label };
+}
+
+/**
+ * The 404 page's second way out, after Home. An old Discord link to a
+ * fixture or a team usually lands there, so it is the Schedule while the
+ * menus list it; before the auction the Schedule only says it opens after
+ * the draft, so it is How it works instead.
+ */
+export function notFoundLink(
+  state: Pick<NavState, "phase" | "draftStatus">,
+): NavLink {
+  return pageLink(afterAuction(state) ? "/schedule" : "/how-it-works");
+}
+
 /**
  * The footer's few links. It used to repeat every page from the header and
  * Explore (up to 16 links, a second site map under every page); it now keeps

@@ -34,16 +34,33 @@ describe("application shell fallback states", () => {
   });
 
   it.each(["not-found.tsx", "error.tsx", "global-error.tsx"])(
-    "%s points to Home, the schedule and the league Discord",
+    "%s points to Home, a page with something on it and the league Discord",
     (file) => {
       const src = read(file);
       expect(src).toMatch(/href="\/"/);
-      expect(src).toContain('href="/schedule"');
+      // Never a fixed Schedule link: before the auction it only says
+      // "Schedule opens after the draft".
+      expect(src).not.toContain('href="/schedule"');
       // DiscordButton reads the invite; the standalone document reads it
       // itself because it cannot rely on the app's components.
       expect(src).toMatch(
         /<DiscordButton label="Ask on Discord"|href=\{LEAGUE_CONFIG\.discordInviteUrl\}/,
       );
+    },
+  );
+
+  it("picks the 404's second link from the menus' rule", () => {
+    const src = read("not-found.tsx");
+    expect(src).toContain("notFoundLink({");
+    expect(src).toContain("href={wayOut.href}");
+  });
+
+  // The error screens can't read the season, so they link a page that
+  // always has something on it.
+  it.each(["error.tsx", "global-error.tsx"])(
+    "%s links How it works",
+    (file) => {
+      expect(read(file)).toContain('href="/how-it-works"');
     },
   );
 });

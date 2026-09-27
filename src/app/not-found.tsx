@@ -2,13 +2,25 @@ import type { Metadata } from "next";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { DiscordButton, buttonClasses } from "@/components/ui";
+import { getActiveSeason } from "@/lib/season";
+import { getSeasonDraftStatus } from "@/lib/queries";
+import { SEASON_STATUS } from "@/lib/constants";
+import { notFoundLink } from "@/lib/site-nav";
 
 // Every notFound() in the app renders this file, so its title replaces the
 // page's own: the tab read just "GGD2L" for an old Discord link to a
 // fixture that no longer exists.
 export const metadata: Metadata = { title: "Page not found" };
 
-export default function NotFound() {
+export default async function NotFound() {
+  // Both reads are request-cached: the root layout has already made them.
+  const season = await getActiveSeason();
+  const draftStatus =
+    season?.status === SEASON_STATUS.DRAFT
+      ? await getSeasonDraftStatus(season.id)
+      : null;
+  // The Schedule while it has fixtures, How it works before that.
+  const wayOut = notFoundLink({ phase: season?.status ?? null, draftStatus });
   return (
     <div className="mx-auto max-w-lg py-16">
       <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-b from-surface-2/70 to-surface/40">
@@ -51,8 +63,8 @@ export default function NotFound() {
             <Link href="/" className={buttonClasses("primary")}>
               Back to home
             </Link>
-            <Link href="/schedule" className={buttonClasses("secondary")}>
-              Schedule
+            <Link href={wayOut.href} className={buttonClasses("secondary")}>
+              {wayOut.label}
             </Link>
             <DiscordButton label="Ask on Discord" />
           </div>

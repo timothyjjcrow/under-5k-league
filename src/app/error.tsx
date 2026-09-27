@@ -62,8 +62,10 @@ export default function Error({
             <Link href="/" className={buttonClasses("secondary")}>
               Back to home
             </Link>
-            <Link href="/schedule" className={buttonClasses("secondary")}>
-              Schedule
+            {/* Not the Schedule: this client screen can't tell whether the
+                season has one yet, and How it works always has something. */}
+            <Link href="/how-it-works" className={buttonClasses("secondary")}>
+              How it works
             </Link>
             <DiscordButton label="Ask on Discord" />
           </div>

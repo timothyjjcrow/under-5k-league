@@ -14,6 +14,7 @@ import {
   footerNav,
   headerStatus,
   joinSeasonCta,
+  notFoundLink,
   phoneDock,
   seasonNav,
   type NavContent,
@@ -326,6 +327,31 @@ describe("footer", () => {
         expect.arrayContaining(["/inhouse", "/scrims"]),
       );
     }
+  });
+});
+
+describe("404 page's way out", () => {
+  // It always offered Schedule, which says "Schedule opens after the draft"
+  // during signups and between seasons, where the menus hide it.
+  it("offers the Schedule only while the menus list it", () => {
+    for (const phase of PHASES) {
+      for (const draftStatus of DRAFTS) {
+        const listed = hrefs(seasonNav(state(phase, draftStatus))).includes(
+          "/schedule",
+        );
+        expect(notFoundLink({ phase, draftStatus })).toEqual(
+          listed
+            ? { href: "/schedule", label: "Schedule" }
+            : { href: "/how-it-works", label: "How it works" },
+        );
+      }
+    }
+    expect(notFoundLink({ phase: SEASON_STATUS.SIGNUPS, draftStatus: null }))
+      .toEqual({ href: "/how-it-works", label: "How it works" });
+    expect(
+      notFoundLink({ phase: SEASON_STATUS.REGULAR_SEASON, draftStatus: null })
+        .href,
+    ).toBe("/schedule");
   });
 });
 
