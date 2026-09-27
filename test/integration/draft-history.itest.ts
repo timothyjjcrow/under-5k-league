@@ -132,6 +132,26 @@ describe("durable draft and roster history", () => {
     expect(runs[1].id).not.toBe(runs[0].id);
   });
 
+  it("tells the draft room which lot and which sales the clock opened", async () => {
+    const f = await setup(); await start(f);
+    expect((await getDraftState(f.season.id, null))!.lotAutoNominated).toBe(false);
+    // Captain A's clock runs out: the draft opens the top player for them.
+    await expireNominationClock(f.season.id); await resolveStalledNomination(f.season.id);
+    const auto = (await getDraftState(f.season.id, null))!;
+    expect(auto.nominatedPlayer?.userId).toBe(f.p.id);
+    expect(auto.lotAutoNominated).toBe(true);
+    await expireClock(f.season.id); await resolveExpiredNomination(f.season.id);
+    // Captain B nominates for themselves.
+    expect((await nominatePlayer(f.season.id, sessionFor(f.b.user), f.q.id, 2)).ok).toBe(true);
+    expect((await getDraftState(f.season.id, null))!.lotAutoNominated).toBe(false);
+    await expireClock(f.season.id); await resolveExpiredNomination(f.season.id);
+    const done = (await getDraftState(f.season.id, null))!;
+    expect(done.lotAutoNominated).toBe(false);
+    expect(done.recentSales.map((sale) => [sale.name, sale.auto])).toEqual([
+      ["Second", false], ["Purchase", true],
+    ]);
+  });
+
   it("records automatic lots and an ineligible nominee as a void without a sale", async () => {
     const f = await setup(); await start(f);
     await expireNominationClock(f.season.id); await resolveStalledNomination(f.season.id);

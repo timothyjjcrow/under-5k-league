@@ -612,4 +612,14 @@ describe("lotHeadingLead", () => {
     expect(lotHeadingLead({ lotLive: false })).toBe("On the clock:");
     expect(lotHeadingLead({ lotLive: true })).toBe("Nominated by");
   });
+
+  it("says when the clock, not the captain, opened the lot", () => {
+    expect(lotHeadingLead({ lotLive: true, autoNominated: true })).toBe(
+      "Clock ran out: auto-picked for",
+    );
+    // Nothing is on the block, so there is no pick to explain.
+    expect(lotHeadingLead({ lotLive: false, autoNominated: true })).toBe(
+      "On the clock:",
+    );
+  });
 });

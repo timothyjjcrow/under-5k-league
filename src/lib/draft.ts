@@ -364,8 +364,13 @@ export function nominationTurnTeamId(s: {
  * The words before the nominating team's name in the lot card's header.
  * "On the clock" belongs to the nomination turn only; while a lot is live the
  * team is just who put the player up, and the clock beside it is the bidding
- * clock.
+ * clock. A lot the clock opened for an absent captain says so — it used to
+ * read exactly like their own choice.
  */
-export function lotHeadingLead(o: { lotLive: boolean }): string {
-  return o.lotLive ? "Nominated by" : "On the clock:";
+export function lotHeadingLead(o: {
+  lotLive: boolean;
+  autoNominated?: boolean;
+}): string {
+  if (!o.lotLive) return "On the clock:";
+  return o.autoNominated ? "Clock ran out: auto-picked for" : "Nominated by";
 }

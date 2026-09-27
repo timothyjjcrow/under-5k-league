@@ -277,5 +277,7 @@ export function draftLotPlayer(lot: DraftLot): DraftedPlayer & { at: number } {
 
 export async function readDraftSales(tx: Pick<Tx, "draftLot">, runId: string) {
   return (await tx.draftLot.findMany({ where: { runId, status: "SOLD" }, orderBy: [{ soldAt: "desc" }, { sequence: "desc" }, { id: "desc" }] }))
-    .map(draftLotPlayer);
+    // `auto`: the nominator's clock ran out and the draft opened this lot for
+    // them, so the draft room can label the sale "auto-picked".
+    .map((lot) => ({ ...draftLotPlayer(lot), auto: lot.openingKind === "AUTOMATIC" }));
 }

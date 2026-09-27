@@ -1050,7 +1050,17 @@ export async function getDraftState(
       const [season, draft, teams, playerRegs, viewerRegistration] =
         await Promise.all([
           tx.season.findUnique({ where: { id: seasonId } }),
-          tx.draft.findUnique({ where: { seasonId } }),
+          tx.draft.findUnique({
+            where: { seasonId },
+            // One PK join: whether the live lot was opened by the clock, so
+            // the room can say "auto-picked" instead of passing it off as the
+            // captain's own choice.
+            include: {
+              currentLot: {
+                select: { openingKind: true, nominatedUserId: true },
+              },
+            },
+          }),
           tx.team.findMany({
             where: { seasonId },
             orderBy: { draftOrder: "asc" },
@@ -1194,6 +1204,8 @@ export async function getDraftState(
               teamName: team.name,
               price: member.price,
               at: member.createdAt.getTime(),
+              // Legacy observation: how the lot opened was never recorded.
+              auto: false,
             })),
         )
         .sort((a, b) => b.at - a.at)
@@ -1246,6 +1258,12 @@ export async function getDraftState(
         nominatedUserId: draft?.nominatedUserId ?? null,
         currentBid: draft?.currentBid ?? 0,
         currentBidTeamId: draft?.currentBidTeamId ?? null,
+        // The live lot was opened by resolveStalledNomination because the
+        // nominator's clock ran out — not a player that captain chose.
+        lotAutoNominated:
+          !!draft?.nominatedUserId &&
+          draft.currentLot?.openingKind === "AUTOMATIC" &&
+          draft.currentLot.nominatedUserId === draft.nominatedUserId,
         lotBids: lotBidRows.slice(0, 8).map((bid) => ({
           teamId: bid.teamId,
           amount: bid.amount,

@@ -581,8 +581,10 @@ export function DraftRoom({
       return;
     }
 
-    const { lines, sale, alerts } = draftFeedDiff(prev, state);
+    const { lines, sale, alerts, notice } = draftFeedDiff(prev, state);
     if (sale) setSoldFlash(sale);
+    // "The clock picked for you" — news only to the captain it happened to.
+    if (notice) pushToast("info", notice);
 
     // The feed is an append-only LOG of state transitions; it cannot be
     // derived from the current state alone, which is what a pure alternative
@@ -1382,7 +1384,10 @@ export function DraftRoom({
                 </p>
               ) : (
                 <h2 className="line-clamp-2 min-w-0 text-sm font-normal text-muted [overflow-wrap:anywhere]">
-                  {lotHeadingLead({ lotLive: !!state.nominatedPlayer })}{" "}
+                  {lotHeadingLead({
+                    lotLive: !!state.nominatedPlayer,
+                    autoNominated: state.lotAutoNominated,
+                  })}{" "}
                   <span className="text-fg">{nominatorName}</span>
                   {nextNominatorName ? (
                     <span className="hidden sm:inline">
@@ -2047,6 +2052,14 @@ function BidFeed({ events }: { events: FeedEvent[] }) {
                   {e.kind === "sold" ? "✅" : e.kind === "bid" ? "💰" : "🎯"}
                 </span>
                 <span className="truncate">{e.text}</span>
+                {e.auto && e.kind === "sold" ? (
+                  <span
+                    title="The nominating captain's clock ran out, so the draft put this player up for them."
+                    className="shrink-0 text-xs text-muted"
+                  >
+                    auto-picked
+                  </span>
+                ) : null}
               </span>
               <span
                 className={cn(
