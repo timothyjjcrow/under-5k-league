@@ -31,6 +31,7 @@ import {
   draftTitleFlag,
   draftViewerStake,
   lotHeadingLead,
+  lotWatcherLine,
   maxBid,
   nextNominatorIndex,
   nominationTurnTeamId,
@@ -973,6 +974,15 @@ export function DraftRoom({
   const rosterFull = !!me.myTeamId && myTeam?.need === 0;
   const pricedOut =
     !!me.myTeamId && !rosterFull && me.myMaxBid <= state.currentBid;
+  // The player on the block, or one still waiting in the pool, gets a line of
+  // their own; visitors get none (they used to read the captains' rules).
+  const watcherText = lotWatcherLine({
+    me,
+    nominatedPlayer: state.nominatedPlayer,
+    available: state.available,
+    currentBid: state.currentBid,
+    highBidderName: highBidderName ?? null,
+  });
   // Who can still answer the current price — the fact a captain weighs before
   // going higher, which used to live only in each team card's tiny "max $N".
   const outbidText = state.nominatedPlayer
@@ -1613,12 +1623,17 @@ export function DraftRoom({
                       Priced out — your max bid is ${me.myMaxBid} (reserving $
                       {state.minBid} per remaining slot).
                     </p>
-                  ) : (
-                    <p className="text-muted">
-                      You&apos;re watching this lot. Only captains with an open
-                      roster seat and enough reserved budget can bid.
+                  ) : watcherText ? (
+                    <p
+                      className={
+                        me.userId === state.nominatedPlayer.userId
+                          ? "text-fg"
+                          : "text-muted"
+                      }
+                    >
+                      {watcherText}
                     </p>
-                  )}
+                  ) : null}
                   {/* Last in the area, BELOW the controls: its length changes
                       as teams price out, and above the buttons that would move
                       them under a captain's thumb. */}

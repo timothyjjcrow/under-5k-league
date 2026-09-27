@@ -9,6 +9,7 @@ import {
   draftTitleFlag,
   draftViewerStake,
   lotHeadingLead,
+  lotWatcherLine,
   nextNominatorIndex,
   nominationTurnTeamId,
   outbidLine,
@@ -679,5 +680,58 @@ describe("outbidders / outbidLine", () => {
 
   it("says nothing without a high bid", () => {
     expect(outbidLine(lot({ currentBidTeamId: null }))).toBeNull();
+  });
+});
+
+describe("lotWatcherLine", () => {
+  const pool = [{ userId: "p1" }, { userId: "me" }, { userId: "p3" }];
+  const live = (me: { userId: string | null; myTeamId: string | null }) => ({
+    me,
+    nominatedPlayer: { userId: "p1" },
+    available: pool,
+    currentBid: 8,
+    highBidderName: "Team 3",
+  });
+
+  it("talks to the player on the block about their own lot", () => {
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "p1", myTeamId: null }),
+      }),
+    ).toBe("Captains are bidding on you: Team 3 leads at $8.");
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "p1", myTeamId: null }),
+        highBidderName: null,
+      }),
+    ).toBe("Captains are bidding on you.");
+  });
+
+  it("tells a player still in the pool how many are left", () => {
+    expect(lotWatcherLine(live({ userId: "me", myTeamId: null }))).toBe(
+      "You're still available: 3 players left in the pool.",
+    );
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "me", myTeamId: null }),
+        available: [{ userId: "me" }],
+      }),
+    ).toBe("You're still available: 1 player left in the pool.");
+  });
+
+  it("says nothing to visitors, drafted players or captains", () => {
+    // Signed out, signed in but not in the pool (drafted, admin), a captain.
+    expect(lotWatcherLine(live({ userId: null, myTeamId: null }))).toBeNull();
+    expect(lotWatcherLine(live({ userId: "x", myTeamId: null }))).toBeNull();
+    expect(lotWatcherLine(live({ userId: "me", myTeamId: "t1" }))).toBeNull();
+  });
+
+  it("says nothing without a live lot", () => {
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "me", myTeamId: null }),
+        nominatedPlayer: null,
+      }),
+    ).toBeNull();
   });
 });

@@ -442,3 +442,33 @@ export function outbidLine(s: {
     s.teams.find((t) => t.id === s.currentBidTeamId)?.name ?? "the high bidder";
   return `No one can outbid ${leader}: sells at $${s.currentBid} when the clock runs out.`;
 }
+
+/**
+ * The line under a live lot for a signed-in viewer who is not a captain: the
+ * player being auctioned, or a player still waiting in the pool. Everyone else
+ * — a visitor, a drafted player, an admin — gets no line (null). They all used
+ * to read the captains' bidding rule on every lot, twenty-odd times a night,
+ * the player on the block included, at their big moment.
+ *
+ * Captains are left to the room's own lines (bid controls, "You hold the high
+ * bid", priced out, roster full); a captain who reaches none of those is
+ * looking at a paused or closing lot, which the banner and clock already say.
+ */
+export function lotWatcherLine(s: {
+  me: { userId: string | null; myTeamId: string | null };
+  nominatedPlayer: { userId: string } | null;
+  available: readonly { userId: string }[];
+  currentBid: number;
+  highBidderName: string | null;
+}): string | null {
+  const id = s.me.userId;
+  if (!s.nominatedPlayer || !id || s.me.myTeamId) return null;
+  if (s.nominatedPlayer.userId === id) {
+    return s.highBidderName
+      ? `Captains are bidding on you: ${s.highBidderName} leads at $${s.currentBid}.`
+      : "Captains are bidding on you.";
+  }
+  if (!s.available.some((p) => p.userId === id)) return null;
+  const left = s.available.length;
+  return `You're still available: ${left} ${left === 1 ? "player" : "players"} left in the pool.`;
+}
