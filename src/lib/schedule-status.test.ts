@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { regularSeasonStatus, pendingResultsMessage } from "./schedule-status";
+import {
+  regularSeasonStatus,
+  pendingResultsMessage,
+  standingsCaption,
+} from "./schedule-status";
 
 function m(week: number, status: string, phase = "REGULAR") {
   return { week, status, phase };
@@ -61,5 +65,54 @@ describe("pendingResultsMessage", () => {
         regularSeasonStatus([m(1, "COMPLETED"), m(2, "SCHEDULED")]),
       ),
     ).toMatch(/1 regular-season match still needs results \(week 2\)/);
+  });
+});
+
+describe("standingsCaption", () => {
+  const caption = (
+    matches: ReturnType<typeof m>[],
+    postseason = false,
+  ) =>
+    standingsCaption({
+      status: regularSeasonStatus(matches),
+      postseason,
+      bracketSize: 4,
+      eligibleTeams: 6,
+    });
+
+  it("never calls a table of zeros final", () => {
+    expect(caption([m(1, "SCHEDULED"), m(2, "SCHEDULED")])).toBe(
+      "No results yet · 4 playoff places",
+    );
+    // Even when the phase has moved on without a single result.
+    expect(caption([m(1, "SCHEDULED")], true)).toBe(
+      "No results yet · 4 playoff places",
+    );
+  });
+
+  it("describes the race while results are still coming in", () => {
+    expect(caption([m(1, "COMPLETED"), m(2, "SCHEDULED")])).toBe(
+      "4 playoff places · 6 eligible teams",
+    );
+  });
+
+  it("is final once every regular result is in or the playoffs have begun", () => {
+    expect(caption([m(1, "COMPLETED"), m(2, "COMPLETED")])).toBe(
+      "Final regular-season table",
+    );
+    expect(caption([m(1, "COMPLETED"), m(2, "SCHEDULED")], true)).toBe(
+      "Final regular-season table",
+    );
+  });
+
+  it("omits the playoff places when no bracket fits", () => {
+    expect(
+      standingsCaption({
+        status: regularSeasonStatus([m(1, "SCHEDULED")]),
+        postseason: false,
+        bracketSize: 0,
+        eligibleTeams: 1,
+      }),
+    ).toBe("No results yet");
   });
 });

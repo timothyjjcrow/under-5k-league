@@ -35,6 +35,7 @@ import { formByTeam } from "@/lib/team-matches";
 import {
   regularSeasonStatus,
   pendingResultsMessage,
+  standingsCaption,
 } from "@/lib/schedule-status";
 import {
   expectedSideSize,
@@ -63,6 +64,7 @@ import {
   SectionTitle,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
@@ -357,6 +359,10 @@ export default async function SchedulePage() {
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
   );
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
+  // Before the first fixture is published there is nothing to rank or cross-
+  // reference: the standings would be every team on zero points, and the
+  // head-to-head grid a sheet of dashes.
+  const hasFixtures = regular.length > 0;
   const status = regularSeasonStatus(matches);
   const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
   const progress = leagueProgress(matches, scheduleNow);
@@ -591,7 +597,9 @@ export default async function SchedulePage() {
             ? "Season results"
             : season.status === "PLAYOFFS"
               ? "Playoffs"
-              : "Schedule & Standings"
+              : hasFixtures
+                ? "Schedule & Standings"
+                : "Schedule"
         }
         // The week and the series count stand in for the progress ring the
         // home page carries: this page leads with the fixtures themselves.
@@ -748,21 +756,49 @@ export default async function SchedulePage() {
       <div id="fixtures" className="scroll-mt-24 space-y-8">
         <section className="space-y-4">
           <SectionTitle>Regular season</SectionTitle>
-          {regular.length === 0 ? (
+          {!hasFixtures ? (
             (() => {
               const copy = emptyScheduleCopy(season.status, draft?.status);
+              const showMatchNight =
+                season.status === "SIGNUPS" ||
+                season.status === "DRAFT" ||
+                season.status === "REGULAR_SEASON";
+              const links = [
+                teams.length > 0 ? (
+                  <Link key="teams" href="/teams" className={textLink("text-sm")}>
+                    See the teams →
+                  </Link>
+                ) : null,
+                viewer?.role === "ADMIN" ? (
+                  <Link
+                    key="admin"
+                    href="/admin#adm-schedule"
+                    className={textLink("text-sm")}
+                  >
+                    Open schedule controls →
+                  </Link>
+                ) : null,
+              ].filter(Boolean);
               return (
                 <EmptyState
                   title={copy.title}
                   description={copy.description}
                   action={
-                    viewer?.role === "ADMIN" ? (
-                      <Link
-                        href="/admin#adm-schedule"
-                        className="text-sm text-info hover:underline"
-                      >
-                        Open schedule controls →
-                      </Link>
+                    showMatchNight || links.length > 0 ? (
+                      <div className="flex w-full max-w-md flex-col gap-3">
+                        {showMatchNight ? (
+                          <ScheduleCallout
+                            label={season.matchSchedule}
+                            description={calloutDescription(season.status)}
+                            className="text-left"
+                          />
+                        ) : null}
+                        {links.length > 0 ? (
+                          <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
+                            {links}
+                          </div>
+                        ) : null}
+                      </div>
                     ) : undefined
                   }
                 />
@@ -790,71 +826,76 @@ export default async function SchedulePage() {
         </section>
       </div>
 
-      <AnalysisDisclosure title="Match times & calendar help">
-        <ScheduleCallout
-          label={season.matchSchedule}
-          description={calloutDescription(season.status)}
-        />
-        <p className="text-sm leading-relaxed text-muted">
-          The time on each fixture is its published kickoff. A time-change
-          request is only a proposal until accepted. Open a match for check-in,
-          rescheduling, and result details.
-        </p>
-        <p className="text-sm leading-relaxed text-muted">
-          Subscribing keeps your calendar in step when a match moves. A
-          downloaded file is a one-time copy.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <a
-            href={calendarFeedLinks().subscribe}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Subscribe in your calendar app
-          </a>
-          <a href="/api/calendar" className={buttonClasses("secondary", "sm")}>
-            Download league calendar (.ics)
-          </a>
-        </div>
-      </AnalysisDisclosure>
-
-      <Card id="standings" className="scroll-mt-24">
-        <CardHeader
-          headingLevel={2}
-          title="Standings"
-          subtitle={
-            season.status === "REGULAR_SEASON"
-              ? `${playoffField.bracketSize} playoff places · ${playoffField.eligibleTeamIds.length} eligible teams`
-              : "Final regular-season table"
-          }
-        />
-        <CardBody className="p-0">
-          <StandingsTable
-            overview
-            standings={standings}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            eligibleTeams={playoffField.eligibleTeamIds.length}
-            withdrawnIds={
-              new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
-            }
-            formByTeam={teamForm}
-            playoffCut={
-              season.status === "REGULAR_SEASON"
-                ? playoffField.bracketSize
-                : undefined
-            }
-            playoffSeedByTeam={playoffField.seedByTeam}
-            unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
-            clinch={clinchFromReport(stakesReport)}
-            playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
-            viewerTeamId={[...myTeamIds][0]}
-            movement={standingsMovement(
-              teams.map((t) => t.id),
-              matches,
-            )}
+      {hasFixtures ? (
+        <AnalysisDisclosure title="Match times & calendar help">
+          <ScheduleCallout
+            label={season.matchSchedule}
+            description={calloutDescription(season.status)}
           />
-        </CardBody>
-      </Card>
+          <p className="text-sm leading-relaxed text-muted">
+            The time on each fixture is its published kickoff. A time-change
+            request is only a proposal until accepted. Open a match for check-in,
+            rescheduling, and result details.
+          </p>
+          <p className="text-sm leading-relaxed text-muted">
+            Subscribing keeps your calendar in step when a match moves. A
+            downloaded file is a one-time copy.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <a
+              href={calendarFeedLinks().subscribe}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Subscribe in your calendar app
+            </a>
+            <a href="/api/calendar" className={buttonClasses("secondary", "sm")}>
+              Download league calendar (.ics)
+            </a>
+          </div>
+        </AnalysisDisclosure>
+      ) : null}
+
+      {hasFixtures ? (
+        <Card id="standings" className="scroll-mt-24">
+          <CardHeader
+            headingLevel={2}
+            title="Standings"
+            subtitle={standingsCaption({
+              status,
+              postseason: postseasonPhase,
+              bracketSize: playoffField.bracketSize,
+              eligibleTeams: playoffField.eligibleTeamIds.length,
+            })}
+          />
+          <CardBody className="p-0">
+            <StandingsTable
+              overview
+              standings={standings}
+              teamName={teamName}
+              teamLogoUrl={teamLogoUrl}
+              eligibleTeams={playoffField.eligibleTeamIds.length}
+              withdrawnIds={
+                new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+              }
+              formByTeam={teamForm}
+              playoffCut={
+                season.status === "REGULAR_SEASON"
+                  ? playoffField.bracketSize
+                  : undefined
+              }
+              playoffSeedByTeam={playoffField.seedByTeam}
+              unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
+              clinch={clinchFromReport(stakesReport)}
+              playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
+              viewerTeamId={[...myTeamIds][0]}
+              movement={standingsMovement(
+                teams.map((t) => t.id),
+                matches,
+              )}
+            />
+          </CardBody>
+        </Card>
+      ) : null}
 
       {season.status === "REGULAR_SEASON" &&
       playoffField.eligibleTeamIds.length > 2 &&
@@ -882,7 +923,7 @@ export default async function SchedulePage() {
         </AnalysisDisclosure>
       ) : null}
 
-      {teams.length > 1 ? (
+      {hasFixtures && teams.length > 1 ? (
         <AnalysisDisclosure title="Head-to-head results grid">
           <SeasonGrid
             standings={standings}

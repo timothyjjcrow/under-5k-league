@@ -62,3 +62,32 @@ export function pendingResultsMessage(status: RegularStatus): string | null {
     status.pending === 1 ? "needs" : "need"
   } results (${w} ${status.pendingWeeks.join(", ")}).`;
 }
+
+/**
+ * The Standings card's one-line caption, decided by what has been PLAYED
+ * rather than by the phase name: a table of zeros is never "final", and the
+ * table stops being a race once every regular result is in (or the playoffs
+ * have started).
+ */
+export function standingsCaption({
+  status,
+  postseason,
+  bracketSize,
+  eligibleTeams,
+}: {
+  status: RegularStatus;
+  postseason: boolean;
+  bracketSize: number;
+  eligibleTeams: number;
+}): string {
+  const places =
+    bracketSize > 0
+      ? `${bracketSize} playoff place${bracketSize === 1 ? "" : "s"}`
+      : null;
+  if (status.completed === 0)
+    return ["No results yet", places].filter(Boolean).join(" · ");
+  if (status.allComplete || postseason) return "Final regular-season table";
+  return [places, `${eligibleTeams} eligible teams`]
+    .filter(Boolean)
+    .join(" · ");
+}
