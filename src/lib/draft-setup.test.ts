@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { DRAFT_REMINDER, DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { LIVE_WINDOW_MS } from "./countdown";
 import {
+  DRAFT_ROOM_LEAD_HOURS,
   captainTransferOpen,
   draftReminderDue,
   draftReminderOpensAt,
   draftRosterCounts,
   draftSeatPlan,
   draftSetupLockedMessage,
+  draftNightSoon,
   draftSetupOpen,
   startDraftCheck,
   startDraftConfirm,
@@ -240,5 +243,29 @@ describe("startDraftConfirm", () => {
       mmrWarning: " Unverified captain MMR sets draft budgets: A (no medal).",
     });
     expect(text.endsWith(" Unverified captain MMR sets draft budgets: A (no medal).")).toBe(true);
+  });
+});
+
+describe("draftNightSoon", () => {
+  const draftAt = Date.UTC(2026, 9, 3, 18, 0);
+  const lead = DRAFT_ROOM_LEAD_HOURS * 3_600_000;
+
+  it("opens the lead time before draft night and closes once it has passed", () => {
+    const at = (offsetMs: number) =>
+      draftNightSoon(SEASON_STATUS.SIGNUPS, draftAt, draftAt + offsetMs);
+    expect(at(-lead - 1)).toBe(false);
+    expect(at(-lead)).toBe(true);
+    expect(at(0)).toBe(true);
+    expect(at(LIVE_WINDOW_MS - 1)).toBe(true);
+    expect(at(LIVE_WINDOW_MS)).toBe(false);
+  });
+
+  it("is Signups only and needs a scheduled draft night", () => {
+    expect(draftNightSoon(SEASON_STATUS.DRAFT, draftAt, draftAt)).toBe(false);
+    expect(draftNightSoon(SEASON_STATUS.REGULAR_SEASON, draftAt, draftAt)).toBe(
+      false,
+    );
+    expect(draftNightSoon(null, draftAt, draftAt)).toBe(false);
+    expect(draftNightSoon(SEASON_STATUS.SIGNUPS, null, draftAt)).toBe(false);
   });
 });

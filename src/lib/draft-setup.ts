@@ -5,6 +5,7 @@ import {
   type DraftStatus,
   type SeasonStatus,
 } from "./constants";
+import { hasPassed } from "./countdown";
 
 /**
  * The one pre-auction capability shared by the admin panel, /me, and every
@@ -45,6 +46,33 @@ export function draftReminderDue(
     return false;
   }
   return nowMs >= draftReminderOpensAt(draftAtMs) && nowMs < draftAtMs;
+}
+
+/** How long before a scheduled draft night the site starts linking the room. */
+export const DRAFT_ROOM_LEAD_HOURS = 2;
+
+/**
+ * Is draft night close enough to point people at the draft room before the
+ * admin presses Start? The room is a live waiting room that flips to the
+ * auction by itself, but outside the Draft phase nothing linked it, so on
+ * draft night people waited on the home page and arrived after the first
+ * nominations. Signups only: Start moves the season to Draft, where the room
+ * is always linked. Open from DRAFT_ROOM_LEAD_HOURS before the scheduled time
+ * until that time has passed (hasPassed, the same boundary as the "passed"
+ * chip), so a slipped draft night stops advertising the room.
+ */
+export function draftNightSoon(
+  seasonStatus: SeasonStatus | string | null | undefined,
+  draftAtMs: number | null | undefined,
+  nowMs: number,
+): boolean {
+  if (seasonStatus !== SEASON_STATUS.SIGNUPS || draftAtMs == null) {
+    return false;
+  }
+  return (
+    nowMs >= draftAtMs - DRAFT_ROOM_LEAD_HOURS * 3_600_000 &&
+    !hasPassed(draftAtMs, nowMs)
+  );
 }
 
 /** Captaincy can change after the auction, but never while its turn state is

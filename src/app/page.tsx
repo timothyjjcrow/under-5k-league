@@ -8,6 +8,7 @@ import { getSeasonGameLeaders } from "@/lib/cached-queries";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
+import { draftNightSoon } from "@/lib/draft-setup";
 import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
 import { prisma } from "@/lib/prisma";
 import {
@@ -230,10 +231,25 @@ export default async function Home() {
     ? "Register as a standin →"
     : "Sign in to stand in →";
   let heroAction: ReactNode = null;
+  // Draft night during Signups: from shortly before the scheduled time until
+  // the admin presses Start, the hero points everyone at the draft room (a
+  // waiting room that goes live by itself) instead of the feature tour.
+  const draftRoomSoon = draftNightSoon(
+    season.status,
+    season.draftAt?.getTime(),
+    // One time snapshot for this render.
+    // eslint-disable-next-line react-hooks/purity
+    Date.now(),
+  );
   if (season.status === "SIGNUPS") {
     // The feature tour rides along during signups — new visitors can't see
-    // most of the league (draft, fantasy, pick'em…) until later phases.
-    const tourLink = (
+    // most of the league (draft, fantasy, pick'em…) until later phases. On
+    // draft night the draft room takes its place.
+    const sideLink = draftRoomSoon ? (
+      <Link href="/draft" className={buttonClasses("accent", "lg")}>
+        Enter the draft room →
+      </Link>
+    ) : (
       <Link href="/features" className={buttonClasses("secondary", "lg")}>
         See what you&apos;re joining
       </Link>
@@ -244,24 +260,24 @@ export default async function Home() {
         <Link href="/login?next=/me" className={buttonClasses("primary", "lg")}>
           Sign in with Steam to join →
         </Link>
-        {tourLink}
+        {sideLink}
       </>
     ) : isRemovedReg ? (
       <>
         <Link href="/me" className={buttonClasses("secondary", "lg")}>
           Signup removed — see details
         </Link>
-        {tourLink}
+        {sideLink}
       </>
     ) : !isActiveReg ? (
       <>
         <Link href="/me" className={buttonClasses("primary", "lg")}>
           Join the season →
         </Link>
-        {tourLink}
+        {sideLink}
       </>
     ) : (
-      tourLink
+      sideLink
     );
   } else if (season.status === "DRAFT") {
     heroAction = (
@@ -459,7 +475,9 @@ export default async function Home() {
           playoffRounds={playoffTotalRounds(matches)}
         />
       </Suspense>
-    ) : season.status === "SIGNUPS" && isActiveReg ? (
+    ) : season.status === "SIGNUPS" && isActiveReg && !draftRoomSoon ? (
+      // On draft night the aside gives way, so the hero's action column can
+      // carry "Enter the draft room" to the players about to be drafted.
       <SignupsAside snapshot={snapshot} />
     ) : null;
 

@@ -40,6 +40,7 @@ function navItems(
   phase: string | null,
   myTeamId: string | null,
   hasHistory: boolean,
+  draftRoomSoon: boolean,
 ) {
   const items: NavItem[] = [
     { href: "/", label: "Home" },
@@ -61,6 +62,11 @@ function navItems(
     items.push({ href: "/teams", label: "Teams" });
   }
   if (myTeamId) items.push({ href: `/teams/${myTeamId}`, label: "My Team" });
+  // Draft night during Signups (draftNightSoon): the waiting room is linked
+  // before Start, so people are in the room when the auction goes live.
+  if (phase !== "DRAFT" && draftRoomSoon) {
+    items.push({ href: "/draft", label: "Draft" });
+  }
   if (phase === "DRAFT") {
     items.push({ href: "/draft", label: "Draft" });
     // A completed auction can publish fixtures before the admin advances the
@@ -138,15 +144,18 @@ export function SiteHeader({
   seasonName,
   myTeamId,
   hasHistory = false,
+  draftRoomSoon = false,
 }: {
   user: HeaderUser;
   phase: string | null;
   seasonName: string | null;
   myTeamId: string | null;
   hasHistory?: boolean;
+  /** Draft night is close and the auction hasn't started (draftNightSoon). */
+  draftRoomSoon?: boolean;
 }) {
   const pathname = usePathname();
-  const items = navItems(phase, myTeamId, hasHistory);
+  const items = navItems(phase, myTeamId, hasHistory, draftRoomSoon);
   // Keep the desktop row focused on the current season. Evergreen Features
   // and History remain in Explore; the phone menu has room for the full list.
   const desktopItems = items.filter(
@@ -271,7 +280,7 @@ export function SiteHeader({
   const hasTeams = items.some((item) => item.href === "/teams");
   const dockItems = [
     { href: "/", label: "Home", icon: "home" as const },
-    phase === "DRAFT"
+    phase === "DRAFT" || draftRoomSoon
       ? { href: "/draft", label: "Draft", icon: "matches" as const }
       : items.some((item) => item.href === "/schedule")
         ? { href: "/schedule", label: "Matches", icon: "matches" as const }
