@@ -43,10 +43,14 @@ import { editTeamIdentity } from "@/app/actions/teams";
 import { canEditTeamIdentity } from "@/lib/team-identity";
 import { canViewLeagueContact } from "@/lib/visibility";
 import {
+  MATCH_PHASE,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_STATUS,
 } from "@/lib/constants";
+import { playoffStatuses } from "@/lib/playoff-status";
+import { seedsFromFirstRound } from "@/lib/bracket-view";
+import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import {
   Avatar,
   Badge,
@@ -284,6 +288,27 @@ export default async function TeamPage({
   // One server snapshot keeps every fixture label consistent on the page.
   // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
+  // Playoffs (and the finished season): the bracket seed replaces the
+  // regular-season rank badge, and a line says where the team stands.
+  const postseason =
+    team.season.status === SEASON_STATUS.PLAYOFFS ||
+    team.season.status === SEASON_STATUS.COMPLETE;
+  const playoffStatus = postseason
+    ? (playoffStatuses(
+        allTeams,
+        allMatches,
+        championPresentation.championTeamId,
+        nowMs,
+      ).get(id) ?? null)
+    : null;
+  const seed = postseason
+    ? seedsFromFirstRound(
+        allMatches.filter(
+          (m) =>
+            m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+        ),
+      ).get(id)
+    : undefined;
   const featuredMatch = profileMatch(
     myMatches,
     nowMs,
@@ -423,7 +448,9 @@ export default async function TeamPage({
                 <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                   {team.name}
                 </h1>
-                {played && rank > 0 ? (
+                {seed ? (
+                  <Badge tone="accent">Seed #{seed}</Badge>
+                ) : played && rank > 0 ? (
                   <Badge tone="accent">
                     #{rank} of {allTeams.length}
                   </Badge>
@@ -434,6 +461,14 @@ export default async function TeamPage({
                 {team.withdrawn ? <Badge tone="danger">Withdrawn</Badge> : null}
               </div>
               <div className="mt-1 text-sm text-muted">{team.season.name}</div>
+              {/* The Champion badge beside the name already says it. */}
+              {playoffStatus && playoffStatus.kind !== "champion" ? (
+                <PlayoffStatusLine
+                  status={playoffStatus}
+                  teamName={teamName}
+                  className="mt-1.5 text-sm"
+                />
+              ) : null}
               <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
                 <span className="flex items-center gap-1.5 text-muted">
                   Captain

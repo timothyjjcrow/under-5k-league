@@ -9,10 +9,18 @@ import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
 import { formByTeam } from "@/lib/team-matches";
 import {
+  MATCH_PHASE,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_STATUS,
 } from "@/lib/constants";
+import {
+  orderByPlayoffRun,
+  playoffStatuses,
+  type TeamPlayoffStatus,
+} from "@/lib/playoff-status";
+import { seedsFromFirstRound } from "@/lib/bracket-view";
+import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { cn } from "@/lib/utils";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { getTeamJersey } from "@/lib/team-jerseys";
@@ -159,12 +167,42 @@ export default async function TeamsPage() {
     ),
   );
 
-  // After matches start, order by standings; before that, keep draft order.
-  const ordered = played
-    ? [...teams].sort(
-        (a, b) => (rankOf.get(a.id) ?? 99) - (rankOf.get(b.id) ?? 99),
+  const championPresentation = resolveChampionPresentation(season, matches);
+  // Once the bracket exists, each card says where the team stands in it.
+  const postseason =
+    season.status === SEASON_STATUS.PLAYOFFS ||
+    season.status === SEASON_STATUS.COMPLETE;
+  const playoffStatus = postseason
+    ? playoffStatuses(
+        teams,
+        matches,
+        championPresentation.championTeamId,
+        // eslint-disable-next-line react-hooks/purity -- async server component
+        Date.now(),
       )
-    : teams;
+    : new Map<string, TeamPlayoffStatus>();
+  const seedOf = seedsFromFirstRound(
+    matches.filter(
+      (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+    ),
+  );
+  const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  // Playoffs: teams still alive first by seed, then the deepest runs. After
+  // matches start, standings order; before that, draft order.
+  const teamById = new Map(teams.map((t) => [t.id, t]));
+  const ordered =
+    playoffStatus.size > 0
+      ? orderByPlayoffRun(
+          teams.map((t) => t.id),
+          playoffStatus,
+          seedOf,
+          rankOf,
+        ).map((id) => teamById.get(id)!)
+      : played
+        ? [...teams].sort(
+            (a, b) => (rankOf.get(a.id) ?? 99) - (rankOf.get(b.id) ?? 99),
+          )
+        : teams;
   const jerseys = ordered.flatMap((team) => {
     const jersey = getTeamJersey(team.members.map((member) => member.user));
     return jersey ? [jersey] : [];
@@ -182,10 +220,7 @@ export default async function TeamsPage() {
       { name: t.name, logoUrl: t.logoUrl, withdrawn: t.withdrawn },
     ]),
   );
-  const powerFrozen =
-    season.status === SEASON_STATUS.PLAYOFFS ||
-    season.status === SEASON_STATUS.COMPLETE;
-  const championPresentation = resolveChampionPresentation(season, matches);
+  const powerFrozen = postseason;
 
   return (
     <div className="space-y-6">
@@ -215,6 +250,8 @@ export default async function TeamsPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {ordered.map((t) => {
             const rank = rankOf.get(t.id) ?? 0;
+            const seed = playoffStatus.size > 0 ? seedOf.get(t.id) : undefined;
+            const status = playoffStatus.get(t.id);
             const row = rowOf.get(t.id);
             const isChampion = championPresentation.championTeamId === t.id;
             const budget = displayBudgets.byTeam.get(t.id) ?? t.budget;
@@ -241,7 +278,14 @@ export default async function TeamsPage() {
                       imageFit="cover"
                     />
                     <div className="min-w-0">
-                      {played && rank > 0 ? (
+                      {seed ? (
+                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                          Seed{" "}
+                          <span className="text-cyan-300">
+                            {String(seed).padStart(2, "0")}
+                          </span>
+                        </p>
+                      ) : played && rank > 0 ? (
                         <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
                           Rank{" "}
                           <span className="text-cyan-300">
@@ -331,6 +375,13 @@ export default async function TeamsPage() {
                       </Badge>
                     ) : null}
                   </div>
+                  {status ? (
+                    <PlayoffStatusLine
+                      status={status}
+                      teamName={teamName}
+                      className="mt-2 text-sm"
+                    />
+                  ) : null}
                   {played && row ? (
                     <div className="mt-3">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">

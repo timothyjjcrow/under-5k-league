@@ -282,6 +282,51 @@ test("the playoff bracket scrolls inside itself at 360px, not across the page", 
   assertNoErrors();
 });
 
+// Mid-semifinals: all four quarterfinals played, one semifinal played, the
+// other still to come. Each /teams card says where its team stands, teams
+// still alive lead, and an eliminated team's own page says it is out.
+const PLAYOFF_STATUS =
+  /^(Through to the (grand final|semifinals)|(Quarterfinal|Semifinal|Grand final) vs .+|Out in the (quarterfinal|semifinal|grand final) \(lost .+\)|Champion|Runner-up \(lost the grand final .+\)|Missed the playoffs)$/;
+
+async function playoffStatusLines(page: Page): Promise<string[]> {
+  const texts = await page
+    .getByRole("region", { name: "Team rosters" })
+    .locator("p")
+    .allTextContents();
+  return texts.map((text) => text.trim()).filter((text) => PLAYOFF_STATUS.test(text));
+}
+
+test("teams say where each one stands in the playoffs", async ({ page }) => {
+  await reseed(page, "playoffs");
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.goto("/teams");
+
+  const statuses = await playoffStatusLines(page);
+  expect(statuses).toHaveLength(8);
+  // Alive first (the grand finalist and both teams in the open semifinal),
+  // then the semifinal loser, then the four quarterfinal losers.
+  expect(statuses[0]).toBe("Through to the grand final");
+  expect(statuses.slice(1, 3).every((text) => /^Semifinal vs /.test(text))).toBe(true);
+  expect(statuses[3]).toMatch(/^Out in the semifinal \(lost 0–2 to .+\)$/);
+  for (const text of statuses.slice(4)) {
+    expect(text).toMatch(/^Out in the quarterfinal \(lost 1–2 to .+\)$/);
+  }
+  const rosters = page.getByRole("region", { name: "Team rosters" });
+  await expect(rosters.getByText(/^Seed 0[1-8]$/)).toHaveCount(8);
+  await expectNoHorizontalOverflow(page, "/teams playoffs");
+
+  // The last card is a quarterfinal loser; its page says so and shows its seed.
+  await rosters.locator('a[href^="/teams/"]').last().click();
+  await expect(page).toHaveURL(/\/teams\/[^/]+$/);
+  await expect(
+    page.locator("#main p", { hasText: /^Out in the quarterfinal \(lost 1–2 to / }),
+  ).toBeVisible();
+  await expect(page.getByText(/^Seed #[5-8]$/)).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/teams/[id] eliminated");
+  assertNoErrors();
+});
+
 test("complete-season public pages agree on the champion and recap", async ({
   page,
 }) => {
@@ -396,6 +441,13 @@ test("complete champion and recap remain usable at 360px", async ({ page }) => {
     ).toBeVisible();
     await expectNoHorizontalOverflow(page, `${path} completed postseason`);
   }
+
+  // Teams lead with the champion and the runner-up.
+  await page.goto("/teams");
+  const statuses = await playoffStatusLines(page);
+  expect(statuses[0]).toBe("Champion");
+  expect(statuses[1]).toMatch(/^Runner-up \(lost the grand final .+\)$/);
+  await expectNoHorizontalOverflow(page, "/teams completed postseason");
 
   assertNoErrors();
 });
