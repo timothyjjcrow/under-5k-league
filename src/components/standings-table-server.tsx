@@ -7,7 +7,7 @@ import { StandingsTableView, type StandingsRowView } from "./standings-table";
  * Adapter for the league table: flattens the maps into plain rows and drops
  * clinch marks when every team makes the bracket (they'd all be ✓).
  *
- * Lives beside the client half rather than in a page module — /,
+ * Lives beside the table rather than in a page module — /,
  * /schedule and /seasons/[id] all render it, and importing a component
  * from "@/app/page" pulled the whole 2,700-line dashboard module into
  * those routes' graphs.
