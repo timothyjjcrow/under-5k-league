@@ -468,16 +468,41 @@ describe("phone tab bar and its sheet", () => {
     }
   });
 
-  it("puts Join in the second slot during signups and moves that page to the sheet", () => {
+  it("puts Join in the Players slot during signups and keeps Inhouse a tab", () => {
     const signups = seasonNav(state(SEASON_STATUS.SIGNUPS));
+    for (const join of [
+      { href: "/me", label: "Join Season 7" },
+      { href: "/login?next=/me", label: "Join Season 7" },
+    ]) {
+      const { tabs, sheet } = phoneDock(signups, null, join);
+      expect(tabs).toEqual([
+        { href: "/", label: "Home", icon: "home" },
+        { href: "/inhouse", label: "Inhouse", icon: "matches" },
+        {
+          href: join.href,
+          label: "Join",
+          ariaLabel: "Join Season 7",
+          icon: "join",
+        },
+      ]);
+      expect(hrefs(sheet)).toEqual(["/players"]);
+    }
+  });
+
+  // The inhouse queue is never de-promoted: whenever the season has no
+  // draft or schedule to focus on, Inhouse holds a tab, Join or not.
+  it("keeps Inhouse a tab whenever the season has nothing else to focus on", () => {
     const join = { href: "/me", label: "Join Season 7" };
-    const { tabs, sheet } = phoneDock(signups, null, join);
-    expect(tabs).toEqual([
-      { href: "/", label: "Home", icon: "home" },
-      { href: "/me", label: "Join", ariaLabel: "Join Season 7", icon: "join" },
-      { href: "/players", label: "Players", icon: "team" },
-    ]);
-    expect(hrefs(sheet)).toEqual(["/inhouse"]);
+    for (const s of allStates()) {
+      const items = seasonNav(s);
+      const hrefList = hrefs(items);
+      if (hrefList.includes("/draft") || hrefList.includes("/schedule")) {
+        continue;
+      }
+      for (const cta of [null, join]) {
+        expect(hrefs(phoneDock(items, null, cta).tabs)).toContain("/inhouse");
+      }
+    }
   });
 
   it("keeps the season's current focus and the viewer's team one tap away", () => {

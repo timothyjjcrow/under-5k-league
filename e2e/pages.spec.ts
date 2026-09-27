@@ -188,13 +188,17 @@ test("signups put Join Season 1 in the header and the phone tab bar", async ({
   await expect(
     dock.getByRole("link", { name: "Join Season 1", exact: true }),
   ).toHaveAttribute("href", "/login?next=/me");
-  // Inhouse gave its tab to Join and waits in the tab bar's sheet.
-  await expect(dock.getByRole("link", { name: "Inhouse" })).toHaveCount(0);
+  // Join takes the Players tab; Inhouse keeps its tab and Players waits in
+  // the tab bar's sheet.
+  await expect(
+    dock.getByRole("link", { name: "Inhouse", exact: true }),
+  ).toHaveAttribute("href", "/inhouse");
+  await expect(dock.getByRole("link", { name: "Players" })).toHaveCount(0);
   await dock.getByRole("button", { name: "Explore league" }).click();
   await expect(
     page
       .getByRole("navigation", { name: "Explore league", exact: true })
-      .getByRole("link", { name: "Inhouse", exact: true }),
+      .getByRole("link", { name: "Players", exact: true }),
   ).toBeVisible();
 
   // Signed in without a signup, both go straight to the form on /me.

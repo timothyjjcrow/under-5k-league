@@ -337,8 +337,10 @@ export type DockTab = NavLink & {
  * it. Phones used to have a ☰ menu as well, which listed the same pages a
  * third time.
  *
- * During signups, a viewer who hasn't joined gets "Join" in the second slot;
- * the page it replaces moves to the sheet.
+ * During signups, a viewer who hasn't joined gets "Join" in the third slot,
+ * where Players would be, and Players moves to the sheet. The second slot
+ * keeps Inhouse, the one thing to play while signups run: the inhouse queue
+ * is never de-promoted.
  */
 export function phoneDock(
   items: NavLink[],
@@ -363,6 +365,7 @@ export function phoneDock(
         : "/players";
   const tabs: DockTab[] = [
     ...pick("/", "home"),
+    ...pick(focusHref, "matches"),
     ...(join
       ? [
           {
@@ -372,8 +375,7 @@ export function phoneDock(
             icon: "join" as const,
           },
         ]
-      : pick(focusHref, "matches")),
-    ...pick(teamHref, "team"),
+      : pick(teamHref, "team")),
   ];
   const inTabs = new Set(tabs.map((tab) => tab.href));
   return { tabs, sheet: items.filter((item) => !inTabs.has(item.href)) };
