@@ -144,7 +144,7 @@ export function StandingsTableClient({
         )}
       >
         {label}
-        <span aria-hidden className="ml-0.5 inline-block w-2 text-[9px]">
+        <span aria-hidden className="ml-0.5 inline-block w-2">
           {key === sortKey ? (desc ? "▼" : "▲") : ""}
         </span>
       </button>
@@ -238,7 +238,7 @@ export function StandingsTableClient({
                       <span
                         aria-hidden
                         title={`Current playoff seed ${row.playoffSeed}`}
-                        className="block text-[9px] font-semibold uppercase leading-tight text-success/80"
+                        className="block text-xs font-semibold leading-tight tracking-tight text-success/80"
                       >
                         seed {row.playoffSeed}
                       </span>
@@ -250,7 +250,7 @@ export function StandingsTableClient({
                         aria-label={`${row.move > 0 ? "up" : "down"} ${Math.abs(row.move)} from last week`}
                         title={`${row.move > 0 ? "Up" : "Down"} ${Math.abs(row.move)} from last week`}
                         className={cn(
-                          "ml-0.5 align-middle text-[9px] font-semibold",
+                          "ml-0.5 align-middle text-xs font-semibold",
                           row.move > 0 ? "text-success" : "text-danger",
                         )}
                       >
@@ -265,7 +265,7 @@ export function StandingsTableClient({
                 <th scope="row" className="px-2 py-2.5 text-left font-medium">
                   <Link
                     href={`/teams/${row.teamId}`}
-                    className="-my-1 flex min-h-11 min-w-0 items-center gap-2 py-1 hover:text-info"
+                    className="-my-1 flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-1 hover:text-info"
                   >
                     <TeamCrest
                       name={row.name}
@@ -276,7 +276,7 @@ export function StandingsTableClient({
                     />
                     <span className="truncate">{row.name}</span>
                     {row.teamId === viewerTeamId ? (
-                      <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info">
+                      <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-xs font-semibold uppercase tracking-wide text-info">
                         You
                       </span>
                     ) : null}
@@ -288,7 +288,7 @@ export function StandingsTableClient({
                         role="img"
                         aria-label="Withdrew from the season — remaining fixtures forfeited, excluded from playoff seeding"
                         title="Withdrew from the season — remaining fixtures were forfeited to the opponents; excluded from playoff seeding"
-                        className="shrink-0 rounded bg-surface-2 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+                        className="shrink-0 rounded bg-surface-2 px-1 py-0.5 text-xs font-semibold uppercase tracking-wide text-muted"
                       >
                         withdrew
                       </span>
@@ -296,7 +296,7 @@ export function StandingsTableClient({
                     {row.tiebreakerPending ? (
                       <span
                         title={row.seedingTiebreakerPending ? "Playoff seed order needs a tiebreaker" : "A tiebreaker match must settle playoff qualification after the regular season"}
-                        className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-semibold text-accent"
+                        className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-xs font-semibold text-accent"
                       >
                         {row.seedingTiebreakerPending ? "Seeding tiebreaker" : "Tiebreaker pending"}
                       </span>
@@ -305,7 +305,7 @@ export function StandingsTableClient({
                         role="img"
                         aria-label="Fully tied with a neighbouring team — displayed order is provisional"
                         title="Points, game diff, series wins and head-to-head are level; ties affecting playoffs require tiebreaker matches after the regular season"
-                        className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent"
+                        className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-xs font-semibold uppercase tracking-wide text-accent"
                       >
                         tied
                       </span>
@@ -313,7 +313,7 @@ export function StandingsTableClient({
                     {row.tiebreakerResolved ? (
                       <span
                         title="Playoff order settled by tiebreaker results"
-                        className="shrink-0 rounded bg-info/10 px-1 py-0.5 text-[10px] font-semibold text-info"
+                        className="shrink-0 rounded bg-info/10 px-1 py-0.5 text-xs font-semibold text-info"
                       >
                         TB resolved
                       </span>
@@ -348,7 +348,7 @@ export function StandingsTableClient({
               {hasCut && !row.tiebreakerPending && row.playoffSeed === playoffCut ? (
                 <tr className="bg-success/[0.03]">
                   <td colSpan={cols} className="px-5 py-1">
-                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-success/80">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.15em] text-success/80">
                       <span
                         aria-hidden
                         className="h-px flex-1 bg-gradient-to-r from-transparent to-success/40"
@@ -522,7 +522,7 @@ function StandingsOverview({
                       aria-label={`${row.move > 0 ? "up" : "down"} ${Math.abs(row.move)} from last week`}
                       title={`${row.move > 0 ? "Up" : "Down"} ${Math.abs(row.move)} from last week`}
                       className={cn(
-                        "mt-2 block whitespace-nowrap text-[9px] font-semibold",
+                        "mt-2 block whitespace-nowrap text-xs font-semibold",
                         row.move > 0 ? "text-success" : "text-danger",
                       )}
                     >
@@ -565,7 +565,7 @@ function StandingsOverview({
                           ↗
                         </span>
                       </Link>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-medium">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium">
                         <OverviewStatus row={row} playoffCut={playoffCut} />
                         {isViewer ? (
                           <span className="text-info">Your team</span>
@@ -609,7 +609,7 @@ function StandingsOverview({
                     <span
                       role="img"
                       aria-label={recordLabel}
-                      className="shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums sm:hidden"
+                      className="shrink-0 whitespace-nowrap font-mono text-xs tabular-nums sm:hidden"
                     >
                       <span aria-hidden>
                         <span className="text-success">{row.wins}W</span>
@@ -658,7 +658,7 @@ function StandingsOverview({
               {showPlayoffCut && !row.tiebreakerPending && row.playoffSeed === playoffCut ? (
                 <tr className="bg-accent/[0.04]">
                   <td colSpan={columns} className="px-4 py-2 sm:px-5">
-                    <div className="flex items-center gap-3 text-[9px] font-semibold uppercase tracking-[0.15em] text-accent">
+                    <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.15em] text-accent">
                       <span
                         aria-hidden
                         className="h-px flex-1 border-t border-dashed border-accent/35"

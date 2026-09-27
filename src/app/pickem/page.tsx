@@ -256,7 +256,7 @@ export default async function PickemPage({
                     {userName.get(s.userId) ?? "?"}
                   </PlayerLink>
                   {viewer?.id === s.userId ? (
-                    <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info">
+                    <span className="shrink-0 rounded bg-info/20 px-1 py-0.5 text-xs font-semibold uppercase tracking-wide text-info">
                       You
                     </span>
                   ) : null}

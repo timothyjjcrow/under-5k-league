@@ -525,7 +525,7 @@ function LadderLeaders({
             </div>
             <span
               className={cn(
-                "rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums",
+                "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
                 player.lastChange > 0
                   ? "bg-success/10 text-success"
                   : player.lastChange < 0
@@ -914,7 +914,7 @@ function Leaderboard({
                 {r.lastChange !== 0 ? (
                   <span
                     className={cn(
-                      "ml-1 text-[10px] font-medium tabular-nums",
+                      "ml-1 text-xs font-medium tabular-nums",
                       r.lastChange > 0 ? "text-success" : "text-danger",
                     )}
                     title="Elo change from their last game"

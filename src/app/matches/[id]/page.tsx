@@ -1584,7 +1584,7 @@ function ReportCardStrip({ line }: { line: PlayerStat }) {
           aria-label={`Overall report-card grade ${overall} — ${percentLabel(avg!)} vs the world on this hero`}
           title={`vs the world on this hero: ${percentLabel(avg!)}`}
           className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide",
+            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs font-semibold uppercase tracking-wide",
             GRADE_CHIP[gradeTone(overall)],
           )}
         >
@@ -1598,7 +1598,7 @@ function ReportCardStrip({ line }: { line: PlayerStat }) {
           aria-label={`${r.label}: grade ${r.grade}, ${percentLabel(r.pct)}`}
           title={`${r.label} — ${percentLabel(r.pct)}`}
           className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] tabular-nums",
+            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs tabular-nums",
             GRADE_CHIP[gradeTone(r.grade)],
           )}
         >

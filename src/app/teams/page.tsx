@@ -265,7 +265,7 @@ export default async function TeamsPage() {
                         {withdrawnTeamIds.has(row.teamId) ? (
                           <Badge
                             tone="danger"
-                            className="mt-1 px-1.5 py-0 text-[10px]"
+                            className="mt-1 px-1.5 py-0"
                             title="Withdrawn teams retain played results but cannot qualify for playoffs"
                           >
                             Withdrawn
@@ -281,7 +281,7 @@ export default async function TeamsPage() {
                         </span>
                         <span
                           className={cn(
-                            "mt-1 block font-mono text-[10px] tabular-nums",
+                            "mt-1 block font-mono text-xs tabular-nums",
                             moved > 0
                               ? "text-cyan-300"
                               : moved < 0

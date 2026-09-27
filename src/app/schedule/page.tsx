@@ -962,7 +962,7 @@ function SeasonGrid({
           !cell.played && "text-muted hover:text-info",
         )}
       >
-        <span className="text-[10px] font-semibold uppercase">
+        <span className="text-xs font-semibold uppercase">
           {cell.played ? cell.result : cell.live ? "Live" : `W${cell.week}`}
         </span>
         <span>{cell.played ? cell.score : "vs"}</span>

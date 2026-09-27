@@ -316,7 +316,7 @@ export function ScheduleWeeks({
                   {/* "Final" is the grand final's word alone — a round
                       header reading "Grand final · 0 / 1 FINAL" said it twice
                       and meant two different things. */}
-                  <span className="mt-0.5 block text-[10px] uppercase tracking-wider">
+                  <span className="mt-0.5 block text-xs uppercase tracking-wider">
                     {total ? "Played" : "Bye"}
                   </span>
                 </span>
@@ -337,7 +337,7 @@ export function ScheduleWeeks({
                   {w.byes.length > 0 &&
                   (!filterTeam || w.byes.some((b) => b.id === filterTeam)) ? (
                     <div className="flex items-center gap-2 border-t border-line-soft px-4 py-3 text-xs text-muted sm:px-5">
-                      <span className="rounded bg-surface-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider">
+                      <span className="rounded bg-surface-2 px-2 py-1 text-xs font-semibold uppercase tracking-wider">
                         Bye
                       </span>
                       <span>
@@ -518,7 +518,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
             m.forfeit ? "Forfeit — this score was ruled, not played" : undefined
           }
           className={cn(
-            "inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em]",
+            "inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em]",
             statusColor,
           )}
         >
@@ -537,7 +537,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
           </Badge>
         ) : null}
         {m.forfeit ? (
-          <span className="ml-auto text-[10px] text-muted">Ruled result</span>
+          <span className="ml-auto text-xs text-muted">Ruled result</span>
         ) : null}
       </div>
       <div className="space-y-1 px-3 pb-3 pt-1 sm:px-4">

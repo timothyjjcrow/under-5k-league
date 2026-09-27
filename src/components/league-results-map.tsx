@@ -164,7 +164,7 @@ export function LeagueResultsMap({
                                         : "border-dashed border-line bg-surface-2/20 text-muted",
                               )}
                             >
-                              <span className="text-[10px] font-semibold uppercase tracking-wide">
+                              <span className="text-xs font-semibold uppercase tracking-wide">
                                 {done
                                   ? `${result}${match.forfeit ? " · F" : ""}`
                                   : live
