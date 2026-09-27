@@ -28,7 +28,6 @@ import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { cn } from "@/lib/utils";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { getTeamJersey } from "@/lib/team-jerseys";
-import { TeamJerseyPreview } from "@/components/team-jersey-preview";
 import { PowerRankingsCard } from "@/components/power-rankings-card";
 import {
   Avatar,
@@ -210,10 +209,12 @@ export default async function TeamsPage() {
             (a, b) => (rankOf.get(a.id) ?? 99) - (rankOf.get(b.id) ?? 99),
           )
         : teams;
-  const jerseys = ordered.flatMap((team) => {
-    const jersey = getTeamJersey(team.members.map((member) => member.user));
-    return jersey ? [jersey] : [];
-  });
+  // Teams with a Fourthwall jersey link to its preview on their own page.
+  const withJersey = new Set(
+    teams
+      .filter((team) => getTeamJersey(team.members.map((m) => m.user)))
+      .map((team) => team.id),
+  );
 
   // Elo power rankings: only regular-season series feed the rating, so it
   // stops moving once the regular season is over.
@@ -460,6 +461,17 @@ export default async function TeamsPage() {
                       ))}
                     </div>
                   )}
+                  {withJersey.has(t.id) ? (
+                    <div className="mt-3 flex justify-end">
+                      <Link
+                        href={`/teams/${t.id}#team-jersey`}
+                        className={textLink("text-xs")}
+                      >
+                        Team jersey
+                        <span className="sr-only"> for {t.name}</span> →
+                      </Link>
+                    </div>
+                  ) : null}
                 </CardBody>
               </Card>
             );
@@ -533,24 +545,6 @@ export default async function TeamsPage() {
         </Card>
       ) : null}
 
-      {jerseys.length > 0 ? (
-        <section aria-labelledby="team-jerseys-title" className="space-y-4">
-          <div>
-            <h2 id="team-jerseys-title" className="text-lg font-semibold">
-              Team jerseys
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
-              Your team, front and back. Explore the Fourthwall previews, then
-              choose a player&apos;s personalized jersey.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
-            {jerseys.map((jersey) => (
-              <TeamJerseyPreview key={jersey.teamName} jersey={jersey} />
-            ))}
-          </div>
-        </section>
-      ) : null}
       <AuctionHistory seasonId={season.id} />
     </div>
   );
