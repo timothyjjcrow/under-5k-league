@@ -43,6 +43,29 @@ describe("playerDirectoryPresentation", () => {
     }
   });
 
+  it("names standins in the live auction's title, since they can't be drafted", () => {
+    for (const draftStatus of [
+      DRAFT_STATUS.IN_PROGRESS,
+      DRAFT_STATUS.PAUSED,
+    ]) {
+      expect(
+        playerDirectoryPresentation(SEASON_STATUS.DRAFT, draftStatus, true)
+          .poolTitle,
+      ).toBe("Draft pool and standins");
+    }
+    // Every other stage's title already covers them.
+    for (const [seasonStatus, draftStatus] of [
+      [SEASON_STATUS.SIGNUPS, null],
+      [SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.COMPLETE, DRAFT_STATUS.COMPLETE],
+    ] as const) {
+      expect(
+        playerDirectoryPresentation(seasonStatus, draftStatus, true).poolTitle,
+      ).toBe(playerDirectoryPresentation(seasonStatus, draftStatus).poolTitle);
+    }
+  });
+
   it("distinguishes a completed auction from later season phases", () => {
     expect(
       playerDirectoryPresentation(

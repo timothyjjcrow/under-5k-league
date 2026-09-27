@@ -108,6 +108,7 @@ export default async function PlayersPage() {
   const directory = playerDirectoryPresentation(
     season.status,
     draft?.status,
+    standins.length > 0,
   );
   const draftedUserIds = new Set(
     teams.flatMap((t) => t.members.map((m) => m.userId)),
