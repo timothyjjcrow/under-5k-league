@@ -6,7 +6,14 @@
 // The server page serializes everything (dates preformatted so hydration
 // never disagrees on locale); this component only filters and toggles.
 
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
@@ -376,8 +383,9 @@ const FOLD_PARAM = "results";
  * The finished regular season during the playoffs: one section that starts
  * closed, so the bracket above and the standings below stay within reach
  * instead of sitting either side of every week's results. It opens by itself
- * when the URL shows the reader was already inside it: a team picked, a week
- * opened, or a return from one of its matches.
+ * when the URL shows the reader was already inside it (a team picked, a week
+ * opened, or a return from one of its matches) or points straight at it, as
+ * the home page's "Full schedule" links do.
  */
 export function ScheduleFold({
   id,
@@ -397,8 +405,21 @@ export function ScheduleFold({
       params.has("weeks") ||
       params.get(FOLD_PARAM) === "open",
   );
+  const fold = useRef<HTMLDetailsElement>(null);
+  // "#fixtures" names this section, so arriving at it (or jumping to it
+  // later) opens it. Read after mount: the server never sees the hash.
+  useEffect(() => {
+    const openIfTargeted = () => {
+      if (window.location.hash === `#${id}` && fold.current)
+        fold.current.open = true;
+    };
+    openIfTargeted();
+    window.addEventListener("hashchange", openIfTargeted);
+    return () => window.removeEventListener("hashchange", openIfTargeted);
+  }, [id]);
   return (
     <details
+      ref={fold}
       id={id}
       open={initiallyOpen}
       onToggle={(event) => {
@@ -414,14 +435,12 @@ export function ScheduleFold({
       className="group scroll-mt-24 rounded-xl border border-line bg-surface/40 open:bg-surface/60"
     >
       <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-5 py-4 transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
-        <span className="min-w-0">
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold leading-snug">{title}</h2>
           {description ? (
-            <span className="mt-0.5 block text-xs text-muted">
-              {description}
-            </span>
+            <p className="mt-0.5 text-xs text-muted">{description}</p>
           ) : null}
-        </span>
+        </div>
         <svg
           aria-hidden="true"
           viewBox="0 0 24 24"

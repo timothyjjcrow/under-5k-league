@@ -32,7 +32,7 @@ export function ByeWeekNote({
       <span className="min-w-0 [overflow-wrap:anywhere]">
         <span className="font-medium">Week {week}: bye.</span>{" "}
         <span className="text-muted">
-          {who} doesn&apos;t play this week.
+          {who} has the week off.
           {next ? ` Next up: ${next}.` : ""}
         </span>
       </span>
