@@ -163,8 +163,26 @@ export function formatInZone(
  * time", or "= Thu 8 Oct, 03:00 your time" when it lands on another day.
  * Null when both clocks read the same (a Paris admin on a Berlin league), so
  * the line only appears when it tells the viewer something.
+ *
+ * Also null when the browser reports a zone Intl can't format (Chrome says
+ * "Etc/Unknown" when it can't map the OS zone): the field calls this from
+ * its sync effect, so a throw here would take down every scheduling box on
+ * /admin over an optional hint line.
  */
 export function yourTimeHint(
+  ms: number,
+  timeZone: string,
+  viewerZone: string,
+  locale: string | undefined,
+): string | null {
+  try {
+    return yourTimeHintOrThrow(ms, timeZone, viewerZone, locale);
+  } catch {
+    return null;
+  }
+}
+
+function yourTimeHintOrThrow(
   ms: number,
   timeZone: string,
   viewerZone: string,
