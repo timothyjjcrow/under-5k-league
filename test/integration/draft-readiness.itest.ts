@@ -34,6 +34,7 @@ import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
 import { sendDiscordMessage } from "@/lib/discord";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
+import { formatLeagueTime } from "@/lib/zoned-time";
 import { makeSeason, makeUser, sessionFor } from "./factories";
 
 function fd(fields: Record<string, string | number>): FormData {
@@ -211,6 +212,9 @@ describe("draft readiness confirmation", () => {
       }),
     );
     expect(changed?.message).toMatch(/need to confirm/i);
+    // The toast restates the night on the league's clock, zone named, so an
+    // admin whose own clock differs can see what they actually saved.
+    expect(changed?.message).toContain(formatLeagueTime(DRAFT_TWO));
     expect(sendDiscordMessage).toHaveBeenLastCalledWith(
       expect.stringMatching(/previous confirmations expired.*\/me/i),
     );

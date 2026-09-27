@@ -16,6 +16,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
+import { formatLeagueTime } from "@/lib/zoned-time";
 import { sendDiscordMessage } from "@/lib/discord";
 import {
   recordResult,
@@ -199,6 +200,10 @@ describe("admin schedule writes only touch the rows they claim to", () => {
 
     expect(out?.message).toMatch(/1 check-in/);
     expect(out?.message).toMatch(/1 open reschedule proposal/i);
+    // The new night is restated on the league's clock, zone named.
+    expect(out?.message).toContain(
+      `Week ${target.week} moved to ${formatLeagueTime(night)}`,
+    );
 
     // The retime kills the live ask; the answered one stays answered, or the
     // audit trail stops recording that the opponent ever said no.

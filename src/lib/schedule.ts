@@ -3,6 +3,7 @@
 
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
+import { dateAtWallTime, wallTime, zoneFormatter as timeFormatter } from "./zoned-time";
 
 export type Pairing = { home: string; away: string };
 
@@ -13,40 +14,6 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 // earlier. Stored kickoffs are never rewritten by this: it only decides the
 // dates that generation, playoff rounds and the week mover compute next.
 const SCHEDULE_TIME_ZONE: string | null = LEAGUE_CONFIG.timeZone;
-
-function wallTime(date: Date, formatter: Intl.DateTimeFormat): number {
-  const parts = Object.fromEntries(
-    formatter.formatToParts(date).map(({ type, value }) => [type, value]),
-  );
-  return Date.UTC(
-    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
-    Number(parts.hour), Number(parts.minute), Number(parts.second),
-    date.getUTCMilliseconds(),
-  );
-}
-
-function timeFormatter(timeZone: string) {
-  return new Intl.DateTimeFormat("en-US-u-ca-gregory", {
-    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
-  });
-}
-
-function dateAtWallTime(target: number, formatter: Intl.DateTimeFormat): Date {
-  const offsets = new Set<number>();
-  // Sample both sides of a possible clock change, including half-hour changes.
-  for (const hours of [-36, 0, 36]) {
-    const sample = new Date(target + hours * 3_600_000);
-    offsets.add(wallTime(sample, formatter) - sample.getTime());
-  }
-  const candidates = [...offsets].map((offset) => new Date(target - offset));
-  const exact = candidates.filter((date) => wallTime(date, formatter) === target);
-  // A repeated local time chooses the earlier occurrence. A skipped local time
-  // moves forward by the clock change, matching calendar scheduling semantics.
-  if (exact.length) return new Date(Math.min(...exact.map((date) => date.getTime())));
-  const after = candidates.filter((date) => wallTime(date, formatter) > target);
-  return new Date(Math.min(...after.map((date) => date.getTime())));
-}
 
 /** Week N's match night, preserving the local clock across daylight saving. */
 export function matchNightForWeek(

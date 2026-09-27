@@ -100,6 +100,7 @@ import {
 import { pubStatsFresh } from "@/lib/pub-stats";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { bool, clampInt, localDate, str } from "@/lib/form";
+import { formatLeagueTime } from "@/lib/zoned-time";
 import {
   draftStartedMessage,
   regularSeasonStartedMessage,
@@ -3151,7 +3152,7 @@ export async function generateSchedule(
       doubleRound ? " (double round robin)" : ""
     }${
       firstNight
-        ? " · match nights set weekly"
+        ? ` · week 1: ${formatLeagueTime(firstNight)}, then weekly`
         : " · no kickoff times set, so auto-sync, reminders and pick'em locks stay off until you set them"
     }${
       collateral.length
@@ -5895,7 +5896,7 @@ export async function setWeekNight(
   return {
     ok: true,
     message:
-      `Week ${week} moved (${outcome.currentRetimed} scheduled match${outcome.currentRetimed === 1 ? "" : "es"} retimed)` +
+      `Week ${week} moved to ${formatLeagueTime(night)} (${outcome.currentRetimed} scheduled match${outcome.currentRetimed === 1 ? "" : "es"} retimed)` +
       (cascade
         ? outcome.laterRetimed > 0
           ? ` · ${outcome.laterRetimed} later match${outcome.laterRetimed === 1 ? "" : "es"} shifted with it`
@@ -6103,7 +6104,7 @@ export async function setMatchTime(
   return {
     message: `${
       scheduledAt
-        ? "Kickoff time updated"
+        ? `Kickoff time set to ${formatLeagueTime(scheduledAt)}`
         : "Kickoff time cleared · this match is now unscheduled; auto-sync, reminders and pick'em locks stay off until a new time is set"
     } · ${outcome.rsvps} check-in(s) cleared · ${outcome.proposals} open reschedule proposal(s) cancelled${
       scheduledAt
@@ -7299,10 +7300,12 @@ export async function setDraftNight(
   }
   refresh();
   return {
+    // League time, named: the admin's own clock is what hid a mis-entered
+    // night before the form read the league's.
     message: when
       ? replacedExistingTime
-        ? "Draft night updated — players need to confirm the new time"
-        : "Draft night set 🗓️"
+        ? `Draft night moved to ${formatLeagueTime(when)} — players need to confirm the new time`
+        : `Draft night set for ${formatLeagueTime(when)} 🗓️`
       : "Draft night cleared",
   };
 }
