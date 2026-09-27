@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SavedSignupForm } from "./saved-signup-form";
 
-const render = (props: { saved: boolean; summary?: string }) =>
+type Props = Omit<ComponentProps<typeof SavedSignupForm>, "children">;
+
+const render = (props: Props) =>
   renderToStaticMarkup(
-    createElement(SavedSignupForm, props, createElement("form")),
+    createElement(
+      SavedSignupForm,
+      props as ComponentProps<typeof SavedSignupForm>,
+      createElement("form"),
+    ),
   );
 
 describe("SavedSignupForm", () => {
