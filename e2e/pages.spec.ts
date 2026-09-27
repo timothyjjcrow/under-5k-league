@@ -21,7 +21,17 @@ test("signed-out profile requests explain sign-in without a duplicate header CTA
   await expect(
     page.getByRole("banner").getByRole("link", { name: "Sign in" }),
   ).toHaveCount(0);
-  await expect(page.getByText("Steam signs you into this site.")).toBeVisible();
+  // One job: Steam is the one button, with the notice of what it shares
+  // right under it. The Discord invite lives in the footer, not here.
+  const main = page.locator("#main");
+  await expect(
+    main.getByRole("link", { name: "Sign in through Steam" }),
+  ).toBeVisible();
+  await expect(
+    main.getByText(/so we never see your password or email\.$/),
+  ).toBeVisible();
+  await expect(main.getByRole("link", { name: /Discord/ })).toHaveCount(0);
+  await expect(main.locator("img")).toHaveCount(0);
 });
 
 test("retired policy routes stay absent and the login page fits a phone", async ({
