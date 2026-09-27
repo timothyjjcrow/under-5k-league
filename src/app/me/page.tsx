@@ -673,9 +673,11 @@ export default async function MePage({
             ) : (
               <>
                 {/* The weekly slot is for deciding whether to sign up. Once
-                    the player is on a team or booked as cover, the fixture
-                    listed above says when they play. */}
-                {member || (standinAssignments?.length ?? 0) > 0 ? null : (
+                    the player has a fixture listed above (their team's next
+                    match, or cover they're booked for), that says when they
+                    play instead. */}
+                {(member && nextTeamMatch) ||
+                (standinAssignments?.length ?? 0) > 0 ? null : (
                   <ScheduleCallout
                     label={seasonMatchNightLabel(season)}
                     description={

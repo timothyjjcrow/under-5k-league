@@ -1311,7 +1311,7 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
           <span className="text-xs text-muted">
             {/* Once the schedule has kickoffs, pages print week 1's slot. */}
             {season.firstMatchNight
-              ? `fixtures set it now: ${weeklyMatchNightLabel(season.firstMatchNight)}`
+              ? `players now see week 1's slot: ${weeklyMatchNightLabel(season.firstMatchNight)}`
               : `shown before signup${season.matchSchedule ? "" : " · using default"}`}
           </span>
         </ActionForm>
