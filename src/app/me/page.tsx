@@ -10,8 +10,7 @@ import {
   confirmDraftReadiness,
   leaveLeague,
   updateDotaAccount,
-  refreshRank,
-  refreshSteamProfile,
+  refreshMyAccounts,
   updateDiscordName,
   unlinkDiscord,
   setInhousePingOptIn,
@@ -75,7 +74,7 @@ import {
   CardBody,
   CardHeader,
   PageTitle,
-  RankBadge,
+  RankMedal,
   ScheduleCallout,
   TeamCrest,
   textLink,
@@ -823,75 +822,17 @@ export default async function MePage({
         <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} guildCfg={guildCfg} memberInfo={memberInfo} />
       </Suspense>
 
-      <Card id="profile-identity" className="scroll-mt-24">
-        {/* Two separate defects, both here all along, and only one of them is
-            about width.
-
-            THE SQUASH is what `shrink-0` fixes: Avatar sets width/height but
-            bakes in no shrink floor (callers pass one), so beside the name
-            block and the button column it rendered 19px wide inside its 56px
-            box — measured still squashed at 430px, i.e. on every phone made.
-            It is not width-dependent and no overflow check can see it.
-
-            THE OVERFLOW is the 17-digit SteamID64, one unbreakable token,
-            pushing this row past its own card: 58px at 320px, 18px at 360px,
-            3px at 375px, and gone by 390px. `min-w-0` + `break-all` and
-            `flex-wrap` + `basis-full` EACH fix that on their own (verified by
-            reverting one at a time) — both are kept because they do different
-            jobs: the first stops the id widening the row, the second gives the
-            buttons their own line rather than a 135px sliver of this one.
-
-            Note which item carries the floor. It goes on the column that is
-            ALLOWED to leave the line; a min-width on the min-w-0 child instead
-            is the trap that broke the player profile hero. */}
-        <CardBody className="flex flex-wrap items-center gap-4">
-          <Avatar
-            name={user.name}
-            src={user.avatar}
-            size={56}
-            className="shrink-0"
-          />
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-display text-xl font-semibold">
-                {user.name}
-              </span>
-              {user.role === "ADMIN" ? (
-                <Badge tone="accent">Admin</Badge>
-              ) : null}
-              <RankBadge rankTier={dbUser?.rankTier} />
-            </div>
-            <a
-              // A player whose Steam profile URL was never fetched still has
-              // a Steam id; "#" opened a blank tab.
-              href={
-                dbUser?.profileUrl ||
-                `https://steamcommunity.com/profiles/${encodeURIComponent(user.steamId)}`
-              }
-              target="_blank"
-              rel="noreferrer"
-              className="break-all text-sm text-muted hover:text-fg"
-            >
-              Steam: {user.steamId}
-            </a>
-          </div>
-          <div className="ml-auto flex basis-full flex-col items-end gap-2 sm:basis-auto">
-            <ActionForm action={refreshSteamProfile}>
-              <SubmitButton variant="secondary" size="sm">
-                Refresh from Steam
-              </SubmitButton>
-            </ActionForm>
-            <Link
-              href={`/players/${user.id}`}
-              className={textLink("whitespace-nowrap text-sm")}
-            >
-              View my public profile →
-            </Link>
-          </div>
-        </CardBody>
-      </Card>
-
-      <DotaAccountCard
+      <SteamDotaCard
+        userId={user.id}
+        name={dbUser?.name ?? user.name}
+        avatar={dbUser ? dbUser.avatar : user.avatar}
+        isAdmin={user.role === "ADMIN"}
+        steamUrl={
+          // A player whose Steam profile URL was never fetched still has a
+          // Steam id; "#" opened a blank tab.
+          dbUser?.profileUrl ||
+          `https://steamcommunity.com/profiles/${encodeURIComponent(user.steamId)}`
+        }
         effectiveId={
           dbUser
             ? effectiveDotaAccountId(dbUser)
@@ -1062,13 +1003,33 @@ function RadioTile({
   );
 }
 
-function DotaAccountCard({
+const PUBLIC_MATCH_DATA_PATH =
+  "Settings → Options → Advanced → Social → Expose Public Match Data";
+
+/**
+ * Steam and Dota in one short card: who you are, your medal, the three
+ * outside profiles and one refresh button. Steam already refreshes the name
+ * and avatar on every sign-in, so the long ids and the per-provider buttons
+ * were noise; the match-data how-to shows only when it is the likely fix
+ * (data private, or no medal yet).
+ */
+function SteamDotaCard({
+  userId,
+  name,
+  avatar,
+  isAdmin,
+  steamUrl,
   effectiveId,
   steamAccountId,
   override,
   rankTier,
   fhUnavailable,
 }: {
+  userId: string;
+  name: string;
+  avatar: string | null;
+  isAdmin: boolean;
+  steamUrl: string;
   effectiveId: number | null;
   steamAccountId: number | null;
   override: number | null;
@@ -1080,30 +1041,8 @@ function DotaAccountCard({
     <Card id="profile-dota" className="scroll-mt-24">
       <CardHeader
         headingLevel={2}
-        title="Dota / Dotabuff account"
-        subtitle="Your Steam sign-in verifies the account used for ranks, scouting, and match imports."
-        action={
-          effectiveId ? (
-            <div className="flex items-center gap-3 text-sm">
-              <a
-                href={`https://www.dotabuff.com/players/${effectiveId}`}
-                target="_blank"
-                rel="noreferrer"
-                className={textLink()}
-              >
-                Dotabuff ↗
-              </a>
-              <a
-                href={`https://www.opendota.com/players/${effectiveId}`}
-                target="_blank"
-                rel="noreferrer"
-                className={textLink()}
-              >
-                OpenDota ↗
-              </a>
-            </div>
-          ) : null
-        }
+        title="Steam & Dota"
+        subtitle="Your Steam sign-in verifies your Dota account, which your medal, scouting stats and match imports come from. To use another Dota account, sign in with the Steam account that owns it."
       />
       <CardBody className="space-y-3">
         {fhUnavailable === true ? (
@@ -1113,42 +1052,75 @@ function DotaAccountCard({
           >
             <b>Your Dota match data is private</b> — league results can&apos;t
             auto-import your games, and your medal/stats stay invisible. In Dota
-            2:{" "}
-            <b>
-              Settings → Options → Advanced → Social → Expose Public Match Data
-            </b>
-            , play a game, then hit Refresh medal below.
+            2: <b>{PUBLIC_MATCH_DATA_PATH}</b>, play a game, then press Refresh
+            my Steam &amp; Dota info below.
           </div>
         ) : null}
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
-          {effectiveId ? (
-            <>
-              <span>
-                Account <span className="font-mono text-fg">{effectiveId}</span>{" "}
-                {override == null ? "(verified by Steam)" : "(legacy manual link)"}
+        {/* shrink-0 on the avatar: Avatar sets width/height but no shrink
+            floor, and beside the name it rendered 19px wide in its 56px box.
+            min-w-0 lets a long Steam name wrap instead of widening the card. */}
+        <div className="flex items-center gap-4">
+          <Avatar name={name} src={avatar} size={56} className="shrink-0" />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-display text-xl font-semibold [overflow-wrap:anywhere]">
+                {name}
               </span>
-              <span>·</span>
-              <span>Medal:</span>
+              {isAdmin ? <Badge tone="accent">Admin</Badge> : null}
               {rankTier ? (
-                <RankBadge rankTier={rankTier} />
+                <RankMedal rankTier={rankTier} showLabel />
               ) : (
-                <span>not synced yet</span>
+                <span className="text-xs text-muted">No medal yet</span>
               )}
-            </>
-          ) : (
-            <span>
-              We couldn&apos;t derive a Dota account from this Steam identity.
-              Contact a league admin before playing.
-            </span>
-          )}
+            </div>
+            {/* Stacked TAP_SAFE links need real spacing between them. */}
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+              <a
+                href={steamUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={textLink()}
+              >
+                Steam <span aria-hidden>↗</span>
+              </a>
+              {effectiveId ? (
+                <>
+                  <a
+                    href={`https://www.dotabuff.com/players/${effectiveId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={textLink()}
+                  >
+                    Dotabuff <span aria-hidden>↗</span>
+                  </a>
+                  <a
+                    href={`https://www.opendota.com/players/${effectiveId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={textLink()}
+                  >
+                    OpenDota <span aria-hidden>↗</span>
+                  </a>
+                </>
+              ) : null}
+            </div>
+          </div>
         </div>
+
+        {!effectiveId ? (
+          <p className="text-sm text-muted">
+            We couldn&apos;t derive a Dota account from this Steam identity.
+            Contact a league admin before playing.
+          </p>
+        ) : null}
 
         {override != null ? (
           <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
             <p>
-              This manual link came from an older version of the league site
-              and is not ownership-verified. You can keep refreshing it, or
-              switch permanently to the account verified by your Steam sign-in.
+              Your Dota account ({override}) is a manual link from an older
+              version of the league site and is not ownership-verified. You
+              can keep refreshing it, or switch permanently to the account
+              verified by your Steam sign-in.
             </p>
             {steamAccountId != null ? (
               <ActionForm action={updateDotaAccount}>
@@ -1158,26 +1130,27 @@ function DotaAccountCard({
               </ActionForm>
             ) : null}
           </div>
-        ) : steamAccountId != null ? (
+        ) : null}
+
+        {effectiveId && !rankTier && fhUnavailable !== true ? (
           <p className="text-xs text-muted">
-            Need to use a different Dota account? Sign out, then sign in with
-            the Steam account that owns it so the league can verify it.
+            No medal showing? In Dota 2, turn on{" "}
+            <b>{PUBLIC_MATCH_DATA_PATH}</b>, play a game, then refresh.
           </p>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-3">
-          <ActionForm action={refreshRank}>
-            <SubmitButton variant="ghost" size="sm">
-              Refresh medal
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <ActionForm action={refreshMyAccounts}>
+            <SubmitButton variant="secondary" size="sm">
+              Refresh my Steam &amp; Dota info
             </SubmitButton>
           </ActionForm>
-          <p className="text-xs text-muted">
-            Medal needs{" "}
-            <b>
-              Settings → Options → Advanced → Social → Expose Public Match Data
-            </b>{" "}
-            enabled in Dota 2.
-          </p>
+          <Link
+            href={`/players/${userId}`}
+            className={textLink("whitespace-nowrap text-sm")}
+          >
+            View my public profile →
+          </Link>
         </div>
       </CardBody>
     </Card>

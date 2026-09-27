@@ -38,7 +38,9 @@ per-phase or offseason so unused features stay hidden.
   reconciles existing accounts to the allowlist in one shot. Steam name/avatar
   come from `fetchSteamProfile`/`fetchSteamProfiles` (GetPlayerSummaries, needs
   `STEAM_API_KEY`) — set on login, bulk-refreshed via admin `syncSteamProfiles`,
-  and per-user via profile `refreshSteamProfile`. `<Avatar>` falls back to
+  and per-user via /me's one "Refresh my Steam & Dota info" button
+  (`refreshMyAccounts`, which runs `refreshSteamProfile`'s and `refreshRank`'s
+  halves side by side, each under its own cooldown). `<Avatar>` falls back to
   initials when `avatar` is null.
 - **UI kit**: `src/components/ui.tsx` (server-safe presentational components).
   `site-header.tsx` and `draft-room.tsx` are `"use client"`.

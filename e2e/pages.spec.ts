@@ -232,7 +232,7 @@ test("profile page renders the searchable hero picker", async ({ page }) => {
     page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Dota / Dotabuff account", level: 2 }),
+    page.getByRole("heading", { name: "Steam & Dota", level: 2 }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Discord", level: 2 }),

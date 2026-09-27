@@ -51,10 +51,21 @@ test("a player's profile uses their Steam-verified Dota account", async ({
     `/api/auth/dev?name=Linker&steamId=${steamId}&redirect=/me`,
   );
   await expect(
-    page.getByRole("heading", { name: "Dota / Dotabuff account" }),
+    page.getByRole("heading", { name: "Steam & Dota" }),
   ).toBeVisible();
-  await expect(page.getByText("(verified by Steam)")).toBeVisible();
-  await expect(page.getByText(accountId, { exact: true })).toBeVisible();
+  // The card no longer prints the raw ids: its Dotabuff and OpenDota links
+  // carry the Steam-verified account.
+  await expect(page.getByRole("link", { name: "Dotabuff" })).toHaveAttribute(
+    "href",
+    `https://www.dotabuff.com/players/${accountId}`,
+  );
+  await expect(page.getByRole("link", { name: "OpenDota" })).toHaveAttribute(
+    "href",
+    `https://www.opendota.com/players/${accountId}`,
+  );
+  await expect(
+    page.getByRole("button", { name: "Refresh my Steam & Dota info" }),
+  ).toBeVisible();
   await expect(
     page.getByPlaceholder("Dotabuff/OpenDota URL or account id"),
   ).toHaveCount(0);

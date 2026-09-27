@@ -4,7 +4,7 @@ import { revalidatePath, updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth";
+import { requireUser, type SessionUser } from "@/lib/auth";
 import { raceHook } from "@/lib/race-hook";
 import { getActiveSeason } from "@/lib/season";
 import {
@@ -46,6 +46,7 @@ import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
+import { mergeAccountRefresh } from "@/lib/account-page";
 import { claimProviderCooldown } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
@@ -1056,7 +1057,7 @@ export async function updateDotaAccount(
         message:
           claim === "cooldown"
             ? `${linkMessage} · OpenDota was refreshed recently; wait a minute before refreshing the medal again`
-            : `${linkMessage} · couldn't safely start the OpenDota refresh; wait a minute and use Refresh medal`,
+            : `${linkMessage} · couldn't safely start the OpenDota refresh; wait a minute and use Refresh my Steam & Dota info`,
       };
     }
     // The scouting snapshot rides the same moment (in parallel — independent
@@ -1100,7 +1101,7 @@ export async function updateDotaAccount(
       medal = result.rankTier ? ` · ${rankMedalName(result.rankTier)}` : "";
     } else {
       // Couldn't reach OpenDota — leave the stored medal alone rather than
-      // wiping it; they can retry with "Refresh medal".
+      // wiping it; they can retry with "Refresh my Steam & Dota info".
       medal = " · couldn't fetch medal (wait a minute, then try Refresh)";
     }
     const current = await prisma.user.findUnique({
@@ -1171,6 +1172,13 @@ export async function refreshRank(
   } catch {
     return { error: "Sign in required" };
   }
+  return refreshOpenDotaProfileFor(user);
+}
+
+/** The OpenDota half: medal, public-data flag and the pub snapshot. */
+async function refreshOpenDotaProfileFor(
+  user: SessionUser,
+): Promise<ActionResult> {
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
   if (!dbUser) return { error: "Sign in required" };
   const accountId = effectiveDotaAccountId(dbUser);
@@ -1279,6 +1287,34 @@ export async function refreshSteamProfile(
   } catch {
     return { error: "Sign in required" };
   }
+  return refreshSteamProfileFor(user);
+}
+
+/**
+ * My account's one refresh button: Steam name/avatar and the OpenDota medal,
+ * public-data flag and scouting snapshot together. Each half keeps its own
+ * cooldown claim and failure handling; the toast says what each one did.
+ */
+export async function refreshMyAccounts(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  const [steam, dota] = await Promise.all([
+    refreshSteamProfileFor(user),
+    refreshOpenDotaProfileFor(user),
+  ]);
+  return mergeAccountRefresh(steam, dota);
+}
+
+async function refreshSteamProfileFor(
+  user: SessionUser,
+): Promise<ActionResult> {
   const claim = await claimProviderCooldown(
     "steam-profile",
     user.id,

@@ -3,6 +3,7 @@ import {
   accountNextSteps,
   discordCardCtas,
   discordLinkNote,
+  mergeAccountRefresh,
   signupSummary,
   type AccountStepInput,
   type DiscordCardInput,
@@ -309,5 +310,43 @@ describe("discordCardCtas", () => {
       expect(primary).not.toBeNull();
       if (secondary) expect(secondary.label).not.toBe(primary?.label);
     }
+  });
+});
+
+describe("mergeAccountRefresh", () => {
+  it("reports what each provider did in one toast", () => {
+    expect(
+      mergeAccountRefresh(
+        { message: "Profile refreshed from Steam" },
+        { message: "Medal: Legend 3" },
+      ),
+    ).toEqual({ message: "Profile refreshed from Steam · Medal: Legend 3" });
+  });
+
+  it("keeps the good half when one provider fails", () => {
+    expect(
+      mergeAccountRefresh(
+        { message: "Profile refreshed from Steam" },
+        { error: "Couldn't reach OpenDota (rate limited?) — wait a minute and try again" },
+      ),
+    ).toEqual({
+      message:
+        "Profile refreshed from Steam · Couldn't reach OpenDota (rate limited?) — wait a minute and try again",
+    });
+  });
+
+  it("says a double cooldown once, and joins other double failures", () => {
+    expect(
+      mergeAccountRefresh(
+        { error: "Your Steam profile was refreshed recently — wait about a minute before trying again." },
+        { error: "Your OpenDota profile was refreshed recently — wait about a minute before trying again." },
+      ),
+    ).toEqual({
+      error:
+        "Your Steam and Dota info were refreshed recently — wait about a minute before trying again.",
+    });
+    expect(
+      mergeAccountRefresh({ error: "Steam down" }, { error: "OpenDota down" }),
+    ).toEqual({ error: "Steam down · OpenDota down" });
   });
 });

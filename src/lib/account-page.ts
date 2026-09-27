@@ -1,6 +1,7 @@
 // Pure copy and ordering for My account (/me). No database or Discord calls:
 // the page reads the facts and these helpers decide what to say.
 
+import type { ActionResult } from "./action-result";
 import { parseHeroList } from "./heroes";
 import { DOTA_ROLES, roleLabels } from "./roles";
 
@@ -283,4 +284,32 @@ export function discordCardCtas(input: DiscordCardInput): DiscordCardCtas {
     }
   }
   return { primary: null, secondary: null };
+}
+
+/**
+ * One toast for My account's single refresh button, which runs the Steam
+ * and OpenDota refreshes side by side. Each half's own message already names
+ * its provider, so the halves are joined; one failed half still reports what
+ * the other did. Both on cooldown reads as one sentence, not two.
+ */
+export function mergeAccountRefresh(
+  steam: ActionResult,
+  dota: ActionResult,
+): ActionResult {
+  const steamError = steam?.error;
+  const dotaError = dota?.error;
+  if (steamError && dotaError) {
+    if (/refreshed recently/.test(steamError) && /refreshed recently/.test(dotaError)) {
+      return {
+        error:
+          "Your Steam and Dota info were refreshed recently — wait about a minute before trying again.",
+      };
+    }
+    return { error: `${steamError} · ${dotaError}` };
+  }
+  const parts = [
+    steamError ?? steam?.message,
+    dotaError ?? dota?.message,
+  ].filter((part): part is string => !!part);
+  return { message: parts.join(" · ") || "Steam and Dota info refreshed" };
 }

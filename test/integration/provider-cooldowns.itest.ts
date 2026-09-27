@@ -16,6 +16,7 @@ vi.mock("@/lib/steam", async (importOriginal) => ({
 }));
 
 import {
+  refreshMyAccounts,
   refreshRank,
   refreshSteamProfile,
   updateDotaAccount,
@@ -204,5 +205,66 @@ describe("authenticated provider action cooldowns", () => {
     expect(
       await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
     ).toMatchObject({ name: "Fresh Steam name" });
+  });
+
+  it("refreshes Steam and OpenDota from one button, each under its own cooldown", async () => {
+    const user = await signedUser(456_789);
+    mockSteam.mockResolvedValue(
+      new Map([
+        [
+          user.steamId,
+          {
+            name: "One-button name",
+            avatar: "https://avatars.example/one.jpg",
+            profileUrl: "https://steamcommunity.com/profiles/one",
+          },
+        ],
+      ]),
+    );
+
+    const first = await refreshMyAccounts({}, new FormData());
+    expect(first).toEqual({
+      message: "Profile refreshed from Steam · Medal: Legend 3",
+    });
+    expect(mockSteam).toHaveBeenCalledTimes(1);
+    expect(mockRank).toHaveBeenCalledTimes(1);
+    expect(mockPub).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+    ).toMatchObject({ name: "One-button name", rankTier: 53 });
+
+    // A second press inside the minute spends neither provider again.
+    const again = await refreshMyAccounts({}, new FormData());
+    expect(again?.error).toMatch(/Steam and Dota info were refreshed recently/);
+    expect(mockSteam).toHaveBeenCalledTimes(1);
+    expect(mockRank).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports the half that worked when the other provider fails", async () => {
+    const user = await signedUser(567_890);
+    mockSteam.mockResolvedValue(new Map());
+    mockRank.mockResolvedValue({
+      ok: true,
+      rankTier: 45,
+      fhUnavailable: false,
+    });
+
+    const result = await refreshMyAccounts({}, new FormData());
+
+    expect(result?.message).toMatch(/Couldn't refresh from Steam/);
+    expect(result?.message).toMatch(/Medal: Archon 5/);
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+    ).toMatchObject({ rankTier: 45 });
+  });
+
+  it("rejects an expired session before either provider is called", async () => {
+    mockRequireUser.mockRejectedValue(new Error("UNAUTHORIZED"));
+    await expect(refreshMyAccounts({}, new FormData())).resolves.toEqual({
+      error: "Sign in required",
+    });
+    expect(await providerClaimCount()).toBe(0);
+    expect(mockSteam).not.toHaveBeenCalled();
+    expect(mockRank).not.toHaveBeenCalled();
   });
 });
