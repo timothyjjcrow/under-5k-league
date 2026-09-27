@@ -161,12 +161,13 @@ for (const viewport of [
       await expect(publicPage.getByText("4700", { exact: true })).toBeVisible();
       await expect(publicPage.getByLabel("Ancient 4", { exact: true }).first()).toBeVisible();
       await publicPage.goto(publicUrl);
-      const rosterRow = publicPage
-        .locator("section")
-        .filter({ has: publicPage.getByRole("heading", { name: /^Rosters/ }) })
-        .getByRole("link", { name: player.name, exact: true })
-        .locator("..");
-      await expect(rosterRow.getByLabel("Ancient 4", { exact: true })).toBeVisible();
+      // Rosters live on /teams now; the drafted player's pool row carries the
+      // corrected medal beside its team chip.
+      const draftedRow = publicPage
+        .locator("li")
+        .filter({ has: publicPage.getByRole("link", { name: player.name, exact: true }) });
+      await expect(draftedRow.getByLabel("Ancient 4", { exact: true })).toBeVisible();
+      await expect(draftedRow.getByRole("link", { name: new RegExp(`Rank ${viewport.label} Team`) })).toBeVisible();
       expect(errors).toEqual([]);
     } finally {
       await publicContext.close();

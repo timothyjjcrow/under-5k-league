@@ -21,20 +21,12 @@ import {
   canViewLeagueDirectoryContact,
 } from "@/lib/visibility";
 import {
-  Avatar,
-  Badge,
-  Card,
-  CardBody,
-  CardHeader,
   EmptyState,
   PageTitle,
-  PlayerLink,
-  RankBadge,
   SectionTitle,
   Skeleton,
   StatCell,
   StatStrip,
-  TeamCrest,
   buttonClasses,
   textLink,
 } from "@/components/ui";
@@ -88,9 +80,12 @@ export default async function PlayersPage() {
       prisma.team.findMany({
         where: { seasonId: season.id },
         orderBy: { draftOrder: "asc" },
-        include: {
-          captain: true,
-          members: { include: { user: true }, orderBy: { price: "desc" } },
+        select: {
+          id: true,
+          name: true,
+          logoUrl: true,
+          captain: { select: { name: true } },
+          members: { select: { userId: true, price: true, isCaptain: true } },
         },
       }),
       viewer
@@ -199,22 +194,12 @@ export default async function PlayersPage() {
     }
     if (entry.inhouse || entry.pub || entry.statement) scout[p.userId] = entry;
   }
-  const inhouseActives = players.filter(
-    (p) => scout[p.userId]?.inhouse,
-  ).length;
-  // "Active" = a visible pub game in the last 30 days — for an admin planning
-  // a draft, the count of signups who actually still play Dota.
-  const pubActive30 = players.filter((p) => {
-    const last = scout[p.userId]?.pub?.lastPlayedAt;
-    return last != null && last * 1000 > nowMs - 30 * 86_400_000;
-  }).length;
-  const anyPub = players.some((p) => scout[p.userId]?.pub);
 
   return (
     <div className="space-y-8">
       <PageTitle
         title="Players"
-        subtitle={`${season.name} · every signup, standin and roster in one place`}
+        subtitle={`${season.name} · every signup and standin in one place`}
         action={
           <span className="flex flex-wrap items-center gap-3">
             {signupRemoved ? (
@@ -236,28 +221,15 @@ export default async function PlayersPage() {
         }
       />
 
-      {/* The shape of the pool in one line. Every figure here was already on
-          the page, but only as something you could count by hand. */}
+      {/* The shape of the pool in one line: only the figures a visitor or a
+          captain acts on, so the list itself starts on the first phone
+          screen. Rosters live on /teams (linked under the pool), and the
+          scouting detail rides on each row. */}
       {players.length > 0 || standins.length > 0 ? (
         <StatStrip>
           <StatCell label="Signed up" value={players.length} hint="players" />
           {avgMmr > 0 ? (
             <StatCell label="Average MMR" value={avgMmr} />
-          ) : null}
-          {inhouseActives > 0 ? (
-            <StatCell
-              label="Inhouse actives"
-              value={inhouseActives}
-              hint={`of ${players.length}`}
-            />
-          ) : null}
-          {anyPub ? (
-            <StatCell
-              label="Active in pubs"
-              value={pubActive30}
-              tone={pubActive30 > 0 ? "default" : "muted"}
-              hint="last 30 days"
-            />
           ) : null}
           {directory.captainSelectionOpen ? (
             <StatCell
@@ -279,15 +251,12 @@ export default async function PlayersPage() {
             tone={standins.length > 0 ? "default" : "muted"}
             hint="on call"
           />
-          {teams.length > 0 ? (
-            <StatCell label="Teams" value={teams.length} />
-          ) : null}
         </StatStrip>
       ) : null}
 
-      {/* The pool leads: this page is named Players, and post-draft "who is
-          still available" is the question that brings a captain here. The
-          rosters below are the reference copy — /teams is their real home. */}
+      {/* The pool is the page: this page is named Players, and post-draft
+          "who is still available" is the question that brings a captain
+          here. Rosters are /teams' job — each row already chips its team. */}
       <section className="space-y-4">
         <SectionTitle aside={directory.poolAside}>
           {directory.poolTitle}
@@ -317,73 +286,23 @@ export default async function PlayersPage() {
         )}
       </section>
 
+      {/* One line instead of a second copy of every roster. During captain
+          selection it names who has been picked so far (they also wear the
+          Captain badge in the pool). */}
       {teams.length > 0 ? (
-        <section className="space-y-4">
-          <div className="flex items-baseline justify-between gap-3">
-            <SectionTitle aside={`· ${teams.length} teams`}>Rosters</SectionTitle>
-            <Link
-              href="/teams"
-              className={textLink("shrink-0 text-sm")}
-            >
-              Full team pages →
-            </Link>
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {teams.map((t) => (
-              <Card key={t.id} interactive className="flex flex-col">
-                <CardHeader
-                  className="px-4 py-3"
-                  title={
-                    <Link
-                      href={`/teams/${t.id}`}
-                      className="flex min-w-0 items-center gap-2 text-base hover:text-info"
-                    >
-                      <TeamCrest
-                        name={t.name}
-                        seed={t.id}
-                        logoUrl={t.logoUrl}
-                        size={22}
-                        className="rounded-md"
-                      />
-                      <span className="truncate">{t.name}</span>
-                    </Link>
-                  }
-                  subtitle={`${t.members.length}/${season.teamSize} players`}
-                  action={
-                    season.status === "DRAFT" ? (
-                      <Badge tone="accent">${t.budget} left</Badge>
-                    ) : null
-                  }
-                />
-                <CardBody className="space-y-1 px-4 py-3">
-                  {t.members.map((m) => (
-                    <div
-                      key={m.id}
-                      className="flex items-center gap-2 text-sm"
-                    >
-                      <Avatar name={m.user.name} src={m.user.avatar} size={22} />
-                      <PlayerLink
-                        userId={m.userId}
-                        className="min-w-0 flex-1 truncate"
-                      >
-                        {m.user.name}
-                      </PlayerLink>
-                      {m.isCaptain ? (
-                        <Badge tone="accent" title="Captain">
-                          C
-                        </Badge>
-                      ) : null}
-                      <RankBadge rankTier={m.user.rankTier} />
-                      <span className="w-8 shrink-0 text-right tabular-nums text-muted">
-                        {m.isCaptain ? "—" : `$${m.price}`}
-                      </span>
-                    </div>
-                  ))}
-                </CardBody>
-              </Card>
-            ))}
-          </div>
-        </section>
+        <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted">
+          {directory.captainSelectionOpen ? (
+            <span className="min-w-0 [overflow-wrap:anywhere]">
+              {teams.length === 1 ? "Captain so far: " : "Captains so far: "}
+              <span className="text-fg">
+                {teams.map((t) => t.captain.name).join(", ")}
+              </span>
+            </span>
+          ) : null}
+          <Link href="/teams" className={textLink()}>
+            See team rosters →
+          </Link>
+        </p>
       ) : null}
     </div>
   );
