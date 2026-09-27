@@ -96,6 +96,9 @@ model NewsPost {
   pinned    Boolean  @default(false)
   authorId  String?
   createdAt DateTime @default(now())
+  // Id of the Discord webhook message that announced this post, so an edit
+  // can update that copy and a delete can remove it. Null = never posted.
+  discordMessageId String?
 
   author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
 
@@ -607,6 +610,9 @@ model LeagueAnnouncement {
   markerEventId String?
   lastErrorCode String?
   sentAt        DateTime?
+  // Time-bound posts (a match-night reminder, a draft-night post) are dropped
+  // instead of sent once this passes. Null = the post never goes stale.
+  expiresAt     DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -742,6 +748,9 @@ model InhouseLobby {
   // JSON userId → Elo change, stamped once when the result lands — the room's
   // post-game banner reads this instead of re-deriving the ladder per poll.
   eloDeltas    String    @default("{}")
+  // Short plain-words reason a lobby ended without a result ("declined by X",
+  // "not started after 3h"), shown to admins. Null for completed games.
+  endReason    String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
