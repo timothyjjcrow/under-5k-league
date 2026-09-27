@@ -33,6 +33,8 @@ import {
   type InhouseAlertSnapshot,
 } from "@/lib/inhouse";
 import { inhousePollCadence } from "@/lib/room-poll";
+import { INHOUSE_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
+import { RoomStatusLine } from "@/components/room-status-line";
 import { nextClockOffset } from "@/lib/countdown";
 import {
   ROOM_SEQUENCE_START,
@@ -772,44 +774,13 @@ export function InhouseRoom({
 
       <RoomStages lobby={lobby} />
 
-      {connectionUnavailable ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "rounded-lg border px-4 py-2 text-sm",
-            connectivity === "offline"
-              ? "border-danger/40 bg-danger/10 text-danger"
-              : "border-info/40 bg-info/10 text-info",
-          )}
-        >
-          {connectivity === "offline"
-            ? "⚠️ You're offline — the queue and lobby keep running on the server. Actions are paused until you reconnect and the current room is confirmed."
-            : "Connection restored — checking the current queue and lobby. Actions remain paused until the latest room state arrives."}
-        </div>
-      ) : null}
-
-      {disconnected ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
-        >
-          ⚠️ Connection lost — reconnecting… The lobby keeps running on the
-          server; actions are paused until we&apos;re back.
-        </div>
-      ) : null}
-
-      {actionReconciling ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
-        >
-          Checking the current queue and lobby after an interrupted action.
-          Controls will unlock when the server confirms the latest state.
-        </div>
-      ) : null}
+      {/* ONE status line, chosen by priority — the draft room's too. */}
+      <RoomStatusLine
+        status={roomStatus(
+          { connectivity, disconnected, actionReconciling },
+          INHOUSE_ROOM_STATUS_COPY,
+        )}
+      />
 
       {state.lastResult &&
       !lobby &&

@@ -76,6 +76,8 @@ import {
   type FeedLine,
 } from "@/lib/draft-feed";
 import { draftPollCadence } from "@/lib/room-poll";
+import { DRAFT_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
+import { RoomStatusLine } from "@/components/room-status-line";
 import { nextClockOffset } from "@/lib/countdown";
 import {
   ROOM_SEQUENCE_START,
@@ -914,83 +916,24 @@ export function DraftRoom({
     return <div className="py-10 text-center text-muted">Loading draft…</div>;
   }
 
-  // Shared "polling is dead" strip — clocks below are ticking on stale state.
-  const disconnectedStrip = disconnected ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
-    >
-      ⚠️ Connection lost — reconnecting… The auction keeps running on the
-      server; actions are paused until we&apos;re back.
-    </div>
-  ) : null;
-
-  const connectivityStrip = connectionUnavailable ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className={cn(
-        "rounded-lg border px-4 py-2 text-sm",
-        connectivity === "offline"
-          ? "border-danger/40 bg-danger/10 text-danger"
-          : "border-info/40 bg-info/10 text-info",
-      )}
-    >
-      {connectivity === "offline"
-        ? "⚠️ You're offline — the auction keeps running on the server. Actions are paused until you reconnect and the current lot is confirmed."
-        : "Connection restored — checking the current lot. Actions remain paused until the latest auction state arrives."}
-    </div>
-  ) : null;
-
-  const syncDelayedStrip = syncDelayed ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning"
-    >
-      Live updates are delayed by traffic — the room is retrying at a slower
-      pace. Check the lot before acting.
-    </div>
-  ) : null;
-
-  const actionReconcilingStrip = actionReconciling ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
-    >
-      Checking the current live lot after an interrupted action. Controls will
-      unlock when the server confirms the latest auction state.
-    </div>
-  ) : null;
-
-  const sessionExpiredStrip = sessionExpired ? (
-    <div
-      role="alert"
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
-    >
-      <span>
-        Your sign-in expired. You are watching as a visitor and cannot nominate,
-        bid, or use admin controls.
-      </span>
-      <Link
-        href="/login?next=/draft"
-        className={buttonClasses("secondary", "sm")}
-      >
-        Sign in again
-      </Link>
-    </div>
-  ) : null;
-
+  // ONE status line, chosen by priority (roomStatus): offline, connection
+  // lost, back online and checking, checking after an interrupted action,
+  // sign-in expired, updates delayed. The inhouse room renders the same line.
+  const connectionStatus = roomStatus(
+    {
+      connectivity,
+      disconnected,
+      actionReconciling,
+      sessionExpired,
+      syncDelayed,
+    },
+    DRAFT_ROOM_STATUS_COPY,
+  );
   const roomAlerts = (
-    <>
-      {connectivityStrip}
-      {disconnectedStrip}
-      {syncDelayedStrip}
-      {actionReconcilingStrip}
-      {sessionExpiredStrip}
-    </>
+    <RoomStatusLine
+      status={connectionStatus}
+      signInHref="/login?next=/draft"
+    />
   );
 
   const { me } = state;
@@ -1500,9 +1443,9 @@ export function DraftRoom({
               title="Back to the auction clock"
               className="flex h-full min-w-0 flex-1 items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
             >
-              {connectionUnavailable || disconnected ? (
+              {connectionStatus?.short ? (
                 <span className="shrink-0 text-xs font-medium text-danger">
-                  {connectivity === "offline" ? "⚠ offline" : "⚠ reconnecting…"}
+                  {connectionStatus.short}
                 </span>
               ) : null}
               {state.nominatedPlayer ? (

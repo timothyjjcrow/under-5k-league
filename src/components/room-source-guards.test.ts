@@ -408,3 +408,32 @@ describe("live rooms delegate their alert triggers", () => {
     });
   }
 });
+
+// Both rooms used to stack one strip per condition (offline, connection lost,
+// back online, checking after an interrupted action, sign-in expired, updates
+// delayed), and two could show at once. They now render ONE line picked by
+// the tested `roomStatus`; a strip re-inlined into a room would bring the
+// stacking back without any test noticing.
+describe("live rooms share one status line", () => {
+  for (const file of ROOMS) {
+    it(`${file}: renders its conditions through roomStatus + RoomStatusLine`, () => {
+      const src = code(file);
+      expect(src).toContain("roomStatus(");
+      expect(src).toContain("<RoomStatusLine");
+    });
+  }
+
+  it("no UI file hand-writes a status sentence", () => {
+    for (const sentence of [
+      "Connection lost — reconnecting",
+      "Connection restored — checking",
+      "after an interrupted action",
+    ]) {
+      expect(
+        uiFilesWith(sentence),
+        `UI code has re-inlined a room status strip ("${sentence}") — pick ` +
+          `the line with roomStatus and render <RoomStatusLine>.`,
+      ).toEqual([]);
+    }
+  });
+});
