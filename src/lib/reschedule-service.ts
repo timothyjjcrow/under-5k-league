@@ -9,12 +9,12 @@ import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
 import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
-import { invalidateMatchLineups } from "./match-lineups";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
 import { rescheduleDeadline } from "./schedule";
+import { isSerializationConflict } from "./prisma-errors";
 
 export type AcceptedReschedule = {
   homeName: string;
@@ -277,7 +277,7 @@ export async function proposeReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That match just changed — reload and try again",
       );
@@ -414,7 +414,6 @@ export async function respondReschedule(
           throw new UserFacingError(
             "That match is no longer awaiting play",
           );
-        await invalidateMatchLineups(tx, match.id, "The kickoff was rescheduled");
 
         // Every RSVP answered the OLD night. Clear them and release the old
         // reminder marker atomically with the retime.
@@ -456,7 +455,7 @@ export async function respondReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That proposal or match just changed — reload and try again",
       );
@@ -517,7 +516,7 @@ export async function cancelReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That proposal just changed — reload and try again",
       );

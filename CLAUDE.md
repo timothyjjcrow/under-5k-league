@@ -289,8 +289,8 @@ has to justify it.
   "31 / 30 players to start" over a pegged bar — a fraction above 1 is the
   universal shape of "sold out", rendered to exactly the person deciding
   whether to sign up. `capacityInfo` carries `extra`/`leftover`/`toNextTeam`
-  for that; keep them uncapped. `scripts/seed-signups-fixture.ts` +
-  `.claude/launch.json`'s `signups-fixture` entry seed and serve this state
+  for that; keep them uncapped. `npm run fixture:signups`
+  (`scripts/seed-signups-fixture.ts`) seeds and serves this state
   (seed-fixture.ts has no SIGNUPS mode).
 - **Feedback**: risky server actions return `ActionResult`
   (`src/lib/action-result.ts`) instead of throwing; the UI wraps them in
@@ -304,8 +304,16 @@ has to justify it.
 - Run `npx tsc --noEmit` for a fast type check; `npm test` for unit;
   `npm run test:e2e` for Playwright — fully isolated: it schema-pushes and
   reseeds a DEDICATED `prisma/e2e.db` and serves it on port 3210 (never
-  dev.db/:3000, safe to run any time). Caveat: Next 16's project-dir lock
-  means it can't start while another `next dev` runs from this repo.
+  dev.db/:3000, safe to run any time). Caveat: Next 16 locks one dev server
+  per BUILD FOLDER, and the three browser suites and `npm run dev` all build
+  into `.next`, so only one of them runs at a time (the `fixture:*` demo
+  servers use their own folders and run alongside any of them).
+- `npm run lint:unused-exports` (`scripts/unused-exports.mjs`) lists `src/lib`
+  exports that no production file imports: dead, or kept alive only by their
+  own tests. Advisory, not a CI gate (test hooks such as `setRaceHook` are
+  meant to be test-only). Run it after replacing a lib function and delete the
+  old one WITH its tests, so the suite stops vouching for code the site never
+  runs. The script's own tests run in CI via `npm run test:scripts`.
 - `npm run test:e2e:mid` is the MID-SEASON browser suite
   (`playwright.midseason.config.ts`, specs in `e2e-mid/`): its own
   `prisma/e2e-fixture.db` (name satisfies seed-fixture's guard) seeded to
@@ -315,7 +323,8 @@ has to justify it.
   whose failure output names the offending elements and the scroll chain.
   Every spec asserts zero uncaught client errors (`trackPageErrors`) — the
   crash class raw-HTML checks can't see. Can't run SIMULTANEOUSLY with the
-  main e2e (one dev server per repo) — CI runs them sequentially.
+  main e2e (both build into `.next`, one dev server per build folder) — CI
+  runs them sequentially.
 
 ## Roster moves (done)
 
@@ -1003,7 +1012,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   ladder query must fetch ALL completed lobbies (no `take` window — Elo
   accumulates over full history). Tunables in
   `constants.ts` (`INHOUSE`: LOBBY_SIZE 10, TEAM_SIZE 5, VOTE_SECONDS 25,
-  PICK_SECONDS 60; `CAPTAIN_METHOD` labels).
+  PICK_SECONDS 60); the method names are the `CaptainMethod` type in
+  `inhouse.ts`.
 - **Service (DB, transactional)**: `src/lib/inhouse-service.ts` — a state read
   runs heartbeat → abandoned-lobby sweep → formation → ready
   check → captain vote → stalled pick → result detection → board repaint.
@@ -1719,6 +1729,16 @@ already in the `Setting` table.
   pages (`setAvailability` action — rostered players and assigned standins
   only, no completed matches). Schedule match rows show per-team ✓/✗ counts
   while a match is unplayed.
+- **Who may answer for a side** is `loadSidePlayerIds`
+  (`availability-service.ts`): the roster minus seats a standin covers, plus
+  standins whose signup is active (or absent) and who hold no roster seat this
+  season. `setAvailability`, the "I'm away" range and the live-series
+  readiness prompt all go through it.
+- **Playing lineups are retired.** Captains no longer confirm lineups, and
+  nothing writes `MatchLineup`/`MatchLineupSeat` or `Match.logisticsRevision`
+  any more; only the season export and the postseason reset receipt copy old
+  rows. They stay in the schema until the next planned migration drops them —
+  don't build on them.
 - Admin standin card flags players who declared OUT and aren't covered by an
   assignment yet, right above the assign form.
 - **Match-night Discord reminder**: `src/lib/reminder-service.ts`
@@ -2289,9 +2309,11 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## Hall of Fame (done, branch: bigger-features)
 
-- `/hall-of-fame`: cross-season career boards — 🏆 titles and ⚔️ series wins
-  via pure `careerCounts` (`src/lib/hall-of-fame.ts`, tested; team cuids are
-  globally unique so cross-season membership just works), 🎯 career fantasy
+- `/hall-of-fame`: cross-season career boards — 🏆 championship
+  contributions and ⚔️ series wins via `appearanceCareers`
+  (`src/lib/appearance-careers.ts`), game counts via pure `careerGameCounts`
+  (`src/lib/hall-of-fame.ts`, tested; team cuids are globally unique so
+  cross-season membership just works), 🎯 career fantasy
   points (`pointsByPlayer` over all games ever), 🔮 all-time oracle record
   (`pickemStandings` over all predictions, min 3 graded). Linked from
   `/seasons` and the footer.
@@ -2375,9 +2397,10 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 ## Hero meta page (done)
 
 - `/meta`: league-wide hero report from imported box scores — pick/win rates,
-  most-contested table, best-win-rate board (adaptive `metaMinPicks` floor),
-  signature player per hero, untouched-pool card. Pure `heroMeta`/
-  `bestWinRates` in `src/lib/hero-meta.ts` (tested). Only complete, unique 5v5
+  most-contested table, an "established" win-rate view (adaptive
+  `metaMinPicks` floor), signature player per hero, untouched-pool card. Pure
+  `heroMeta`/`metaMinPicks` in `src/lib/hero-meta.ts` (tested); the explorer
+  UI is `src/components/hero-meta-explorer.tsx`. Only complete, unique 5v5
   boxes enter the denominator; a game containing an unknown hero id is omitted
   as a whole so known-hero coverage cannot exceed 100%, with a catalogue-update
   diagnostic. Deleted signature owners remain visible as `Former player`.
@@ -2441,8 +2464,11 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
   (always): `magicNumber`, `eliminationLosses`, focal-match-conditioned
   `winAndIn`/`loseAndOut`, rank ranges. Over the cap it degrades to
   `clinchStatuses` + bounds. `TeamScenario.nextMatchId` names the match the
-  winAndIn family is about; `matchStakes(matchId, …)` suppresses those labels
-  on any other match page. `stakesHeadline` picks the banner line.
+  winAndIn family is about, so a surface must check it before pinning a
+  "win and in" line on a specific match. The per-result paths and outlooks
+  come from `src/lib/scenario-outlook.ts` (tested), and every surface renders
+  them through `src/components/playoff-outlook.tsx` (`PlayoffOutlook`,
+  `playoffStatusLine`, `playoffPathLines`).
 - `src/lib/stakes.ts` (tested) adapts prisma rows → engine inputs and the
   report → the standings `clinch` prop (cut from `pickBracketSize`, same as
   `createPlayoffBracket`; null when everyone makes the bracket).
@@ -2453,8 +2479,9 @@ statement?}` — statement is the row quote's fallback when `captainNote` is
 
 ## League news (done)
 
-- `NewsPost` model (title/body/pinned/author). Pure `sortNews` (pinned first,
-  newest first) + `newsPostError` validation in `src/lib/news.ts` (tested).
+- `NewsPost` model (title/body/pinned/author). Pages order posts in the query
+  (pinned first, newest first, id last); pure `newsPostError` validation lives
+  in `src/lib/news.ts` (tested).
 - Admin "League news" card (create/pin/delete, always rendered — news is
   season-independent) → `src/app/actions/news.ts`. Create carries a UUID
   request receipt committed with the post, so replays/double-clicks create,
@@ -2543,8 +2570,8 @@ ask it made twice. What that turned into:
 - **This week strip**: the current week's (or open playoff round's) matches
   with kickoff times, standin-aware ✓ check-in counts (shared
   `matchNightRoster` in `availability.ts` — /schedule uses the same helper),
-  and a stakes chip via `matchStakes`/`stakesHeadline` (the long
-  everything-on-the-line label gets a short chip form).
+  and a compact `PlayoffOutlook` for each side whose `nextMatchId` is this
+  fixture (win/draw/loss paths only ever describe a team's next match).
 - **Your team** card: rank/record/points tiles (Record rendered a size down —
   W–L–D wraps at Stat's text-3xl in the narrow column), form strip, stake
   one-liner, next-up tile aligned to the ENGINE's nextMatchId so the "next
@@ -2642,23 +2669,49 @@ ask it made twice. What that turned into:
 
 ## Verifying UI against a fixture (workflow note)
 
-- `scripts/seed-fixture.ts` seeds a throwaway DB into a demo state:
-  `FIXTURE_MODE=regular` (last week open — clinch marks, run-in, byes with
-  `FIXTURE_TEAMS=5`), `complete` (champion crowned), default (mid-playoffs
-  bracket with a TBD final). It REFUSES any `DATABASE_URL` without "fixture"
-  in it — always pass one explicitly; the generated Prisma client's baked
-  .env can silently point at dev.db.
+- **One command per league state**, each on its own port, database and
+  build folder, so all four run at once from this checkout, beside
+  `npm run dev`:
+
+      npm run fixture:signups    # SIGNUPS, 37 players       → :3111
+      npm run fixture:regular    # last regular week open    → :3116
+      npm run fixture:playoffs   # mid-playoffs, TBD final   → :3117
+      npm run fixture:complete   # champion crowned          → :3118
+
+  `scripts/fixture-server.ts` pushes the schema into
+  `prisma/<state>-fixture.db`, runs the seeder, then serves it with
+  `NEXT_DIST_DIR=.next-fixture-<state>` and dev login on (`/api/auth/dev`,
+  `?admin=1` for an admin). Every start reseeds; `-- --no-seed` serves the
+  existing file and `-- --dry-run` prints the target and commands. Seeder knobs
+  pass through (`PLAYERS`/`CAPTAINS` for signups, `FIXTURE_TEAMS` for the
+  others: `FIXTURE_TEAMS=5 npm run fixture:regular` shows byes). The
+  `.claude/launch.json` entries of the same names run these commands.
+- **Why it works**: Next 16 takes its dev lock inside the build folder, and
+  `next.config.ts` reads `distDir` from `NEXT_DIST_DIR` (only `.next` or
+  `.next-<name>`; unset everywhere else, including deploys). The
+  `.next-*` folders are gitignored and ESLint-ignored, and `tsconfig.json`
+  already lists each fixture folder's `types` globs so starting a server
+  doesn't rewrite it. A new fixture folder name needs the same two tsconfig
+  lines. `next-env.d.ts` (gitignored) follows whichever server started last;
+  that is harmless.
+- `scripts/seed-fixture.ts` seeds the demo states: `FIXTURE_MODE=regular`
+  (last week open — clinch marks, run-in, byes with `FIXTURE_TEAMS=5`),
+  `complete` (champion crowned), default (mid-playoffs bracket with a TBD
+  final). It REFUSES every database except the exact files listed in
+  `src/lib/fixture-database.ts` (the browser suites' and the demo servers');
+  the signups seeder refuses any `DATABASE_URL` without "fixture" in it. The
+  generated Prisma client's baked .env can silently point at dev.db, which is
+  why the launcher always sets the URL itself.
 - Fixture box scores carry the full modern line shape (durations, kill
   scores, benchmarks for report cards — the first two games ever stay
   legacy-shaped to verify degradation), every match gets its league-night
   `scheduledAt` (so `/api/calendar` has VEVENTs), and completed playoff
   matches get games too.
-- The dev server locks its project dir (Next 16) and dev.db may belong to
-  another session — never reseed it. To run a second server: copy the repo
-  elsewhere (`rsync` minus node_modules/.next/dev.db, then
-  `cp -Rc node_modules` — APFS clonefile; a symlink breaks Turbopack), point
-  its `.env` at an absolute fixture `DATABASE_URL`, and `next dev -p 3111`
-  from the copy.
+- dev.db may belong to another session — never reseed it. For any other
+  one-off server, give it its own build folder the same way:
+  `NEXT_DIST_DIR=.next-<name> DATABASE_URL=file:$PWD/prisma/<name>.db npx next dev -p <port>`.
+  Next then appends that folder's two `types` globs to `tsconfig.json` on
+  start; add them on purpose or leave that change out of your commit.
 
 ## Performance (done — keep following these)
 

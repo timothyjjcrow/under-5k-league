@@ -30,7 +30,21 @@ const SECURITY_HEADERS = [
   },
 ];
 
+// Next 16 locks one dev server per build folder, so a second local server
+// (the `npm run fixture:<state>` demo servers) sets its own folder here.
+// Unset everywhere else, including builds and deploys, which keep `.next`.
+// Only `.next` or `.next-<name>` is accepted: every such folder is already
+// ignored by git and ESLint, and a typo must not write build output anywhere
+// else in the repo.
+const distDir = process.env.NEXT_DIST_DIR || ".next";
+if (!/^\.next(?:-[a-z0-9-]+)?$/.test(distDir)) {
+  throw new Error(
+    `NEXT_DIST_DIR must be ".next" or ".next-<name>" (lowercase letters, digits, dashes); got "${distDir}".`,
+  );
+}
+
 const nextConfig: NextConfig = {
+  distDir,
   experimental: {
     serverActions: {
       // Every action in this app accepts scalar form fields; there are no file

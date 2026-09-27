@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
+import { outPingPrefix } from "./availability";
 
 // Tiny key-value store (the `Setting` model) for league-global config that an
 // admin edits at runtime — anything per-season belongs on `Season` instead.
@@ -73,12 +74,16 @@ export const SETTING_KEYS = {
 // honorsAnnounced:<season>:<week>, playoffRoundBuilt:<season>:<round>), JSON
 // state blobs (playoffGamesArchive:<season>, importSkip:<season>,
 // leagueSyncSkip:<season>) and per-pair throttles
-// (outPing:<matchId>:<userId>, providerCooldown:*).
-// Multi-file key formats
-// are built ONLY through the helpers below — a prefix that drifts between the
-// writer and the sweep that startsWith-matches it fails silently, with no
-// compile error. Single-file keys (importSkip, playoffRoundBuilt, outPing)
-// keep their local builders beside their one call site.
+// (outPing:<matchId>:<userId>, providerCooldown:*), plus tiebreakerDraw:
+// <season>:<group> opening draws.
+// Every key format is built ONLY through the helpers below — a prefix that
+// drifts between the writer and the sweep that startsWith-matches it fails
+// silently, with no compile error. seasonSettingScopeWhere sweeps every
+// season-scoped key, so each has at least two users and no writer keeps a
+// private copy. The one exception is outPing, whose builder lives in the pure
+// availability.ts (a client component imports it) and is imported here. The
+// key strings are stored in production databases: never change one without
+// migrating the rows.
 // ---------------------------------------------------------------------------
 
 /**
@@ -177,6 +182,36 @@ export function leagueSyncSkipKey(seasonId: string): string {
   return `leagueSyncSkip:${seasonId}`;
 }
 
+/**
+ * Legacy per-season memory of removed games (JSON array). ImportSuppression
+ * rows replaced it; import-candidates still honours an old row and season
+ * delete/export still sweeps it.
+ */
+export function importSkipKey(seasonId: string): string {
+  return `importSkip:${seasonId}`;
+}
+
+/**
+ * Exactly-once marker for "round N of this season's bracket has been built".
+ * Cleared by createPlayoffBracket so Reset playoffs can rebuild from scratch.
+ */
+export function playoffRoundBuiltKey(seasonId: string, round: number): string {
+  return `${playoffRoundBuiltPrefix(seasonId)}${round}`;
+}
+
+export function playoffRoundBuiltPrefix(seasonId: string): string {
+  return `playoffRoundBuilt:${seasonId}:`;
+}
+
+/** The saved opening draw of one tiebreaker group (JSON array of team ids). */
+export function tiebreakerDrawKey(seasonId: string, groupKey: string): string {
+  return `${tiebreakerDrawPrefix(seasonId)}${groupKey}`;
+}
+
+export function tiebreakerDrawPrefix(seasonId: string): string {
+  return `tiebreakerDraw:${seasonId}:`;
+}
+
 /** Dynamic Setting rows that bound authenticated, user-triggered API work. */
 export const PROVIDER_COOLDOWN_PREFIX = "providerCooldown:";
 
@@ -217,9 +252,27 @@ export function providerCooldownKey(
   ) {
     throw new Error("Invalid provider cooldown identity");
   }
-  // Resource precedes user so deleting/exporting a season can select every
-  // captain claim for one match without knowing which users made the calls.
-  return `${PROVIDER_COOLDOWN_PREFIX}${action}:${encodeURIComponent(resource)}:${encodeURIComponent(user)}`;
+  return `${providerCooldownResourcePrefix(action, resource)}${encodeURIComponent(user)}`;
+}
+
+/**
+ * The cooldown resource for a pasted match-id import on one league fixture.
+ * Keyed to the fixture, never the submitted id, which the caller can vary.
+ */
+export function fixtureImportCooldownResource(matchId: string): string {
+  return `fixture:${matchId}`;
+}
+
+/**
+ * Every user's cooldown row for one provider resource. Resource precedes user
+ * so deleting/exporting a season can select every captain claim for one match
+ * without knowing which users made the calls.
+ */
+export function providerCooldownResourcePrefix(
+  action: ProviderCooldownAction,
+  resourceId: string | number,
+): string {
+  return `${PROVIDER_COOLDOWN_PREFIX}${action}:${encodeURIComponent(String(resourceId))}:`;
 }
 
 /**
@@ -268,22 +321,25 @@ export function seasonSettingScopeWhere(
     { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
     { key: playoffGamesArchiveKey(seasonId) },
     { key: tiebreakerGamesArchiveKey(seasonId) },
-    { key: { startsWith: `tiebreakerDraw:${seasonId}:` } },
+    { key: { startsWith: tiebreakerDrawPrefix(seasonId) } },
     { key: leagueSyncSkipKey(seasonId) },
-    { key: `importSkip:${seasonId}` },
-    { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
+    { key: importSkipKey(seasonId) },
+    { key: { startsWith: playoffRoundBuiltPrefix(seasonId) } },
   ];
   const matchScope = matchIds.flatMap<Prisma.SettingWhereInput>((matchId) => [
     { key: resultAnnouncedKey(matchId) },
-    { key: { startsWith: `outPing:${matchId}:` } },
+    { key: { startsWith: outPingPrefix(matchId) } },
     {
       key: {
-        startsWith: `${PROVIDER_COOLDOWN_PREFIX}open-dota-match-scan:${encodeURIComponent(matchId)}:`,
+        startsWith: providerCooldownResourcePrefix("open-dota-match-scan", matchId),
       },
     },
     {
       key: {
-        startsWith: `${PROVIDER_COOLDOWN_PREFIX}open-dota-match-import:${encodeURIComponent(`fixture:${matchId}`)}:`,
+        startsWith: providerCooldownResourcePrefix(
+          "open-dota-match-import",
+          fixtureImportCooldownResource(matchId),
+        ),
       },
     },
   ]);

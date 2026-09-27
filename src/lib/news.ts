@@ -1,30 +1,11 @@
-// League news/announcements: pure ordering + validation, DB-free and tested.
-// Posting/pinning/deleting lives in src/app/actions/news.ts.
+// League news/announcements: pure validation, DB-free and tested. Pages order
+// posts in the query (pinned, then newest, then id). Posting/pinning/deleting
+// lives in src/app/actions/news.ts.
 
 export const NEWS_LIMITS = {
   TITLE_MAX: 120,
   BODY_MAX: 4000,
 } as const;
-
-export type NewsLike = {
-  id?: string;
-  pinned: boolean;
-  createdAt: Date | number;
-};
-
-function toMs(v: Date | number): number {
-  return typeof v === "number" ? v : v.getTime();
-}
-
-/** Pinned posts first, newest first within each group. */
-export function sortNews<T extends NewsLike>(posts: T[]): T[] {
-  return [...posts].sort(
-    (a, b) =>
-      Number(b.pinned) - Number(a.pinned) ||
-      toMs(b.createdAt) - toMs(a.createdAt) ||
-      (b.id ?? "").localeCompare(a.id ?? ""),
-  );
-}
 
 // Klipy (unlike Giphy/Tenor) exposes no embeddable page URL: its pages sit
 // behind Cloudflare (403 to any server fetch) and its media is content-addressed

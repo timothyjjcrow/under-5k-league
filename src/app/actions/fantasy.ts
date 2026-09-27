@@ -13,9 +13,9 @@ import { raceHook } from "@/lib/race-hook";
 import {
   claimSideGameDraft,
   claimSideGameSeason,
-  isSideGameTransactionConflict,
   retrySideGameTransaction,
 } from "@/lib/side-game-claims";
+import { isSerializationConflict } from "@/lib/prisma-errors";
 
 /**
  * Save the signed-in manager's fantasy five for the active season. Picks are
@@ -194,7 +194,7 @@ export async function saveFantasyRoster(
         error: "Fantasy rosters are locked — the season's first game is in",
       };
     }
-    if (isSideGameTransactionConflict(e)) {
+    if (isSerializationConflict(e)) {
       return {
         error:
           "The league state changed while you saved — reload; fantasy may now be locked",

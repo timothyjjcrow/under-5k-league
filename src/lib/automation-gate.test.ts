@@ -60,6 +60,8 @@ import {
   type AutomationGateSeason,
 } from "./automation-gate";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
+import { announcementClaimValue } from "./announcement-marker";
+import { honorsClaimValue } from "./honors-service";
 import { AUTO_SYNC, DRAFT_REMINDER, INHOUSE, WEEK_REMINDER } from "./constants";
 import {
   draftReminderKey,
@@ -1028,6 +1030,63 @@ describe("computeAutomationGateSnapshot", () => {
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       reason: null,
     });
+  });
+
+  it("recognises claims minted by announcement-marker and honors-service", () => {
+    // The markers are minted by the real writers, never hand-typed here: if a
+    // writer's claim format drifts from what the gate parses, the gate would
+    // treat a stuck claim as finished (or as legacy) and its announcement
+    // would never be retried, with no error anywhere.
+    const eventId = "11111111-1111-4111-8111-111111111111";
+    const completed = match({
+      status: "COMPLETED",
+      scheduledAt: null,
+      completedAt: new Date(NOW - 1_000),
+      winnerTeamId: "home",
+    });
+    const snapshot = (resultMarker: string, honorsMarker: string) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          seasons: [season({ status: "REGULAR_SEASON", matches: [completed] })],
+          leagueWebhookConfigured: true,
+          settings: {
+            [resultAnnouncedKey(completed.id)]: resultMarker,
+            [honorsAnnouncedKey("season-1", 1)]: honorsMarker,
+          },
+        }),
+        NOW,
+      );
+    const resultSent = `sent:v2:${eventId}:${NOW}`;
+    const honorsSent = `sent:honors:v2:${eventId}:digest`;
+    expect(snapshot(resultSent, honorsSent)).toMatchObject({
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      reason: null,
+    });
+
+    // A live lease is waited out: the gate wakes when it expires, not now
+    // (an unrecognised honors claim reads as legacy and is due at once; an
+    // unrecognised generic claim is rejected as malformed).
+    for (const live of [
+      snapshot(announcementClaimValue(NOW, eventId), honorsSent),
+      snapshot(resultSent, honorsClaimValue(NOW, eventId, "initial")),
+      snapshot(resultSent, honorsClaimValue(NOW, eventId, "corrected")),
+    ]) {
+      expect(live.reason).toBe("ANNOUNCEMENT_RETRY");
+      expect(live.nextWakeAtMs).toBeGreaterThan(NOW);
+      expect(live.nextWakeAtMs).toBeLessThanOrEqual(NOW + 5 * 60_000);
+    }
+
+    // Once the lease has expired the same claims are due immediately.
+    const longAgo = NOW - 60 * 60_000;
+    for (const expired of [
+      snapshot(announcementClaimValue(longAgo, eventId), honorsSent),
+      snapshot(resultSent, honorsClaimValue(longAgo, eventId, "initial")),
+    ]) {
+      expect(expired).toMatchObject({
+        nextWakeAtMs: NOW,
+        reason: "ANNOUNCEMENT_RETRY",
+      });
+    }
   });
 
   it("does not hide recoverable result markers outside the active season", () => {

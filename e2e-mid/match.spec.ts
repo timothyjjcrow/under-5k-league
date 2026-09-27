@@ -70,7 +70,7 @@ test("an unplayed match page renders the preview with the scouting report", asyn
     page.getByRole("heading", { name: "Scouting report" }),
   ).toBeFocused();
   await matchSections
-    .getByRole("link", { name: "Lineups", exact: true })
+    .getByRole("link", { name: "Matchup", exact: true })
     .click();
   await expect(page).toHaveURL(/#match-matchup$/);
   await expect(

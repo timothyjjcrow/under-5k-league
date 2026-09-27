@@ -125,7 +125,16 @@ export function parseAvailabilityStatus(
  * ways inside RSVP_OUT_PING_THROTTLE_SECONDS pings the captain once.
  */
 export function outPingThrottleKey(matchId: string, userId: string): string {
-  return `outPing:${matchId}:${userId}`;
+  return `${outPingPrefix(matchId)}${userId}`;
+}
+
+/**
+ * Every OUT-ping throttle row of one match (settings.ts sweeps them with its
+ * season). Built here, beside the key, because this module is pure and a
+ * client component imports it, so it cannot import settings.ts.
+ */
+export function outPingPrefix(matchId: string): string {
+  return `outPing:${matchId}:`;
 }
 
 /**

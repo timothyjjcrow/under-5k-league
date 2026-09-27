@@ -55,20 +55,6 @@ export function allHeroesKnown(
   );
 }
 
-/** Known catalogue coverage; unknown ids can never inflate the denominator. */
-export function heroPoolSeenPercent(
-  rows: readonly Pick<HeroMetaRow, "heroId">[],
-  knownHeroIds: ReadonlySet<number>,
-): number {
-  if (knownHeroIds.size === 0) return 0;
-  const seen = new Set(
-    rows
-      .filter((row) => knownHeroIds.has(row.heroId))
-      .map((row) => row.heroId),
-  );
-  return Math.round((seen.size / knownHeroIds.size) * 100);
-}
-
 /** Roll every game's lines up into per-hero meta rows. */
 export function heroMeta(games: MetaGame[]): HeroMeta {
   type Agg = {
@@ -158,24 +144,10 @@ export function heroMeta(games: MetaGame[]): HeroMeta {
 }
 
 /**
- * Adaptive floor for the "best win rate" board: heroes need a few picks before
- * their rate means anything, scaling up as the season accumulates games.
+ * Adaptive floor for an "established" hero on /meta (the explorer's win-rate
+ * view): heroes need a few picks before their rate means anything, scaling up
+ * as the season accumulates games.
  */
 export function metaMinPicks(totalGames: number): number {
   return Math.max(2, Math.ceil(totalGames / 10));
-}
-
-/** Heroes ranked by win rate among those with at least `minPicks` picks. */
-export function bestWinRates(
-  rows: HeroMetaRow[],
-  minPicks: number,
-): HeroMetaRow[] {
-  return rows
-    .filter((r) => r.picks >= minPicks)
-    .sort(
-      (a, b) =>
-        b.wins / b.picks - a.wins / a.picks ||
-        b.picks - a.picks ||
-        a.heroId - b.heroId,
-    );
 }

@@ -45,7 +45,6 @@ export function seedOrder<T extends Seedable>(players: T[]): T[] {
 // How a filled lobby decides its two captains. Players vote on this so it isn't
 // always the same top-2 MMR pairing (see castVote / resolveCaptainVote).
 export type CaptainMethod = "MMR" | "RECORD" | "VOTE";
-export const CAPTAIN_METHODS: CaptainMethod[] = ["VOTE", "MMR", "RECORD"];
 
 export type CaptainCandidate = Seedable & {
   nominations: number; // captain-votes received from teammates

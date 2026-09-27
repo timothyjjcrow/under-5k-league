@@ -111,7 +111,6 @@ export default async function TeamPage({
   const [
     allTeams,
     allMatches,
-    myMatches,
     rosterRegs,
     seasonGames,
     captainRegs,
@@ -119,13 +118,6 @@ export default async function TeamPage({
   ] = await Promise.all([
     prisma.team.findMany({ where: { seasonId: team.seasonId } }),
     prisma.match.findMany({ where: { seasonId: team.seasonId } }),
-    prisma.match.findMany({
-      where: {
-        seasonId: team.seasonId,
-        OR: [{ homeTeamId: id }, { awayTeamId: id }],
-      },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
-    }),
     memberIds.length
       ? prisma.registration.findMany({
           where: { seasonId: team.seasonId, userId: { in: memberIds } },
@@ -157,6 +149,15 @@ export default async function TeamPage({
         })
       : null,
   ]);
+  // This team's fixtures are a filter of the season's, so derive them here
+  // rather than paying a second query. Same order the old query asked for:
+  // week, then creation time (Array.prototype.sort is stable).
+  const myMatches = allMatches
+    .filter((m) => m.homeTeamId === id || m.awayTeamId === id)
+    .sort(
+      (a, b) =>
+        a.week - b.week || a.createdAt.getTime() - b.createdAt.getTime(),
+    );
   const viewerHasActiveRegistration =
     team.season.isActive &&
     viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE;

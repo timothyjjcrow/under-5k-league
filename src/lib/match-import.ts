@@ -31,6 +31,7 @@ import {
   stampResultChange,
   weekReminderKey,
   claimProviderCooldown,
+  fixtureImportCooldownResource,
 } from "./settings";
 import {
   AUTO_SYNC,
@@ -71,6 +72,7 @@ import {
   saveImportEvidence,
   type ImportCandidateSnapshot,
 } from "./import-candidates";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
@@ -990,7 +992,7 @@ export async function importGameForMatch(
     const providerClaim = await claimProviderCooldown(
       "open-dota-match-import",
       options.providerActorId,
-      `fixture:${match.id}`,
+      fixtureImportCooldownResource(match.id),
     );
     if (providerClaim === "cooldown") {
       return {
@@ -1250,14 +1252,14 @@ export async function importGameForMatch(
       // The dedupe check above races with concurrent imports (an OpenDota
       // fetch sits between check and create) — the unique index is the real
       // arbiter.
-      if ((e as { code?: string }).code === "P2002") {
+      if (isUniqueViolation(e)) {
         return {
           ok: false,
           code: "OWNED_ELSEWHERE",
           error: "That game was just recorded by someone else",
         };
       }
-      if ((e as { code?: string }).code === "P2034") {
+      if (isSerializationConflict(e)) {
         // A reminder marker can be the conflicting writer even when no rival
         // imported this game. Start a new Serializable snapshot so reminder
         // invalidation remains atomic with the game/result mutation. A true

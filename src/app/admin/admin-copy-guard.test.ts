@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import {
+  haystackOf,
+  sourceFiles,
+} from "../../../test/support/source-files";
 
 /**
  * Copy on /admin must not name a control that doesn't exist.
@@ -21,17 +25,36 @@ import { describe, it, expect } from "vitest";
 const ROOT = join(__dirname, "..", "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
-const SOURCES = [
-  "src/app/admin/page.tsx",
-  "src/app/actions/admin.ts",
-  "src/lib/admin-next-step.ts",
-  "src/lib/captain-mmr.ts",
-  "src/components/match-import-controls.tsx",
-  "src/components/admin-player-rank-editor.tsx",
-];
+/**
+ * Every file that RENDERS an admin control: each page under /admin and the
+ * admin components they mount. Globbed rather than listed, so splitting the
+ * admin page into card components keeps every string in view; the floor of 5
+ * files (three /admin pages, the rank editor, the import controls) fails the
+ * run if a pattern stops matching.
+ *
+ * Only rendering files count here, never the .ts copy that QUOTES a control:
+ * copy naming "the Discord notifications card" must not be able to satisfy
+ * its own check.
+ */
+const ADMIN_UI = sourceFiles(
+  [
+    "src/app/admin/**/*.tsx",
+    "src/components/admin-*.tsx",
+    "src/components/admin/**/*.tsx",
+    "src/components/match-import-controls.tsx",
+  ],
+  5,
+);
+const renderedAdmin = haystackOf(ADMIN_UI);
 
-/** Every source that can render or describe an admin control, concatenated. */
-const haystack = SOURCES.map(read).join("\n");
+/**
+ * Every application source file, where the banned phrases must not appear.
+ * Admin copy is written in admin pages, server-action toasts, lib copy
+ * builders and shared components alike, so the ban covers all of them: a
+ * phrase moved to a new file is still caught.
+ */
+const ALL_SOURCE = sourceFiles("src/**/*.{ts,tsx,mjs}", 300);
+const haystack = haystackOf(ALL_SOURCE);
 
 /**
  * Control names that admin copy is allowed to reference, each with the file
@@ -70,8 +93,8 @@ describe("admin copy names only controls that exist", () => {
     "$quoted is rendered somewhere",
     ({ rendered }) => {
       expect(
-        haystack.includes(rendered),
-        `Admin copy references “${rendered}”, but no admin source renders that string. Either the control was renamed and the copy is now lying, or the copy invented a name.`,
+        renderedAdmin.includes(rendered),
+        `Admin copy references “${rendered}”, but no admin page or admin component renders that string. Either the control was renamed and the copy is now lying, or the copy invented a name.`,
       ).toBe(true);
     },
   );
@@ -129,15 +152,14 @@ describe("admin copy names only controls that exist", () => {
     expect(haystack).not.toContain("are reviewed before joining");
   });
 
-  // The REFERENCED_CONTROLS check is haystack-wide, and admin-next-step.ts —
-  // which QUOTES "the Discord notifications card" — is part of the haystack,
-  // so that entry satisfies itself: renaming the card leaves the quoting copy
-  // matching its own words (verified by mutation). Pin the RENDER site
-  // directly instead.
+  // The REFERENCED_CONTROLS check once read the quoting copy too, and
+  // admin-next-step.ts QUOTES "the Discord notifications card", so that entry
+  // satisfied itself (verified by mutation). It now reads rendering files
+  // only, but the words can still appear in rendered prose, so pin the card's
+  // TITLE directly.
   it("the card the pre-draft chase note points at is actually titled that", () => {
-    const page = read("src/app/admin/page.tsx");
     expect(
-      page.includes('title="Discord notifications"'),
+      renderedAdmin.includes('title="Discord notifications"'),
       'admin-next-step copy points at "the Discord notifications card" — if the AdminSection was renamed, update the note (and this test), or the admin hunts for a card that is not there',
     ).toBe(true);
   });
@@ -147,9 +169,8 @@ describe("admin copy names only controls that exist", () => {
   // but nothing behavioural reaches a native confirm dialog — deleting the
   // append would fail no test while silently reverting the feature.
   it("the Start-draft confirm actually carries the Discord reachability line", () => {
-    const page = read("src/app/admin/page.tsx");
     expect(
-      page.includes("confirmBase + discordReachWarning(reach)"),
+      renderedAdmin.includes("confirmBase + discordReachWarning(reach)"),
       "StartDraftControl must append discordReachWarning to the confirm — the warning copy is tested, this is the line that makes it reach the admin",
     ).toBe(true);
   });
@@ -159,17 +180,16 @@ describe("admin copy names only controls that exist", () => {
   // button carry it). captainMmrWarning is unit-tested; these pin that it, the
   // per-captain flag and the next-step input actually reach the admin.
   it("the Start-draft confirm, captain rows and next-step banner carry the unverified-MMR check", () => {
-    const page = read("src/app/admin/page.tsx");
     expect(
-      page.includes("captainMmrWarning(unverifiedMmr)"),
+      renderedAdmin.includes("captainMmrWarning(unverifiedMmr)"),
       "startConfirm must append captainMmrWarning, or the confirm stops naming unverified captains",
     ).toBe(true);
     expect(
-      page.includes("unverifiedMmrByTeam.get(t.id)!.reason"),
+      renderedAdmin.includes("unverifiedMmrByTeam.get(t.id)!.reason"),
       "each captain row must render its unverified-MMR reason",
     ).toBe(true);
     expect(
-      page.includes("unverifiedCaptainMmrNames: unverifiedCaptainMmrsFor("),
+      renderedAdmin.includes("unverifiedCaptainMmrNames: unverifiedCaptainMmrsFor("),
       "adminNextStep must receive the unverified captain names",
     ).toBe(true);
   });
@@ -180,7 +200,8 @@ describe("admin copy names only controls that exist", () => {
   it("the Edit medal & MMR editor can still set a manual medal on captain rows", () => {
     const editor = read("src/components/admin-player-rank-editor.tsx");
     expect(editor).toContain('<option value="manual">Manual correction</option>');
-    const page = read("src/app/admin/page.tsx");
-    expect(page).toContain("registrationId={captainReg.get(t.captainId)!.id}");
+    expect(renderedAdmin).toContain(
+      "registrationId={captainReg.get(t.captainId)!.id}",
+    );
   });
 });

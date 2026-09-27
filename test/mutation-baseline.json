@@ -1,6 +1,6 @@
 {
   "note": "Exact guarded-claim inventory. Stages 1–3 update retains the previously measured baseline and adds PostgreSQL sabotage evidence for all 27 new/renamed claims plus the result-sync ordinal rebind; new kills were confirmed twice. Reviewed equivalents retain their source justifications. Full CI re-mutates every protected claim in four shards; focused local probes do not claim a fresh full-sweep verification.",
-  "totalClaims": 165,
+  "totalClaims": 161,
   "equivalent": [
     "src/app/actions/admin.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
     "src/app/actions/admin.ts::createSeason::isActive#1",
@@ -50,7 +50,6 @@
     "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#4",
     "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#5",
     "src/lib/match-import.ts::importGameForMatch::fantasyLockedAt#1",
-    "src/lib/match-lineups.ts::confirmMatchLineup::logisticsRevision+scheduleRevision+status#1",
     "src/lib/participant-admin.ts::claimParticipantAdmin::role#1",
     "src/lib/playoff-service.ts::advancePlayoffBracket::isActive+status#1",
     "src/lib/playoff-service.ts::createPlayoffBracket::isActive+status#1",
@@ -151,9 +150,6 @@
     "src/lib/match-import.ts::announceSeriesResultOnce::value#1",
     "src/lib/match-import.ts::recomputeSeries::awayScore+homeScore+status#1",
     "src/lib/match-import.ts::writeIfUnchanged::players#1",
-    "src/lib/match-lineups.ts::confirmMatchLineup::activeKey#1",
-    "src/lib/match-lineups.ts::invalidateMatchLineups::activeKey+status#1",
-    "src/lib/match-lineups.ts::invalidateMatchLineups::status#1",
     "src/lib/playoff-service.ts::advancePlayoffBracket::status#1",
     "src/lib/reschedule-service.ts::proposeReschedule::status#1",
     "src/lib/result-sync-service.ts::dueMinutes::OR+status#1",

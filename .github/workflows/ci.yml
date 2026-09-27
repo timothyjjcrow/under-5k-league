@@ -112,10 +112,14 @@ jobs:
           node-version: "22.x"
           cache: npm
       - run: npm ci
+      # Shipped dependencies block on ANY advisory. Dev-only tools (test,
+      # lint, build helpers) block only on high/critical here, so a fresh
+      # low/moderate advisory in a linter plugin cannot hold a match-night
+      # hotfix; dependency-audit.yml reports those weekly instead.
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=low
-      - name: Full dependency audit
-        run: npm audit --audit-level=low
+      - name: Full dependency audit (high and critical)
+        run: npm audit --audit-level=high
       - name: Validate committed SQLite schema
         run: npx prisma validate
       - run: npx prisma generate
@@ -123,8 +127,8 @@ jobs:
         run: npm run lint -- --max-warnings=0
       - name: Type check
         run: npx tsc --noEmit
-      - name: Shared release and regional provisioning guards
-        run: npm run test:release && npm run test:provisioning
+      - name: Shared release, regional provisioning and script tool guards
+        run: npm run test:release && npm run test:provisioning && npm run test:scripts
       - name: Validate European scheduler artifacts
         run: npm run scheduler:europe:check && npm run scheduler:europe:check:paused
       - name: Validate active scheduler artifact
@@ -385,8 +389,8 @@ jobs:
       - name: Run e2e (seeds the DB + boots next dev)
         run: npm run test:e2e
       - name: Run mid-season e2e (fixture DB, own port)
-        # Sequential on purpose — Next's project-dir lock allows one dev
-        # server per repo, so the suites can never run simultaneously.
+        # Sequential on purpose — Next allows one dev server per build
+        # folder and all three suites build into .next.
         run: npm run test:e2e:mid
       - name: Run postseason e2e (fixture DB, own port)
         run: npm run test:e2e:postseason

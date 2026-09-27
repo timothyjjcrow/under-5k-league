@@ -1,21 +1,13 @@
 import { Prisma } from "@prisma/client";
 import { MATCH_STATUS } from "./constants";
 import { predictionOpenWhere } from "./pickem";
+import { isSerializationConflict } from "./prisma-errors";
 
 const ON_POSTGRES = /^(postgres|postgresql):/.test(
   process.env.DATABASE_URL ?? "",
 );
 
 type Tx = Prisma.TransactionClient;
-
-/** Prisma wraps raw-query serialization failures as P2010/SQLSTATE 40001. */
-export function isSideGameTransactionConflict(error: unknown): boolean {
-  const known = error as { code?: string; meta?: { code?: string } };
-  return (
-    known.code === "P2034" ||
-    (known.code === "P2010" && known.meta?.code === "40001")
-  );
-}
 
 /** Retry a fresh Serializable snapshot for ordinary deadline-burst conflicts. */
 export async function retrySideGameTransaction<T>(
@@ -28,7 +20,7 @@ export async function retrySideGameTransaction<T>(
       return await run();
     } catch (error) {
       lastError = error;
-      if (!isSideGameTransactionConflict(error) || attempt === attempts - 1) {
+      if (!isSerializationConflict(error) || attempt === attempts - 1) {
         throw error;
       }
     }

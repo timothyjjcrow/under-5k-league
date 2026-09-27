@@ -4,24 +4,58 @@ import { prisma } from "./prisma";
 import { ANNOUNCE_FAILED_PREFIX } from "./settings";
 import { raceHook } from "./race-hook";
 
-const CLAIM_PREFIX = "claim:v2:";
+// ---------------------------------------------------------------------------
+// Marker VALUE formats. These strings are stored in production databases, so
+// they never change without migrating the stored rows. Every writer and
+// reader imports them from here — honors-service, the league outbox and the
+// automation gate included. A reader left behind by a format bump would stop
+// recognising a stuck claim, and that announcement would never be retried,
+// with no error anywhere.
+//
+// The honors formats live here rather than in honors-service because this
+// module must parse them (announcementMarkerOwnsEvent) and honors-service
+// already imports this one: importing back would close a require cycle.
+// ---------------------------------------------------------------------------
+
+/** A UUID (versions 1-5) as an unanchored RegExp source. */
+export const MARKER_UUID_SOURCE =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const UUID = MARKER_UUID_SOURCE;
+
+/** A live generic claim: `claim:v2:<leaseExpiryMs>:<eventId>:<ownerToken>`. */
+export const ANNOUNCEMENT_CLAIM_PREFIX = "claim:v2:";
 const FAILED_PREFIX = `${ANNOUNCE_FAILED_PREFIX}v2:`;
 const SENT_PREFIX = "sent:v2:";
 const CLAIM_LEASE_MS = 90_000;
-const UUID =
-  "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const CLAIM_PATTERN = new RegExp(
-  `^claim:v2:(\\d{1,16}):(${UUID}):(${UUID})$`,
+/** Groups: 1 lease expiry (epoch ms), 2 event id, 3 owner token. */
+export const ANNOUNCEMENT_CLAIM_PATTERN = new RegExp(
+  `^${ANNOUNCEMENT_CLAIM_PREFIX}(\\d{1,16}):(${UUID}):(${UUID})$`,
   "i",
 );
 const FAILED_PATTERN = new RegExp(`^failed:v2:(${UUID}):\\d{1,16}$`, "i");
 const SENT_PATTERN = new RegExp(`^sent:v2:(${UUID}):\\d{1,16}$`, "i");
-const HONORS_CLAIM_PATTERN = new RegExp(
-  `^claim:honors:v2:\\d{1,16}:(${UUID}):${UUID}:(?:initial|corrected)$`,
+
+/**
+ * Any honors claim. The unversioned prefix also matches legacy claims, which
+ * honors-service still treats as recoverable.
+ */
+export const HONORS_CLAIM_PREFIX = "claim:honors:";
+/** A failed honors send: `failed:honors:<mode>:v2:<eventId>:<ms>` (or legacy). */
+export const HONORS_FAILED_PREFIX = `${ANNOUNCE_FAILED_PREFIX}honors:`;
+/** An honors marker whose slate changed; it re-announces as a correction. */
+export const HONORS_STALE_PREFIX = "stale:";
+/**
+ * A live honors claim:
+ * `claim:honors:v2:<leaseExpiryMs>:<eventId>:<ownerToken>:<initial|corrected>`.
+ * Groups: 1 lease expiry (epoch ms), 2 event id, 3 owner token, 4 mode.
+ */
+export const HONORS_CLAIM_PATTERN = new RegExp(
+  `^${HONORS_CLAIM_PREFIX}v2:(\\d{1,16}):(${UUID}):(${UUID}):(initial|corrected)$`,
   "i",
 );
-const HONORS_FAILED_PATTERN = new RegExp(
-  `^failed:honors:(?:initial|corrected):v2:(${UUID}):\\d{1,16}$`,
+/** Groups: 1 mode, 2 event id. */
+export const HONORS_FAILED_PATTERN = new RegExp(
+  `^${HONORS_FAILED_PREFIX}(initial|corrected):v2:(${UUID}):\\d{1,16}$`,
   "i",
 );
 const HONORS_SENT_PATTERN = new RegExp(`^sent:honors:v2:(${UUID}):`, "i");
@@ -33,13 +67,16 @@ export type AnnouncementMarkerClaim = {
   eventId: string;
 };
 
-function claimValue(nowMs: number, eventId: string): string {
-  return `${CLAIM_PREFIX}${nowMs + CLAIM_LEASE_MS}:${eventId}:${randomUUID()}`;
+/** Mint a fresh generic claim value for one event generation. */
+export function announcementClaimValue(nowMs: number, eventId: string): string {
+  return `${ANNOUNCEMENT_CLAIM_PREFIX}${nowMs + CLAIM_LEASE_MS}:${eventId}:${randomUUID()}`;
 }
 
 function eventIdFromRecoverableValue(value: string): string | null {
   return (
-    CLAIM_PATTERN.exec(value)?.[2] ?? FAILED_PATTERN.exec(value)?.[1] ?? null
+    ANNOUNCEMENT_CLAIM_PATTERN.exec(value)?.[2] ??
+    FAILED_PATTERN.exec(value)?.[1] ??
+    null
   );
 }
 
@@ -53,7 +90,7 @@ export function recoverableAnnouncementMarker(
   nowMs = Date.now(),
 ): boolean {
   if (value.startsWith(ANNOUNCE_FAILED_PREFIX)) return true;
-  const claim = CLAIM_PATTERN.exec(value);
+  const claim = ANNOUNCEMENT_CLAIM_PATTERN.exec(value);
   return !!claim && Number(claim[1]) <= nowMs;
 }
 
@@ -69,11 +106,11 @@ export function announcementMarkerOwnsEvent(
   eventId: string,
 ): boolean {
   const ownedEventId =
-    CLAIM_PATTERN.exec(value)?.[2] ??
+    ANNOUNCEMENT_CLAIM_PATTERN.exec(value)?.[2] ??
     FAILED_PATTERN.exec(value)?.[1] ??
     SENT_PATTERN.exec(value)?.[1] ??
-    HONORS_CLAIM_PATTERN.exec(value)?.[1] ??
-    HONORS_FAILED_PATTERN.exec(value)?.[1] ??
+    HONORS_CLAIM_PATTERN.exec(value)?.[2] ??
+    HONORS_FAILED_PATTERN.exec(value)?.[2] ??
     HONORS_SENT_PATTERN.exec(value)?.[1] ??
     null;
   return ownedEventId?.toLowerCase() === eventId.toLowerCase();
@@ -108,7 +145,7 @@ export async function invalidatePendingAnnouncementMarkers(
   const queuedKeys = new Set(queued.flatMap((row) => row.markerKey ?? []));
   const removable = markers.filter(
     (marker) =>
-      marker.value.startsWith(CLAIM_PREFIX) ||
+      marker.value.startsWith(ANNOUNCEMENT_CLAIM_PREFIX) ||
       marker.value.startsWith(ANNOUNCE_FAILED_PREFIX) ||
       queuedKeys.has(marker.key),
   );
@@ -151,7 +188,7 @@ export async function claimAnnouncementMarker(
   nowMs = Date.now(),
 ): Promise<AnnouncementMarkerClaim | null> {
   const initialEventId = randomUUID();
-  const initialValue = claimValue(nowMs, initialEventId);
+  const initialValue = announcementClaimValue(nowMs, initialEventId);
   const created = await prisma.$executeRaw`
     INSERT INTO "Setting" ("key", "value")
     VALUES (${key}, ${initialValue})
@@ -169,7 +206,7 @@ export async function claimAnnouncementMarker(
     return null;
   }
   const eventId = eventIdFromRecoverableValue(current.value) ?? randomUUID();
-  const value = claimValue(nowMs, eventId);
+  const value = announcementClaimValue(nowMs, eventId);
   // Test seam: another worker can reclaim and even finalize this exact
   // generation after our read. The value-scoped write below must then lose.
   await raceHook("announcement-marker.claimAnnouncementMarker.beforeReclaim");

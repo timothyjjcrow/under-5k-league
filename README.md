@@ -531,6 +531,17 @@ declares the same runtime line used by every CI job.
      `needs_scheduler_pause` flags decide whether the recovery or scheduler
      procedures are also required.
 
+   A plain deletion of a regular file is judged like an edit to that path, so
+   removing a stale doc or dead component needs no maintenance procedure.
+   Deleting anything under `prisma/`, `ops/`, the cron or automation-health
+   routes, or the scheduler libraries still selects both flags; renames,
+   copies, and file-type or mode changes select both everywhere. Everything
+   under `ops/` counts as scheduler plumbing except the independently hosted
+   lobby bot and relay (`ops/dota-lobby-bot/`, `ops/dota-lobby-relay/`, the
+   `ops/` entries in `.vercelignore`), which stay strict for review without a
+   scheduler pause. A new `ops/` folder selects scheduler controls until it is
+   deliberately added to that exemption list.
+
    A UI-only or app release does **not** require a fresh database backup or a
    scheduler pause. Its migration gate contains no writer, and the classifier
    reports neither impact flag. Do not force an unknown change into a faster
@@ -864,7 +875,8 @@ and credential-free database identity metadata. `backups/` is mode `0700`;
 every artifact and sidecar is `0600`; failed runs remove partial output. SQLite
 uses its online backup API rather than a byte copy and requires the resulting snapshot to pass
 `PRAGMA integrity_check` before publication. That local-development path
-requires the `sqlite3` command-line client and fails safely if it is absent.
+uses Node's built-in `node:sqlite` (Node 22.16 or newer), needs no `sqlite3`
+program, and fails safely if the running Node lacks it.
 
 > **`pg_dump` must be at least as new as the server**, or it aborts with
 > `aborting because of server version mismatch` and writes nothing. Check the

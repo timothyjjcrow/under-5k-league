@@ -20,6 +20,8 @@ import { raceHook } from "./race-hook";
 import {
   championAnnouncedKey,
   playoffGamesArchiveKey,
+  playoffRoundBuiltKey,
+  playoffRoundBuiltPrefix,
   resultAnnouncedKey,
   stampResultChange,
   weekReminderKey,
@@ -35,6 +37,7 @@ import {
 } from "./announcement-marker";
 import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -72,15 +75,6 @@ async function assertNoPlayoffScrimConflict(
     throw new PlayoffScrimConflictError();
   }
 }
-
-/**
- * Exactly-once marker for "round N of this season's bracket has been built".
- * Cleared by createPlayoffBracket so Reset playoffs can rebuild from scratch —
- * without that, a reset season could never advance past a round it had already
- * built once.
- */
-const playoffRoundKey = (seasonId: string, round: number) =>
-  `playoffRoundBuilt:${seasonId}:${round}`;
 
 // Bracket slots are encoded as `R{round}M{match}` e.g. "R0M1".
 function parseSlot(slot: string | null): { round: number; match: number } {
@@ -210,7 +204,10 @@ async function removePostseason(
   ]);
 
   await tx.setting.deleteMany({
-    where: { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
+    // Round markers (settings.ts's playoffRoundBuiltKey): without clearing
+    // them, a reset season could never advance past a round it had already
+    // built once.
+    where: { key: { startsWith: playoffRoundBuiltPrefix(seasonId) } },
   });
   await tx.setting.deleteMany({
     where: { key: championAnnouncedKey(seasonId) },
@@ -475,7 +472,7 @@ export async function createPlayoffBracket(
     }
     if (
       error instanceof BracketBuildRaceError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
     }
@@ -581,7 +578,7 @@ export async function returnToRegularSeason(
   } catch (error) {
     if (
       error instanceof BracketBuildRaceError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
     }
@@ -786,7 +783,7 @@ export async function advancePlayoffBracket(
       // A concurrent correction/crown/reset won the Serializable ordering. Its
       // own caller either advances the fresh state or leaves it for the next
       // idempotent sync pass; this stale caller must not surface a false error.
-      if ((error as { code?: string }).code !== "P2034") throw error;
+      if (!isSerializationConflict(error)) throw error;
       return false;
     }
     if (!championTeamId) return false;
@@ -890,7 +887,7 @@ export async function advancePlayoffBracket(
         if (!inputsHold) throw new StaleBracketError();
         await tx.setting.create({
           data: {
-            key: playoffRoundKey(seasonId, nextRound),
+            key: playoffRoundBuiltKey(seasonId, nextRound),
             value: new Date().toISOString(),
           },
         });
@@ -935,9 +932,9 @@ export async function advancePlayoffBracket(
     return true;
   } catch (e) {
     // Someone else is building (or already built) this exact round.
-    if ((e as { code?: string }).code === "P2002") return false;
+    if (isUniqueViolation(e)) return false;
     // SSI loser — a rival build or a reset serialized ahead of us.
-    if ((e as { code?: string }).code === "P2034") return false;
+    if (isSerializationConflict(e)) return false;
     // The bracket we computed from no longer exists as we read it.
     if (e instanceof StaleBracketError) return false;
     // A confirmed scrim owns this time for now. Do not turn a successfully

@@ -3,18 +3,14 @@
 The application keeps three different facts separate:
 
 1. **Roster membership:** `TeamMember` is today's roster. `RosterTenure` retains when a membership began and ended, along with acquisition facts known at that time.
-2. **Confirmed plan:** `MatchLineup` and its immutable seats record a captain's selected players, optional planned positions, current-kickoff check-ins and observed ratings. A newer confirmation supersedes the old plan from that moment onward.
+2. **Confirmed plan (retired):** `MatchLineup` and its immutable seats recorded a captain's selected players, optional planned positions, current-kickoff check-ins and observed ratings. Captains no longer confirm lineups and nothing writes these rows; existing rows are only copied by the season export and the postseason reset receipt, and the tables will be dropped by a later migration.
 3. **Actual appearance:** imported `Game.players` remains the canonical box score. `GameParticipant` indexes its validated lines for player queries. A plan alone never awards an appearance or proves the position actually played.
 
 Official team results and the current competition's scoring rules are unchanged. Individual series-win counts require a recorded appearance in that series. A “championship contribution” means the player appeared for the champion during that season; it is deliberately separate from an official individual title policy. Manual results without player evidence count for teams only.
 
-## Captain workflow
+## Check-ins
 
-Players check in on the match page for its current published kickoff. The captain selects exactly the season's configured team size, with distinct people and optional distinct positions. The server rechecks authority, eligibility, check-ins and schedule/logistics revisions in the write transaction.
-
-A changed kickoff requires new check-ins and confirmations for both teams. Roster, cover and check-in changes supersede the affected team's plan. Earlier seats remain stored. A live series supports readiness and replacement plans for the remaining games; these cannot change an earlier game's lineup evidence. A completed match's historical plan is retained.
-
-Older standin assignments do not prove an accepted offer. Their acceptance snapshot is explicitly unknown; the player's current check-in is a separate fact.
+Players check in on the match page for its current published kickoff. The server rechecks the player's roster seat or standin cover and the kickoff revision in the write transaction. A changed kickoff clears check-ins for both teams. A live series supports readiness for the remaining games; it cannot change an earlier game's recorded appearances.
 
 ## Auction receipts
 

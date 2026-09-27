@@ -178,6 +178,13 @@ evidence:
 3. **Split `src/app/page.tsx` per phase** — `dashboard-guards` would need its
    haystack turned into a coordinated file list; `SeasonViewSkeleton` must
    mirror `SeasonView` band-for-band; only one phase's code runs per request.
+
+   *Update 2026-09:* the source-guard half of #1–#3 no longer holds.
+   `admin-copy-guard` and `dashboard-guards` (and the other area-wide source
+   guards) now glob their areas through `test/support/source-files.ts` and
+   fail loudly when a glob finds too few files, so moved strings and props stay
+   in view. The other reasons stand; single-file guards that pin one page's
+   wiring still fail loudly when their target moves.
 4. **Split `getInhouseState`'s view assembly out of `inhouse-service.ts`** —
    no claims live in it (verified), but the assembly reads block-scoped state
    threaded through the resolver chain; extraction forces restructuring a

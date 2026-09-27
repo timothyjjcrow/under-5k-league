@@ -7,10 +7,15 @@
   },
   "scripts": {
     "dev": "next dev",
+    "fixture:signups": "tsx scripts/fixture-server.ts signups",
+    "fixture:regular": "tsx scripts/fixture-server.ts regular",
+    "fixture:playoffs": "tsx scripts/fixture-server.ts playoffs",
+    "fixture:complete": "tsx scripts/fixture-server.ts complete",
     "build": "next build",
     "build:vercel": "node scripts/vercel-build.mjs",
     "start": "next start",
     "lint": "eslint",
+    "lint:unused-exports": "node scripts/unused-exports.mjs",
     "db:generate": "prisma generate",
     "db:push": "node scripts/assert-local-db.mjs \"Pushing the database schema\" && prisma db push",
     "db:seed": "tsx prisma/seed.ts",
@@ -50,6 +55,7 @@
     "test:e2e:mid": "playwright test --config playwright.midseason.config.ts",
     "test:e2e:postseason": "playwright test --config playwright.postseason.config.ts",
     "test:release": "node --test scripts/shared-release.test.mjs",
+    "test:scripts": "node --test scripts/unused-exports.test.mjs",
     "release:both": "node scripts/release-both.mjs"
   },
   "dependencies": {

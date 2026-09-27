@@ -38,6 +38,7 @@ import {
   actionErrorMessage,
   UserFacingError,
 } from "@/lib/user-facing-error";
+import { isSerializationConflict } from "@/lib/prisma-errors";
 
 /**
  * Record the signed-in player's match-night RSVP (IN | OUT) for a scheduled
@@ -129,7 +130,7 @@ export async function setAvailability(
         }
 
         if (priorStatus !== status) {
-          await recordCheckin(tx, match, user.id, status, seat.teamId);
+          await recordCheckin(tx, match, user.id, status);
         }
 
         // Which side loses a player — the roster seat, or the team a standin
@@ -139,7 +140,7 @@ export async function setAvailability(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error: "That match just changed — reload and try your RSVP again",
       };
@@ -250,7 +251,7 @@ export async function markAwayDates(
       nowMs: Date.now(),
     });
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return { error: "Your fixtures just changed. Reload and try again." };
     }
     return {

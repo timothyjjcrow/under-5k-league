@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { sourceFiles } from "../../test/support/source-files";
 
 const ROOT = join(__dirname, "..", "..");
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
@@ -22,5 +23,30 @@ describe("archived season query wiring", () => {
     expect(source).toContain("singleSearchParam(");
     expect(source).toMatch(/=== null\) notFound\(\)/);
     expect(source).toMatch(/season\?: string \| string\[\]/);
+  });
+});
+
+describe("every page that takes ?season= normalizes it", () => {
+  // The four pages above were the ones found first; any page that accepts a
+  // season id has the same string[] hazard, including ones added later.
+  const seasonPages = sourceFiles("src/app/**/page.tsx", 20).filter((f) =>
+    /season\?:\s*string/.test(f.text),
+  );
+
+  it("finds the season-scoped pages (guard is not vacuous)", () => {
+    // Ten today: the four above plus leaders, meta, records, scrims and two
+    // admin pages.
+    expect(seasonPages.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("routes every one of them through singleSearchParam", () => {
+    const unguarded = seasonPages
+      .filter(
+        (f) =>
+          !f.text.includes('from "@/lib/search-params"') ||
+          !f.text.includes("singleSearchParam("),
+      )
+      .map((f) => f.path);
+    expect(unguarded).toEqual([]);
   });
 });

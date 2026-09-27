@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { sourceFiles } from "../../test/support/source-files";
 
 const playersPage = readFileSync(
   path.resolve(process.cwd(), "src/app/players/page.tsx"),
@@ -16,7 +17,13 @@ describe("player-directory contact visibility wiring", () => {
     expect(playersPage).toContain(
       "showContact={viewerCanViewLeagueDirectory}",
     );
-    expect(playersPage).not.toContain("showContact={!!viewer}");
+    // Nowhere, not just on /players: any surface that hands contact details
+    // to every signed-in account skips the member/subject/admin policy.
+    expect(
+      sourceFiles(["src/app/**/*.tsx", "src/components/**/*.tsx"], 80)
+        .filter((f) => f.text.includes("showContact={!!viewer}"))
+        .map((f) => f.path),
+    ).toEqual([]);
   });
 
   it("runs standin contact through the same subject/member/admin policy", () => {

@@ -1,13 +1,17 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { haystackOf, sourceFiles } from "../../test/support/source-files";
 
 const ROOT = join(__dirname, "..", "..");
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
+/** Every /admin page, joined, so the admin page can be split into files. */
+const adminPages = () => haystackOf(sourceFiles("src/app/admin/**/*.tsx", 3));
+
 describe("postseason UI lifecycle guards", () => {
   it("does not expose generic phase changes that bypass bracket commands", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
     const policy = read("src/lib/season-phase-policy.ts");
 
     expect(admin).toContain("seasonPhasePolicy({");
@@ -28,7 +32,7 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("mirrors schedule, correction, kickoff, and playoff-start capabilities in the admin UI", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
 
     expect(admin).toContain("const scheduleEditingOpen = postAuctionWorkOpen(");
     expect(admin).toContain("const scheduleGenerationLockedReason =");
@@ -45,7 +49,7 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("keeps team withdrawal and reinstatement visibly regular-season-only", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
 
     expect(admin).toMatch(
       /const teamWithdrawalLocked\s*=\s*teamWithdrawalLockedReason\(season\.status\)/,
@@ -57,7 +61,7 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("reserves champion retraction for the final's stored participant, including mismatch recovery", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
     const start = admin.indexOf("const championIsFinalParticipant =");
     const end = admin.indexOf("const crownedGrandFinal =", start);
     const classification = admin.slice(start, end);

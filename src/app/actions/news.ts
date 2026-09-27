@@ -9,6 +9,7 @@ import { newsMessage, sendDiscordMessage } from "@/lib/discord";
 import { str } from "@/lib/form";
 import { logAdminAction } from "@/lib/admin-log";
 import type { ActionResult } from "@/lib/action-result";
+import { isUniqueViolation } from "@/lib/prisma-errors";
 
 const NEWS_CREATE_REQUEST_PREFIX = "newsPostRequest:";
 
@@ -80,7 +81,7 @@ export async function createNewsPost(
       return created;
     });
   } catch (transactionError) {
-    if ((transactionError as { code?: string }).code === "P2002") {
+    if (isUniqueViolation(transactionError)) {
       refreshNewsSurfaces();
       return { message: "Already posted — this submission was received once." };
     }

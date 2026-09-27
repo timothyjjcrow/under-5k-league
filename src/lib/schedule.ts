@@ -313,14 +313,6 @@ export function matchPhaseLabel(phase: string, week: number): string {
   return `Week ${week}`;
 }
 
-/** Compact chip form of matchPhaseLabel: "GF" | "PO" | "TB" | "W3". */
-export function matchPhaseAbbrev(phase: string, week: number): string {
-  if (phase === MATCH_PHASE.FINAL) return "GF";
-  if (phase === MATCH_PHASE.PLAYOFF) return "PO";
-  if (phase === MATCH_PHASE.TIEBREAKER) return "TB";
-  return `W${week}`;
-}
-
 /**
  * Chronological comparator for match lists: kickoff time first (unscheduled
  * last), then week, then creation order. Reschedules can move a match past its

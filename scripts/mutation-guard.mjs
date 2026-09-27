@@ -114,16 +114,15 @@ const EQUIVALENT = new Set([
   // These guards still document intent and defend inconsistent external data.
   "src/lib/roster-history.ts::closeRosterTenure::closedAt#1",
   "src/lib/roster-history.ts::checkActor::closedAt+openKey#1",
-  // Identity correction, its fresh administrator claim, lineup confirmation,
-  // provider-failure bookkeeping and import-progress commands read the exact
-  // row before their same-row write in SERIALIZABLE. Concurrent source/role/
-  // revision changes therefore force rollback without the copied predicates.
+  // Identity correction, its fresh administrator claim, provider-failure
+  // bookkeeping and import-progress commands read the exact row before their
+  // same-row write in SERIALIZABLE. Concurrent source/role/revision changes
+  // therefore force rollback without the copied predicates.
   // Their write locks and fresh reads remain essential. In contrast, detached
   // provider success/decision snapshots and participant backfill source checks
   // are independently protected predicates, not covered by this equivalence.
   "src/lib/game-identity-correction.ts::correctGameIdentity::players#1",
   "src/lib/participant-admin.ts::claimParticipantAdmin::role#1",
-  "src/lib/match-lineups.ts::confirmMatchLineup::logisticsRevision+scheduleRevision+status#1",
   "src/lib/import-candidates.ts::recordImportFetchFailure::revision#1",
   "src/app/actions/import-progress.ts::changeImportCandidate::isActive+status#1",
   "src/app/actions/import-progress.ts::changeImportCandidate::attempts+payload+revision+status#1",
@@ -290,7 +289,6 @@ const FILES = [
   "src/lib/game-participants.ts",
   "src/lib/game-identity-correction.ts",
   "src/lib/participant-admin.ts",
-  "src/lib/match-lineups.ts",
   "src/lib/import-candidates.ts",
   "src/lib/inhouse-service.ts",
   "src/lib/match-import.ts",

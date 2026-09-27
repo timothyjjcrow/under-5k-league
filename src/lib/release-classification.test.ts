@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  INDEPENDENT_OPS_PREFIXES,
   classifyEntries,
   classifyRelease,
   isStaticClassNameOnlyDiff,
@@ -168,6 +169,7 @@ describe("release classifier policy", () => {
     "src/lib/automation-service.ts",
     "src/lib/cron-auth.ts",
     "ops/cloudflare-automation-worker/wrangler.jsonc",
+    "ops/cloudflare-automation-worker/src/index.ts",
   ])(
     "requires only scheduler controls for runtime scheduler path %s",
     (file) => {
@@ -180,6 +182,45 @@ describe("release classifier policy", () => {
       });
     },
   );
+
+  // ops/ is scheduler plumbing by default; only the named independent
+  // services are exempt. A second scheduler folder (a per-region worker) or
+  // any new ops/ service must not silently skip the scheduler pause.
+  it.each([
+    ["M", "ops/cloudflare-automation-worker-europe/src/index.ts"],
+    ["A", "ops/scheduler-backup/cron.mjs"],
+    ["M", "ops/new-service/wrangler.jsonc"],
+  ])(
+    "requires scheduler controls for an unlisted ops/ path (%s %s)",
+    (code, file) => {
+      const entry =
+        code === "A"
+          ? { ...modified(file), status: "A", code: "A", oldMode: "000000" }
+          : modified(file);
+      expect(classifyEntries([entry])).toMatchObject({
+        lane: "strict",
+        needs_postgres: true,
+        needs_mutation: true,
+        needs_db_release: false,
+        needs_scheduler_pause: true,
+      });
+    },
+  );
+
+  it("exempts from scheduler controls only ops/ services .vercelignore keeps out of the upload", () => {
+    const ignored = readFileSync(
+      path.resolve(process.cwd(), ".vercelignore"),
+      "utf8",
+    )
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("ops/"));
+    expect(INDEPENDENT_OPS_PREFIXES.length).toBeGreaterThan(0);
+    for (const prefix of INDEPENDENT_OPS_PREFIXES) {
+      expect(prefix).toMatch(/^ops\/[^/]+\/$/);
+      expect(ignored).toContain(prefix);
+    }
+  });
 
   it.each([
     ".github/workflows/ci.yml",
@@ -199,6 +240,11 @@ describe("release classifier policy", () => {
     "src/app/actions/admin.ts",
     "src/lib/release-classification.test.ts",
     "src/lib/automation-service.test.ts",
+    // The lobby bot and relay are hosted independently of the website and
+    // its scheduler (.vercelignore excludes them from the upload).
+    "ops/dota-lobby-bot/server.mjs",
+    "ops/dota-lobby-relay/src/index.mjs",
+    "ops/dota-lobby-relay/wrangler.jsonc",
   ])("keeps strict review without DB or scheduler controls for %s", (file) => {
     expect(classifyEntries([modified(file)])).toMatchObject({
       lane: "strict",
@@ -241,18 +287,195 @@ describe("release classifier policy", () => {
   });
 
   it.each([
-    { status: "D", code: "D", oldMode: "100644", newMode: "000000" },
     { status: "R100", code: "R", oldMode: "100644", newMode: "100644" },
+    { status: "C100", code: "C", oldMode: "100644", newMode: "100644" },
     { status: "T", code: "T", oldMode: "100644", newMode: "120000" },
     { status: "M", code: "M", oldMode: "100644", newMode: "100755" },
-  ])("fails closed for status or mode $status", (entry) => {
+    // A deleted symlink, executable or submodule is not a plain deletion.
+    { status: "D", code: "D", oldMode: "120000", newMode: "000000" },
+    { status: "D", code: "D", oldMode: "100755", newMode: "000000" },
+    { status: "D", code: "D", oldMode: "160000", newMode: "000000" },
+    { status: "D", code: "D", oldMode: "100644", newMode: "100644" },
+  ])("fails closed for status or mode $status $oldMode", (entry) => {
     expect(
       classifyEntries([
         {
           ...entry,
-          oldPath: entry.code === "R" ? "old-footer.tsx" : null,
+          oldPath:
+            entry.code === "R" || entry.code === "C" ? "old-footer.tsx" : null,
           path: "src/components/site-footer.tsx",
         },
+      ]),
+    ).toMatchObject({
+      lane: "strict",
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
+  });
+});
+
+describe("release classifier deletions", () => {
+  const deleted = (file: string) => ({
+    status: "D",
+    code: "D",
+    oldPath: null,
+    path: file,
+    oldMode: "100644",
+    newMode: "000000",
+  });
+  const modified = (
+    file: string,
+    extra: Record<string, string | boolean> = {},
+  ) => ({
+    status: "M",
+    code: "M",
+    oldPath: null,
+    path: file,
+    oldMode: "100644",
+    newMode: "100644",
+    ...extra,
+  });
+
+  it.each([
+    "src/components/match-lineups.tsx",
+    "src/app/matches/[id]/lineups.tsx",
+    // Deleting the allowlisted footer is never a presentation-only change.
+    "src/components/site-footer.tsx",
+  ])("routes a deleted UI file %s to the app lane", (file) => {
+    expect(classifyEntries([deleted(file)])).toMatchObject({
+      lane: "app",
+      needs_postgres: true,
+      needs_mutation: true,
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+  });
+
+  it("treats a deleted static public asset like any asset change", () => {
+    expect(classifyEntries([deleted("public/old-banner.png")])).toMatchObject({
+      lane: "ui-only",
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+    expect(
+      classifyEntries([deleted("public/service-worker.js")]),
+    ).toMatchObject({
+      lane: "strict",
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
+  });
+
+  it("classifies the removal of a server action and its component without maintenance", () => {
+    expect(
+      classifyEntries([
+        deleted("src/app/actions/match-lineups.ts"),
+        deleted("src/components/match-lineups.tsx"),
+      ]),
+    ).toMatchObject({
+      lane: "strict",
+      needs_postgres: true,
+      needs_mutation: true,
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+  });
+
+  it("treats deleted documentation as a neutral companion", () => {
+    expect(
+      classifyEntries([deleted("docs/TIEBREAKER-WEEK.md")]),
+    ).toMatchObject({
+      lane: "strict",
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+    expect(
+      classifyEntries([
+        modified("src/components/site-footer.tsx", { presentationSafe: true }),
+        deleted("docs/footer-notes.md"),
+      ]),
+    ).toMatchObject({ lane: "ui-only", needs_postgres: false });
+    expect(
+      classifyEntries([
+        modified("src/app/players/page.tsx"),
+        deleted("docs/old-players.md"),
+        deleted("test/integration/old-players.itest.ts"),
+      ]),
+    ).toMatchObject({ lane: "app", needs_db_release: false });
+  });
+
+  it.each([
+    "README.md",
+    "docs/PRODUCTION-OPERATIONS.md",
+    "scripts/old-helper.mjs",
+    "src/lib/old-service.ts",
+    ".github/workflows/old.yml",
+    "ops/dota-lobby-bot/server.mjs",
+    "ops/dota-lobby-relay/src/index.mjs",
+  ])("keeps strict review without maintenance for deleted %s", (file) => {
+    expect(classifyEntries([deleted(file)])).toMatchObject({
+      lane: "strict",
+      needs_postgres: true,
+      needs_mutation: true,
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+  });
+
+  it.each([
+    "prisma/schema.prisma",
+    "prisma/migrations/20990101000000_example/migration.sql",
+    "prisma/seed.ts",
+    "ops/cloudflare-automation-worker/src/index.ts",
+    "ops/cloudflare-automation-worker/wrangler.paused.jsonc",
+    "src/app/api/cron/automation/route.ts",
+    "src/app/api/health/automation/route.ts",
+    "src/lib/automation-service.ts",
+    "src/lib/automation-service.test.ts",
+    "src/lib/cron-auth.ts",
+    "src/lib/external-automation-scheduler.ts",
+  ])("fails closed for a deleted schema or scheduler file %s", (file) => {
+    const result = classifyEntries([deleted(file)]);
+    expect(result).toMatchObject({
+      lane: "strict",
+      needs_postgres: true,
+      needs_mutation: true,
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
+    expect(result.reasons.join(" ")).toMatch(/schema or scheduler file/);
+  });
+
+  it.each([
+    "ops/cloudflare-automation-worker-europe/wrangler.jsonc",
+    "ops/scheduler-backup/cron.mjs",
+  ])(
+    "fails closed for a deleted file in an unlisted ops/ folder %s",
+    (file) => {
+      const result = classifyEntries([deleted(file)]);
+      expect(result).toMatchObject({
+        lane: "strict",
+        needs_db_release: true,
+        needs_scheduler_pause: true,
+      });
+      expect(result.reasons.join(" ")).toMatch(/schema or scheduler file/);
+    },
+  );
+
+  it("fails closed for a deleted unknown path", () => {
+    expect(classifyEntries([deleted("unknown.txt")])).toMatchObject({
+      lane: "strict",
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
+  });
+
+  it("lets one protected deletion select controls for the whole release", () => {
+    expect(
+      classifyEntries([
+        deleted("docs/old.md"),
+        deleted("src/components/old.tsx"),
+        deleted("prisma/migrations/20990101000000_example/migration.sql"),
       ]),
     ).toMatchObject({
       lane: "strict",
@@ -403,6 +626,63 @@ export function Footer() {
       });
     },
   );
+
+  it("classifies a real plain deletion like a change to that path", () => {
+    const cwd = createRepository();
+    write(cwd, "src/components/old-widget.tsx", "export const Old = 1;\n");
+    write(cwd, "docs/old-notes.md", "# Old notes\n");
+    write(cwd, "src/app/page.tsx", "export default function Page() {}\n");
+    const base = commitAll(cwd, "base");
+    rmSync(path.join(cwd, "src/components/old-widget.tsx"));
+    rmSync(path.join(cwd, "docs/old-notes.md"));
+    const head = commitAll(cwd, "delete stale files");
+
+    expect(classifyRelease({ base, head, cwd })).toMatchObject({
+      lane: "app",
+      changedFiles: ["docs/old-notes.md", "src/components/old-widget.tsx"],
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+  });
+
+  it("keeps real deletions of migrations and symlinks fail-closed", () => {
+    const cwd = createRepository();
+    write(
+      cwd,
+      "prisma/migrations/20990101000000_example/migration.sql",
+      "SELECT 1;\n",
+    );
+    write(cwd, "README.md", "base\n");
+    mkdirSync(path.join(cwd, "docs"), { recursive: true });
+    symlinkSync("../README.md", path.join(cwd, "docs", "link"));
+    const base = commitAll(cwd, "base");
+
+    rmSync(path.join(cwd, "docs", "link"));
+    const symlinkHead = commitAll(cwd, "delete symlink");
+    const symlinkResult = classifyRelease({ base, head: symlinkHead, cwd });
+    expect(symlinkResult).toMatchObject({
+      lane: "strict",
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
+    expect(symlinkResult.reasons.join(" ")).toMatch(/file type or mode/i);
+
+    rmSync(path.join(cwd, "prisma"), { recursive: true });
+    const migrationHead = commitAll(cwd, "delete migration");
+    const migrationResult = classifyRelease({
+      base: symlinkHead,
+      head: migrationHead,
+      cwd,
+    });
+    expect(migrationResult).toMatchObject({
+      lane: "strict",
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
+    expect(migrationResult.reasons.join(" ")).toMatch(
+      /schema or scheduler file/,
+    );
+  });
 
   it("rejects a non-ancestor base and an empty diff", () => {
     const cwd = createRepository();

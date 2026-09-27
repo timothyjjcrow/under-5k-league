@@ -7,6 +7,7 @@ import { LEAGUE_TARGETS, assertDeployment, assertReleaseInfo, promotePair } from
 import { requireSuccessfulCi, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory } from "./release-both.mjs";
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 import { projectProvider } from "./release-provider.mjs";
+import { classifyEntries } from "./classify-release.mjs";
 
 const sha = "a".repeat(40);
 const baseSha = "b".repeat(40);
@@ -127,6 +128,18 @@ test("maintenance evidence cannot waive an affected database or scheduler", () =
   for (const patch of [{ backupVerified: false }, { restoreRehearsed: false }, { migrationReleasePassed: false }, { noActiveLease: false }, { baseSha: sha }, { zeroTriggersAt: new Date(now).toISOString() }, { observedAt: "invalid" }])
     assert.throws(() => requireMaintenanceEvidence(plan, { ...evidence, regions: { us: { ...record, ...patch } } }, now));
   requireMaintenanceEvidence({ classifications: { us: {}, eu: {} } }, undefined, now);
+});
+test("cleanup deletions need no maintenance evidence; schema and scheduler deletions still do", () => {
+  const deleted = (file) => ({ status: "D", code: "D", oldPath: null, path: file, oldMode: "100644", newMode: "000000" });
+  const modified = (file) => ({ status: "M", code: "M", oldPath: null, path: file, oldMode: "100644", newMode: "100644" });
+  const plan = (entries) => ({ sha, bases: { us: { sha: baseSha }, eu: { sha: baseSha } }, classifications: { us: classifyEntries(entries), eu: classifyEntries(entries) } });
+  const now = Date.now();
+  requireMaintenanceEvidence(plan([deleted("docs/TIEBREAKER-WEEK.md")]), undefined, now);
+  requireMaintenanceEvidence(plan([deleted("src/app/actions/match-lineups.ts"), deleted("src/components/match-lineups.tsx")]), undefined, now);
+  requireMaintenanceEvidence(plan([modified("ops/dota-lobby-bot/server.mjs"), deleted("ops/dota-lobby-relay/src/protocol.mjs")]), undefined, now);
+  for (const file of ["prisma/migrations/20990101000000_example/migration.sql", "ops/cloudflare-automation-worker/src/index.ts", "ops/scheduler-backup/cron.mjs", "src/app/api/cron/automation/route.ts", "src/lib/automation-service.ts", "unknown.txt"])
+    assert.throws(() => requireMaintenanceEvidence(plan([deleted(file)]), undefined, now), /maintenance evidence/);
+  assert.throws(() => requireMaintenanceEvidence(plan([modified("ops/cloudflare-automation-worker/wrangler.jsonc")]), undefined, now), /maintenance evidence/);
 });
 test("the shared targets retain separate projects, origins and deployment credentials", () => {
   for (const key of ["projectId", "origin", "tokenEnv", "functionRegion"])

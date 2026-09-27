@@ -48,6 +48,7 @@ import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 import { claimProviderCooldown } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
+import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 
 function refresh() {
   updateTag(AUTOMATION_GATE_TAG);
@@ -177,7 +178,7 @@ export async function confirmDraftReadiness(
     }
     if (
       error instanceof DraftConfirmationChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error:
@@ -623,9 +624,9 @@ export async function saveRegistration(
               : "That signup changed while you submitted — reload before trying again.",
         };
       }
-      const code = (error as { code?: string }).code;
-      if ((code === "P2002" || code === "P2034") && attempt === 0) continue;
-      if (code === "P2002" || code === "P2034") {
+      const staleWrite = isUniqueViolation(error) || isSerializationConflict(error);
+      if (staleWrite && attempt === 0) continue;
+      if (staleWrite) {
         return {
           error:
             "That signup, season, or draft changed while you submitted — reload before trying again.",
@@ -854,7 +855,7 @@ export async function leaveLeague(
       return {
         error: "This season is complete — its signup history is now read-only.",
       };
-    if ((e as { code?: string }).code === "P2034")
+    if (isSerializationConflict(e))
       return { error: "Your signup just changed — reload and try again." };
     throw e;
   }
@@ -1010,14 +1011,14 @@ export async function updateDotaAccount(
     // proves ownership or the value is a grandfathered override.
     if (
       e instanceof DotaAccountCollisionError ||
-      (e as { code?: string }).code === "P2002"
+      isUniqueViolation(e)
     ) {
       return {
         error:
           "That Dota account is already linked elsewhere. Use the Steam account that owns it.",
       };
     }
-    if ((e as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(e)) {
       // Two identical submits can race during the one-time legacy→v2 copy.
       // Treat the unique winner's exact state as success; a genuinely
       // different link still gets the stale-tab refusal.
