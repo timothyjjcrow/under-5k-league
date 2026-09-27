@@ -113,7 +113,7 @@ export function HeroPicker({
               key={h.id}
               onClick={() => toggle(h)}
               aria-label={`Add ${h.name}`}
-              className="flex items-center gap-1.5 rounded-full border border-dashed border-line py-1 pl-1 pr-2 text-xs font-medium transition-colors hover:border-accent/60 hover:bg-accent/10"
+              className="flex items-center gap-1.5 rounded-full border border-dashed border-line py-1 pl-1 pr-2 text-xs font-medium transition-colors hover:border-accent/60 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img

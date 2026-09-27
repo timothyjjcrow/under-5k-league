@@ -196,8 +196,10 @@ test("profile saves optional details with clear dirty state", async ({
   ).toBeVisible();
   // Closed details retain successful controls in the form submission.
   await optional.locator("summary").click();
+  // Mid-season a newcomer can only register as a standin, and the button
+  // says so.
   await page
-    .getByRole("button", { name: "Join the season", exact: true })
+    .getByRole("button", { name: "Register as a standin", exact: true })
     .click();
   await expect(
     page.getByRole("button", { name: "Update signup" }),
