@@ -69,7 +69,7 @@ test("schedule keeps analysis discoverable and labels filtered counts for the se
   await expect(race).not.toHaveAttribute("open", "");
   await race.locator("summary").first().click();
   await expect(
-    page.getByRole("heading", { name: "Remaining opponents", exact: true }),
+    page.getByRole("heading", { name: "Playoff picture", exact: true }),
   ).toBeVisible();
   await page
     .locator("summary")

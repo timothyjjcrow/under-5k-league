@@ -25,7 +25,6 @@ import {
   orderScheduleWeeks,
   pickBracketSize,
   playoffFirstRound,
-  remainingSchedule,
   roundName,
   teamByeWeek,
 } from "@/lib/schedule";
@@ -943,13 +942,6 @@ export default async function SchedulePage() {
             unresolvedTeamIds={shownDeadHeatTeamIds}
             tiebreakerError={playoffField.tiebreakers.error}
           />
-          <RunIn
-            standings={playoffField.eligibleStandings}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            remaining={remainingSchedule(playoffField.eligibleTeamIds, matches)}
-            playoffCut={playoffField.bracketSize}
-          />
         </AnalysisDisclosure>
       ) : null}
 
@@ -1289,91 +1281,5 @@ function ProjectedSide({
       />
       <span className="min-w-0 [overflow-wrap:anywhere]">{name}</span>
     </Link>
-  );
-}
-
-// Each team's remaining opponents in week order — the run-in a playoff race
-// is decided by. Opponent chips carry their current rank; playoff-bound
-// opponents (inside the cut) read as the tough dates.
-function RunIn({
-  standings,
-  teamName,
-  teamLogoUrl,
-  remaining,
-  playoffCut,
-}: {
-  standings: ReturnType<typeof computeStandings>;
-  teamName: Map<string, string>;
-  teamLogoUrl: Map<string, string | null>;
-  remaining: Map<string, { week: number; opponentId: string }[]>;
-  playoffCut: number;
-}) {
-  const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
-  const rows = standings.filter(
-    (s) => (remaining.get(s.teamId) ?? []).length > 0,
-  );
-  if (rows.length === 0) return null;
-  return (
-    <Card>
-      <CardHeader
-        headingLevel={2}
-        title="Remaining opponents"
-        subtitle="Opponents in week order · # = current rank"
-      />
-      <CardBody className="divide-y divide-line/60 p-0">
-        {rows.map((s) => (
-          <div
-            key={s.teamId}
-            className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-2.5 text-sm"
-          >
-            <Link
-              href={`/teams/${s.teamId}`}
-              className="flex w-full min-w-0 items-center gap-2 py-1 font-medium hover:text-info"
-            >
-              <TeamCrest
-                name={teamName.get(s.teamId) ?? "?"}
-                seed={s.teamId}
-                logoUrl={teamLogoUrl.get(s.teamId)}
-                size={20}
-                className="shrink-0 rounded"
-              />
-              <span className="min-w-0 [overflow-wrap:anywhere]">
-                {teamName.get(s.teamId) ?? "?"}
-              </span>
-            </Link>
-            <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {(remaining.get(s.teamId) ?? []).map((r) => {
-                const oppRank = rankOf.get(r.opponentId);
-                const tough = oppRank != null && oppRank <= playoffCut;
-                return (
-                  <Link
-                    key={`${r.week}-${r.opponentId}`}
-                    href={`/teams/${r.opponentId}`}
-                    title={`Week ${r.week} vs ${teamName.get(r.opponentId) ?? "?"} (currently #${oppRank})`}
-                    className={cn(
-                      // min-w-0 matters: a wrap-line chip wider than the
-                      // remaining row width must truncate, not push the page
-                      // wider (CLAUDE.md mobile rules — a long team name once
-                      // gave /schedule a 26px horizontal scroll on phones).
-                      "flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors hover:border-muted/70",
-                      tough
-                        ? "border-accent/40 text-fg"
-                        : "border-line text-muted",
-                    )}
-                  >
-                    <span className="font-mono text-[10px] tabular-nums">
-                      Week {r.week} · #{oppRank}
-                    </span>
-                    <span className="min-w-0 [overflow-wrap:anywhere]">
-                      {teamName.get(r.opponentId) ?? "?"}
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </CardBody>
-    </Card>
   );
 }

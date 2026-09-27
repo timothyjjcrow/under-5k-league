@@ -6,7 +6,6 @@ import {
   orderScheduleWeeks,
   teamByeWeek,
   weekStartsCollapsed,
-  remainingSchedule,
   seedOrder,
   playoffFirstRound,
   pickBracketSize,
@@ -633,46 +632,6 @@ describe("weekStartsCollapsed", () => {
 
   it("never closes a week with nothing in it (a filtered bye week)", () => {
     expect(weekStartsCollapsed({ week: 2, completed: 0, total: 0 }, 3)).toBe(false);
-  });
-});
-
-describe("remainingSchedule", () => {
-  const m = (
-    week: number,
-    home: string,
-    away: string,
-    status = "SCHEDULED",
-    phase = "REGULAR",
-  ) => ({ week, homeTeamId: home, awayTeamId: away, status, phase });
-
-  it("lists unplayed opponents in week order for both sides", () => {
-    const rem = remainingSchedule(
-      ["a", "b", "c", "d"],
-      [
-        m(1, "a", "b", "COMPLETED"),
-        m(3, "c", "a"),
-        m(2, "a", "d"),
-        m(2, "b", "c"),
-      ],
-    );
-    expect(rem.get("a")).toEqual([
-      { week: 2, opponentId: "d" },
-      { week: 3, opponentId: "c" },
-    ]);
-    expect(rem.get("c")).toEqual([
-      { week: 2, opponentId: "b" },
-      { week: 3, opponentId: "a" },
-    ]);
-    expect(rem.get("d")).toEqual([{ week: 2, opponentId: "a" }]);
-  });
-
-  it("ignores completed and playoff matches", () => {
-    const rem = remainingSchedule(
-      ["a", "b"],
-      [m(1, "a", "b", "COMPLETED"), m(9, "a", "b", "SCHEDULED", "PLAYOFF")],
-    );
-    expect(rem.get("a")).toEqual([]);
-    expect(rem.get("b")).toEqual([]);
   });
 });
 

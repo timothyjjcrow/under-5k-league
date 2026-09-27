@@ -36,9 +36,10 @@ test("schedule renders weeks, cards, the LIVE chip, and the calendar link", asyn
     .filter({ hasText: "Playoff race & possible matchups" })
     .click();
   await expect(page.getByText("Playoff picture")).toBeVisible();
+  // The fixture list already shows each team's remaining games.
   await expect(
     page.getByText("Remaining opponents", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await page
     .locator("summary")
     .filter({ hasText: "Head-to-head results grid" })
