@@ -2,7 +2,7 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { Badge, DiscordButton } from "@/components/ui";
 import { seasonPhaseLabel, seasonPhaseTone } from "@/lib/season-copy";
-import { footerNav } from "@/lib/site-nav";
+import { footerNav, type NavContent } from "@/lib/site-nav";
 
 const FOOTER_LINK_CLASS =
   "rounded py-1 text-sm leading-6 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
@@ -11,20 +11,21 @@ export function SiteFooter({
   seasonName,
   phase,
   draftStatus = null,
-  hasHistory = false,
+  content,
 }: {
   seasonName: string | null;
   phase: string | null;
   /** The active season's auction status; only read during DRAFT. */
   draftStatus?: string | null;
-  hasHistory?: boolean;
+  /** What the league has on record; decides which pages are offered. */
+  content: NavContent;
 }) {
   const year = new Date().getFullYear();
   // Only the essentials. The footer used to repeat every page from the header
   // and Explore, a fourth copy of the same links under every page (about
   // 775px tall on a phone). Its links come from src/lib/site-nav.ts, so they
   // keep the names every other menu uses.
-  const links = footerNav({ phase, draftStatus, hasHistory });
+  const links = footerNav({ ...content, phase, draftStatus });
   // The .ics feed is a file download, so it renders as a plain <a> below.
   const showCalendar = phase === "REGULAR_SEASON" || phase === "PLAYOFFS";
 

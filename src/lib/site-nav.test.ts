@@ -9,11 +9,14 @@ import {
 } from "./constants";
 import {
   exploreNav,
+  fantasyListed,
+  fantasyPickWindowOpen,
   footerNav,
   headerStatus,
   joinSeasonCta,
   phoneDock,
   seasonNav,
+  type NavContent,
   type NavLink,
   type NavState,
 } from "./site-nav";
@@ -21,11 +24,36 @@ import {
 const PHASES = [null, ...Object.values(SEASON_STATUS)];
 const DRAFTS = [null, ...Object.values(DRAFT_STATUS)];
 
+/** A league with nothing on record yet, for a viewer with no stake in it. */
+const EMPTY: NavContent = {
+  hasHistory: false,
+  hasGames: false,
+  hasChampion: false,
+  fantasyLocked: false,
+  fantasyEntered: false,
+};
+/** A league with games, a champion and past seasons; fantasy picks open. */
+const FULL: NavContent = {
+  ...EMPTY,
+  hasHistory: true,
+  hasGames: true,
+  hasChampion: true,
+};
+
+/** Every combination of what the league has on record. */
+function allContents(): NavContent[] {
+  let contents: NavContent[] = [EMPTY];
+  for (const key of Object.keys(EMPTY) as (keyof NavContent)[]) {
+    contents = contents.flatMap((c) => [c, { ...c, [key]: true }]);
+  }
+  return contents;
+}
+
 /** Every state the menus can be rendered in. */
 function allStates(): NavState[] {
   return PHASES.flatMap((phase) =>
     DRAFTS.flatMap((draftStatus) =>
-      [false, true].map((hasHistory) => ({ phase, draftStatus, hasHistory })),
+      allContents().map((content) => ({ ...content, phase, draftStatus })),
     ),
   );
 }
@@ -33,8 +61,14 @@ function allStates(): NavState[] {
 const state = (
   phase: string | null,
   draftStatus: string | null = null,
-  hasHistory = false,
-): NavState => ({ phase, draftStatus, hasHistory });
+  content: Partial<NavContent> = {},
+): NavState => ({ ...EMPTY, ...content, phase, draftStatus });
+
+const RESULTS_PHASES: (string | null)[] = [
+  SEASON_STATUS.REGULAR_SEASON,
+  SEASON_STATUS.PLAYOFFS,
+  SEASON_STATUS.COMPLETE,
+];
 
 const hrefs = (links: NavLink[]) => links.map((link) => link.href);
 const exploreHrefs = (s: NavState) =>
@@ -76,7 +110,7 @@ describe("site navigation", () => {
 
   it("groups Explore the same way everywhere", () => {
     const full = exploreNav(
-      state(SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE, true),
+      state(SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE, FULL),
     );
     expect(full.map((section) => section.label)).toEqual([
       "Play",
@@ -94,29 +128,30 @@ describe("site navigation", () => {
   // screens, so the menus wait for the auction like the feature tour does.
   it("offers Schedule, Fantasy and Pick'em only once the auction is complete", () => {
     const locked = ["/schedule", "/fantasy", "/pickem"];
+    // A manager who entered keeps Fantasy after the lock, so this holds for
+    // anyone who could be offered it.
+    const entrant = { fantasyEntered: true };
     for (const draftStatus of [
       null,
       DRAFT_STATUS.NOT_STARTED,
       DRAFT_STATUS.IN_PROGRESS,
       DRAFT_STATUS.PAUSED,
     ]) {
-      const listed = everyHref(state(SEASON_STATUS.DRAFT, draftStatus));
+      const listed = everyHref(
+        state(SEASON_STATUS.DRAFT, draftStatus, entrant),
+      );
       for (const href of locked) expect(listed, href).not.toContain(href);
     }
     const drafted = everyHref(
       state(SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE),
     );
     for (const href of locked) expect(drafted).toContain(href);
-    for (const phase of [
-      SEASON_STATUS.REGULAR_SEASON,
-      SEASON_STATUS.PLAYOFFS,
-      SEASON_STATUS.COMPLETE,
-    ]) {
-      const listed = everyHref(state(phase));
+    for (const phase of RESULTS_PHASES) {
+      const listed = everyHref(state(phase, null, entrant));
       for (const href of locked) expect(listed, href).toContain(href);
     }
     for (const phase of [null, SEASON_STATUS.SIGNUPS]) {
-      const listed = everyHref(state(phase, DRAFT_STATUS.COMPLETE));
+      const listed = everyHref(state(phase, DRAFT_STATUS.COMPLETE, entrant));
       for (const href of locked) expect(listed, href).not.toContain(href);
     }
   });
@@ -131,13 +166,64 @@ describe("site navigation", () => {
         "/scrims",
         "/news",
         "/features",
-        "/records",
-        "/players/compare",
-        "/hall-of-fame",
       ]) {
         expect(listed, href).toContain(href);
       }
     }
+  });
+
+  // A league with no games yet (a new region) used to offer a Record book,
+  // Compare players and a Hall of Fame that each opened onto an empty page.
+  it("offers the statistics pages once a game is on record and the Hall of Fame once a champion is", () => {
+    for (const s of allStates()) {
+      const listed = exploreHrefs(s);
+      const results = RESULTS_PHASES.includes(s.phase);
+      for (const href of ["/records", "/players/compare"]) {
+        expect(listed.includes(href), href).toBe(s.hasGames);
+      }
+      for (const href of ["/leaders", "/meta"]) {
+        expect(listed.includes(href), href).toBe(s.hasGames && results);
+      }
+      expect(listed.includes("/hall-of-fame")).toBe(s.hasChampion);
+    }
+    // Before any game, the Statistics group is left out entirely.
+    expect(
+      exploreNav(state(SEASON_STATUS.REGULAR_SEASON)).map((g) => g.label),
+    ).toEqual(["Play", "League"]);
+  });
+
+  it("offers Fantasy while picks are open, then only to managers who entered", () => {
+    for (const s of allStates()) {
+      const listed = exploreHrefs(s).includes("/fantasy");
+      expect(listed).toBe(fantasyListed(s));
+      if (s.fantasyEntered) continue;
+      expect(listed).toBe(fantasyPickWindowOpen(s));
+    }
+    // Picks open from the completed auction until the first game locks them.
+    const window = [
+      state(SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE),
+      state(SEASON_STATUS.REGULAR_SEASON),
+      state(SEASON_STATUS.PLAYOFFS),
+    ];
+    for (const s of window) {
+      expect(fantasyPickWindowOpen(s)).toBe(true);
+      expect(fantasyPickWindowOpen({ ...s, fantasyLocked: true })).toBe(false);
+    }
+    // After the lock, and once the season is complete, only entrants.
+    for (const phase of RESULTS_PHASES) {
+      const locked = state(phase, null, { fantasyLocked: true });
+      expect(fantasyListed(locked)).toBe(false);
+      expect(fantasyListed({ ...locked, fantasyEntered: true })).toBe(true);
+    }
+    expect(fantasyListed(state(SEASON_STATUS.COMPLETE))).toBe(false);
+    // Entering never unlocks it before the auction is over.
+    expect(
+      fantasyListed(
+        state(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS, {
+          fantasyEntered: true,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("follows the season's own chapters in the primary row", () => {
@@ -190,19 +276,19 @@ describe("site navigation", () => {
 
   it("lists statistics from the regular season and history once it exists", () => {
     for (const phase of [null, SEASON_STATUS.SIGNUPS, SEASON_STATUS.DRAFT]) {
-      const listed = exploreHrefs(state(phase, DRAFT_STATUS.COMPLETE));
+      const listed = exploreHrefs(state(phase, DRAFT_STATUS.COMPLETE, FULL));
       expect(listed).not.toContain("/leaders");
       expect(listed).not.toContain("/meta");
     }
-    expect(exploreHrefs(state(SEASON_STATUS.REGULAR_SEASON))).toEqual(
-      expect.arrayContaining(["/leaders", "/meta"]),
-    );
+    expect(
+      exploreHrefs(state(SEASON_STATUS.REGULAR_SEASON, null, FULL)),
+    ).toEqual(expect.arrayContaining(["/leaders", "/meta"]));
     expect(exploreHrefs(state(SEASON_STATUS.SIGNUPS))).not.toContain(
       "/seasons",
     );
-    expect(exploreHrefs(state(SEASON_STATUS.SIGNUPS, null, true))).toContain(
-      "/seasons",
-    );
+    expect(
+      exploreHrefs(state(SEASON_STATUS.SIGNUPS, null, { hasHistory: true })),
+    ).toContain("/seasons");
   });
 });
 
@@ -218,9 +304,9 @@ describe("footer", () => {
       "/features",
     ]);
     expect(
-      footerNav(state(SEASON_STATUS.REGULAR_SEASON, null, true)).map(
-        (link) => link.label,
-      ),
+      footerNav(
+        state(SEASON_STATUS.REGULAR_SEASON, null, { hasHistory: true }),
+      ).map((link) => link.label),
     ).toEqual(["League news", "Feature tour", "Season history"]);
   });
 });

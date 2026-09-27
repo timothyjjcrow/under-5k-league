@@ -33,14 +33,31 @@ const EXPLORE_GROUP_LABEL: Record<ExploreGroup, string> = {
   league: "League",
 };
 
+/**
+ * What the league has on record, and the viewer's own stake in it. A page is
+ * only offered once it has something to show: a league with no games yet (a
+ * new region, or the first weeks of a new league) used to list a Record book,
+ * Compare players and Hall of Fame that each opened onto an empty page.
+ */
+export type NavContent = {
+  /** At least one archived season exists. */
+  hasHistory: boolean;
+  /** A league game has been imported, in any season. */
+  hasGames: boolean;
+  /** Some season has crowned a champion. */
+  hasChampion: boolean;
+  /** The active season's fantasy rosters are locked: its first game is in. */
+  fantasyLocked: boolean;
+  /** The viewer has a fantasy roster in the active season. */
+  fantasyEntered: boolean;
+};
+
 /** What decides which pages a visitor is offered right now. */
-export type NavState = {
+export type NavState = NavContent & {
   /** The active season's status; null in the offseason. */
   phase: string | null;
   /** The active season's auction status. Only read during DRAFT. */
   draftStatus: string | null;
-  /** At least one archived season exists. */
-  hasHistory: boolean;
 };
 
 export type NavLink = { href: string; label: string };
@@ -62,16 +79,56 @@ const teamsExist = ({ phase }: NavState) =>
 
 // Schedule, Fantasy and Pick'em have nothing to show until the auction has
 // sold every roster: before that they open onto "opens after the draft"
-// screens. This is the feature tour's own POST_AUCTION rule, so the menus and
+// screens (Fantasy narrows this further, below). This is the feature tour's own POST_AUCTION rule, so the menus and
 // the tour agree. A completed auction can publish fixtures before the admin
 // moves the season on, which is why this reads the auction and not the phase.
-const afterAuction = ({ phase, draftStatus }: NavState) =>
+const afterAuction = ({
+  phase,
+  draftStatus,
+}: Pick<NavState, "phase" | "draftStatus">) =>
   featureAvailability("POST_AUCTION", phase, draftStatus).available;
 
 const resultsPhase = ({ phase }: NavState) =>
   phase === SEASON_STATUS.REGULAR_SEASON ||
   phase === SEASON_STATUS.PLAYOFFS ||
   phase === SEASON_STATUS.COMPLETE;
+
+// The statistics pages fill from imported games; until the league has one,
+// each opens onto "No stats yet".
+const gamesOnRecord = ({ hasGames }: NavState) => hasGames;
+
+// Leaders and Hero meta show the active season, so they also wait for it to
+// reach the regular season (they have a switcher for past seasons).
+const seasonStats = (state: NavState) => resultsPhase(state) && state.hasGames;
+
+type FantasyNavState = Pick<
+  NavState,
+  "phase" | "draftStatus" | "fantasyLocked" | "fantasyEntered"
+>;
+
+/**
+ * Fantasy's pick window: from the completed auction (it picks from the
+ * drafted rosters) until rosters lock at the season's first imported game.
+ * A completed season is read-only.
+ */
+export function fantasyPickWindowOpen(state: FantasyNavState): boolean {
+  return (
+    afterAuction(state) &&
+    state.phase !== SEASON_STATUS.COMPLETE &&
+    !state.fantasyLocked
+  );
+}
+
+/**
+ * Fantasy is promoted while picks are open, and after the lock only to the
+ * managers who entered, who have standings to follow. Everyone else used to
+ * be sent all season to "Rosters are locked… Catch the next season!". The page
+ * itself stays reachable by its address. Home's side-game tiles use this too.
+ */
+export function fantasyListed(state: FantasyNavState): boolean {
+  if (fantasyPickWindowOpen(state)) return true;
+  return afterAuction(state) && state.fantasyEntered;
+}
 
 /**
  * Every page any menu can list, in display order within its group. Pages that
@@ -93,6 +150,7 @@ const NAV_PAGES: readonly NavPage[] = [
   // or names the champion; the link is how people find it, and a link that
   // changes its name with the phase reads as a different page.
   { href: "/schedule", label: "Schedule", group: "season", visible: afterAuction },
+  // Before the final the recap only repeats Leaders and the bracket.
   {
     href: "/recap",
     label: "Season recap",
@@ -102,17 +160,17 @@ const NAV_PAGES: readonly NavPage[] = [
   // Scrims are listed in every phase: the archive stays useful between
   // seasons.
   { href: "/scrims", label: "Scrims", group: "play", visible: always },
-  { href: "/fantasy", label: "Fantasy", group: "play", visible: afterAuction },
+  { href: "/fantasy", label: "Fantasy", group: "play", visible: fantasyListed },
   { href: "/pickem", label: "Pick'em", group: "play", visible: afterAuction },
-  { href: "/leaders", label: "Leaders", group: "stats", visible: resultsPhase },
-  { href: "/meta", label: "Hero meta", group: "stats", visible: resultsPhase },
+  { href: "/leaders", label: "Leaders", group: "stats", visible: seasonStats },
+  { href: "/meta", label: "Hero meta", group: "stats", visible: seasonStats },
   // Same order as the statistics pages' own tab bar (stats-nav.tsx).
-  { href: "/records", label: "Record book", group: "stats", visible: always },
+  { href: "/records", label: "Record book", group: "stats", visible: gamesOnRecord },
   {
     href: "/players/compare",
     label: "Compare players",
     group: "stats",
-    visible: always,
+    visible: gamesOnRecord,
   },
   {
     href: "/news",
@@ -128,7 +186,14 @@ const NAV_PAGES: readonly NavPage[] = [
     visible: always,
     footer: true,
   },
-  { href: "/hall-of-fame", label: "Hall of Fame", group: "league", visible: always },
+  // Champion history is what makes it a hall of fame; until a season has
+  // one, its boards are empty or repeat Leaders.
+  {
+    href: "/hall-of-fame",
+    label: "Hall of Fame",
+    group: "league",
+    visible: ({ hasChampion }) => hasChampion,
+  },
   {
     href: "/seasons",
     label: "Season history",

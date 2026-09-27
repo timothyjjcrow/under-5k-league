@@ -4,11 +4,13 @@ const mocks = vi.hoisted(() => ({
   revision: "before-archive",
   findFirst: vi.fn(),
   matchFindFirst: vi.fn(),
+  gameFindFirst: vi.fn(),
   entries: new Map<string, unknown>(),
 }));
 vi.mock("./prisma", () => ({ prisma: {
   season: { findFirst: mocks.findFirst },
   match: { findFirst: mocks.matchFindFirst },
+  game: { findFirst: mocks.gameFindFirst },
 } }));
 vi.mock("./public-read-signals", () => ({
   getPublicReadSignals: async () => ({ publicGameRevision: mocks.revision }),
@@ -68,4 +70,61 @@ it("reads one LIVE match per season and revision for the header's chip", async (
   // No active season, no query.
   expect(await getPublicHasLiveMatch(null)).toBe(false);
   expect(mocks.matchFindFirst).toHaveBeenCalledTimes(2);
+});
+
+it("offers the statistics pages and the Hall of Fame from two cached existence reads", async () => {
+  const { getPublicLeagueContent } = await import("./public-navigation");
+  mocks.findFirst.mockReset();
+  mocks.revision = "before-any-game";
+  mocks.gameFindFirst.mockResolvedValue(null);
+  mocks.findFirst.mockResolvedValue(null);
+  expect(await getPublicLeagueContent(null)).toEqual({
+    hasGames: false,
+    hasChampion: false,
+  });
+  expect(await getPublicLeagueContent(null)).toEqual({
+    hasGames: false,
+    hasChampion: false,
+  });
+  expect(mocks.gameFindFirst).toHaveBeenCalledTimes(1);
+  expect(mocks.gameFindFirst).toHaveBeenCalledWith({ select: { id: true } });
+  expect(mocks.findFirst).toHaveBeenCalledWith({
+    where: { status: "COMPLETE", championTeamId: { not: null } },
+    select: { id: true },
+  });
+
+  // The first import, then the crowning, each move the revision.
+  mocks.gameFindFirst.mockResolvedValue({ id: "game-1" });
+  mocks.revision = "after-game-one";
+  expect(await getPublicLeagueContent(null)).toEqual({
+    hasGames: true,
+    hasChampion: false,
+  });
+  mocks.findFirst.mockResolvedValue({ id: "season-1" });
+  mocks.revision = "after-the-final";
+  expect(await getPublicLeagueContent(null)).toEqual({
+    hasGames: true,
+    hasChampion: true,
+  });
+  expect(mocks.gameFindFirst).toHaveBeenCalledTimes(3);
+});
+
+it("reads one game per season and revision for the fantasy lock", async () => {
+  const { getPublicSeasonHasGames } = await import("./public-navigation");
+  mocks.gameFindFirst.mockReset();
+  mocks.revision = "fantasy-open";
+  mocks.gameFindFirst.mockResolvedValue(null);
+  expect(await getPublicSeasonHasGames("season-2")).toBe(false);
+  expect(await getPublicSeasonHasGames("season-2")).toBe(false);
+  expect(mocks.gameFindFirst).toHaveBeenCalledTimes(1);
+  expect(mocks.gameFindFirst).toHaveBeenCalledWith({
+    where: { match: { seasonId: "season-2" } },
+    select: { id: true },
+  });
+
+  mocks.gameFindFirst.mockResolvedValue({ id: "game-1" });
+  mocks.revision = "fantasy-locked";
+  expect(await getPublicSeasonHasGames("season-2")).toBe(true);
+  expect(await getPublicSeasonHasGames(null)).toBe(false);
+  expect(mocks.gameFindFirst).toHaveBeenCalledTimes(2);
 });

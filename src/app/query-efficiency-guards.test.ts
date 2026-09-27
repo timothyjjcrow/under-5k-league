@@ -33,6 +33,22 @@ describe("shared-shell query efficiency", () => {
     expect(PUBLIC_NAVIGATION).toMatch(/prisma\.match\.findFirst\(\{/);
     expect(PUBLIC_NAVIGATION).not.toMatch(/prisma\.match\.(?:count|findMany)\(/);
   });
+
+  // The menus offer the statistics pages, the Hall of Fame and Fantasy only
+  // once they have something to show. Every page pays for that, so it is
+  // existence reads behind the shared snapshot, never a count or a scan.
+  it("decides which data pages to offer from cached existence reads", () => {
+    expect(LAYOUT).toContain("getPublicLeagueContent(null)");
+    expect(LAYOUT).toContain("getPublicSeasonHasGames(season.id)");
+    expect(LAYOUT).not.toMatch(/prisma\.game\./);
+    expect(PUBLIC_NAVIGATION).toMatch(/prisma\.game\.findFirst\(\{/);
+    expect(PUBLIC_NAVIGATION).not.toMatch(/prisma\.game\.(?:count|findMany)\(/);
+  });
+
+  it("reads the viewer's fantasy entry with one unique-key lookup", () => {
+    expect(LAYOUT.match(/prisma\.fantasyRoster\./g)).toHaveLength(1);
+    expect(LAYOUT).toContain("prisma.fantasyRoster.findUnique({");
+  });
 });
 
 describe("homepage query efficiency", () => {

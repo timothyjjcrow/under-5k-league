@@ -234,13 +234,11 @@ test("phones get one menu: the tab bar's sheet, plus the avatar's account menu",
     name: "Explore league",
     exact: true,
   });
-  for (const label of [
-    "League news",
-    "Hall of Fame",
-    "Record book",
-    "Compare players",
-  ]) {
-    await expect(sheet.getByRole("link", { name: label })).toBeVisible();
+  await expect(sheet.getByRole("link", { name: "League news" })).toBeVisible();
+  // This league has no games or champion yet, so its empty statistics pages
+  // and the Hall of Fame are not offered (they stay reachable by address).
+  for (const label of ["Hall of Fame", "Record book", "Compare players"]) {
+    await expect(sheet.getByRole("link", { name: label })).toHaveCount(0);
   }
   // The tour lives in Explore's League group, listed once; Merch once too.
   await expect(sheet.getByRole("link", { name: "Feature tour" })).toHaveCount(1);
@@ -265,12 +263,12 @@ test("desktop Explore menu keeps evergreen league pages discoverable", async ({
   await expect(
     explore.getByRole("link", { name: "League news" }),
   ).toBeVisible();
-  await expect(
-    explore.getByRole("link", { name: "Record book" }),
-  ).toBeVisible();
-  await expect(
-    explore.getByRole("link", { name: "Compare players" }),
-  ).toBeVisible();
+  // No league game is on record yet, so the statistics pages (all empty)
+  // and the Hall of Fame (no champion) wait; the Statistics group with them.
+  for (const label of ["Record book", "Compare players", "Hall of Fame"]) {
+    await expect(explore.getByRole("link", { name: label })).toHaveCount(0);
+  }
+  await expect(explore.getByText("Statistics", { exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(explore).toHaveCount(0);
   await expect(button).toBeFocused();
@@ -288,6 +286,11 @@ test("public statistics and news explain their pre-result empty states", async (
   ] as const) {
     await page.goto(path);
     await expect(page.getByText(emptyTitle, { exact: true })).toBeVisible();
+    // Every statistics page is empty too, so the tab bar between them is
+    // left out until the first game.
+    await expect(
+      page.getByRole("navigation", { name: "Statistics" }),
+    ).toHaveCount(0);
   }
 });
 

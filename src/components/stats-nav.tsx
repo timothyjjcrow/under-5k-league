@@ -1,12 +1,18 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { getSessionUser } from "@/lib/auth";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { textLink } from "@/components/ui";
 
 export type StatsSection = "leaders" | "meta" | "records" | "compare";
 
-/** Compact cross-navigation for the league's four public statistics views. */
-export function StatsNav({
+/**
+ * Compact cross-navigation for the league's four public statistics views.
+ * All four fill from imported games, so before the league's first game the
+ * bar is left out: it only linked one empty page to three more. The menus
+ * follow the same rule (src/lib/site-nav.ts).
+ */
+export async function StatsNav({
   active,
   seasonId,
 }: {
@@ -14,6 +20,8 @@ export function StatsNav({
   /** Keep a selected season when moving between the season-scoped boards. */
   seasonId?: string;
 }) {
+  const { hasGames } = await getPublicLeagueContent(null);
+  if (!hasGames) return null;
   const query = seasonId
     ? `?${new URLSearchParams({ season: seasonId }).toString()}`
     : "";

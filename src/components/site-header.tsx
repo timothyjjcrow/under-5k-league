@@ -15,6 +15,7 @@ import {
   seasonNav,
   type DockIconName,
   type JoinCta,
+  type NavContent,
   type NavLink,
   type NavSection,
 } from "@/lib/site-nav";
@@ -52,7 +53,7 @@ export function SiteHeader({
   seasonName,
   myTeamId,
   draftStatus = null,
-  hasHistory = false,
+  content,
   join = null,
   seriesLive = false,
 }: {
@@ -62,7 +63,8 @@ export function SiteHeader({
   myTeamId: string | null;
   /** The active season's auction status; only read during DRAFT. */
   draftStatus?: string | null;
-  hasHistory?: boolean;
+  /** What the league has on record; decides which data pages are offered. */
+  content: NavContent;
   /** "Join Season N" during signups, for a viewer who hasn't joined. */
   join?: JoinCta | null;
   /** A match in the active season is LIVE right now. */
@@ -71,7 +73,7 @@ export function SiteHeader({
   const pathname = usePathname();
   // Every list below comes from src/lib/site-nav.ts, which the footer shares:
   // one name, one group and one visibility rule per page.
-  const navState = { phase, draftStatus, hasHistory };
+  const navState = { ...content, phase, draftStatus };
   const items = seasonNav(navState, myTeamId);
   // The logo is the home link on wide screens.
   const desktopItems = items.filter((item) => item.href !== "/");
