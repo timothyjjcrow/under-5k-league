@@ -6,6 +6,7 @@ import {
 } from "./result-sync-service";
 import { raceHook } from "./race-hook";
 import { prismaErrorCode } from "./operational-code";
+import { isUniqueViolation } from "./prisma-errors";
 
 export const AUTOMATION_RUN_KEY = "league-maintenance";
 export const AUTOMATION_LEASE_MS = 90_000;
@@ -179,15 +180,6 @@ function failureSummary(
 
 function errorCode(error: unknown): string {
   return prismaErrorCode(error) ?? "AUTOMATION_FAILED";
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    !!error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "P2002"
-  );
 }
 
 function leaseRetrySeconds(leaseExpiresAt: Date | null, nowMs: number): number {

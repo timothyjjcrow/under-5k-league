@@ -13,6 +13,7 @@ import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
 import { raceHook } from "./race-hook";
 import { resultAnnouncedKey, stampResultChange, tiebreakerGamesArchiveKey, weekReminderKey } from "./settings";
+import { isSerializationConflict } from "./prisma-errors";
 
 // Same snapshot as the admin's playoff/tiebreaker confirmation. Child rows
 // matter during Reset because deleting a match cascades their commitments.
@@ -49,7 +50,7 @@ async function serializable<T>(run: (tx: Prisma.TransactionClient) => Promise<T>
   try {
     return await prisma.$transaction(run, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       throw new UserFacingError("The season or tiebreaker results changed while this action was running. Reload and try again.");
     }
     throw error;

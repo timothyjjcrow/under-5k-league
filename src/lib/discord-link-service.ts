@@ -21,6 +21,7 @@ import {
   type GuildJoin,
 } from "./discord-roles";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
+import { isUniqueViolation } from "./prisma-errors";
 
 type Db = Pick<PrismaClient, "user">;
 
@@ -79,7 +80,7 @@ export async function linkDiscordAccount(
   } catch (e) {
     // P2002 = the unique race: someone else linked this Discord account
     // between our pre-check and the write.
-    if ((e as { code?: string })?.code === "P2002") {
+    if (isUniqueViolation(e)) {
       return { ok: false, error: "taken" };
     }
     throw e;

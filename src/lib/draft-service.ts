@@ -41,6 +41,7 @@ import {
   undoDraftSaleHistory, voidDraftLot,
 } from "./draft-history";
 import { invalidateTeamLineups } from "./match-lineups";
+import { isSerializationConflict } from "./prisma-errors";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
@@ -746,7 +747,7 @@ export async function undoLastSale(
     if (e instanceof UndoRaceError || e instanceof DraftHistoryRaceError) {
       return { ok: false as const, error: e.message };
     }
-    if ((e as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(e)) {
       return {
         ok: false as const,
         error: "The phase, roster, or auction just changed — reload and try again.",
@@ -1020,7 +1021,7 @@ export async function abortDraft(
   } catch (error) {
     if (
       error instanceof AbortRaceError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         ok: false,
@@ -1438,7 +1439,7 @@ export async function nominatePlayer(
     return { ok: true as const };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         ok: false,
         error: "The player pool or nomination turn just changed — review the room.",

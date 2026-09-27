@@ -35,6 +35,7 @@ import {
 } from "./announcement-marker";
 import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 /** One deleted playoff game, kept so the postseason can be re-imported. */
 type ArchivedGame = { dotaMatchId: string; slot: string | null; week: number };
@@ -475,7 +476,7 @@ export async function createPlayoffBracket(
     }
     if (
       error instanceof BracketBuildRaceError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
     }
@@ -581,7 +582,7 @@ export async function returnToRegularSeason(
   } catch (error) {
     if (
       error instanceof BracketBuildRaceError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       throw new UserFacingError(BRACKET_BUILD_RACE_MESSAGE);
     }
@@ -786,7 +787,7 @@ export async function advancePlayoffBracket(
       // A concurrent correction/crown/reset won the Serializable ordering. Its
       // own caller either advances the fresh state or leaves it for the next
       // idempotent sync pass; this stale caller must not surface a false error.
-      if ((error as { code?: string }).code !== "P2034") throw error;
+      if (!isSerializationConflict(error)) throw error;
       return false;
     }
     if (!championTeamId) return false;
@@ -935,9 +936,9 @@ export async function advancePlayoffBracket(
     return true;
   } catch (e) {
     // Someone else is building (or already built) this exact round.
-    if ((e as { code?: string }).code === "P2002") return false;
+    if (isUniqueViolation(e)) return false;
     // SSI loser — a rival build or a reset serialized ahead of us.
-    if ((e as { code?: string }).code === "P2034") return false;
+    if (isSerializationConflict(e)) return false;
     // The bracket we computed from no longer exists as we read it.
     if (e instanceof StaleBracketError) return false;
     // A confirmed scrim owns this time for now. Do not turn a successfully

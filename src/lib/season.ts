@@ -5,6 +5,7 @@ import type { Season } from "@prisma/client";
 import { DRAFT_STATUS, SCRIM_STATUS, SEASON_STATUS } from "./constants";
 import { resolveChampionPresentation } from "./champion-presentation";
 import { stampResultChange } from "./settings";
+import { isSerializationConflict, isUniqueViolation, isRecordNotFound } from "./prisma-errors";
 
 /** Fail closed whenever the application-level active-season invariant drifts. */
 export function singleActiveSeason<T>(active: readonly T[]): T | null {
@@ -188,7 +189,7 @@ export async function archiveCompletedSeason(
     }
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         ok: false,
@@ -330,9 +331,9 @@ export async function reactivateSeason(
   } catch (e) {
     if (
       e instanceof ActiveSeasonChangedError ||
-      (e as { code?: string }).code === "P2034" ||
-      (e as { code?: string }).code === "P2002" ||
-      (e as { code?: string }).code === "P2025"
+      isSerializationConflict(e) ||
+      isUniqueViolation(e) ||
+      isRecordNotFound(e)
     ) {
       return {
         ok: false,

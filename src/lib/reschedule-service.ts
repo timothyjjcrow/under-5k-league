@@ -15,6 +15,7 @@ import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
 import { rescheduleDeadline } from "./schedule";
+import { isSerializationConflict } from "./prisma-errors";
 
 export type AcceptedReschedule = {
   homeName: string;
@@ -277,7 +278,7 @@ export async function proposeReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That match just changed — reload and try again",
       );
@@ -456,7 +457,7 @@ export async function respondReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That proposal or match just changed — reload and try again",
       );
@@ -517,7 +518,7 @@ export async function cancelReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That proposal just changed — reload and try again",
       );

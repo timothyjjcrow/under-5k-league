@@ -19,6 +19,7 @@ import {
   hasConfirmedScrimConflict,
   scrimCollisionRange,
 } from "./scrim-schedule-conflict";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 const PAST_GRACE_MS = 60 * 60 * 1000;
 const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000;
@@ -76,10 +77,6 @@ export type TeamCoachSummary = {
   name: string;
   dotaAccountId: number;
 };
-
-function hasPrismaCode(error: unknown, code: string): boolean {
-  return (error as { code?: string }).code === code;
-}
 
 function assertSaneScrimTime(scheduledAt: Date, now = new Date()): void {
   if (!(scheduledAt instanceof Date) || !Number.isFinite(scheduledAt.getTime())) {
@@ -399,7 +396,7 @@ export async function createScrim(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (hasPrismaCode(error, "P2034")) {
+    if (isSerializationConflict(error)) {
       throw new UserFacingError(
         "Your team schedule just changed — reload and try posting that scrim again",
       );
@@ -538,12 +535,12 @@ export async function joinScrim(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (hasPrismaCode(error, "P2034")) {
+    if (isSerializationConflict(error)) {
       throw new UserFacingError(
         "That scrim or a team schedule just changed — reload and try again",
       );
     }
-    if (hasPrismaCode(error, "P2002")) {
+    if (isUniqueViolation(error)) {
       throw new UserFacingError(
         "That scrim was claimed or one of its Dota accounts is already in the lineup",
       );
@@ -600,7 +597,7 @@ export async function cancelScrim(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (hasPrismaCode(error, "P2034")) {
+    if (isSerializationConflict(error)) {
       throw new UserFacingError(
         "That scrim just changed — reload before cancelling it",
       );
@@ -701,7 +698,7 @@ export async function addScrimGuest(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (hasPrismaCode(error, "P2034") || hasPrismaCode(error, "P2002")) {
+    if (isSerializationConflict(error) || isUniqueViolation(error)) {
       throw new UserFacingError(
         "That scrim lineup just changed — reload and try adding the guest again",
       );
@@ -763,7 +760,7 @@ export async function removeScrimGuest(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (hasPrismaCode(error, "P2034")) {
+    if (isSerializationConflict(error)) {
       throw new UserFacingError(
         "That scrim lineup just changed — reload before removing the guest",
       );
@@ -867,7 +864,7 @@ export async function addTeamCoach(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (hasPrismaCode(error, "P2034") || hasPrismaCode(error, "P2002")) {
+    if (isSerializationConflict(error) || isUniqueViolation(error)) {
       throw new UserFacingError(
         "That team's staff just changed — reload and try adding the coach again",
       );
@@ -918,7 +915,7 @@ export async function removeTeamCoach(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if (hasPrismaCode(error, "P2034")) {
+    if (isSerializationConflict(error)) {
       throw new UserFacingError(
         "That team's staff just changed — reload before removing the coach",
       );

@@ -17,6 +17,7 @@ import {
 import { mentionsOf } from "./discord-mentions";
 import { standinConflict, standinMmrNote } from "./standin";
 import { invalidateMatchLineups } from "./match-lineups";
+import { isSerializationConflict } from "./prisma-errors";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -513,7 +514,7 @@ export async function assignStandinGuarded(opts: {
     );
   } catch (e) {
     if (e instanceof StandinRaceError) return { ok: false, error: e.message };
-    if ((e as { code?: string }).code === "P2034")
+    if (isSerializationConflict(e))
       return {
         ok: false,
         error: "That standin's signup just changed — check it and try again",
@@ -644,7 +645,7 @@ export async function removeStandinGuarded(opts: {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
     if (error instanceof StandinRaceError) return { ok: false, error: error.message };
-    if ((error as { code?: string }).code === "P2034") return { ok: false, error: "The match just changed — reload before removing this cover." };
+    if (isSerializationConflict(error)) return { ok: false, error: "The match just changed — reload before removing this cover." };
     throw error;
   }
   if (gone.count === 0) {

@@ -171,6 +171,7 @@ import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
 import { normalizeTeamLogoUrl } from "@/lib/team-logo";
 import { hasConfirmedScrimConflict } from "@/lib/scrim-schedule-conflict";
+import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 
 /**
  * Thrown from inside a `$transaction` callback when a precondition that was
@@ -452,8 +453,8 @@ export async function createSeason(
     }
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034" ||
-      (error as { code?: string }).code === "P2002"
+      isSerializationConflict(error) ||
+      isUniqueViolation(error)
     ) {
       return {
         error:
@@ -619,7 +620,7 @@ export async function archiveIncompleteSeasonAction(
       message: `${result.name} was cancelled and archived without deleting its saved data${result.draftParked ? "; its live auction is paused for review" : ""}`,
     };
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error:
           "The season changed while it was being cancelled — reload and try again.",
@@ -918,7 +919,7 @@ export async function setSeasonPhase(
     );
     if (result.error) return { error: result.error };
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error:
           "The season, auction, or results changed while you moved the phase — reload and try again.",
@@ -1088,7 +1089,7 @@ export async function addCaptain(
   } catch (error) {
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error:
@@ -1101,7 +1102,7 @@ export async function addCaptain(
     if (error instanceof CaptainStateChangedError) {
       return { error: error.message };
     }
-    if ((error as { code?: string }).code === "P2002") {
+    if (isUniqueViolation(error)) {
       return {
         error:
           "That player was just designated as a captain — reload to see the team.",
@@ -1294,7 +1295,7 @@ export async function removeCaptain(
     }
     if (
       e instanceof ActiveSeasonChangedError ||
-      (e as { code?: string }).code === "P2034"
+      isSerializationConflict(e)
     ) {
       return {
         error:
@@ -1522,14 +1523,14 @@ export async function transferCaptaincy(
     }
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error:
           "The season or roster changed while you were saving — reload and try again.",
       };
     }
-    if ((error as { code?: string }).code === "P2002") {
+    if (isUniqueViolation(error)) {
       return {
         error:
           "That player was just made captain elsewhere — reload and try again.",
@@ -1614,7 +1615,7 @@ export async function renameTeam(
       return { error: "Unknown team" };
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error: "The season or team just changed — reload and try again.",
@@ -1800,7 +1801,7 @@ export async function withdrawSignup(
       };
     if (msg === "STATUS_CHANGED")
       return { error: "That signup just changed — reload and try again." };
-    if ((e as { code?: string }).code === "P2034")
+    if (isSerializationConflict(e))
       return { error: "That signup just changed — reload and try again." };
     throw e;
   }
@@ -1914,7 +1915,7 @@ export async function reinstateSignup(
     }
     if (
       error instanceof SignupChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return { error: "That signup just changed — reload and try again." };
     }
@@ -2022,7 +2023,7 @@ export async function setRegistrationMmr(
     }
     if (
       error instanceof SignupChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return { error: "That signup just changed — reload and try again." };
     }
@@ -2149,7 +2150,7 @@ export async function setPlayerRank(
     if (error instanceof DraftAlreadyStartedError) {
       return { error: "The auction is live or paused — full-player MMR is locked until it finishes. You can still edit their medal." };
     }
-    if (error instanceof SignupChangedError || (error as { code?: string }).code === "P2034") {
+    if (error instanceof SignupChangedError || isSerializationConflict(error)) {
       return { error: staleError };
     }
     throw error;
@@ -2240,7 +2241,7 @@ export async function randomizeDraftOrder(
     }
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error:
@@ -2446,7 +2447,7 @@ export async function startDraft(
               },
             });
           } catch (error) {
-            if ((error as { code?: string }).code === "P2002") {
+            if (isUniqueViolation(error)) {
               throw new DraftAlreadyStartedError();
             }
             throw error;
@@ -2533,14 +2534,14 @@ export async function startDraft(
     }
     if (
       e instanceof ActiveSeasonChangedError ||
-      (e as { code?: string }).code === "P2034"
+      isSerializationConflict(e)
     ) {
       return {
         error:
           "The season, captain list, order, settings, or player pool changed while starting — nothing was armed. Reload and review the preflight.",
       };
     }
-    if ((e as { code?: string }).code === "P2002") {
+    if (isUniqueViolation(e)) {
       return {
         error:
           "Another Start just beat this one — the draft is already live. Nothing was changed twice.",
@@ -3096,7 +3097,7 @@ export async function generateSchedule(
           "A team has a booked scrim within four hours of a generated kickoff. Move or cancel that scrim before replacing the schedule.",
       };
     }
-    if ((e as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(e)) {
       return {
         error:
           "The schedule changed while it was being generated — nothing was changed. Reload and try again.",
@@ -3660,7 +3661,7 @@ export async function recordResult(
       return { message: "That result is already saved — no changes were made" };
     }
     if (error instanceof ResultWriteError) return { error: error.message };
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error:
           "The match, phase, or playoff bracket changed while you saved — reload and check the current result.",
@@ -4072,7 +4073,7 @@ export async function signFreeAgent(
         error: "That player's signup just changed — reload and try again",
       };
     }
-    if ((e as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(e)) {
       return {
         error:
           "The auction, roster, or signup just changed — reload and try again.",
@@ -4086,7 +4087,7 @@ export async function signFreeAgent(
         error: `${registration.user.name} is standing in on an upcoming match — remove that assignment first, then sign them`,
       };
     }
-    if ((e as { code?: string }).code === "P2002") {
+    if (isUniqueViolation(e)) {
       return { error: "That player was just signed elsewhere" };
     }
     throw e;
@@ -4366,7 +4367,7 @@ export async function releasePlayer(
         error: `${member.user.name} was already released — reload to see the roster`,
       };
     }
-    if ((e as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(e)) {
       return {
         error:
           "The roster changed while you were releasing — reload and try again",
@@ -4661,7 +4662,7 @@ export async function withdrawTeam(
     }
     if (
       error instanceof TeamWithdrawalLifecycleChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error:
@@ -4804,7 +4805,7 @@ export async function reinstateTeam(
     }
     if (
       error instanceof TeamWithdrawalLifecycleChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error:
@@ -5185,7 +5186,7 @@ export async function reopenMatch(
     );
   } catch (error) {
     if (error instanceof ResultWriteError) return { error: error.message };
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error:
           "The match, phase, or playoff bracket changed while you reopened it — reload and try again.",
@@ -5488,7 +5489,7 @@ export async function removeGame(
     );
   } catch (error) {
     if (error instanceof ResultWriteError) return { error: error.message };
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error:
           "The result or playoff bracket changed while you removed that game — reload and try again.",
@@ -5851,7 +5852,7 @@ export async function setWeekNight(
           "A team in this schedule move has a booked scrim within four hours of its new kickoff. Move or cancel that scrim first.",
       };
     }
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error:
           "The schedule changed while this week move was being applied — nothing was changed. Reload and try again.",
@@ -6087,7 +6088,7 @@ export async function setMatchTime(
           "One of these teams has a booked scrim within four hours of that kickoff. Move or cancel the scrim first.",
       };
     }
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error:
           "The match changed while kickoff was being updated — nothing was changed. Reload and try again.",
@@ -6551,7 +6552,7 @@ export async function setDraftSettings(
     if (error instanceof DraftSetupLockedError) return { error: error.message };
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error: "The season or draft just changed — reload and try again.",
@@ -7278,7 +7279,7 @@ export async function setDraftNight(
     if (error instanceof DraftSetupLockedError) return { error: error.message };
     if (
       error instanceof ActiveSeasonChangedError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         error:
@@ -7431,7 +7432,7 @@ export async function promoteStandinToPlayer(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error: candidateName
           ? `${candidateName}'s signup just changed — reload and check it before promoting`

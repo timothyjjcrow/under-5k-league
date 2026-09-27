@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { OpenDotaMatch, OpenDotaPlayer } from "./dota";
 import { prisma } from "./prisma";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 export const IMPORT_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const IMPORT_CANDIDATE_MAX_ATTEMPTS = 8;
@@ -201,7 +202,7 @@ export async function recordImportFetchFailure(seasonId: string, dotaMatchId: st
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       return;
     } catch (error) {
-      if (!["P2034", "P2002"].includes((error as { code?: string }).code ?? "")) throw error;
+      if (!isSerializationConflict(error) && !isUniqueViolation(error)) throw error;
       // A contended bookkeeping update can safely wait for the next pass.
       // Never turn this transient failure into an import suppression.
     }
