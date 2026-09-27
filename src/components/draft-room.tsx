@@ -2055,7 +2055,17 @@ function DraftAdminToolbar({
     lotLive: !!state.nominatedPlayer,
     hasSale: state.recentSales.length > 0,
   });
-  if (!controls || !hasToolbarControl(controls)) return null;
+  // Nothing to press here (e.g. the season has left the Draft phase): no
+  // bar, just the way to the admin panel.
+  if (!controls || !hasToolbarControl(controls)) {
+    return (
+      <p className="text-right">
+        <Link href="/admin" className={textLink("text-sm")}>
+          Admin panel
+        </Link>
+      </p>
+    );
+  }
   const hidden = { expectedActiveSeasonId: seasonId };
   const lastSale = state.recentSales[0];
   const nominatorName =
