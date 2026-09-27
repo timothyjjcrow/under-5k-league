@@ -34,7 +34,6 @@ import {
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
 import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
-import { topAffinities, type MeetingGame } from "@/lib/compare";
 import { leagueRecords, toRecordGames, type PlayerRecord } from "@/lib/records";
 import { formatNetWorth, cn, hasText } from "@/lib/utils";
 import { rankMedalName } from "@/lib/rank";
@@ -53,7 +52,6 @@ import {
   HeroList,
   HeroPool,
   KDA,
-  PlayerLink,
   RankMedal,
   RoleBadges,
   SectionTitle,
@@ -408,10 +406,9 @@ export default async function PlayerProfilePage({
   const overallGrade =
     reportCard.avgPct != null ? gradeFor(reportCard.avgPct) : null;
 
-  // Per-hero W-L/KDA for the hero card, and rivalry math for the nemesis/duo
-  // card — both pure folds over lines already in memory (zero new queries).
-  // ScoutGame/MeetingGame are the exact shapes the match-preview dossier and
-  // /players/compare already consume.
+  // Per-hero W-L/KDA for the hero card — a pure fold over lines already in
+  // memory (zero new queries). ScoutGame is the exact shape the match-preview
+  // dossier already consumes.
   const scoutGames: ScoutGame[] = gameRows.map((r) => ({
     radiantWin: r.game.radiantWin,
     durationSecs: r.game.durationSecs,
@@ -429,28 +426,6 @@ export default async function PlayerProfilePage({
   // topHeroes source tiebreaks games → wins — a full tie can reorder tiles.
   const leagueHeroes = playerHeroPool(id, scoutGames);
 
-  const meetingGames: MeetingGame[] = gameRows.map((r) => ({
-    radiantWin: r.game.radiantWin,
-    lines: r.parsed.map((p) => ({
-      userId: p.userId ?? null,
-      isRadiant: p.isRadiant,
-    })),
-  }));
-  const affinities = topAffinities(meetingGames, id);
-  const affinityIds = [
-    ...new Set(
-      [affinities.nemesis?.userId, affinities.duo?.userId].filter(
-        (v): v is string => !!v,
-      ),
-    ),
-  ];
-  const affinityUsers = affinityIds.length
-    ? await prisma.user.findMany({
-        where: { id: { in: affinityIds } },
-        select: { id: true, name: true },
-      })
-    : [];
-  const affinityName = new Map(affinityUsers.map((u) => [u.id, u.name]));
   const streak = currentStreak(careerLines); // newest-first (games desc)
   const streakLabel =
     streak.count > 1 ? `${streak.type}${streak.count} streak` : undefined;
@@ -588,7 +563,6 @@ export default async function PlayerProfilePage({
     leagueHeroes.length > 0 ||
     pubHeroes.length > 0 ||
     hasText(selfPickedHeroes);
-  const connectionsVisible = !!affinities.nemesis || !!affinities.duo;
 
   // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
   // game (older imports may lack them), so average only over games that have it.
@@ -666,8 +640,8 @@ export default async function PlayerProfilePage({
           latestLeagueGame.game.match.awayTeam,
         ]
       : [];
-  const extrasVisible = heldRecords.length > 0 || connectionsVisible;
-  const profileVisible = heroCardVisible || extrasVisible;
+  const recordsVisible = heldRecords.length > 0;
+  const profileVisible = heroCardVisible || recordsVisible;
   // With no league games the inhouse card leads the page (it is their one
   // real record); otherwise it sits with the rest of their career.
   const inhouseInOverview = !hasLeagueGames && !!recentInhouse;
@@ -684,7 +658,7 @@ export default async function PlayerProfilePage({
     ...(heroCardVisible ? [{ id: "player-heroes", label: "Heroes" }] : []),
     // "About" only when the band holds more than the hero card, which the
     // Heroes tab already reaches.
-    ...(extrasVisible ? [{ id: "player-about", label: "About" }] : []),
+    ...(recordsVisible ? [{ id: "player-about", label: "About" }] : []),
     ...(careerVisible ? [{ id: "player-career", label: "Career" }] : []),
   ];
   const overviewItems =
@@ -1366,90 +1340,45 @@ export default async function PlayerProfilePage({
               </Card>
             ) : null}
 
-            {extrasVisible ? (
-              // auto-fit, never grid-cols-1: either card can be missing, and
-              // the empty track must collapse so the other takes the width.
-              <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
-                {heldRecords.length > 0 ? (
-                  <Card className="min-w-0">
-                    <CardHeader
-                      title="League records"
-                      subtitle="All-time single-game records"
-                      action={
-                        <Link href="/records" className={textLink("text-sm")}>
-                          Record book →
-                        </Link>
-                      }
-                    />
-                    <CardBody className="flex flex-wrap gap-2">
-                      {heldRecords.map((record) => {
-                        const hero = heroById(record.heroId);
-                        return (
-                          <Link
-                            key={record.key}
-                            href={`/matches/${record.matchId}`}
-                            className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm transition-colors hover:border-muted/60"
-                            title={`${record.title}: ${recordDisplayValue(record)}`}
-                          >
-                            <span aria-hidden>{record.emoji}</span>
-                            {hero ? <HeroIcon hero={hero} size={22} /> : null}
-                            <span>
-                              <span className="block font-medium">
-                                {record.title}
-                              </span>
-                              <span className="block font-mono text-xs tabular-nums text-muted">
-                                {recordDisplayValue(record)}
-                              </span>
-                            </span>
-                            <Badge tone={record.won ? "success" : "danger"}>
-                              {record.won ? "W" : "L"}
-                            </Badge>
-                          </Link>
-                        );
-                      })}
-                    </CardBody>
-                  </Card>
-                ) : null}
-
-                {connectionsVisible ? (
-                  <Card className="min-w-0">
-                    <CardHeader
-                      title="League connections"
-                      subtitle="Across imported league games"
-                    />
-                    <CardBody className="space-y-4 text-sm">
-                      {affinities.nemesis ? (
-                        <Connection
-                          label="Nemesis"
-                          emoji="⚔️"
-                          profileId={id}
-                          playerId={affinities.nemesis.userId}
-                          playerName={affinityName.get(
-                            affinities.nemesis.userId,
-                          )}
-                          games={affinities.nemesis.games}
-                          wins={affinities.nemesis.wins}
-                          losses={affinities.nemesis.losses}
-                          detail="as rivals"
-                        />
-                      ) : null}
-                      {affinities.duo ? (
-                        <Connection
-                          label="Best duo"
-                          emoji="🤝"
-                          profileId={id}
-                          playerId={affinities.duo.userId}
-                          playerName={affinityName.get(affinities.duo.userId)}
-                          games={affinities.duo.games}
-                          wins={affinities.duo.wins}
-                          losses={affinities.duo.losses}
-                          detail="as teammates"
-                        />
-                      ) : null}
-                    </CardBody>
-                  </Card>
-                ) : null}
-              </div>
+            {heldRecords.length > 0 ? (
+              <Card className="min-w-0">
+                <CardHeader
+                  title="League records"
+                  subtitle="All-time single-game records"
+                  action={
+                    <Link href="/records" className={textLink("text-sm")}>
+                      Record book →
+                    </Link>
+                  }
+                />
+                <CardBody className="flex flex-wrap gap-2">
+                  {heldRecords.map((record) => {
+                    const hero = heroById(record.heroId);
+                    return (
+                      <Link
+                        key={record.key}
+                        href={`/matches/${record.matchId}`}
+                        className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm transition-colors hover:border-muted/60"
+                        title={`${record.title}: ${recordDisplayValue(record)}`}
+                      >
+                        <span aria-hidden>{record.emoji}</span>
+                        {hero ? <HeroIcon hero={hero} size={22} /> : null}
+                        <span>
+                          <span className="block font-medium">
+                            {record.title}
+                          </span>
+                          <span className="block font-mono text-xs tabular-nums text-muted">
+                            {recordDisplayValue(record)}
+                          </span>
+                        </span>
+                        <Badge tone={record.won ? "success" : "danger"}>
+                          {record.won ? "W" : "L"}
+                        </Badge>
+                      </Link>
+                    );
+                  })}
+                </CardBody>
+              </Card>
             ) : null}
           </div>
         </section>
@@ -1658,61 +1587,6 @@ function recordDisplayValue(record: PlayerRecord): string {
     default:
       return new Intl.NumberFormat("en-US").format(record.value);
   }
-}
-
-function Connection({
-  label,
-  emoji,
-  profileId,
-  playerId,
-  playerName,
-  games,
-  wins,
-  losses,
-  detail,
-}: {
-  label: string;
-  emoji: string;
-  profileId: string;
-  playerId: string;
-  playerName: string | undefined;
-  games: number;
-  wins: number;
-  losses: number;
-  detail: string;
-}) {
-  return (
-    <div className="flex min-w-0 items-start gap-3">
-      <span aria-hidden className="pt-0.5 text-lg">
-        {emoji}
-      </span>
-      <div className="min-w-0">
-        <div className="text-xs font-medium uppercase tracking-wide text-muted">
-          {label}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <PlayerLink
-            userId={playerId}
-            className="font-semibold hover:text-info"
-          >
-            {playerName ?? "Unknown player"}
-          </PlayerLink>
-          <Link
-            href={`/players/compare?a=${encodeURIComponent(profileId)}&b=${encodeURIComponent(playerId)}`}
-            className={textLink("text-xs")}
-          >
-            Compare →
-          </Link>
-        </div>
-        <div className="text-xs text-muted">
-          <span className="tabular-nums">
-            {wins}–{losses}
-          </span>{" "}
-          {detail} across {games} game{games === 1 ? "" : "s"}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // ---------- Inhouse career ----------
