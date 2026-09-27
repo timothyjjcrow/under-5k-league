@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
+import { SteamJoin } from "@/components/steam-sign-in";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { SOFT_MMR_LIMIT } from "@/lib/constants";
 import {
@@ -96,7 +97,11 @@ export default async function HowItWorksPage() {
     hasDiscord: Boolean(LEAGUE_CONFIG.discordInviteUrl),
   });
   const button =
-    action.kind === "link" ? (
+    action.kind === "sign-in" ? (
+      <SteamJoin next={action.next} size="lg">
+        {action.label} <LinkArrow />
+      </SteamJoin>
+    ) : action.kind === "link" ? (
       <Link href={action.href} className={buttonClasses("primary", "lg")}>
         {action.label} <LinkArrow />
       </Link>

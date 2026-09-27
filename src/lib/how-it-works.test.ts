@@ -83,8 +83,8 @@ describe("howItWorksAction", () => {
 
   it("asks newcomers to join during signups, through sign-in when needed", () => {
     expect(howItWorksAction(base)).toEqual({
-      kind: "link",
-      href: "/login?next=/me",
+      kind: "sign-in",
+      next: "/me",
       label: "Join Season 1",
     });
     expect(howItWorksAction({ ...base, signedIn: true })).toEqual({
@@ -111,8 +111,8 @@ describe("howItWorksAction", () => {
       SEASON_STATUS.PLAYOFFS,
     ]) {
       expect(howItWorksAction({ ...base, phase })).toEqual({
-        kind: "link",
-        href: "/login?next=/me",
+        kind: "sign-in",
+        next: "/me",
         label: "Sign up as a standin",
       });
       expect(

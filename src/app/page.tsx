@@ -116,6 +116,7 @@ import {
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
 import { homeMetadata } from "@/lib/link-preview-metadata";
+import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
 
 const PHASE_ORDER = [
   "SIGNUPS",
@@ -219,10 +220,19 @@ export default async function Home() {
       season.status === "PLAYOFFS") &&
     !isActiveReg &&
     !isRemovedReg;
-  const standinRegistrationHref = user ? "/me" : "/login?next=/me";
-  const standinRegistrationLabel = user
-    ? "Register as a standin"
-    : "Sign in to stand in";
+  // Signed out, the button goes straight to Steam and carries the sign-in
+  // note, which /login would otherwise have shown.
+  const standinRegistration = (variant: "primary" | "secondary") =>
+    user ? (
+      <Link href="/me" className={buttonClasses(variant, "lg")}>
+        Register as a standin <LinkArrow />
+      </Link>
+    ) : (
+      <SteamSignInButton next="/me" variant={variant}>
+        Sign in to stand in <LinkArrow />
+      </SteamSignInButton>
+    );
+  const steamNote = user ? null : <SteamSignInNote />;
   let heroAction: ReactNode = null;
   if (season.status === "SIGNUPS") {
     // How it works rides along during signups: the draft, match nights and
@@ -235,10 +245,11 @@ export default async function Home() {
     heroAction = !user ? (
       <>
         {/* next=/me: signing in "to join" should land on the signup form. */}
-        <Link href="/login?next=/me" className={buttonClasses("primary", "lg")}>
+        <SteamSignInButton next="/me">
           Sign in with Steam to join <LinkArrow />
-        </Link>
+        </SteamSignInButton>
         {tourLink}
+        {steamNote}
       </>
     ) : isRemovedReg ? (
       <>
@@ -264,12 +275,10 @@ export default async function Home() {
           {draftPresentation.action}
         </Link>
         {standinRegistrationOpen ? (
-          <Link
-            href={standinRegistrationHref}
-            className={buttonClasses("secondary", "lg")}
-          >
-            {standinRegistrationLabel} <LinkArrow />
-          </Link>
+          <>
+            {standinRegistration("secondary")}
+            {steamNote}
+          </>
         ) : null}
       </>
     );
@@ -279,15 +288,11 @@ export default async function Home() {
     // page, below the news.
     heroAction = (
       <>
-        <Link
-          href={standinRegistrationHref}
-          className={buttonClasses("primary", "lg")}
-        >
-          {standinRegistrationLabel} <LinkArrow />
-        </Link>
+        {standinRegistration("primary")}
         <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
           Play an inhouse <LinkArrow />
         </Link>
+        {steamNote}
       </>
     );
   }
@@ -1333,12 +1338,10 @@ async function SignupsView({
 
           <div className="flex flex-wrap items-center gap-3 pt-1">
             {!loggedIn ? (
-              <Link
-                href="/login?next=/me"
-                className={buttonClasses("primary", "lg")}
-              >
+              // The Why Steam sign-in? note below is this button's notice.
+              <SteamSignInButton next="/me">
                 Sign in with Steam to join
-              </Link>
+              </SteamSignInButton>
             ) : isActivePlayer ? (
               <div className="flex flex-wrap items-center gap-3">
                 <Badge

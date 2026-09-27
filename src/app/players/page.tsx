@@ -1,4 +1,5 @@
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
+import { SteamJoin } from "@/components/steam-sign-in";
 import Link from "next/link";
 import { Suspense } from "react";
 import { hasText } from "@/lib/utils";
@@ -239,6 +240,11 @@ export default async function PlayersPage() {
               <Link href="/me" className={buttonClasses("secondary", "sm")}>
                 Signup removed — see details
               </Link>
+            ) : canSignUp && !viewer ? (
+              // Straight to Steam, then back to the signup form.
+              <SteamJoin next="/me" size="sm">
+                Sign in with Steam to join
+              </SteamJoin>
             ) : canSignUp ? (
               <Link href="/me" className={buttonClasses("primary", "sm")}>
                 Join the season →

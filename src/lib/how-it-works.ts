@@ -55,6 +55,8 @@ export function standinSignupOpen({
 
 export type HowItWorksAction =
   | { kind: "link"; href: string; label: string }
+  /** Signed out: straight to Steam, then back to `next` (sign-in-link.ts). */
+  | { kind: "sign-in"; next: string; label: string }
   | { kind: "discord" }
   | { kind: "news" };
 
@@ -88,14 +90,17 @@ export function howItWorksAction({
     registrationStatus,
     onRoster,
   });
-  if (join) return { kind: "link", href: join.href, label: join.label };
+  // Sign-in lands on the signup form, like Home's buttons.
+  if (join) {
+    return signedIn
+      ? { kind: "link", href: "/me", label: join.label }
+      : { kind: "sign-in", next: "/me", label: join.label };
+  }
   if (standinSignupOpen({ phase, registrationStatus }) && !onRoster) {
-    return {
-      kind: "link",
-      // Sign-in lands on the signup form, like Home's button.
-      href: signedIn ? "/me" : "/login?next=/me",
-      label: "Sign up as a standin",
-    };
+    const label = "Sign up as a standin";
+    return signedIn
+      ? { kind: "link", href: "/me", label }
+      : { kind: "sign-in", next: "/me", label };
   }
   return hasDiscord ? { kind: "discord" } : { kind: "news" };
 }

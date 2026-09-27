@@ -53,7 +53,12 @@ test("signed-out newcomers can find the mid-season standin signup", async ({
 
   const cta = page.getByRole("link", { name: "Sign in to stand in" });
   await expect(cta).toBeVisible();
+  // Dev login is on in e2e, so this goes through /login; with only Steam it
+  // goes straight to Steam, and the note beside it says what is shared.
   await expect(cta).toHaveAttribute("href", "/login?next=/me");
+  await expect(
+    page.getByText(/so we never see your password or email\.$/),
+  ).toBeVisible();
 
   assertNoErrors();
 });

@@ -42,10 +42,15 @@ test("How it works explains the league on one screen and asks newcomers to join"
   // Cred betting is gone; the page must not advertise it.
   await expect(main).not.toContainText(/\bcred\b/i);
   // One button. The signup fixture is in signups, so it is the header's
-  // "Join Season 1", through sign-in.
+  // "Join Season 1", through sign-in. With only Steam it goes straight to
+  // Steam; e2e has dev login on, so it goes to /login, where both live. The
+  // note says what signing in shares, since the button can skip /login.
   const join = main.getByRole("link", { name: "Join Season 1" });
   await expect(join).toHaveCount(1);
   await expect(join).toHaveAttribute("href", "/login?next=/me");
+  await expect(
+    main.getByText(/so we never see your password or email\.$/),
+  ).toBeVisible();
   await join.click();
   await expect(
     page.getByRole("heading", { name: `Sign in to ${LEAGUE_CONFIG.name}` }),
