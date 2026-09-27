@@ -723,9 +723,9 @@ export default async function PlayerProfilePage({
       ? [{ id: "player-performance", label: "Performance" }]
       : []),
     ...(heroCardVisible ? [{ id: "player-heroes", label: "Heroes" }] : []),
-    // "About" only when the band holds more than the hero card, which the
-    // Heroes tab already reaches.
-    ...(recordsVisible ? [{ id: "player-about", label: "About" }] : []),
+    // Named for the card it jumps to. "About" is the player's own words
+    // under the header, so a tab called that must not land on records.
+    ...(recordsVisible ? [{ id: "player-records", label: "Records" }] : []),
     ...(careerVisible ? [{ id: "player-career", label: "Career" }] : []),
   ];
   const overviewItems =
@@ -1430,7 +1430,7 @@ export default async function PlayerProfilePage({
             ) : null}
 
             {heldRecords.length > 0 ? (
-              <Card className="min-w-0">
+              <Card id="player-records" className="min-w-0 scroll-mt-40">
                 <CardHeader
                   title="League records"
                   subtitle="All-time single-game records"
