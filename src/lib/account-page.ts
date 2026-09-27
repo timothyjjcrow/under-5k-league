@@ -14,7 +14,8 @@ import {
   mmrRangeForRankTier,
   rankMedalName,
 } from "./rank";
-import { parseHeroList } from "./heroes";
+import { heroById, parseHeroList } from "./heroes";
+import { parsePubStats } from "./pub-stats";
 import { DOTA_ROLES, roleLabels } from "./roles";
 
 /** Where a draft confirmation stands for a signed-up full player. */
@@ -497,4 +498,24 @@ export function mmrPreviewLine(
         ? `Left blank, you'll be listed at ${check.mmr} MMR, your medal's low end.`
         : `${typed} is outside your medal's range, so you'll be listed at ${check.mmr} MMR.`,
   };
+}
+
+/**
+ * One-tap suggestions for the empty "Favorite heroes" picker: the player's
+ * three most-played pub heroes from the stored OpenDota snapshot, as hero
+ * ids. Offered, never pre-selected: the favorites stay a deliberate choice,
+ * and the pool keeps showing the real most-played heroes separately. Empty
+ * once any favorite is saved, or without a readable snapshot.
+ */
+export function favoriteHeroSuggestions(
+  savedHeroes: string | null | undefined,
+  pubStatsRaw: string | null | undefined,
+): number[] {
+  if (savedHeroes?.trim()) return [];
+  const pub = parsePubStats(pubStatsRaw);
+  if (!pub) return [];
+  return pub.topHeroes
+    .filter((h) => heroById(h.heroId) !== null)
+    .slice(0, 3)
+    .map((h) => h.heroId);
 }

@@ -31,6 +31,7 @@ import {
 import {
   accountNextSteps,
   auctionRunning,
+  favoriteHeroSuggestions,
   fullPlayerChoiceOpen,
   mmrLeadLine,
   mmrRulesLine,
@@ -729,6 +730,10 @@ export default async function MePage({
                     <HeroPicker
                       name="favoriteHeroes"
                       defaultValue={form?.favoriteHeroes}
+                      suggestions={favoriteHeroSuggestions(
+                        form?.favoriteHeroes,
+                        dbUser?.pubStats,
+                      )}
                     />
                     <p className="mt-1 text-xs text-muted">
                       Pick the heroes you&apos;re known for.

@@ -2,7 +2,13 @@
 
 import { useContext, useMemo, useState } from "react";
 import { FormChangeContext } from "@/components/action-form";
-import { HEROES, type Hero, heroIcon, parseHeroList } from "@/lib/heroes";
+import {
+  HEROES,
+  type Hero,
+  heroById,
+  heroIcon,
+  parseHeroList,
+} from "@/lib/heroes";
 import { buttonClasses } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -19,10 +25,14 @@ export function HeroPicker({
   name,
   defaultValue,
   max = 12,
+  suggestions = [],
 }: {
   name: string;
   defaultValue?: string | null;
   max?: number;
+  /** Hero ids offered as one-tap adds (the player's most-played pub heroes).
+   *  Never pre-selected: picking favorites stays a deliberate choice. */
+  suggestions?: number[];
 }) {
   const markDirty = useContext(FormChangeContext);
   const [selected, setSelected] = useState<Hero[]>(
@@ -45,6 +55,11 @@ export function HeroPicker({
 
   const atMax = selected.length >= max;
   const value = selected.map((h) => h.name).join(", ");
+  const offered = atMax
+    ? []
+    : suggestions
+        .map((id) => heroById(id))
+        .filter((h): h is Hero => h !== null && !selectedIds.has(h.id));
 
   function toggle(hero: Hero) {
     if (selectedIds.has(hero.id) || !atMax) markDirty();
@@ -84,6 +99,33 @@ export function HeroPicker({
               <span className="text-muted transition-colors group-hover:text-danger">
                 ×
               </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {offered.length > 0 ? (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted">Most played (pubs):</span>
+          {offered.map((h) => (
+            <button
+              type="button"
+              key={h.id}
+              onClick={() => toggle(h)}
+              aria-label={`Add ${h.name}`}
+              className="flex items-center gap-1.5 rounded-full border border-dashed border-line py-1 pl-1 pr-2 text-xs font-medium transition-colors hover:border-accent/60 hover:bg-accent/10"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={heroIcon(h)}
+                alt=""
+                width={20}
+                height={20}
+                style={{ width: 20, height: 20 }}
+                className="rounded"
+              />
+              <span aria-hidden>+</span>
+              {h.name}
             </button>
           ))}
         </div>

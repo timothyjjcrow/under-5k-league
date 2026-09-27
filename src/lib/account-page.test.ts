@@ -3,6 +3,7 @@ import {
   accountNextSteps,
   discordCardCtas,
   discordLinkNote,
+  favoriteHeroSuggestions,
   fullPlayerChoiceOpen,
   mergeAccountRefresh,
   mmrLeadLine,
@@ -510,5 +511,39 @@ describe("MMR field copy", () => {
     expect(preview("1500", { storedMmr: 4400, frozen: true })).toBe(
       "The draft is running, so you stay listed at 4400 MMR until it ends.",
     );
+  });
+});
+
+describe("favoriteHeroSuggestions", () => {
+  const snapshot = (heroIds: number[]) =>
+    JSON.stringify({
+      recentWins: 5,
+      recentLosses: 5,
+      totalGames: 900,
+      lastPlayedAt: 1_700_000_000,
+      topHeroes: heroIds.map((heroId, i) => ({
+        heroId,
+        games: 100 - i,
+        wins: 50,
+      })),
+    });
+
+  it("offers the top three most-played heroes while no favorite is saved", () => {
+    // Axe (2), Pudge (14), Lion (26), Sniper (35)
+    expect(favoriteHeroSuggestions("", snapshot([2, 14, 26, 35]))).toEqual([
+      2, 14, 26,
+    ]);
+    expect(favoriteHeroSuggestions(null, snapshot([14]))).toEqual([14]);
+  });
+
+  it("offers nothing once favorites are saved, or without a snapshot", () => {
+    expect(favoriteHeroSuggestions("Axe", snapshot([2, 14]))).toEqual([]);
+    expect(favoriteHeroSuggestions("", null)).toEqual([]);
+    expect(favoriteHeroSuggestions("", "not json")).toEqual([]);
+    expect(favoriteHeroSuggestions("", snapshot([]))).toEqual([]);
+  });
+
+  it("skips a hero id the static table doesn't know", () => {
+    expect(favoriteHeroSuggestions("", snapshot([9999, 2]))).toEqual([2]);
   });
 });
