@@ -12,6 +12,17 @@ import {
   type LogoImageState,
 } from "@/lib/team-identity";
 
+/** The typed value once typing pauses, so the preview doesn't fetch every
+ *  half-typed link (a pasted link settles at once). */
+function useSettled(value: string, delayMs = 400): string {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [value, delayMs]);
+  return settled;
+}
+
 /** Whether a logo link actually loads as an image, so the preview can say so.
  *  The crest itself hides a broken image silently (initials show through). */
 function useImageState(src: string | null): LogoImageState | null {
@@ -65,10 +76,16 @@ export function TeamIdentityForm({
 }) {
   const [draftName, setDraftName] = useState(name);
   const [draftLogo, setDraftLogo] = useState(logoUrl ?? "");
+  // Save is checked against what was typed; the preview follows once typing
+  // settles.
   const logo = normalizeTeamLogoUrl(draftLogo);
-  const previewUrl = "logoUrl" in logo ? logo.logoUrl : null;
+  const settledLogo = normalizeTeamLogoUrl(useSettled(draftLogo));
+  const previewUrl = "logoUrl" in settledLogo ? settledLogo.logoUrl : null;
   const image = useImageState(previewUrl);
-  const preview = logoPreviewNote(logo, image);
+  const preview = logoPreviewNote(
+    logo,
+    "logoUrl" in logo && logo.logoUrl === previewUrl ? image : "loading",
+  );
   const previewName = normalizeTeamName(draftName) || name;
   const inputClass =
     "h-11 w-full min-w-0 rounded-md border border-line bg-surface-2/50 px-2.5 text-sm sm:h-9";
