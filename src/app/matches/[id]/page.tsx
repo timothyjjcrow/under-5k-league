@@ -2187,9 +2187,12 @@ async function RescheduleCard({
             className="flex flex-wrap items-center gap-2"
           >
             <label htmlFor={`proposed-time-${match.id}`} className="sr-only">
-              Proposed new kickoff
+              Proposed new kickoff, in your time
             </label>
-            <span>
+            {/* The two captains may sit in different zones, so each proposes
+                on their own clock; the admin boxes use the league's. Say
+                which one this is. */}
+            <span className="inline-flex max-w-full flex-wrap items-center gap-2">
               <LocalDatetimeField
                 id={`proposed-time-${match.id}`}
                 name="proposedTime"
@@ -2197,6 +2200,9 @@ async function RescheduleCard({
                 required
                 className="h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm text-fg"
               />
+              <span aria-hidden="true" className="text-xs text-muted">
+                your time
+              </span>
             </span>
             <SubmitButton variant="secondary" size="sm">
               Propose new time

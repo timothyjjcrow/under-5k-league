@@ -9,8 +9,22 @@
 // The hidden field is kept in sync with native event listeners + a submit
 // hook rather than React state, so it also catches autofill and any change
 // path that bypasses synthetic events.
+//
+// `timeZone` opts a field into reading and prefilling on a NAMED zone's clock
+// instead of the viewer's. Every admin scheduling box passes the league's:
+// on the viewer's clock, a Europe admin sitting in Los Angeles who typed 20:00
+// scheduled the whole season for 05:00 Berlin time, and every screen they
+// checked afterwards also rendered in their own zone and read "20:00". The
+// field names the zone beside the box and, when the viewer's clock differs,
+// shows what the entry is on theirs.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
+import {
+  epochToZonedDatetimeLocal,
+  yourTimeHint,
+  zonedDatetimeLocalToEpoch,
+  zoneLabel,
+} from "@/lib/zoned-time";
 
 export function LocalDatetimeField({
   name,
@@ -20,6 +34,7 @@ export function LocalDatetimeField({
   className,
   defaultValue,
   defaultTs,
+  timeZone,
 }: {
   /** Name for the raw datetime-local string (server-side fallback). */
   name: string;
@@ -29,16 +44,24 @@ export function LocalDatetimeField({
   required?: boolean;
   className?: string;
   /** Prefill as a raw datetime-local string — only safe when the string was
-   *  produced in the VIEWER's timezone. Prefer defaultTs. */
+   *  produced in the zone the field reads (the viewer's, or `timeZone`).
+   *  Prefer defaultTs. */
   defaultValue?: string;
   /** Prefill from an epoch — formatted into the input client-side, in the
-   *  viewer's timezone. A server-formatted defaultValue string would be the
+   *  zone the field reads (the viewer's, or `timeZone`). A server-formatted defaultValue string would be the
    *  server's wall clock: resubmitting an untouched form on the UTC prod
    *  host would silently shift the stored time by the viewer's UTC offset. */
   defaultTs?: number | null;
+  /** Opt-in: an IANA zone (the league's) whose clock the field reads and
+   *  prefills on, labelled beside the box. Omitted = the viewer's own clock,
+   *  exactly as before. */
+  timeZone?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const hiddenRef = useRef<HTMLInputElement>(null);
+  const hintRef = useRef<HTMLSpanElement>(null);
+  const zoneId = useId();
+  const hintId = useId();
   // What the field held at the last submit. Distinguishes "the form reset
   // itself after a successful save" (restore the prefill) from "the user
   // deliberately emptied the field to clear the time" (leave it empty).
@@ -52,14 +75,33 @@ export function LocalDatetimeField({
     // because only the browser can render the instant in the viewer's zone.
     const applyPrefill = () => {
       if (defaultTs == null || input.value) return;
+      if (timeZone) {
+        input.value = epochToZonedDatetimeLocal(defaultTs, timeZone);
+        return;
+      }
       const d = new Date(defaultTs);
       const pad = (n: number) => String(n).padStart(2, "0");
       input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     };
     applyPrefill();
+    const hint = hintRef.current;
+    // The viewer's own zone, only needed for the "your time" line.
+    const viewerZone = timeZone
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone
+      : undefined;
     const sync = () => {
-      const ms = new Date(input.value).getTime();
+      const ms = timeZone
+        ? (zonedDatetimeLocalToEpoch(input.value, timeZone) ?? NaN)
+        : new Date(input.value).getTime();
       hidden.value = Number.isNaN(ms) ? "" : String(ms);
+      if (hint && timeZone) {
+        const text =
+          viewerZone && !Number.isNaN(ms)
+            ? yourTimeHint(ms, timeZone, viewerZone, undefined)
+            : null;
+        hint.textContent = text ?? "";
+        hint.hidden = !text;
+      }
     };
     sync(); // pick up any prefill
     // <ActionForm> calls form.reset() after a successful save. Because the
@@ -92,10 +134,26 @@ export function LocalDatetimeField({
       form?.removeEventListener("submit", onSubmit);
       form?.removeEventListener("reset", onReset);
     };
-  }, [defaultTs]);
+  }, [defaultTs, timeZone]);
 
+  if (!timeZone) {
+    return (
+      <>
+        <input
+          ref={inputRef}
+          type="datetime-local"
+          id={id}
+          name={name}
+          required={required}
+          defaultValue={defaultValue}
+          className={className}
+        />
+        <input ref={hiddenRef} type="hidden" name={tsName} defaultValue="" />
+      </>
+    );
+  }
   return (
-    <>
+    <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1">
       <input
         ref={inputRef}
         type="datetime-local"
@@ -104,8 +162,14 @@ export function LocalDatetimeField({
         required={required}
         defaultValue={defaultValue}
         className={className}
+        aria-describedby={`${zoneId} ${hintId}`}
       />
       <input ref={hiddenRef} type="hidden" name={tsName} defaultValue="" />
-    </>
+      <span id={zoneId} className="text-xs text-muted">
+        {zoneLabel(timeZone)}
+      </span>
+      {/* Filled in the browser: only it knows the viewer's zone. */}
+      <span id={hintId} ref={hintRef} className="text-xs text-muted" />
+    </span>
   );
 }

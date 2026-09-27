@@ -83,7 +83,7 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   const steamId = "7656118" + String(Date.now()).slice(-10);
 
   // Schedule draft night from the real admin form. The datetime-local helper
-  // converts this browser-local value to the epoch the confirmation action
+  // converts this league-time value to the epoch the confirmation action
   // later binds to its revision.
   await page.goto(
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",

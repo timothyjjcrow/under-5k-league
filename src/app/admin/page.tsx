@@ -107,6 +107,8 @@ import {
 } from "@/app/actions/news";
 import { NEWS_LIMITS } from "@/lib/news";
 import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueTime } from "@/lib/zoned-time";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import {
@@ -1733,20 +1735,18 @@ function CaptainControls({
                 name="draftAt"
                 tsName="draftAtTs"
                 defaultTs={season.draftAt?.getTime()}
+                timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />
             </div>
             <SubmitButton variant="secondary" size="sm">
               {season.draftAt ? "Update draft night" : "Set draft night"}
             </SubmitButton>
+            {/* League time, like the box beside it — the admin's own clock
+                is what hid a mis-entered night before. */}
             {season.draftAt ? (
               <span className="text-xs text-muted">
-                Currently{" "}
-                <LocalTime
-                  ts={season.draftAt.getTime()}
-                  variant="full"
-                  initial={formatMatchTime(season.draftAt, "full")}
-                />
+                Currently {formatLeagueTime(season.draftAt)}
               </span>
             ) : null}
           </ActionForm>
@@ -2592,7 +2592,7 @@ function ScheduleControls({
               <label
                 htmlFor="firstNight"
                 className="text-xs text-muted"
-                title="Week 1 plays at this time; each later week (and playoff round) is +7 days. Leave empty for no times."
+                title="Week 1 plays at this time on the league's clock; each later week (and playoff round) is +7 days at the same time. Leave empty for no times."
               >
                 First match night
               </label>
@@ -2601,6 +2601,7 @@ function ScheduleControls({
                 name="firstNight"
                 tsName="firstNightTs"
                 defaultTs={season.firstMatchNight?.getTime()}
+                timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />
               {/* The lib always supported the mirrored second leg; this box is
@@ -2742,6 +2743,7 @@ function ScheduleControls({
                     <LocalDatetimeField
                       name="night"
                       tsName="nightTs"
+                      timeZone={LEAGUE_CONFIG.timeZone}
                       className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
                     />
                   </span>
@@ -3134,6 +3136,7 @@ function MatchResultRow({
               name="scheduledAt"
               tsName="scheduledAtTs"
               defaultTs={m.scheduledAt?.getTime()}
+              timeZone={LEAGUE_CONFIG.timeZone}
               className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
             />
           </label>
