@@ -22,6 +22,7 @@ import {
   playoffTotalRounds,
 } from "./schedule";
 import { raceHook } from "./race-hook";
+import { seriesRecordLine } from "./record-announce";
 import { markWeekHonorsStale, maybeAnnounceWeekHonors } from "./honors-service";
 import {
   getWebhookUrl,
@@ -222,6 +223,13 @@ export async function announceSeriesResultOnce(match: {
           .catch(() => []),
       )
     : 0;
+  // A new all-time player record rides this post as one line: no extra
+  // send and no second marker, so a retry or re-import cannot post it twice.
+  // Best-effort like the round name: a failed read costs the line only.
+  const record =
+    current._count.games > 0
+      ? await seriesRecordLine(current.id).catch(() => null)
+      : null;
   const sent = await sendDiscordMessage(
     matchResultMessage({
       matchId: current.id,
@@ -236,6 +244,7 @@ export async function announceSeriesResultOnce(match: {
         current.phase === MATCH_PHASE.PLAYOFF
           ? { nextRound: nextPlayoffRoundName(current, playoffRounds) }
           : undefined,
+      record,
     }),
     undefined,
     {

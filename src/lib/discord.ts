@@ -203,6 +203,18 @@ export function matchResultMessage(m: {
    *  loser is out. The grand final gets no such line — crowning the champion
    *  is the champion post's job. */
   knockout?: { nextRound: string | null };
+  /** An all-time player record set in this series (brokenPlayerRecord),
+   *  added as one line. Riding the result post means no extra send and no
+   *  second once-only marker. */
+  record?: {
+    emoji: string;
+    holderName: string;
+    /** "17 kills", with its unit (formatRecordMark). */
+    mark: string;
+    heroName: string | null;
+    /** The mark it beat, same format. */
+    previousMark: string;
+  } | null;
 }): string {
   const home = name(m.homeName);
   const away = name(m.awayName);
@@ -221,7 +233,10 @@ export function matchResultMessage(m: {
   // Only promise a box score when a game was actually imported: a manual
   // score (forfeit or not) opens on "no games recorded".
   const link = `${m.hasGames ? "Box score" : "Match page"}: <${resolveSiteUrl()}/matches/${m.matchId}>`;
-  return `${tail} ${link}`;
+  const record = m.record
+    ? `\n${m.record.emoji} New league record: **${name(m.record.holderName)}**, ${m.record.mark}${m.record.heroName ? ` on ${m.record.heroName}` : ""} (old mark ${m.record.previousMark})`
+    : "";
+  return `${tail} ${link}${record}`;
 }
 
 export function playoffsStartedMessage(

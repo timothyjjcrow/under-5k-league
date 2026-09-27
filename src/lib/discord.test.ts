@@ -156,6 +156,42 @@ describe("discord message formatters", () => {
     expect(msg).not.toMatch(/eliminated|advance/);
   });
 
+  it("adds at most one broken-record line, with the holder's name escaped", () => {
+    const base = {
+      matchId: "m9",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 2,
+      awayScore: 0,
+      label: "Week 4",
+      hasGames: true,
+    };
+    const msg = matchResultMessage({
+      ...base,
+      record: {
+        emoji: "🔪",
+        holderName: "[free mmr](https://evil.test)",
+        mark: "17 kills",
+        heroName: "Razor",
+        previousMark: "14 kills",
+      },
+    });
+    const lines = msg.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/Box score: <[^>]+\/matches\/m9>$/);
+    expect(lines[1]).toMatch(/^🔪 New league record: \*\*.+\*\*, 17 kills on Razor \(old mark 14 kills\)$/);
+    expect(lines[1]).not.toContain("](");
+    expect(
+      matchResultMessage({
+        ...base,
+        record: { emoji: "💰", holderName: "Carry", mark: "32.1k net worth", heroName: null, previousMark: "30.0k net worth" },
+      }),
+    ).toContain("**Carry**, 32.1k net worth (old mark 30.0k net worth)");
+    // No record, no second line: the post is byte-for-byte what it was.
+    expect(matchResultMessage({ ...base, record: null })).toBe(matchResultMessage(base));
+    expect(matchResultMessage(base)).not.toContain("\n");
+  });
+
   it("promises a box score only when a game was imported", () => {
     const base = {
       matchId: "m8",

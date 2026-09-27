@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { compareRecordChronology } from "./records";
 import {
   fetchPublicGameSnapshot,
   getPublicGameSnapshot,
@@ -37,12 +38,7 @@ function recordGames(games: PublicGameSnapshot, contexts: PublicMatchContext, te
       homeTeam: { name: home },
       awayTeam: { name: away },
     },
-  }]; }).sort((a, b) => {
-    // Unknown OpenDota time belongs after dated games, never before them.
-    const aTime = a.startTime > 0 ? a.startTime : Number.MAX_SAFE_INTEGER;
-    const bTime = b.startTime > 0 ? b.startTime : Number.MAX_SAFE_INTEGER;
-    return aTime - bTime || a.id.localeCompare(b.id);
-  });
+  }]; }).sort(compareRecordChronology);
 }
 
 function recapGames(games: PublicGameSnapshot) {
