@@ -529,6 +529,17 @@ describe("navigation surfaces", () => {
     expect(footer).not.toContain("exploreNav(");
   });
 
+  // Home's Fantasy tile used to be shown to everyone all season ("Rosters
+  // locked — standings") after the menus stopped listing it.
+  it("promotes Fantasy on Home by the menus' rule", () => {
+    const home = source("src/app/page.tsx");
+    expect(home).toContain("const showFantasy = fantasyListed({");
+    expect(home).toMatch(
+      /\{showFantasy \? \(\s*<SideGameLink\s+href="\/fantasy"/,
+    );
+    expect(home.match(/href="\/fantasy"/g)).toHaveLength(1);
+  });
+
   // Phones had a ☰ menu, the tab bar's sheet and the footer listing the same
   // pages. The tab bar's sheet is now the only phone menu.
   it("gives phones one menu, built from the tab bar's leftovers", () => {

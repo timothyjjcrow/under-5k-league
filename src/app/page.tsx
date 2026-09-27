@@ -11,8 +11,10 @@ import { getSessionUser } from "@/lib/auth";
 import {
   getSeasonMatches,
   getSeasonSnapshot,
+  getViewerFantasyEntered,
   type SeasonSnapshot,
 } from "@/lib/queries";
+import { fantasyListed } from "@/lib/site-nav";
 import { prisma } from "@/lib/prisma";
 import {
   computeStandings,
@@ -1964,13 +1966,30 @@ async function SeasonView({
   const picksMade = openPickemIds.filter((id) => myPicks.has(id)).length;
   const fantasyLocked = season.fantasyLockedAt != null || gamesOnRecord > 0;
   const picksMissing = pickemOpen - picksMade;
+  // Fantasy gets a tile while picks are open and, after the lock, only for
+  // managers who entered: the menus' rule (site-nav.ts). The entry read is
+  // request-cached; the layout already made it for the menus.
+  const showFantasy = fantasyListed({
+    phase: season.status,
+    draftStatus: snapshot.draftStatus,
+    fantasyLocked,
+    fantasyEntered:
+      userId && fantasyLocked
+        ? await getViewerFantasyEntered(season.id, userId)
+        : false,
+  });
 
   // The side-game band renders BELOW the table now. It used to sit above both
   // the standings and This-week, so the secondary loop (pick'em, fantasy) got
   // the first full-width band on the page while the primary one — your match,
   // your team, the table — started below it.
   const sideGames = (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div
+      className={cn(
+        "grid grid-cols-1 gap-3 sm:grid-cols-3",
+        showFantasy ? "lg:grid-cols-5" : "lg:grid-cols-4",
+      )}
+    >
       <SideGameLink
         href="/pickem"
         icon="🔮"
@@ -1985,12 +2004,14 @@ async function SeasonView({
             : "See the oracle board"
         }
       />
-      <SideGameLink
-        href="/fantasy"
-        icon="🧙"
-        title="Fantasy"
-        hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
-      />
+      {showFantasy ? (
+        <SideGameLink
+          href="/fantasy"
+          icon="🧙"
+          title="Fantasy"
+          hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
+        />
+      ) : null}
       <SideGameLink
         href="/inhouse"
         icon="⚔️"

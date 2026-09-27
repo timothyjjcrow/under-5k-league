@@ -126,7 +126,8 @@ export function fantasyPickWindowOpen(state: FantasyNavState): boolean {
  * Fantasy is promoted while picks are open, and after the lock only to the
  * managers who entered, who have standings to follow. Everyone else used to
  * be sent all season to "Rosters are locked… Catch the next season!". The page
- * itself stays reachable by its address. Home's side-game tiles use this too.
+ * itself stays reachable by its address. Home's Fantasy tile and the current
+ * season's page use this too.
  */
 export function fantasyListed(state: FantasyNavState): boolean {
   if (fantasyPickWindowOpen(state)) return true;
