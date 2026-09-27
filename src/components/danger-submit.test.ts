@@ -1,6 +1,11 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import {
+  filesContaining,
+  haystackOf,
+  sourceFile,
+  sourceFiles,
+  stripLineComments,
+} from "../../test/support/source-files";
 
 /**
  * The unrecoverable actions must stay behind TYPE-TO-CONFIRM.
@@ -16,61 +21,95 @@ import { describe, it, expect } from "vitest";
  * unit suite never renders these pages, and a browser spec only reaches the
  * controls that happen to be on screen in that fixture's phase.
  */
-const ROOT = join(__dirname, "..", "..");
-const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
-const admin = read("src/app/admin/page.tsx");
-const seasons = read("src/app/seasons/page.tsx");
-const danger = read("src/components/danger-submit.tsx");
+/**
+ * Every page and component. Globbed, not listed: an unrecoverable form moved
+ * into a new card component must still be found, and so must a new
+ * DangerSubmit call site whose token is a magic word.
+ */
+const UI = sourceFiles(["src/app/**/*.tsx", "src/components/**/*.tsx"], 80);
+/** Every page under /admin, joined (so the admin page can be split). */
+const admin = haystackOf(UI.filter((f) => f.path.startsWith("src/app/admin/")));
+const seasons = sourceFile("src/app/seasons/page.tsx").text;
+const danger = sourceFile("src/components/danger-submit.tsx").text;
 
-/** action name → the file whose JSX must guard it with DangerSubmit. */
-const UNRECOVERABLE: Array<{ action: string; source: string; why: string }> = [
+/** Every `<DangerSubmit …>` call site and the token prop it passes. */
+const CALL_SITES = UI.flatMap((f) =>
+  stripLineComments(f.text)
+    .split(/<DangerSubmit\s/)
+    .slice(1)
+    .map((after) => ({
+      file: f.path,
+      token:
+        /\btoken=(\{[^}]*\}|"[^"]*"|'[^']*')/.exec(after.slice(0, 600))?.[1] ??
+        null,
+    })),
+);
+
+/** The unrecoverable actions; each form rendering one must use DangerSubmit. */
+const UNRECOVERABLE: Array<{ action: string; why: string }> = [
   {
     action: "deleteSeason",
-    source: seasons,
     why: "hard cascade delete of a whole season; no undo, no export",
   },
   {
     action: "abortDraftAction",
-    source: admin,
     why: "dissolves an auction result nothing records",
   },
   {
     action: "startPlayoffs",
-    source: admin,
     why: "reset deletes the postseason; RSVPs/picks/bookings are not archived",
   },
   {
     action: "generateSchedule",
-    source: admin,
     why: "regenerate cascades away every check-in, pick and standin booking",
   },
   {
     action: "removeCaptain",
-    source: admin,
     why: "deletes every fixture in the season, not just that team's",
   },
 ];
 
 describe("unrecoverable admin actions require typed confirmation", () => {
-  it.each(UNRECOVERABLE)("$action is guarded ($why)", ({ action, source }) => {
-    // The form exists…
-    expect(source).toContain(`action={${action}}`);
-    // …and a DangerSubmit is rendered somewhere in the same file. (Both files
-    // are small enough that a per-file check is the honest granularity — a
-    // per-form parse would need a real JSX parser to be trustworthy.)
+  it.each(UNRECOVERABLE)("$action is guarded ($why)", ({ action }) => {
+    // The form exists somewhere…
+    const forms = filesContaining(UI, `action={${action}}`);
     expect(
-      source.includes("<DangerSubmit"),
-      `${action} lives in a file that no longer renders DangerSubmit`,
-    ).toBe(true);
+      forms.length,
+      `no page or component renders action={${action}} any more`,
+    ).toBeGreaterThan(0);
+    // …and every file rendering it also renders a DangerSubmit. (A per-file
+    // check is the honest granularity — a per-form parse would need a real
+    // JSX parser to be trustworthy.)
+    for (const form of forms) {
+      expect(
+        form.text.includes("<DangerSubmit"),
+        `${action} is rendered in ${form.path}, which renders no DangerSubmit`,
+      ).toBe(true);
+    }
   });
 
   it("every DangerSubmit call site names a real token, not a magic word", () => {
+    // At least one call site per unrecoverable action, in at least two files
+    // (/admin and /seasons), or the parse below is checking nothing.
+    expect(CALL_SITES.length).toBeGreaterThanOrEqual(UNRECOVERABLE.length);
+    expect(new Set(CALL_SITES.map((c) => c.file)).size).toBeGreaterThanOrEqual(
+      2,
+    );
     // "type DELETE" trains the reflex it exists to break; the token has to be
-    // something specific to the thing being destroyed.
-    for (const src of [admin, seasons]) {
-      expect(src).not.toMatch(/token=\{?["']DELETE["']\}?/i);
-      expect(src).not.toMatch(/token=\{?["']CONFIRM["']\}?/i);
+    // something specific to the thing being destroyed: its name.
+    for (const file of UI) {
+      expect(file.text, file.path).not.toMatch(/token=\{?["']DELETE["']\}?/i);
+      expect(file.text, file.path).not.toMatch(/token=\{?["']CONFIRM["']\}?/i);
+    }
+    for (const site of CALL_SITES) {
+      expect(site.token, `a DangerSubmit in ${site.file}`).not.toMatch(
+        /^\{?["']?(DELETE|CONFIRM)["']?\}?$/i,
+      );
+      expect(
+        site.token,
+        `a DangerSubmit in ${site.file} must pass a real name as its token`,
+      ).toMatch(/^\{[\w.]+\.name\}$/);
     }
     // Both files pass a real name through.
     expect(admin).toMatch(/token=\{(season\.name|t\.name)\}/);

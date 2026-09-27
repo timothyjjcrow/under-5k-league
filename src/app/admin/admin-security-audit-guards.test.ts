@@ -1,11 +1,18 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  haystackOf,
+  sourceFiles,
+} from "../../../test/support/source-files";
 
-const actions = readFileSync(
-  path.resolve(process.cwd(), "src/app/actions/admin.ts"),
-  "utf8",
-);
+// Audit rows are written from server actions and from the services they call.
+// Both areas are globbed so an action split out of actions/admin.ts, or a new
+// service that logs, stays under the guard.
+const ACTION_FILES = sourceFiles("src/app/actions/**/*.ts", 10);
+const actions = haystackOf(ACTION_FILES);
+const AUDIT_WRITERS = [
+  ...ACTION_FILES,
+  ...sourceFiles("src/lib/**/*.ts", 150),
+];
 
 describe("security and league configuration audit trail", () => {
   it.each([
@@ -39,11 +46,18 @@ describe("security and league configuration audit trail", () => {
   );
 
   it("never interpolates a webhook URL into an audit summary", () => {
-    const summaries = [...actions.matchAll(/summary:\s*`([^`]+)`/g)].map(
-      (match) => match[1],
+    const summaries = AUDIT_WRITERS.flatMap((f) =>
+      [...f.text.matchAll(/summary:\s*`([^`]+)`/g)].map((match) => ({
+        file: f.path,
+        summary: match[1],
+      })),
     );
-    expect(summaries.join("\n")).not.toMatch(
-      /WebhookUrl|webhookUrl|https:\/\//,
-    );
+    // ~55 templated summaries today (44 in actions/admin.ts). Far fewer means
+    // the extractor stopped matching and the check below reads nothing.
+    expect(summaries.length).toBeGreaterThanOrEqual(40);
+    const leaking = summaries
+      .filter(({ summary }) => /WebhookUrl|webhookUrl|https:\/\//.test(summary))
+      .map(({ file, summary }) => `${file}: ${summary}`);
+    expect(leaking).toEqual([]);
   });
 });
