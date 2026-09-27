@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
+import { hasOfficialChampion } from "@/lib/official-champion";
 import {
   analyzeRecordGames,
   formatGameDuration,
@@ -150,10 +151,11 @@ export default async function RecordsPage({
 }: {
   searchParams: Promise<{ season?: string | string[] }>;
 }) {
-  const [games, seasons, query] = await Promise.all([
+  const [games, seasons, query, champion] = await Promise.all([
     getAllGamesForRecords(),
     prisma.season.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, name: true } }),
     searchParams,
+    hasOfficialChampion(),
   ]);
   const seasonParam = singleSearchParam(query.season);
   if (seasonParam === null) notFound();
@@ -201,7 +203,7 @@ export default async function RecordsPage({
         subtitle={selectedSeason
           ? `The best single-game performances of ${selectedSeason.name}.`
           : "The best single-game performances in league history."}
-        action={<Link href="/hall-of-fame" className={textLink("text-sm font-semibold")}>Career legends →</Link>}
+        action={champion ? <Link href="/hall-of-fame" className={textLink("text-sm font-semibold")}>Career legends →</Link> : undefined}
       />
       <StatsNav active="records" seasonId={selectedSeason?.id} />
       <StatsDataNotice {...analysis.diagnostics} />

@@ -19,6 +19,7 @@ import {
   Card,
   CardBody,
   EmptyState,
+  buttonClasses,
   PageTitle,
   PlayerLink,
   SectionTitle,
@@ -97,7 +98,7 @@ function BoardCard({ board, userOf }: { board: Board; userOf: Map<string, User> 
 }
 
 export default async function HallOfFamePage() {
-  const [seasons, matches, games, predictions] = await Promise.all([
+  const [seasons, matches] = await Promise.all([
     prisma.season.findMany({
       orderBy: { createdAt: "desc" },
       select: { id: true, name: true, status: true, championTeamId: true },
@@ -109,8 +110,6 @@ export default async function HallOfFamePage() {
         awayTeamId: true, scheduledAt: true,
       },
     }),
-    getPublicGameSnapshot(null),
-    prisma.prediction.findMany({ select: { matchId: true, userId: true, pickedTeamId: true } }),
   ]);
   const matchesBySeason = new Map<string, typeof matches>();
   for (const match of matches) {
@@ -124,17 +123,52 @@ export default async function HallOfFamePage() {
       teamId: resolveChampionPresentation(season, matchesBySeason.get(season.id) ?? []).championTeamId,
     }))
     .filter((row): row is { season: typeof seasons[number]; teamId: string } => Boolean(row.teamId));
-  const championTeamIds = champions.map((row) => row.teamId);
 
+  // A hall of fame starts with a champion. Before one exists every board
+  // would be empty or repeat this season's Leaders, so the page is just
+  // this one note.
+  if (champions.length === 0) {
+    return (
+      <div>
+        <PageTitle
+          title="Hall of Fame"
+          subtitle="The teams that lifted the trophy and the players who built lasting careers."
+        />
+        <EmptyState
+          title="No champion yet"
+          description="The Hall of Fame opens when a season crowns its champion. Until then, Leaders and the Record book follow the season."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Link href="/leaders" className={buttonClasses("secondary", "sm")}>Leaders →</Link>
+              <Link href="/records" className={buttonClasses("secondary", "sm")}>Record book →</Link>
+            </div>
+          }
+        />
+      </div>
+    );
+  }
+
+  const [games, predictions] = await Promise.all([
+    getPublicGameSnapshot(null),
+    prisma.prediction.findMany({ select: { matchId: true, userId: true, pickedTeamId: true } }),
+  ]);
+  const championTeamIds = champions.map((row) => row.teamId);
   const careers = appearanceCareers(games, matches,
     champions.map(({ season, teamId }) => ({ seasonId: season.id, teamId })));
   const titles = careers.championshipContributions;
   const seriesWins = careers.seriesWins;
   const memberships = careers.rows.filter((row) => row.championshipContribution);
+  const seasonOfMatch = new Map(matches.map((match) => [match.id, match.seasonId]));
   const trustedGames = games.map((game) => ({
+    seasonId: seasonOfMatch.get(game.matchId),
     radiantWin: game.radiantWin,
     players: trustedGamePlayers(decodeGamePlayers(game.players)),
   })).filter((game) => game.players.length === 10);
+  // With one season of games the career game boards are that season's
+  // Leaders again, so they wait for a second season.
+  const seasonsWithGames = new Set(
+    trustedGames.flatMap((game) => (game.seasonId ? [game.seasonId] : [])),
+  ).size;
   const gameCounts = careerGameCounts(trustedGames);
   const gameWins = new Map([...gameCounts].map(([id, count]) => [id, count.wins]));
   // Impact points: the per-game score behind Player of the Week and match
@@ -166,7 +200,7 @@ export default async function HallOfFamePage() {
       detail: (id) => countLine(titles.get(id), "championship contribution", "championship contributions"),
     },
   ];
-  const performanceBoards: Board[] = [
+  const performanceBoards: Board[] = seasonsWithGames >= 2 ? [
     {
       id: "game-wins", title: "🎮 Game wins", subtitle: "Actual Dota games played and won in trusted box scores.",
       top: topPlaces(rankCounts(gameWins)), format: (value) => number.format(value),
@@ -187,21 +221,24 @@ export default async function HallOfFamePage() {
       top: topPlaces(rankCounts(impact), { placeKey: tenths }), format: (value) => pointsNumber.format(value),
       detail: (id) => `${gameCounts.get(id)?.games ?? 0} games played`,
     },
-  ];
+  ] : [];
   const oracleBoard: Board = {
     id: "oracle", title: "🔮 Pick'em accuracy", subtitle: "Correct picks divided by graded picks; at least three to qualify.",
     top: topPlaces(oracle.map((standing) => ({ userId: standing.userId, value: Math.round(standing.accuracy * 100) }))),
     format: (value) => `${value}%`,
     detail: (id) => `${oracleOf.get(id)?.correct ?? 0}/${oracleOf.get(id)?.graded ?? 0} correct picks`,
   };
+  const hasRows = (list: Board[]) => list.some((board) => board.top.rows.length > 0);
+  // Sections with nothing on any board are left out rather than shown empty.
+  const showCareer = hasRows(careerBoards);
+  const showPerformance = hasRows(performanceBoards);
+  const showPickem = hasRows([oracleBoard]);
   const boards = [...careerBoards, ...performanceBoards, oracleBoard];
 
-  const teams = championTeamIds.length
-    ? await prisma.team.findMany({
-        where: { id: { in: championTeamIds } },
-        select: { id: true, name: true, logoUrl: true },
-      })
-    : [];
+  const teams = await prisma.team.findMany({
+    where: { id: { in: championTeamIds } },
+    select: { id: true, name: true, logoUrl: true },
+  });
   const teamOf = new Map(teams.map((team) => [team.id, team]));
   const championRosterIds = memberships
     .filter((member) => championTeamIds.includes(member.teamId))
@@ -217,9 +254,13 @@ export default async function HallOfFamePage() {
       })
     : [];
   const userOf = new Map(users.map((user) => [user.id, user]));
-  const featuredChampion = champions[0];
-  const featuredTeam = featuredChampion ? teamOf.get(featuredChampion.teamId) : null;
-  const hasCareerRows = boards.some((board) => board.top.rows.length > 0);
+  const sections = [
+    ["champions", "Champions", true],
+    ["career", "Career honors", showCareer],
+    ["performance", "Game performance", showPerformance],
+    ["prediction", "Pick'em", showPickem],
+  ] as const;
+  const shownSections = sections.filter(([, , shown]) => shown);
 
   return (
     <div className="space-y-8">
@@ -234,128 +275,96 @@ export default async function HallOfFamePage() {
         }
       />
 
-      <section className="overflow-hidden rounded-2xl border border-accent/30 bg-gradient-to-br from-surface-3 via-surface to-bg p-5 sm:p-7">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-accent">League legacy</p>
-            <h2 className="mt-2 max-w-2xl font-display text-3xl font-bold leading-tight sm:text-4xl">
-              {featuredChampion && featuredTeam
-                ? `${featuredTeam.name} is the latest champion.`
-                : "The next chapter is still being written."}
-            </h2>
-            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">
-              Explore official team titles, recorded player contributions, imported game performances, and pick&apos;em results across the full archive.
-            </p>
-            {featuredChampion && featuredTeam ? (
-              <Link href={`/seasons/${featuredChampion.season.id}`} className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-info hover:underline">
-                <TeamCrest name={featuredTeam.name} seed={featuredTeam.id} logoUrl={featuredTeam.logoUrl} size={30} />
-                Relive {featuredChampion.season.name} →
-              </Link>
-            ) : null}
-          </div>
-          <div className="grid grid-cols-3 gap-3 text-center lg:min-w-72">
-            {([[seasons.length, "seasons"], [champions.length, "champions"], [trustedGames.length, "games"]] as const).map(([value, label]) => (
-              <div key={label} className="rounded-xl border border-line bg-bg/45 px-3 py-3">
-                <div className="font-display text-2xl font-bold tabular-nums">{value}</div>
-                <div className="text-xs text-muted">{label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <nav aria-label="Hall of Fame sections" className="flex flex-wrap gap-2">
-        {[
-          ["career", "Career honors"],
-          ["performance", "Game performance"],
-          ["prediction", "Pick'em"],
-          ["champions", "Champions"],
-        ].map(([id, label]) => (
-          <a key={id} href={`#${id}`} className="rounded-full border border-line bg-surface px-3 py-2 text-sm font-medium text-muted hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{label} ↓</a>
-        ))}
-      </nav>
-
-      {!hasCareerRows && champions.length === 0 ? (
-        <EmptyState title="No legends yet" description="Careers and champions appear as completed matches and imported games build league history." />
+      {shownSections.length > 1 ? (
+        <nav aria-label="Hall of Fame sections" className="flex flex-wrap gap-2">
+          {shownSections.map(([id, label]) => (
+            <a key={id} href={`#${id}`} className="rounded-full border border-line bg-surface px-3 py-2 text-sm font-medium text-muted hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{label} ↓</a>
+          ))}
+        </nav>
       ) : null}
-
-      <section id="career" className="scroll-mt-24 space-y-3">
-        <SectionTitle aside="Team results across every season">Career honors</SectionTitle>
-        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
-          {careerBoards.map((board) => <BoardCard key={board.id} board={board} userOf={userOf} />)}
-        </div>
-      </section>
-
-      <section id="performance" className="scroll-mt-24 space-y-3">
-        <SectionTitle aside="Trusted imported box scores only">Game performance</SectionTitle>
-        <p className="text-sm leading-relaxed text-muted">
-          Impact points are the Player of the Week score: {impactPointsRule()}.
-        </p>
-        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
-          {performanceBoards.map((board) => <BoardCard key={board.id} board={board} userOf={userOf} />)}
-        </div>
-      </section>
-
-      <section id="prediction" className="scroll-mt-24 space-y-3">
-        <SectionTitle aside="A rate with a visible sample">Pick&apos;em</SectionTitle>
-        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
-          <BoardCard board={oracleBoard} userOf={userOf} />
-          <Card tone="quiet">
-            <CardBody>
-              <h3 className="font-display text-xl font-bold">How this is ranked</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted">
-                Pick&apos;em ranks by accuracy after three graded picks. Draws and unfinished matches are not graded. The correct/graded line shows exactly how much evidence sits behind each percentage.
-              </p>
-              <Link href="/pickem" className="mt-4 inline-block text-sm font-semibold text-info hover:underline">Make a pick →</Link>
-            </CardBody>
-          </Card>
-        </div>
-      </section>
 
       <section id="champions" className="scroll-mt-24 space-y-3">
         <SectionTitle aside="Only verified completed-season titles">Champion history</SectionTitle>
-        {champions.length === 0 ? (
-          <Card tone="quiet"><CardBody><p className="text-sm text-muted">No completed season has an official champion yet.</p></CardBody></Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {champions.map(({ season, teamId }) => {
-              const team = teamOf.get(teamId);
-              const roster = memberships.filter((member) => member.teamId === teamId);
-              return (
-                <Card key={season.id}>
-                  <CardBody>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">{season.name}</p>
-                    <div className="mt-3 flex items-center gap-3">
-                      <TeamCrest name={team?.name ?? "Champion"} seed={teamId} logoUrl={team?.logoUrl} size={48} />
-                      <div className="min-w-0">
-                        <h3 className="truncate font-display text-xl font-bold">{team?.name ?? "Archived champion"}</h3>
-                        <Link href={`/seasons/${season.id}`} className="text-xs font-semibold text-info hover:underline">View season →</Link>
-                      </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {champions.map(({ season, teamId }) => {
+            const team = teamOf.get(teamId);
+            const roster = memberships.filter((member) => member.teamId === teamId);
+            return (
+              <Card key={season.id}>
+                <CardBody>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">{season.name}</p>
+                  <div className="mt-3 flex items-center gap-3">
+                    <TeamCrest name={team?.name ?? "Champion"} seed={teamId} logoUrl={team?.logoUrl} size={48} />
+                    <div className="min-w-0">
+                      <h3 className="truncate font-display text-xl font-bold">{team?.name ?? "Archived champion"}</h3>
+                      <Link href={`/seasons/${season.id}`} className="text-xs font-semibold text-info hover:underline">View season →</Link>
                     </div>
-                    {roster.length > 0 ? (
-                      <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line-soft pt-4">
-                        <p className="w-full text-xs text-muted">Recorded contributors during this championship season</p>
-                        {roster.map((member) => {
-                          const user = userOf.get(member.userId);
-                          return user ? (
-                            <PlayerLink key={member.userId} userId={member.userId} className="rounded-full border border-line bg-surface-2 px-2.5 py-1 text-xs font-medium">{user.name}</PlayerLink>
-                          ) : null;
-                        })}
-                      </div>
-                    ) : <p className="mt-4 text-xs text-muted">The team title is recorded; individual appearances have not been recovered.</p>}
-                  </CardBody>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+                  </div>
+                  {roster.length > 0 ? (
+                    <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line-soft pt-4">
+                      <p className="w-full text-xs text-muted">Recorded contributors during this championship season</p>
+                      {roster.map((member) => {
+                        const user = userOf.get(member.userId);
+                        return user ? (
+                          <PlayerLink key={member.userId} userId={member.userId} className="rounded-full border border-line bg-surface-2 px-2.5 py-1 text-xs font-medium">{user.name}</PlayerLink>
+                        ) : null;
+                      })}
+                    </div>
+                  ) : <p className="mt-4 text-xs text-muted">The team title is recorded; individual appearances have not been recovered.</p>}
+                </CardBody>
+              </Card>
+            );
+          })}
+        </div>
       </section>
 
-      <p className="border-t border-line-soft pt-4 text-xs leading-relaxed text-muted">
-        Player contributions use {careers.coverage.trustedGames} trusted game{careers.coverage.trustedGames === 1 ? "" : "s"} of {careers.coverage.importedGames} imported.
-        {careers.coverage.unattributedLines > 0 ? ` ${careers.coverage.unattributedLines} player lines lack a verified player/team pairing and cannot receive a team contribution.` : ""}
-        {" "}Manual results without box scores still count for teams; they do not invent individual appearances. Historical totals change when a result is corrected. Impact points use the current scoring rules for every imported game.
-      </p>
+      {showCareer ? (
+        <section id="career" className="scroll-mt-24 space-y-3">
+          <SectionTitle aside="Team results across every season">Career honors</SectionTitle>
+          <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
+            {careerBoards.map((board) => <BoardCard key={board.id} board={board} userOf={userOf} />)}
+          </div>
+        </section>
+      ) : null}
+
+      {showPerformance ? (
+        <section id="performance" className="scroll-mt-24 space-y-3">
+          <SectionTitle aside="Trusted imported box scores only">Game performance</SectionTitle>
+          <p className="text-sm leading-relaxed text-muted">
+            Impact points are the Player of the Week score: {impactPointsRule()}.
+          </p>
+          <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
+            {performanceBoards.map((board) => <BoardCard key={board.id} board={board} userOf={userOf} />)}
+          </div>
+        </section>
+      ) : null}
+
+      {showPickem ? (
+        <section id="prediction" className="scroll-mt-24 space-y-3">
+          <SectionTitle aside="A rate with a visible sample">Pick&apos;em</SectionTitle>
+          <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
+            <BoardCard board={oracleBoard} userOf={userOf} />
+            <Card tone="quiet">
+              <CardBody>
+                <h3 className="font-display text-xl font-bold">How this is ranked</h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  Pick&apos;em ranks by accuracy after three graded picks. Draws and unfinished matches are not graded. The correct/graded line shows exactly how much evidence sits behind each percentage.
+                </p>
+                <Link href="/pickem" className="mt-4 inline-block text-sm font-semibold text-info hover:underline">Make a pick →</Link>
+              </CardBody>
+            </Card>
+          </div>
+        </section>
+      ) : null}
+
+      {showCareer || showPerformance ? (
+        <p className="border-t border-line-soft pt-4 text-xs leading-relaxed text-muted">
+          Player contributions use {careers.coverage.trustedGames} trusted game{careers.coverage.trustedGames === 1 ? "" : "s"} of {careers.coverage.importedGames} imported.
+          {careers.coverage.unattributedLines > 0 ? ` ${careers.coverage.unattributedLines} player lines lack a verified player/team pairing and cannot receive a team contribution.` : ""}
+          {" "}Manual results without box scores still count for teams; they do not invent individual appearances. Historical totals change when a result is corrected.
+          {showPerformance ? " Impact points use the current scoring rules for every imported game." : ""}
+        </p>
+      ) : null}
     </div>
   );
 }

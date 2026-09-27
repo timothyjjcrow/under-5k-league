@@ -195,6 +195,9 @@ test("former players retain actual appearances and auction receipts while identi
     expect(await page.content()).not.toContain("privateMarker");
 
     await page.goto("/hall-of-fame");
+    // The history season crowned a champion, so the Hall of Fame opens on it.
+    await expect(page.getByRole("heading", { name: "Champion history" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: f.homeName, exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "🏆 Championship contributions", exact: true })).toBeVisible();
     await page.goto(`/matches/${f.matchId}`);
     await expect(page.getByText("Correct player attribution · Admin", { exact: true })).toHaveCount(0);

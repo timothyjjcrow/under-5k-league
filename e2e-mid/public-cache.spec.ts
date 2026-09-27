@@ -193,7 +193,10 @@ test("warm public statistics refresh on the first read after real admin correcti
         expect(warm[key].text).toContain("9,999");
         expect(warm[key].html).toContain(`${fixture.homeName} vs Cache Away`);
       }
-      for (const key of ["career", "leaders", "recap"]) {
+      // /hall-of-fame (career) is only its "No champion yet" note in this
+      // regular-season fixture, so it is read for errors but carries no
+      // player statistics to compare.
+      for (const key of ["leaders", "recap"]) {
         expect(warm[key].html, `${key} includes the owned imported game before removal`).toContain(playerLink(fixture.playerId));
       }
       expect(warm.player.html).toContain(`href="/matches/${fixture.matchId}"`);
@@ -238,7 +241,7 @@ test("warm public statistics refresh on the first read after real admin correcti
       expect(afterRemove?.value, "game correction commits a new public data revision").toBeTruthy();
       expect(afterRemove?.value).not.toBe(afterRename?.value);
       const corrected = await readTogether(context, paths);
-      for (const key of ["career", "records", "seasonRecords", "leaders", "recap"]) {
+      for (const key of ["records", "seasonRecords", "leaders", "recap"]) {
         expect(corrected[key].html, `${key} first response excludes the removed game's participant statistics`).not.toContain(playerLink(fixture.playerId));
       }
       expect(corrected.player.html).toContain("No games recorded yet");

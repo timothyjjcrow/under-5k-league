@@ -131,6 +131,8 @@ test("the record book lists records compactly and scopes by season", async ({ pa
   // No record names a player for their worst game.
   await expect(page.getByText(/Most deaths|Wild card/)).toHaveCount(0);
   await expect(page.getByText(/tie goes to whoever set the mark first/)).toBeVisible();
+  // No champion yet, so no link to a Hall of Fame that would only say so.
+  await expect(page.getByRole("link", { name: "Career legends →" })).toHaveCount(0);
   // One season of games: "All seasons" would be the same list, so no picker
   // and no separate submit button.
   const picker = page.getByRole("navigation", { name: "Choose a season for records" });
@@ -151,15 +153,17 @@ test("the record book lists records compactly and scopes by season", async ({ pa
   assertNoErrors();
 });
 
-test("Hall of Fame puts career rates and champion history in context", async ({ page }) => {
+test("Hall of Fame waits for a champion instead of showing empty boards", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
+  // The midseason fixture has one season and no champion yet.
   await page.goto("/hall-of-fame");
-  await expect(page.getByRole("heading", { name: "Hall of Fame" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Career honors" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Game performance" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Impact points per game" })).toBeVisible();
-  await expect(page.getByText(/Impact points are the Player of the Week score/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Champion history" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hall of Fame", level: 1 })).toBeVisible();
+  await expect(page.getByText("No champion yet", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Leaders →" })).toHaveAttribute("href", "/leaders");
+  await expect(page.getByRole("link", { name: "Record book →" })).toHaveAttribute("href", "/records");
+  await expect(page.getByRole("heading", { name: "Career honors" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Game performance" })).toHaveCount(0);
+  await expect(page.getByText("Nobody has qualified yet.")).toHaveCount(0);
   await page.setViewportSize({ width: 360, height: 812 });
   await expectNoHorizontalOverflow(page, "/hall-of-fame");
   assertNoErrors();
