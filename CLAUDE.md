@@ -512,7 +512,9 @@ has to justify it.
 - **The signed-up-but-unlinked prompt** (`src/components/discord-setup.tsx`):
   linking used to be offered in exactly ONE place — a card partway down `/me`
   — while the invite had six. `DiscordSetupPrompt` renders on the dashboard
-  (and `DiscordSetupCard` at the top of `/me`) for a viewer who is ACTIVE in
+  (on `/me` the season card now comes first and its derived "You're signed
+  up. Next:" list, `accountNextSteps` in `src/lib/account-page.ts`, points
+  at the Discord card instead) for a viewer who is ACTIVE in
   the season and has no `discordId`, and is phase-independent on purpose: a
   player who signs up during SIGNUPS is still unreachable in week 4. It is
   DERIVED state, never a dismissible flag — a nag that can be dismissed
