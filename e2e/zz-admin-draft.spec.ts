@@ -110,9 +110,25 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     capOnePage.getByText("Waiting for the admin to start the auction"),
   ).toBeVisible();
 
-  // Start the auction and jump into the draft room.
+  // Start the auction from the draft room's waiting room: an admin gets the
+  // same Start draft button as /admin (same action, same confirm), and the
+  // team cards show the opening nomination order (Cap One was made captain
+  // first, so they open).
+  await page.goto("/draft");
+  await expect(
+    page.getByText("Waiting for the admin to start the auction"),
+  ).toBeVisible();
+  const rosterCards = page.locator('section[aria-label="Team rosters"] > div');
+  await expect(
+    rosterCards.filter({ hasText: "Cap One" }).getByText("Nominates 1st"),
+  ).toBeVisible();
+  await expect(
+    rosterCards.filter({ hasText: "Cap Two" }).getByText("Nominates 2nd"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Captains & draft setup on the admin panel" }),
+  ).toHaveAttribute("href", "/admin#adm-captains");
   await page.getByRole("button", { name: "Start draft" }).click();
-  await page.getByRole("link", { name: /draft room/i }).click();
 
   // The parked player's page flips live via its own poll — NO reload.
   await expect(playerPage.getByText(/Available ·/)).toBeVisible({

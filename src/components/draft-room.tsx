@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import {
   Avatar,
@@ -27,6 +33,7 @@ import {
 import { DOTA_ROLES } from "@/lib/roles";
 import {
   adminNominationTeam,
+  nominationOrderLabel,
   bidAllowanceLine,
   captainStatusLine,
   draftAlertsReachViewer,
@@ -268,6 +275,7 @@ export function DraftRoom({
   resumeAction,
   undoAction,
   voidLotAction,
+  adminStart,
 }: {
   pollMs?: number;
   seasonId: string;
@@ -275,6 +283,12 @@ export function DraftRoom({
   resumeAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   undoAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   voidLotAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  /**
+   * Admins only, while draft setup is open: the Start draft button from
+   * /admin (same form, same startDraft action, same confirm), rendered by the
+   * page, plus why Start is unavailable when it is.
+   */
+  adminStart?: { control: ReactNode; blocker: string | null };
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
@@ -1162,19 +1176,41 @@ export function DraftRoom({
             <Link href="/teams" className={buttonClasses("secondary", "sm")}>
               Captains &amp; budgets
             </Link>
-            {me.isAdmin ? (
-              <Link href="/admin" className={buttonClasses("accent", "sm")}>
+            {me.isAdmin && !adminStart ? (
+              <Link
+                href="/admin#adm-captains"
+                className={buttonClasses("accent", "sm")}
+              >
                 Start it from the admin panel →
               </Link>
             ) : null}
           </div>
+          {/* Admins start the auction right here: the same Start draft form
+              as the Captains & draft card (same action, same confirm), so a
+              phone on draft night doesn't have to dig through /admin. The
+              rest of setup stays one link away, on that card. */}
+          {me.isAdmin && adminStart ? (
+            <div className="mt-4 flex flex-col items-center gap-2 border-t border-line pt-4">
+              {adminStart.control}
+              {adminStart.blocker ? (
+                <p className="text-sm font-medium text-accent">
+                  Start unavailable: {adminStart.blocker}
+                </p>
+              ) : null}
+              <Link href="/admin#adm-captains" className={textLink("text-sm")}>
+                Captains &amp; draft setup on the admin panel
+              </Link>
+            </div>
+          ) : null}
         </div>
         <AuctionPrimer
           minBid={state.minBid}
           teamSize={state.teamSize}
           defaultOpen
         />
-        {state.teams.length > 0 ? <TeamsGrid state={state} /> : null}
+        {state.teams.length > 0 ? (
+          <TeamsGrid state={state} showNominationOrder />
+        ) : null}
       </div>
     );
   }
@@ -2410,7 +2446,14 @@ function AuctionPrimer({
   );
 }
 
-function TeamsGrid({ state }: { state: DraftState }) {
+function TeamsGrid({
+  state,
+  showNominationOrder = false,
+}: {
+  state: DraftState;
+  /** Waiting room: label each card with its place in the opening order. */
+  showNominationOrder?: boolean;
+}) {
   // A player is up for auction → the "max bid" lines can flag who's priced
   // out. Outside a live lot there is nothing to bid on, so the cards show just
   // the budget (a waiting-room "max $77" meant nothing to anyone).
@@ -2420,7 +2463,7 @@ function TeamsGrid({ state }: { state: DraftState }) {
       aria-label="Team rosters"
       className="grid grid-cols-1 gap-4 sm:grid-cols-2"
     >
-      {state.teams.map((t) => {
+      {state.teams.map((t, i) => {
         // Only while the team still has to nominate — during a live lot the
         // ring and badge belong to the high bidder, not whoever put it up.
         const onClock = nominationTurnTeamId(state) === t.id;
@@ -2485,6 +2528,16 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   ) : null}
                 </div>
                 <div className="text-xs text-muted">
+                  {/* state.teams is in draft order, which is the order
+                      Start draft hands out the opening nominations. */}
+                  {showNominationOrder ? (
+                    <>
+                      <span className="font-medium text-fg">
+                        {nominationOrderLabel(i)}
+                      </span>
+                      {" · "}
+                    </>
+                  ) : null}
                   {t.members.length}/{state.teamSize} players
                 </div>
               </div>

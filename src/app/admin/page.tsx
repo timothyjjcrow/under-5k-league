@@ -33,7 +33,6 @@ import {
   addCaptain,
   removeCaptain,
   randomizeDraftOrder,
-  startDraft,
   generateSchedule,
   startPlayoffs,
   returnToRegularSeasonAction,
@@ -136,7 +135,6 @@ import {
   type InhouseBoardStatus,
 } from "@/lib/inhouse-board-service";
 import {
-  discordReachWarning,
   getDiscordReachFunnel,
   getGuildConfig,
   getPingHealth,
@@ -177,12 +175,17 @@ import {
   undoSaleConfirm,
   voidLotConfirm,
 } from "@/lib/draft-admin";
-import { captainMmrWarning, unverifiedCaptainMmrs } from "@/lib/captain-mmr";
+import {
+  captainMmrWarning,
+  unverifiedCaptainMmrsFor,
+} from "@/lib/captain-mmr";
 import {
   captainTransferOpen,
-  draftSeatPlan,
   draftSetupLockedMessage,
+  draftRosterCounts,
   draftSetupOpen,
+  startDraftCheck,
+  startDraftConfirm,
 } from "@/lib/draft-setup";
 import {
   MATCH_SCHEDULE,
@@ -195,6 +198,10 @@ import {
 } from "@/lib/schedule-status";
 import { MatchImportControls } from "@/components/match-import-controls";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import {
+  StartDraftControl,
+  StartDraftForm,
+} from "@/components/admin-start-draft";
 import { AdminPlayerRankEditor } from "@/components/admin-player-rank-editor";
 import { TEAM_LOGO_URL_MAX_LENGTH } from "@/lib/team-logo";
 import {
@@ -894,29 +901,6 @@ async function loadSeasonAdminData(seasonId: string) {
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
 type Season = NonNullable<Awaited<ReturnType<typeof getActiveSeason>>>;
 
-/**
- * Captains whose MMR will weight their budget at Start with no medal backing
- * it. Built from the SAME rows the projected budgets use (the captain's ACTIVE
- * PLAYER registration MMR, 0 when missing, which startDraft also reads as
- * unknown) plus the captain's current medal, and shared by the Captains &
- * draft card and the next-step banner so the two can never name different
- * captains. Empty once setup closes: from Start on, Team.budget is the
- * authoritative money and captain MMR no longer moves it.
- */
-function unverifiedCaptainMmrsFor(season: Season, data: AdminData) {
-  if (!draftSetupOpen(season.status, data.draft?.status)) return [];
-  const mmrByUser = new Map(data.players.map((p) => [p.userId, p.mmr]));
-  return unverifiedCaptainMmrs(
-    season.budgetMmrWeight,
-    data.teams.map((t) => ({
-      teamId: t.id,
-      name: t.captain.name,
-      mmr: mmrByUser.get(t.captainId) ?? 0,
-      rankTier: t.captain.rankTier,
-    })),
-  );
-}
-
 function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
   const attention = matchAttention(data.matches);
   const names = new Map(data.teams.map((team) => [team.id, team.name]));
@@ -1452,11 +1436,18 @@ function CaptainControls({
   const anyResultRecorded =
     data.matches.some((m) => m.status === "COMPLETED") ||
     data.matches.some((m) => (m.games?.length ?? 0) > 0);
-  const boughtCount = data.teams.reduce(
-    (n, t) => n + t.members.filter((m) => !m.isCaptain).length,
-    0,
+  // Seat math, mirroring startDraft's own (pool = ACTIVE PLAYER signups not
+  // already rostered; seats = one team per CAPTAIN, captain's own seat taken).
+  // Signups are uncapped by design — minTeams is a floor — so the pool is
+  // routinely not a multiple of teamSize, and the count is settled HERE by
+  // choosing how many captains to start with. startDraft accepts both a short
+  // pool (standins fill in) and a long one, silently: an overflow leaves those
+  // players undrafted as free agents with no warning anywhere, which is a thing
+  // to learn before pressing the button, not after.
+  const { captainCount, boughtCount, poolCount } = draftRosterCounts(
+    data.teams,
+    data.players,
   );
-  const captainCount = data.teams.length;
   // The sale Undo last sale would revert — the newest AUCTION purchase
   // (price > 0; $0 rows are free-agent signings), the same row undoLastSale
   // picks — so the confirm can name it like the draft room's does.
@@ -1473,48 +1464,29 @@ function CaptainControls({
       )
       .sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1))[0]?.sale ??
     null;
-  // Seat math, mirroring startDraft's own (pool = ACTIVE PLAYER signups not
-  // already rostered; seats = one team per CAPTAIN, captain's own seat taken).
-  // Signups are uncapped by design — minTeams is a floor — so the pool is
-  // routinely not a multiple of teamSize, and the count is settled HERE by
-  // choosing how many captains to start with. startDraft accepts both a short
-  // pool (standins fill in) and a long one, silently: an overflow leaves those
-  // players undrafted as free agents with no warning anywhere, which is a thing
-  // to learn before pressing the button, not after.
-  const rosteredIds = new Set(
-    data.teams.flatMap((t) => t.members.map((m) => m.userId)),
-  );
-  const poolCount = data.players.filter(
-    (p) => !rosteredIds.has(p.userId),
-  ).length;
-  const seats = draftSeatPlan(captainCount, season.teamSize, poolCount);
+  const {
+    seats,
+    canStart,
+    blocker: startBlocker,
+  } = startDraftCheck({
+    captainCount,
+    teamSize: season.teamSize,
+    poolCount,
+    boughtCount,
+  });
   const rosterAlreadyBuilt = boughtCount > 0;
-  const canStart = seats.canStart && !rosterAlreadyBuilt;
-  const startBlocker = rosterAlreadyBuilt
-    ? `${boughtCount} non-captain roster member${boughtCount === 1 ? " is" : "s are"} already assigned. Return to the appropriate season phase and use roster tools; Start only accepts captain-only teams.`
-    : seats.blocker;
   const openSeats = seats.openSeats;
-  const seatNote =
-    openSeats === poolCount
-      ? ` The pool fits exactly: ${poolCount} players for ${openSeats} open seats.`
-      : openSeats > poolCount
-        ? ` ${poolCount} players for ${openSeats} open seats — ${openSeats - poolCount} seat${openSeats - poolCount === 1 ? "" : "s"} will go unfilled (standins cover them). Removing a captain would tighten it.`
-        : ` ${poolCount} players for only ${openSeats} open seats — ${poolCount - openSeats} player${poolCount - openSeats === 1 ? "" : "s"} will go undrafted. Adding a captain opens ${season.teamSize - 1} more seats.`;
-  const startConfirm =
-    `Start the draft with ${captainCount} captain${captainCount === 1 ? "" : "s"}?` +
-    (captainCount < season.minTeams
-      ? ` That is fewer than this season's ${season.minTeams}-team target.`
-      : "") +
-    seatNote +
-    " Captains are locked once the auction begins — the way back is Abort draft," +
-    " which returns every drafted player and refund and keeps the captains, but" +
-    " is refused once any result has been recorded." +
-    (season.draftAt
-      ? ` Draft confirmations: ${confirmationCounts.ready} of ${confirmationCounts.total} ready; ${confirmationCounts.awaiting} awaiting${confirmationCounts.stale ? `; ${confirmationCounts.stale} must reconfirm` : ""}. This is a warning only and does not block the draft.`
-      : " No draft night is scheduled, so players have not been asked to confirm one.") +
+  const startConfirm = startDraftConfirm({
+    captainCount,
+    minTeams: season.minTeams,
+    teamSize: season.teamSize,
+    seats,
+    draftScheduled: !!season.draftAt,
+    confirmations: confirmationCounts,
     // DB-only, so it belongs in the base confirm: the Suspense fallback button
     // carries it too, and a click before the Discord line lands still warns.
-    captainMmrWarning(unverifiedMmr);
+    mmrWarning: captainMmrWarning(unverifiedMmr),
+  });
   const startDisabled = !setupOpen || !canStart;
 
   return (
@@ -5121,64 +5093,6 @@ async function MembershipChip({
     <Badge tone={chip.tone} title={chip.detail}>
       {chip.label}
     </Badge>
-  );
-}
-
-/**
- * The Start-draft form itself, rendered twice: as the Suspense fallback with
- * the base confirm (the button must exist the moment the panel paints), and
- * by StartDraftControl with the Discord reachability line appended.
- */
-function StartDraftForm({
-  seasonId,
-  confirm,
-  disabled,
-}: {
-  seasonId: string;
-  confirm: string;
-  disabled: boolean;
-}) {
-  return (
-    <ActionForm
-      action={startDraft}
-      hidden={{ expectedActiveSeasonId: seasonId }}
-    >
-      <SubmitButton
-        variant="accent"
-        size="sm"
-        disabled={disabled}
-        confirm={confirm}
-      >
-        Start draft
-      </SubmitButton>
-    </ActionForm>
-  );
-}
-
-/**
- * House rule: a consequential confirm states the real numbers BEFORE the
- * click. This one appends who the league cannot reach on Discord — missing
- * from the server, stuck behind its rules screen, or never linked — because
- * the moment before the draft is the last cheap chance to chase a join:
- * afterwards these players are locked onto rosters that need to schedule
- * with them every week.
- */
-async function StartDraftControl({
-  seasonId,
-  confirmBase,
-  disabled,
-}: {
-  seasonId: string;
-  confirmBase: string;
-  disabled: boolean;
-}) {
-  const reach = await getDiscordReachFunnel(seasonId);
-  return (
-    <StartDraftForm
-      seasonId={seasonId}
-      confirm={confirmBase + discordReachWarning(reach)}
-      disabled={disabled}
-    />
   );
 }
 

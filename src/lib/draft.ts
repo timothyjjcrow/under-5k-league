@@ -631,3 +631,25 @@ export function adminNominationTeam(s: {
   if (cap < s.minBid) return null;
   return { id: team.id, name: team.name, maxBid: cap };
 }
+
+/**
+ * "Nominates 1st", "Nominates 2nd", …: a team's place in the opening
+ * nomination order, by its 0-based index in draft order (the order Start
+ * draft hands out the first nomination, and the waiting room lists teams in).
+ */
+export function nominationOrderLabel(index: number): string {
+  const n = Math.max(0, Math.trunc(index)) + 1;
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  const suffix =
+    mod100 >= 11 && mod100 <= 13
+      ? "th"
+      : mod10 === 1
+        ? "st"
+        : mod10 === 2
+          ? "nd"
+          : mod10 === 3
+            ? "rd"
+            : "th";
+  return `Nominates ${n}${suffix}`;
+}

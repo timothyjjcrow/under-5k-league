@@ -31,6 +31,7 @@ import {
   wasOutbid,
   shuffle,
   DRAFT_TITLE_PREFIXES,
+  nominationOrderLabel,
 } from "./draft";
 
 const team = (rosterCount: number, budget = 100): DraftTeam => ({
@@ -926,5 +927,26 @@ describe("adminNominationTeam", () => {
       teams: [{ id: "t2", name: "Team 2", budget: 2, members: [{}, {}] }],
     };
     expect(adminNominationTeam(broke)).toBeNull();
+  });
+});
+
+describe("nominationOrderLabel", () => {
+  it("numbers the opening nomination order from a 0-based index", () => {
+    expect([0, 1, 2, 3, 4, 5].map(nominationOrderLabel)).toEqual([
+      "Nominates 1st",
+      "Nominates 2nd",
+      "Nominates 3rd",
+      "Nominates 4th",
+      "Nominates 5th",
+      "Nominates 6th",
+    ]);
+  });
+
+  it("uses th for 11th to 13th and st/nd/rd after them", () => {
+    expect(nominationOrderLabel(10)).toBe("Nominates 11th");
+    expect(nominationOrderLabel(11)).toBe("Nominates 12th");
+    expect(nominationOrderLabel(12)).toBe("Nominates 13th");
+    expect(nominationOrderLabel(20)).toBe("Nominates 21st");
+    expect(nominationOrderLabel(21)).toBe("Nominates 22nd");
   });
 });

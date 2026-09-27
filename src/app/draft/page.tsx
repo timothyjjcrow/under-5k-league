@@ -1,6 +1,13 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { getActiveSeason } from "@/lib/season";
+import { getSessionUser } from "@/lib/auth";
+import { loadStartDraftPreflight } from "@/lib/draft-start-preflight";
 import { DraftRoom } from "@/components/draft-room";
+import {
+  StartDraftControl,
+  StartDraftForm,
+} from "@/components/admin-start-draft";
 import { EmptyState, PageTitle, buttonClasses } from "@/components/ui";
 import {
   pauseDraftAction,
@@ -35,6 +42,39 @@ export default async function DraftPage() {
     );
   }
 
+  // Admins get Start draft in the waiting room: the same form, action and
+  // confirm as /admin's Captains & draft card (see admin-start-draft.tsx),
+  // loaded only for them and only while there is something to start.
+  const user = await getSessionUser();
+  const preflight =
+    user?.role === "ADMIN" ? await loadStartDraftPreflight(season) : null;
+  const adminStart = preflight
+    ? {
+        blocker: preflight.blocker,
+        // Same Suspense shape as /admin: the button is there at once with the
+        // base confirm, and gains the Discord line when that lookup lands.
+        control: (
+          <Suspense
+            fallback={
+              <StartDraftForm
+                seasonId={season.id}
+                confirm={preflight.confirm}
+                disabled={!preflight.canStart}
+                size="md"
+              />
+            }
+          >
+            <StartDraftControl
+              seasonId={season.id}
+              confirmBase={preflight.confirm}
+              disabled={!preflight.canStart}
+              size="md"
+            />
+          </Suspense>
+        ),
+      }
+    : undefined;
+
   return (
     <div className="space-y-4">
       {/* One line, not the site's two-line PageTitle: on a phone the old
@@ -56,6 +96,7 @@ export default async function DraftPage() {
         resumeAction={resumeDraftAction}
         undoAction={undoLastSaleAction}
         voidLotAction={voidCurrentLotAction}
+        adminStart={adminStart}
       />
     </div>
   );

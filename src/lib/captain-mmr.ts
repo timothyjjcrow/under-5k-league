@@ -1,4 +1,5 @@
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "./rank";
+import { draftSetupOpen } from "./draft-setup";
 
 /**
  * Is the MMR that weights a captain's draft budget backed by anything the
@@ -157,5 +158,40 @@ export function captainMmrWarning(
     ` Unverified captain MMR sets draft budgets: ${list}.` +
     " Cancel and check each with Edit medal & MMR first; a medal that matches the MMR marks it verified." +
     " Starting anyway is allowed."
+  );
+}
+
+/**
+ * Captains whose MMR will weight their budget at Start with no medal backing
+ * it. Built from the SAME rows the projected budgets use (the captain's ACTIVE
+ * PLAYER registration MMR, 0 when missing, which startDraft also reads as
+ * unknown) plus the captain's current medal, and shared by the Captains &
+ * draft card, the next-step banner and the draft room's Start button so they
+ * can never name different captains. Empty once setup closes: from Start on,
+ * Team.budget is the authoritative money and captain MMR no longer moves it.
+ */
+export function unverifiedCaptainMmrsFor(
+  season: { status: string; budgetMmrWeight: number },
+  data: {
+    draft: { status: string } | null;
+    /** The season's ACTIVE PLAYER registrations. */
+    players: readonly { userId: string; mmr: number }[];
+    teams: readonly {
+      id: string;
+      captainId: string;
+      captain: { name: string; rankTier: number | null };
+    }[];
+  },
+): UnverifiedCaptainMmr[] {
+  if (!draftSetupOpen(season.status, data.draft?.status)) return [];
+  const mmrByUser = new Map(data.players.map((p) => [p.userId, p.mmr]));
+  return unverifiedCaptainMmrs(
+    season.budgetMmrWeight,
+    data.teams.map((t) => ({
+      teamId: t.id,
+      name: t.captain.name,
+      mmr: mmrByUser.get(t.captainId) ?? 0,
+      rankTier: t.captain.rankTier,
+    })),
   );
 }
