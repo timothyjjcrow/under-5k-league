@@ -128,9 +128,14 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(
     page.getByRole("button", { name: "Pause auction" }),
   ).toBeVisible();
+  // The room's admin bar shows only buttons that work right now: nothing has
+  // sold yet, so there is no Undo, and the full set is one link away.
   await expect(
     page.getByRole("button", { name: "Undo last sale" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "More controls" }),
+  ).toHaveAttribute("href", "/admin#adm-captains");
 
   // --- The live auction, driven from the captains' own browsers ------------
 

@@ -172,6 +172,11 @@ import {
 } from "@/lib/season-phase-policy";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { mmrWeightedBudgets } from "@/lib/draft";
+import {
+  profileSyncAllowed,
+  undoSaleConfirm,
+  voidLotConfirm,
+} from "@/lib/draft-admin";
 import { captainMmrWarning, unverifiedCaptainMmrs } from "@/lib/captain-mmr";
 import {
   captainTransferOpen,
@@ -1452,6 +1457,22 @@ function CaptainControls({
     0,
   );
   const captainCount = data.teams.length;
+  // The sale Undo last sale would revert — the newest AUCTION purchase
+  // (price > 0; $0 rows are free-agent signings), the same row undoLastSale
+  // picks — so the confirm can name it like the draft room's does.
+  const lastAuctionSale =
+    data.teams
+      .flatMap((t) =>
+        t.members
+          .filter((m) => !m.isCaptain && m.price > 0)
+          .map((m) => ({
+            id: m.id,
+            at: m.createdAt.getTime(),
+            sale: { name: m.user.name, teamName: t.name, price: m.price },
+          })),
+      )
+      .sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1))[0]?.sale ??
+    null;
   // Seat math, mirroring startDraft's own (pool = ACTIVE PLAYER signups not
   // already rostered; seats = one team per CAPTAIN, captain's own seat taken).
   // Signups are uncapped by design — minTeams is a floor — so the pool is
@@ -1513,25 +1534,32 @@ function CaptainControls({
              caught by the mobile tripwire on CI, whose fonts are a few px wider
              than macOS's, so it read as a 7px page scroll. */
           <div className="flex flex-wrap justify-end gap-2">
-            <ActionForm action={syncPlayerRanks}>
-              {/* Pulls medals AND the pub-scouting snapshots the player pool
-                  renders (recent W/L, games, last-played) — one button, one
-                  OpenDota pass. */}
-              <SubmitButton variant="secondary" size="sm">
-                Sync ranks &amp; stats
-              </SubmitButton>
-            </ActionForm>
-            <ActionForm action={syncSteamProfiles}>
-              <SubmitButton
-                variant="secondary"
-                size="sm"
-                /* It refreshes the Steam persona too, not just the picture —
-                   a rename shows up across the whole site after this. */
-                confirm="Refresh every player's Steam name and avatar?"
-              >
-                Sync names &amp; avatars
-              </SubmitButton>
-            </ActionForm>
+            {/* Off while the auction is live or paused: both rewrite the
+                medals, names and avatars captains are reading in the room. */}
+            {profileSyncAllowed(data.draft?.status) ? (
+              <>
+                <ActionForm action={syncPlayerRanks}>
+                  {/* Pulls medals AND the pub-scouting snapshots the player
+                      pool renders (recent W/L, games, last-played) — one
+                      button, one OpenDota pass. */}
+                  <SubmitButton variant="secondary" size="sm">
+                    Sync ranks &amp; stats
+                  </SubmitButton>
+                </ActionForm>
+                <ActionForm action={syncSteamProfiles}>
+                  <SubmitButton
+                    variant="secondary"
+                    size="sm"
+                    /* It refreshes the Steam persona too, not just the
+                       picture — a rename shows up across the whole site after
+                       this. */
+                    confirm="Refresh every player's Steam name and avatar?"
+                  >
+                    Sync names &amp; avatars
+                  </SubmitButton>
+                </ActionForm>
+              </>
+            ) : null}
             {setupOpen ? (
               <>
                 <ActionForm
@@ -1606,7 +1634,16 @@ function CaptainControls({
                 <SubmitButton
                   variant="secondary"
                   size="sm"
-                  confirm="Void the paused live lot? Every bid on this lot is discarded, no sale is recorded, and the same team keeps the nomination turn."
+                  confirm={voidLotConfirm({
+                    playerName:
+                      data.players.find(
+                        (p) => p.userId === data.draft?.nominatedUserId,
+                      )?.user.name ?? null,
+                    nominatorName:
+                      data.teams.find(
+                        (t) => t.id === data.draft?.nominatorTeamId,
+                      )?.name ?? null,
+                  })}
                 >
                   Void live lot
                 </SubmitButton>
@@ -1633,12 +1670,13 @@ function CaptainControls({
                      clock, so one click on a card that says the draft is over
                      puts ten captains back into a live auction and
                      resolveStalledNomination will auto-sell the top remaining
-                     player on the next poll from any visitor. Say so. */
-                  confirm={
-                    data.draft?.status === DRAFT_STATUS.COMPLETE
-                      ? "Undo the most recent sale? This REOPENS the finished auction as a live draft with a fresh nomination clock — the player returns to the pool and the buyer gets the money back and the next nomination. Finish or re-complete the draft afterwards."
-                      : "Undo the most recent auction sale? The player returns to the pool and the buyer gets the money back and the next nomination."
-                  }
+                     player on the next poll from any visitor. Say so. The
+                     text is shared with the draft room's Undo. */
+                  confirm={undoSaleConfirm({
+                    draftComplete:
+                      data.draft?.status === DRAFT_STATUS.COMPLETE,
+                    sale: lastAuctionSale,
+                  })}
                 >
                   Undo last sale
                 </SubmitButton>

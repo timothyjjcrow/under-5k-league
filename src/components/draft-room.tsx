@@ -49,6 +49,12 @@ import {
 } from "@/lib/draft";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
+  draftToolbarControls,
+  hasToolbarControl,
+  undoSaleConfirm,
+  voidLotConfirm,
+} from "@/lib/draft-admin";
+import {
   FEED_MAX,
   draftFeedInvalidated,
   draftFeedDiff,
@@ -1918,6 +1924,9 @@ export function DraftRoom({
   );
 }
 
+// Only the buttons that work right now (draftToolbarControls): a disabled
+// Undo explained in a hover tooltip told a phone nothing, and the bar took
+// ~190px above the clock. The room's confirms are the same texts /admin uses.
 function DraftAdminToolbar({
   state,
   seasonId,
@@ -1935,92 +1944,77 @@ function DraftAdminToolbar({
   undoAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   voidLotAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
 }) {
+  const controls = draftToolbarControls({
+    seasonStatus: state.seasonStatus,
+    status: state.status,
+    lotLive: !!state.nominatedPlayer,
+    hasSale: state.recentSales.length > 0,
+  });
+  if (!controls || !hasToolbarControl(controls)) return null;
   const hidden = { expectedActiveSeasonId: seasonId };
-  const paused = state.status === "PAUSED";
-  const live = state.status === "IN_PROGRESS";
-  const canUndo =
-    state.seasonStatus === "DRAFT" &&
-    !state.nominatedPlayer &&
-    state.recentSales.length > 0;
+  const lastSale = state.recentSales[0];
+  const nominatorName =
+    state.teams.find((t) => t.id === state.nominatorTeamId)?.name ?? null;
 
   return (
     <section
       aria-label="Live draft administration"
-      className="rounded-[var(--radius)] border border-info/30 bg-info/5 p-4"
+      className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-info/30 bg-info/5 px-4 py-2"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">Admin controls</h2>
-          <p className="text-xs text-muted">
-            These controls follow the polled live state. Pause before correcting
-            a mistaken nomination.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {live ? (
-            <ActionForm action={pauseAction} hidden={hidden}>
-              <SubmitButton variant="secondary" size="sm" disabled={disabled}>
-                Pause auction
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-          {paused ? (
-            <ActionForm action={resumeAction} hidden={hidden}>
-              <SubmitButton variant="primary" size="sm" disabled={disabled}>
-                Resume auction
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-          {paused && state.nominatedPlayer ? (
-            <ActionForm action={voidLotAction} hidden={hidden}>
-              <SubmitButton
-                variant="danger"
-                size="sm"
-                disabled={disabled}
-                confirm={`Void the paused lot for ${state.nominatedPlayer.name}? Bids on this lot will be removed and the same team keeps the nomination turn.`}
-              >
-                Void live lot
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-          {canUndo ? (
-            <ActionForm action={undoAction} hidden={hidden}>
-              <SubmitButton
-                variant="secondary"
-                size="sm"
-                disabled={disabled}
-                confirm={`Undo the most recent sale (${state.recentSales[0]?.name} → ${state.recentSales[0]?.teamName})?`}
-              >
-                Undo last sale
-              </SubmitButton>
-            </ActionForm>
-          ) : (
-            <button
-              type="button"
-              disabled
-              title={
-                state.recentSales.length === 0
-                  ? "No completed sale is available to undo."
-                  : state.nominatedPlayer
-                    ? "Pause and void the current lot before undoing a prior sale."
-                    : "Undo is available only during the draft phase."
-              }
-              className={buttonClasses("secondary", "sm")}
-            >
-              Undo last sale
-            </button>
-          )}
-          <Link href="/admin" className={buttonClasses("secondary", "sm")}>
-            Full recovery controls
-          </Link>
-        </div>
-      </div>
-      {state.nominatedPlayer && !paused ? (
-        <p className="mt-2 text-xs text-muted">
-          Undo is unavailable while a lot is live. Pause, then void this lot if
-          the nomination or bidding state is wrong.
-        </p>
+      <h2 className="mr-auto text-sm font-semibold">Admin controls</h2>
+      {controls.pause ? (
+        <ActionForm action={pauseAction} hidden={hidden}>
+          <SubmitButton variant="secondary" size="sm" disabled={disabled}>
+            Pause auction
+          </SubmitButton>
+        </ActionForm>
       ) : null}
+      {controls.resume ? (
+        <ActionForm action={resumeAction} hidden={hidden}>
+          <SubmitButton variant="primary" size="sm" disabled={disabled}>
+            Resume auction
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
+      {controls.voidLot ? (
+        <ActionForm action={voidLotAction} hidden={hidden}>
+          <SubmitButton
+            variant="danger"
+            size="sm"
+            disabled={disabled}
+            confirm={voidLotConfirm({
+              playerName: state.nominatedPlayer?.name ?? null,
+              nominatorName,
+            })}
+          >
+            Void live lot
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
+      {controls.undo ? (
+        <ActionForm action={undoAction} hidden={hidden}>
+          <SubmitButton
+            variant="secondary"
+            size="sm"
+            disabled={disabled}
+            confirm={undoSaleConfirm({
+              draftComplete: state.status === "COMPLETE",
+              sale: lastSale
+                ? {
+                    name: lastSale.name,
+                    teamName: lastSale.teamName,
+                    price: lastSale.price,
+                  }
+                : null,
+            })}
+          >
+            Undo last sale
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
+      <Link href="/admin#adm-captains" className={textLink("text-sm")}>
+        More controls
+      </Link>
     </section>
   );
 }
