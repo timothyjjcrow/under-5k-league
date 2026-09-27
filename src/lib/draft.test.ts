@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { DEFAULTS } from "./constants";
 import {
   adminNominationTeam,
   bidAllowanceLine,
+  bidClockSeconds,
+  lotContested,
   captainStatusLine,
   uncoveredRoles,
   teamNeed,
@@ -689,6 +692,85 @@ describe("outbidders / outbidLine", () => {
 
   it("says nothing without a high bid", () => {
     expect(outbidLine(lot({ currentBidTeamId: null }))).toBeNull();
+  });
+});
+
+describe("lotContested / bidClockSeconds", () => {
+  // teamSize 3 (captain + 2 buys), $1 minimum. Same teams as the outbidders
+  // block above, as the server sees them (roster counts, not member lists).
+  const t = (id: string, budget: number, rosterCount: number): DraftTeam => ({
+    id,
+    budget,
+    rosterCount,
+  });
+  const teams = [t("a", 50, 1), t("b", 30, 2), t("c", 10, 1), t("d", 90, 3)];
+  const lot = (price: number, highBidderTeamId: string | null = "a") => ({
+    teams,
+    teamSize: 3,
+    minBid: 1,
+    price,
+    highBidderTeamId,
+  });
+
+  it("keeps the full clock while another team can top the price", () => {
+    // b can go to $30, c to $9.
+    expect(lotContested(lot(8))).toBe(true);
+    expect(bidClockSeconds(lot(8))).toBe(DEFAULTS.BID_TIMER_SECONDS);
+    expect(bidClockSeconds(lot(29))).toBe(DEFAULTS.BID_TIMER_SECONDS);
+  });
+
+  it("drops to the short clock once nobody else can top it", () => {
+    // $30: b is at its cap, c is priced out, d is full.
+    expect(lotContested(lot(30))).toBe(false);
+    expect(bidClockSeconds(lot(30))).toBe(
+      DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
+    );
+  });
+
+  it("never counts the high bidder as a rival", () => {
+    // b holds the bid: a (cap $49) is the rival that can still top it, and b's
+    // own $30 cap is irrelevant. At $49 a is out too.
+    expect(lotContested(lot(10, "b"))).toBe(true);
+    expect(lotContested(lot(30, "b"))).toBe(true);
+    expect(lotContested(lot(49, "b"))).toBe(false);
+    // a holds the bid: at $29 b (cap $30) can still top it, at $30 nobody.
+    expect(lotContested(lot(29, "a"))).toBe(true);
+    expect(lotContested(lot(30, "a"))).toBe(false);
+  });
+
+  it("is the same rule as the room's 'Can still outbid' list", () => {
+    const roomTeams = teams.map((x) => ({
+      id: x.id,
+      name: x.id,
+      budget: x.budget,
+      members: Array.from({ length: x.rosterCount }, () => null),
+    }));
+    for (const holder of ["a", "b", "c", "d"]) {
+      for (let price = 1; price <= 60; price++) {
+        expect(lotContested(lot(price, holder))).toBe(
+          outbidders({
+            teams: roomTeams,
+            teamSize: 3,
+            minBid: 1,
+            currentBid: price,
+            currentBidTeamId: holder,
+          }).length > 0,
+        );
+      }
+    }
+  });
+
+  it("the last team with seats bidding against nobody gets the short clock", () => {
+    // Late draft: everyone else is full, the one short team opens at $1.
+    const late = [t("a", 40, 2), t("b", 3, 3), t("c", 0, 3)];
+    expect(
+      bidClockSeconds({
+        teams: late,
+        teamSize: 3,
+        price: 1,
+        highBidderTeamId: "a",
+      }),
+    ).toBe(DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS);
   });
 });
 

@@ -51,6 +51,61 @@ export function canNominate(
   );
 }
 
+/**
+ * Could this team top `price` on the live lot? An open seat and a max bid
+ * above the price: the same rule canBid applies to a bid of `price + 1`.
+ * One definition for the room's "Can still outbid" line and the server's
+ * short clock for a lot nobody else can contest.
+ */
+function canTopPrice(
+  team: DraftTeam,
+  teamSize: number,
+  price: number,
+  minBid: number,
+): boolean {
+  return (
+    teamNeed(teamSize, team.rosterCount) > 0 &&
+    maxBid(team, teamSize, minBid) > price
+  );
+}
+
+/**
+ * Can any team other than the high bidder still top the price? False when
+ * every other team is full or priced out, which is most lots late in a draft:
+ * the high bidder wins whatever happens, so there is nothing to wait for.
+ */
+export function lotContested(s: {
+  teams: readonly DraftTeam[];
+  teamSize: number;
+  price: number;
+  highBidderTeamId: string | null;
+  minBid?: number;
+}): boolean {
+  const minBid = s.minBid ?? DEFAULTS.MIN_BID;
+  return s.teams.some(
+    (t) =>
+      t.id !== s.highBidderTeamId &&
+      canTopPrice(t, s.teamSize, s.price, minBid),
+  );
+}
+
+/**
+ * Seconds to put on the bid clock when a lot opens, a bid lands or a paused
+ * lot resumes: the full BID_TIMER_SECONDS while another team can still bid,
+ * UNCONTESTED_BID_TIMER_SECONDS when nobody can (see lotContested).
+ */
+export function bidClockSeconds(s: {
+  teams: readonly DraftTeam[];
+  teamSize: number;
+  price: number;
+  highBidderTeamId: string | null;
+  minBid?: number;
+}): number {
+  return lotContested(s)
+    ? DEFAULTS.BID_TIMER_SECONDS
+    : DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS;
+}
+
 /** Whether `amount` is a legal bid for this team given the current high bid. */
 export function canBid(
   team: DraftTeam,
@@ -403,15 +458,14 @@ export function outbidders(s: {
     .map((t) => ({
       id: t.id,
       name: t.name,
-      cap: maxBid(
-        { id: t.id, budget: t.budget, rosterCount: t.members.length },
-        s.teamSize,
-        minBid,
-      ),
-      need: teamNeed(s.teamSize, t.members.length),
+      team: { id: t.id, budget: t.budget, rosterCount: t.members.length },
     }))
-    .filter((t) => t.need > 0 && t.cap > s.currentBid)
-    .map(({ id, name, cap }) => ({ id, name, cap }));
+    .filter((t) => canTopPrice(t.team, s.teamSize, s.currentBid, minBid))
+    .map(({ id, name, team }) => ({
+      id,
+      name,
+      cap: maxBid(team, s.teamSize, minBid),
+    }));
 }
 
 /**

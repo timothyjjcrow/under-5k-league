@@ -92,6 +92,10 @@ export const DEFAULTS = {
   DRAFT_BUDGET: 100,
   // Seconds the auction clock runs for a nominated player; each new bid resets it.
   BID_TIMER_SECONDS: 30,
+  // The bid clock instead, when no team other than the high bidder can top the
+  // price (full rosters, or not enough money). Late in a draft most lots are
+  // like that: nothing is left to decide, so they close quickly.
+  UNCONTESTED_BID_TIMER_SECONDS: 5,
   // Seconds the team on the clock has to nominate before the draft auto-picks
   // the top available player for them (keeps a live draft from stalling).
   NOMINATION_TIMER_SECONDS: 90,

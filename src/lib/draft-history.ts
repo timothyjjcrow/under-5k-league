@@ -46,7 +46,9 @@ export async function startDraftRun(tx: Tx, input: {
     seasonId: input.seasonId, runNumber: await nextRunNumber(tx, input.seasonId),
     provenance: "COMMAND", status: "RUNNING", startedAt: now, startedById: input.actor.id,
     rulesSnapshot: JSON.stringify({ version: 1, ...input.rules, minimumBid: DEFAULTS.MIN_BID,
-      bidTimerSeconds: DEFAULTS.BID_TIMER_SECONDS, nominationTimerSeconds: DEFAULTS.NOMINATION_TIMER_SECONDS,
+      bidTimerSeconds: DEFAULTS.BID_TIMER_SECONDS,
+      uncontestedBidTimerSeconds: DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
+      nominationTimerSeconds: DEFAULTS.NOMINATION_TIMER_SECONDS,
       budgetAlgorithm: "mmrWeightedBudgets-v1" }),
     openingTeamsSnapshot: JSON.stringify({ version: 1, teams: input.teams.map((team) => ({
       ...team, captainMmr: byUser.get(team.captainId)?.mmr || null,

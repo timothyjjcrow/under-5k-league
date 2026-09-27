@@ -2473,6 +2473,15 @@ function AuctionPrimer({
           When it hits zero, the high bidder wins the player.
         </li>
         <li>
+          <strong className="text-fg">
+            Nobody left to outbid? {DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS}s.
+          </strong>{" "}
+          When no other team has an open seat and the money to top the price,
+          the clock runs {DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS} seconds
+          instead, so late lots don&apos;t sit through{" "}
+          {DEFAULTS.BID_TIMER_SECONDS} seconds of waiting.
+        </li>
+        <li>
           <strong className="text-fg">Your max bid is capped</strong> — the room
           reserves ${minBid} for each seat you&apos;d still have to fill
           afterwards, so you can always finish your roster.

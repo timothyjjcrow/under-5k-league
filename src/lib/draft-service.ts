@@ -10,6 +10,7 @@ import {
 } from "./constants";
 import { effectiveDotaAccountId } from "./dota-account";
 import {
+  bidClockSeconds,
   canBid,
   canNominate,
   maxBid,
@@ -43,6 +44,49 @@ import {
 import { isSerializationConflict } from "./prisma-errors";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * When the bid clock runs out on a lot about to stand at `price`, held by
+ * `highBidderTeamId`: the full clock, or the short one when no other team can
+ * top that price (bidClockSeconds). Every caller reads this inside its own
+ * transaction and writes it in its own guarded claim, and that claim is what
+ * keeps the deadline honest:
+ *
+ * - The price and the high bidder are what the claim itself writes, and the
+ *   claim re-asserts the lot/turn it read, so a rival bid or nomination that
+ *   landed first makes it match no row — a clock is never committed next to a
+ *   price it wasn't computed for.
+ * - Team budgets and rosters, the other input, change only when a lot sells
+ *   (resolveExpiredNomination clears the lot and moves the turn) or a sale is
+ *   undone (undoLastSale repoints the turn and refuses a live lot at its own
+ *   write). Both rewrite the Draft row the caller's claim re-asserts. Admin
+ *   roster moves (sign, release) are refused until the auction is complete.
+ */
+async function bidDeadline(
+  tx: Prisma.TransactionClient,
+  lot: {
+    seasonId: string;
+    teamSize: number;
+    price: number;
+    highBidderTeamId: string | null;
+  },
+): Promise<Date> {
+  const teams = await tx.team.findMany({
+    where: { seasonId: lot.seasonId },
+    select: { id: true, budget: true, _count: { select: { members: true } } },
+  });
+  const seconds = bidClockSeconds({
+    teams: teams.map((t) => ({
+      id: t.id,
+      budget: t.budget,
+      rosterCount: t._count.members,
+    })),
+    teamSize: lot.teamSize,
+    price: lot.price,
+    highBidderTeamId: lot.highBidderTeamId,
+  });
+  return new Date(Date.now() + seconds * 1000);
+}
 
 /**
  * Finalize a nomination whose clock has expired: the current high bidder wins
@@ -364,9 +408,17 @@ export async function resolveStalledNomination(
     }
 
     const amount = DEFAULTS.MIN_BID;
+    const bidEndsAt = await bidDeadline(tx, {
+      seasonId,
+      teamSize: season.teamSize,
+      price: amount,
+      highBidderTeamId: nominator.id,
+    });
     // Claim the auto-nomination: only fire if nothing else nominated (or a
     // rival resolver already fired) since our read — two concurrent pollers
-    // must open ONE auction with ONE opening Bid row.
+    // must open ONE auction with ONE opening Bid row. The turn's clock in the
+    // WHERE is also what vouches for bidEndsAt: a sale or an undo, the only
+    // writes that move a team's budget or roster, each move this clock too.
     const claim = await tx.draft.updateMany({
       where: {
         seasonId,
@@ -378,7 +430,7 @@ export async function resolveStalledNomination(
         nominatedUserId: pick.userId,
         currentBid: amount,
         currentBidTeamId: nominator.id,
-        bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000),
+        bidEndsAt,
         nominationEndsAt: null,
       },
     });
@@ -437,7 +489,10 @@ export async function pauseDraft(
   });
 }
 
-/** Admin: resume a paused auction with a fresh full clock for the live lot. */
+/**
+ * Admin: resume a paused auction with a fresh clock for the live lot (the
+ * short one when no other team can top its price, as when a lot opens).
+ */
 export async function resumeDraft(
   seasonId: string,
   viewer: SessionUser,
@@ -455,7 +510,14 @@ export async function resumeDraft(
       return { ok: false as const, error: "The draft isn't paused" };
     }
     const clock = draft.nominatedUserId
-      ? { bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000) }
+      ? {
+          bidEndsAt: await bidDeadline(tx, {
+            seasonId,
+            teamSize: season.teamSize,
+            price: draft.currentBid,
+            highBidderTeamId: draft.currentBidTeamId,
+          }),
+        }
       : {
           nominationEndsAt: new Date(
             Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
@@ -464,6 +526,9 @@ export async function resumeDraft(
     // Cancellation deliberately touches even an already-PAUSED draft. A
     // Resume that authorized itself just before that lifecycle write must lose
     // this updatedAt claim instead of rearming clocks on an archived season.
+    // The same updatedAt vouches for the lot's price and high bidder behind
+    // the bid clock above; a paused lot's teams cannot change (Undo refuses
+    // while a lot is on the block, and Void clears the lot, moving updatedAt).
     await raceHook("draft.resume.beforeClaim");
     const claim = await tx.draft.updateMany({
       where: {
@@ -1421,7 +1486,12 @@ export async function nominatePlayer(
             : `${nominator.name} can open at $${openingCap} at most`,
       };
 
-    const bidEndsAt = new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000);
+    const bidEndsAt = await bidDeadline(tx, {
+      seasonId,
+      teamSize: season.teamSize,
+      price: amount,
+      highBidderTeamId: nominator.id,
+    });
     // Claim the nomination slot: if the auto-skip resolver (or an admin
     // nomination) landed between our read and this write, reject instead of
     // silently replacing a live auction.
@@ -1552,11 +1622,18 @@ export async function placeBid(
     if (!canBid(team, season.teamSize, amount, draft.currentBid))
       return { ok: false as const, error: "Invalid bid amount" };
 
-    const bidEndsAt = new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000);
+    // The short clock when this bid leaves no other team able to top it.
+    const bidEndsAt = await bidDeadline(tx, {
+      seasonId,
+      teamSize: season.teamSize,
+      price: amount,
+      highBidderTeamId: myTeam.id,
+    });
     // Optimistic lock: only apply the bid if the auction is still exactly as we
     // read it. If a concurrent bid landed first (possible under Postgres's
     // connection pool), the WHERE matches no rows and we reject — so two
-    // simultaneous bids can never both "win".
+    // simultaneous bids can never both "win", and the clock written here is
+    // always the one computed for the price and bidder that actually stand.
     const applied = await tx.draft.updateMany({
       where: {
         seasonId,
