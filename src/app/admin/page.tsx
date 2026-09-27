@@ -202,6 +202,9 @@ import {
   StartDraftControl,
   StartDraftForm,
 } from "@/components/admin-start-draft";
+import { StartDraftConfirmLine } from "@/components/start-draft-submit";
+import { missingCaptainsConfirmLine } from "@/lib/draft-presence";
+import { readCaptainPresence } from "@/lib/draft-presence-service";
 import { AdminPlayerRankEditor } from "@/components/admin-player-rank-editor";
 import { TEAM_LOGO_URL_MAX_LENGTH } from "@/lib/team-logo";
 import {
@@ -850,6 +853,13 @@ async function loadSeasonAdminData(seasonId: string) {
     where: { match: { seasonId }, status: "OUT" },
     include: { user: true },
   });
+  // Captains with the draft room open as this page renders, for the
+  // Start-draft confirm (the draft room itself shows it live).
+  const captainsInRoom = await readCaptainPresence(
+    prisma,
+    seasonId,
+    teams.map((t) => t.captainId),
+  );
   // OpenDota ids of playoff games a bracket reset deleted. Archived by
   // createPlayoffBracket so the postseason can be re-imported by hand — without
   // them the ids were simply gone, which is what made "recreate the bracket"
@@ -895,6 +905,7 @@ async function loadSeasonAdminData(seasonId: string) {
     tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
     collateral: { rsvps, picks, covers, proposals },
     unlinkedDiscord,
+    captainsInRoom,
   };
 }
 
@@ -1488,6 +1499,14 @@ function CaptainControls({
     mmrWarning: captainMmrWarning(unverifiedMmr),
   });
   const startDisabled = !setupOpen || !canStart;
+  // Named last in the confirm, as in the draft room, but only as of this
+  // page load: /admin doesn't poll.
+  const captainsAwayLine = missingCaptainsConfirmLine(
+    data.teams
+      .filter((t) => !data.captainsInRoom.has(t.captainId))
+      .map((t) => t.captain.name),
+    "pageLoad",
+  );
 
   return (
     <Card>
@@ -1560,21 +1579,23 @@ function CaptainControls({
                     disabled fallback — would block starting the draft on
                     Discord's health, which is the exact failure this Suspense
                     exists to avoid. */}
-                <Suspense
-                  fallback={
-                    <StartDraftForm
+                <StartDraftConfirmLine line={captainsAwayLine}>
+                  <Suspense
+                    fallback={
+                      <StartDraftForm
+                        seasonId={season.id}
+                        confirm={startConfirm}
+                        disabled={startDisabled}
+                      />
+                    }
+                  >
+                    <StartDraftControl
                       seasonId={season.id}
-                      confirm={startConfirm}
+                      confirmBase={startConfirm}
                       disabled={startDisabled}
                     />
-                  }
-                >
-                  <StartDraftControl
-                    seasonId={season.id}
-                    confirmBase={startConfirm}
-                    disabled={startDisabled}
-                  />
-                </Suspense>
+                  </Suspense>
+                </StartDraftConfirmLine>
               </>
             ) : null}
             {draftLive ? (

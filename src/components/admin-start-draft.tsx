@@ -1,5 +1,6 @@
 import { startDraft } from "@/app/actions/admin";
-import { ActionForm, SubmitButton } from "@/components/action-form";
+import { ActionForm } from "@/components/action-form";
+import { StartDraftSubmit } from "@/components/start-draft-submit";
 import type { ButtonSize } from "@/components/ui";
 import {
   discordReachWarning,
@@ -10,7 +11,9 @@ import {
 // the draft room's waiting room. Both render THIS form over the same
 // startDraft server action, with the confirm built by startDraftConfirm
 // (draft-setup.ts) plus the Discord line below, so the start guards and the
-// warning an admin reads are the same wherever they press it.
+// warning an admin reads are the same wherever they press it. The line naming
+// captains who aren't in the draft room is added last, by the button itself
+// (see start-draft-submit.tsx), because only the page showing it knows that.
 
 /**
  * The Start-draft form itself, rendered twice: as the Suspense fallback with
@@ -33,14 +36,7 @@ export function StartDraftForm({
       action={startDraft}
       hidden={{ expectedActiveSeasonId: seasonId }}
     >
-      <SubmitButton
-        variant="accent"
-        size={size}
-        disabled={disabled}
-        confirm={confirm}
-      >
-        Start draft
-      </SubmitButton>
+      <StartDraftSubmit confirm={confirm} disabled={disabled} size={size} />
     </ActionForm>
   );
 }

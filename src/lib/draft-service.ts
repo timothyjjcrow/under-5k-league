@@ -19,6 +19,8 @@ import {
   type DraftTeam,
 } from "./draft";
 import { draftBudgetsForDisplay } from "./draft-budgets";
+import { draftPresenceTracked } from "./draft-presence";
+import { readCaptainPresence } from "./draft-presence-service";
 import type { SessionUser } from "./auth";
 import { raceHook } from "./race-hook";
 import { draftRecap } from "./draft-recap";
@@ -1110,7 +1112,7 @@ export async function getDraftState(
   // a sale between them could return a new roster with an old budget, or a new
   // lot with the previous lot's Bid trail. SERIALIZABLE is the only isolation
   // level shared by this repository's SQLite dev/test DB and PostgreSQL.
-  return prisma.$transaction(
+  const state = await prisma.$transaction(
     async (tx) => {
       const [season, draft, teams, playerRegs, viewerRegistration] =
         await Promise.all([
@@ -1227,6 +1229,8 @@ export async function getDraftState(
         budget: displayBudgets.byTeam.get(team.id) ?? team.budget,
         draftOrder: team.draftOrder,
         captainId: team.captainId,
+        // Filled in below, outside the snapshot.
+        captainInRoom: null as boolean | null,
         need: teamNeed(season.teamSize, team.members.length),
         members: team.members.map((member) => ({
           userId: member.userId,
@@ -1405,6 +1409,26 @@ export async function getDraftState(
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
+  // Which captains have the room open (their own polls record it), in the
+  // waiting room and while the auction runs. Read after the snapshot on
+  // purpose: it is a label, not part of what must agree with the rosters and
+  // the lot, and keeping the heartbeat rows out of the serializable read set
+  // means a captain's poll can never cost anyone else's a retry.
+  if (!state || !draftPresenceTracked(state.seasonStatus, state.status)) {
+    return state;
+  }
+  const captainsHere = await readCaptainPresence(
+    prisma,
+    seasonId,
+    state.teams.map((team) => team.captainId),
+  );
+  return {
+    ...state,
+    teams: state.teams.map((team) => ({
+      ...team,
+      captainInRoom: captainsHere.has(team.captainId),
+    })),
+  };
 }
 
 export type DraftState = NonNullable<Awaited<ReturnType<typeof getDraftState>>>;

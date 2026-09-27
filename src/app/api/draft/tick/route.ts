@@ -3,6 +3,8 @@ import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invali
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { getDraftState } from "@/lib/draft-service";
+import { draftPresenceTracked } from "@/lib/draft-presence";
+import { recordCaptainPresence } from "@/lib/draft-presence-service";
 import {
   clientIp,
   rateLimit,
@@ -84,6 +86,15 @@ export async function POST(req: NextRequest) {
     : false;
   try {
     const state = await getDraftState(season.id, user, { resolveDeadlines });
+    // A captain's poll is their "in the room" heartbeat (throttled to one
+    // write per window), shown on team cards and in the Start-draft confirm.
+    if (
+      user &&
+      state?.me.myTeamId &&
+      draftPresenceTracked(state.seasonStatus, state.status)
+    ) {
+      await recordCaptainPresence(season.id, user.id);
+    }
     return NextResponse.json(state, {
       headers: { "cache-control": "no-store" },
     });

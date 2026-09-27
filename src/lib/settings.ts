@@ -153,6 +153,19 @@ export function draftReminderPrefix(seasonId: string): string {
 }
 
 /**
+ * When a captain last polled the draft room (ISO time): the "in room" marker
+ * on team cards and in the Start-draft confirm. Written through claimThrottle,
+ * so a room polling every second costs one write per throttle window.
+ */
+export function draftPresenceKey(seasonId: string, userId: string): string {
+  return `${draftPresencePrefix(seasonId)}${userId}`;
+}
+
+export function draftPresencePrefix(seasonId: string): string {
+  return `draftPresence:${seasonId}:`;
+}
+
+/**
  * Exactly-once marker for a completed week's honors announcement. Its value
  * is a small state machine owned by honors-service (claim/failed/sent/stale),
  * because reopening a result needs one explicit corrected announcement rather
@@ -318,6 +331,7 @@ export function seasonSettingScopeWhere(
     { key: championAnnouncedKey(seasonId) },
     { key: { startsWith: weekReminderPrefix(seasonId) } },
     { key: { startsWith: draftReminderPrefix(seasonId) } },
+    { key: { startsWith: draftPresencePrefix(seasonId) } },
     { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
     { key: playoffGamesArchiveKey(seasonId) },
     { key: tiebreakerGamesArchiveKey(seasonId) },

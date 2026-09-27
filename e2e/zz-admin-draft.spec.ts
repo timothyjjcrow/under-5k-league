@@ -125,6 +125,16 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(
     rosterCards.filter({ hasText: "Cap Two" }).getByText("Nominates 2nd"),
   ).toBeVisible();
+  // Both captains are parked on /draft, so their own polls mark them as in
+  // the room: the admin sees it above Start draft and on each team card.
+  await expect(
+    page.getByText("All 2 captains are in the draft room."),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    rosterCards
+      .filter({ hasText: "Cap One" })
+      .getByText("in room", { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("link", { name: "Captains & draft setup on the admin panel" }),
   ).toHaveAttribute("href", "/admin#adm-captains");

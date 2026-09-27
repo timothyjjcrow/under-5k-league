@@ -57,6 +57,12 @@ import {
 } from "@/lib/draft";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
+  DRAFT_PRESENCE,
+  captainPresence,
+  captainPresenceLine,
+  missingCaptainsConfirmLine,
+} from "@/lib/draft-presence";
+import {
   draftToolbarControls,
   hasToolbarControl,
   undoSaleConfirm,
@@ -86,6 +92,7 @@ import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { DraftRecapCard } from "@/components/draft-recap-card";
+import { StartDraftConfirmLine } from "@/components/start-draft-submit";
 import type { ActionResult } from "@/lib/action-result";
 
 // A single line in "Recent sales": the tested content (see @/lib/draft-feed)
@@ -1136,6 +1143,9 @@ export function DraftRoom({
     // admin starts — nobody has to hand-refresh into a running clock. The
     // admin CTA renders only for admins (everyone else used to get bounced
     // off /admin with no explanation).
+    // Who's in the room, from the live poll: a line above Start draft, and
+    // the missing captains named in its confirm at the moment of the click.
+    const presence = captainPresence(state.teams, me.userId);
     return (
       <div className="space-y-6">
         {roomAlerts}
@@ -1198,7 +1208,16 @@ export function DraftRoom({
               rest of setup stays one link away, on that card. */}
           {me.isAdmin && adminStart ? (
             <div className="mt-4 flex flex-col items-center gap-2 border-t border-line pt-4">
-              {adminStart.control}
+              {presence ? (
+                <p className="text-sm text-muted">
+                  {captainPresenceLine(presence)}
+                </p>
+              ) : null}
+              <StartDraftConfirmLine
+                line={missingCaptainsConfirmLine(presence?.away ?? [], "now")}
+              >
+                {adminStart.control}
+              </StartDraftConfirmLine>
               {adminStart.blocker ? (
                 <p className="text-sm font-medium text-accent">
                   Start unavailable: {adminStart.blocker}
@@ -2496,6 +2515,37 @@ function AuctionPrimer({
   );
 }
 
+/**
+ * Beside a captain's name while presence is tracked: whether they have the
+ * draft room open. Words, not just a dot, so it reads without colour and to
+ * a screen reader. A captain who isn't here never bids, and the draft
+ * nominates for them when their clock runs out.
+ */
+function InRoomMark({ inRoom }: { inRoom: boolean }) {
+  return (
+    <span
+      title={
+        inRoom
+          ? "Has the draft room open"
+          : `Hasn't had the draft room open in the last ${DRAFT_PRESENCE.AWAY_SECONDS} seconds`
+      }
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 text-[10px] font-medium",
+        inRoom ? "text-success" : "text-muted",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          inRoom ? "bg-success" : "border border-current",
+        )}
+      />
+      {inRoom ? "in room" : "not in room"}
+    </span>
+  );
+}
+
 function TeamsGrid({
   state,
   showNominationOrder = false,
@@ -2649,6 +2699,13 @@ function TeamsGrid({
                       <span className="shrink-0">
                         <Badge tone="accent">C</Badge>
                       </span>
+                    ) : null}
+                    {m.userId === t.captainId && t.captainInRoom !== null ? (
+                      <InRoomMark
+                        inRoom={
+                          t.captainInRoom || t.captainId === state.me.userId
+                        }
+                      />
                     ) : null}
                     <RankBadge rankTier={m.rankTier} />
                   </span>
