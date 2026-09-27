@@ -342,8 +342,8 @@ export default async function PickemPage({
                         return (
                           <Card key={m.id}>
                             <CardBody className="space-y-2.5">
-                              <div className="flex items-center justify-between text-xs text-muted">
-                                <span>
+                              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted">
+                                <span className="shrink-0 whitespace-nowrap">
                                   {m.phase === "REGULAR" ? (
                                     roundLabel(m)
                                   ) : (
@@ -354,7 +354,7 @@ export default async function PickemPage({
                                     </Badge>
                                   )}
                                 </span>
-                                <span className="flex items-center gap-2">
+                                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                   {m.scheduledAt ? (
                                     <>
                                       <LocalTime
@@ -381,7 +381,7 @@ export default async function PickemPage({
                                   )}
                                   <Link
                                     href={`/matches/${m.id}`}
-                                    className={textLink()}
+                                    className={textLink("whitespace-nowrap")}
                                   >
                                     preview →
                                   </Link>

@@ -957,7 +957,7 @@ function SeasonGrid({
           "flex min-h-12 min-w-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-transparent px-2 py-2 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
           cell.result === "W" &&
             "bg-success/15 text-success hover:bg-success/25",
-          cell.result === "L" && "bg-danger/10 text-danger hover:bg-danger/20",
+          cell.result === "L" && "bg-danger/10 text-danger-soft hover:bg-danger/20",
           cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
           !cell.played && "text-muted hover:text-info",
         )}

@@ -22,7 +22,13 @@
   --color-accent: #f2b134;
   --color-success: #3fb950;
   --color-danger: #e5534b;
-  --color-info: #4c8dff;
+  /* Danger as TEXT on a danger-tinted chip (a lost or live result). Plain
+     danger there is 4.3:1, under AA for the chips' small type; this is 5.6:1. */
+  --color-danger-soft: #f47067;
+  /* Link blue. Was #4c8dff, which fell to 4.1:1 on the raised cards
+     (surface-3, the LIVE match card) once link colours applied at all; this
+     keeps every blue link above AA (4.8:1 on the darkest card, 6.9:1 on bg). */
+  --color-info: #609aff;
 
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
