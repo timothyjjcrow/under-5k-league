@@ -96,6 +96,7 @@ import {
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { playoffRunTile, teamPlayoffRun } from "@/lib/playoff-run";
 import { canViewLeagueContact } from "@/lib/visibility";
+import { hasJoinedLeague } from "@/lib/profile-footprint";
 
 export async function generateMetadata({
   params,
@@ -103,15 +104,27 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [user, gameScores] = await Promise.all([
+  const [user, gameScores, joined] = await Promise.all([
     prisma.user.findUnique({
       where: { id },
       select: { name: true, rankTier: true, pubStats: true },
     }),
     getPlayerGameFacts(id),
+    hasJoinedLeague(id),
   ]);
   // notFound() in metadata runs before the shell streams → real 404 status.
   if (!user) notFound();
+  // An account that only signed in: a plain, unindexed page, no medal or
+  // hero highlights (see UnjoinedProfile).
+  if (!joined) {
+    return {
+      ...shareMetadata(
+        `${user.name} · Player`,
+        `${user.name} hasn't joined a ${LEAGUE_CONFIG.name} season yet.`,
+      ),
+      robots: { index: false },
+    };
+  }
   const rank = rankMedalName(user.rankTier);
   const summary = summarizePlayerGames(
     gameScores.flatMap(({ players, radiantWin }) =>
@@ -158,11 +171,20 @@ export default async function PlayerProfilePage({
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) notFound();
 
-  const [season, viewer] = await Promise.all([
+  const [season, viewer, joined] = await Promise.all([
     getActiveSeason(),
     getSessionUser(),
+    hasJoinedLeague(id),
   ]);
   const isSelf = viewer?.id === id;
+  // Signing in once creates an account, and pick'em, fantasy and inhouse
+  // boards link to it. Until they join something the league records, the page
+  // is their name and avatar only: no season subtitle (it read as a signup),
+  // medal, pub numbers or outbound links. The sign-in medal fetch stays; the
+  // inhouse queue uses it to sanity-check typed MMR.
+  if (!joined) {
+    return <UnjoinedProfile user={user} isSelf={isSelf} />;
+  }
 
   const [
     registration,
@@ -1507,6 +1529,57 @@ export default async function PlayerProfilePage({
           ) : null}
         </section>
       ) : null}
+    </div>
+  );
+}
+
+/** The whole profile of an account that has joined nothing yet. */
+function UnjoinedProfile({
+  user,
+  isSelf,
+}: {
+  user: { name: string; avatar: string | null; role: string };
+  isSelf: boolean;
+}) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <div className="mb-3">
+          <ContextBackLink href="/players" className={textLink("text-sm")}>
+            ← All players
+          </ContextBackLink>
+        </div>
+        <div className="flex flex-wrap items-center gap-5 rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 p-6 shadow-sm">
+          <Avatar
+            name={user.name}
+            src={user.avatar}
+            size={88}
+            className="shrink-0 shadow-lg shadow-black/40 ring-2 ring-line/80"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
+                {user.name}
+              </h1>
+              {user.role === "ADMIN" ? (
+                <Badge tone="accent">Admin</Badge>
+              ) : null}
+            </div>
+            <p className="mt-1 text-sm text-muted">
+              Hasn&apos;t joined a season yet
+            </p>
+            {isSelf ? (
+              <p className="mt-2.5 text-sm text-muted">
+                Your profile fills in once you sign up for a season or play an
+                inhouse.{" "}
+                <Link href="/me" className={textLink()}>
+                  Go to My account →
+                </Link>
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
