@@ -380,34 +380,41 @@ export function ScheduleWeeks({
 const FOLD_PARAM = "results";
 
 /**
- * The finished regular season during the playoffs: one section that starts
- * closed, so the bracket above and the standings below stay within reach
- * instead of sitting either side of every week's results. It opens by itself
- * when the URL shows the reader was already inside it (a team picked, a week
- * opened, or a return from one of its matches) or points straight at it, as
- * the home page's "Full schedule" links do.
+ * Finished history during the playoffs (the regular season, a settled
+ * tiebreaker): one section that starts closed, so the bracket and the
+ * standings stay within reach instead of sitting either side of every
+ * finished result. It opens by itself when the URL shows the reader was
+ * already inside it (a team picked or a week opened, for the regular season;
+ * a return from one of its matches) or points straight at it, as the home
+ * page's "Full schedule" links do.
  */
 export function ScheduleFold({
   id,
   title,
   description,
+  rememberParam = FOLD_PARAM,
+  openOnFilter = true,
   children,
 }: {
   id: string;
   title: string;
   description?: string;
+  /** URL flag that keeps this fold open across a match visit. */
+  rememberParam?: string;
+  /** Also open when a team filter or opened week is in the URL. */
+  openOnFilter?: boolean;
   children: ReactNode;
 }) {
   const params = useSearchParams();
   const [initiallyOpen] = useState(
     () =>
-      params.has("team") ||
-      params.has("weeks") ||
-      params.get(FOLD_PARAM) === "open",
+      (openOnFilter && (params.has("team") || params.has("weeks"))) ||
+      params.get(rememberParam) === "open",
   );
   const fold = useRef<HTMLDetailsElement>(null);
-  // "#fixtures" names this section, so arriving at it (or jumping to it
-  // later) opens it. Read after mount: the server never sees the hash.
+  // The id names this section ("#fixtures", "#tiebreakers"), so arriving at
+  // it (or jumping to it later) opens it. Read after mount: the server never
+  // sees the hash.
   useEffect(() => {
     const openIfTargeted = () => {
       if (window.location.hash === `#${id}` && fold.current)
@@ -424,8 +431,8 @@ export function ScheduleFold({
       open={initiallyOpen}
       onToggle={(event) => {
         const url = new URL(window.location.href);
-        if (event.currentTarget.open) url.searchParams.set(FOLD_PARAM, "open");
-        else url.searchParams.delete(FOLD_PARAM);
+        if (event.currentTarget.open) url.searchParams.set(rememberParam, "open");
+        else url.searchParams.delete(rememberParam);
         window.history.replaceState(
           null,
           "",

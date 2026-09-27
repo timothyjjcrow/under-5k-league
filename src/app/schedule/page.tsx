@@ -14,7 +14,10 @@ import {
 } from "@/lib/playoff-field";
 import { TiebreakerNotice } from "@/components/tiebreaker-notice";
 import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
-import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
+import {
+  buildTiebreakerBrackets,
+  tiebreakerResultLine,
+} from "@/components/tiebreaker-bracket-view";
 import type { ScenarioReport } from "@/lib/scenarios";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import {
@@ -549,6 +552,46 @@ export default async function SchedulePage() {
   );
   const postseasonPhase =
     season.status === "PLAYOFFS" || season.status === "COMPLETE";
+  const showTiebreakers =
+    tiebreakers.length > 0 ||
+    (status.allComplete && playoffField.seedingDeadHeatTeamIds.length > 0);
+  // Once the playoffs start, a finished tiebreaker is history: it folds to
+  // one line of results below the standings instead of sitting mid-page.
+  const tiebreakersSettled =
+    postseasonPhase &&
+    !tiebreakerBrackets.error &&
+    tiebreakerBrackets.groups.length > 0 &&
+    tiebreakerBrackets.groups.every((bracket) => bracket.status === "resolved");
+  const tiebreakerBody = (
+    <>
+      {tiebreakerBrackets.groups.map((bracket) => (
+        <TiebreakerBracket key={bracket.key} bracket={bracket} teams={teams} postseasonStarted={postseasonPhase} />
+      ))}
+      {tiebreakerBrackets.error && season.status !== "REGULAR_SEASON" ? (
+        <p className="text-sm text-accent">The tiebreaker bracket needs an administrator’s review. Recorded matches are available below.</p>
+      ) : null}
+      {tiebreakerWeekViews.length > 0 ? (
+        <details data-testid="tiebreaker-match-details" className="rounded-xl border border-line p-4">
+          <summary className="cursor-pointer text-sm font-medium text-info">Match details &amp; check-in</summary>
+          <p className="mb-4 mt-2 text-xs text-muted">Published matches only. Later games are added as their teams are decided.</p>
+          <ScheduleWeeks
+            weeks={tiebreakerWeekViews}
+            teams={teams.map((team) => ({
+              id: team.id,
+              name: team.name,
+              logoUrl: team.logoUrl,
+            }))}
+            initialTeamId={[...myTeamIds][0]}
+          />
+        </details>
+      ) : (
+        <p className="text-sm text-muted">
+          An administrator will schedule the required tiebreaker matches
+          before the playoff bracket starts.
+        </p>
+      )}
+    </>
+  );
   const postseasonSection = postseasonPhase ? (
     <section id="playoff-bracket" className="scroll-mt-20 space-y-4">
       <SectionTitle>Playoff bracket</SectionTitle>
@@ -740,8 +783,7 @@ export default async function SchedulePage() {
 
       {postseasonSection}
 
-      {tiebreakers.length > 0 ||
-      (status.allComplete && playoffField.seedingDeadHeatTeamIds.length > 0) ? (
+      {showTiebreakers && !tiebreakersSettled ? (
         <section id="tiebreakers" className="scroll-mt-24 space-y-4">
           <SectionTitle>Tiebreaker bracket</SectionTitle>
           {season.status === "REGULAR_SEASON" ? (
@@ -754,32 +796,7 @@ export default async function SchedulePage() {
               scheduleLink={false}
             />
           ) : null}
-          {tiebreakerBrackets.groups.map((bracket) => (
-            <TiebreakerBracket key={bracket.key} bracket={bracket} teams={teams} postseasonStarted={season.status === "PLAYOFFS" || season.status === "COMPLETE"} />
-          ))}
-          {tiebreakerBrackets.error && season.status !== "REGULAR_SEASON" ? (
-            <p className="text-sm text-accent">The tiebreaker bracket needs an administrator’s review. Recorded matches are available below.</p>
-          ) : null}
-          {tiebreakerWeekViews.length > 0 ? (
-            <details data-testid="tiebreaker-match-details" className="rounded-xl border border-line p-4">
-              <summary className="cursor-pointer text-sm font-medium text-info">Match details &amp; check-in</summary>
-              <p className="mb-4 mt-2 text-xs text-muted">Published matches only. Later games are added as their teams are decided.</p>
-              <ScheduleWeeks
-                weeks={tiebreakerWeekViews}
-                teams={teams.map((team) => ({
-                  id: team.id,
-                  name: team.name,
-                  logoUrl: team.logoUrl,
-                }))}
-                initialTeamId={[...myTeamIds][0]}
-              />
-            </details>
-          ) : (
-            <p className="text-sm text-muted">
-              An administrator will schedule the required tiebreaker matches
-              before the playoff bracket starts.
-            </p>
-          )}
+          {tiebreakerBody}
         </section>
       ) : null}
 
@@ -924,6 +941,21 @@ export default async function SchedulePage() {
             />
           </CardBody>
         </Card>
+      ) : null}
+
+      {showTiebreakers && tiebreakersSettled ? (
+        <ScheduleFold
+          id="tiebreakers"
+          title="Tiebreaker bracket"
+          description={
+            tiebreakerResultLine(tiebreakerBrackets.groups) ??
+            "Settled before the playoffs"
+          }
+          rememberParam="tiebreaker"
+          openOnFilter={false}
+        >
+          <div className="space-y-4">{tiebreakerBody}</div>
+        </ScheduleFold>
       ) : null}
 
       {season.status === "REGULAR_SEASON" &&
