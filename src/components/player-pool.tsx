@@ -37,7 +37,9 @@ import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
 
 /** Which team drafted a player, keyed by userId (parallel to the frozen
- * PoolPlayer type). `price` is null for captains — no draft price shown. */
+ * PoolPlayer type). `price` is null for captains — no draft price shown.
+ * `captain` comes from the roster row, never from the price: a captain keeps
+ * a nonzero price after transferCaptaincy. */
 export type PoolDraftInfo = Record<
   string,
   {
@@ -45,6 +47,7 @@ export type PoolDraftInfo = Record<
     teamName: string;
     teamLogoUrl?: string | null;
     price: number | null;
+    captain?: boolean;
   }
 >;
 
@@ -60,6 +63,7 @@ export function PlayerPool({
   players,
   standinIds,
   showDraftStatus,
+  captainSelectionOpen = false,
   draftInfo,
   scout,
   now,
@@ -71,6 +75,11 @@ export function PlayerPool({
    *  lists standins. */
   standinIds?: string[];
   showDraftStatus: boolean;
+  /** Captains are still being chosen (signups, or a draft not yet started).
+   *  "Wants captain" is a setup-time signal: once the auction starts the
+   *  volunteers who weren't picked stop wearing the badge, and the filter
+   *  chip goes with it. */
+  captainSelectionOpen?: boolean;
   draftInfo?: PoolDraftInfo;
   /** Per-player scouting extras (inhouse record, pub snapshot, goals quote) —
    *  a parallel record like draftInfo, so PoolPlayer stays frozen. */
@@ -110,8 +119,10 @@ export function PlayerPool({
     if (s === "inhouse") return anyInhouse ? "inhouse" : "mmr";
     return s && SORTS.includes(s as PoolSort) ? (s as PoolSort) : "mmr";
   });
+  // A stale ?cap=1 link after the draft starts must not filter invisibly:
+  // the chip that would show (and clear) it is gone by then.
   const [captainOnly, setCaptainOnly] = useState(
-    () => params.get("cap") === "1",
+    () => captainSelectionOpen && params.get("cap") === "1",
   );
   const [status, setStatus] = useState<PoolStatusFilter>(() => {
     const s = params.get("status");
@@ -243,18 +254,20 @@ export function PlayerPool({
           ))}
         </div>
 
-        <button
-          type="button"
-          onClick={() => setCaptainOnly((v) => !v)}
-          aria-pressed={captainOnly}
-          className={cn(
-            CHIP_BASE,
-            "h-11 px-3 sm:h-9",
-            captainOnly ? "border-brand/50 bg-brand/10 text-brand" : CHIP_OFF,
-          )}
-        >
-          Wants captain
-        </button>
+        {captainSelectionOpen ? (
+          <button
+            type="button"
+            onClick={() => setCaptainOnly((v) => !v)}
+            aria-pressed={captainOnly}
+            className={cn(
+              CHIP_BASE,
+              "h-11 px-3 sm:h-9",
+              captainOnly ? "border-brand/50 bg-brand/10 text-brand" : CHIP_OFF,
+            )}
+          >
+            Wants captain
+          </button>
+        ) : null}
 
         {(showDraftStatus && anyDrafted) || anyStandin ? (
           <div
@@ -363,9 +376,7 @@ export function PlayerPool({
             ) : null}
             <span>Roles</span>
             <span className="hidden xl:block">Signature heroes</span>
-            <span className="text-right">
-              {showDraftStatus ? "Status" : "Notes"}
-            </span>
+            <span className="text-right">Status</span>
           </div>
           <ul className="divide-y divide-line/60">
             {filtered.map((p) => {
@@ -579,7 +590,8 @@ export function PlayerPool({
                     </span>
                   </span>
 
-                  {/* 5 — draft status / captain interest. DOM order puts this
+                  {/* 5 — status: standin, captain, team or free agent, and
+                    captain interest while captains are being chosen. DOM order puts this
                     BEFORE heroes so md gets its five tracks in the right order;
                     `xl:order` swaps the two back for the wide layout, where
                     heroes want the column to the LEFT of status.
@@ -592,8 +604,17 @@ export function PlayerPool({
                       "flex flex-wrap items-center gap-1.5 justify-end md:justify-end xl:order-2",
                     )}
                   >
-                    {p.wantsCaptain ? (
+                    {/* Only volunteers still waiting on the call: a designated
+                      captain reads "Captain" instead, and after the auction
+                      starts the volunteers who weren't picked stop carrying
+                      a signup-week badge for the rest of the season. */}
+                    {captainSelectionOpen &&
+                    p.wantsCaptain &&
+                    !draftInfo?.[p.userId]?.captain ? (
                       <Badge tone="brand">Wants captain</Badge>
+                    ) : null}
+                    {draftInfo?.[p.userId]?.captain ? (
+                      <Badge tone="accent">Captain</Badge>
                     ) : null}
                     {standinSet.has(p.userId) ? (
                       // Before the draft-status branch: a standin is never

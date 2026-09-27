@@ -10,16 +10,10 @@ import { averageMmr } from "@/lib/pool-stats";
 import { loadInhouseLadder } from "@/lib/inhouse-ladder";
 import {
   buildPoolInhouseInfo,
-  inhouseTitle,
-  inhouseToken,
-  pubHeroTitle,
-  pubTitle,
-  pubToken,
   type PoolScout,
   type PoolScoutInfo,
 } from "@/lib/player-pool";
 import { poolPubRecord } from "@/lib/pub-stats";
-import { heroById } from "@/lib/heroes";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { playerDirectoryPresentation } from "@/lib/player-directory-lifecycle";
 import {
@@ -33,11 +27,9 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
-  HeroIcon,
   PageTitle,
   PlayerLink,
   RankBadge,
-  RoleBadges,
   SectionTitle,
   Skeleton,
   StatCell,
@@ -134,6 +126,7 @@ export default async function PlayersPage() {
         teamName: t.name,
         teamLogoUrl: t.logoUrl,
         price: m.isCaptain ? null : m.price,
+        captain: m.isCaptain,
       };
     }
   }
@@ -314,6 +307,7 @@ export default async function PlayersPage() {
               players={poolPlayers}
               standinIds={standins.map((s) => s.userId)}
               showDraftStatus={directory.showDraftStatus}
+              captainSelectionOpen={directory.captainSelectionOpen}
               draftInfo={draftInfo}
               scout={scout}
               now={nowMs}
@@ -322,103 +316,6 @@ export default async function PlayersPage() {
           </Suspense>
         )}
       </section>
-
-      {directory.captainSelectionOpen && captainHopefuls.length > 0 ? (
-        <section className="space-y-4">
-          <SectionTitle
-            aside={`· ${captainHopefuls.length} volunteered to lead a team`}
-          >
-            Captain hopefuls
-          </SectionTitle>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {captainHopefuls.map((p) => {
-              const accountId = effectiveDotaAccountId(p.user);
-              const sc = scout[p.userId];
-              return (
-                <Card key={p.id} interactive>
-                  <CardBody className="flex items-start gap-3">
-                    <PlayerLink userId={p.userId}>
-                      <Avatar name={p.user.name} src={p.user.avatar} size={40} />
-                    </PlayerLink>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <PlayerLink userId={p.userId} className="font-medium">
-                          {p.user.name}
-                        </PlayerLink>
-                        <Badge tone="brand">Wants to captain</Badge>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
-                        {p.mmr > 0 ? <span>{p.mmr} MMR</span> : null}
-                        <RankBadge rankTier={p.user.rankTier} />
-                        <RoleBadges roles={p.roles} />
-                        {/* Same scouting tokens as the pool rows — a captain
-                            vote is exactly where the observed record matters. */}
-                        {sc?.inhouse ? (
-                          <span
-                            className="tabular-nums"
-                            title={inhouseTitle(sc.inhouse)}
-                          >
-                            {inhouseToken(sc.inhouse)}
-                          </span>
-                        ) : null}
-                        {sc?.pub ? (
-                          <span
-                            className="tabular-nums"
-                            title={pubTitle(sc.pub, nowMs)}
-                          >
-                            {pubToken(sc.pub)}
-                          </span>
-                        ) : null}
-                        {sc?.pub && sc.pub.topHeroes.length > 0 ? (
-                          <span
-                            role="img"
-                            aria-label={`Most played: ${sc.pub.topHeroes
-                              .map(
-                                (h) =>
-                                  heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
-                              )
-                              .join(", ")}`}
-                            className="flex items-center gap-1"
-                          >
-                            {sc.pub.topHeroes.map((h) => {
-                              const hero = heroById(h.heroId);
-                              // title on the ICON — the innermost title wins.
-                              return hero ? (
-                                <span key={h.heroId} aria-hidden>
-                                  <HeroIcon
-                                    hero={hero}
-                                    size={18}
-                                    title={pubHeroTitle(h)}
-                                  />
-                                </span>
-                              ) : null;
-                            })}
-                          </span>
-                        ) : null}
-                        {accountId ? (
-                          <a
-                            href={`https://www.dotabuff.com/players/${accountId}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={textLink()}
-                          >
-                            Dotabuff ↗
-                          </a>
-                        ) : null}
-                      </div>
-                      {hasText(p.captainNote) ? (
-                        <p className="mt-1.5 line-clamp-2 text-xs italic text-muted">
-                          &ldquo;{p.captainNote}&rdquo;
-                        </p>
-                      ) : null}
-                    </div>
-                  </CardBody>
-                </Card>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
 
       {teams.length > 0 ? (
         <section className="space-y-4">

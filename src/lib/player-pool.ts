@@ -112,10 +112,9 @@ export function buildPoolInhouseInfo(
 }
 
 // --- Scouting token/title text -----------------------------------------------
-// One source for the strings the pool row, its lg column, and the captain-
-// hopefuls cards all render — two hand-copies of a token is how the header
-// starts lying about a column. Pure so both the client component and the
-// server page can call them.
+// One source for the strings the pool row and its lg column render — two
+// hand-copies of a token is how the header starts lying about a column. Pure
+// so both the client component and the server page can call them.
 
 /** "Inhouse 1042 · 7–3" (ranked) / "Inhouse 2–0" (provisional — no rating:
  *  a 1-game Elo is noise, the same reason rankInhouse never ranks them). */
