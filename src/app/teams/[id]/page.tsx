@@ -1,7 +1,10 @@
 import { AddToCalendar } from "@/components/add-to-calendar";
 import { resolveSiteUrl } from "@/lib/site-url";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { PlayoffOutlook } from "@/components/playoff-outlook";
+import {
+  PlayoffOutlook,
+  settledPlayoffStatus,
+} from "@/components/playoff-outlook";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -265,6 +268,13 @@ export default async function TeamPage({
   // Before any result exists, record/points/rank are noise (and the "rank"
   // is just draft order) — show draft-shaped tiles instead.
   const played = allMatches.some((m) => m.status === "COMPLETED");
+  // Once nothing left can change the team's fate, its status is a chip by
+  // the name; the outlook card at the bottom stays only while results still
+  // matter.
+  const hasOutlook = !!(myScenario && stakesReport && played);
+  const settledStatus =
+    hasOutlook && myScenario ? settledPlayoffStatus(myScenario) : null;
+  const showOutlookCard = hasOutlook && !settledStatus;
   const knownMmrs = rosterRegs.map((r) => r.mmr).filter((v) => v > 0);
   const avgMmr = knownMmrs.length
     ? Math.round(knownMmrs.reduce((s, v) => s + v, 0) / knownMmrs.length)
@@ -364,7 +374,7 @@ export default async function TeamPage({
     ...(myMatches.length > 0 ? [{ id: "team-matches", label: "Matches" }] : []),
     ...(teamHeroes.length > 0 ? [{ id: "team-heroes", label: "Heroes" }] : []),
     ...(h2h.length > 0 ? [{ id: "team-rivals", label: "Head-to-head" }] : []),
-    ...(myScenario && stakesReport && played
+    ...(showOutlookCard
       ? [{ id: "team-outlook", label: "Playoff outlook" }]
       : []),
     ...(jersey ? [{ id: "team-jersey", label: "Jersey" }] : []),
@@ -489,6 +499,9 @@ export default async function TeamPage({
                   >
                     #{rank} of {allTeams.length}
                   </StandingBadge>
+                ) : null}
+                {settledStatus ? (
+                  <Badge tone={settledStatus.tone}>{settledStatus.text}</Badge>
                 ) : null}
                 {championPresentation.championTeamId === team.id ? (
                   <Badge tone="accent">🏆 Champion</Badge>
@@ -997,7 +1010,7 @@ export default async function TeamPage({
         </Card>
       ) : null}
 
-      {myScenario && stakesReport && played ? (
+      {showOutlookCard && myScenario ? (
         <section
           id="team-outlook"
           aria-label="Playoff outlook"

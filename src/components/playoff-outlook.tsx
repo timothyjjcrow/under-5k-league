@@ -133,6 +133,30 @@ function settled(outlook: ScenarioOutlook | undefined) {
     outlook.qualificationTiebreaker === outlook.total);
 }
 
+/**
+ * The team's playoff status as a chip once nothing left can change it
+ * (qualified, out, or a tiebreaker for the spot), else null. The team page
+ * shows it beside the name and keeps its outlook card only while results
+ * still matter.
+ */
+export function settledPlayoffStatus(
+  scenario: TeamScenario,
+): { text: string; tone: "success" | "accent" | "neutral" } | null {
+  const outlook = scenario.outlook;
+  const isSettled = outlook
+    ? settled(outlook)
+    : scenario.status === "CLINCHED" || scenario.status === "ELIMINATED";
+  if (!isSettled) return null;
+  const text = playoffStatusLine(scenario);
+  const qualified = outlook
+    ? outlook.qualified === outlook.total
+    : scenario.status === "CLINCHED";
+  const out = outlook
+    ? outlook.eliminated === outlook.total
+    : scenario.status === "ELIMINATED";
+  return { text, tone: qualified ? "success" : out ? "neutral" : "accent" };
+}
+
 export function PlayoffOutlook({
   scenario,
   teamNames,

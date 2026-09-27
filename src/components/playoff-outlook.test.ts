@@ -5,6 +5,7 @@ import {
   PlayoffOutlook,
   PlayoffOutlookFootnote,
   outlookSummary,
+  settledPlayoffStatus,
   shortOutlook,
   playoffStatusLine,
   playoffPathLines,
@@ -237,6 +238,30 @@ describe("playoff outlook presentation", () => {
 
     it("renders nothing when there is nothing to explain", () => {
       expect(footnote([team({ teamId: "alpha" })])).toBe("");
+    });
+  });
+
+  describe("the settled status chip", () => {
+    it.each([
+      [team({ outlook: result({ total: 3, qualified: 3 }) }), "Qualified for playoffs", "success"],
+      [team({ outlook: result({ total: 3, qualified: 3, seedingTiebreaker: 3 }) }),
+        "Qualified · seeding tiebreaker", "success"],
+      [team({ outlook: result({ total: 3, eliminated: 3 }) }), "Eliminated", "neutral"],
+      [team({ outlook: result({ total: 3, qualificationTiebreaker: 3 }) }),
+        "Playoff spot decided by tiebreaker", "accent"],
+      [team({ status: "CLINCHED" }), "Qualified for playoffs", "success"],
+      [team({ status: "ELIMINATED" }), "Eliminated", "neutral"],
+    ])("names a settled outcome", (scenario, text, tone) => {
+      expect(settledPlayoffStatus(scenario)).toEqual({ text, tone });
+    });
+
+    it("stays away while results can still change the outcome", () => {
+      expect(settledPlayoffStatus(team({ outlook: result({ total: 3, qualified: 2, eliminated: 1 }) })))
+        .toBeNull();
+      expect(settledPlayoffStatus(team({ status: null }))).toBeNull();
+      // A clinch flag from the bounds never overrides an exact mixed outlook.
+      expect(settledPlayoffStatus(team({ status: "CLINCHED",
+        outlook: result({ total: 3, qualified: 1, qualificationTiebreaker: 2 }) }))).toBeNull();
     });
   });
 });
