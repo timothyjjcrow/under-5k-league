@@ -15,7 +15,11 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
 import { AUTO_SYNC, LEAGUE_GAME_MODE } from "@/lib/constants";
-import { howToHostParts, NO_TICKET_RESULT_NOTE } from "@/lib/match-hosting";
+import {
+  howToHostParts,
+  NO_TICKET_REPORT_SUBTITLE,
+  NO_TICKET_RESULT_NOTE,
+} from "@/lib/match-hosting";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
 import { seatValue } from "@/lib/standin";
@@ -1711,17 +1715,19 @@ async function ReportResultSection({
       : afterScheduledTime
         ? `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. If the whole series is still missing ${Math.round(AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF / 60)} hours after the scheduled match time, player-account recovery starts automatically.`
         : `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. Player-account recovery protects the result if an old or incorrect ticket is used.`;
+  const hostParts = howToHostParts({
+    homeTeamName: match.homeTeam.name,
+    bestOf: match.bestOf,
+    region: LEAGUE_CONFIG.gameServerRegion,
+    mode: LEAGUE_GAME_MODE.name,
+  });
   return (
     <div className="space-y-6">
-      <HowToHost
-        parts={howToHostParts({
-          homeTeamName: match.homeTeam.name,
-          bestOf: match.bestOf,
-          region: LEAGUE_CONFIG.gameServerRegion,
-          mode: LEAGUE_GAME_MODE.name,
-        })}
-        note={match.season.dotaLeagueId ? null : NO_TICKET_RESULT_NOTE}
-      />
+      {/* A ticketed season gets the same line as the checklist's first line
+          instead, so the host and lobby count are never said twice. */}
+      {match.season.dotaLeagueId ? null : (
+        <HowToHost parts={hostParts} note={NO_TICKET_RESULT_NOTE} />
+      )}
       {lobbyBotKindEnabled("season") ? (
         <DotaLobbyControls
           key={`${match.id}:${match.homeScore}:${match.awayScore}`}
@@ -1732,8 +1738,7 @@ async function ReportResultSection({
       {match.season.dotaLeagueId ? (
         <LeagueLobbyChecklist
           leagueId={match.season.dotaLeagueId}
-          bestOf={match.bestOf}
-          homeTeamName={match.homeTeam.name}
+          hostParts={hostParts}
         />
       ) : null}
       <Card>
@@ -1742,7 +1747,7 @@ async function ReportResultSection({
           subtitle={
             match.season.dotaLeagueId
               ? leagueSubtitle
-              : "Played it? Pull the finished game from OpenDota — no admin needed. Auto-fetch scans both rosters; a pasted ID must fall near this fixture's scheduled match time so an old scrim or rematch cannot claim the result."
+              : NO_TICKET_REPORT_SUBTITLE
           }
         />
         <CardBody className="space-y-3">
@@ -1765,19 +1770,13 @@ async function ReportResultSection({
 
 /**
  * The one-line hosting summary both captains always get — who hosts, which
- * server, which mode, how many lobbies — whether or not the season has a
- * league ticket. Built from LEAGUE_CONFIG, LEAGUE_GAME_MODE and the match's
- * own bestOf (howToHostParts), so it can't drift from the rules. A ticketed
- * season adds the league id via LeagueLobbyChecklist; a ticketless one gets
- * the note on what to do when the result doesn't import by itself.
+ * server, which mode, how many lobbies. Built from LEAGUE_CONFIG,
+ * LEAGUE_GAME_MODE and the match's own bestOf (howToHostParts), so it can't
+ * drift from the rules. This box is the ticketless season's version, with the
+ * note on why the result may not import by itself; a ticketed season shows the
+ * same line at the top of LeagueLobbyChecklist, beside the league id.
  */
-function HowToHost({
-  parts,
-  note,
-}: {
-  parts: string[];
-  note: string | null;
-}) {
+function HowToHost({ parts, note }: { parts: string[]; note: string }) {
   return (
     <section
       aria-label="How to host"
@@ -1787,7 +1786,7 @@ function HowToHost({
         <b className="text-fg">How to host:</b>{" "}
         <span className="text-muted">{parts.join(" · ")}</span>
       </p>
-      {note ? <p className="mt-1 text-xs text-muted">{note}</p> : null}
+      <p className="mt-1 text-xs text-muted">{note}</p>
     </section>
   );
 }

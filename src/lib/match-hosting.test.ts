@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   howToHostParts,
   MISSING_LEAGUE_TICKET_WARNING,
+  NO_TICKET_REPORT_SUBTITLE,
   NO_TICKET_RESULT_NOTE,
   seriesLobbyRule,
 } from "./match-hosting";
@@ -61,8 +62,19 @@ describe("ticket copy", () => {
   });
 
   it("points captains at pasting the match ID, never at public match history", () => {
-    expect(NO_TICKET_RESULT_NOTE).toMatch(/paste the Dota match ID/);
     expect(NO_TICKET_RESULT_NOTE).toMatch(/Report your result/);
-    expect(NO_TICKET_RESULT_NOTE).not.toMatch(/public/i);
+    expect(NO_TICKET_REPORT_SUBTITLE).toMatch(/Paste the Dota match ID/);
+    for (const copy of [NO_TICKET_RESULT_NOTE, NO_TICKET_REPORT_SUBTITLE]) {
+      expect(copy).not.toMatch(/public/i);
+    }
+  });
+
+  it("agrees with the note: an admin may be needed without a ticket", () => {
+    // The card used to say "no admin needed" right under a note that ends
+    // "send an admin the score".
+    expect(NO_TICKET_REPORT_SUBTITLE).toMatch(/send an admin the score/);
+    expect(NO_TICKET_REPORT_SUBTITLE).not.toMatch(/no admin needed/i);
+    // Each step is said once: the note points at the card, the card says how.
+    expect(NO_TICKET_RESULT_NOTE).not.toMatch(/admin|match ID/i);
   });
 });
