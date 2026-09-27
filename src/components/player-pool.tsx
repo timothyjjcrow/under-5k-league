@@ -437,8 +437,10 @@ export function PlayerPool({
                         history goes first: for a returning player it is the
                         most direct evidence a captain has. */}
                       {sc?.lastSeason ? (
+                        // Free text (season and team names), so it may break
+                        // anywhere rather than widen a phone row.
                         <span
-                          className="tabular-nums"
+                          className="min-w-0 tabular-nums [overflow-wrap:anywhere]"
                           title={lastSeasonTitle(sc.lastSeason)}
                         >
                           {lastSeasonToken(sc.lastSeason)}
@@ -619,11 +621,11 @@ export function PlayerPool({
                     ) : null}
                   </span>
 
-                  {/* 5 — status: standin, captain, team or free agent, and
-                    captain interest while captains are being chosen. DOM order puts this
-                    BEFORE heroes so md gets its five tracks in the right order;
-                    `xl:order` swaps the two back for the wide layout, where
-                    heroes want the column to the LEFT of status.
+                  {/* 5 — status: standin, captain, team or free agent, plus
+                    captain interest while captains are being chosen. DOM order
+                    puts this BEFORE heroes so md gets its five tracks in the
+                    right order; `xl:order` swaps the two back for the wide
+                    layout, where heroes want the column to the LEFT of status.
                     It spans both phone tracks rather than sitting in track 3 —
                     an `auto` track sized by a "Techies Anonymous $4" chip stole
                     ~170px back off the name column on the row above. */}
