@@ -4,6 +4,7 @@ import {
   maxBid,
   canBid,
   canNominate,
+  draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
   nextNominatorIndex,
@@ -384,6 +385,40 @@ describe("draftViewerStake", () => {
         available: [{ userId: "u1" }],
       }),
     ).toBe(false);
+  });
+});
+
+describe("draftAlertsReachViewer", () => {
+  const view = (
+    me: { userId: string | null; myTeamId: string | null },
+    available: { userId: string }[] = [],
+  ) => ({ me, available });
+
+  it("a captain always can — their turn to nominate, and being outbid", () => {
+    expect(draftAlertsReachViewer(view({ userId: "c1", myTeamId: "t1" }))).toBe(true);
+  });
+
+  it("so can a player still in the pool — on the block, then drafted", () => {
+    expect(
+      draftAlertsReachViewer(view({ userId: "u1", myTeamId: null }, [{ userId: "u1" }])),
+    ).toBe(true);
+  });
+
+  it("a drafted player, a signed-out visitor and a bare admin cannot", () => {
+    // Nothing in the room rings for any of them, so offering a sound toggle
+    // is a control that does nothing.
+    expect(
+      draftAlertsReachViewer(view({ userId: "u1", myTeamId: null }, [{ userId: "u2" }])),
+    ).toBe(false);
+    expect(
+      draftAlertsReachViewer(view({ userId: null, myTeamId: null }, [{ userId: "u1" }])),
+    ).toBe(false);
+  });
+
+  it("stays narrower than draftViewerStake, which also keeps an admin polling", () => {
+    const admin = { userId: "a1", myTeamId: null, isAdmin: true };
+    expect(draftViewerStake({ me: admin, available: [] })).toBe(true);
+    expect(draftAlertsReachViewer({ me: admin, available: [] })).toBe(false);
   });
 });
 

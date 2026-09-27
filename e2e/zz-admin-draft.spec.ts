@@ -123,10 +123,6 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(page).toHaveURL(/\/draft/);
   await expect(page.getByText(/On the clock/)).toBeVisible();
   await expect(page.getByText(/Available ·/)).toBeVisible();
-  // The auction has the same persisted sound toggle as the inhouse room.
-  await expect(
-    page.getByRole("button", { name: /Sound on|Muted/ }),
-  ).toBeVisible();
   // Admin recovery travels with the live room; an operator should not have to
   // leave the clock to pause or correct the auction.
   await expect(
@@ -143,6 +139,13 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(capOnePage.getByText("You're on the clock")).toBeVisible({
     timeout: 15_000,
   });
+  // The auction has the same persisted sound toggle as the inhouse room. It
+  // renders only for viewers the room can ring for — a captain always — so
+  // it is checked here rather than on the admin's page (whether the admin
+  // qualifies depends on the seed putting them in the pool).
+  await expect(
+    capOnePage.getByRole("button", { name: /Sound on|Muted/ }),
+  ).toBeVisible();
 
   // REGRESSION (2026-08-01): a tab that parked on /draft pre-start and
   // flipped live via its own poll never attached the compact clock bar's

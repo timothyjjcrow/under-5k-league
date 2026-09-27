@@ -26,6 +26,7 @@ import {
 } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
+  draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
   maxBid,
@@ -1125,10 +1126,50 @@ export function DraftRoom({
 
   const paused = state.status === "PAUSED";
 
+  // While the auction runs, "Your team" and the sound toggle ride in the lot
+  // card's header instead of taking two rows of their own above the clock.
+  const liveTeamLine = me.rosterTeamId ? (
+    <span className="min-w-0 truncate">
+      Your team:{" "}
+      <Link
+        href={`/teams/${me.rosterTeamId}`}
+        target="_blank"
+        rel="noreferrer"
+        title="Open your team's roster in a new tab"
+        className={textLink("font-medium")}
+      >
+        {me.rosterTeamName}
+        <span aria-hidden> ↗</span>
+      </Link>
+      {me.rosterIsCaptain
+        ? " · captain"
+        : me.rosterPrice != null
+          ? ` · drafted for $${me.rosterPrice}`
+          : ""}
+    </span>
+  ) : null;
+  // Only for viewers the room can actually ring for (draftAlertsReachViewer):
+  // a visitor, an admin or a drafted player never hears a thing.
+  const soundToggle = draftAlertsReachViewer(state) ? (
+    <button
+      type="button"
+      onClick={toggleSound}
+      aria-pressed={soundOn}
+      title={
+        soundOn
+          ? "Notification sound on — click to mute"
+          : "Notifications muted — click to enable a bell"
+      }
+      className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
+    >
+      <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
+      {soundOn ? "Sound on" : "Muted"}
+    </button>
+  ) : null;
+
   return (
     <div className="space-y-6">
       {roomAlerts}
-      {viewerTeamBanner}
       {!paused ? (
         <ClockExpiryObserver
           endsAtMs={
@@ -1159,23 +1200,6 @@ export function DraftRoom({
           sell. Stay put; it resumes with a fresh clock.
         </div>
       ) : null}
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          onClick={toggleSound}
-          aria-pressed={soundOn}
-          title={
-            soundOn
-              ? "Notification sound on — click to mute"
-              : "Notifications muted — click to enable a bell"
-          }
-          className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
-        >
-          <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
-          {soundOn ? "Sound on" : "Muted"}
-        </button>
-      </div>
-
       {outbid ? (
         <div
           role="status"
@@ -1373,24 +1397,35 @@ export function DraftRoom({
           (connectionUnavailable || disconnected) && "opacity-50",
         )}
       >
-        <div className="flex items-center justify-between border-b border-line px-5 py-3">
-          <h2 className="min-w-0 text-sm font-normal text-muted">
-            On the clock: <span className="text-fg">{nominatorName}</span>
-            {nextNominatorName ? (
-              <span className="hidden sm:inline">
-                {" "}
-                · next: {nextNominatorName}
+        <div className="border-b border-line">
+          <div className="flex items-center justify-between px-5 py-3">
+            <h2 className="min-w-0 text-sm font-normal text-muted">
+              On the clock: <span className="text-fg">{nominatorName}</span>
+              {nextNominatorName ? (
+                <span className="hidden sm:inline">
+                  {" "}
+                  · next: {nextNominatorName}
+                </span>
+              ) : null}
+            </h2>
+            {paused ? (
+              <span className="font-mono text-sm font-semibold text-info">
+                ⏸ paused
               </span>
+            ) : state.nominatedPlayer ? (
+              <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
+            ) : state.nominationEndsAt ? (
+              <NomClock
+                endsAtMs={state.nominationEndsAt}
+                offsetMs={offsetMs}
+              />
             ) : null}
-          </h2>
-          {paused ? (
-            <span className="font-mono text-sm font-semibold text-info">
-              ⏸ paused
-            </span>
-          ) : state.nominatedPlayer ? (
-            <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
-          ) : state.nominationEndsAt ? (
-            <NomClock endsAtMs={state.nominationEndsAt} offsetMs={offsetMs} />
+          </div>
+          {liveTeamLine || soundToggle ? (
+            <div className="-mt-1 flex items-center gap-2 px-5 pb-2 text-xs text-muted">
+              {liveTeamLine}
+              {soundToggle}
+            </div>
           ) : null}
         </div>
 

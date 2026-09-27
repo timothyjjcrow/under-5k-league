@@ -36,11 +36,16 @@ export default async function DraftPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <PageTitle
-        title="Draft room"
-        subtitle={`${season.name} · live auction draft`}
-      />
+    <div className="space-y-4">
+      {/* One line, not the site's two-line PageTitle: on a phone the old
+          title, subtitle and divider sat ~120px above the auction clock on a
+          screen where every pixel above the bid buttons costs time. */}
+      <h1 className="flex min-w-0 items-baseline gap-2 font-display text-2xl font-semibold leading-tight tracking-tight text-fg">
+        <span className="shrink-0">Draft room</span>{" "}
+        <span className="min-w-0 truncate font-sans text-sm font-normal text-muted">
+          {season.name}
+        </span>
+      </h1>
       {/* The room handles every draft status itself (waiting → live →
           complete) via its poll. A server-rendered gate here went stale the
           moment the admin clicked start, stranding the whole league on a

@@ -270,7 +270,27 @@ export function draftViewerStake(s: {
   me: { userId: string | null; myTeamId: string | null; isAdmin: boolean };
   available: { userId: string }[];
 }): boolean {
-  if (s.me.myTeamId || s.me.isAdmin) return true;
+  return s.me.isAdmin || draftAlertsReachViewer(s);
+}
+
+/**
+ * Can the draft room ever ring for this viewer? It decides whether the room
+ * shows its sound toggle at all — a toggle for a bell that never rings is
+ * clutter at the top of the busiest screen in the app.
+ *
+ * Mirrors what actually rings (draft-feed.ts's alerts plus the outbid latch):
+ * a CAPTAIN gets "your turn to nominate" and "outbid"; a player still IN THE
+ * POOL gets "you're on the block" and "you were drafted". Nobody else gets
+ * anything — not a signed-out visitor, not a drafted player, and not an admin
+ * as such (an admin who is also a captain or a pool player qualifies through
+ * that). Being an admin is why draftViewerStake keeps polling a hidden tab;
+ * it is not a reason to offer a bell.
+ */
+export function draftAlertsReachViewer(s: {
+  me: { userId: string | null; myTeamId: string | null };
+  available: { userId: string }[];
+}): boolean {
+  if (s.me.myTeamId) return true;
   const id = s.me.userId;
   return !!id && s.available.some((p) => p.userId === id);
 }
