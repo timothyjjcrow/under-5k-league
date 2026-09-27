@@ -50,23 +50,39 @@ const TEST_FILE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/;
 const TEST_PREFIXES = ["e2e/", "test/"];
 const DOC_PREFIXES = ["docs/"];
 
-// Only the Cloudflare automation worker drives the production scheduler. The
-// Dota lobby bot and relay under ops/ are hosted independently (.vercelignore
-// excludes them from the website upload), so they stay strict for review
-// through STRICT_PREFIXES without selecting a scheduler pause.
 const SCHEDULER_PREFIXES = [
-  "ops/cloudflare-automation-worker/",
+  "ops/",
   "src/app/api/cron/",
   "src/app/api/health/automation/",
 ];
 const SCHEDULER_LIBRARY =
   /^src\/lib\/(?:automation(?:-|\.)|cron(?:-|\.)|external-automation-scheduler(?:\.|$))/;
+// Everything under ops/ is scheduler plumbing unless it is named here. These
+// services are hosted independently of the website and its scheduler (they
+// are the ops/ entries .vercelignore keeps out of the website upload), so they
+// stay strict for review through STRICT_PREFIXES without selecting a scheduler
+// pause. The list is an exemption, not an allowlist: a new ops/ folder, such as
+// a second scheduler worker, selects scheduler controls until someone adds it
+// here on purpose.
+export const INDEPENDENT_OPS_PREFIXES = [
+  "ops/dota-lobby-bot/",
+  "ops/dota-lobby-relay/",
+];
+
+function isSchedulerPath(path) {
+  if (INDEPENDENT_OPS_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    return false;
+  }
+  return (
+    SCHEDULER_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    SCHEDULER_LIBRARY.test(path)
+  );
+}
 
 // A plain deletion of a regular file is judged like a modification of that
 // path, except in the schema and scheduler surfaces, where removing a file
 // (a migration, the worker, the cron route or its libraries) still selects
 // every control. Renames, copies and type changes stay fail-closed everywhere.
-const DELETION_FAIL_CLOSED_PREFIXES = ["prisma/", ...SCHEDULER_PREFIXES];
 const DELETED_FILE_MODE = "000000";
 
 function fail(message) {
@@ -305,18 +321,12 @@ function impactForStrictPath(path) {
   // writer. Only a committed Prisma/schema surface selects the DB-release
   // procedure; malformed/unknown changes are handled fail-closed by the caller.
   const needsDbRelease = path.startsWith("prisma/");
-  const needsSchedulerPause =
-    needsDbRelease ||
-    SCHEDULER_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
-    SCHEDULER_LIBRARY.test(path);
+  const needsSchedulerPause = needsDbRelease || isSchedulerPath(path);
   return { needsDbRelease, needsSchedulerPause };
 }
 
 function isDeletionFailClosedPath(path) {
-  return (
-    DELETION_FAIL_CLOSED_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
-    SCHEDULER_LIBRARY.test(path)
-  );
+  return path.startsWith("prisma/") || isSchedulerPath(path);
 }
 
 function entryModeIsSafe(entry) {

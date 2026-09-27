@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  INDEPENDENT_OPS_PREFIXES,
   classifyEntries,
   classifyRelease,
   isStaticClassNameOnlyDiff,
@@ -181,6 +182,45 @@ describe("release classifier policy", () => {
       });
     },
   );
+
+  // ops/ is scheduler plumbing by default; only the named independent
+  // services are exempt. A second scheduler folder (a per-region worker) or
+  // any new ops/ service must not silently skip the scheduler pause.
+  it.each([
+    ["M", "ops/cloudflare-automation-worker-europe/src/index.ts"],
+    ["A", "ops/scheduler-backup/cron.mjs"],
+    ["M", "ops/new-service/wrangler.jsonc"],
+  ])(
+    "requires scheduler controls for an unlisted ops/ path (%s %s)",
+    (code, file) => {
+      const entry =
+        code === "A"
+          ? { ...modified(file), status: "A", code: "A", oldMode: "000000" }
+          : modified(file);
+      expect(classifyEntries([entry])).toMatchObject({
+        lane: "strict",
+        needs_postgres: true,
+        needs_mutation: true,
+        needs_db_release: false,
+        needs_scheduler_pause: true,
+      });
+    },
+  );
+
+  it("exempts from scheduler controls only ops/ services .vercelignore keeps out of the upload", () => {
+    const ignored = readFileSync(
+      path.resolve(process.cwd(), ".vercelignore"),
+      "utf8",
+    )
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("ops/"));
+    expect(INDEPENDENT_OPS_PREFIXES.length).toBeGreaterThan(0);
+    for (const prefix of INDEPENDENT_OPS_PREFIXES) {
+      expect(prefix).toMatch(/^ops\/[^/]+\/$/);
+      expect(ignored).toContain(prefix);
+    }
+  });
 
   it.each([
     ".github/workflows/ci.yml",
@@ -405,6 +445,22 @@ describe("release classifier deletions", () => {
     });
     expect(result.reasons.join(" ")).toMatch(/schema or scheduler file/);
   });
+
+  it.each([
+    "ops/cloudflare-automation-worker-europe/wrangler.jsonc",
+    "ops/scheduler-backup/cron.mjs",
+  ])(
+    "fails closed for a deleted file in an unlisted ops/ folder %s",
+    (file) => {
+      const result = classifyEntries([deleted(file)]);
+      expect(result).toMatchObject({
+        lane: "strict",
+        needs_db_release: true,
+        needs_scheduler_pause: true,
+      });
+      expect(result.reasons.join(" ")).toMatch(/schema or scheduler file/);
+    },
+  );
 
   it("fails closed for a deleted unknown path", () => {
     expect(classifyEntries([deleted("unknown.txt")])).toMatchObject({
