@@ -78,7 +78,13 @@ import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { type FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
-import { pickStandout } from "@/lib/profile-history";
+import {
+  groupBySeries,
+  pickStandout,
+  seriesOutcome,
+  type SeriesOutcome,
+} from "@/lib/profile-history";
+import { ShowMore } from "@/components/show-more";
 import {
   careerReportCard,
   gradeFor,
@@ -474,27 +480,65 @@ export default async function PlayerProfilePage({
         Math.round(((l.kills + l.assists) / Math.max(1, l.deaths)) * 10) / 10,
     );
 
-  // Group the career match history by season. gameRows is newest-first, so a
-  // Map keyed by seasonId yields seasons newest-first by first appearance —
+  // Match history is one entry per series (how the league scores), latest
+  // first. gameRows is newest-first, so series and seasons keep that order —
   // and a season stays one group even if a game with no start time (startTime
   // defaults to 0) sorts out of order. A per-season header shows only when the
-  // player has games across more than one season.
-  const bySeason = new Map<
-    string,
-    { seasonId: string; seasonName: string; rows: typeof gameRows }
-  >();
-  for (const row of gameRows) {
-    const sId = row.game.match.seasonId;
-    const group = bySeason.get(sId);
-    if (group) group.rows.push(row);
+  // player has series in more than one season.
+  const seriesHistory = groupBySeries(
+    gameRows.map((row) => ({
+      ...row,
+      matchId: row.game.matchId,
+      startTime: row.game.startTime,
+    })),
+  ).map(({ matchId, games: seriesGames }) => {
+    const match = seriesGames[0].game.match;
+    // The team they played for in this series (a standin's covered team).
+    const teamId =
+      seriesGames
+        .map((row) => row.stat.teamId)
+        .find((t) => t === match.homeTeamId || t === match.awayTeamId) ??
+      null;
+    const firstPlayed = seriesGames.find((row) => row.game.startTime > 0);
+    const playedAt = firstPlayed
+      ? new Date(firstPlayed.game.startTime * 1000)
+      : match.scheduledAt;
+    return {
+      matchId,
+      match,
+      games: seriesGames,
+      outcome: seriesOutcome(match, teamId, seriesGames),
+      opponentName:
+        teamId === match.homeTeamId
+          ? match.awayTeam.name
+          : teamId === match.awayTeamId
+            ? match.homeTeam.name
+            : `${match.homeTeam.name} / ${match.awayTeam.name}`,
+      round: matchRoundLabel(
+        match,
+        playoffRoundsBySeason.get(match.seasonId) ?? 0,
+      ),
+      playedAt,
+    };
+  });
+  type SeriesEntry = (typeof seriesHistory)[number];
+  const historyGroups: {
+    seasonId: string;
+    seasonName: string;
+    series: SeriesEntry[];
+  }[] = [];
+  for (const entry of seriesHistory) {
+    const group = historyGroups.find(
+      (g) => g.seasonId === entry.match.seasonId,
+    );
+    if (group) group.series.push(entry);
     else
-      bySeason.set(sId, {
-        seasonId: sId,
-        seasonName: row.game.match.season.name,
-        rows: [row],
+      historyGroups.push({
+        seasonId: entry.match.seasonId,
+        seasonName: entry.match.season.name,
+        series: [entry],
       });
   }
-  const historyGroups = [...bySeason.values()];
   const multiSeasonHistory = historyGroups.length > 1;
   // An unknown `?season=` falls back to the all-seasons view rather than
   // presenting a misleading empty history (links copied from an old profile
@@ -502,9 +546,13 @@ export default async function PlayerProfilePage({
   const selectedHistoryGroup = historySeasonParam
     ? historyGroups.find((group) => group.seasonId === historySeasonParam)
     : undefined;
-  const visibleHistoryGroups = selectedHistoryGroup
-    ? [selectedHistoryGroup]
-    : historyGroups;
+  const visibleSeries = selectedHistoryGroup
+    ? selectedHistoryGroup.series
+    : historyGroups.flatMap((group) => group.series);
+  const seriesCountBySeason = new Map(
+    historyGroups.map((group) => [group.seasonId, group.series.length]),
+  );
+  const showSeasonHeaders = multiSeasonHistory && !selectedHistoryGroup;
   const latestLeagueGame = gameRows.find((row) => row.game.startTime > 0);
 
   // Team + record for this season, if drafted.
@@ -957,6 +1005,95 @@ export default async function PlayerProfilePage({
           ) : null}
         </div>
       </section>
+
+      <Card id="player-matches" className="scroll-mt-40 overflow-hidden">
+        <CardHeader
+          title="Match history"
+          headingLevel={2}
+          subtitle={
+            gameRows.length > 0
+              ? selectedHistoryGroup
+                ? selectedHistoryGroup.seasonName
+                : multiSeasonHistory
+                  ? "All seasons"
+                  : historyGroups[0]?.seasonName
+              : (season?.name ?? undefined)
+          }
+          action={
+            recentFormStrip.length > 0 || multiSeasonHistory ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {recentFormStrip.length > 0 ? (
+                  <FormStrip form={recentFormStrip} size={5} />
+                ) : null}
+                {multiSeasonHistory ? (
+                  <form
+                    method="get"
+                    action={`/players/${id}#player-matches`}
+                    className="flex items-center gap-2"
+                  >
+                    <label>
+                      <span className="sr-only">Show games from season</span>
+                      <select
+                        name="season"
+                        defaultValue={selectedHistoryGroup?.seasonId ?? ""}
+                        className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-xs text-fg outline-none focus:border-accent/60 sm:h-8"
+                      >
+                        <option value="">All seasons</option>
+                        {historyGroups.map((group) => (
+                          <option key={group.seasonId} value={group.seasonId}>
+                            {group.seasonName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="submit"
+                      className={buttonClasses("secondary", "sm")}
+                    >
+                      View
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+            ) : undefined
+          }
+        />
+        <CardBody className="p-0">
+          {gameRows.length === 0 ? (
+            <div className="p-5">
+              <EmptyState
+                title="No games recorded yet"
+                description="Games appear here once this player's matches are imported."
+              />
+            </div>
+          ) : (
+            <>
+              <SeriesList
+                series={visibleSeries.slice(0, HISTORY_PREVIEW)}
+                previousSeasonId={null}
+                showSeasonHeaders={showSeasonHeaders}
+                seriesCountBySeason={seriesCountBySeason}
+              />
+              {visibleSeries.length > HISTORY_PREVIEW ? (
+                <ShowMore
+                  showLabel={`Show all ${visibleSeries.length} series`}
+                  hideLabel="Show fewer"
+                >
+                  <SeriesList
+                    series={visibleSeries.slice(HISTORY_PREVIEW)}
+                    previousSeasonId={
+                      visibleSeries[HISTORY_PREVIEW - 1].match.seasonId
+                    }
+                    showSeasonHeaders={showSeasonHeaders}
+                    seriesCountBySeason={seriesCountBySeason}
+                    className="border-t border-line/60"
+                  />
+                </ShowMore>
+              ) : null}
+            </>
+          )}
+        </CardBody>
+      </Card>
 
       {/* ---------- How they play ---------- */}
       {/* Bands: an h2 SectionTitle over an auto-fit grid. auto-fit, NEVER
@@ -1480,144 +1617,141 @@ export default async function PlayerProfilePage({
         </section>
       ) : null}
 
-      <Card id="player-matches" className="scroll-mt-40 overflow-hidden">
-        <CardHeader
-          title="Match history"
-          headingLevel={2}
-          subtitle={
-            gameRows.length > 0
-              ? selectedHistoryGroup
-                ? selectedHistoryGroup.seasonName
-                : multiSeasonHistory
-                  ? "All seasons"
-                  : historyGroups[0]?.seasonName
-              : (season?.name ?? undefined)
-          }
-          action={
-            recentFormStrip.length > 0 || multiSeasonHistory ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {recentFormStrip.length > 0 ? (
-                  <FormStrip form={recentFormStrip} size={5} />
-                ) : null}
-                {multiSeasonHistory ? (
-                  <form
-                    method="get"
-                    action={`/players/${id}#player-matches`}
-                    className="flex items-center gap-2"
-                  >
-                    <label>
-                      <span className="sr-only">Show games from season</span>
-                      <select
-                        name="season"
-                        defaultValue={selectedHistoryGroup?.seasonId ?? ""}
-                        className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-xs text-fg outline-none focus:border-accent/60 sm:h-8"
-                      >
-                        <option value="">All seasons</option>
-                        {historyGroups.map((group) => (
-                          <option key={group.seasonId} value={group.seasonId}>
-                            {group.seasonName}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="submit"
-                      className={buttonClasses("secondary", "sm")}
-                    >
-                      View
-                    </button>
-                  </form>
-                ) : null}
-              </div>
-            ) : undefined
-          }
-        />
-        <CardBody className="p-0">
-          {gameRows.length === 0 ? (
-            <div className="p-5">
-              <EmptyState
-                title="No games recorded yet"
-                description="Games appear here once this player's matches are imported."
-              />
-            </div>
-          ) : (
-            <ul className="divide-y divide-line/60">
-              {visibleHistoryGroups.map((group) => (
-                <li key={group.seasonId}>
-                  {multiSeasonHistory && !selectedHistoryGroup ? (
-                    <Link
-                      href={`/seasons/${group.seasonId}`}
-                      className="flex items-center justify-between bg-surface-2/40 px-5 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
-                    >
-                      <span className="truncate">{group.seasonName}</span>
-                      <span className="shrink-0 tabular-nums">
-                        {group.rows.length} game
-                        {group.rows.length === 1 ? "" : "s"}
-                      </span>
-                    </Link>
-                  ) : null}
-                  <ul className="divide-y divide-line/60">
-                    {group.rows.map(({ game, stat }) => {
-                      const won = wonGame({
-                        isRadiant: stat.isRadiant,
-                        radiantWin: game.radiantWin,
-                        kills: 0,
-                        deaths: 0,
-                        assists: 0,
-                        heroId: 0,
-                      });
-                      const hero = heroById(stat.heroId);
-                      const opponentName =
-                        stat.teamId === game.match.homeTeamId
-                          ? game.match.awayTeam.name
-                          : stat.teamId === game.match.awayTeamId
-                            ? game.match.homeTeam.name
-                            : `${game.match.homeTeam.name} / ${game.match.awayTeam.name}`;
-                      return (
-                        <li key={game.id}>
-                          <Link
-                            href={`/matches/${game.matchId}`}
-                            className="flex items-center gap-3 px-5 py-3 text-sm hover:bg-surface-2/40"
-                          >
-                            <Badge tone={won ? "success" : "danger"}>
-                              {won ? "W" : "L"}
-                            </Badge>
-                            {hero ? <HeroIcon hero={hero} size={26} /> : null}
-                            <span className="min-w-0 flex-1">
-                              <span className="block font-medium leading-snug [overflow-wrap:anywhere]">
-                                <span className="font-normal text-muted">
-                                  vs{" "}
-                                </span>
-                                {opponentName}
-                              </span>
-                              <span className="mt-1 block text-xs text-muted">
-                                {hero?.name ?? `Hero ${stat.heroId}`} ·{" "}
-                                {matchRoundLabel(
-                                  game.match,
-                                  playoffRoundsBySeason.get(
-                                    game.match.seasonId,
-                                  ) ?? 0,
-                                )}
-                              </span>
-                            </span>
-                            <KDA
-                              kills={stat.kills}
-                              deaths={stat.deaths}
-                              assists={stat.assists}
-                              className="shrink-0 text-xs"
-                            />
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardBody>
-      </Card>
     </div>
+  );
+}
+
+/** Latest series shown before "Show all". */
+const HISTORY_PREVIEW = 5;
+
+type HistorySeries = {
+  matchId: string;
+  match: { seasonId: string; season: { name: string } };
+  games: {
+    game: { id: string };
+    stat: PlayerStat;
+    won: boolean;
+  }[];
+  outcome: SeriesOutcome;
+  opponentName: string;
+  round: string;
+  playedAt: Date | null;
+};
+
+/**
+ * One row per series: the result from their side, the opponent, the week or
+ * playoff round and the date, with their hero and KDA for each game beneath.
+ * The whole row opens the match page.
+ */
+function SeriesList({
+  series,
+  previousSeasonId,
+  showSeasonHeaders,
+  seriesCountBySeason,
+  className,
+}: {
+  series: HistorySeries[];
+  /** Season of the row just above this list, so a header isn't repeated. */
+  previousSeasonId: string | null;
+  showSeasonHeaders: boolean;
+  seriesCountBySeason: ReadonlyMap<string, number>;
+  className?: string;
+}) {
+  return (
+    <ul className={cn("divide-y divide-line/60", className)}>
+      {series.map((entry, i) => {
+        const seasonId = entry.match.seasonId;
+        const prior = i > 0 ? series[i - 1].match.seasonId : previousSeasonId;
+        const count = seriesCountBySeason.get(seasonId) ?? 0;
+        return (
+          <li key={entry.matchId}>
+            {showSeasonHeaders && seasonId !== prior ? (
+              <Link
+                href={`/seasons/${seasonId}`}
+                className="flex items-center justify-between border-b border-line/60 bg-surface-2/40 px-5 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
+              >
+                <span className="truncate">{entry.match.season.name}</span>
+                <span className="shrink-0 tabular-nums">
+                  {count} series
+                </span>
+              </Link>
+            ) : null}
+            <Link
+              href={`/matches/${entry.matchId}`}
+              className="block px-5 py-3 text-sm hover:bg-surface-2/40"
+            >
+              <span className="flex items-center gap-3">
+                <Badge
+                  tone={
+                    entry.outcome.result === "W"
+                      ? "success"
+                      : entry.outcome.result === "L"
+                        ? "danger"
+                        : entry.outcome.result === "D"
+                          ? "neutral"
+                          : "info"
+                  }
+                >
+                  {entry.outcome.result ?? "Live"}
+                </Badge>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium leading-snug [overflow-wrap:anywhere]">
+                    <span className="font-normal text-muted">vs </span>
+                    {entry.opponentName}
+                  </span>
+                  <span className="mt-1 block text-xs text-muted">
+                    {entry.outcome.label} · {entry.round}
+                    {entry.playedAt ? (
+                      <>
+                        {" · "}
+                        <LocalTime
+                          ts={entry.playedAt.getTime()}
+                          variant="date"
+                          initial={formatMatchTime(entry.playedAt, "date")}
+                        />
+                      </>
+                    ) : null}
+                  </span>
+                </span>
+              </span>
+              <span className="mt-2 block space-y-1.5 pl-10">
+                {/* Only the games THEY played, so no "Game 2" numbering: a
+                    standin who covered one game of three has one line. */}
+                {entry.games.map(({ game, stat, won }) => {
+                  const hero = heroById(stat.heroId);
+                  return (
+                    <span
+                      key={game.id}
+                      className="flex items-center gap-2 text-xs"
+                    >
+                      {hero ? <HeroIcon hero={hero} size={22} /> : null}
+                      <span className="min-w-0 flex-1 truncate text-muted">
+                        {hero?.name ?? `Hero ${stat.heroId}`}
+                      </span>
+                      <KDA
+                        kills={stat.kills}
+                        deaths={stat.deaths}
+                        assists={stat.assists}
+                        className="shrink-0"
+                      />
+                      <span
+                        className={cn(
+                          "w-3 shrink-0 text-right font-semibold",
+                          won ? "text-success" : "text-danger",
+                        )}
+                      >
+                        <span aria-hidden>{won ? "W" : "L"}</span>
+                        <span className="sr-only">{won ? "won" : "lost"}</span>
+                      </span>
+                    </span>
+                  );
+                })}
+              </span>
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
