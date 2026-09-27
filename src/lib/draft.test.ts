@@ -10,10 +10,15 @@ import {
   draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
+  keepsLinedUpPick,
+  lineUpHint,
   lotHeadingLead,
   lotWatcherLine,
   nextNominatorIndex,
   nominationTurnTeamId,
+  nominationWaitLine,
+  upcomingNominatorTeamId,
+  upNextLine,
   outbidLine,
   outbidders,
   mmrWeightedBudgets,
@@ -776,5 +781,95 @@ describe("uncoveredRoles", () => {
 
   it("ignores junk in the stored string", () => {
     expect(uncoveredRoles([{ roles: "1, 2,9,x,3,4" }])).toEqual(["5"]);
+  });
+});
+
+describe("upcomingNominatorTeamId", () => {
+  // teamSize 3 (captain + 2 buys), $1 minimum. Draft order a, b, c.
+  const t = (id: string, rostered: number, budget = 50) => ({
+    id,
+    budget,
+    members: Array.from({ length: rostered }, (_, i) => ({ i })),
+  });
+  const draft = (over: Partial<Parameters<typeof upcomingNominatorTeamId>[0]> = {}) => ({
+    status: "IN_PROGRESS",
+    teams: [t("a", 1), t("b", 1), t("c", 1)],
+    teamSize: 3,
+    nominatorTeamId: "a",
+    available: [1, 2, 3, 4],
+    ...over,
+  });
+
+  it("names the team after the one nominating now, in draft order", () => {
+    expect(upcomingNominatorTeamId(draft())).toBe("b");
+    expect(upcomingNominatorTeamId(draft({ nominatorTeamId: "c" }))).toBe("a");
+  });
+
+  it("skips full and broke teams, like the server's rotation", () => {
+    expect(
+      upcomingNominatorTeamId(draft({ teams: [t("a", 1), t("b", 3), t("c", 1)] })),
+    ).toBe("c");
+    // b needs two players but has $1: it can't pay the minimum for both.
+    expect(
+      upcomingNominatorTeamId(draft({ teams: [t("a", 1), t("b", 1, 1), t("c", 1)] })),
+    ).toBe("c");
+  });
+
+  it("still answers during a pause", () => {
+    expect(upcomingNominatorTeamId(draft({ status: "PAUSED" }))).toBe("b");
+  });
+
+  it("is null when there is no next turn to announce", () => {
+    // Not running.
+    for (const status of ["NOT_STARTED", "COMPLETE"]) {
+      expect(upcomingNominatorTeamId(draft({ status }))).toBeNull();
+    }
+    // This turn takes the last player in the pool.
+    expect(upcomingNominatorTeamId(draft({ available: [1] }))).toBeNull();
+    // Only the team on the clock still needs players: it goes again.
+    expect(
+      upcomingNominatorTeamId(draft({ teams: [t("a", 1), t("b", 3), t("c", 3)] })),
+    ).toBeNull();
+    expect(upcomingNominatorTeamId(draft({ nominatorTeamId: null }))).toBeNull();
+  });
+});
+
+describe("keepsLinedUpPick", () => {
+  it("keeps a lined-up pick only when the turn passes to that captain", () => {
+    expect(keepsLinedUpPick({ nominatorTeamId: "t2", myTeamId: "t2" })).toBe(true);
+    expect(keepsLinedUpPick({ nominatorTeamId: "t3", myTeamId: "t2" })).toBe(false);
+    expect(keepsLinedUpPick({ nominatorTeamId: null, myTeamId: "t2" })).toBe(false);
+    // Not a captain: nothing to keep, even on a null-vs-null match.
+    expect(keepsLinedUpPick({ nominatorTeamId: null, myTeamId: null })).toBe(false);
+  });
+});
+
+describe("lineUpHint / upNextLine", () => {
+  it("names the lined-up player, or says how to line one up", () => {
+    expect(lineUpHint("Topson")).toBe("Lined up: Topson.");
+    expect(lineUpHint(null)).toBe("Tap a player in the pool to line them up.");
+    expect(upNextLine(null)).toBe(
+      "You're next to nominate. Tap a player in the pool to line them up.",
+    );
+    expect(upNextLine("Topson")).toBe("You're next to nominate. Lined up: Topson.");
+  });
+});
+
+describe("nominationWaitLine", () => {
+  it("tells a paused captain on the clock that the turn is theirs", () => {
+    expect(
+      nominationWaitLine({ paused: true, myTurn: true, nominatorName: "Team 4" }),
+    ).toBe(
+      "It's your turn to nominate. Your clock restarts when the admin unpauses the auction.",
+    );
+  });
+
+  it("names the team on the clock for everyone else", () => {
+    expect(
+      nominationWaitLine({ paused: true, myTurn: false, nominatorName: "Team 4" }),
+    ).toBe("Team 4 nominates when the admin unpauses the auction.");
+    expect(
+      nominationWaitLine({ paused: false, myTurn: false, nominatorName: "Team 4" }),
+    ).toBe("Waiting for Team 4 to nominate a player…");
   });
 });

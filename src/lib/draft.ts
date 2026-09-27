@@ -504,3 +504,89 @@ export function uncoveredRoles(
   if (coverage.every((role) => role.count === 0)) return [];
   return coverage.filter((role) => role.count === 0).map((role) => role.key);
 }
+
+/**
+ * The team that nominates AFTER the current turn: after the live lot sells, or
+ * after the team now on the clock puts its player up. Null when there is no
+ * such turn to announce — the auction isn't running, the pool will be empty by
+ * then, or the same team would go again.
+ *
+ * It reads the rosters as they stand, the same rotation the server runs
+ * (nextNominatorIndex from the current nominator). That can be wrong in one
+ * case: a next team with a single open seat that wins the live lot is full
+ * afterwards, and the turn skips it. Predicting from the high bidder instead
+ * would make the answer change with every bid, on a line that sits above the
+ * bid buttons.
+ */
+export function upcomingNominatorTeamId(s: {
+  status: string;
+  teams: readonly { id: string; budget: number; members: readonly unknown[] }[];
+  teamSize: number;
+  nominatorTeamId: string | null;
+  /** Players not yet drafted — the player on the block included. */
+  available: readonly unknown[];
+}): string | null {
+  if (s.status !== "IN_PROGRESS" && s.status !== "PAUSED") return null;
+  // One player left means this turn takes the last of them and the draft ends.
+  if (!s.nominatorTeamId || s.available.length < 2) return null;
+  const current = s.teams.findIndex((t) => t.id === s.nominatorTeamId);
+  const idx = nextNominatorIndex(
+    s.teams.map((t) => ({
+      id: t.id,
+      budget: t.budget,
+      rosterCount: t.members.length,
+    })),
+    s.teamSize,
+    current < 0 ? 0 : current,
+  );
+  const next = idx >= 0 ? s.teams[idx] : undefined;
+  return next && next.id !== s.nominatorTeamId ? next.id : null;
+}
+
+/**
+ * When the nomination turn moves, does the player a captain lined up survive?
+ * Only when the turn has just passed TO that captain — that is what lining up
+ * a pick while "next" is for. Any other hand-over clears it: a pick chosen for
+ * a turn that went to someone else must not sit there looking live.
+ */
+export function keepsLinedUpPick(o: {
+  nominatorTeamId: string | null;
+  myTeamId: string | null;
+}): boolean {
+  return !!o.myTeamId && o.nominatorTeamId === o.myTeamId;
+}
+
+/** "Lined up: X." or how to line someone up. */
+export function lineUpHint(linedUpName: string | null): string {
+  return linedUpName
+    ? `Lined up: ${linedUpName}.`
+    : "Tap a player in the pool to line them up.";
+}
+
+/**
+ * The notice for the captain whose nomination turn comes next, on every screen
+ * size. Their 90 seconds used to start with searching the pool, and the only
+ * hint ("next: Team 3" in the lot header) was hidden on phones.
+ */
+export function upNextLine(linedUpName: string | null): string {
+  return `You're next to nominate. ${lineUpHint(linedUpName)}`;
+}
+
+/**
+ * The line under a nomination turn for everyone who isn't nominating right now.
+ * During a pause the captain on the clock used to read "Waiting for <their own
+ * team> to nominate a player…".
+ */
+export function nominationWaitLine(o: {
+  paused: boolean;
+  myTurn: boolean;
+  nominatorName: string;
+}): string {
+  if (o.myTurn && o.paused) {
+    return "It's your turn to nominate. Your clock restarts when the admin unpauses the auction.";
+  }
+  if (o.paused) {
+    return `${o.nominatorName} nominates when the admin unpauses the auction.`;
+  }
+  return `Waiting for ${o.nominatorName} to nominate a player…`;
+}

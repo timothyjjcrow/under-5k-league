@@ -31,17 +31,21 @@ import {
   draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
+  keepsLinedUpPick,
+  lineUpHint,
   lotHeadingLead,
   lotWatcherLine,
   maxBid,
-  nextNominatorIndex,
   nominationTurnTeamId,
+  nominationWaitLine,
   openSeatsLabel,
   outbidLatchAfter,
   outbidLine,
   rosterDisplayOrder,
   stripDraftTitleFlag,
   uncoveredRoles,
+  upcomingNominatorTeamId,
+  upNextLine,
 } from "@/lib/draft";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
@@ -645,8 +649,15 @@ export function DraftRoom({
   const turnRef = useRef<string | null>(null);
   useEffect(() => {
     if (!state) return;
+    // A player the captain lined up while "next" survives the turn passing to
+    // them — that is the point of lining one up. Any other hand-over clears
+    // the selection.
+    const keep = keepsLinedUpPick({
+      nominatorTeamId: state.nominatorTeamId,
+      myTeamId: state.me.myTeamId,
+    });
     if (turnRef.current && turnRef.current !== state.nominatorTeamId) {
-      setSelected(null);
+      setSelected((current) => (keep ? current : null));
       setNomAmount(state.minBid);
     }
     turnRef.current = state.nominatorTeamId;
@@ -772,7 +783,9 @@ export function DraftRoom({
           return;
         }
         apply(next, seq);
-        setSelected(null);
+        // A bid leaves the pick a captain has lined up for their next turn
+        // alone; a nomination has just used it.
+        if (url !== "/api/draft/bid") setSelected(null);
       }
     } catch {
       // A lost response is never proof that a mutation failed: the server can
@@ -956,22 +969,22 @@ export function DraftRoom({
   )?.name;
   // Who nominates after this lot — captains plan a turn ahead. Pure rotation
   // math over the same draftOrder-sorted teams the server uses.
-  const curNomIdx = state.teams.findIndex(
-    (t) => t.id === state.nominatorTeamId,
-  );
-  const nextNomIdx = nextNominatorIndex(
-    state.teams.map((t) => ({
-      id: t.id,
-      budget: t.budget,
-      rosterCount: t.members.length,
-    })),
-    state.teamSize,
-    curNomIdx < 0 ? 0 : curNomIdx,
-  );
-  const nextNominatorName =
-    nextNomIdx >= 0 && state.teams[nextNomIdx]?.id !== state.nominatorTeamId
-      ? state.teams[nextNomIdx]?.name
-      : null;
+  const upcomingTeamId = upcomingNominatorTeamId(state);
+  const nextNominatorName = upcomingTeamId
+    ? (state.teams.find((t) => t.id === upcomingTeamId)?.name ?? null)
+    : null;
+  // The captain whose turn comes next may line up a pick in advance, and so
+  // may the captain on the clock while the admin has paused the auction.
+  const iAmNext = !!me.myTeamId && upcomingTeamId === me.myTeamId;
+  const myTurnPaused =
+    state.status === "PAUSED" &&
+    !state.nominatedPlayer &&
+    !!me.myTeamId &&
+    state.nominatorTeamId === me.myTeamId;
+  const canLineUp = me.canNominate || iAmNext || myTurnPaused;
+  const linedUpName = selected
+    ? (state.available.find((p) => p.userId === selected)?.name ?? null)
+    : null;
   // The viewer's own team (if a captain) — drives the "why can't I bid" copy.
   const myTeam = me.myTeamId
     ? state.teams.find((t) => t.id === me.myTeamId)
@@ -1544,10 +1557,18 @@ export function DraftRoom({
                 />
               ) : null}
             </div>
-            {liveTeamLine || soundToggle ? (
-              <div className="-mt-1 flex items-center gap-2 px-5 pb-2 text-xs text-muted">
+            {liveTeamLine || soundToggle || iAmNext ? (
+              <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-5 pb-2 text-xs text-muted">
                 {liveTeamLine}
                 {soundToggle}
+                {/* Every screen size: the header's "next: Team 3" is hidden
+                    on phones, and a turn that starts with searching the pool
+                    loses most of its 90 seconds. */}
+                {iAmNext ? (
+                  <p className="basis-full font-medium text-accent">
+                    {upNextLine(linedUpName)}
+                  </p>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -1734,9 +1755,23 @@ export function DraftRoom({
               />
             ) : (
               <div className="flex flex-col items-center gap-3 py-4">
-                <p className="text-center text-muted">
-                  Waiting for {nominatorName} to nominate a player…
+                <p
+                  className={cn(
+                    "text-center",
+                    myTurnPaused ? "font-medium text-fg" : "text-muted",
+                  )}
+                >
+                  {nominationWaitLine({
+                    paused,
+                    myTurn: myTurnPaused,
+                    nominatorName,
+                  })}
                 </p>
+                {myTurnPaused ? (
+                  <p className="text-center text-sm text-muted">
+                    {lineUpHint(linedUpName)}
+                  </p>
+                ) : null}
                 {/* Hidden while PAUSED: nominatePlayer refuses any non-live
                     draft, so in the pause → settle → resume flow this button
                     could only walk the admin through the confirm into a
@@ -1863,7 +1898,7 @@ export function DraftRoom({
               state={state}
               role={poolRole}
               onRoleChange={setPoolRole}
-              canNominate={me.canNominate}
+              canPick={canLineUp}
               selected={selected}
               onPick={(userId) => {
                 setSelected(userId);
@@ -1996,7 +2031,7 @@ function AvailableList({
   state,
   role,
   onRoleChange: setRole,
-  canNominate,
+  canPick,
   selected,
   onPick,
 }: {
@@ -2004,7 +2039,8 @@ function AvailableList({
   /** The position filter, owned by the room (see `poolRole`). */
   role: string | null;
   onRoleChange: (role: string | null) => void;
-  canNominate: boolean;
+  /** Rows are pick buttons: on the clock, or lining up the next turn. */
+  canPick: boolean;
   selected: string | null;
   onPick: (userId: string) => void;
 }) {
@@ -2119,7 +2155,7 @@ function AvailableList({
                     : "",
               )}
             >
-              {canNominate ? (
+              {canPick ? (
                 <button
                   type="button"
                   onClick={() => onPick(p.userId)}
