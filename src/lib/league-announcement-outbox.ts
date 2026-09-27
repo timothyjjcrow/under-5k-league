@@ -6,7 +6,10 @@ import {
   normalizeMentionAllowlist,
   type MentionAllowlist,
 } from "./discord-payload";
-import { announcementMarkerOwnsEvent } from "./announcement-marker";
+import {
+  announcementMarkerOwnsEvent,
+  MARKER_UUID_SOURCE,
+} from "./announcement-marker";
 import { databaseNow } from "./database-time";
 import { prisma } from "./prisma";
 
@@ -17,15 +20,18 @@ export const LEAGUE_ANNOUNCEMENT_STATUS = {
   CANCELLED: "CANCELLED",
 } as const;
 
-const CLAIM_LEASE_MS = 30_000;
+/**
+ * How long a SENDING row stays claimed before another worker may retry it.
+ * The automation gate imports this to know when such a row becomes due.
+ */
+export const LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS = 30_000;
 const BASE_RETRY_MS = 30_000;
 const MAX_RETRY_MS = 15 * 60_000;
 const DEFAULT_LIMIT = 4;
 const CANDIDATE_BATCH = 25;
 const MAX_DEDUPE_KEY = 190;
 const MAX_MARKER_KEY = 500;
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = new RegExp(`^${MARKER_UUID_SOURCE}$`, "i");
 
 type AnnouncementDb = Pick<Prisma.TransactionClient, "leagueAnnouncement">;
 type Send = (content: string, mentions?: MentionAllowlist) => Promise<boolean>;
@@ -65,7 +71,7 @@ function eligibleWhere(now: Date) {
       },
       {
         status: LEAGUE_ANNOUNCEMENT_STATUS.SENDING,
-        claimedAt: { lt: new Date(now.getTime() - CLAIM_LEASE_MS) },
+        claimedAt: { lt: new Date(now.getTime() - LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS) },
       },
     ],
   };

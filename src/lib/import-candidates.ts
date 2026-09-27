@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { OpenDotaMatch, OpenDotaPlayer } from "./dota";
 import { prisma } from "./prisma";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
+import { importSkipKey } from "./settings";
 
 export const IMPORT_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const IMPORT_CANDIDATE_MAX_ATTEMPTS = 8;
@@ -229,11 +230,10 @@ export async function recordImportDecision(
 }
 
 type SuppressionDb = Pick<Prisma.TransactionClient, "importSuppression" | "importCandidate" | "setting">;
-const legacyImportSkipKey = (seasonId: string) => `importSkip:${seasonId}`;
 
 export async function loadImportSuppressions(seasonId: string, db: SuppressionDb = prisma): Promise<Set<string>> {
   const [legacy, rows] = await Promise.all([
-    db.setting.findUnique({ where: { key: legacyImportSkipKey(seasonId) }, select: { value: true } }),
+    db.setting.findUnique({ where: { key: importSkipKey(seasonId) }, select: { value: true } }),
     db.importSuppression.findMany({ where: { seasonId }, select: { dotaMatchId: true } }),
   ]);
   // A corrupt legacy value is an operational error, never permission to undo

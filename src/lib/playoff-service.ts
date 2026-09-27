@@ -20,6 +20,8 @@ import { raceHook } from "./race-hook";
 import {
   championAnnouncedKey,
   playoffGamesArchiveKey,
+  playoffRoundBuiltKey,
+  playoffRoundBuiltPrefix,
   resultAnnouncedKey,
   stampResultChange,
   weekReminderKey,
@@ -73,15 +75,6 @@ async function assertNoPlayoffScrimConflict(
     throw new PlayoffScrimConflictError();
   }
 }
-
-/**
- * Exactly-once marker for "round N of this season's bracket has been built".
- * Cleared by createPlayoffBracket so Reset playoffs can rebuild from scratch —
- * without that, a reset season could never advance past a round it had already
- * built once.
- */
-const playoffRoundKey = (seasonId: string, round: number) =>
-  `playoffRoundBuilt:${seasonId}:${round}`;
 
 // Bracket slots are encoded as `R{round}M{match}` e.g. "R0M1".
 function parseSlot(slot: string | null): { round: number; match: number } {
@@ -211,7 +204,10 @@ async function removePostseason(
   ]);
 
   await tx.setting.deleteMany({
-    where: { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
+    // Round markers (settings.ts's playoffRoundBuiltKey): without clearing
+    // them, a reset season could never advance past a round it had already
+    // built once.
+    where: { key: { startsWith: playoffRoundBuiltPrefix(seasonId) } },
   });
   await tx.setting.deleteMany({
     where: { key: championAnnouncedKey(seasonId) },
@@ -891,7 +887,7 @@ export async function advancePlayoffBracket(
         if (!inputsHold) throw new StaleBracketError();
         await tx.setting.create({
           data: {
-            key: playoffRoundKey(seasonId, nextRound),
+            key: playoffRoundBuiltKey(seasonId, nextRound),
             value: new Date().toISOString(),
           },
         });

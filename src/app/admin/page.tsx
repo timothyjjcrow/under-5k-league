@@ -118,6 +118,7 @@ import {
   tiebreakerGamesArchiveKey,
   SETTING_KEYS,
 } from "@/lib/settings";
+import { HONORS_STALE_PREFIX } from "@/lib/announcement-marker";
 import { adminNextStep } from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
@@ -4177,7 +4178,7 @@ async function AutomationRunnerHealth() {
             { value: { startsWith: ANNOUNCE_FAILED_PREFIX } },
             {
               key: { startsWith: HONORS_ANNOUNCED_PREFIX },
-              value: { startsWith: "stale:" },
+              value: { startsWith: HONORS_STALE_PREFIX },
             },
           ],
         },

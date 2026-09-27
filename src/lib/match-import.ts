@@ -31,6 +31,7 @@ import {
   stampResultChange,
   weekReminderKey,
   claimProviderCooldown,
+  fixtureImportCooldownResource,
 } from "./settings";
 import {
   AUTO_SYNC,
@@ -991,7 +992,7 @@ export async function importGameForMatch(
     const providerClaim = await claimProviderCooldown(
       "open-dota-match-import",
       options.providerActorId,
-      `fixture:${match.id}`,
+      fixtureImportCooldownResource(match.id),
     );
     if (providerClaim === "cooldown") {
       return {

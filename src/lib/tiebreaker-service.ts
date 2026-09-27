@@ -12,7 +12,7 @@ import { singleEliminationPlan } from "./single-elimination";
 import { UserFacingError } from "./user-facing-error";
 import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
 import { raceHook } from "./race-hook";
-import { resultAnnouncedKey, stampResultChange, tiebreakerGamesArchiveKey, weekReminderKey } from "./settings";
+import { resultAnnouncedKey, stampResultChange, tiebreakerDrawKey, tiebreakerGamesArchiveKey, weekReminderKey } from "./settings";
 import { isSerializationConflict } from "./prisma-errors";
 
 // Same snapshot as the admin's playoff/tiebreaker confirmation. Child rows
@@ -61,7 +61,7 @@ type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 
 /** A reset keeps the original draw for the same standings; it cannot reroll a bye. */
 async function openingDraw(tx: Prisma.TransactionClient, seasonId: string, group: TiebreakerGroup) {
-  const key = `tiebreakerDraw:${seasonId}:${group.key}`;
+  const key = tiebreakerDrawKey(seasonId, group.key);
   const existing = await tx.setting.findUnique({ where: { key } });
   if (existing) {
     let parsed: unknown;

@@ -44,6 +44,15 @@ import {
   AUTOMATION_GATE_TAG,
   AUTOMATION_GATE_VERSION,
 } from "./automation-gate-constants";
+import {
+  ANNOUNCEMENT_CLAIM_PATTERN,
+  ANNOUNCEMENT_CLAIM_PREFIX,
+  HONORS_CLAIM_PATTERN,
+  HONORS_CLAIM_PREFIX,
+  HONORS_FAILED_PREFIX,
+  HONORS_STALE_PREFIX,
+} from "./announcement-marker";
+import { LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS } from "./league-announcement-outbox";
 
 export {
   AUTOMATION_GATE_CACHE_KEY,
@@ -52,21 +61,10 @@ export {
   AUTOMATION_GATE_VERSION,
 } from "./automation-gate-constants";
 
-const OUTBOX_CLAIM_LEASE_MS = 30_000;
+// Mirrors CLAIM_LEASE_MS in inhouse-announcement-outbox.ts, which does not
+// export it yet. Import it from there once it does, as the league lease is.
+const INHOUSE_OUTBOX_CLAIM_LEASE_MS = 30_000;
 const AUTOMATION_GATE_CLOCK_SKEW_MS = 60_000;
-const ANNOUNCEMENT_CLAIM_PREFIX = "claim:v2:";
-const HONORS_CLAIM_PREFIX = "claim:honors:";
-const HONORS_STALE_PREFIX = "stale:";
-const UUID =
-  "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const ANNOUNCEMENT_CLAIM_PATTERN = new RegExp(
-  `^claim:v2:(\\d{1,16}):${UUID}:${UUID}$`,
-  "i",
-);
-const HONORS_CLAIM_PATTERN = new RegExp(
-  `^claim:honors:v2:(\\d{1,16}):${UUID}:${UUID}:(?:initial|corrected)$`,
-  "i",
-);
 const PLAYOFF_SLOT_PATTERN = /^R(\d+)M(\d+)$/;
 
 export const AUTOMATION_GATE_REASONS = [
@@ -290,7 +288,7 @@ function honorsMarkerWakeAt(value: string | undefined, nowMs: number) {
   if (value === undefined) return nowMs;
   if (
     value.startsWith(HONORS_STALE_PREFIX) ||
-    value.startsWith(`${ANNOUNCE_FAILED_PREFIX}honors:`)
+    value.startsWith(HONORS_FAILED_PREFIX)
   ) {
     return nowMs;
   }
@@ -310,6 +308,7 @@ function outboxWakeAt(
   label: string,
   nowMs: number,
   outboxClock: AutomationGateInputs["outboxClock"],
+  claimLeaseMs: number,
 ): number {
   invariant(
     validTimestamp(outboxClock.databaseNowMs) &&
@@ -329,7 +328,7 @@ function outboxWakeAt(
   invariant(row.status === "SENDING", `${label}.status is unknown`);
   const claimedAt = optionalDateMs(row.claimedAt, `${label}.claimedAt`);
   invariant(claimedAt !== null, `${label} SENDING row has no claim`);
-  return appDeadline(claimedAt + OUTBOX_CLAIM_LEASE_MS + 1);
+  return appDeadline(claimedAt + claimLeaseMs + 1);
 }
 
 function latestPlayoffRound(matches: AutomationGateMatch[]) {
@@ -756,6 +755,7 @@ export function computeAutomationGateSnapshot(
         "leagueOutbox",
         nowMs,
         inputs.outboxClock,
+        LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS,
       );
       dateMs(row.createdAt, "leagueOutbox.createdAt");
     }
@@ -773,6 +773,7 @@ export function computeAutomationGateSnapshot(
         "leagueOutbox",
         nowMs,
         inputs.outboxClock,
+        LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS,
       ),
       "LEAGUE_OUTBOX",
     );
@@ -799,6 +800,7 @@ export function computeAutomationGateSnapshot(
       "inhouseOutbox",
       nowMs,
       inputs.outboxClock,
+      INHOUSE_OUTBOX_CLAIM_LEASE_MS,
     );
     dateMs(row.createdAt, "inhouseOutbox.createdAt");
     const current = inhouseHeads.get(row.lobbyId);
@@ -823,6 +825,7 @@ export function computeAutomationGateSnapshot(
         "inhouseOutbox",
         nowMs,
         inputs.outboxClock,
+        INHOUSE_OUTBOX_CLAIM_LEASE_MS,
       ),
       "INHOUSE_OUTBOX",
     );
