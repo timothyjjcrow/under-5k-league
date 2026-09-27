@@ -333,9 +333,13 @@ test("complete-season public pages agree on the champion and recap", async ({
   await expect(
     page.getByRole("heading", { name: "Fantasy", exact: true }),
   ).toBeVisible();
+  // A signed-out visitor gets the final standings, with no lineup section.
+  await expect(
+    page.getByText(/Season complete: these are the final standings/),
+  ).toBeVisible();
   await expect(
     page.getByText(/season complete — these are the final fives/i),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(page.getByText("Fantasy opens after the draft")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: /save fantasy|update fantasy/i }),
@@ -363,6 +367,10 @@ test("complete-season public pages agree on the champion and recap", async ({
       name: "Side Game Viewer",
       exact: true,
     }),
+  ).toBeVisible();
+  // The manager still gets their own five, below the standings.
+  await expect(
+    page.getByText(/season complete — these are the final fives/i),
   ).toBeVisible();
   const finalFive = page.getByText("View fantasy five", { exact: true });
   await expect(finalFive).toBeVisible();

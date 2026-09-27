@@ -35,7 +35,7 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   assertNoErrors();
 });
 
-test("fantasy renders standings for a signed-in viewer (league locked)", async ({
+test("fantasy shows a signed-in latecomer the scores, not a dead end (league locked)", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
@@ -43,9 +43,32 @@ test("fantasy renders standings for a signed-in viewer (league locked)", async (
   await expect(
     page.getByRole("heading", { name: "Fantasy", exact: true }),
   ).toBeVisible();
-  // Imported games lock the league — the page must say so instead of
-  // offering a dead picker.
-  await expect(page.getByText(/locked/i).first()).toBeVisible();
+  // Imported games lock the league — the page must say so, in one line,
+  // instead of offering a dead picker…
+  await expect(
+    page.getByText(/Rosters locked at the season's first game/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/New fives open after next season's draft/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /save fantasy|update fantasy/i }),
+  ).toHaveCount(0);
+  // …and the page is the scores, not a "catch the next season" card. The
+  // mid-season fixture has no fantasy entries, so it says that too.
+  await expect(
+    page.getByText("No fantasy fives this season", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Player scores" }),
+  ).toBeVisible();
+  await expect(page.getByText(/Catch the next season/)).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Your five", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "How impact points work" }),
+  ).toBeVisible();
   assertNoErrors();
 });
 

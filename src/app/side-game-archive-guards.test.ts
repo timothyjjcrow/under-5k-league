@@ -31,6 +31,7 @@ const FANTASY = read("fantasy", "page.tsx");
 const PICKEM = read("pickem", "page.tsx");
 const HOME = read("page.tsx");
 const FANTASY_ACTION = read("actions", "fantasy.ts");
+const FANTASY_PICKER = read("..", "components", "fantasy-picker.tsx");
 const PICKEM_BUTTON = read("..", "components", "pickem-submit-button.tsx");
 const PICK_FORM = read("..", "components", "pickem-pick-form.tsx");
 const MATCH = read("matches", "[id]", "page.tsx");
@@ -109,6 +110,35 @@ describe("side-game archive: the season archive links to them", () => {
     expect(SEASON_ARCHIVE).toMatch(
       /href=\{`\/pickem\?season=\$\{season\.id\}`\}/,
     );
+  });
+});
+
+describe("fantasy after the lock, and the picker before it", () => {
+  it("a viewer without a five gets the standings, not a dead-end card", () => {
+    // Everyone who arrived after the first game used to read "Rosters are
+    // locked… Catch the next season!" as the page's main content. The lineup
+    // section now exists only while picks are open or for a manager's own
+    // five; the subtitle says why nobody else can pick.
+    expect(FANTASY).toMatch(/\{!locked \|\| myRoster \? \(\s*<section id="lineup"/);
+    expect(FANTASY).not.toMatch(/Catch the next season|Rosters are locked/);
+    expect(FANTASY).toMatch(/New fives open after next season's draft\./);
+  });
+
+  it("explains impact points on the page", () => {
+    expect(FANTASY).toMatch(/title="How impact points work"/);
+    expect(FANTASY).toMatch(/href="#scoring"/);
+  });
+
+  it("keeps one Save button, in the bar that sticks above the phone dock", () => {
+    expect(FANTASY_PICKER.match(/<SubmitButton\b/g)).toHaveLength(1);
+    const barAt = FANTASY_PICKER.indexOf(
+      "sticky bottom-[calc(var(--mobile-dock-height)",
+    );
+    expect(barAt).toBeGreaterThan(0);
+    expect(FANTASY_PICKER.slice(barAt)).toMatch(/<SubmitButton\b/);
+    // The pool opens in the price order the shared helper defines.
+    expect(FANTASY_PICKER).toMatch(/useState<FantasyPickerOrder>\(\s*DEFAULT_FANTASY_PICKER_ORDER,?\s*\)/);
+    expect(FANTASY_PICKER).toMatch(/orderFantasyCandidates\(/);
   });
 });
 
