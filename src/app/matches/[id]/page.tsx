@@ -35,7 +35,6 @@ import { formatMatchTime } from "@/lib/match-time";
 import { matchNightRoster } from "@/lib/availability";
 import { canViewNamedMatchAvailability } from "@/lib/visibility";
 import {
-  isPlayoffPhase,
   matchCheckinOpen,
   matchLogisticsOpen,
   matchResultsOpen,
@@ -514,14 +513,16 @@ export default async function MatchDetailPage({
           part of {match.season.name}; its schedule, reporting, and logistics
           are read-only.
         </div>
-      ) : match.status !== "COMPLETED" &&
-        match.scheduledAt &&
-        match.scheduledAt.getTime() < renderedAt ? (
+      ) : resultPending && match.status !== "LIVE" && games.length === 0 ? (
+        // Once a game is in, the LIVE badge and the score say it all. Before
+        // that, say where things stand without promising an import: forfeits
+        // and private match data never arrive on their own.
         <div className="rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-muted">
-          <strong className="text-fg">Result pending.</strong> The scheduled
-          kickoff has passed, but this series is not final yet. A captain can
-          report the Dota game until the{" "}
-          {isPlayoffPhase(match.phase) ? "playoffs end" : "regular season ends"}.
+          <strong className="text-fg">Waiting for the result.</strong> Kickoff
+          has passed and no game is recorded yet.
+          {matchResultsOpen(match.season.status, match.phase)
+            ? " Results usually appear here on their own; if one doesn't, a captain can add it from this page."
+            : null}
         </div>
       ) : null}
 
