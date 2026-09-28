@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Avatar,
@@ -1155,10 +1162,10 @@ function QueueView({
   nextGame?: boolean;
 }) {
   const { queue, lobbySize, needed, me } = state;
-  // "Away" players (heartbeat gone quiet) keep their row for a grace window
-  // but don't count toward forming — the headline number stays honest, and
-  // (via queueSlots below) they can't take a visible slot off someone who is
-  // actually here.
+  // "Away" players (heartbeat gone quiet, or re-queued by a cancelled lobby
+  // and not back yet) stay queued but don't count toward forming. queueSlots
+  // keeps them out of the ten slots, which are for players who are here, and
+  // the room lists them on their own line with a plain explanation.
   const present = queue.filter((q) => !q.away);
   const pct = lobbySize
     ? Math.min(100, Math.round((present.length / lobbySize) * 100))
@@ -1168,217 +1175,223 @@ function QueueView({
   // isn't presented as the room's calibre.
   const knownMmrs = present.map((q) => q.mmr).filter((m) => m > 0);
   const queueAvg = knownMmrs.length >= 2 ? avgKnownMmr(knownMmrs) : 0;
-  const { slots, overflow } = queueSlots(queue, lobbySize);
+  const { slots, overflow, away } = queueSlots(queue, lobbySize);
 
   const myPosition = present.findIndex((q) => q.userId === me.userId) + 1;
 
+  const controls = (
+    <QueueControls
+      me={me}
+      pending={pending}
+      mmr={mmr}
+      setMmr={setMmr}
+      mmrHint={mmrHint}
+      act={act}
+      nextGame={nextGame}
+    />
+  );
+
   return (
     <div className="space-y-3">
-      <section
-        aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
-        className="overflow-hidden rounded-2xl border border-accent/25 bg-surface/90 shadow-xl shadow-black/10"
-      >
-        <div className="grid lg:grid-cols-[0.85fr_1.35fr]">
-          <div className="relative overflow-hidden border-b border-line bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] p-5 lg:border-b-0 lg:border-r lg:p-6">
-            <div className="flex items-center gap-5 lg:flex-col lg:gap-3 lg:text-center">
-              <div className="relative grid h-32 w-32 shrink-0 place-items-center lg:h-40 lg:w-40">
-                <svg
-                  viewBox="0 0 120 120"
-                  aria-hidden
-                  className="absolute inset-0 h-full w-full -rotate-90"
-                >
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="51"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="5"
-                    className="text-line"
-                  />
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="51"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="5"
-                    pathLength="100"
-                    strokeDasharray={`${pct} 100`}
-                    strokeLinecap={pct > 0 ? "round" : "butt"}
-                    className="text-accent transition-[stroke-dasharray] duration-500 motion-reduce:transition-none"
-                  />
-                </svg>
-                <div
-                  role="progressbar"
-                  aria-label={
-                    nextGame
-                      ? "Next-game queue progress"
-                      : "Inhouse queue progress"
-                  }
-                  aria-valuemin={0}
-                  aria-valuemax={lobbySize}
-                  aria-valuenow={Math.min(present.length, lobbySize)}
-                  aria-valuetext={`${present.length} players queued; ${needed} more needed`}
-                  className="text-center"
-                >
-                  <span className="block font-display text-4xl font-bold leading-none tabular-nums lg:text-5xl">
-                    {present.length}
-                  </span>
-                  <span className="mt-1 block text-[11px] text-muted">
-                    of {lobbySize} players
-                  </span>
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-                  {nextGame ? "Up next" : "Pick-up Dota"}
-                </p>
-                <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">
-                  {nextGame ? "Next-game queue" : "Inhouse queue"}
-                </h2>
-                <p className="mt-1.5 text-sm text-muted">
-                  {needed > 0
-                    ? `${needed} more ${needed === 1 ? "player" : "players"} to play`
-                    : nextGame
-                      ? "Full · waiting for this game to finish"
-                      : "Full · starting the ready check…"}
-                </p>
-                {queueAvg > 0 ? (
-                  <p className="mt-2 text-xs tabular-nums text-muted">
-                    {queueAvg.toLocaleString()} average MMR
-                  </p>
-                ) : null}
-              </div>
-            </div>
-            <div className="mt-5">
-              <QueueControls
-                me={me}
-                pending={pending}
-                mmr={mmr}
-                setMmr={setMmr}
-                mmrHint={mmrHint}
-                act={act}
-                nextGame={nextGame}
-              />
-            </div>
-            {me.inQueue ? (
-              <p
-                role="status"
-                className="mt-3 text-center text-xs text-success"
-              >
-                {myPosition > 0
-                  ? `You’re #${myPosition} in line`
-                  : "Your spot is saved"}
-                {nextGame ? " · next game" : " · listen for the ready check"}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="min-w-0 p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold">Who’s playing</h3>
-              <span className="text-xs text-muted">
-                {nextGame ? (
-                  "Ready check after this game"
-                ) : (
-                  <>First {lobbySize} in → ready check</>
-                )}
-              </span>
-            </div>
-            <ul className="grid grid-cols-2 gap-2">
-              {slots.map((q, i) => {
-                if (!q) {
-                  return (
-                    <li
-                      key={`open-${i}`}
-                      className="flex min-h-16 items-center gap-2 rounded-xl border border-dashed border-line/70 px-3 py-2"
-                    >
-                      <span
-                        aria-hidden
-                        className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-dashed border-line text-sm text-muted"
-                      >
-                        +
-                      </span>
-                      <span className="min-w-0 text-xs text-muted">
-                        Open slot
-                        <span className="ml-1 tabular-nums">{i + 1}</span>
-                      </span>
-                    </li>
-                  );
-                }
-                const isMe = q.userId === me.userId;
-                return (
-                  <li
-                    key={q.userId}
-                    className={cn(
-                      "flex min-h-16 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors",
-                      isMe
-                        ? "border-accent/50 bg-accent/10"
-                        : "border-line bg-surface-2/50",
-                      q.away && "opacity-60",
-                    )}
+      {present.length === 0 ? (
+        <EmptyQueueCard
+          lobbySize={lobbySize}
+          away={away}
+          controls={controls}
+          nextGame={nextGame}
+        />
+      ) : (
+        <section
+          aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
+          className="overflow-hidden rounded-2xl border border-accent/25 bg-surface/90 shadow-xl shadow-black/10"
+        >
+          <div className="grid lg:grid-cols-[0.85fr_1.35fr]">
+            <div className="relative overflow-hidden border-b border-line bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] p-5 lg:border-b-0 lg:border-r lg:p-6">
+              <div className="flex items-center gap-5 lg:flex-col lg:gap-3 lg:text-center">
+                <div className="relative grid h-32 w-32 shrink-0 place-items-center lg:h-40 lg:w-40">
+                  <svg
+                    viewBox="0 0 120 120"
+                    aria-hidden
+                    className="absolute inset-0 h-full w-full -rotate-90"
                   >
-                    <Avatar name={q.name} src={q.avatar} size={30} />
-                    <div className="min-w-0 flex-1">
-                      <PlayerLink
-                        userId={q.userId}
-                        className="block truncate text-xs font-semibold sm:text-sm"
-                      >
-                        {q.name}
-                      </PlayerLink>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
-                        <span className="tabular-nums">#{i + 1}</span>
-                        {isMe ? <span className="text-accent">You</span> : null}
-                        {q.mmr > 0 ? (
-                          <span className="tabular-nums">
-                            {q.mmr.toLocaleString()} MMR
-                          </span>
-                        ) : null}
-                        {q.away ? (
-                          <span title="This player will rejoin lobby formation when they return">
-                            away
-                          </span>
-                        ) : null}
-                      </span>
-                    </div>
-                    <span className="hidden xl:block">
-                      <RankBadge rankTier={q.rankTier} />
+                    <circle
+                      cx="60"
+                      cy="60"
+                      r="51"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="5"
+                      className="text-line"
+                    />
+                    <circle
+                      cx="60"
+                      cy="60"
+                      r="51"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="5"
+                      pathLength="100"
+                      strokeDasharray={`${pct} 100`}
+                      strokeLinecap={pct > 0 ? "round" : "butt"}
+                      className="text-accent transition-[stroke-dasharray] duration-500 motion-reduce:transition-none"
+                    />
+                  </svg>
+                  <div
+                    role="progressbar"
+                    aria-label={
+                      nextGame
+                        ? "Next-game queue progress"
+                        : "Inhouse queue progress"
+                    }
+                    aria-valuemin={0}
+                    aria-valuemax={lobbySize}
+                    aria-valuenow={Math.min(present.length, lobbySize)}
+                    aria-valuetext={`${present.length} players queued; ${needed} more needed`}
+                    className="text-center"
+                  >
+                    <span className="block font-display text-4xl font-bold leading-none tabular-nums lg:text-5xl">
+                      {present.length}
                     </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {overflow.length > 0 ? (
-              <div className="mt-3 border-t border-line/60 pt-3">
-                <div className="mb-2 text-xs text-muted">
-                  Also queued · {overflow.length}
+                    <span className="mt-1 block text-[11px] text-muted">
+                      of {lobbySize} players
+                    </span>
+                  </div>
                 </div>
-                <ul className="flex flex-wrap gap-2">
-                  {overflow.map((q) => (
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+                    {nextGame ? "Up next" : "Pick-up Dota"}
+                  </p>
+                  <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">
+                    {nextGame ? "Next-game queue" : "Inhouse queue"}
+                  </h2>
+                  <p className="mt-1.5 text-sm text-muted">
+                    {needed > 0
+                      ? `${needed} more ${needed === 1 ? "player" : "players"} to play`
+                      : nextGame
+                        ? "Full · waiting for this game to finish"
+                        : "Full · starting the ready check…"}
+                  </p>
+                  {queueAvg > 0 ? (
+                    <p className="mt-2 text-xs tabular-nums text-muted">
+                      {queueAvg.toLocaleString()} average MMR
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-5">{controls}</div>
+              {me.inQueue ? (
+                <p
+                  role="status"
+                  className="mt-3 text-center text-xs text-success"
+                >
+                  {myPosition > 0
+                    ? `You’re #${myPosition} in line`
+                    : "Your spot is saved"}
+                  {nextGame ? " · next game" : " · listen for the ready check"}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="min-w-0 p-4 sm:p-5">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold">Who’s playing</h3>
+                <span className="text-xs text-muted">
+                  {nextGame ? (
+                    "Ready check after this game"
+                  ) : (
+                    <>First {lobbySize} in → ready check</>
+                  )}
+                </span>
+              </div>
+              <ul className="grid grid-cols-2 gap-2">
+                {slots.map((q, i) => {
+                  if (!q) {
+                    return (
+                      <li
+                        key={`open-${i}`}
+                        className="flex min-h-16 items-center gap-2 rounded-xl border border-dashed border-line/70 px-3 py-2"
+                      >
+                        <span
+                          aria-hidden
+                          className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-dashed border-line text-sm text-muted"
+                        >
+                          +
+                        </span>
+                        <span className="min-w-0 text-xs text-muted">
+                          Open slot
+                          <span className="ml-1 tabular-nums">{i + 1}</span>
+                        </span>
+                      </li>
+                    );
+                  }
+                  const isMe = q.userId === me.userId;
+                  return (
                     <li
                       key={q.userId}
                       className={cn(
-                        "flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 py-1 pl-1 pr-2.5 text-xs",
-                        q.away && "opacity-60",
+                        "flex min-h-16 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors",
+                        isMe
+                          ? "border-accent/50 bg-accent/10"
+                          : "border-line bg-surface-2/50",
                       )}
                     >
-                      <Avatar name={q.name} src={q.avatar} size={20} />
-                      <PlayerLink
-                        userId={q.userId}
-                        className="max-w-32 truncate"
-                      >
-                        {q.name}
-                      </PlayerLink>
-                      {q.away ? <span className="text-muted">away</span> : null}
+                      <Avatar name={q.name} src={q.avatar} size={30} />
+                      <div className="min-w-0 flex-1">
+                        <PlayerLink
+                          userId={q.userId}
+                          className="block truncate text-xs font-semibold sm:text-sm"
+                        >
+                          {q.name}
+                        </PlayerLink>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
+                          <span className="tabular-nums">#{i + 1}</span>
+                          {isMe ? (
+                            <span className="text-accent">You</span>
+                          ) : null}
+                          {q.mmr > 0 ? (
+                            <span className="tabular-nums">
+                              {q.mmr.toLocaleString()} MMR
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <span className="hidden xl:block">
+                        <RankBadge rankTier={q.rankTier} />
+                      </span>
                     </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+                  );
+                })}
+              </ul>
+              {overflow.length > 0 ? (
+                <div className="mt-3 border-t border-line/60 pt-3">
+                  <div className="mb-2 text-xs text-muted">
+                    Also queued · {overflow.length}
+                  </div>
+                  <ul className="flex flex-wrap gap-2">
+                    {overflow.map((q) => (
+                      <li
+                        key={q.userId}
+                        className="flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 py-1 pl-1 pr-2.5 text-xs"
+                      >
+                        <Avatar name={q.name} src={q.avatar} size={20} />
+                        <PlayerLink
+                          userId={q.userId}
+                          className="max-w-32 truncate"
+                        >
+                          {q.name}
+                        </PlayerLink>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {away.length > 0 ? (
+                <AwayLine away={away} lobbySize={lobbySize} />
+              ) : null}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
       <p className="px-1 text-center text-xs text-muted">
         Tab switching keeps your spot · queue clears after{" "}
         {INHOUSE.QUEUE_IDLE_HOURS}h without lobby activity
@@ -1418,6 +1431,116 @@ function QueueView({
           </li>
         </ol>
       </details>
+    </div>
+  );
+}
+
+/**
+ * The queue with nobody in it — the state most visitors see. Ten dashed "Open
+ * slot" boxes beside a 0/10 ring made the scene look dead and pushed the page
+ * past 3,000px on a phone, so an empty queue is one compact card instead: what
+ * an inhouse is, the join control, and how many are queued. The full slot
+ * view returns the moment one present player is in.
+ */
+function EmptyQueueCard({
+  lobbySize,
+  away,
+  controls,
+  nextGame,
+}: {
+  lobbySize: number;
+  away: InhouseState["queue"];
+  controls: React.ReactNode;
+  nextGame: boolean;
+}) {
+  return (
+    <section
+      aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
+      className="rounded-2xl border border-accent/25 bg-surface/90 p-5 shadow-xl shadow-black/10 sm:p-6"
+    >
+      <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+            {nextGame ? "Up next" : "Pick-up Dota"}
+          </p>
+          <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">
+            {nextGame ? "Next-game queue" : "Inhouse queue"}
+          </h2>
+          <p className="mt-1.5 max-w-xl text-sm text-muted">
+            {lobbySize} players queue up, vote on captains, draft two teams and
+            play one game of Dota. The result records itself and moves
+            everyone&apos;s Elo.
+          </p>
+        </div>
+        <div className="shrink-0">{controls}</div>
+      </div>
+      <div className="mt-5 flex items-center gap-3">
+        <div
+          role="progressbar"
+          aria-label={
+            nextGame ? "Next-game queue progress" : "Inhouse queue progress"
+          }
+          aria-valuemin={0}
+          aria-valuemax={lobbySize}
+          aria-valuenow={0}
+          aria-valuetext={`0 players queued; ${lobbySize} more needed`}
+          className="flex min-w-0 flex-1 gap-1"
+        >
+          {Array.from({ length: lobbySize }, (_, i) => (
+            <span key={i} className="h-2 flex-1 rounded-full bg-line" />
+          ))}
+        </div>
+        <span className="shrink-0 text-sm tabular-nums text-muted">
+          <strong className="text-fg">0</strong> / {lobbySize} queued
+        </span>
+      </div>
+      {away.length > 0 ? <AwayLine away={away} lobbySize={lobbySize} /> : null}
+    </section>
+  );
+}
+
+/** Names shown on the away line before it says "and N more". */
+const AWAY_NAMES_SHOWN = 10;
+
+/**
+ * Queued players who aren't on the page right now, on one line under the
+ * slots. After an admin cancel this is all ten of the last lobby until their
+ * tabs check in; the words say what the dimmed "away" tag only said in a
+ * hover tooltip, which phones never show.
+ */
+function AwayLine({
+  away,
+  lobbySize,
+}: {
+  away: InhouseState["queue"];
+  lobbySize: number;
+}) {
+  const shown = away.slice(0, AWAY_NAMES_SHOWN);
+  const more = away.length - shown.length;
+  return (
+    <div className="mt-4 border-t border-line/60 pt-3 text-xs text-muted">
+      <p>
+        <span className="font-medium text-fg">
+          Waiting for {away.length} {away.length === 1 ? "player" : "players"}{" "}
+          to come back:
+        </span>{" "}
+        {shown.map((q, i) => (
+          <Fragment key={q.userId}>
+            {i > 0 ? ", " : null}
+            <PlayerLink
+              userId={q.userId}
+              className="max-w-full truncate align-bottom"
+            >
+              {q.name}
+            </PlayerLink>
+          </Fragment>
+        ))}
+        {more > 0 ? ` and ${more} more` : null}
+      </p>
+      <p className="mt-1">
+        They&apos;re still in the queue but not on this page right now. Each
+        one counts toward the {lobbySize} again as soon as they open it.
+      </p>
     </div>
   );
 }

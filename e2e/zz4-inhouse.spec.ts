@@ -82,7 +82,8 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
     "/api/auth/dev?name=IH+Observer&steamId=76561190000002000&redirect=/inhouse",
   );
 
-  // Queue view with the seeded demo entries visible but away (dimmed chips).
+  // An empty queue is one compact card (the seeded demo entries are away, so
+  // they sit on the "waiting to come back" line, never in the ten slots).
   await expect(
     page.getByRole("heading", { name: "Inhouse queue", exact: true }),
   ).toBeVisible();
@@ -332,6 +333,15 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // The slot is free again: the room falls back to the queue view.
   await expect(
     page.getByRole("heading", { name: "Inhouse queue", exact: true }),
+  ).toBeVisible();
+  // The ten re-queued players are away until their own tabs check in. They
+  // are listed on one line under the queue, not in its slots, so the count
+  // and what is shown agree.
+  await expect(
+    page.getByRole("progressbar", { name: "Inhouse queue progress" }),
+  ).toHaveAttribute("aria-valuenow", "0");
+  await expect(
+    page.getByText(/Waiting for \d+ players to come back/),
   ).toBeVisible();
   // …and the server agrees there is no active lobby holding it.
   const after = await act(admin, { action: "state" });

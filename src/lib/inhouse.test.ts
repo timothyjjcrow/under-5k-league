@@ -307,47 +307,66 @@ describe("queueSlots", () => {
       q("real2"),
       q("real3"),
     ];
-    const { slots, overflow } = queueSlots(queue, 3);
+    const { slots, overflow, away } = queueSlots(queue, 3);
     expect(slots.map((s) => s?.name)).toEqual(["real1", "real2", "real3"]);
-    expect(overflow.map((s) => s.name)).toEqual(["demo1", "demo2"]);
+    expect(overflow).toEqual([]);
+    expect(away.map((s) => s.name)).toEqual(["demo1", "demo2"]);
   });
 
-  it("keeps away players visible in the leftover slots", () => {
-    // They are still queued — the grace window is the point. They just can't
-    // displace someone who is here.
-    const { slots } = queueSlots([q("away1", true), q("here")], 4);
-    expect(slots.map((s) => s?.name)).toEqual(["here", "away1", undefined, undefined]);
+  it("never puts an away player in a slot, even when slots are open", () => {
+    // After an admin cancel all ten come back away until their tabs check in.
+    // Ten names in the slots over "0 of 10 players" read as a full queue.
+    const { slots, away } = queueSlots([q("away1", true), q("here")], 4);
+    expect(slots.map((s) => s?.name)).toEqual([
+      "here",
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(away.map((s) => s.name)).toEqual(["away1"]);
+
+    const cancelled = Array.from({ length: 10 }, (_, i) => q(`p${i}`, true));
+    const after = queueSlots(cancelled, 10);
+    expect(after.slots.every((s) => s === null)).toBe(true);
+    expect(after.away).toHaveLength(10);
   });
 
   it("pads out to the lobby size with empty slots", () => {
-    const { slots, overflow } = queueSlots([q("a")], 10);
+    const { slots, overflow, away } = queueSlots([q("a")], 10);
     expect(slots).toHaveLength(10);
     expect(slots.filter(Boolean)).toHaveLength(1);
     expect(overflow).toEqual([]);
+    expect(away).toEqual([]);
   });
 
   it("preserves join order within each group, and in the overflow", () => {
-    const queue = [q("a"), q("b"), q("c"), q("d")];
-    const { slots, overflow } = queueSlots(queue, 2);
+    const queue = [q("a"), q("x", true), q("b"), q("c"), q("y", true), q("d")];
+    const { slots, overflow, away } = queueSlots(queue, 2);
     expect(slots.map((s) => s?.name)).toEqual(["a", "b"]);
     // The overflow is a waiting LINE; its order is who queued when.
     expect(overflow.map((s) => s.name)).toEqual(["c", "d"]);
+    expect(away.map((s) => s.name)).toEqual(["x", "y"]);
   });
 
   it("never drops or duplicates an entry", () => {
     const queue = [q("a", true), q("b"), q("c", true), q("d"), q("e")];
     for (const size of [0, 1, 3, 5, 9]) {
-      const { slots, overflow } = queueSlots(queue, size);
-      const seen = [...slots.filter(Boolean), ...overflow];
+      const { slots, overflow, away } = queueSlots(queue, size);
+      const seen = [...slots.filter(Boolean), ...overflow, ...away];
       expect(new Set(seen).size).toBe(seen.length);
       expect(seen).toHaveLength(queue.length);
+      // Only present players ever sit in a slot or the line behind it.
+      expect([...slots.filter(Boolean), ...overflow].some((s) => s!.away)).toBe(
+        false,
+      );
     }
   });
 
   it("survives a zero lobby size instead of dividing by it", () => {
-    expect(queueSlots([q("a")], 0)).toEqual({
+    expect(queueSlots([q("a"), q("b", true)], 0)).toEqual({
       slots: [],
       overflow: [{ name: "a", away: false }],
+      away: [{ name: "b", away: true }],
     });
   });
 });

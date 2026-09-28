@@ -74,25 +74,35 @@ export default async function InhousePage({
   // Seed the MMR field from the player's most recent league signup, if any,
   // and fetch the medal so the join panel can explain the MMR check (the
   // server clamps implausible values to the medal window's floor on join).
-  const [lastReg, dbUser] = user
-    ? await Promise.all([
-        prisma.registration.findFirst({
-          // Match joinQueue's trust rule exactly: the newest positive league
-          // MMR is the number the server will actually seed with.
-          where: { userId: user.id, mmr: { gt: 0 } },
-          orderBy: { createdAt: "desc" },
-          select: { mmr: true },
-        }),
-        prisma.user.findUnique({
-          where: { id: user.id },
-          // fhUnavailable is OpenDota's `profile.fh_unavailable` — true means
-          // "Expose Public Match Data" is OFF, the #1 reason auto-import can't
-          // see a player. It is the one signal that says who the setup guide is
-          // actually for; we already capture it and were not using it here.
-          select: { rankTier: true, fhUnavailable: true },
-        }),
-      ])
-    : [null, null];
+  // The completed-game count decides whether the ladder, results and the
+  // section nav have anything to show yet (an indexed count, always fresh).
+  const [viewerRows, completedGames] = await Promise.all([
+    user
+      ? Promise.all([
+          prisma.registration.findFirst({
+            // Match joinQueue's trust rule exactly: the newest positive
+            // league MMR is the number the server will actually seed with.
+            where: { userId: user.id, mmr: { gt: 0 } },
+            orderBy: { createdAt: "desc" },
+            select: { mmr: true },
+          }),
+          prisma.user.findUnique({
+            where: { id: user.id },
+            // fhUnavailable is OpenDota's `profile.fh_unavailable` — true
+            // means "Expose Public Match Data" is OFF, the #1 reason
+            // auto-import can't see a player. It is the one signal that says
+            // who the setup guide is actually for.
+            select: { rankTier: true, fhUnavailable: true },
+          }),
+        ])
+      : null,
+    prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.COMPLETED } }),
+  ]);
+  const [lastReg, dbUser] = viewerRows ?? [null, null];
+  // Before the first completed game the ladder and results would only be
+  // empty cards (and the section nav would jump between them), so the page is
+  // the room plus one line until then.
+  const hasGames = completedGames > 0;
   const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
   const mmrHint = mmrWindow
     ? `Your ${rankMedalName(dbUser?.rankTier)} medal puts you around ${formatMmrRange(mmrWindow)} MMR — ${
@@ -130,15 +140,17 @@ export default async function InhousePage({
           }
         />
 
-        <SectionNav
-          label="Inhouse sections"
-          items={[
-            { id: "live-room", label: "Live room" },
-            { id: "inhouse-ladder", label: "Ladder" },
-            { id: "recent-inhouse", label: "Results" },
-            { id: "opendota-setup", label: "Setup help" },
-          ]}
-        />
+        {hasGames ? (
+          <SectionNav
+            label="Inhouse sections"
+            items={[
+              { id: "live-room", label: "Live room" },
+              { id: "inhouse-ladder", label: "Ladder" },
+              { id: "recent-inhouse", label: "Results" },
+              { id: "opendota-setup", label: "Setup help" },
+            ]}
+          />
+        ) : null}
         <section
           id="live-room"
           className="scroll-mt-28"
@@ -156,31 +168,47 @@ export default async function InhousePage({
             reachable content, and a returning player's own standing was the
             hardest thing on it to find. Scene stats → ladder → results → guide
             is the order of how often someone wants each. */}
-        <Suspense fallback={null}>
-          <SceneStats />
-        </Suspense>
-        <section
-          id="inhouse-ladder"
-          className="scroll-mt-28"
-          aria-label="Inhouse ladder"
-        >
-          <Suspense fallback={<CardSkeleton rows={6} />}>
-            {ladderView === "month" ? (
-              <MonthLadderCard meId={user?.id ?? null} />
-            ) : (
-              <LadderCard meId={user?.id ?? null} />
-            )}
-          </Suspense>
-        </section>
-        <section
-          id="recent-inhouse"
-          className="scroll-mt-28"
-          aria-label="Recent inhouse results"
-        >
-          <Suspense fallback={<CardSkeleton rows={5} />}>
-            <RecentResults />
-          </Suspense>
-        </section>
+        {hasGames ? (
+          <>
+            <Suspense fallback={null}>
+              <SceneStats />
+            </Suspense>
+            <section
+              id="inhouse-ladder"
+              className="scroll-mt-28"
+              aria-label="Inhouse ladder"
+            >
+              <Suspense fallback={<CardSkeleton rows={6} />}>
+                {ladderView === "month" ? (
+                  <MonthLadderCard meId={user?.id ?? null} />
+                ) : (
+                  <LadderCard meId={user?.id ?? null} />
+                )}
+              </Suspense>
+            </section>
+            <section
+              id="recent-inhouse"
+              className="scroll-mt-28"
+              aria-label="Recent inhouse results"
+            >
+              <Suspense fallback={<CardSkeleton rows={5} />}>
+                <RecentResults />
+              </Suspense>
+            </section>
+          </>
+        ) : (
+          // One line instead of an empty ladder card and an empty results
+          // card: before the first game there is nothing to rank or replay.
+          <section
+            id="inhouse-ladder"
+            className="scroll-mt-28"
+            aria-label="Inhouse ladder"
+          >
+            <p className="rounded-[var(--radius)] border border-line bg-surface/80 px-4 py-3 text-sm text-muted">
+              No games recorded yet: the ladder starts after the first game.
+            </p>
+          </section>
+        )}
 
         {/* Open ONLY for the cohort it is about: a player OpenDota reports as
             having public match data switched off. Folding it shut for everyone

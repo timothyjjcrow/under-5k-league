@@ -164,37 +164,35 @@ export function playersNeeded(
 }
 
 /**
- * Split the queue into the lobby's visible slots and the overflow behind them.
+ * Split the queue into the lobby's visible slots, the present overflow behind
+ * them, and the players who are away.
  *
- * PRESENT ENTRIES CLAIM SLOTS FIRST. The room used to index the raw queue, so
- * the ten slots were filled in join order with "away" players (heartbeat gone
- * quiet) included — while the headline count above them, `needed`, and lobby
- * formation itself all count present players only. On a fresh database that is
- * the DEFAULT state: the seed enqueues six demo players born away, so a real
- * five-player queue rendered "5 / 10" over a grid of six dimmed demos with a
- * real, counted player relegated to "In line for the next game". The pinned
- * Discord board has always got this right (it lists present names), so the two
- * surfaces contradicted each other on the one screen that exists to persuade
- * someone to queue.
+ * THE TEN SLOTS ARE FOR PLAYERS WHO ARE HERE. The headline count, `needed` and
+ * lobby formation itself all count present players only, so a slot holding an
+ * away player shows something the count above it denies. The room first
+ * indexed the raw queue (on a fresh database the seed's six away demo players
+ * took slots from real ones), then let away players fill whatever slots were
+ * left — which is every slot right after an admin cancel, because the ten
+ * re-queued players come back away until their own tabs check in: ten names
+ * over a ring reading "0 of 10 players" and "10 more players to play". A
+ * newcomer could not tell whether the queue was full or empty.
  *
- * Away entries keep their rows — they are still queued, and the grace window
- * is the point — they simply cannot displace someone who is here.
+ * Away entries are still queued (the grace window is the point), so the room
+ * lists them on their own line under the slots and says in words that they
+ * count again the moment they come back.
  */
 export function queueSlots<T extends { away: boolean }>(
   queue: T[],
   lobbySize: number = INHOUSE.LOBBY_SIZE,
-): { slots: (T | null)[]; overflow: T[] } {
-  if (lobbySize <= 0) return { slots: [], overflow: [...queue] };
-  const ordered = [
-    ...queue.filter((q) => !q.away),
-    ...queue.filter((q) => q.away),
-  ];
-  const taken = ordered.slice(0, lobbySize);
+): { slots: (T | null)[]; overflow: T[]; away: T[] } {
+  const present = queue.filter((q) => !q.away);
+  const away = queue.filter((q) => q.away);
+  if (lobbySize <= 0) return { slots: [], overflow: present, away };
   return {
-    slots: Array.from({ length: lobbySize }, (_, i) => taken[i] ?? null),
-    // Back to queue order for the overflow chips: it is a waiting LINE, and
-    // its order is who queued when.
-    overflow: queue.filter((q) => !taken.includes(q)),
+    slots: Array.from({ length: lobbySize }, (_, i) => present[i] ?? null),
+    // Queue order: it is a waiting LINE, and its order is who queued when.
+    overflow: present.slice(lobbySize),
+    away,
   };
 }
 
