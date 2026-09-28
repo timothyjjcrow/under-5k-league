@@ -76,6 +76,22 @@ export function haystackOf(files: readonly SourceFile[]): string {
 }
 
 /**
+ * Home (`/`): the route file, which loads the data and picks the phase, plus
+ * the shared hero and the per-phase views it draws from src/components/home.
+ * A guard that pins Home reads all of them, so code moving between these
+ * files stays in view.
+ */
+const HOME_PAGE_SOURCES = [
+  "src/app/page.tsx",
+  "src/components/home/**/*.{ts,tsx}",
+] as const;
+
+/** Every Home source file's text, joined (see HOME_PAGE_SOURCES). */
+export function homePageSource(): string {
+  return haystackOf(sourceFiles(HOME_PAGE_SOURCES, 14));
+}
+
+/**
  * The text with whole-line comments dropped. Guards look for literals that the
  * comments explaining them also QUOTE; stripping comment lines keeps the
  * explanation without letting it satisfy (or trip) the guard.

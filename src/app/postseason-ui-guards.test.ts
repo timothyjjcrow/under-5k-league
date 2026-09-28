@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { haystackOf, sourceFiles } from "../../test/support/source-files";
+import {
+  haystackOf,
+  homePageSource,
+  sourceFiles,
+} from "../../test/support/source-files";
 
 const ROOT = join(__dirname, "..", "..");
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
@@ -95,7 +99,7 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("distinguishes missing-bracket recovery from final reconciliation", () => {
-    const dashboard = read("src/app/page.tsx");
+    const dashboard = homePageSource();
     const schedule = read("src/app/schedule/page.tsx");
 
     expect(dashboard).toContain(

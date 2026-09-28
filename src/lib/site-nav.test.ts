@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { homePageSource } from "../../test/support/source-files";
 import { seasonPhaseLabel } from "./season-copy";
 import {
   DRAFT_STATUS,
@@ -216,7 +217,7 @@ describe("site navigation", () => {
     const root = path.resolve(__dirname, "..");
     const statsNav = readFileSync(path.join(root, "components/stats-nav.tsx"), "utf8");
     expect(statsNav).toMatch(/seasonStatsListed\(\{ phase: season\?\.status \?\? null, hasGames \}\)/);
-    const home = readFileSync(path.join(root, "app/page.tsx"), "utf8");
+    const home = homePageSource();
     expect(home).not.toMatch(/<SideGameLink\s+href="\/(leaders|meta)"/);
     expect(home).not.toMatch(/href="\/meta"/);
   });
@@ -682,7 +683,7 @@ describe("navigation surfaces", () => {
   // Home's Fantasy tile used to be shown to everyone all season ("Rosters
   // locked — standings") after the menus stopped listing it.
   it("promotes Fantasy on Home by the menus' rule", () => {
-    const home = source("src/app/page.tsx");
+    const home = homePageSource();
     expect(home).toContain("const showFantasy = fantasyListed({");
     expect(home).toMatch(
       /\{showFantasy \? \(\s*<SideGameLink\s+href="\/fantasy"/,
@@ -693,7 +694,7 @@ describe("navigation surfaces", () => {
   // Home's side-game tiles offer only what is live: Pick'em used to sit there
   // all season as "See the oracle board" with nothing to pick.
   it("offers Pick'em on Home only while a fixture is open for picks", () => {
-    const home = source("src/app/page.tsx");
+    const home = homePageSource();
     expect(home).toMatch(
       /\{pickemOpen > 0 \? \(\s*<SideGameLink\s+href="\/pickem"/,
     );

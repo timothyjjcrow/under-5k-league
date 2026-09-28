@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { sourceFile, sourceFiles, stripLineComments } from "../../test/support/source-files";
+import {
+  homePageSource,
+  sourceFiles,
+  stripLineComments,
+} from "../../test/support/source-files";
 
 // EVERY .tsx in the app — the guard's whole lesson is that the surface nobody
 // remembered is the one that regresses (/me and the draft waiting room shipped
@@ -66,7 +70,7 @@ describe("dashboard draft-night countdowns", () => {
  * table (that left a hole under it at desktop widths).
  */
 describe("dashboard Your team card", () => {
-  const page = stripLineComments(sourceFile("src/app/page.tsx").text);
+  const page = stripLineComments(homePageSource());
   const card = page.slice(page.indexOf("const myStakeCard ="));
 
   it("stands down when This week already shows its series", () => {

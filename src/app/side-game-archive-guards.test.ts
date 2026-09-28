@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { homePageSource } from "../../test/support/source-files";
 
 /**
  * The two side games — fantasy and pick'em — must stay browsable for ARCHIVED
@@ -29,7 +30,7 @@ import { join } from "node:path";
 const read = (...p: string[]) => readFileSync(join(__dirname, ...p), "utf8");
 const FANTASY = read("fantasy", "page.tsx");
 const PICKEM = read("pickem", "page.tsx");
-const HOME = read("page.tsx");
+const HOME = homePageSource();
 const FANTASY_ACTION = read("actions", "fantasy.ts");
 const FANTASY_PICKER = read("..", "components", "fantasy-picker.tsx");
 const PICKEM_BUTTON = read("..", "components", "pickem-submit-button.tsx");

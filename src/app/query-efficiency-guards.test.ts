@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { homePageSource } from "../../test/support/source-files";
 
 const read = (...path: string[]) => readFileSync(join(__dirname, ...path), "utf8");
-const HOME = read("page.tsx");
+const HOME = homePageSource();
 const LAYOUT = read("layout.tsx");
 const PUBLIC_NAVIGATION = read("../lib/public-navigation.ts");
 const QUERIES = read("../lib/queries.ts");
