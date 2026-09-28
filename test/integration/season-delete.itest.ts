@@ -153,7 +153,7 @@ async function archivedSeasonWithHistory() {
       { key: `leagueSyncSkip:${season.id}`, value: "[]" },
       { key: `resultAnnounced:${match.id}`, value: "sent" },
       { key: `outPing:${match.id}:player-1`, value: "sent" },
-      { key: `checkinNudge:${match.id}:team-1`, value: "2026-01-01T00:00:00.000Z" },
+      { key: `checkinNudge:${match.id}:team-1:0`, value: "2026-01-01T00:00:00.000Z" },
       { key: "discordWebhookUrl", value: "global-setting-survives" },
     ],
   });
@@ -199,7 +199,7 @@ describe("deleteSeason", () => {
     ).toBeNull();
     expect(
       await prisma.setting.findUnique({
-        where: { key: `checkinNudge:${match.id}:team-1` },
+        where: { key: `checkinNudge:${match.id}:team-1:0` },
       }),
     ).toBeNull();
     expect(
