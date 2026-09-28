@@ -188,10 +188,10 @@ export default async function MetaPage({
                 malformedGames === 0
                 ? viewerIsAdmin
                   ? "Games are imported, but their heroes are missing from the bundled catalogue. Update the hero catalogue before publishing this meta report."
-                  : "Games are imported, but their hero data is still being checked. The meta report fills in once it is."
+                  : "Games are imported, but their hero data is incomplete. The meta report fills in once an admin fixes it."
                 : viewerIsAdmin
                   ? "Games are imported, but no trusted hero data is available. Inspect and re-import incomplete box scores; unknown hero IDs require a hero-catalogue update."
-                  : "Games are imported, but their hero data is still being checked. The meta report fills in once it is."
+                  : "Games are imported, but their hero data is incomplete. The meta report fills in once an admin fixes it."
               : "The meta report fills in once match games are imported."
           }
         />

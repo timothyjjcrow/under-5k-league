@@ -115,8 +115,11 @@ export function StatsDataNoticeBody({
   if (!isAdmin) {
     return (
       <p className="mb-6 rounded-xl border border-line bg-surface-2/60 px-4 py-3 text-sm text-muted">
-        A few imported games are still being checked, so some stats may be
-        missing for now.
+        {/* Nothing re-checks these on its own: they stay out of the stats
+            until an admin repairs or re-imports them, so the copy must not
+            promise a delay that clears itself. */}
+        Some imported games are incomplete, so a few stats are missing until
+        an admin fixes them.
       </p>
     );
   }
