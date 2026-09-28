@@ -93,6 +93,54 @@ export function standingsCaption({
     .join(" · ");
 }
 
+type TimedMatchLike = MatchLike & { scheduledAt: Date | null };
+
+/**
+ * Regular fixtures whose result is actually due: live, or past kickoff with
+ * no result yet. A fixture weeks in the future is still to play, not
+ * "missing a result", so counting every unplayed match told admins on day
+ * one to enter scores for games nobody had played.
+ */
+export function regularResultsDue<M extends TimedMatchLike>(
+  matches: M[],
+  nowMs: number,
+): M[] {
+  return matches.filter(
+    (m) =>
+      m.phase === MATCH_PHASE.REGULAR &&
+      m.status !== MATCH_STATUS.COMPLETED &&
+      (m.status === MATCH_STATUS.LIVE ||
+        (m.scheduledAt != null && m.scheduledAt.getTime() <= nowMs)),
+  );
+}
+
+/** The next regular fixture still to kick off: its week and kickoff. */
+export function nextRegularKickoff(
+  matches: TimedMatchLike[],
+  nowMs: number,
+): { week: number; at: Date } | null {
+  let next: { week: number; at: Date } | null = null;
+  for (const m of matches) {
+    if (
+      m.phase !== MATCH_PHASE.REGULAR ||
+      m.status !== MATCH_STATUS.SCHEDULED ||
+      m.scheduledAt == null ||
+      m.scheduledAt.getTime() <= nowMs
+    ) {
+      continue;
+    }
+    const at = m.scheduledAt.getTime();
+    if (
+      !next ||
+      at < next.at.getTime() ||
+      (at === next.at.getTime() && m.week < next.week)
+    ) {
+      next = { week: m.week, at: m.scheduledAt };
+    }
+  }
+  return next;
+}
+
 type ReportableMatch = {
   phase: string;
   status: string;

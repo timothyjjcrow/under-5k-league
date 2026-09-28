@@ -323,7 +323,48 @@ describe("adminNextStep — regular season", () => {
       pendingRegularResults: 3,
     });
     expect(s.tone).toBe("waiting");
-    expect(s.title).toContain("3 result(s)");
+    expect(s.title).toBe("Season running: 3 results outstanding.");
+  });
+
+  // Day one used to read "15 result(s) outstanding" for fixtures weeks away.
+  it("calls only past-kickoff fixtures outstanding", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      pendingRegularResults: 12,
+      outstandingRegularResults: 1,
+      nextKickoff: { week: 2, label: "Wed 14 Oct, 20:00 CEST" },
+    });
+    expect(s.title).toBe("Season running: 1 result outstanding.");
+    expect(s.detail).toMatch(/live or past kickoff/);
+  });
+
+  it("names the next kickoff while every unplayed fixture is still to come", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      pendingRegularResults: 15,
+      outstandingRegularResults: 0,
+      nextKickoff: { week: 1, label: "Wed 7 Oct, 20:00 CEST" },
+    });
+    expect(s.title).toBe(
+      "Season running. Week 1 kicks off Wed 7 Oct, 20:00 CEST.",
+    );
+    expect(s.detail).toMatch(/^15 fixtures still to play\. Nothing to enter before kickoff/);
+    expect(s.title).not.toMatch(/outstanding/);
+    expect(s.tone).toBe("waiting");
+  });
+
+  it("keeps the due results in view behind the missing-kickoff warning", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      untimedRegularCount: 6,
+      pendingRegularResults: 12,
+      outstandingRegularResults: 2,
+    });
+    expect(s.title).toMatch(/kickoff time/);
+    expect(s.detail).toMatch(/Also: 2 results past kickoff are still missing\.$/);
   });
 
   it("prompts the playoffs once every result is in — nothing else ever does", () => {

@@ -44,7 +44,15 @@ export type AdminPhaseInput = {
    * warning stays up until the last one has a time, not just the first.
    */
   untimedRegularCount: number;
+  /** Every unplayed regular fixture, future ones included. */
   pendingRegularResults: number;
+  /**
+   * Unplayed regular fixtures that are live or past kickoff: the results
+   * actually due. Optional; without it every unplayed fixture counts.
+   */
+  outstandingRegularResults?: number;
+  /** The next regular kickoff, already written on the league's clock. */
+  nextKickoff?: { week: number; label: string } | null;
   pendingTiebreakerResults?: number;
   /** Already-created tiebreaker fixtures, including completed games. */
   existingTiebreakerCount?: number;
@@ -183,12 +191,23 @@ const TICKET_PHASES: ReadonlySet<string> = new Set([
   SEASON_STATUS.PLAYOFFS,
 ]);
 
-/** Fixtures with no kickoff: the step names how many are left. */
-function untimedStep(count: number): AdminNextStep {
+function resultCount(n: number): string {
+  return `${n} result${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * Fixtures with no kickoff: the step names how many are left, and still
+ * mentions results that are due, since this step outranks that one.
+ */
+function untimedStep(count: number, outstanding = 0): AdminNextStep {
   const fixtures = count === 1 ? "1 fixture still has" : `${count} fixtures still have`;
+  const due =
+    outstanding > 0
+      ? ` Also: ${resultCount(outstanding)} past kickoff ${outstanding === 1 ? "is" : "are"} still missing.`
+      : "";
   return {
     title: "Next step: give every fixture a kickoff time.",
-    detail: `${fixtures} no kickoff time, so ${count === 1 ? "it gets" : "they get"} no check-in, no weekly Discord reminder, no automatic result import and no pick'em lock. Set each week's time with “Move a match night”, or, before any result is in, regenerate the schedule with a first match night.`,
+    detail: `${fixtures} no kickoff time, so ${count === 1 ? "it gets" : "they get"} no check-in, no weekly Discord reminder, no automatic result import and no pick'em lock. Set each week's time with “Move a match night”, or, before any result is in, regenerate the schedule with a first match night.${due}`,
     tone: "warning",
     jump: JUMP.schedule,
   };
@@ -211,6 +230,8 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     regularMatchCount,
     untimedRegularCount,
     pendingRegularResults,
+    outstandingRegularResults = pendingRegularResults,
+    nextKickoff = null,
     pendingTiebreakerResults = 0,
     existingTiebreakerCount = 0,
     unresolvedPlayoffTieCount = 0,
@@ -311,12 +332,28 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         jump: JUMP.schedule,
       };
     }
-    if (untimedRegularCount > 0) return untimedStep(untimedRegularCount);
-    if (pendingRegularResults > 0) {
+    if (untimedRegularCount > 0) {
+      return untimedStep(untimedRegularCount, outstandingRegularResults);
+    }
+    // Outstanding means past kickoff: a fixture weeks away is still to play,
+    // and calling it a missing result read as "enter scores for games nobody
+    // has played" and buried the ones that are really missing.
+    if (outstandingRegularResults > 0) {
       return {
-        title: `Season running — ${pendingRegularResults} result(s) outstanding.`,
+        title: `Season running: ${resultCount(outstandingRegularResults)} outstanding.`,
         detail:
-          "Results import themselves from OpenDota; enter any that can't be found by hand in Schedule & results.",
+          "These fixtures are live or past kickoff. Results import themselves from OpenDota; enter any that can't be found by hand in Schedule & results.",
+        tone: "waiting",
+        jump: JUMP.schedule,
+      };
+    }
+    if (pendingRegularResults > 0) {
+      const toPlay = `${pendingRegularResults} fixture${pendingRegularResults === 1 ? "" : "s"} still to play.`;
+      return {
+        title: nextKickoff
+          ? `Season running. Week ${nextKickoff.week} kicks off ${nextKickoff.label}.`
+          : "Season running.",
+        detail: `${toPlay} Nothing to enter before kickoff: results import themselves from OpenDota after each match.`,
         tone: "waiting",
         jump: JUMP.schedule,
       };

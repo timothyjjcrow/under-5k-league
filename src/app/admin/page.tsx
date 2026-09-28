@@ -204,6 +204,8 @@ import {
   HARD_MMR_CEILING,
 } from "@/lib/constants";
 import {
+  nextRegularKickoff,
+  regularResultsDue,
   regularSeasonStatus,
   pendingResultsMessage,
 } from "@/lib/schedule-status";
@@ -274,7 +276,12 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const season = await getActiveSeason();
 
   const data = season ? await loadSeasonAdminData(season.id) : null;
-  const nextStep = season && data ? adminNextStepFor(season, data) : null;
+  // Async server component: it renders once per request, so Date.now() has
+  // no re-render to be inconsistent across. "Outstanding" means past kickoff.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const nextStep =
+    season && data ? adminNextStepFor(season, data, nowMs) : null;
   const showTiebreakers = data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
@@ -411,7 +418,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                 </AdminAnchor>
               ) : null}
               <AdminAnchor id="adm-schedule">
-                <ScheduleControls season={season} data={data} />
+                <ScheduleControls
+                  season={season}
+                  data={data}
+                  nowMs={nowMs}
+                />
               </AdminAnchor>
               <AdminAnchor id="adm-playoffs">
                 <PlayoffControls season={season} data={data} />
@@ -438,7 +449,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           ) : null}
           {season.status === "SIGNUPS" || season.status === "DRAFT" ? setupControls : null}
           <AdminAnchor id="adm-schedule">
-            <ScheduleControls season={season} data={data} />
+            <ScheduleControls
+              season={season}
+              data={data}
+              nowMs={nowMs}
+            />
           </AdminAnchor>
           <AdminAnchor id="adm-playoffs">
             <PlayoffControls season={season} data={data} />
@@ -1066,8 +1081,13 @@ function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
  * adminNextStep. Built once per render: the banner under the page title and
  * the phase card both read it.
  */
-function adminNextStepFor(season: Season, data: AdminData): AdminNextStep {
+function adminNextStepFor(
+  season: Season,
+  data: AdminData,
+  nowMs: number,
+): AdminNextStep {
   const cap = capacityInfo(season, data.players.length);
+  const nextKickoff = nextRegularKickoff(data.matches, nowMs);
   const regular = data.matches.filter((m) => m.phase === "REGULAR");
   const playoff = data.matches.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
@@ -1091,6 +1111,11 @@ function adminNextStepFor(season: Season, data: AdminData): AdminNextStep {
     ).length,
     pendingRegularResults: regular.filter((m) => m.status !== "COMPLETED")
       .length,
+    outstandingRegularResults: regularResultsDue(data.matches, nowMs).length,
+    nextKickoff: nextKickoff && {
+      week: nextKickoff.week,
+      label: formatLeagueTime(nextKickoff.at),
+    },
     pendingTiebreakerResults: data.matches.filter(
       (m) => m.phase === "TIEBREAKER" && m.status !== "COMPLETED",
     ).length,
@@ -2861,11 +2886,16 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
 function ScheduleControls({
   season,
   data,
+  nowMs,
 }: {
   season: Season;
   data: AdminData;
+  nowMs: number;
 }) {
   const status = regularSeasonStatus(data.matches);
+  // Only fixtures past kickoff (or live) are missing a result.
+  const due = regularSeasonStatus(regularResultsDue(data.matches, nowMs));
+  const nextKickoff = nextRegularKickoff(data.matches, nowMs);
   const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
   const tiebreakerMatches = data.matches.filter(
     (m) => m.phase === "TIEBREAKER",
@@ -3006,9 +3036,11 @@ function ScheduleControls({
             {status.total > 0 ? (
               <div
                 className={`rounded-lg border px-3 py-2 text-sm ${
-                  status.pending > 0
+                  due.pending > 0
                     ? "border-accent/40 bg-accent/10"
-                    : "border-success/40 bg-success/10 text-success"
+                    : status.pending > 0
+                      ? "border-line bg-surface-2/30"
+                      : "border-success/40 bg-success/10 text-success"
                 }`}
               >
                 {/* `status` counts REGULAR matches only, so once the last one
@@ -3016,16 +3048,25 @@ function ScheduleControls({
                     to "start the playoffs" all through the postseason and next
                     to a crowned champion, pointing at a button that by then says
                     RESET and deletes the whole bracket. Branch on the phase. */}
-                {status.pending > 0
-                  ? `⏳ ${pendingResultsMessage(status)} Enter them to keep standings & seeding correct.`
-                  : season.status === SEASON_STATUS.PLAYOFFS
-                    ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores below.`
-                    : season.status === SEASON_STATUS.COMPLETE
-                      ? `✓ Season complete — all ${status.total} regular-season results recorded.`
-                      : playoffField.seedingDeadHeatTeamIds.length > 0 ||
-                          playoffField.tiebreakers.error
-                        ? `All ${status.total} regular-season results in — finish the bracket in Tiebreakers above before starting playoffs.`
-                        : `✓ All ${status.total} results in — ready to start the playoffs.`}
+                {/* Only fixtures past kickoff are missing a result; on day
+                    one every fixture is still to play, and "15 matches still
+                    need results, enter them" asked for scores nobody had. */}
+                {due.pending > 0
+                  ? `⏳ ${pendingResultsMessage(due)} Enter them to keep standings & seeding correct.`
+                  : status.pending > 0
+                    ? `${status.pending} regular-season fixture${status.pending === 1 ? "" : "s"} still to play${
+                        nextKickoff
+                          ? `. Week ${nextKickoff.week} kicks off ${formatLeagueTime(nextKickoff.at)}`
+                          : ""
+                      }. Results are due from kickoff.`
+                    : season.status === SEASON_STATUS.PLAYOFFS
+                      ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores below.`
+                      : season.status === SEASON_STATUS.COMPLETE
+                        ? `✓ Season complete — all ${status.total} regular-season results recorded.`
+                        : playoffField.seedingDeadHeatTeamIds.length > 0 ||
+                            playoffField.tiebreakers.error
+                          ? `All ${status.total} regular-season results in — finish the bracket in Tiebreakers above before starting playoffs.`
+                          : `✓ All ${status.total} results in — ready to start the playoffs.`}
               </div>
             ) : null}
             <p className="text-xs text-muted">

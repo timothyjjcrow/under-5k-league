@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   captainOverdueResults,
+  nextRegularKickoff,
+  regularResultsDue,
   regularSeasonStatus,
   pendingResultsMessage,
   resultOverdue,
@@ -199,5 +201,60 @@ describe("captainOverdueResults", () => {
     expect(
       resultOverdue(fixture("x", "2026-09-21T01:00:00Z"), freshFrom),
     ).toBe(false);
+  });
+});
+
+describe("regularResultsDue — only fixtures past kickoff", () => {
+  const now = Date.UTC(2026, 9, 14, 18);
+  const at = (hoursFromNow: number | null) =>
+    hoursFromNow == null ? null : new Date(now + hoursFromNow * 3600_000);
+  const fx = (
+    week: number,
+    status: string,
+    hours: number | null,
+    phase = "REGULAR",
+  ) => ({ week, status, phase, scheduledAt: at(hours) });
+
+  it("counts live and past-kickoff fixtures, never future or untimed ones", () => {
+    const due = regularResultsDue(
+      [
+        fx(1, "SCHEDULED", -2),
+        fx(1, "LIVE", 1), // a live series is due even if its kickoff moved
+        fx(1, "COMPLETED", -2),
+        fx(1, "SCHEDULED", 0), // kickoff is now
+        fx(2, "SCHEDULED", 24 * 7),
+        fx(3, "SCHEDULED", null),
+        fx(1, "SCHEDULED", -2, "TIEBREAKER"),
+      ],
+      now,
+    );
+    expect(due.map((m) => [m.week, m.status])).toEqual([
+      [1, "SCHEDULED"],
+      [1, "LIVE"],
+      [1, "SCHEDULED"],
+    ]);
+  });
+
+  it("is empty on day one, before anything kicks off", () => {
+    expect(
+      regularResultsDue([fx(1, "SCHEDULED", 48), fx(2, "SCHEDULED", 216)], now),
+    ).toEqual([]);
+  });
+
+  it("names the next week to kick off and when", () => {
+    expect(
+      nextRegularKickoff(
+        [
+          fx(1, "SCHEDULED", -2),
+          fx(3, "SCHEDULED", 24 * 14),
+          fx(2, "SCHEDULED", 24 * 7),
+          fx(2, "LIVE", 24),
+          fx(2, "SCHEDULED", null),
+          fx(1, "SCHEDULED", 5, "TIEBREAKER"),
+        ],
+        now,
+      ),
+    ).toEqual({ week: 2, at: at(24 * 7) });
+    expect(nextRegularKickoff([fx(1, "SCHEDULED", -2)], now)).toBeNull();
   });
 });
