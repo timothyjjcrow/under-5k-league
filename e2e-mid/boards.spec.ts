@@ -94,9 +94,9 @@ test("homepage shows the latest weekly honors as one open line", async ({
   });
   await expect(heading).toBeVisible();
   const line = heading.locator("xpath=ancestor::section[1]");
-  await expect(line).toContainText("Player of the week:");
+  await expect(line).toContainText("Player of the Week:");
   await expect(line).toContainText(/\(best game \d+\/\d+\/\d+ on .+\)/);
-  await expect(line).toContainText("Team of the week:");
+  await expect(line).toContainText("Team of the Week:");
   await expect(line).not.toContainText(/impact points|still in progress/i);
   await expect(
     line.getByRole("link", { name: "All honors" }),

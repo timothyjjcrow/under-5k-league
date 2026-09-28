@@ -3240,7 +3240,7 @@ async function ThisWeek({
 
 /**
  * The latest weekly honors as one open line: "Week 4 honors · Player of the
- * week: X (best game 12/2/18 on Tiny) · Team of the week: Y". Only official
+ * Week: X (best game 12/2/18 on Tiny) · Team of the Week: Y". Only official
  * honors (the same readiness rows Discord and /leaders use); until a week has
  * them it renders nothing, and /leaders explains a week still in progress or
  * waiting on box scores.
@@ -3285,7 +3285,7 @@ async function WeeklyHonorsLine({
       {potw ? (
         <p className="min-w-0 [overflow-wrap:anywhere]">
           <span aria-hidden>⭐ </span>
-          <span className="text-muted">Player of the week:</span>{" "}
+          <span className="text-muted">Player of the Week:</span>{" "}
           <PlayerLink userId={potw.id} className="font-medium">
             {potw.name}
           </PlayerLink>
@@ -3301,7 +3301,7 @@ async function WeeklyHonorsLine({
       {honors.team ? (
         <p className="min-w-0 [overflow-wrap:anywhere]">
           <span aria-hidden>🛡️ </span>
-          <span className="text-muted">Team of the week:</span>{" "}
+          <span className="text-muted">Team of the Week:</span>{" "}
           <Link
             href={`/teams/${honors.team.teamId}`}
             className={cn(TAP_SAFE, "font-medium hover:text-info")}
