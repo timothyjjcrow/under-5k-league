@@ -3,6 +3,7 @@ import {
   draftPhasePresentation,
   leagueEligibilityLine,
   leaguePitch,
+  mmrCeilingPhrase,
   matchNightText,
   phaseSubtitle,
   seasonPhaseLabel,
@@ -217,6 +218,13 @@ describe("the league pitch for new visitors", () => {
     expect(leagueEligibilityLine("Wednesdays at 20:00 Berlin time")).toBe(
       "Open to players up to 5,000 MMR · Match night: Wednesdays at 20:00 Berlin time",
     );
+  });
+
+  // Home, How it works and the link previews describe who can join; they
+  // share one phrase so the limit can't be worded three ways.
+  it("words the hard MMR limit once for every surface", () => {
+    expect(mmrCeilingPhrase()).toBe("up to 5,000 MMR");
+    expect(leagueEligibilityLine(null)).toContain(mmrCeilingPhrase());
   });
 
   it("says the match night is still to come rather than inventing one", () => {

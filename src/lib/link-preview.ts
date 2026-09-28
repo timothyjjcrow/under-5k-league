@@ -8,13 +8,12 @@
 
 import {
   DRAFT_STATUS,
-  HARD_MMR_CEILING,
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
 import { announcedMatchNight, type FixtureKickoff } from "./match-night";
-import { seasonPhaseLabel } from "./season-copy";
+import { leaguePitch, mmrCeilingPhrase, seasonPhaseLabel } from "./season-copy";
 import { formatLeagueTime } from "./zoned-time";
 
 export type LinkPreview = { title: string; description: string };
@@ -26,7 +25,7 @@ export type LinkPreview = { title: string; description: string };
  * doesn't belong in a sentence that outlives every season.
  */
 export function siteDescription(): string {
-  return `${LEAGUE_CONFIG.name} is an amateur Dota 2 league for players up to ${HARD_MMR_CEILING.toLocaleString("en-US")} MMR, played on ${LEAGUE_CONFIG.gameServerRegion} servers. Sign in with Steam, join the season, get drafted and compete.`;
+  return `${leaguePitch()} Open to players ${mmrCeilingPhrase()}, on ${LEAGUE_CONFIG.gameServerRegion} servers.`;
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -79,7 +78,7 @@ export function homePreview(
       ].filter(Boolean);
       return {
         title,
-        description: `${facts.join(" · ")}. Players up to ${HARD_MMR_CEILING.toLocaleString("en-US")} MMR can join. Sign in with Steam to sign up.`,
+        description: `${facts.join(" · ")}. Players ${mmrCeilingPhrase()} can join. Sign in with Steam to sign up.`,
       };
     }
     case SEASON_STATUS.DRAFT: {

@@ -1,6 +1,7 @@
 // The How it works page's rules, kept pure so they can be tested.
 
-import { HARD_MMR_CEILING, REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
+import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
+import { mmrCeilingPhrase } from "./season-copy";
 import { joinSeasonCta } from "./site-nav";
 
 /**
@@ -11,7 +12,7 @@ import { joinSeasonCta } from "./site-nav";
  * (`registrationGate`).
  */
 export function eligibilityText(softLimit: number): string {
-  const ceiling = `Players up to ${HARD_MMR_CEILING.toLocaleString("en-US")} MMR can join; Divine 3 and higher medals and Immortal players can't.`;
+  const ceiling = `Players ${mmrCeilingPhrase()} can join; Divine 3 and higher medals and Immortal players can't.`;
   if (softLimit <= 0) return ceiling;
   return `${ceiling} Above ${softLimit.toLocaleString("en-US")} MMR, an admin looks over your signup before the draft.`;
 }

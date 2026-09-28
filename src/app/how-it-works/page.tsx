@@ -7,6 +7,7 @@ import { SteamJoin } from "@/components/steam-sign-in";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { eligibilityText, howItWorksAction } from "@/lib/how-it-works";
 import { seasonMatchNightLabel } from "@/lib/match-night";
+import { leaguePitch } from "@/lib/season-copy";
 import {
   Card,
   CardBody,
@@ -18,7 +19,8 @@ import {
   textLink,
 } from "@/components/ui";
 
-const PITCH = `${LEAGUE_CONFIG.name} is an amateur Dota 2 league. Sign up on your own, get drafted onto a team, and play a season of weekly matches.`;
+// The same sentence Home and the site-wide link preview open with.
+const PITCH = leaguePitch();
 
 export const metadata = shareMetadata("How it works", PITCH, "/how-it-works");
 

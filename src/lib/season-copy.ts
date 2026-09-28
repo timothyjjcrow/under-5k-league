@@ -220,10 +220,21 @@ export function matchNightText(raw: string | null | undefined): string | null {
  * What the league is, in one sentence, for a visitor who has never heard of
  * it. Home's hero otherwise went straight from a season name and team-count
  * maths to "Sign in with Steam to join"; the only description lived in link
- * previews. Deliberately says nothing about cost or dates, which vary.
+ * previews. Deliberately says nothing about cost or dates, which vary. Home,
+ * How it works and the site-wide link preview all open with this sentence.
  */
 export function leaguePitch(name: string = LEAGUE_CONFIG.name): string {
   return `${name} is an amateur Dota 2 league: captains draft players in a live auction, then teams play weekly matches and playoffs.`;
+}
+
+/**
+ * The one hard MMR limit, worded the same everywhere the league describes who
+ * can join (Home, How it works, link previews): "up to 5,000 MMR". It is the
+ * limit the signup form enforces (HARD_MMR_CEILING), never a season's soft
+ * review threshold.
+ */
+export function mmrCeilingPhrase(): string {
+  return `up to ${HARD_MMR_CEILING.toLocaleString("en-US")} MMR`;
 }
 
 /**
@@ -234,7 +245,7 @@ export function leaguePitch(name: string = LEAGUE_CONFIG.name): string {
  * region prints its own; null says it is still to be announced.
  */
 export function leagueEligibilityLine(matchNight: string | null): string {
-  const mmr = `Open to players up to ${HARD_MMR_CEILING.toLocaleString("en-US")} MMR`;
+  const mmr = `Open to players ${mmrCeilingPhrase()}`;
   return matchNight
     ? `${mmr} · Match night: ${matchNight}`
     : `${mmr} · Match night to be announced`;

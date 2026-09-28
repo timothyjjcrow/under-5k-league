@@ -7,6 +7,7 @@ import {
   type HomePreviewSeason,
   type MatchPreviewInput,
 } from "./link-preview";
+import { leaguePitch } from "./season-copy";
 
 const NOW = Date.parse("2026-09-27T12:00:00Z");
 // Thursday 1 October, 7 PM on the US league's (Pacific) clock.
@@ -36,8 +37,10 @@ describe("siteDescription", () => {
   it("names the hard MMR ceiling and the game servers, not a soft 4.5K", () => {
     const text = siteDescription();
     expect(text).toBe(
-      "GGD2L is an amateur Dota 2 league for players up to 5,000 MMR, played on US East servers. Sign in with Steam, join the season, get drafted and compete.",
+      "GGD2L is an amateur Dota 2 league: captains draft players in a live auction, then teams play weekly matches and playoffs. Open to players up to 5,000 MMR, on US East servers.",
     );
+    // Home and How it works open with the same pitch sentence.
+    expect(text.startsWith(leaguePitch())).toBe(true);
     expect(text).not.toContain("4.5K");
   });
 
@@ -47,7 +50,7 @@ describe("siteDescription", () => {
     vi.resetModules();
     const europe = await import("./link-preview");
     expect(europe.siteDescription()).toMatch(
-      /^GGD2L Europe is an amateur Dota 2 league for players up to 5,000 MMR, played on Europe West servers\./,
+      /^GGD2L Europe is an amateur Dota 2 league: .* Open to players up to 5,000 MMR, on Europe West servers\.$/,
     );
   });
 });
