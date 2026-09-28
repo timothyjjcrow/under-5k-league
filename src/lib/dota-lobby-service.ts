@@ -264,7 +264,9 @@ export async function resolveDotaLobby(
     const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
     spec = {
       key,
-      name: `${`${LEAGUE_CONFIG.region === "us" ? "LD2L" : LEAGUE_CONFIG.name} ${match.homeTeam.name} vs ${match.awayTeam.name}`.slice(0, 90)} G${game} ${id.slice(-8)}`,
+      // The league's own name in both regions, as the site and Discord say
+      // it: players type this into Dota's Custom Lobbies browser.
+      name: `${`${LEAGUE_CONFIG.name} ${match.homeTeam.name} vs ${match.awayTeam.name}`.slice(0, 90)} G${game} ${id.slice(-8)}`,
       password: createHmac("sha256", secret)
         .update(key)
         .digest("hex")

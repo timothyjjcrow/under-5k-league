@@ -104,6 +104,12 @@ describe("Dota lobby authorization and settings", () => {
         dire: [away.user.steamId],
       },
     });
+    // Players type the name into Dota's lobby browser, so it names the league
+    // the way the site and Discord do, never the old "LD2L".
+    expect(first.spec.name).toBe(
+      `${LEAGUE_CONFIG.name} ${home.team.name} vs ${away.team.name} G1 ${match.id.slice(-8)}`,
+    );
+    expect(first.spec.name).not.toContain("LD2L");
     const repeat = await resolveDotaLobby(
       asSession(away.user),
       "season",
