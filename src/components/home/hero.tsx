@@ -58,22 +58,18 @@ export const PHASE_STEP: Record<string, string> = {
   COMPLETE: "Champion",
 };
 
-// A single animated hero figure — big count-up number + a muted label, with
-// an optional word before the number ("Week 3 of 7").
+/** One hero figure: a big number and a muted label ("12 players signed up"). */
 export function HeroStat({
   value,
   label,
   tone,
-  prefix,
 }: {
   value: number;
   label: string;
   tone?: "accent";
-  prefix?: string;
 }) {
   return (
     <span className="flex items-baseline gap-1.5">
-      {prefix ? <span className="text-sm text-muted">{prefix}</span> : null}
       <span
         className={cn(
           "font-display text-2xl font-bold tabular-nums sm:text-3xl",
