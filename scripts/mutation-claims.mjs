@@ -267,6 +267,14 @@ export function discoverClaims(file, src) {
   return found;
 }
 
+// The part of a claim id after its file and function: the predicate
+// signature and the ordinal (`status+updatedAt#1`). Null for a string that is
+// not a claim id.
+function claimTail(id) {
+  const at = id.lastIndexOf("::");
+  return at === -1 ? null : id.slice(at + 2);
+}
+
 function repeated(values) {
   const seen = new Set();
   const out = new Set();
@@ -293,9 +301,17 @@ function repeated(values) {
  * the lists from live ids and drops the entries.
  *
  * Every entry must be an actual move: the old id is classified and no longer
- * live, the new id is live and not yet classified, and no two entries land on
- * the same id. Expects `base.protected`/`base.equivalent` to be string arrays;
- * returns the problems plus both lists with every rename applied and sorted.
+ * live, the new id is live and not yet classified, no two entries land on the
+ * same id, and only the file and function part of the id changes. The
+ * predicate signature and ordinal must match (see claimTail), because an entry
+ * that changes them is not a move: it would carry a protected classification
+ * from a guard that was weakened (`status+updatedAt#1` to `status#1`, so verify
+ * never mutates the dropped `updatedAt` again) or from a guard that was
+ * deleted onto an unrelated new claim. Refusing the entry leaves both to fail
+ * as they did before renames existed: a protected claim that DISAPPEARED plus
+ * an unclassified one. Expects `base.protected`/`base.equivalent` to be string
+ * arrays; returns the problems plus both lists with every rename applied and
+ * sorted.
  */
 export function resolveRenames(base, liveIds) {
   const unchanged = {
@@ -330,6 +346,12 @@ export function resolveRenames(base, liveIds) {
     }
     if (!live.has(to)) problems.push(`rename target is not a live claim: ${to}`);
     if (recorded.has(to)) problems.push(`rename target is already classified: ${to}`);
+    const tail = claimTail(from);
+    if (tail === null || tail !== claimTail(to)) {
+      problems.push(
+        `rename changes the claim's predicates or ordinal, so it is not a move (only the file and function may change): ${from} -> ${to}`,
+      );
+    }
   }
   for (const to of repeated(entries.map(([, to]) => to))) {
     problems.push(`more than one rename targets the same claim: ${to}`);

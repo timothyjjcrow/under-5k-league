@@ -102,8 +102,10 @@ function to another file, or renaming it, still changes its id; record the move
 in the baseline as `"renames": { "<old id>": "<new id>" }` instead of running a
 full Postgres `--discover`. A rename carries the classification, never the
 evidence: verify still deletes the guard at its new home and needs a test to
-fail, the static check refuses any entry that isn't an actual move, and the next
-full `--discover` folds the entries into the lists. A moved EQUIVALENT also
+fail, the static check refuses any entry that isn't an actual move (only the
+file and function part of the id may change; a different predicate signature
+or ordinal is a weakened or swapped guard, not a move), and the next full
+`--discover` folds the entries into the lists. A moved EQUIVALENT also
 needs its id renamed in the guard's `EQUIVALENT` list, reason and all.
 A full `--discover` also writes `killers` (per protected claim, the test file
 that failed first); verify runs that file alone with `--bail` (once it has

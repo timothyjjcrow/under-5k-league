@@ -201,6 +201,40 @@ test("a rename must be an actual move", () => {
   );
 });
 
+test("a rename may change only the file and function of a claim id", () => {
+  const live = [
+    "src/lib/y.ts::fn::status#1",
+    "src/lib/y.ts::fn::status#2",
+    "src/lib/y.ts::other::value#1",
+    "src/lib/y.ts::renamed::status#1",
+  ];
+  const problems = (from, to) =>
+    resolveRenames({ protected: [from], equivalent: [], renames: { [from]: to } }, live)
+      .problems;
+  const notAMove = (from, to) => [
+    `rename changes the claim's predicates or ordinal, so it is not a move (only the file and function may change): ${from} -> ${to}`,
+  ];
+  // A real move: new file, and the function renamed on the way.
+  assert.deepEqual(problems("src/lib/x.ts::fn::status#1", "src/lib/y.ts::fn::status#1"), []);
+  assert.deepEqual(
+    problems("src/lib/x.ts::fn::status#1", "src/lib/y.ts::renamed::status#1"),
+    [],
+  );
+  for (const [from, to] of [
+    // Weakened on the way: the updatedAt predicate was deleted, and carrying
+    // the classification over would mean verify never mutates it again.
+    ["src/lib/x.ts::fn::status+updatedAt#1", "src/lib/y.ts::fn::status#1"],
+    // Swapped: one guard deleted, an unrelated new claim added elsewhere.
+    ["src/lib/x.ts::fn::status#1", "src/lib/y.ts::other::value#1"],
+    // A different ordinal is a different claim of the function.
+    ["src/lib/x.ts::fn::status#1", "src/lib/y.ts::fn::status#2"],
+    // A string that is not a claim id has no predicates to compare.
+    ["not-a-claim", "src/lib/y.ts::fn::status#1"],
+  ]) {
+    assert.deepEqual(problems(from, to), notAMove(from, to), `${from} -> ${to}`);
+  }
+});
+
 test("a malformed renames value is refused", () => {
   const message = "renames must be an object mapping each old claim id to its new id";
   for (const renames of [null, [], "x", { "old.ts::moved::status#1": 1 }]) {
