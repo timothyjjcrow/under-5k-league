@@ -56,6 +56,34 @@ describe("playoff outlook presentation", () => {
     expect(compact).toContain("Tiebreaker for a spot");
   });
 
+  it.each([
+    // Techies: a draw qualifies as well as a win, so "Win to qualify" undersold it.
+    ["win or draw qualifies", { win: result({ qualified: 1 }), draw: result({ qualified: 1 }),
+      loss: result({ total: 2, qualificationTiebreaker: 1, eliminated: 1 }) }, "Avoid a loss to qualify"],
+    // Couriers: loseAndOut said "avoid a loss", but a draw is out too.
+    ["only a win keeps them alive", { win: result({ total: 3, qualified: 1, qualificationTiebreaker: 1, eliminated: 1 }),
+      draw: result({ eliminated: 1 }), loss: result({ eliminated: 1 }) }, "Needs a win and help"],
+    ["a win only forces a tiebreaker", { win: result({ qualificationTiebreaker: 1 }),
+      draw: result({ eliminated: 1 }), loss: result({ eliminated: 1 }) }, "Must win to reach a tiebreaker"],
+    ["a BO3 can't be drawn", { win: result({ total: 2, qualified: 1, eliminated: 1 }),
+      draw: null, loss: result({ eliminated: 1 }) }, "Needs a win and help"],
+    ["a draw keeps them alive", { win: result({ total: 2, qualified: 1, eliminated: 1 }),
+      draw: result({ total: 2, qualificationTiebreaker: 1, eliminated: 1 }), loss: result({ eliminated: 1 }) }, "Must avoid a loss"],
+    ["a BO2 at 1-0 can't be lost", { win: result({ total: 2, qualified: 1, eliminated: 1 }),
+      draw: result({ eliminated: 1 }), loss: null }, "Needs a win and help"],
+  ] as const)("words the headline from the same paths as the table (%s)", (_, paths, headline) => {
+    const scenario = team({ nextMatchId: "match", loseAndOut: true, paths,
+      outlook: result({ total: 6, qualified: 1, qualificationTiebreaker: 2, eliminated: 3 }) });
+    expect(playoffStatusLine(scenario)).toBe(headline);
+  });
+
+  it("never tells a team a draw is enough when the bounds alone say a loss is out", () => {
+    const base = team({ nextMatchId: "match", loseAndOut: true });
+    expect(playoffStatusLine(base)).toBe("Must avoid a loss");
+    expect(playoffStatusLine({ ...base, paths: { win: null, draw: result({ eliminated: 1 }), loss: null } }))
+      .toBe("Must win");
+  });
+
   it("never calls a qualification tie qualified and preserves a secured place during a seed tie", () => {
     expect(playoffStatusLine(team({ status: "CLINCHED", outlook: result({ qualificationTiebreaker: 1 }) })))
       .toBe("Playoff spot decided by tiebreaker");

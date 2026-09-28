@@ -34,13 +34,40 @@ export function playoffStatusLine(scenario: TeamScenario): string {
   }
   if (!outlook && scenario.status === "CLINCHED") return "Qualified for playoffs";
   if (!outlook && scenario.status === "ELIMINATED") return "Eliminated";
-  if (scenario.paths?.win && scenario.paths.win.qualified === scenario.paths.win.total)
-    return "Win to qualify";
+  const pathLine = pathsStatusLine(scenario.paths);
+  if (pathLine) return pathLine;
   if (scenario.nextMatchId === null)
     return "Waiting on remaining results";
   if (scenario.winAndIn) return "Win to qualify";
-  if (scenario.loseAndOut) return "Must avoid a loss";
+  if (scenario.loseAndOut)
+    return every(scenario.paths?.draw, "eliminated") ? "Must win" : "Must avoid a loss";
   return "Playoff spot still open";
+}
+
+/** Every counted combination for this result ends the same way. */
+function every(path: ScenarioOutlook | null | undefined, verdict: "qualified" | "eliminated") {
+  return !!path && path.total > 0 && path[verdict] === path.total;
+}
+
+/**
+ * The headline read off the same Win/Draw/Loss paths the table under it
+ * prints, so the two can never disagree: a draw that also qualifies isn't
+ * "Win to qualify", and a draw that eliminates isn't "avoid a loss". A null
+ * path is a result that can't happen (a BO3 can't be drawn; a BO2 at 1-0
+ * can't be lost), never a result that knocks them out.
+ */
+function pathsStatusLine(paths: TeamScenario["paths"]): string | null {
+  if (!paths) return null;
+  const { win, draw, loss } = paths;
+  if (every(win, "qualified"))
+    return every(draw, "qualified") ? "Avoid a loss to qualify" : "Win to qualify";
+  const alive = (path: ScenarioOutlook | null) => !!path && !every(path, "eliminated");
+  if (alive(win) && (draw || loss) && !alive(draw) && !alive(loss))
+    return win!.qualificationTiebreaker === win!.total
+      ? "Must win to reach a tiebreaker"
+      : "Needs a win and help";
+  if (every(loss, "eliminated") && alive(draw)) return "Must avoid a loss";
+  return null;
 }
 
 /** The default view states possibilities, without turning counts into odds. */
