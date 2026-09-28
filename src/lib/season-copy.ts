@@ -172,9 +172,9 @@ export const ADMIN_PHASE_LABEL: Record<string, string> = {
 
 /**
  * How long player signups stay open, said the same way on Home and in the
- * draft-night reminder. Neither draft night nor the auction closes them: an
- * admin does, with Close signups (SIGNUPS → DRAFT) or Start draft, and either
- * can come before draft night.
+ * draft-night reminder. Nothing closes them on a clock: an admin does, with
+ * Close signups (SIGNUPS → DRAFT) or Start draft, and Close signups can come
+ * days before draft night.
  */
 export const PLAYER_SIGNUPS_OPEN_UNTIL =
   "until an admin closes them for the draft";
