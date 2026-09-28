@@ -34,8 +34,8 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
  * run if a pattern stops matching.
  *
  * Only rendering files count here, never the .ts copy that QUOTES a control:
- * copy naming "the Discord notifications card" must not be able to satisfy
- * its own check.
+ * copy naming "the Discord reach card" must not be able to satisfy its own
+ * check.
  */
 const ADMIN_UI = sourceFiles(
   [
@@ -85,6 +85,8 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Abort draft", rendered: "Abort draft" },
   { quoted: "Start draft", rendered: "Start draft" },
   // The pre-draft next-step points at the funnel that names the unlinked.
+  { quoted: "Discord reach", rendered: "Discord reach" },
+  // The couldn't-check line and the signup chip send admins to its checklist.
   { quoted: "Discord notifications", rendered: "Discord notifications" },
   { quoted: "Start playoffs", rendered: "Start playoffs" },
   { quoted: "Reset playoffs", rendered: "Reset playoffs" },
@@ -173,15 +175,37 @@ describe("admin copy names only controls that exist", () => {
   });
 
   // The REFERENCED_CONTROLS check once read the quoting copy too, and
-  // admin-next-step.ts QUOTES "the Discord notifications card", so that entry
+  // admin-next-step.ts QUOTES "the Discord reach card", so that entry
   // satisfied itself (verified by mutation). It now reads rendering files
-  // only, but the words can still appear in rendered prose, so pin the card's
-  // TITLE directly.
+  // only, but the words can still appear in rendered prose, so pin the cards'
+  // TITLES directly.
   it("the card the pre-draft chase note points at is actually titled that", () => {
+    expect(read("src/lib/admin-next-step.ts")).toContain(
+      "the Discord reach card names them",
+    );
+    expect(
+      renderedAdmin.includes('title="Discord reach"'),
+      'admin-next-step copy points at "the Discord reach card" — if the card was renamed, update the note (and this test), or the admin hunts for a card that is not there',
+    ).toBe(true);
     expect(
       renderedAdmin.includes('title="Discord notifications"'),
-      'admin-next-step copy points at "the Discord notifications card" — if the AdminSection was renamed, update the note (and this test), or the admin hunts for a card that is not there',
+      'the reach card and signup chips point at the checklist "under Discord notifications" — if that AdminSection was renamed, update them',
     ).toBe(true);
+  });
+
+  // The funnel names people and builds the chase post. It must stay out of
+  // the collapsed settings section (a weekly people task, not configuration)
+  // and render only inside its own streamed card.
+  it("the reach funnel renders in its own card, not the Discord settings", () => {
+    const page = read("src/app/admin/page.tsx");
+    const controls = page.slice(
+      page.indexOf("function DiscordControls("),
+      page.indexOf("\n}\n", page.indexOf("function DiscordControls(")),
+    );
+    expect(controls).not.toContain("DiscordReachLine");
+    expect(controls).not.toContain("ChaseCopy");
+    expect(page).toContain("<DiscordReachCard seasonId={season.id} />");
+    expect(page).toContain('<AdminAnchor id="adm-reach">');
   });
 
   // The house rule the Start-draft confirm upgrade exists for: state the real

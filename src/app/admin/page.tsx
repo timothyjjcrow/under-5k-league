@@ -340,6 +340,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         ?.name ?? null)
     : null;
   const importQuery = await searchParams;
+  // Chasing Discord links is a weekly people task, so it sits beside the
+  // signups (before the draft) or the rosters (after it), not inside the
+  // collapsed Discord settings. Streamed: its membership sweep calls Discord.
+  const reachCard = season ? (
+    <AdminAnchor id="adm-reach">
+      <Suspense fallback={<CardSkeleton rows={3} />}>
+        <DiscordReachCard seasonId={season.id} />
+      </Suspense>
+    </AdminAnchor>
+  ) : null;
   const syncCards = season ? (
     <AdminAnchor id="adm-sync">
       <AutoSyncHealth season={season} />
@@ -388,6 +398,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                   ? [{ id: "adm-roster", label: "Roster moves" }]
                   : []),
                 { id: "adm-standins", label: "Standins" },
+                { id: "adm-reach", label: "Discord reach" },
                 ...(autoSyncVisible(season)
                   ? [{ id: "adm-sync", label: "Auto-sync" }]
                   : []),
@@ -472,7 +483,12 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               <TiebreakerControls season={season} data={data} nowMs={nowMs} />
             </AdminAnchor>
           ) : null}
-          {season.status === "SIGNUPS" || season.status === "DRAFT" ? setupControls : null}
+          {season.status === "SIGNUPS" || season.status === "DRAFT" ? (
+            <>
+              {setupControls}
+              {reachCard}
+            </>
+          ) : null}
           <AdminAnchor id="adm-schedule">
             <ScheduleControls
               season={season}
@@ -489,6 +505,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <AdminAnchor id="adm-standins">
             <StandinControls season={season} data={data} />
           </AdminAnchor>
+          {season.status !== "SIGNUPS" && season.status !== "DRAFT"
+            ? reachCard
+            : null}
           {syncCards}
           {season.status !== "SIGNUPS" && season.status !== "DRAFT" ? setupControls : null}
           <LeagueControls season={season} />
@@ -512,12 +531,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       </AdminAnchor>
 
       {/* Evergreen because its inhouse channel, ping role and live board do
-          not belong to a season. With no active season the reach funnel is
-          simply empty, while every inhouse control remains usable. Streamed:
-          Discord health has bounded network calls and must never hold up the
-          rest of the admin page. */}
+          not belong to a season; every inhouse control stays usable in the
+          offseason. Streamed: Discord health has bounded network calls and
+          must never hold up the rest of the admin page. */}
       <Suspense fallback={<CardSkeleton rows={6} />}>
-        <DiscordSection seasonId={season?.id ?? null} />
+        <DiscordSection />
       </Suspense>
 
       <div>
@@ -5651,8 +5669,34 @@ async function MembershipChip({
  * chasing them BEFORE the draft is the whole point of the funnel, because
  * after it they're on rosters that need to schedule with them.
  */
+/**
+ * Who league announcements and pings can reach, who they can't, and one post
+ * that chases the rest. Only the webhooks and bot setup stay in the collapsed
+ * Discord notifications section.
+ */
+async function DiscordReachCard({ seasonId }: { seasonId: string }) {
+  const reach = await getDiscordReachFunnel(seasonId);
+  return (
+    <Card>
+      <CardHeader
+        headingLevel={2}
+        title="Discord reach"
+        subtitle="Who league mentions and pings reach, and who to chase."
+      />
+      <CardBody>
+        {reach.registered === 0 ? (
+          <p className="text-sm text-muted">
+            Nobody has signed up for this season yet.
+          </p>
+        ) : (
+          <DiscordReachLine reach={reach} />
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
-  if (reach.registered === 0) return null;
   const pct = Math.round((reach.linked / reach.registered) * 100);
   // Below half, the useful next move is chasing links rather than building
   // more notification machinery — so say so rather than just showing a number.
@@ -5676,7 +5720,7 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
     reach.registered - reach.linked > 0 ||
     (g !== null && (g.missing > 0 || g.pending > 0));
   return (
-    <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2">
+    <div>
       <p className="text-sm">
         <b>
           {reach.linked} of {reach.registered}
@@ -5742,10 +5786,10 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
                   (rendering "1— Discord"), and the copy must not promise a fix
                   it can't deliver — "reload" is a no-op inside the 30s memo
                   window, and a wrong guild id or kicked bot answers this way
-                  FOREVER; the checklist above is what names the broken piece. */}
+                  FOREVER; the bot checklist is what names the broken piece. */}
               Couldn&apos;t check {g.unknown}
               {
-                " — Discord didn't answer. A hiccup clears itself within a minute; if this persists, the bot checklist above says which piece is broken."
+                " — Discord didn't answer. A hiccup clears itself within a minute; if this persists, the bot checklist under Discord notifications says which piece is broken."
               }
             </p>
           ) : null}
@@ -5924,15 +5968,14 @@ function PingHealthLines({
  * Loads everything the Discord card needs. Its own component so the page can
  * put it behind <Suspense> — see the render site for why that matters.
  */
-async function DiscordSection({ seasonId }: { seasonId: string | null }) {
+async function DiscordSection() {
   // Never hand the raw webhook URL to the client — it's a bearer credential.
   // Resolve it server-side only to derive a boolean + a masked fingerprint.
   const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
   const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
-  const [board, pingHealth, discordReach] = await Promise.all([
+  const [board, pingHealth] = await Promise.all([
     getInhouseBoardStatus(),
     getPingHealth(),
-    getDiscordReachFunnel(seasonId),
   ]);
   return (
     <DiscordControls
@@ -5945,7 +5988,6 @@ async function DiscordSection({ seasonId }: { seasonId: string | null }) {
       }}
       board={board}
       pingHealth={pingHealth}
-      discordReach={discordReach}
       mutationsAllowed={discordMutationsAllowed()}
     />
   );
@@ -5955,13 +5997,11 @@ function DiscordControls({
   status,
   board,
   pingHealth,
-  discordReach,
   mutationsAllowed,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
   board: InhouseBoardStatus;
   pingHealth: PingHealth;
-  discordReach: DiscordReachFunnel;
   mutationsAllowed: boolean;
 }) {
   const { configured, masked, envManaged } = status;
@@ -6217,7 +6257,6 @@ function DiscordControls({
             health={pingHealth}
             mutationsAllowed={mutationsAllowed}
           />
-          <DiscordReachLine reach={discordReach} />
 
           <p className="text-xs text-muted">
             {board.pingRoleId ? (

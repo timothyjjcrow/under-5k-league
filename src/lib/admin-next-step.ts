@@ -65,7 +65,7 @@ export type AdminPhaseInput = {
    * ACTIVE player signups whose user never linked Discord. Optional and
    * DB-derived on purpose — this banner renders on the panel's blocking path,
    * so it can never afford a Discord API call; the full in-server funnel
-   * lives on the streamed Discord notifications card. Linking is the step the
+   * lives on the streamed Discord reach card. Linking is the step the
    * league can see for free, and it is also the step that makes the one-click
    * auto-join happen.
    */
@@ -118,7 +118,7 @@ export type AdminNextStep = {
 function discordChaseNote(i: AdminPhaseInput): string {
   const unlinked = i.unlinkedDiscordCount ?? 0;
   if (unlinked === 0) return "";
-  return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord notifications card names them).`;
+  return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord reach card names them).`;
 }
 
 /**
