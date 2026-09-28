@@ -12,6 +12,8 @@ import {
   inhouseHistoryPage,
   inhousePlayedAt,
 } from "@/lib/inhouse-history";
+import { failedLobbyReason } from "@/lib/inhouse-end-reason";
+import { inhouseLobbyCode } from "@/lib/inhouse";
 import { voidInhouseResult } from "@/app/actions/inhouse-admin";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -343,6 +345,86 @@ export default async function InhouseHistoryPage({
           )}
         </CardBody>
       </Card>
+
+      {isAdmin ? <RecentFailedLobbies /> : null}
     </div>
+  );
+}
+
+/** How many cancelled lobbies the admin list shows. */
+const FAILED_LOBBIES_SHOWN = 20;
+
+/**
+ * Admin-only: the lobbies that ended WITHOUT a result, newest first, each with
+ * the reason its cancelling write stored (declined, didn't accept, cancelled
+ * by an admin, timed out, result voided). Everything else on this page is
+ * completed games, so before this a failed ready check or a timed-out lobby
+ * left no trace anyone could read. Older lobbies from before reasons were
+ * stored say how far they got instead.
+ */
+async function RecentFailedLobbies() {
+  const lobbies = await prisma.inhouseLobby.findMany({
+    where: { status: INHOUSE_STATUS.CANCELLED },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: FAILED_LOBBIES_SHOWN,
+    select: {
+      id: true,
+      endReason: true,
+      createdAt: true,
+      startedAt: true,
+      completedAt: true,
+      players: {
+        orderBy: [{ queuedAt: "asc" }, { userId: "asc" }],
+        select: {
+          acceptedAt: true,
+          team: true,
+          user: { select: { name: true } },
+        },
+      },
+    },
+  });
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader
+        title="Recent failed lobbies"
+        headingLevel={2}
+        subtitle="Admins only · lobbies that ended without a result, newest first"
+      />
+      <CardBody className="p-0">
+        {lobbies.length === 0 ? (
+          <p className="px-4 py-5 text-sm text-muted sm:px-5">
+            No failed lobbies.
+          </p>
+        ) : (
+          <ol
+            aria-label="Recent failed inhouse lobbies"
+            className="divide-y divide-line"
+          >
+            {lobbies.map((lobby) => (
+              <li key={lobby.id} className="min-w-0 px-4 py-3 sm:px-5">
+                <p className="break-words text-sm font-medium">
+                  {failedLobbyReason(lobby)}
+                </p>
+                <p className="mt-1 break-words text-xs text-muted">
+                  Formed{" "}
+                  <LocalTime
+                    ts={lobby.createdAt.getTime()}
+                    variant="short"
+                    initial={formatMatchTime(lobby.createdAt, "short")}
+                  />
+                  <span className="font-mono">
+                    {" "}
+                    · #{inhouseLobbyCode(lobby.id)}
+                  </span>
+                  {lobby.players.length > 0
+                    ? ` · ${lobby.players.map((p) => p.user.name).join(", ")}`
+                    : null}
+                </p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </CardBody>
+    </Card>
   );
 }

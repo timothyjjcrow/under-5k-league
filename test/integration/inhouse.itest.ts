@@ -1247,10 +1247,14 @@ describe("inhouse — cancelling a live game", () => {
     const { lobby } = await runToInProgress(admin);
 
     expect((await cancelLobby(admin)).ok).toBe(true);
-    expect(
-      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
-        .status,
-    ).toBe(INHOUSE_STATUS.CANCELLED);
+    const cancelled = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(cancelled.status).toBe(INHOUSE_STATUS.CANCELLED);
+    // The lobby itself says why it ended, for the admin list on history.
+    expect(cancelled.endReason).toBe(
+      "Cancelled by admin Live Cancel Admin during the game",
+    );
 
     const log = await prisma.adminAction.findMany({
       where: { action: "cancelLobby" },
@@ -1824,6 +1828,7 @@ describe("inhouse — ready check", () => {
     expect((await declineMatch(players[8].session)).ok).toBe(true);
     const lobby = await prisma.inhouseLobby.findFirstOrThrow();
     expect(lobby.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(lobby.endReason).toBe("Declined by IH8");
 
     const queued = await prisma.inhouseQueueEntry.findMany();
     const byId = new Map(queued.map((q) => [q.userId, q]));
@@ -1918,9 +1923,10 @@ describe("inhouse — ready check", () => {
 
     // Any poll resolves it lazily.
     await getInhouseState(players[0].session);
-    expect((await prisma.inhouseLobby.findFirstOrThrow()).status).toBe(
-      INHOUSE_STATUS.CANCELLED,
-    );
+    const expired = await prisma.inhouseLobby.findFirstOrThrow();
+    expect(expired.status).toBe(INHOUSE_STATUS.CANCELLED);
+    // Named in queue order, so an admin can see who keeps missing checks.
+    expect(expired.endReason).toBe("IH7, IH8 and IH9 didn't accept in time");
 
     // Only the seven accepters are back in the queue, present.
     const queued = await prisma.inhouseQueueEntry.findMany();
@@ -2016,8 +2022,10 @@ describe("inhouse — ready check", () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     await acceptMatch(players[0].session);
     expect((await cancelLobby(admin)).ok).toBe(true);
-    expect((await prisma.inhouseLobby.findFirstOrThrow()).status).toBe(
-      INHOUSE_STATUS.CANCELLED,
+    const cancelled = await prisma.inhouseLobby.findFirstOrThrow();
+    expect(cancelled.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(cancelled.endReason).toBe(
+      "Cancelled by admin Admin during the ready check",
     );
     const queued = await prisma.inhouseQueueEntry.findMany();
     expect(queued).toHaveLength(INHOUSE.LOBBY_SIZE);
@@ -3064,6 +3072,14 @@ describe("inhouse — an admin can void a wrong result", () => {
     });
     expect(log).toHaveLength(1);
     expect(log[0].summary).toContain("7200000002");
+    // The lobby's own end reason keeps the match id the claim just cleared.
+    const voided = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: g.lobby.id },
+    });
+    expect(voided.dotaMatchId).toBeNull();
+    expect(voided.endReason).toBe(
+      "Result voided by admin Audit Void Admin (match 7200000002)",
+    );
 
     expect(mockSend).toHaveBeenCalledTimes(1);
     const msg = mockSend.mock.calls[0][0];
@@ -3198,10 +3214,13 @@ describe("inhouse — abandoned lobby teardown", () => {
     await age(ready.id, "createdAt", INHOUSE.ABANDON_READY_HOURS + 1);
     await getInhouseState(null); // any page view, by anyone, signed out included
 
-    expect(
-      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ready.id } }))
-        .status,
-    ).toBe(INHOUSE_STATUS.CANCELLED);
+    const scrapped = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: ready.id },
+    });
+    expect(scrapped.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(scrapped.endReason).toBe(
+      `No result ${INHOUSE.ABANDON_READY_HOURS}h after the lobby formed`,
+    );
     // The single active-lobby slot is free again, so the feature works: the
     // ten who were stranded can queue, and a fresh lobby can form.
     expect(
@@ -3256,6 +3275,9 @@ describe("inhouse — abandoned lobby teardown", () => {
       where: { id: lobby.id },
     });
     expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(after.endReason).toBe(
+      `No result ${INHOUSE.ABANDON_IN_PROGRESS_HOURS}h after the game started`,
+    );
     // Cancelled, not COMPLETED: there is no result, so nothing may reach the
     // ladder and no Discord result may be announced.
     expect(after.winnerTeam).toBeNull();

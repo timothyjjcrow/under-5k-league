@@ -193,6 +193,13 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
       page.getByText(/Result voided — the ladder recalculates/),
     ).toBeVisible();
     await expect(page.locator(`#result-${lobbyId(0)}`)).toHaveCount(0);
+    // Admins see the voided lobby in the failed list, with the match id the
+    // void cleared from the lobby itself.
+    await expect(
+      page
+        .getByRole("list", { name: "Recent failed inhouse lobbies" })
+        .getByText("Result voided by admin History Admin (match 8990000000)"),
+    ).toBeVisible();
     expect(
       (await db.inhouseLobby.findUniqueOrThrow({ where: { id: lobbyId(0) } }))
         .status,

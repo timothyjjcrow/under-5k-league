@@ -20,6 +20,13 @@ import {
   type CaptainMethod,
 } from "./inhouse";
 import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
+import {
+  abandonedReason,
+  adminCancelReason,
+  declinedReason,
+  noShowReason,
+  resultVoidedReason,
+} from "./inhouse-end-reason";
 import type { InhouseBoxPlayer } from "./inhouse-box";
 import {
   canStartOpenDotaFetch,
@@ -312,15 +319,26 @@ async function startCaptainVote(tx: Tx, lobbyId: string): Promise<boolean> {
  * this claim (the claim locks only the lobby row, not the player rows); that
  * player holds a committed accept + an ok response, so they MUST be treated as
  * an accepter, not a dropped no-show.
+ *
+ * `endReason` rides the CANCELLED claim itself, so the lobby can never be
+ * cancelled without saying why. It is built from the caller's pre-claim
+ * snapshot, which is the one thing that can be a few milliseconds stale: an
+ * accept committing in that gap is requeued as an accepter above, yet may
+ * still be named as a no-show in the admin-only reason. That is a display
+ * nuance on a record, never a membership decision.
  */
 async function failReadyCheck(
   tx: Tx,
   lobbyId: string,
-  opts: { pendingBackdated: boolean; dropUserId?: string },
+  opts: { pendingBackdated: boolean; dropUserId?: string; endReason: string },
 ): Promise<boolean> {
   const claim = await tx.inhouseLobby.updateMany({
     where: { id: lobbyId, status: INHOUSE_STATUS.READY_CHECK },
-    data: { status: INHOUSE_STATUS.CANCELLED, acceptEndsAt: null },
+    data: {
+      status: INHOUSE_STATUS.CANCELLED,
+      acceptEndsAt: null,
+      endReason: opts.endReason,
+    },
   });
   if (claim.count === 0) return false;
   const lobby = await tx.inhouseLobby.findUniqueOrThrow({
@@ -439,15 +457,17 @@ export async function declineMatch(
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY_CHECK },
-      include: { players: true },
+      include: { players: { include: { user: { select: { name: true } } } } },
     });
     if (!lobby) return { ok: false as const, error: "No match to decline" };
-    if (!lobby.players.some((p) => p.userId === viewer.id)) {
+    const mine = lobby.players.find((p) => p.userId === viewer.id);
+    if (!mine) {
       return { ok: false as const, error: "You're not in this lobby" };
     }
     const failed = await failReadyCheck(tx, lobby.id, {
       pendingBackdated: true,
       dropUserId: viewer.id,
+      endReason: declinedReason(mine.user.name),
     });
     if (!failed) {
       // Lost the claim: the check already resolved (everyone accepted, a
@@ -469,7 +489,7 @@ export async function resolveReadyCheck(): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const lobby = await tx.inhouseLobby.findFirst({
       where: { status: INHOUSE_STATUS.READY_CHECK },
-      include: { players: true },
+      include: { players: { include: { user: { select: { name: true } } } } },
     });
     if (!lobby) return false;
     const allAccepted =
@@ -481,7 +501,18 @@ export async function resolveReadyCheck(): Promise<boolean> {
     // Timed out with pending players: they ignored the Discord ping, the chime
     // and the tab flash for the whole accept window — proven AFK, dropped.
     // Accepters go back to the front of the queue.
-    return failReadyCheck(tx, lobby.id, { pendingBackdated: false });
+    const noShows = lobby.players
+      .filter((p) => !p.acceptedAt)
+      .sort(
+        (a, b) =>
+          a.queuedAt.getTime() - b.queuedAt.getTime() ||
+          a.userId.localeCompare(b.userId),
+      )
+      .map((p) => p.user.name);
+    return failReadyCheck(tx, lobby.id, {
+      pendingBackdated: false,
+      endReason: noShowReason(noShows),
+    });
   });
 }
 
@@ -537,6 +568,7 @@ export async function resolveAbandonedLobby(): Promise<boolean> {
       status: INHOUSE_STATUS.CANCELLED,
       pickTeam: null,
       pickEndsAt: null,
+      endReason: abandonedReason(stale.status),
     },
   });
   return claim.count > 0;
@@ -1987,6 +2019,8 @@ export async function voidLastResult(
       where: { id: last.id, status: INHOUSE_STATUS.COMPLETED },
       data: {
         status: INHOUSE_STATUS.CANCELLED,
+        // The claim nulls the match id below; the reason keeps it on record.
+        endReason: resultVoidedReason(viewer.name, last.dotaMatchId),
         winnerTeam: null,
         dotaMatchId: null,
         durationSecs: null,
@@ -2082,6 +2116,7 @@ export async function cancelLobby(
         status: INHOUSE_STATUS.CANCELLED,
         pickTeam: null,
         pickEndsAt: null,
+        endReason: adminCancelReason(viewer.name, lobby.status),
       },
     });
     if (claim.count === 0) return false;

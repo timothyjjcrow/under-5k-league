@@ -858,6 +858,13 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   result paths have no time gate, so a group that simply forgot still records
   normally. It does NOT re-queue anyone — unlike `cancelLobby`, whose players
   are present and want the next game, nobody has touched this one for hours.
+- **Every CANCELLED write stores `InhouseLobby.endReason`** (pure builders in
+  `src/lib/inhouse-end-reason.ts`): declined by X, X and Y didn't accept, an
+  admin cancel (with the phase), no result after N hours, result voided (with
+  the match id the void clears). It rides the SAME guarded claim `data` that
+  sets the status, never a second write. Admins read them in "Recent failed
+  lobbies" on /inhouse/history; older rows without one show the furthest stage
+  their columns prove (`failedLobbyReason`). A new cancel path must set it too.
 - **`InhouseLobby.eloDeltas`** (JSON userId → Elo swing) is stamped by the
   successful exact-result FINALIZATION claim; the room's post-game banner
   reads it — never re-derive the ladder on the poll path. COMPLETED is claimed
