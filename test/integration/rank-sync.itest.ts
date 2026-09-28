@@ -8,7 +8,7 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   updateTag: vi.fn(),
 }));
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })), requireUser: vi.fn() }));
 vi.mock("@/lib/dota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dota")>()),
   fetchRankTier: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock("@/lib/steam", async (importOriginal) => ({
   fetchSteamProfiles: vi.fn(async () => new Map()),
 }));
 
-import { refreshPlayerData } from "@/app/actions/admin";
+import { refreshPlayerData } from "@/app/actions/admin-captains-draft";
 import { refreshPlayerDataAutomatically } from "@/lib/player-data-refresh";
 import {
   refreshRank,

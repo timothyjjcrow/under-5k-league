@@ -79,7 +79,7 @@ const EQUIVALENT = new Set([
   // createSeason's broad archive runs after the transaction has read the full
   // active set. Dropping `isActive: true` merely writes false over rows already
   // archived; its one newly created row does not exist until the next statement.
-  "src/app/actions/admin.ts::createSeason::isActive#1",
+  "src/app/actions/admin-season.ts::createSeason::isActive#1",
   // importGameForMatch reads Season.fantasyLockedAt through the fresh Match
   // graph and stamps that same Season row in its SERIALIZABLE import. A rival
   // lock either precedes the snapshot or forces P2034, so the null predicate
@@ -92,7 +92,7 @@ const EQUIVALENT = new Set([
   // guarded WHERE stays as defense in depth and documents the transition; the
   // two-start test (including the existing-row/after-abort branch) pins the
   // actual one-winner invariant and its one Discord announcement.
-  "src/app/actions/admin.ts::startDraft::status#1",
+  "src/app/actions/admin-captains-draft.ts::startDraft::status#1",
   // undoLastSale reads Draft.status and nominatedUserId, performs its refund,
   // and reopens that same Draft row inside one SERIALIZABLE transaction. A
   // poller opening a lot in the gap changes the row and forces Undo to abort
@@ -196,54 +196,54 @@ const EQUIVALENT = new Set([
   // change forces P2034 even when the copied WHERE fields are removed. Their
   // deterministic seam/race tests assert rollback and the final state; keeping
   // the predicates in production still documents the exact transition.
-  "src/app/actions/admin.ts::recordResult::awayScore+forfeit+homeScore+status+winnerTeamId#1",
-  "src/app/actions/admin.ts::reopenMatch::games+season+status#1",
-  "src/app/actions/admin.ts::setSeasonPhase::isActive+status#1",
-  "src/app/actions/admin.ts::setWeekNight::scheduledAt+status#1",
+  "src/app/actions/admin-schedule-results.ts::recordResult::awayScore+forfeit+homeScore+status+winnerTeamId#1",
+  "src/app/actions/admin-schedule-results.ts::reopenMatch::games+season+status#1",
+  "src/app/actions/admin-season.ts::setSeasonPhase::isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::setWeekNight::scheduledAt+status#1",
   // These actions likewise read the authoritative Season, Match, Registration
   // or Team rows and write those same rows inside SERIALIZABLE transactions.
   // Pre-snapshot changes fail the fresh checks; post-read changes force P2034,
   // so copied state fields cannot change a committed outcome. Count checks
   // still detect missing identity rows. The predicates remain useful
   // transition documentation and defense in depth.
-  "src/app/actions/admin.ts::reinstateSignup::status+type#1",
-  "src/app/actions/admin.ts::setRegistrationMmr::status+type#1",
-  "src/app/actions/admin.ts::randomizeDraftOrder::draftOrder#1",
-  "src/app/actions/admin.ts::startDraft::captainId+draftOrder#1",
-  "src/app/actions/admin.ts::startDraft::isActive+status#1",
-  "src/app/actions/admin.ts::generateSchedule::isActive#1",
-  "src/app/actions/admin.ts::reopenMatch::championTeamId+isActive+status#1",
-  "src/app/actions/admin.ts::setWeekNight::isActive#1",
-  "src/app/actions/admin.ts::setMatchTime::scheduledAt+status#1",
-  "src/app/actions/admin.ts::setDraftSettings::isActive+status+updatedAt#1",
-  "src/app/actions/admin.ts::setDraftNight::isActive+status#1",
+  "src/app/actions/admin-roster.ts::reinstateSignup::status+type#1",
+  "src/app/actions/admin-roster.ts::setRegistrationMmr::status+type#1",
+  "src/app/actions/admin-captains-draft.ts::randomizeDraftOrder::draftOrder#1",
+  "src/app/actions/admin-captains-draft.ts::startDraft::captainId+draftOrder#1",
+  "src/app/actions/admin-captains-draft.ts::startDraft::isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::generateSchedule::isActive#1",
+  "src/app/actions/admin-schedule-results.ts::reopenMatch::championTeamId+isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::setWeekNight::isActive#1",
+  "src/app/actions/admin-schedule-results.ts::setMatchTime::scheduledAt+status#1",
+  "src/app/actions/admin-season.ts::setDraftSettings::isActive+status+updatedAt#1",
+  "src/app/actions/admin-captains-draft.ts::setDraftNight::isActive+status#1",
   // changeCaptain re-reads the Team, Season and Draft inside its SERIALIZABLE
   // transaction before this write (seam test in change-captain.itest.ts), so a
   // rival Start draft or captain change either fails those fresh checks or
   // forces a serialization failure. The WHERE is defense in depth.
-  "src/app/actions/admin.ts::changeCaptain::captainId+season#1",
+  "src/app/actions/admin-captains-draft.ts::changeCaptain::captainId+season#1",
   // transferCaptaincy's Team captain predicate has the same same-row
   // SERIALIZABLE protection. Its first flag write merely writes false over
   // already-false members (the count is discarded and TeamMember has no
   // updatedAt); its second re-asserts the false state established immediately
   // beforehand. All three predicates remain as repair intent/defense in depth.
-  "src/app/actions/admin.ts::transferCaptaincy::captainId#1",
-  "src/app/actions/admin.ts::transferCaptaincy::isCaptain#1",
-  "src/app/actions/admin.ts::transferCaptaincy::isCaptain#2",
+  "src/app/actions/admin-captains-draft.ts::transferCaptaincy::captainId#1",
+  "src/app/actions/admin-captains-draft.ts::transferCaptaincy::isCaptain#1",
+  "src/app/actions/admin-captains-draft.ts::transferCaptaincy::isCaptain#2",
   // removeGame reads Season (including fantasy/champion state) through the
   // fresh Game graph and writes that same Season row in its SERIALIZABLE
   // transaction. Repeat mutation verification proved discovery's apparent
   // kills were incidental: both mutants survive without weakening the actual
   // correction/uncrown invariants. The predicates remain defense in depth.
-  "src/app/actions/admin.ts::removeGame::fantasyLockedAt#1",
-  "src/app/actions/admin.ts::removeGame::championTeamId+isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::removeGame::fantasyLockedAt#1",
+  "src/app/actions/admin-schedule-results.ts::removeGame::championTeamId+isActive+status#1",
   // These completion/offseason claims all read the same Season row and then
   // write it inside one SERIALIZABLE transaction. A pre-snapshot lifecycle
   // change fails the fresh checks; a post-read change forces P2034 even if the
   // copied fields are removed. Their guards remain explicit state-machine
   // documentation. Separate tests pin cancellation-vs-Resume, cancellation-
   // vs-bracket-build/crown, one-winner reactivation, and completed handoffs.
-  "src/app/actions/admin.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
+  "src/app/actions/admin-season.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
   "src/lib/season.ts::archiveCompletedSeason::championTeamId+isActive+status#1",
   "src/lib/season.ts::reactivateSeason::isActive+updatedAt#1",
   // advancePlayoffBracket's crown likewise performs a fresh Season read plus
@@ -333,7 +333,10 @@ const FILES = [
   "src/lib/inhouse-board-service.ts",
   "src/lib/settings.ts",
   "src/lib/season.ts",
-  "src/app/actions/admin.ts",
+  "src/app/actions/admin-season.ts",
+  "src/app/actions/admin-captains-draft.ts",
+  "src/app/actions/admin-roster.ts",
+  "src/app/actions/admin-schedule-results.ts",
   "src/app/actions/import-progress.ts",
   "src/app/actions/news.ts",
   "src/lib/news-rollover.ts",

@@ -242,7 +242,7 @@ describe("release classifier policy", () => {
     ["scripts/classify-release.mjs", true],
     ["scripts/release-migrations.mjs", true],
     ["scripts/vercel-build.mjs", true],
-    ["src/app/actions/admin.ts", true],
+    ["src/app/actions/admin-season.ts", true],
     ["src/lib/release-classification.test.ts", true],
     ["src/lib/automation-service.test.ts", true],
     // The lobby bot and relay are hosted independently of the website and
@@ -816,7 +816,7 @@ describe("release classifier mutation ratchet", () => {
   it.each([
     "src/lib/draft-service.ts",
     "src/lib/draft.test.ts",
-    "src/app/actions/admin.ts",
+    "src/app/actions/admin-season.ts",
     "src/app/api/draft/tick/route.ts",
     "src/app/api/dota-lobby/route.ts",
     "src/app/recap/route.ts",
@@ -951,7 +951,7 @@ describe("release classifier mutation ratchet", () => {
     expect(sources).toEqual(
       expect.arrayContaining([
         "scripts/mutation-claims.mjs",
-        "src/app/actions/admin.ts",
+        "src/app/actions/admin-season.ts",
         "src/app/recap/route.ts",
         "src/lib/draft-service.ts",
         "test/fixtures/legacy-tiebreaker.ts",

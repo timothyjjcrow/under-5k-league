@@ -16,7 +16,10 @@ describe("active-season authority reads", () => {
   it("reads the files it used to name, among the rest", () => {
     const paths = authorityFiles.map((f) => f.path);
     for (const file of [
-      "src/app/actions/admin.ts",
+      "src/app/actions/admin-captains-draft.ts",
+      "src/app/actions/admin-roster.ts",
+      "src/app/actions/admin-schedule-results.ts",
+      "src/app/actions/admin-season.ts",
       "src/app/actions/availability.ts",
       "src/lib/availability-service.ts",
       "src/lib/reschedule-service.ts",

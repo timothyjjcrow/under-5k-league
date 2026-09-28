@@ -24,7 +24,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { assignStandinGuarded } from "@/lib/standin-service";
-import { releasePlayer } from "@/app/actions/admin";
+import { releasePlayer } from "@/app/actions/admin-roster";
 import { leaveLeague } from "@/app/actions/registration";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";

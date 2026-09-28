@@ -8,7 +8,7 @@ vi.mock("next/cache", () => ({
   updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
-  requireAdmin: vi.fn(),
+  requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })),
   requireUser: vi.fn(),
   getSessionUser: vi.fn(async () => null),
 }));
@@ -18,7 +18,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { createSeason } from "@/app/actions/admin";
+import { createSeason } from "@/app/actions/admin-season";
 import { getWebhookUrl, sendDiscordMessage } from "@/lib/discord";
 import { announceSignupsOpenOnce } from "@/lib/signups-open-announcement";
 import { prisma } from "@/lib/prisma";

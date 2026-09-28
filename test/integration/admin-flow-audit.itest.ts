@@ -31,24 +31,24 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import { matchNightForWeek } from "@/lib/schedule";
+import { setLeagueId, setSeasonPhase } from "@/app/actions/admin-season";
+import { removeCaptain, startDraft } from "@/app/actions/admin-captains-draft";
 import {
   assignStandin,
-  generateSchedule,
-  removeCaptain,
-  removeGame,
   renameTeam,
   releasePlayer,
-  reopenMatch,
   signFreeAgent,
-  setLeagueId,
+  reinstateSignup,
+  withdrawSignup,
+} from "@/app/actions/admin-roster";
+import {
+  generateSchedule,
+  removeGame,
+  reopenMatch,
   setMatchTime,
   setWeekNight,
   recordResult,
-  reinstateSignup,
-  setSeasonPhase,
-  startDraft,
-  withdrawSignup,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { nominatePlayer } from "@/lib/draft-service";
 import { advancePlayoffBracket } from "@/lib/playoff-service";
 import { sendDiscordMessage } from "@/lib/discord";

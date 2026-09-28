@@ -1,5 +1,5 @@
 {
-  "note": "Exact guarded-claim inventory. Stages 1–3 update retains the previously measured baseline and adds PostgreSQL sabotage evidence for all 27 new/renamed claims plus the result-sync ordinal rebind; new kills were confirmed twice. Reviewed equivalents retain their source justifications. Full CI re-mutates every protected claim in four shards; focused local probes do not claim a fresh full-sweep verification. Claim ids are anchored to the top-level declaration read from the TypeScript syntax tree (2026-09-28): 14 ids whose old regex anchor was a comment word or an inner helper were renamed with their classification unchanged; every other id is byte-identical.",
+  "note": "Exact guarded-claim inventory. Stages 1–3 update retains the previously measured baseline and adds PostgreSQL sabotage evidence for all 27 new/renamed claims plus the result-sync ordinal rebind; new kills were confirmed twice. Reviewed equivalents retain their source justifications. Full CI re-mutates every protected claim in four shards; focused local probes do not claim a fresh full-sweep verification. Claim ids are anchored to the top-level declaration read from the TypeScript syntax tree (2026-09-28): 14 ids whose old regex anchor was a comment word or an inner helper were renamed with their classification unchanged; every other id is byte-identical. The admin actions file was split by job (2026-09-28): its 38 claim ids moved to src/app/actions/admin-{season,captains-draft,roster,schedule-results}.ts through the renames map, predicates and ordinals unchanged; the next full --discover folds them into the lists.",
   "totalClaims": 174,
   "equivalent": [
     "src/app/actions/admin.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
@@ -178,5 +178,45 @@
     "src/lib/users.ts::ensurePubStats::pubStatsAt#1",
     "src/lib/users.ts::ensureRankTier::rankTier#1",
     "src/lib/users.ts::ensureRankTier::rankTier+rankTierManual#1"
-  ]
+  ],
+  "renames": {
+    "src/app/actions/admin.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1": "src/app/actions/admin-season.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
+    "src/app/actions/admin.ts::archiveIncompleteSeasonAction::status#1": "src/app/actions/admin-season.ts::archiveIncompleteSeasonAction::status#1",
+    "src/app/actions/admin.ts::changeCaptain::captainId+season#1": "src/app/actions/admin-captains-draft.ts::changeCaptain::captainId+season#1",
+    "src/app/actions/admin.ts::claimTeamWithdrawalSeason::isActive+status#1": "src/app/actions/admin-roster.ts::claimTeamWithdrawalSeason::isActive+status#1",
+    "src/app/actions/admin.ts::createSeason::isActive#1": "src/app/actions/admin-season.ts::createSeason::isActive#1",
+    "src/app/actions/admin.ts::generateSchedule::isActive#1": "src/app/actions/admin-schedule-results.ts::generateSchedule::isActive#1",
+    "src/app/actions/admin.ts::promoteStandinToPlayer::status+type#1": "src/app/actions/admin-roster.ts::promoteStandinToPlayer::status+type#1",
+    "src/app/actions/admin.ts::randomizeDraftOrder::draftOrder#1": "src/app/actions/admin-captains-draft.ts::randomizeDraftOrder::draftOrder#1",
+    "src/app/actions/admin.ts::recordResult::awayScore+forfeit+homeScore+status+winnerTeamId#1": "src/app/actions/admin-schedule-results.ts::recordResult::awayScore+forfeit+homeScore+status+winnerTeamId#1",
+    "src/app/actions/admin.ts::reinstateSignup::status+type#1": "src/app/actions/admin-roster.ts::reinstateSignup::status+type#1",
+    "src/app/actions/admin.ts::reinstateTeam::withdrawn#1": "src/app/actions/admin-roster.ts::reinstateTeam::withdrawn#1",
+    "src/app/actions/admin.ts::removeGame::championTeamId+isActive+status#1": "src/app/actions/admin-schedule-results.ts::removeGame::championTeamId+isActive+status#1",
+    "src/app/actions/admin.ts::removeGame::fantasyLockedAt#1": "src/app/actions/admin-schedule-results.ts::removeGame::fantasyLockedAt#1",
+    "src/app/actions/admin.ts::reopenMatch::championTeamId+isActive+status#1": "src/app/actions/admin-schedule-results.ts::reopenMatch::championTeamId+isActive+status#1",
+    "src/app/actions/admin.ts::reopenMatch::games+season+status#1": "src/app/actions/admin-schedule-results.ts::reopenMatch::games+season+status#1",
+    "src/app/actions/admin.ts::setDraftNight::isActive+status#1": "src/app/actions/admin-captains-draft.ts::setDraftNight::isActive+status#1",
+    "src/app/actions/admin.ts::setDraftSettings::isActive+status+updatedAt#1": "src/app/actions/admin-season.ts::setDraftSettings::isActive+status+updatedAt#1",
+    "src/app/actions/admin.ts::setMatchTime::scheduledAt+status#1": "src/app/actions/admin-schedule-results.ts::setMatchTime::scheduledAt+status#1",
+    "src/app/actions/admin.ts::setMatchTime::status#1": "src/app/actions/admin-schedule-results.ts::setMatchTime::status#1",
+    "src/app/actions/admin.ts::setPlayerRank::mmr+status+type#1": "src/app/actions/admin-roster.ts::setPlayerRank::mmr+status+type#1",
+    "src/app/actions/admin.ts::setPlayerRank::rankTier+rankTierManual#1": "src/app/actions/admin-roster.ts::setPlayerRank::rankTier+rankTierManual#1",
+    "src/app/actions/admin.ts::setRegistrationMmr::status+type#1": "src/app/actions/admin-roster.ts::setRegistrationMmr::status+type#1",
+    "src/app/actions/admin.ts::setSeasonPhase::isActive+status#1": "src/app/actions/admin-season.ts::setSeasonPhase::isActive+status#1",
+    "src/app/actions/admin.ts::setWeekNight::isActive#1": "src/app/actions/admin-schedule-results.ts::setWeekNight::isActive#1",
+    "src/app/actions/admin.ts::setWeekNight::scheduledAt+status#1": "src/app/actions/admin-schedule-results.ts::setWeekNight::scheduledAt+status#1",
+    "src/app/actions/admin.ts::setWeekNight::status#1": "src/app/actions/admin-schedule-results.ts::setWeekNight::status#1",
+    "src/app/actions/admin.ts::startDraft::captainId+draftOrder#1": "src/app/actions/admin-captains-draft.ts::startDraft::captainId+draftOrder#1",
+    "src/app/actions/admin.ts::startDraft::isActive+status#1": "src/app/actions/admin-captains-draft.ts::startDraft::isActive+status#1",
+    "src/app/actions/admin.ts::startDraft::status#1": "src/app/actions/admin-captains-draft.ts::startDraft::status#1",
+    "src/app/actions/admin.ts::transferCaptaincy::captainId#1": "src/app/actions/admin-captains-draft.ts::transferCaptaincy::captainId#1",
+    "src/app/actions/admin.ts::transferCaptaincy::isCaptain#1": "src/app/actions/admin-captains-draft.ts::transferCaptaincy::isCaptain#1",
+    "src/app/actions/admin.ts::transferCaptaincy::isCaptain#2": "src/app/actions/admin-captains-draft.ts::transferCaptaincy::isCaptain#2",
+    "src/app/actions/admin.ts::updateRenderedSeason::isActive+updatedAt#1": "src/app/actions/admin-season.ts::updateRenderedSeason::isActive+updatedAt#1",
+    "src/app/actions/admin.ts::withdrawSignup::status#1": "src/app/actions/admin-roster.ts::withdrawSignup::status#1",
+    "src/app/actions/admin.ts::withdrawTeam::OR+status#1": "src/app/actions/admin-roster.ts::withdrawTeam::OR+status#1",
+    "src/app/actions/admin.ts::withdrawTeam::status#1": "src/app/actions/admin-roster.ts::withdrawTeam::status#1",
+    "src/app/actions/admin.ts::withdrawTeam::status#2": "src/app/actions/admin-roster.ts::withdrawTeam::status#2",
+    "src/app/actions/admin.ts::withdrawTeam::withdrawn#1": "src/app/actions/admin-roster.ts::withdrawTeam::withdrawn#1"
+  }
 }

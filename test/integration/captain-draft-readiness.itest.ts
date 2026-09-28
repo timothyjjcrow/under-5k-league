@@ -16,15 +16,15 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
+import { setDraftSettings } from "@/app/actions/admin-season";
 import {
   addCaptain,
   randomizeDraftOrder,
   removeCaptain,
-  setDraftSettings,
   startDraft,
   transferCaptaincy,
-  withdrawSignup,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-captains-draft";
+import { withdrawSignup } from "@/app/actions/admin-roster";
 import { confirmDraftReadiness } from "@/app/actions/registration";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";

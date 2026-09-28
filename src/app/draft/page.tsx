@@ -21,13 +21,13 @@ import {
   StartDraftForm,
 } from "@/components/admin-start-draft";
 import { EmptyState, PageTitle, buttonClasses } from "@/components/ui";
+import { setSeasonPhase } from "@/app/actions/admin-season";
 import {
   pauseDraftAction,
   resumeDraftAction,
-  setSeasonPhase,
   undoLastSaleAction,
   voidCurrentLotAction,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-captains-draft";
 
 // The link preview names the page and the season.
 export function generateMetadata() {

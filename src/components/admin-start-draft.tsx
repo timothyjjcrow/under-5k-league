@@ -1,4 +1,4 @@
-import { startDraft } from "@/app/actions/admin";
+import { startDraft } from "@/app/actions/admin-captains-draft";
 import { ActionForm } from "@/components/action-form";
 import { StartDraftSubmit } from "@/components/start-draft-submit";
 import type { ButtonSize } from "@/components/ui";

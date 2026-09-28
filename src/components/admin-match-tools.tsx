@@ -31,16 +31,15 @@ import {
   parseTiebreakerStage,
 } from "@/lib/tiebreaker-format";
 import { cn } from "@/lib/utils";
+import { assignStandin, removeStandin } from "@/app/actions/admin-roster";
 import {
-  assignStandin,
   autoDetectAction,
   importGameAction,
   recordResult,
   removeGame,
-  removeStandin,
   reopenMatch,
   setMatchTime,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { cancelReschedule } from "@/app/actions/reschedule";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { AutoOpenDetails } from "@/components/auto-open-details";

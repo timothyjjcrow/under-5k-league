@@ -8,7 +8,7 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   updateTag: vi.fn(),
 }));
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })), requireUser: vi.fn() }));
 vi.mock("@/lib/discord", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/discord")>()),
   getWebhookUrl: vi.fn(async () => ""),
@@ -23,7 +23,7 @@ import {
   reopenMatch,
   setMatchTime,
   setWeekNight,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { proposeReschedule, respondReschedule } from "@/lib/reschedule-service";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { announceAdminRetime } from "@/lib/retime-announcement";

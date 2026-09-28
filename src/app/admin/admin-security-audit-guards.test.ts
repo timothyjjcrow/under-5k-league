@@ -5,8 +5,8 @@ import {
 } from "../../../test/support/source-files";
 
 // Audit rows are written from server actions and from the services they call.
-// Both areas are globbed so an action split out of actions/admin.ts, or a new
-// service that logs, stays under the guard.
+// Both areas are globbed so an action moved between the admin-*.ts action
+// files, or a new service that logs, stays under the guard.
 const ACTION_FILES = sourceFiles("src/app/actions/**/*.ts", 10);
 const AUDIT_WRITERS = [
   ...ACTION_FILES,
@@ -77,7 +77,7 @@ describe("security and league configuration audit trail", () => {
         summary: match[1],
       })),
     );
-    // ~55 templated summaries today (44 in actions/admin.ts). Far fewer means
+    // ~55 templated summaries today (44 in the actions/admin-*.ts files). Far fewer means
     // the extractor stopped matching and the check below reads nothing.
     expect(summaries.length).toBeGreaterThanOrEqual(40);
     const leaking = summaries
