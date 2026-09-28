@@ -8,7 +8,7 @@ test("Tonight leads /admin on match night and jumps to each result row", async (
 }) => {
   const noErrors = trackPageErrors(page);
   await page.goto(
-    "/api/auth/dev?name=Tonight+Admin&steamId=76561190000991998&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Tonight+Admin&steamId=76561190000994002&admin=1&redirect=/admin",
   );
   const tonight = page.locator("#adm-tonight");
   await expect(

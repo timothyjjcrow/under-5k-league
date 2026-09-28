@@ -8,7 +8,7 @@ test("Discord reach is its own card, outside the Discord settings", async ({
 }) => {
   const noErrors = trackPageErrors(page);
   await page.goto(
-    "/api/auth/dev?name=Reach+Admin&steamId=76561190000991997&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Reach+Admin&steamId=76561190000994001&admin=1&redirect=/admin",
   );
   const reach = page.locator("#adm-reach");
   await expect(
