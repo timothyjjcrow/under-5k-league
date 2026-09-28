@@ -77,3 +77,31 @@ export function revealChipScrollLeft({
   next = Math.max(0, Math.round(next));
   return next === Math.round(scrollLeft) ? null : next;
 }
+
+/**
+ * SectionNav highlights the section crossing a reading band: from just under
+ * the sticky header down to this fraction of the viewport height (its
+ * IntersectionObserver trims the rest off the bottom).
+ */
+export const SECTION_BAND_BOTTOM = 0.45;
+
+/**
+ * Whether the reader is above every section, so the bar should highlight
+ * none. The observer only ever SETS a highlight, and at the top of a page the
+ * first section starts below the band, so nothing intersects and nothing
+ * cleared it: after reading down to Career and back up, the bar still lit
+ * "Career" and stayed scrolled sideways past "Overview". `sectionTops` are
+ * viewport pixels (getBoundingClientRect().top) of the sections on the page.
+ */
+export function aboveAllSections({
+  anyInBand,
+  sectionTops,
+  viewportHeight,
+}: {
+  anyInBand: boolean;
+  sectionTops: number[];
+  viewportHeight: number;
+}): boolean {
+  if (anyInBand || sectionTops.length === 0) return false;
+  return Math.min(...sectionTops) > viewportHeight * SECTION_BAND_BOTTOM;
+}

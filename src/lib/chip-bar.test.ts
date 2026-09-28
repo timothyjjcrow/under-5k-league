@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHIP_BAR_FADE_PX,
+  aboveAllSections,
   chipBarEdges,
   chipBarMask,
   revealChipScrollLeft,
@@ -123,5 +124,29 @@ describe("revealChipScrollLeft", () => {
         scrollLeft: 50,
       }),
     ).toBe(50 + 300 - CHIP_BAR_FADE_PX);
+  });
+});
+
+describe("aboveAllSections", () => {
+  it("clears the highlight back at the top, where the first section starts below the band", () => {
+    // 844px phone: the band ends at 380px; the first section starts at 620px.
+    expect(
+      aboveAllSections({ anyInBand: false, sectionTops: [620, 1400, 2300], viewportHeight: 844 }),
+    ).toBe(true);
+  });
+
+  it("keeps it while any section crosses the band", () => {
+    expect(
+      aboveAllSections({ anyInBand: true, sectionTops: [620, 1400], viewportHeight: 844 }),
+    ).toBe(false);
+  });
+
+  it("keeps the last section lit below the final one, and with no sections at all", () => {
+    // Scrolled past every section (a footer in the band): the first top is
+    // far above the viewport, so this is not "above every section".
+    expect(
+      aboveAllSections({ anyInBand: false, sectionTops: [-3000, -1200], viewportHeight: 844 }),
+    ).toBe(false);
+    expect(aboveAllSections({ anyInBand: false, sectionTops: [], viewportHeight: 844 })).toBe(false);
   });
 });

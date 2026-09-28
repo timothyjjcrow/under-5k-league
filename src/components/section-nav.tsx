@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  SECTION_BAND_BOTTOM,
+  aboveAllSections,
   chipBarEdges,
   chipBarMask,
   revealChipScrollLeft,
@@ -126,7 +128,14 @@ export function SectionNav({
   // page. This scrolls the bar sideways only, never the page.
   useEffect(() => {
     const list = listRef.current;
-    if (!list || !active || list.scrollWidth <= list.clientWidth) return;
+    if (!list || list.scrollWidth <= list.clientWidth) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+    // Back above every section: return the bar to its first chip too.
+    if (!active) {
+      if (list.scrollLeft > 0)
+        list.scrollTo({ left: 0, behavior: reduce.matches ? "auto" : "smooth" });
+      return;
+    }
     const chip = [...list.querySelectorAll<HTMLAnchorElement>("a")].find(
       (link) => link.getAttribute("href") === `#${active}`,
     );
@@ -137,7 +146,6 @@ export function SectionNav({
       scrollLeft: list.scrollLeft,
     });
     if (left === null) return;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     list.scrollTo({ left, behavior: reduce.matches ? "auto" : "smooth" });
   }, [active]);
   useEffect(() => {
@@ -157,12 +165,34 @@ export function SectionNav({
         setActive(id);
       }
     };
+    const inBand = new Set<string>();
     const observer = new IntersectionObserver(
       (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) inBand.add(entry.target.id);
+          else inBand.delete(entry.target.id);
+        }
         const visible = entries.filter((entry) => entry.isIntersecting);
-        if (visible[0]) setActive(visible[0].target.id);
+        if (visible[0]) {
+          setActive(visible[0].target.id);
+          return;
+        }
+        const sectionTops = items.flatMap(({ id }) => {
+          const target = document.getElementById(id);
+          return target ? [target.getBoundingClientRect().top] : [];
+        });
+        if (
+          aboveAllSections({
+            anyInBand: inBand.size > 0,
+            sectionTops,
+            viewportHeight: window.innerHeight,
+          })
+        )
+          setActive("");
       },
-      { rootMargin: "-145px 0px -55% 0px" },
+      {
+        rootMargin: `-145px 0px -${Math.round((1 - SECTION_BAND_BOTTOM) * 100)}% 0px`,
+      },
     );
     const observeSections = () => {
       items.forEach(({ id }) => {
