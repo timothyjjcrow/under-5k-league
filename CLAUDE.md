@@ -2209,11 +2209,15 @@ in the lower-left — the single worst thing on the site, and invisible in code
 review because both halves are individually correct. Two replacements, both in
 `src/app/page.tsx`, and neither is optional decoration:
 
-- **A band whose card count is KNOWN** gets an explicit grid whose spans adapt:
-  Standings is `lg:col-span-2` when a "Your team" card sits beside it and
-  `lg:col-span-3` when the viewer has none. The `COMPLETE` view's twin split
-  instead uses `items-start`, because there the short card genuinely should not
-  stretch.
+- **A band whose card count is KNOWN** gets an explicit grid whose spans adapt.
+  The same trap applies to a short card beside a tall one: the standings used
+  to share their band with the "Your team" stakes card, a third of the table's
+  height, which left a ~350×260px hole under it. The table now takes the full
+  width and the card joins the auto-fit band below (like the playoffs' team
+  card), and it stands down entirely when its series is on the This-week slate,
+  whose team row already prints the same Win/Draw/Loss block
+  (`dashboard-guards.test.ts`). The `COMPLETE` view's twin split instead uses
+  `items-start`, because there the short card genuinely should not stretch.
 - **A band whose card count is UNKNOWN at render time** (a card that renders
   `null` until the league has games; Upcoming and Recent each vanish at the ends
   of a season) uses auto-fit:
@@ -2968,10 +2972,11 @@ ask it made twice. What that turned into:
   `matchNightRoster` in `availability.ts` — /schedule uses the same helper),
   and a compact `PlayoffOutlook` for each side whose `nextMatchId` is this
   fixture (win/draw/loss paths only ever describe a team's next match).
-- **Your team** card: rank/record/points tiles (Record rendered a size down —
-  W–L–D wraps at Stat's text-3xl in the narrow column), form strip, stake
-  one-liner, next-up tile aligned to the ENGINE's nextMatchId so the "next
-  series" guarantee and the tile never point at different matches.
+- **Your team** card: the playoff stakes of the viewer's next series, aligned
+  to the ENGINE's nextMatchId so the "next series" guarantee and the fixture
+  it names never point at different matches (their rank and record are
+  already highlighted in the table). Shown only when This week doesn't
+  already print that series, in the auto-fit band under the standings.
 - **Weekly honors line** (`WeeklyHonorsLine`, replaced League pulse): one
   open line once a week's honors are official — "Week 4 honors · Player of
   the week: X (best game …) · Team of the week: Y · All honors" — from the

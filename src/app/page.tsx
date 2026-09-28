@@ -485,19 +485,6 @@ export default async function Home() {
       ])
     : [[] as Match[], 0];
   const championPresentation = resolveChampionPresentation(season, matches);
-  // Whether SeasonView will draw the viewer's stakes card, so its skeleton
-  // reserves the card only when it comes: a regular-season viewer on a team
-  // still in the race (not withdrawn, in a field of two or more) once the
-  // first regular-season result is final (playoffOutlookShown).
-  const viewerTeam = user
-    ? snapshot.teams.find((t) => t.members.some((m) => m.userId === user.id))
-    : undefined;
-  const stakeCardExpected =
-    season.status === "REGULAR_SEASON" &&
-    !!viewerTeam &&
-    !viewerTeam.withdrawn &&
-    snapshot.teams.filter((t) => !t.withdrawn).length >= 2 &&
-    playoffOutlookShown(matches);
   // Until this season crowns someone, Home keeps naming the last champion.
   // Signups and the draft only: from the regular season on, the dashboard is
   // about this season's race.
@@ -754,14 +741,7 @@ export default async function Home() {
           {/* MyNextMatch is NOT rendered here any more — it lives in the hero's
               control slot, which is the whole point: the RSVP a captain depends
               on used to be the lowest-contrast strip on the page. */}
-          <Suspense
-            fallback={
-              <SeasonViewSkeleton
-                playoffs={season.status === "PLAYOFFS"}
-                stakeCard={stakeCardExpected}
-              />
-            }
-          >
+          <Suspense fallback={<SeasonViewSkeleton />}>
             <SeasonView
               snapshot={snapshot}
               userId={user?.id}
@@ -808,40 +788,14 @@ export default async function Home() {
 }
 
 // Fallback for the mid-season dashboard. It MUST mirror the real bands — This
-// week, then the standings (beside the viewer's stakes card, when SeasonView
-// draws one) or in the playoffs the bracket, the Coming up / Recent results
-// pair, then the side games — or the page paints one layout and then visibly
-// rearranges into another.
-function SeasonViewSkeleton({
-  playoffs,
-  stakeCard,
-}: {
-  playoffs: boolean;
-  /** SeasonView will draw the viewer's stakes card beside the standings. */
-  stakeCard: boolean;
-}) {
+// week, then the full-width standings (in the playoffs, the bracket), the
+// team / Coming up / Recent results band, then the side games — or the page
+// paints one layout and then visibly rearranges into another.
+function SeasonViewSkeleton() {
   return (
     <div className="space-y-6">
       <CardSkeleton rows={4} />
-      {playoffs ? (
-        <CardSkeleton rows={6} />
-      ) : (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div
-            className={cn(
-              "min-w-0",
-              stakeCard ? "lg:col-span-2" : "lg:col-span-3",
-            )}
-          >
-            <CardSkeleton rows={6} />
-          </div>
-          {stakeCard ? (
-            <div className="order-first min-w-0 lg:order-none">
-              <CardSkeleton rows={3} />
-            </div>
-          ) : null}
-        </div>
-      )}
+      <CardSkeleton rows={6} />
       <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
         {Array.from({ length: 2 }).map((_, i) => (
           <CardSkeleton key={i} rows={3} className="min-w-0" />
@@ -2636,13 +2590,19 @@ async function SeasonView({
   );
 
   // The viewer's own team card. Mid-season it carries only what the table
-  // beside it can't: the playoff stakes of the next series (their row is
-  // already highlighted there with rank, points and W/D/L). No stakes yet
-  // (before the first final series) means no card, and the table takes the
-  // band. In the playoffs the table is gone and the card says where the team
-  // stands in the bracket instead.
+  // can't: the playoff stakes of the next series (their row is already
+  // highlighted there with rank, points and W/D/L). No stakes yet (before the
+  // first final series) means no card. Nor when that series is on the
+  // This-week slate: its team rows already print this exact Win/Draw/Loss
+  // block, and a fixture is shown once per job. What's left is a bye week or
+  // a team that has finished playing, so the card joins the auto-fit band
+  // below the table (like the playoffs' team card) instead of standing beside
+  // a table twice its height. In the playoffs the table is gone and the card
+  // says where the team stands in the bracket instead.
+  const myStakesOnSlate =
+    !!myScenario?.nextMatchId && slateIds.has(myScenario.nextMatchId);
   const myStakeCard =
-    myTeam && myScenario && myStakeLine ? (
+    myTeam && myScenario && myStakeLine && !myStakesOnSlate ? (
       <Card tone="feature">
         <CardHeader headingLevel={2} title="Your team" subtitle={myTeam.name} />
         <CardBody className="space-y-3">
@@ -2793,78 +2753,65 @@ async function SeasonView({
           </CardBody>
         </Card>
       ) : (
-        /* THE DASHBOARD BAND. The table and the viewer's stakes card, when
-           there is one; otherwise the table takes the whole band rather than
-           leaving a third of it empty. min-w-0 on every item: grid items
-           otherwise refuse to shrink below their content, letting a long
-           team name widen the page on mobile. */
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div
-            className={cn(
-              "min-w-0",
-              myStakeCard ? "lg:col-span-2" : "lg:col-span-3",
-            )}
-          >
-            <Card>
-              <CardHeader
-                headingLevel={2}
-                title="Standings"
-                action={
-                  <Link
-                    href="/schedule#standings"
-                    className={textLink("text-sm")}
-                  >
-                    Full standings <LinkArrow />
-                  </Link>
+        /* THE DASHBOARD BAND: the table, full width. The viewer's stakes
+           card used to sit beside it, but it is a third of the table's height,
+           which left a hole under it; it lives in the band below now. */
+        <div className="min-w-0">
+          <Card>
+            <CardHeader
+              headingLevel={2}
+              title="Standings"
+              action={
+                <Link
+                  href="/schedule#standings"
+                  className={textLink("text-sm")}
+                >
+                  Full standings <LinkArrow />
+                </Link>
+              }
+            />
+            <CardBody className="p-0">
+              <StandingsTable
+                standings={standings}
+                totalTeams={standings.length}
+                eligibleTeams={playoffField.eligibleTeamIds.length}
+                teamName={teamName}
+                teamLogoUrl={teamLogoUrl}
+                withdrawnIds={
+                  new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
                 }
+                formByTeam={teamForm}
+                playoffCut={playoffField.bracketSize}
+                playoffSeedByTeam={playoffField.seedByTeam}
+                unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
+                  playoffField,
+                  matches,
+                )}
+                clinch={clinchFromReport(report)}
+                playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
+                viewerTeamId={myTeam?.id}
+                movement={standingsMovement(
+                  teams.map((t) => t.id),
+                  matches,
+                )}
               />
-              <CardBody className="p-0">
-                <StandingsTable
-                  standings={standings}
-                  totalTeams={standings.length}
-                  eligibleTeams={playoffField.eligibleTeamIds.length}
-                  teamName={teamName}
-                  teamLogoUrl={teamLogoUrl}
-                  withdrawnIds={
-                    new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
-                  }
-                  formByTeam={teamForm}
-                  playoffCut={playoffField.bracketSize}
-                  playoffSeedByTeam={playoffField.seedByTeam}
-                  unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
-                    playoffField,
-                    matches,
-                  )}
-                  clinch={clinchFromReport(report)}
-                  playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
-                  viewerTeamId={myTeam?.id}
-                  movement={standingsMovement(
-                    teams.map((t) => t.id),
-                    matches,
-                  )}
-                />
-              </CardBody>
-            </Card>
-          </div>
-          {myStakeCard ? (
-            // order-first on phones: the viewer's stakes sit above the table.
-            <div className="order-first min-w-0 lg:order-none">
-              {myStakeCard}
-            </div>
-          ) : null}
+            </CardBody>
+          </Card>
         </div>
       )}
 
-      {/* In the playoffs, where the viewer's team stands in the bracket;
-          then what comes after this slate and what just finished: short plain
+      {/* The viewer's team card (in the playoffs, where it stands in the
+          bracket; mid-season, the stakes of a next series This week doesn't
+          show); then what comes after this slate and what just finished: short plain
           lists with a link to the rest. auto-fit, because any card can be
           missing (nothing left to play, nothing played yet), and items-start
           so the shorter card doesn't stretch into an empty box. There is no
           week-by-week results grid here: the table's form column and Recent
           results already say it, and Schedule keeps the full grid. */}
-      {myPlayoffCard || upcoming.length > 0 || recentResults.length > 0 ? (
+      {myPlayoffCard || myStakeCard || upcoming.length > 0 || recentResults.length > 0 ? (
         <div className="grid items-start gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
           {myPlayoffCard}
+          {myStakeCard ? <div className="min-w-0">{myStakeCard}</div> : null}
           {upcoming.length > 0 ? (
             <Card className="min-w-0 overflow-hidden">
               <CardHeader

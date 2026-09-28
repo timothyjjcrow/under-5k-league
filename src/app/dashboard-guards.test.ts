@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sourceFiles } from "../../test/support/source-files";
+import { sourceFile, sourceFiles, stripLineComments } from "../../test/support/source-files";
 
 // EVERY .tsx in the app — the guard's whole lesson is that the surface nobody
 // remembered is the one that regresses (/me and the draft waiting room shipped
@@ -55,5 +55,29 @@ describe("dashboard draft-night countdowns", () => {
       .filter((c) => !c.props.includes("passedLabel"))
       .map((c) => c.file);
     expect(missing).toEqual([]);
+  });
+});
+
+/**
+ * The viewer's "Your team" card prints the Win/Draw/Loss block for their next
+ * series. When that series is on the This-week slate, the slate's own team
+ * row already prints the identical block, so the card must stand down; and
+ * the card is far shorter than the standings, so it must not sit beside the
+ * table (that left a hole under it at desktop widths).
+ */
+describe("dashboard Your team card", () => {
+  const page = stripLineComments(sourceFile("src/app/page.tsx").text);
+  const card = page.slice(page.indexOf("const myStakeCard ="));
+
+  it("stands down when This week already shows its series", () => {
+    expect(page).toMatch(/myStakesOnSlate\s*=\s*\n?\s*!!myScenario\?\.nextMatchId && slateIds\.has\(myScenario\.nextMatchId\)/);
+    expect(card.slice(0, card.indexOf("?"))).toContain("!myStakesOnSlate");
+  });
+
+  it("joins the auto-fit band instead of sitting beside the standings", () => {
+    expect(page).not.toMatch(/myStakeCard \? "lg:col-span-2"/);
+    const band = page.slice(page.indexOf("{myPlayoffCard || myStakeCard"));
+    expect(band.slice(0, 400)).toContain("repeat(auto-fit,");
+    expect(band.slice(0, 600)).toContain("{myStakeCard ?");
   });
 });
