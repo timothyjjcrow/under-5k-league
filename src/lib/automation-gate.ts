@@ -32,11 +32,15 @@ import {
   championAnnouncedKey,
   draftReminderKey,
   honorsAnnouncedKey,
+  PLAYOFF_ROUND_ANNOUNCED_PREFIX,
   RESULT_ANNOUNCED_PREFIX,
   resultAnnouncedKey,
+  resultNudgeKey,
   SETTING_KEYS,
   weekReminderKey,
 } from "./settings";
+import { matchResultsOpen } from "./league-lifecycle";
+import { resultNudgeDueAt, type NudgeFixture } from "./result-nudge";
 import {
   AUTOMATION_GATE_CACHE_KEY,
   AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -114,6 +118,10 @@ export type AutomationGateMatch = {
   winnerTeamId: string | null;
   homeTeamId: string;
   awayTeamId: string;
+  /** Keys the result nudge's once-per-kickoff marker. */
+  scheduleRevision: number;
+  /** Imported games; the loader fills them for unfinished fixtures only. */
+  games: NudgeFixture["games"];
 };
 
 export type AutomationGateSeason = {
@@ -180,7 +188,10 @@ export type AutomationGateInputs = {
    * timestamps are present. Other deadlines are application-owned.
    */
   outboxClock: { databaseNowMs: number; appNowMs: number };
-  /** Recoverable result/champion markers are global, including orphan rows. */
+  /**
+   * Recoverable result/champion/playoff-round markers are global, including
+   * orphan rows.
+   */
   globalAnnouncementMarkers: Array<{ key: string; value: string }>;
   /** Result of a fresh canonical board digest probe on cache fills. */
   boardNeedsSync: boolean;
@@ -876,6 +887,45 @@ export function computeAutomationGateSnapshot(
     }
   }
 
+  // The "we couldn't find your games" nudge (maybeNudgeMissingResults): wake
+  // when a fixture falls due, then follow its per-kickoff marker. Same rules
+  // as the worker (resultNudgeDueAt is what resultNudgeReason is built on), so
+  // the gate never wakes it for a nudge it would refuse. A preview cannot post,
+  // so it is not woken to fail.
+  if (
+    season &&
+    inputs.leagueDeliveryAvailable &&
+    (season.status === SEASON_STATUS.REGULAR_SEASON ||
+      season.status === SEASON_STATUS.PLAYOFFS)
+  ) {
+    for (const match of season.matches) {
+      if (!matchResultsOpen(season.status, match.phase)) continue;
+      invariant(Array.isArray(match.games), "match games are missing");
+      for (const game of match.games) {
+        invariant(
+          Number.isSafeInteger(game.startTime) &&
+            Number.isSafeInteger(game.durationSecs),
+          "game timing is invalid",
+        );
+        dateMs(game.fetchedAt, "game.fetchedAt");
+      }
+      const dueAt = resultNudgeDueAt(match, nowMs);
+      if (dueAt === null) continue;
+      invariant(
+        Number.isSafeInteger(match.scheduleRevision) &&
+          match.scheduleRevision >= 0,
+        "match schedule revision is invalid",
+      );
+      const markerAt = genericMarkerWakeAt(
+        inputs.settings[resultNudgeKey(match.id, match.scheduleRevision)],
+        nowMs,
+      );
+      if (markerAt !== null) {
+        addCandidate(candidates, nowMs, Math.max(dueAt, markerAt), "REMINDER");
+      }
+    }
+  }
+
   if (season?.status === SEASON_STATUS.REGULAR_SEASON &&
       tiebreakerNeedsAdvancement(season.matches)) {
     addCandidate(candidates, nowMs, nowMs, "TIEBREAKER_REPAIR");
@@ -906,15 +956,18 @@ export function computeAutomationGateSnapshot(
   for (const marker of inputs.globalAnnouncementMarkers) {
     invariant(
       marker.key.startsWith(RESULT_ANNOUNCED_PREFIX) ||
-        marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX),
+        marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) ||
+        marker.key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX),
       "global announcement marker has an unknown key",
     );
-    // Champion recovery deliberately preserves its marker while Discord is
-    // unavailable so the winner can still be announced after configuration
-    // returns. Retrying before then cannot make progress; the webhook mutation
-    // invalidates this gate, and the hard wake covers runtime env changes.
+    // Champion and playoff-round recovery deliberately preserve their marker
+    // while Discord is unavailable so the post can still go out after
+    // configuration returns. Retrying before then cannot make progress; the
+    // webhook mutation invalidates this gate, and the hard wake covers runtime
+    // env changes.
     if (
-      marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) &&
+      (marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) ||
+        marker.key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX)) &&
       !inputs.leagueDeliveryAvailable
     ) {
       continue;
@@ -1090,6 +1143,12 @@ export async function loadAutomationGateSnapshot(
             winnerTeamId: true,
             homeTeamId: true,
             awayTeamId: true,
+            scheduleRevision: true,
+            // Only an unfinished fixture can still be nudged.
+            games: {
+              where: { match: { status: { not: MATCH_STATUS.COMPLETED } } },
+              select: { startTime: true, durationSecs: true, fetchedAt: true },
+            },
           },
         },
       },
@@ -1100,8 +1159,9 @@ export async function loadAutomationGateSnapshot(
   // Only these exact per-season markers can affect the calculator. Old
   // rescheduled kickoff markers and unrelated honors weeks are immutable
   // history, so fetching their entire prefixes grows work without changing
-  // any deadline. Global failed/claimed result and champion recovery remains
-  // below, including markers whose match or season was deleted.
+  // any deadline. Global failed/claimed result, champion and playoff-round
+  // recovery remains below, including markers whose match or season was
+  // deleted.
   const markerKeys = new Set<string>();
   if (season) {
     markerKeys.add(championAnnouncedKey(season.id));
@@ -1116,6 +1176,9 @@ export async function loadAutomationGateSnapshot(
         markerKeys.add(
           weekReminderKey(season.id, match.week, match.scheduledAt.getTime()),
         );
+      }
+      if (match.status !== MATCH_STATUS.COMPLETED && match.scheduledAt) {
+        markerKeys.add(resultNudgeKey(match.id, match.scheduleRevision));
       }
       if (match.phase === MATCH_PHASE.REGULAR) {
         markerKeys.add(honorsAnnouncedKey(season.id, match.week));
@@ -1160,6 +1223,14 @@ export async function loadAutomationGateSnapshot(
           },
           {
             key: { startsWith: CHAMPION_ANNOUNCED_PREFIX },
+            value: { startsWith: ANNOUNCEMENT_CLAIM_PREFIX },
+          },
+          {
+            key: { startsWith: PLAYOFF_ROUND_ANNOUNCED_PREFIX },
+            value: { startsWith: ANNOUNCE_FAILED_PREFIX },
+          },
+          {
+            key: { startsWith: PLAYOFF_ROUND_ANNOUNCED_PREFIX },
             value: { startsWith: ANNOUNCEMENT_CLAIM_PREFIX },
           },
         ],
@@ -1243,7 +1314,8 @@ export async function loadAutomationGateSnapshot(
   const globalAnnouncementMarkers = settingRows.filter(
     (row) =>
       (row.key.startsWith(RESULT_ANNOUNCED_PREFIX) ||
-        row.key.startsWith(CHAMPION_ANNOUNCED_PREFIX)) &&
+        row.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) ||
+        row.key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX)) &&
       (row.value.startsWith(ANNOUNCE_FAILED_PREFIX) ||
         row.value.startsWith(ANNOUNCEMENT_CLAIM_PREFIX)),
   );

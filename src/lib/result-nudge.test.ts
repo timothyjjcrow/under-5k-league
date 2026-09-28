@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { AUTO_SYNC, MATCH_STATUS } from "./constants";
-import { RESULT_NUDGE, resultNudgeReason, type NudgeFixture } from "./result-nudge";
+import {
+  RESULT_NUDGE,
+  resultNudgeDueAt,
+  resultNudgeReason,
+  type NudgeFixture,
+} from "./result-nudge";
 
 const HOUR = 3_600_000;
 const KICKOFF = Date.UTC(2026, 8, 20, 18, 0, 0);
@@ -91,5 +96,69 @@ describe("resultNudgeReason", () => {
     expect(RESULT_NUDGE.HOURS_AFTER_KICKOFF).toBeLessThan(
       AUTO_SYNC.WINDOW_HOURS,
     );
+  });
+});
+
+describe("resultNudgeDueAt — when the automation gate must wake for a nudge", () => {
+  it("names the kickoff floor for a fixture with no games", () => {
+    expect(resultNudgeDueAt(fixture(), KICKOFF)).toBe(
+      KICKOFF + RESULT_NUDGE.HOURS_AFTER_KICKOFF * HOUR,
+    );
+  });
+
+  it("names the stall time for a part-played series, never before the floor", () => {
+    const early = fixture({ status: MATCH_STATUS.LIVE, games: [game(0, 10)] });
+    expect(resultNudgeDueAt(early, KICKOFF)).toBe(
+      KICKOFF + RESULT_NUDGE.HOURS_AFTER_KICKOFF * HOUR,
+    );
+    const late = fixture({ status: MATCH_STATUS.LIVE, games: [game(2)] });
+    expect(resultNudgeDueAt(late, KICKOFF)).toBe(
+      KICKOFF +
+        2 * HOUR +
+        40 * 60_000 +
+        RESULT_NUDGE.HOURS_SINCE_LAST_GAME * HOUR,
+    );
+  });
+
+  it("is null once nothing can fall due before the import window closes", () => {
+    const end = KICKOFF + AUTO_SYNC.WINDOW_HOURS * HOUR;
+    expect(resultNudgeDueAt(fixture(), end + 1)).toBeNull();
+    const lastMinute = fixture({
+      status: MATCH_STATUS.LIVE,
+      games: [game(AUTO_SYNC.WINDOW_HOURS - 1)],
+    });
+    expect(resultNudgeDueAt(lastMinute, KICKOFF)).toBeNull();
+    expect(resultNudgeDueAt(fixture({ scheduledAt: null }), KICKOFF)).toBeNull();
+    expect(
+      resultNudgeDueAt(fixture({ status: MATCH_STATUS.COMPLETED }), KICKOFF),
+    ).toBeNull();
+  });
+
+  it("never disagrees with resultNudgeReason", () => {
+    // The gate sleeps until the due time; a nudge the worker would send
+    // earlier would be late, and a due time the worker would refuse would
+    // wake it every minute for nothing.
+    const cases = [
+      fixture(),
+      fixture({ status: MATCH_STATUS.LIVE, games: [game(0)] }),
+      fixture({ status: MATCH_STATUS.LIVE, games: [game(3), game(1)] }),
+      fixture({ status: MATCH_STATUS.LIVE, games: [game(46)] }),
+      fixture({
+        status: MATCH_STATUS.LIVE,
+        games: [{ startTime: 0, durationSecs: 0, fetchedAt: new Date(KICKOFF + 2 * HOUR) }],
+      }),
+    ];
+    for (const f of cases) {
+      for (let minute = -60; minute <= (AUTO_SYNC.WINDOW_HOURS + 1) * 60; minute += 7) {
+        const now = KICKOFF + minute * 60_000;
+        const dueAt = resultNudgeDueAt(f, now);
+        const due = dueAt !== null && now >= dueAt;
+        expect(resultNudgeReason(f, now) !== null).toBe(due);
+        if (dueAt !== null && dueAt > now) {
+          expect(resultNudgeReason(f, dueAt)).not.toBeNull();
+          expect(resultNudgeReason(f, dueAt - 1)).toBeNull();
+        }
+      }
+    }
   });
 });

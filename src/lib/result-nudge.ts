@@ -32,32 +32,30 @@ export type NudgeFixture = {
 };
 
 /**
- * Why this fixture's captains should be asked to report it, or null.
+ * When this fixture's captains become due a nudge, given the games imported
+ * so far: HOURS_AFTER_KICKOFF past kickoff with no games, or, for a
+ * part-played series, HOURS_SINCE_LAST_GAME after its newest game ended (and
+ * never before HOURS_AFTER_KICKOFF). Null when no nudge can fall due from
+ * `nowMs` on: the fixture is decided or unscheduled, or the automatic import's
+ * window (WINDOW_HOURS after kickoff) closes first. It stops looking then, and
+ * a fixture that old is an admin matter, not a nudge.
  *
- * "missing": no games at all, HOURS_AFTER_KICKOFF past kickoff.
- * "stalled": some games imported, but the series is still open and its
- * newest game ended HOURS_SINCE_LAST_GAME ago (a Bo3 stuck at 1-0).
- *
- * Only inside the automatic import's own window: past WINDOW_HOURS it has
- * stopped looking, and a fixture that old is an admin matter, not a nudge.
- * Unscheduled fixtures are never scanned, so they are never nudged either.
+ * The automation gate sleeps until this time, so it and resultNudgeReason
+ * must never disagree: the reason is defined from it.
  */
-export function resultNudgeReason(
+export function resultNudgeDueAt(
   fixture: NudgeFixture,
   nowMs: number,
-): "missing" | "stalled" | null {
+): number | null {
   if (!fixture.scheduledAt || fixture.status === MATCH_STATUS.COMPLETED) {
     return null;
   }
   const kickoffMs = fixture.scheduledAt.getTime();
-  if (
-    !Number.isFinite(kickoffMs) ||
-    nowMs < kickoffMs + RESULT_NUDGE.HOURS_AFTER_KICKOFF * HOUR_MS ||
-    nowMs > kickoffMs + AUTO_SYNC.WINDOW_HOURS * HOUR_MS
-  ) {
-    return null;
-  }
-  if (fixture.games.length === 0) return "missing";
+  if (!Number.isFinite(kickoffMs)) return null;
+  const closesAtMs = kickoffMs + AUTO_SYNC.WINDOW_HOURS * HOUR_MS;
+  if (nowMs > closesAtMs) return null;
+  const opensAtMs = kickoffMs + RESULT_NUDGE.HOURS_AFTER_KICKOFF * HOUR_MS;
+  if (fixture.games.length === 0) return opensAtMs;
   const lastEndedMs = Math.max(
     ...fixture.games.map((game) =>
       game.startTime > 0
@@ -65,7 +63,29 @@ export function resultNudgeReason(
         : game.fetchedAt.getTime(),
     ),
   );
-  return nowMs - lastEndedMs >= RESULT_NUDGE.HOURS_SINCE_LAST_GAME * HOUR_MS
-    ? "stalled"
-    : null;
+  const dueAtMs = Math.max(
+    opensAtMs,
+    lastEndedMs + RESULT_NUDGE.HOURS_SINCE_LAST_GAME * HOUR_MS,
+  );
+  // NaN (an unreadable game time) fails this comparison too: never due.
+  return dueAtMs <= closesAtMs ? dueAtMs : null;
+}
+
+/**
+ * Why this fixture's captains should be asked to report it, or null.
+ *
+ * "missing": no games at all, HOURS_AFTER_KICKOFF past kickoff.
+ * "stalled": some games imported, but the series is still open and its
+ * newest game ended HOURS_SINCE_LAST_GAME ago (a Bo3 stuck at 1-0).
+ *
+ * Only inside the automatic import's own window (see resultNudgeDueAt).
+ * Unscheduled fixtures are never scanned, so they are never nudged either.
+ */
+export function resultNudgeReason(
+  fixture: NudgeFixture,
+  nowMs: number,
+): "missing" | "stalled" | null {
+  const dueAtMs = resultNudgeDueAt(fixture, nowMs);
+  if (dueAtMs === null || nowMs < dueAtMs) return null;
+  return fixture.games.length === 0 ? "missing" : "stalled";
 }

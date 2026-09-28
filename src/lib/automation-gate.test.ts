@@ -63,10 +63,12 @@ import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidati
 import { announcementClaimValue } from "./announcement-marker";
 import { honorsClaimValue } from "./honors-service";
 import { AUTO_SYNC, DRAFT_REMINDER, INHOUSE, WEEK_REMINDER } from "./constants";
+import { RESULT_NUDGE } from "./result-nudge";
 import {
   draftReminderKey,
   honorsAnnouncedKey,
   resultAnnouncedKey,
+  resultNudgeKey,
   SETTING_KEYS,
   weekReminderKey,
 } from "./settings";
@@ -89,6 +91,8 @@ function match(
     winnerTeamId: null,
     homeTeamId: "home",
     awayTeamId: "away",
+    scheduleRevision: 0,
+    games: [],
     ...overrides,
   };
 }
@@ -153,7 +157,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 7,
+      version: 8,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -247,7 +251,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 7,
+      version: 8,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -1109,6 +1113,163 @@ describe("computeAutomationGateSnapshot", () => {
     });
   });
 
+  it("wakes for a failed playoff-round post, behind the retry throttle and only when Discord can take it", () => {
+    const marker = {
+      key: "playoffRoundAnnounced:season-1:2",
+      value: "failed:v2:11111111-1111-4111-8111-111111111111:1786910400000",
+    };
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({ globalAnnouncementMarkers: [marker] }),
+        NOW,
+      ),
+    ).toMatchObject({ nextWakeAtMs: Number.MAX_SAFE_INTEGER, reason: null });
+
+    const delivery = { leagueWebhookConfigured: true, leagueDeliveryAvailable: true };
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({ ...delivery, globalAnnouncementMarkers: [marker] }),
+        NOW,
+      ),
+    ).toMatchObject({ nextWakeAtMs: NOW, reason: "ANNOUNCEMENT_RETRY" });
+
+    // The worker retries it inside the throttled announcement sweep.
+    const throttled = computeAutomationGateSnapshot(
+      inputs({
+        ...delivery,
+        globalAnnouncementMarkers: [marker],
+        settings: {
+          [SETTING_KEYS.ANNOUNCE_RETRY_AT]: new Date(NOW - 60_000).toISOString(),
+        },
+      }),
+      NOW,
+    );
+    expect(throttled).toMatchObject({
+      nextWakeAtMs:
+        NOW - 60_000 + AUTO_SYNC.LEAGUE_INTERVAL_SECONDS * 1_000 + 1,
+      reason: "ANNOUNCEMENT_RETRY",
+    });
+
+    // A crashed worker's claim is retried once its lease runs out.
+    const claimed = computeAutomationGateSnapshot(
+      inputs({
+        ...delivery,
+        globalAnnouncementMarkers: [
+          {
+            key: marker.key,
+            value: announcementClaimValue(NOW, "11111111-1111-4111-8111-111111111111"),
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(claimed.reason).toBe("ANNOUNCEMENT_RETRY");
+    expect(claimed.nextWakeAtMs).toBeGreaterThan(NOW);
+  });
+
+  describe("the 'we couldn't find your games' nudge", () => {
+    const HOUR = 3_600_000;
+    // Kicked off 3.5h ago: the week reminder has closed, and the fixture's
+    // automatic scans are backed off for hours, so nothing else wakes the
+    // worker before the nudge falls due at kickoff + 4h.
+    const kickoff = NOW - 3.5 * HOUR;
+    const dueAt = kickoff + RESULT_NUDGE.HOURS_AFTER_KICKOFF * HOUR;
+    const fixture = (overrides: Partial<AutomationGateMatch> = {}) =>
+      match({
+        scheduledAt: new Date(kickoff),
+        autoSyncedAt: new Date(NOW - 60_000),
+        autoSyncAttempts: AUTO_SYNC.BACKOFF_DOUBLINGS,
+        ...overrides,
+      });
+    const snapshot = (
+      m: AutomationGateMatch,
+      options: {
+        status?: string;
+        settings?: Record<string, string>;
+        delivery?: boolean;
+        now?: number;
+      } = {},
+    ) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          seasons: [
+            season({ status: options.status ?? "REGULAR_SEASON", matches: [m] }),
+          ],
+          settings: options.settings ?? {},
+          leagueWebhookConfigured: options.delivery ?? true,
+          leagueDeliveryAvailable: options.delivery ?? true,
+        }),
+        options.now ?? NOW,
+      );
+
+    it("sleeps until a fixture with no games falls due", () => {
+      expect(snapshot(fixture())).toMatchObject({
+        nextWakeAtMs: dueAt,
+        reason: "REMINDER",
+      });
+      // Otherwise the worker would next look hours later.
+      const quiet = snapshot(fixture(), { delivery: false });
+      expect(quiet.reason).toBe("LEAGUE");
+      expect(quiet.nextWakeAtMs).toBeGreaterThan(dueAt + HOUR);
+    });
+
+    it("sleeps until a part-played series has stalled", () => {
+      const lastEnded = kickoff + 2 * HOUR;
+      const live = fixture({
+        status: "LIVE",
+        games: [
+          {
+            startTime: Math.floor((lastEnded - 40 * 60_000) / 1000),
+            durationSecs: 40 * 60,
+            fetchedAt: new Date(lastEnded + 60_000),
+          },
+        ],
+      });
+      expect(snapshot(live)).toMatchObject({
+        nextWakeAtMs: lastEnded + RESULT_NUDGE.HOURS_SINCE_LAST_GAME * HOUR,
+        reason: "REMINDER",
+      });
+    });
+
+    it("follows the fixture's marker for its current kickoff", () => {
+      const key = resultNudgeKey("match-1", 2);
+      const moved = fixture({ scheduleRevision: 2 });
+      expect(
+        snapshot(moved, { settings: { [key]: "sent:v2:event:message" } }).reason,
+      ).toBe("LEAGUE");
+      // A marker from an earlier kickoff says nothing about this one.
+      expect(
+        snapshot(moved, {
+          settings: { [resultNudgeKey("match-1", 1)]: "sent:v2:event:message" },
+        }),
+      ).toMatchObject({ nextWakeAtMs: dueAt, reason: "REMINDER" });
+      // A post that could not be queued is retried on the next pass.
+      expect(
+        snapshot(moved, {
+          now: dueAt + HOUR,
+          settings: {
+            [key]: "failed:v2:11111111-1111-4111-8111-111111111111:1",
+          },
+        }),
+      ).toMatchObject({ nextWakeAtMs: dueAt + HOUR, reason: "REMINDER" });
+    });
+
+    it("never wakes for a nudge the worker would refuse", () => {
+      const notReminder = (s: ReturnType<typeof snapshot>) =>
+        expect(s.reason).not.toBe("REMINDER");
+      notReminder(snapshot(fixture({ status: "COMPLETED", winnerTeamId: "home" })));
+      notReminder(snapshot(fixture({ scheduledAt: null })));
+      // A regular week left open once the playoffs start is not theirs.
+      notReminder(snapshot(fixture(), { status: "PLAYOFFS" }));
+      // Past the automatic import's window it is an admin matter.
+      notReminder(
+        snapshot(fixture(), {
+          now: kickoff + AUTO_SYNC.WINDOW_HOURS * HOUR + 1,
+        }),
+      );
+    });
+  });
+
   it("parks champion retries until Discord delivery is available", () => {
     const marker = {
       key: "championAnnounced:archived-season",
@@ -1331,7 +1492,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 7,
+      version: 8,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,
