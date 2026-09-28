@@ -649,12 +649,14 @@ function AdminSection({
     >
       <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
         <SectionReady />
+        {/* Set like CardHeader's title and subtitle, so a folded section and
+            an open card read as the same kind of heading. */}
         <div className="min-w-0">
-          <h3 className="font-display text-lg font-semibold text-fg [overflow-wrap:anywhere]">
+          <h3 className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
             {title}
           </h3>
           {subtitle ? (
-            <p className="mt-0.5 text-sm text-muted [overflow-wrap:anywhere]">
+            <p className="mt-1.5 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
               {subtitle}
             </p>
           ) : null}
@@ -922,7 +924,7 @@ function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
     <Card id="adm-attention" className="scroll-mt-40">
       <CardHeader
         headingLevel={2}
-        title={`${season.name} — needs attention`}
+        title={`${season.name} — ${attention.length ? "needs attention" : "nothing to review"}`}
         subtitle={`${PHASE_LABEL[season.status]} · Read-only match-night checklist. Open a match to review its current state.`}
       />
       <CardBody className="space-y-4">
@@ -1728,8 +1730,16 @@ function CaptainControls({
       />
       {/* grid-cols-1 is explicit on purpose (see the CLAUDE.md mobile rules):
           without it the implicit track is `auto`, so a long team or player
-          name sizes the column past the viewport and widens the whole page. */}
-      <CardBody className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          name sizes the column past the viewport and widens the whole page.
+          Once setup is closed and everyone is drafted, the second column is
+          one "no signups" line; beside the captain list it was a large empty
+          block, so the card stacks instead. */}
+      <CardBody
+        className={cn(
+          "grid grid-cols-1 gap-6",
+          (setupOpen || nonCaptains.length > 0) && "md:grid-cols-2",
+        )}
+      >
         {setupOpen ? (
           <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 md:col-span-2">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -3478,7 +3488,11 @@ function PlayoffControls({
             Reset playoffs is unavailable: {resetPlayoffsLockedReason}
           </div>
         ) : null}
-        {playoffMatches.length === 0 && startPlayoffsLockedReason ? (
+        {/* Outstanding results get the red line below, which also names the
+            weeks; repeating them here said the same thing twice. */}
+        {playoffMatches.length === 0 &&
+        startPlayoffsLockedReason &&
+        !(season.status === SEASON_STATUS.REGULAR_SEASON && status.pending > 0) ? (
           <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs text-muted">
             Start playoffs is unavailable: {startPlayoffsLockedReason}
           </div>
@@ -3487,7 +3501,8 @@ function PlayoffControls({
           <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
             ⚠ {status.pending} regular-season result
             {status.pending === 1 ? "" : "s"} still needed — the playoffs are
-            locked until every match is entered (weeks{" "}
+            locked until every match is entered (week
+            {status.pendingWeeks.length === 1 ? "" : "s"}{" "}
             {status.pendingWeeks.join(", ")}).
           </div>
         ) : null}
@@ -5945,24 +5960,27 @@ async function AdminNews({
   return (
     <div className="space-y-3">
       <NewsControls posts={results.slice(0, 20)} />
-      <nav aria-label="Admin news pages" className="flex gap-3 text-sm">
-        {page > 1 ? (
-          <Link
-            href={`/admin?newsPage=${page - 1}#adm-news`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            ← Newer posts
-          </Link>
-        ) : null}
-        {results.length > 20 ? (
-          <Link
-            href={`/admin?newsPage=${page + 1}#adm-news`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Older posts →
-          </Link>
-        ) : null}
-      </nav>
+      {/* Only with somewhere to go: an empty nav still took space-y's gap. */}
+      {page > 1 || results.length > 20 ? (
+        <nav aria-label="Admin news pages" className="flex gap-3 text-sm">
+          {page > 1 ? (
+            <Link
+              href={`/admin?newsPage=${page - 1}#adm-news`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              ← Newer posts
+            </Link>
+          ) : null}
+          {results.length > 20 ? (
+            <Link
+              href={`/admin?newsPage=${page + 1}#adm-news`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Older posts →
+            </Link>
+          ) : null}
+        </nav>
+      ) : null}
     </div>
   );
 }
