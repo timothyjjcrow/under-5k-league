@@ -206,7 +206,7 @@ describe("match page admin tools", () => {
 
   it("renders for admins on the active season, above the games", () => {
     expect(PAGE).toMatch(
-      /viewer\?\.role === "ADMIN" && match\.season\.isActive \? \(\s*<AdminMatchTools match=\{match\}/,
+      /viewer\?\.role === "ADMIN" && match\.season\.isActive \? \(\s*<AdminMatchTools\s+match=\{match\}/,
     );
     expect(PAGE.indexOf("<AdminMatchTools")).toBeGreaterThan(-1);
     expect(PAGE.indexOf("<AdminMatchTools")).toBeLessThan(
@@ -233,6 +233,18 @@ describe("match page admin tools", () => {
     // The same standin pool on both pages.
     expect(TOOLS).toContain("where: adminStandinPoolWhere(match.seasonId),");
     expect(ADMIN).toContain("where: adminStandinPoolWhere(seasonId),");
+  });
+
+  it("never repeats the captain's import form for an admin who captains", () => {
+    // Two "Auto-fetch games" / "Add game" forms on one page break the
+    // one-control-one-name rule; the admin card points at Captain tools.
+    expect(PAGE).toMatch(
+      /<AdminMatchTools\s+match=\{match\}[\s\S]*?viewerHasCaptainTools=\{showCaptainTools\}/,
+    );
+    expect(TOOLS).toContain("captainImportOnPage={viewerHasCaptainTools}");
+    expect(TOOLS).toMatch(
+      /captainImportOnPage \? \([\s\S]*?href=\{`#\$\{MATCH_ANCHOR\.report\}`\}[\s\S]*?\) : resultCorrectionOpen && m\.status !== MATCH_STATUS\.COMPLETED \? \(\s*<MatchImportControls/,
+    );
   });
 
   it("locks a live series' standin instead of offering a remove that fails", () => {

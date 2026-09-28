@@ -20,8 +20,9 @@ export function MatchImportControls({
   matchId: string;
   importAction: ImportFormAction;
   detectAction: ImportFormAction;
-  /** Keeps ids unique when a page shows two of these for one match (an
-   *  admin who captains it sees their captain card and Admin tools). */
+  /** Keeps ids unique if a page ever shows two of these for one match. The
+   *  match page's Admin tools pass "admin-"; for an admin who captains the
+   *  match they point at Captain tools instead of rendering a second copy. */
   idPrefix?: string;
 }) {
   const inputId = `${idPrefix}dota-match-ref-${matchId}`;

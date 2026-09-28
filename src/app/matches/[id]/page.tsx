@@ -596,7 +596,11 @@ export default async function MatchDetailPage({
           /admin's Needs attention items land on it (#match-admin), which
           opens it. Captains' own tools stay as they are below. */}
       {viewer?.role === "ADMIN" && match.season.isActive ? (
-        <AdminMatchTools match={match} label={postseasonLabel} />
+        <AdminMatchTools
+          match={match}
+          label={postseasonLabel}
+          viewerHasCaptainTools={showCaptainTools}
+        />
       ) : null}
 
       {/* A jump bar earns its space only with three places to go; with one

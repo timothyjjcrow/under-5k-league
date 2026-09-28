@@ -135,6 +135,7 @@ export function MatchResultRow({
   isSoleLatestPlayoffSeries,
   id,
   idPrefix = "",
+  captainImportOnPage = false,
 }: {
   m: AdminResultRowMatch;
   teams: { id: string; name: string }[];
@@ -150,6 +151,10 @@ export function MatchResultRow({
   /** Prefixes the row's input ids where another copy of a control may share
    *  the page (the match page's captain card for an admin who captains). */
   idPrefix?: string;
+  /** The viewer captains this match and the page already shows their own
+   *  Auto-fetch games / Add game in Captain tools: point there instead of a
+   *  second, identically named form (one control, one name). */
+  captainImportOnPage?: boolean;
 }) {
   const home = teams.find((t) => t.id === m.homeTeamId);
   const away = teams.find((t) => t.id === m.awayTeamId);
@@ -456,7 +461,18 @@ export function MatchResultRow({
         </ul>
       ) : null}
 
-      {resultCorrectionOpen && m.status !== MATCH_STATUS.COMPLETED ? (
+      {resultCorrectionOpen &&
+      m.status !== MATCH_STATUS.COMPLETED &&
+      captainImportOnPage ? (
+        <p className="text-xs text-muted">
+          You captain this match, so add its games in{" "}
+          <a href={`#${MATCH_ANCHOR.report}`} className={textLink()}>
+            Captain tools
+          </a>{" "}
+          below. The admin import, which skips the captain checks, is in the
+          admin panel.
+        </p>
+      ) : resultCorrectionOpen && m.status !== MATCH_STATUS.COMPLETED ? (
         <MatchImportControls
           matchId={m.id}
           importAction={importGameAction}
@@ -702,6 +718,7 @@ export function StandinMatchBlock({
 export async function AdminMatchTools({
   match,
   label,
+  viewerHasCaptainTools = false,
 }: {
   match: AdminResultRowMatch & {
     seasonId: string;
@@ -711,6 +728,9 @@ export async function AdminMatchTools({
   };
   /** The fixture's round, e.g. "Week 3" or "Semifinal". */
   label: string;
+  /** The admin also captains this match and the page shows their Captain
+   *  tools, whose import form this card then points at instead of repeating. */
+  viewerHasCaptainTools?: boolean;
 }) {
   const [season, draft, fixtures, teams, pool, outRsvps, pending] =
     await Promise.all([
@@ -822,6 +842,7 @@ export async function AdminMatchTools({
             }
             isSoleLatestPlayoffSeries={correction.isSoleLatestPlayoffSeries}
             idPrefix="admin-"
+            captainImportOnPage={viewerHasCaptainTools}
             label={
               <span className="shrink-0 text-xs font-medium text-fg">
                 {label}

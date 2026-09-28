@@ -3232,7 +3232,12 @@ the later-round lock and the sole-final check, and `adminStandinPoolWhere`
 for the cover pool. Every /admin result row carries `adminMatchRowId` and
 `RevealHashTarget` opens its folded week, so the card's "Open this match in
 the admin panel" link lands on the row. Don't re-inline either component into
-/admin; `match-page-guards.test.ts` pins it.
+/admin; `match-page-guards.test.ts` pins it. An admin who CAPTAINS the match
+already has Auto-fetch games / Add game in Captain tools, so the card points
+there (`captainImportOnPage`) instead of a second identically named form;
+the admin import override stays one link away on /admin. `StandinMatchBlock`
+shows "Locked: series already started" instead of remove once a game is
+imported, as the captain's card does (removeStandinGuarded refuses it).
 
 ## The 2026-07-31 audit and what it changed (read before re-litigating any of it)
 
