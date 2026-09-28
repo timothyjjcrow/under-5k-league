@@ -84,6 +84,11 @@ function linkFor(page: NavPage, state: NavState): NavLink {
 
 const always = () => true;
 
+// A season is active (null is the league between seasons: a cancelled
+// season, or an admin reactivating an old one; a finished season rests in
+// Complete instead).
+const seasonActive = ({ phase }: Pick<NavState, "phase">) => phase !== null;
+
 const teamsExist = ({ phase }: NavState) =>
   phase === SEASON_STATUS.DRAFT ||
   phase === SEASON_STATUS.REGULAR_SEASON ||
@@ -162,7 +167,9 @@ export function fantasyListed(state: FantasyNavState): boolean {
  */
 const NAV_PAGES: readonly NavPage[] = [
   { href: "/", label: "Home", group: "season", visible: always },
-  { href: "/players", label: "Players", group: "season", visible: always },
+  // The active season's player pool. With no active season the page only
+  // says there is no pool, so the menus leave it out; its address still works.
+  { href: "/players", label: "Players", group: "season", visible: seasonActive },
   // Inhouse is a standalone pick-up mode: available season or not.
   {
     href: "/inhouse",
@@ -358,7 +365,8 @@ export type DockTab = NavLink & {
 /**
  * The phone tab bar and its one menu sheet. The bar holds three pages (Home,
  * the season's current focus, and the viewer's team or the player list) and
- * a last slot that opens the sheet. The sheet lists every OTHER primary page,
+ * a last slot that opens the sheet. Between seasons there is no player list,
+ * so it holds two. The sheet lists every OTHER primary page,
  * so no page is ever both a tab and a sheet entry; the Explore groups follow
  * it. Phones used to have a ☰ menu as well, which listed the same pages a
  * third time.
