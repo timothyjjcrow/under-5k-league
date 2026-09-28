@@ -198,8 +198,11 @@ Captain report, admin import, league feed and roster scan all end in
   so the admin "Automatic result sync" card (`AutoSyncHealth`,
   `src/app/admin/page.tsx`) shows each in-window match's last scan, empty-scan
   count and next check (pure `autoCheckStatus`/`autoCheckCopy`/
-  `nextRosterScanAt`, tested), the feed throttle, the cursor and the players
-  with private match data.
+  `nextRosterScanAt`, tested), the feed throttle, the cursor, how many feed
+  games the last pass set aside (`IGNORED` candidates with a
+  `NO_ELIGIBLE_FIXTURE*` reason, which only `syncLeagueGames` writes and every
+  pass reconsiders) and the players with private match data. Never count the
+  legacy skip Settings there: nothing writes them.
 - **Inhouse resolvers run here too.** `syncInhouse` runs them behind a cheap
   lobby/queue read, so a lobby whose ten players all closed /inhouse still
   advances and records its result (see `inhouse.md`).

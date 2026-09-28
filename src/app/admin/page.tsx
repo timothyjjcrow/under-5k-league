@@ -133,7 +133,6 @@ import {
   ANNOUNCE_FAILED_PREFIX,
   getSetting,
   HONORS_ANNOUNCED_PREFIX,
-  leagueSyncSkipKey,
   playoffGamesArchiveKey,
   tiebreakerGamesArchiveKey,
   SETTING_KEYS,
@@ -4961,7 +4960,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
   // for client components.
   // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
-  const [inWindow, leagueSyncAt, cursor, skipRaw, privatePlayers] =
+  const [inWindow, leagueSyncAt, cursor, setAside, privatePlayers] =
     await Promise.all([
       prisma.match.findMany({
         where: {
@@ -4980,7 +4979,19 @@ async function AutoSyncHealth({ season }: { season: Season }) {
       }),
       getSetting(SETTING_KEYS.LEAGUE_AUTO_SYNC_AT),
       getSetting(SETTING_KEYS.RESULT_CHANGED_AT),
-      getSetting(leagueSyncSkipKey(season.id)),
+      // League-feed games the last classification set aside: no fixture they
+      // fit, or an extra game past a decided series. Only syncLeagueGames
+      // records these reasons, and every pass reconsiders them. (The old
+      // leagueSyncSkip Setting is read-only legacy; nothing writes it.)
+      season.dotaLeagueId
+        ? prisma.importCandidate.count({
+            where: {
+              seasonId: season.id,
+              status: "IGNORED",
+              reason: { startsWith: "NO_ELIGIBLE_FIXTURE" },
+            },
+          })
+        : Promise.resolve(0),
       // WHO the roster scans can't see — OpenDota flagged their match data
       // private. This is the admin's only mid-season surface for it (the
       // signup-pool badge lives on a card that retires after the draft).
@@ -4995,13 +5006,6 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         orderBy: { name: "asc" },
       }),
     ]);
-  let skippedIds = 0;
-  try {
-    const parsed = JSON.parse(skipRaw ?? "[]");
-    if (Array.isArray(parsed)) skippedIds = parsed.length;
-  } catch {
-    // unreadable skip memory — just report 0
-  }
   const ts = (iso: string | null) => {
     const t = iso ? Date.parse(iso) : NaN;
     return Number.isFinite(t) ? t : null;
@@ -5115,7 +5119,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
               ) : (
                 "never"
               )}
-              {` · ${skippedIds} league game${skippedIds === 1 ? "" : "s"} skipped as not ours`}
+              {` · ${setAside} league game${setAside === 1 ? "" : "s"} set aside (no matching fixture, or an extra game)`}
             </>
           ) : null}
         </p>
