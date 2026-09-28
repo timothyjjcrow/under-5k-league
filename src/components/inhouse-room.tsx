@@ -1844,7 +1844,7 @@ function VoteView({
         />
         <MethodCard
           label="Highest MMR"
-          hint="Top 2 MMR captain"
+          hint="Two highest-MMR players"
           tally={vote.methodTallies.MMR}
           total={vote.voterCount}
           selected={myMethod === "MMR"}
@@ -2629,9 +2629,11 @@ function InProgressView({
             <ElapsedClock startedAtMs={lobby.startedAt} offsetMs={offset} />
           ) : null}
         </h2>
+        {/* Whoever pressed Start, which is not necessarily who hosts the
+            Dota lobby. */}
         {lobby.startedByName ? (
           <p className="mt-1 text-sm text-muted">
-            Hosted by {lobby.startedByName}
+            Started by {lobby.startedByName}
           </p>
         ) : null}
         {me.canRecord ? (

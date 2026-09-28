@@ -299,8 +299,12 @@ export async function callLobbyBot(
       const messages: Record<string, string> = {
         BUSY: "The bot is hosting another game. Try again after that game finishes or its captain releases the bot.",
         OFFLINE: "The bot is not connected to Dota yet. Try again shortly.",
+        // Inhouses have no match page and no stand-ins: the ten drafted
+        // players are the whole roster.
         ROSTER:
-          "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
+          key.kind === "inhouse"
+            ? "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start."
+            : "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
         SETTINGS:
           "Dota has not confirmed the required ticket and lobby settings. Ask an admin to check the bot's ticket permissions.",
         STATE:
