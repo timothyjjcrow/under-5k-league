@@ -122,7 +122,7 @@ describe("POST /api/draft/tick", () => {
       expect.objectContaining({ limit: 300 }),
       expect.any(Number),
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v8", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -285,7 +285,7 @@ describe("POST /api/draft/bid", () => {
       expect.any(Number),
     );
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v8", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -320,7 +320,7 @@ describe("POST /api/draft/bid", () => {
     expect(response.status).toBe(409);
     // placeBid can first resolve an expired lot before discovering that this
     // request lost the race, so a dispatched attempt always expires the gate.
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v8", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -363,7 +363,7 @@ describe("nomination routes", () => {
         nominationEndsAt: turn.nominationEndsAt,
       }),
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v8", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -422,7 +422,7 @@ describe("nomination routes", () => {
 
     expect(response.status).toBe(404);
     expect(mocks.nominatePlayer).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v8", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
