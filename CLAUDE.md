@@ -2323,9 +2323,11 @@ match (the tile is aligned to the scenario engine's `nextMatchId` so "win the
 next series" and the fixture beneath it cannot disagree), and it names the
 OPPONENT, not "us vs them", which was the third printing of the viewer's own
 team name on one card. Measured on the fixture: 14 links over 9 fixtures
-became 13 over 11 — strictly more of the league surfaced, in less space. The
-remaining 3 printings of the viewer's own match each do a different job
-(RSVP / the league's slate with both check-in counts / the stake anchor).
+became 13 over 11 — strictly more of the league surfaced, in less space. Once
+This week's team rows gained the same Win/Draw/Loss stakes block, the stake
+card became a second printing of it, so it now stands down whenever its series
+is on the slate. The remaining printings of the viewer's own match each do a
+different job (RSVP / the league's slate with both check-in counts and stakes).
 
 **Tap targets: size the PRIMITIVES, not the call sites.** A bare text link is
 exactly its line-height tall — 20px at `text-sm`, 16px at `text-xs` — and WCAG
