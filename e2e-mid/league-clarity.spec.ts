@@ -17,7 +17,7 @@ test("home and schedule agree on progress and show one standings table with game
       progress = `${await bar.getAttribute("aria-valuenow")} of ${await bar.getAttribute("aria-valuemax")} series played`;
     } else {
       // Schedule leads with the fixtures: the same count rides the subtitle
-      // instead of repeating the home page's progress ring.
+      // instead of repeating the home page's progress block.
       await expect(bar).toHaveCount(0);
       await expect(
         page.locator("h1 + p").filter({ hasText: progress! }),

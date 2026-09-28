@@ -1207,11 +1207,33 @@ function HeroActions({ children }: { children: ReactNode }) {
 // are purely visual (aria-hidden) with sr-only state text on each label.
 function SeasonTimeline({ phase }: { phase: string }) {
   const current = PHASE_ORDER.findIndex((p) => p === phase);
+  const next = current >= 0 ? PHASE_ORDER[current + 1] : undefined;
   return (
     // No frame of its own: it renders inside the hero's footer rail, which owns
     // the border and the background.
     <div>
-      <ol aria-label="Season progress" className="flex items-start">
+      {/* Phones show the current step only: five steps across 390px pushed
+          the page down for what the phase badge already says. The full list
+          stays for screen readers, so this line is hidden from them. */}
+      {current >= 0 ? (
+        <p
+          aria-hidden
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden"
+        >
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-accent bg-accent/15 text-[11px] font-semibold text-accent">
+            {current + 1}
+          </span>
+          <span className="font-medium text-fg">{PHASE_STEP[phase]}</span>
+          <span className="text-muted">
+            Step {current + 1} of {PHASE_ORDER.length}
+            {next ? ` · Next: ${PHASE_STEP[next]}` : ""}
+          </span>
+        </p>
+      ) : null}
+      <ol
+        aria-label="Season progress"
+        className={cn("flex items-start", current >= 0 && "max-sm:sr-only")}
+      >
         {PHASE_ORDER.map((p, i) => {
           const done = current >= 0 && i < current;
           const isCurrent = i === current;

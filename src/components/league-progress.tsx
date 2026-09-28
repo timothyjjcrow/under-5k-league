@@ -2,35 +2,15 @@ import type { leagueProgress } from "@/lib/league-progress";
 
 type Progress = ReturnType<typeof leagueProgress>;
 
-/** Aggregate counts, not an implied order of individual fixtures. */
-function progressSegments(progress: Progress) {
-  const groups = [
-    { count: progress.completed, color: "text-cyan-300" },
-    { count: progress.live, color: "text-danger" },
-    { count: progress.awaiting.length, color: "text-accent" },
-    { count: progress.untimed, color: "text-violet-300" },
-    { count: progress.scheduled, color: "text-slate-500" },
-  ];
-  let offset = 0;
-  // One notch per series keeps ordinary league schedules easy to read. For a
-  // large archive, proportional arcs avoid hundreds of nearly invisible nodes.
-  const individual = progress.total <= 60;
-  return groups.flatMap(({ count, color }) => {
-    if (!count) return [];
-    const length = (100 * (individual ? 1 : count)) / progress.total;
-    return Array.from({ length: individual ? count : 1 }, () => {
-      const segment = { offset, length, color };
-      offset += length;
-      return segment;
-    });
-  });
-}
-
+/**
+ * The regular season's one progress indicator on Home: "Week 5 of 6", how
+ * many series are final, and a bar per week that fills as its results come
+ * in. It used to sit beside a percentage ring saying the same thing, under a
+ * "Regular season" label the hero's phase badge already shows.
+ */
 export function RegularSeasonProgress({ progress }: { progress: Progress }) {
   if (!progress.total) return null;
   const complete = progress.completed === progress.total;
-  const percent = Math.floor((progress.completed / progress.total) * 100);
-  const segments = progressSegments(progress);
   const heading =
     progress.focusWeek != null
       ? `Week ${progress.focusWeek} of ${progress.totalWeeks} weeks`
@@ -38,178 +18,98 @@ export function RegularSeasonProgress({ progress }: { progress: Progress }) {
         ? "Regular-season results are complete"
         : "Waiting for remaining results";
   const states = [
-    {
-      count: progress.live,
-      label: "Live",
-      color: "bg-danger",
-      text: "text-danger",
-    },
-    {
-      count: progress.scheduled,
-      label: "Scheduled",
-      color: "bg-slate-500",
-      text: "text-fg",
-    },
-    {
-      count: progress.untimed,
-      label: "Time TBC",
-      color: "bg-violet-300",
-      text: "text-violet-300",
-    },
-    {
-      count: progress.awaiting.length,
-      label: "Overdue",
-      color: "bg-accent",
-      text: "text-accent",
-    },
+    { count: progress.live, label: "Live", text: "text-danger" },
+    { count: progress.scheduled, label: "Scheduled", text: "text-fg" },
+    { count: progress.untimed, label: "Time TBC", text: "text-violet-300" },
+    { count: progress.awaiting.length, label: "Overdue", text: "text-accent" },
   ].filter((state) => state.count > 0);
 
   return (
-    <div
-      className="w-full min-w-0 text-left"
-      aria-label="Regular season progress"
-    >
-      <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-4 sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:gap-5">
-        <div
-          role="progressbar"
-          aria-label="Regular-season series complete"
-          aria-valuemin={0}
-          aria-valuemax={progress.total}
-          aria-valuenow={progress.completed}
-          aria-valuetext={`${progress.completed} of ${progress.total} series complete`}
-          className="relative aspect-square"
-        >
-          <svg
-            viewBox="0 0 120 120"
-            className="h-full w-full -rotate-90"
-            aria-hidden="true"
-          >
-            <circle
-              cx="60"
-              cy="60"
-              r="39"
-              fill="none"
-              className="stroke-line/60"
-              strokeWidth="0.5"
-            />
-            {segments.map((segment, index) => {
-              const gap = Math.min(1.15, segment.length * 0.22);
-              return (
-                <circle
-                  key={index}
-                  cx="60"
-                  cy="60"
-                  r="51"
-                  fill="none"
-                  pathLength="100"
-                  stroke="currentColor"
-                  strokeWidth="8"
-                  strokeDasharray={`${segment.length - gap} ${100 - segment.length + gap}`}
-                  strokeDashoffset={-segment.offset - gap / 2}
-                  className={segment.color}
-                />
-              );
-            })}
-          </svg>
-          <div
-            className="absolute inset-0 flex flex-col items-center justify-center"
-            aria-hidden="true"
-          >
-            <span className="font-display text-3xl font-semibold leading-none tabular-nums tracking-tight text-fg sm:text-4xl">
-              {percent}
-              <span className="ml-0.5 text-base font-normal text-muted sm:text-lg">
-                %
-              </span>
+    <div className="w-full min-w-0 text-left">
+      <p
+        className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-fg"
+        aria-label={heading}
+      >
+        {progress.focusWeek != null ? (
+          <>
+            <span className="font-display text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">
+              Week {progress.focusWeek}{" "}
             </span>
-            <span className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300">
-              Complete
+            <span className="text-xs text-muted">
+              of {progress.totalWeeks} weeks
             </span>
-          </div>
-        </div>
-
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
-            Regular season
-          </p>
-          <p
-            className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-fg"
-            aria-label={heading}
-          >
-            {progress.focusWeek != null ? (
-              <>
-                <span className="font-display text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">
-                  Week {progress.focusWeek}{" "}
-                </span>
-                <span className="text-xs text-muted">
-                  of {progress.totalWeeks} weeks
-                </span>
-              </>
-            ) : (
-              <span className="font-display text-2xl font-semibold leading-tight sm:text-3xl">
-                {complete ? "Results complete" : "Results pending"}
-              </span>
-            )}
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            <span className="font-semibold tabular-nums text-fg">
-              {progress.completed}
-            </span>
-            <span className="mx-1 text-muted/70">/</span>
-            <span className="tabular-nums">{progress.total}</span> series final
-          </p>
-          {progress.tiebreakerTotal > 0 ? (
-            <p className="mt-2 text-xs text-accent">
-              {progress.tiebreakerPending > 0
-                ? `Tiebreaker week${progress.tiebreakerFocusWeek != null ? ` ${progress.tiebreakerFocusWeek}` : ""} in progress · See the full tiebreaker bracket for remaining games`
-                : `${progress.tiebreakerCompleted} tiebreaker series complete`}
-            </p>
-          ) : null}
-          {states.length > 0 ? (
-            <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-2 text-xs">
-              {states.map((state) => (
-                <li
-                  key={state.label}
-                  className="flex items-center gap-1.5 whitespace-nowrap"
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`h-1.5 w-1.5 rounded-full ${state.color}`}
-                  />
-                  <span className={`font-semibold tabular-nums ${state.text}`}>
-                    {state.count}
-                  </span>
-                  <span className="text-muted">{state.label}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      </div>
+          </>
+        ) : (
+          <span className="font-display text-2xl font-semibold leading-tight sm:text-3xl">
+            {complete ? "Results complete" : "Results pending"}
+          </span>
+        )}
+      </p>
+      {/* The count is the progress value: the week bars below draw it. */}
+      <p
+        role="progressbar"
+        aria-label="Regular-season series complete"
+        aria-valuemin={0}
+        aria-valuemax={progress.total}
+        aria-valuenow={progress.completed}
+        aria-valuetext={`${progress.completed} of ${progress.total} series complete`}
+        className="mt-1 text-xs text-muted"
+      >
+        <span className="font-semibold tabular-nums text-fg">
+          {progress.completed}
+        </span>
+        <span className="mx-1 text-muted/70">/</span>
+        <span className="tabular-nums">{progress.total}</span> series final
+      </p>
+      {progress.tiebreakerTotal > 0 ? (
+        <p className="mt-2 text-xs text-accent">
+          {progress.tiebreakerPending > 0
+            ? `Tiebreaker week${progress.tiebreakerFocusWeek != null ? ` ${progress.tiebreakerFocusWeek}` : ""} in progress · See the full tiebreaker bracket for remaining games`
+            : `${progress.tiebreakerCompleted} tiebreaker series complete`}
+        </p>
+      ) : null}
+      {states.length > 0 ? (
+        <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+          {states.map((state) => (
+            <li key={state.label} className="whitespace-nowrap">
+              <span className={`font-semibold tabular-nums ${state.text}`}>
+                {state.count}
+              </span>{" "}
+              <span className="text-muted">{state.label}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       {progress.totalWeeks > 1 ? (
         <ol
           aria-label="Regular-season weeks"
-          className="mt-4 flex border-t border-line-soft pt-3"
+          className="mt-3 flex"
           style={{ columnGap: `${Math.min(6, 60 / progress.totalWeeks)}px` }}
         >
-          {Array.from({ length: progress.totalWeeks }, (_, index) => {
-            const week = index + 1;
+          {progress.weeks.map(({ week, total, completed }) => {
             const current = week === progress.focusWeek;
+            const share = total > 0 ? (100 * completed) / total : 0;
             return (
               <li
                 key={week}
                 aria-current={current ? "step" : undefined}
                 className="min-w-0 flex-1"
-                title={`Week ${week}${current ? " · current" : ""}`}
+                title={`Week ${week}: ${completed} of ${total} series final${current ? " · current" : ""}`}
               >
                 <span className="sr-only">
-                  Week {week}
+                  Week {week}: {completed} of {total} series final
                   {current ? ", current week" : ""}
                 </span>
                 <div
                   aria-hidden="true"
-                  className={`h-1 rounded-full ${current ? "bg-cyan-300" : "bg-line/75"}`}
-                />
+                  className={`h-1.5 overflow-hidden rounded-full bg-line/75 ${current ? "ring-1 ring-cyan-300/70" : ""}`}
+                >
+                  <div
+                    className="h-full rounded-full bg-cyan-300"
+                    style={{ width: `${share}%` }}
+                  />
+                </div>
                 {progress.totalWeeks <= 12 ? (
                   <span
                     aria-hidden="true"
