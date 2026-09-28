@@ -2644,8 +2644,10 @@ async function ThisWeek({
       />
       {/* auto-fit, not sm:grid-cols-2: a league plays an ODD number of matches
           per week whenever it has a bye, and a fixed two-up left a permanently
-          empty cell next to the last fixture. */}
-      <CardBody className="grid gap-3 p-3 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))] sm:p-4">
+          empty cell next to the last fixture. items-start: a LIVE card has no
+          pick tray, and stretched to its neighbours' height it was mostly a
+          blank block under the score. */}
+      <CardBody className="grid items-start gap-3 p-3 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))] sm:p-4">
         {focus.map((m) => {
           const pick = pickemControlFor(m, {
             signedIn: myPicks != null,
@@ -2682,7 +2684,7 @@ async function ThisWeek({
                     <span
                       role="img"
                       aria-label={`Live — series at ${m.homeScore}–${m.awayScore}`}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-1.5 py-0.5 font-mono text-xs tabular-nums text-danger"
+                      className="inline-flex items-center gap-1.5 rounded-md bg-danger/10 px-1.5 py-0.5 font-mono text-xs tabular-nums text-danger-soft"
                     >
                       <span aria-hidden className="relative flex h-1.5 w-1.5">
                         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
