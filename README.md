@@ -291,9 +291,10 @@ draft.
 ```
 src/
   app/
-    page.tsx            # phase-aware dashboard
+    page.tsx            # dashboard: loads data, picks the phase
     login/ me/ players/ draft/ schedule/ admin/
-    actions/            # server actions (registration, admin)
+    matches/[id]/       # match page: load.ts + one file per card
+    actions/            # server actions (registration, admin-*.ts by job)
     api/
       auth/             # steam, dev, logout, callback
       draft/            # tick (poll), nominate, bid
@@ -301,6 +302,7 @@ src/
       health/           # dependency-free live and database-ready probes
       sync/             # read-only browser cursor/watch snapshot
   components/           # ui kit, site header, draft room
+    home/               # dashboard hero and per-phase views
   lib/
     draft.ts            # pure auction rules (tested)
     standings.ts        # pure standings math (tested)

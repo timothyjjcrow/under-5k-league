@@ -113,7 +113,8 @@ auction, and completed-season records are read-only.
 `TeamMember.isCaptain` (there is no CAPTAIN registration type). Admin actions
 `addCaptain`/`removeCaptain`/`transferCaptaincy`/`randomizeDraftOrder`/
 `setDraftNight` (`src/app/actions/admin-captains-draft.ts`) and
-`setDraftSettings` (`src/app/actions/admin-season.ts`) configure the field. `src/lib/draft-setup.ts` is the shared capability policy: setup is
+`setDraftSettings` (`src/app/actions/admin-season.ts`) configure the field.
+`src/lib/draft-setup.ts` is the shared capability policy: setup is
 open in SIGNUPS or DRAFT only while the Draft row is missing/NOT_STARTED;
 captain handover is allowed after the auction but never live/paused or in a
 completed season. Every setup action carries the active-season id rendered by
@@ -551,6 +552,14 @@ before `sentAt` commits. Routine queue/cancel notifications remain best-effort.
 
 Rules that follow from the layering:
 
+- **Big pages keep a thin route file.** The dashboard's `page.tsx` loads the
+  data and picks the phase; its hero and per-phase views live in
+  `src/components/home/`. `/matches/[id]` reads the match once in `load.ts`
+  (roster, draft and check-in reads are request-cached) and renders one card
+  file per section beside `page.tsx`. Admin server actions are split by job
+  (`actions/admin-*.ts`, shared helpers in the non-`"use server"`
+  `admin-shared.ts`). Source guards read these through `homePageSource()` and
+  `folderSourceFiles` (`test/support/source-files.ts`).
 - **Prefer adding logic to a pure lib with a test beside it.** Services should
   be thin transactions over pure decisions; the room components have had every
   behavioral rule extracted into pure modules precisely because there is no

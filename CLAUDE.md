@@ -3166,8 +3166,9 @@ ask it made twice. What that turned into:
   full-history Elo scan behind it. Awaited inline they blocked the whole page,
   Pause draft and Record result included, and did it worst exactly when
   Discord was down, which is when an admin opens that page.
-- **In-page streaming**: the dashboard (`page.tsx`) and the match preview wrap
-  their slower async sub-sections in `<Suspense fallback={<CardSkeleton/>}>` so
+- **In-page streaming**: the dashboard (`page.tsx` and its views in
+  `src/components/home/`) and the match page's cards (`src/app/matches/[id]/`)
+  wrap their slower async sub-sections in `<Suspense fallback={<CardSkeleton/>}>` so
   the hero/shell paints before the heavy queries resolve. When adding a new
   async card, wrap it too; use `CardSkeleton`/`Skeleton` (`ui.tsx`) for a
   fixed-height fallback (no CLS). The root `loading.tsx` still covers navigation.
