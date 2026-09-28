@@ -158,6 +158,27 @@ async function originalMetaSample(read: PublicRead) {
   }, read.html);
 }
 
+// A game record lays each team out as its own flex item (so each truncates on
+// its own), which means the HTML never holds "Home vs Away" as one string.
+// Parse a detached copy of the first document, as above, and join each row's
+// text nodes the way the row reads on screen.
+async function originalRecordRows(read: PublicRead) {
+  return read.page.evaluate((html) => {
+    const document = new DOMParser().parseFromString(html, "text/html");
+    return [...document.querySelectorAll("li")].map((row) => {
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      const parts: string[] = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) parts.push(node.textContent ?? "");
+      return parts.join(" ").replace(/\s+/g, " ").trim();
+    });
+  }, read.html);
+}
+
+async function expectOriginalMatchup(read: PublicRead, matchup: string) {
+  const rows = await originalRecordRows(read);
+  expect(rows.some((row) => row.includes(matchup)), `a game record reads "${matchup}"`).toBe(true);
+}
+
 function playerLink(playerId: string) { return `href="/players/${playerId}"`; }
 
 test("warm public statistics refresh on the first read after real admin corrections, including nested scouting", async ({ page, browser, request, baseURL }) => {
@@ -192,7 +213,7 @@ test("warm public statistics refresh on the first read after real admin correcti
       for (const key of ["records", "seasonRecords"]) {
         expect(warm[key].html).toContain(playerLink(fixture.playerId));
         expect(warm[key].text).toContain("9,999");
-        expect(warm[key].html).toContain(`${fixture.homeName} vs Cache Away`);
+        await expectOriginalMatchup(warm[key], `${fixture.homeName} vs Cache Away`);
       }
       // /hall-of-fame (career) is only its "No champion yet" note in this
       // regular-season fixture, so it is read for errors but carries no
@@ -222,7 +243,7 @@ test("warm public statistics refresh on the first read after real admin correcti
       expect(afterRename?.value).not.toBe(beforeRename?.value);
       const renamed = await readTogether(context, { records: paths.records, seasonRecords: paths.seasonRecords, player: paths.player });
       for (const key of ["records", "seasonRecords"]) {
-        expect(renamed[key].html).toContain(`${fixture.renamedHome} vs Cache Away`);
+        await expectOriginalMatchup(renamed[key], `${fixture.renamedHome} vs Cache Away`);
         expect(renamed[key].html).not.toContain(fixture.homeName);
       }
       expect(renamed.player.text).toContain(fixture.renamedHome);
