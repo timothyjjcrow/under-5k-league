@@ -118,7 +118,10 @@ export async function generateMetadata({
   const { id } = await params;
   // The round and teams, then the kickoff, live score or result.
   const metadata = await matchMetadata(id);
-  // notFound() in metadata runs before the shell streams → real 404 status.
+  // notFound() in metadata: crawlers wait for metadata, so they get a real
+  // 404 status. Browsers get streamed metadata, so the not-found page
+  // arrives with a 200 and Next's noindex tag (its documented streaming
+  // behaviour).
   if (!metadata) notFound();
   return metadata;
 }

@@ -93,9 +93,11 @@ export async function generateMetadata({
     where: { id },
     select: { name: true },
   });
-  // Metadata resolves BEFORE the body streams — a notFound() here is the
-  // only way an unknown id yields a real 404 status (the root loading.tsx
-  // otherwise commits a 200 shell before the page's own notFound throws).
+  // notFound() in metadata: crawlers wait for metadata, so they get a real
+  // 404 status (the root loading.tsx otherwise commits a 200 shell before
+  // the page's own notFound throws). Browsers get streamed metadata, so the
+  // not-found page arrives with a 200 and Next's noindex tag (its documented
+  // streaming behaviour).
   if (!team) notFound();
   return shareMetadata(
     team.name,

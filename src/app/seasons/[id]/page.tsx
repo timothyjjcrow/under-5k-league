@@ -53,7 +53,10 @@ export async function generateMetadata({
     where: { id },
     select: { name: true, isActive: true, status: true },
   });
-  // notFound() in metadata runs before the shell streams → real 404 status.
+  // notFound() in metadata: crawlers wait for metadata, so they get a real
+  // 404 status. Browsers get streamed metadata, so the not-found page
+  // arrives with a 200 and Next's noindex tag (its documented streaming
+  // behaviour).
   if (!season) notFound();
   // The champion post in Discord links here, so a finished season's preview
   // says what the page holds.
