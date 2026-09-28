@@ -295,7 +295,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   user-supplied image URLs render with the viewer's cookies.
 - **Never parse a raw `datetime-local` string on the server** (`new Date(raw)`
   uses the server's zone, UTC in production). Use `<LocalDatetimeField>`
-  (prefill with `defaultTs`) and `localDate(fd, raw, ts)` in the action.
+  (prefill with `defaultTs`) and `localDate(fd, raw, ts)` in the action. Admin
+  boxes pass `timeZone={LEAGUE_CONFIG.timeZone}` (source-guarded).
 - **Show times in the viewer's zone** with `<LocalTime>`, passing a
   `formatMatchTime` `initial` and the epoch `ts`. Discord times are
   `<t:epoch:F>`, never formatted strings.
@@ -345,9 +346,10 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 
 ### Discord safety
 
-- **Never send a credential to the browser, a log or an admin page.** Webhook
-  URLs, the bot token and the OAuth secret show only as a boolean plus a masked
-  fingerprint (`maskWebhookUrl`); credential inputs start empty.
+- **Never send a credential to the browser, a log or an admin page,** or put
+  one in argv, a commit, an issue, a screenshot or chat. Webhook URLs, the bot
+  token and the OAuth secret show only as a boolean plus a masked fingerprint
+  (`maskWebhookUrl`); credential inputs start empty.
 - **Gate every Discord write behind `discordMutationsAllowed()`,** so Vercel
   previews never post, edit or grant roles.
 - **Escape every player-chosen name with `escapeDiscordText`:** webhook messages
@@ -378,8 +380,6 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   the binary already serving, pinned in `MIGRATION_SHA256`
   (`scripts/migration-safety.mjs`). Never edit an applied migration, never
   `db push` production, and keep build code free of side effects.
-- **Never put a credential in argv, a commit, a log, an issue, a screenshot or
-  chat.**
 
 ## Working practices
 

@@ -20,6 +20,10 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   `startDraft` makes one team per captain, so the admin settles the count by
   naming captains: short pool = seats for standins, long pool = free agents.
   `seatFitSentence` (`draft-setup.ts`) says which before the click.
+- **Nothing closes signups on a clock;** an admin does (Close signups or Start
+  draft), sometimes days before draft night. Home and the draft-night
+  reminder say so in one phrase, `PLAYER_SIGNUPS_OPEN_UNTIL`
+  (`season-copy.ts`); never promise signups run until draft night.
 - **`capacityInfo` is display only, never a gate.** Keep `extra`, `leftover`,
   `toNextTeam` and `nextTeamTarget` uncapped: past the minimum the SIGNUPS
   home card (`src/components/home/signups-view.tsx`) counts toward the next

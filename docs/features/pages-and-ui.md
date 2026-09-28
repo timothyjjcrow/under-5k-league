@@ -34,6 +34,15 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   involvement, sustain, report card). No wins or win-rate board (they rank the
   team's record) and no per-board search (`leader-board.tsx` pins the viewer's
   row).
+- **`/how-it-works` is the one-screen explainer** (`/features` redirects
+  there); its rules are pure in `src/lib/how-it-works.ts` (tested). It prints
+  the night through `seasonMatchNightLabel` (`match-night.ts`), never a
+  built-in default, so it agrees with /me, Schedule and the admin hint.
+  `resultsCopy(hasLeagueTicket)` lets only a ticketed season say results
+  arrive by themselves; the ticketless copy reuses `NO_TICKET_RESULT_LEAD`
+  (`match-hosting.ts`), the match page's wording. Its one button
+  (`howItWorksAction`) reuses the header's join label and Home's "Register as
+  a standin" (`standinSignupOpen`), so the three pages name one action one way.
 
 ## The shared UI kit
 
@@ -51,12 +60,25 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Tokens:** `--color-surface-3` is an OPAQUE elevation step (translucent
   lets scrolled rows show through a table header); `--color-line-soft` is a
   rule inside a dense list (`--color-line` boxes every row).
+- **Keep the global link reset inside `@layer base`.** An unlayered
+  `a { color: inherit }` outranks every Tailwind utility, so every colour class
+  on a link was ignored (near-white on the gold accent buttons).
+  `src/app/link-color-layer.test.ts` fails on a bare `a` colour rule outside a
+  layer. Blue means clickable: don't colour plain text `text-info`.
 - **Use only colour tokens `globals.css` defines.** Tailwind v4 emits nothing
   for an undefined one, so `text-warning` rendered plain text with no error.
   Warnings and attention use `accent` (amber: the passed-date chip, the tied
   chip, "No reply", the rooms' delayed status line).
   `src/components/color-token-guards.test.ts` fails on a token-shaped colour
   class (`warning`, `surface-1`, `info-strong`) that `globals.css` lacks.
+- **Small tinted text uses the soft tokens.** Red text on a red tint is
+  `text-danger-soft` (plain danger there is about 4.3:1, under AA);
+  `tint-contrast-guards.test.ts` fails on `bg-danger/5..20` with plain
+  `text-danger` in one class string. Blue text on a blue badge is
+  `text-info-soft`. A tint laid over a surface colour goes in a flat gradient
+  (`bg-linear-to-b from-danger/[0.04] to-danger/[0.04]` on the live schedule
+  card): `cn` is twMerge, which keeps only the last `bg-*` colour and so
+  dropped the card's `bg-surface`.
 - **`CardHeader` wraps instead of crushing:** `flex-wrap` + `basis-48` on the
   title keeps a link action inline and drops a whole form to its own line.
   Title and subtitle clamp (`min-w-0`, `[overflow-wrap:anywhere]`), so free
@@ -281,9 +303,20 @@ the league is already draftable and many visitors have joined. Write for both.
 ## The admin page layout (`/admin`)
 
 - **Anchors plus disclosure.** `AdminJump` (a `SectionNav`, sticky from `lg`)
-  jumps to `AdminAnchor` ids (`scroll-mt-40`). Rarely touched cards (Discord,
-  league id, news, security, season handoff and similar) are `AdminSection`: a
-  `<details>` whose `<summary>` keeps the title as a visible heading.
+  jumps to `AdminAnchor` ids. Rarely touched cards (Discord, league id, news,
+  security, historical records, database performance, season handoff and
+  similar) are `AdminSection`: a `<details>` whose `<summary>` keeps the title
+  as a visible heading.
+- **The jump bar wraps from `lg`** (`SectionNav wrap`: a desktop mouse can't
+  scroll sideways; chips drop to `lg:min-h-9`) and hugs its chips from `sm`
+  (`sm:w-fit`). The wrapped sticky bar is up to ~135px tall, so every jump
+  target carries `scroll-mt-40 lg:scroll-mt-56`. A new anchor needs both.
+- **Chips follow the page's render order,** so the active chip only moves
+  forward on scroll. `setupFirst` (SIGNUPS or DRAFT) puts the Phase, Captains &
+  draft and Discord reach chips AND cards first; later phases put them after
+  the working cards. Chips and cards branch on the same flag, and
+  `admin-copy-guard.test.ts` ("the jump bar lists sections in the order the
+  page renders them") fails if the two orders drift.
 - **Never put a `<button>` in a `<summary>`:** it toggles instead of
   submitting.
 - **The jump bar and cards share one visibility predicate**
@@ -297,6 +330,12 @@ the league is already draftable and many visitors have joined. Write for both.
   React `cache()` reads. No card re-reads match, season, draft or viewer.
   `match-page-guards.test.ts` pins this and reads the whole folder with
   `folderSourceFiles` (a glob cannot spell `[id]`).
+- **Shared components on the page follow the same rule.** `AdminMatchTools`
+  takes the season from the page's match and the draft status from the
+  request-cached `getSeasonDraftStatus` (also guarded); only its /admin-shaped
+  reads (rosters, standin pool, bookings, named OUTs, open reschedule) are its
+  own. `GameIdentityEditor` gets the viewer from the `cache()`d
+  `getSessionUser`.
 - **`MatchPreview` renders while a match has no games and is not COMPLETED:**
   rosters, recent form, prior meetings, stakes banner, scouting report, and the
   `/schedule` check-in banner. A COMPLETED match with no games says it was a
@@ -306,6 +345,20 @@ the league is already draftable and many visitors have joined. Write for both.
   Create/Start in Captain tools; other players, booked standins and admins get
   `lobby-panel.tsx` (`seesPlayerLobbyPanel`, `lobby-access.ts`, matching who
   `resolveDotaLobby` lets view it).
+- **Both captains always get a "How to host" line built from data**
+  (`src/lib/match-hosting.ts`, tested): the home captain hosts,
+  `LEAGUE_CONFIG.gameServerRegion`, `LEAGUE_GAME_MODE` (the mode the lobby bot
+  also sets) and the match's own `bestOf` (`seriesLobbyRule`). A ticketed
+  season makes it the first line of the lobby checklist; a ticketless one
+  adds `NO_TICKET_RESULT_NOTE`, pointing at Report your result, whose subtitle
+  says to send an admin the score if nothing finds the game (never "no admin
+  needed", never "public match history is enough"). Each step is said once.
+- **`DotaLobbyControls` takes an `audience`.** "host" (default: inhouse
+  players and season captains) always renders, so the people who make the
+  lobby hear that the bot is missing or failing. "player" (`lobby-panel.tsx`)
+  renders only once the bot answers with a lobby (`lobbyPanelVisible`): those
+  viewers can't fix the bot or the ticket, and the manual steps are not on
+  their page.
 
 ## Checking UI against a fixture
 

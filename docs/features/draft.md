@@ -94,6 +94,16 @@ Admin actions: `src/app/actions/admin-captains-draft.ts`. Helpers:
   MMRs. The weight is set with `setDraftSettings` until Start; new seasons
   carry it over. Seed medals follow signup MMR (`approxRankTierFromMmr` in
   `prisma/seed.ts`), so demo medals match demo budgets.
+- **A captain's budget MMR is flagged when nothing backs it**
+  (`classifyCaptainMmr`, `captain-mmr.ts`, tested): "unverified" when it is
+  unknown (0), has no medal to check it against, or sits outside the medal's
+  clamp window; otherwise "medal-backed". Typing low buys a bigger budget, and
+  the signup clamp only checks players who have a medal. Warn and name, never
+  block: the captain's row, the Start-draft confirm and `adminNextStep`
+  (`unverifiedCaptainMmrNames`). Silent when `budgetMmrWeight` is 0, since MMR
+  then moves no money. An admin clears a flag by saving a matching medal under
+  "Manual correction" (`setPlayerRank`, `User.rankTierManual`); there is no
+  separate "admin-approved" state without a schema change.
 
 ## Admin draft-night controls
 
@@ -258,3 +268,17 @@ In the Captains & draft card on `/admin` and inside the room
 - **Completion posts once per run.** Sales post nothing; completion posts the
   teams then `draftRecapMessage`; a repeat completion after Undo posts plain
   names and no recap (see the Discord notes).
+- **The draft-night reminder posts once per draft time**
+  (`maybeAnnounceDraftNight`, `reminder-service.ts`, run by the automation
+  worker). `draftReminderDue` (`draft-setup.ts`) is its one window, shared
+  with the automation gate: setup still open and `draftAt` within
+  `DRAFT_REMINDER.AHEAD_HOURS` (24) and still ahead, with no allowance after
+  it. The marker is `draftReminderKey(season, draftRevision)` on the week
+  reminder's claim machinery; after its claim the service re-reads the season,
+  draft and pool and releases the claim if any of them moved.
+  `setDraftNight` invalidates the older revisions' in-flight markers, so a
+  moved draft re-arms under its new key, except when a reminder was already
+  delivered and the new time is still inside the window: then it records the
+  new revision as covered (`recordAnnouncementCovered`) and the "draft
+  rescheduled" post carries the change. `startDraft` invalidates any pending
+  reminder; deleting a season sweeps `draftReminderPrefix`.

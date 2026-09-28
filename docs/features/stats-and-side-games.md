@@ -52,10 +52,21 @@ tested in `src/lib/` (`fantasy.ts`, `achievements.ts`, `honors*.ts`,
 
 - **Rank what the player did** (Tim's decision). No total-wins, win-rate or
   "Winningest" board: they ranked the team's record. Kills and assists are
-  per game with a flat `PER_GAME_MIN_GAMES` (3, `src/app/leaders/page.tsx`)
-  so volume can't win; other average boards cap their floor at the
-  most-played count so they aren't empty early. Keep "Most games". Details
-  and nav: `pages-and-ui.md`.
+  per game with a flat `PER_GAME_MIN_GAMES` (3, `src/lib/player-stats.ts`,
+  shared with the season awards) so volume can't win; other average boards
+  cap their floor at the most-played count so they aren't empty early. Keep
+  "Most games". `leaders-guards.test.ts` pins the constant and both boards.
+  Details and nav: `pages-and-ui.md`.
+
+## Season awards (the recap)
+
+- **`computeSeasonAwards` (`awards.ts`, tested) ranks per game, never a
+  count** (a count crowns whoever played most for the best team). MVP is
+  impact points per game with a floor of half the most games anyone played
+  (`ceil(maxGames / 2)`). Kill Leader and Playmaker use the one-decimal
+  per-game average and the same flat `PER_GAME_MIN_GAMES` and tiebreaks
+  (more games, then id) as the /leaders boards, and are skipped until someone
+  qualifies, so the recap always crowns who those boards put first.
 
 ## Hall of Fame
 
@@ -169,6 +180,10 @@ tested in `src/lib/` (`fantasy.ts`, `achievements.ts`, `honors*.ts`,
   subtitle says "New fives open after next season's draft." A season nobody
   entered gets a compact note where the standings go. Each standings row folds
   open to show that five and each pick's points.
+- **The summary tiles follow the lock** (pure `fantasyWindowTiles`,
+  `fantasy-tiles.ts`, tested). Open: draft pool and salary cap. Locked: Top
+  player, then Your rank (else Leader, else Players scored). Never the pool or
+  cap after the lock, when nobody can pick.
 - **One sticky bar holds count, salary and the one Save button**
   (source-guarded), above the phone tab bar. On phones it reads "Save" or
   "Update"; its accessible name keeps "… fantasy five". The pool opens
@@ -187,12 +202,13 @@ tested in `src/lib/` (`fantasy.ts`, `achievements.ts`, `honors*.ts`,
   void picks; ties share a place. The oracle board, Hall of Fame and weekly
   Oracle use it and print `PICKEM_RANKING_NOTE`. Never re-sort it.
 - **`PickemPickForm` is the only pick control and the only importer of
-  `savePrediction`** (guarded). Other surfaces use `pickemControlFor` +
-  `PickemTray` (open control, or your locked pick with ✓/✗/void; never the
-  crowd split). Every mark carries screen-reader text ("right", "wrong", "your
-  pick"). Signed out: nothing outside `/pickem`; on it, one "Sign in with Steam
-  to pick" button (`signInHref`), never dead buttons. Sides are a container
-  query (`@container/pick`, side by side from 26rem).
+  `savePrediction`** (guarded). Other surfaces (Home's This-week cards, the
+  match page) use `pickemControlFor` + `PickemTray` for a one-tap pick (open
+  control, or your locked pick with ✓/✗/void; never the crowd split). Every
+  mark carries screen-reader text ("right", "wrong", "your pick"). Signed out:
+  nothing outside `/pickem`; on it, one "Sign in with Steam to pick" button
+  (`signInHref`), never dead buttons. Sides are a container query
+  (`@container/pick`, side by side from 26rem).
 - **Order by deadline** (`groupOpenByWeek`); the crowd split stays hidden
   until lock. Closed picks are ONE newest-first "Your picks" list
   (`pickHistory`). A completed match shows "Your pick: X ✓ (2 of 3 called it)"

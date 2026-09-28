@@ -287,8 +287,16 @@ Every transition is a guarded claim; keep it that way (general rules:
 - **Only established accounts rank.** `rankInhouse` gives medals and "#N" to
   players with `PROVISIONAL_GAMES` or more; provisionals list after, dimmed.
   The `/inhouse` ladder and `InhouseCareerCard` both use it.
-- **The monthly board sums stored `eloDeltas`;** a later void of an earlier game
-  recomputes the career ladder but not those stamps.
+- **"This month" is a form ladder** (`/inhouse?ladder=month`,
+  `summarizeInhouseMonth` in `inhouse-stats.ts`, tested): wins, then win rate,
+  then games, then user id (a total order). A lobby counts by its immutable
+  `completedAt` inside `leagueMonthWindow` (the league's clock), never
+  `createdAt` or `updatedAt`. Players under `MONTH_MIN_GAMES` (3) are listed
+  after the ranked block, unranked. `loadInhouseMonthLadder` keys its memo on
+  the result cursor AND the month window, so a new month never serves the old.
+- **The monthly board sums stored `eloDeltas`;** a player's net Elo is null if
+  any of their games has no stamp. A later void of an earlier game recomputes
+  the career ladder but not those stamps.
 
 ## The room (client)
 

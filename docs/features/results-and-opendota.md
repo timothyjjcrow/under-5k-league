@@ -145,7 +145,10 @@ Captain report, admin import, league feed and roster scan all end in
   in an action, `invalidateAutomationGateBestEffort()` elsewhere) or the worker
   may sleep until `AUTOMATION_GATE_HARD_HORIZON_MS`. Give a new automated step
   its own wake in the gate, and bump `AUTOMATION_GATE_VERSION` and its key when
-  the snapshot shape or deadline rules change.
+  the snapshot shape or deadline rules change (`automation-gate-constants.ts`,
+  currently 9). Version, cache key, tag and the tests that pin them move
+  together. When two branches each bumped it, the merge takes a number above
+  both, so neither build's cached decision is trusted.
 - **Isolate steps and name failures.** Each `runResultSync` step checks its
   budget first (`canStartWork`) and fails alone, adding a stable issue or
   skipped code. Add new codes to `SAFE_WORKER_CODES` (`automation-service.ts`)

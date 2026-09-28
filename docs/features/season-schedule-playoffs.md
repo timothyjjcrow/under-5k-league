@@ -41,7 +41,18 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   (`Season.firstMatchNight`): an untimed fixture gets no check-in, reminder,
   auto-import or pick'em lock.
   Week N is `matchNightForWeek(first, N)`, on the local clock of
-  `LEAGUE_CONFIG.timeZone` (datetime rule in CLAUDE.md).
+  `LEAGUE_CONFIG.timeZone` (datetime rule in CLAUDE.md). Wall-time
+  conversion lives in `zoned-time.ts`: a skipped spring-forward time moves
+  forward by the jump, a repeated fall-back time takes the earlier one.
+- **Name a single fixture with `matchRoundLabel` (`schedule.ts`, tested),
+  given `playoffTotalRounds` over the season's matches:** "Week 3",
+  "Tiebreaker", "Semifinal", "Grand final". Playoff rows still count weeks in
+  the database, so never print "Week N" or a bare "Playoffs" for one when the
+  bracket can place it. "Final" means the grand final only (a finished result
+  is "Final score"; a round counter says "1 of 2 series complete"). Pages,
+  pick'em, the calendar, /me, profiles, reschedule refusals and Discord
+  result posts all use it; `loadPlayoffRoundsBySeason` (`playoff-rounds.ts`)
+  reads the depth for cross-season lists.
 - **`generateSchedule` re-reads its inputs in one Serializable transaction**
   (seam `admin.generateSchedule.beforeTx`): active season, post-auction phase,
   no COMPLETED regular series AND no Game (both halves pinned in
@@ -133,7 +144,18 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   `standings-table.tsx` on home, /schedule and the archive (status line
   Qualified / Eliminated / Withdrawn / Tiebreaker pending / Tied / Settled by
   tiebreaker / "Your team", W-D-L, game difference, points, Last 5 from `sm`).
-  Movement arrows (`standingsMovement`), ✓/✗ marks.
+  Movement arrows (`standingsMovement`), ✓/✗ marks. Team names truncate on one
+  line (full name in `title`) rather than wrap on phones.
+- **Public tables show a dead heat only once it can matter**
+  (`publicDeadHeatTeamIds`, `playoff-field.ts`, tested): every regular fixture
+  final, or tiebreaker fixtures exist. Before that only the quiet "Tied" chip
+  shows (none while nobody has played), and seeds, the cut and projected
+  matchups keep the displayed order. Presentation only: admin tiebreaker
+  scheduling and `createPlayoffBracket` read `seedingDeadHeatTeamIds`.
+- **One "Tied" chip:** `TiedChip`, exported beside the table. /teams' cards use
+  it under the table's rule: hidden while a (non-withdrawn) team's dead heat
+  waits on a tiebreaker (`publicDeadHeatTeamIds`), where the table shows its
+  tiebreaker badge instead.
 - **Draw the cut line and the ✓/✗ marks only when the cut drops an eligible
   team** (`cutIsReal` in `standings-table-server.tsx`; a team with a pending
   tiebreaker keeps its mark). When everyone makes the bracket every row would

@@ -71,7 +71,21 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   line per phase** under the panel title, because several transitions fail
   quietly: the auction ending does not advance the phase, a schedule without
   kickoff times turns off auto-sync, reminders and pick'em locks, and nothing
-  else prompts "start the playoffs" or "record the final".
+  else prompts "start the playoffs" or "record the final". With
+  `hasLeagueTicket: false` it adds a separate `ticketWarning` from Signups
+  through the Playoffs (Valve wants ticket applications about 15 days ahead),
+  linking to `#adm-league`; the draft preflight shows the same "League
+  ticket: not set" row. Nothing renders once a ticket is set.
+- **Every in-page `#adm-` link needs both an `AdminAnchor` and a jump-bar
+  entry** (checked by `admin-copy-guard.test.ts`), so a link never lands
+  nowhere and the jump bar can open a folded target.
+- **Every admin date/time box reads on the league's clock:**
+  `<LocalDatetimeField timeZone={LEAGUE_CONFIG.timeZone}>` names the zone and
+  shows the viewer's own time beside it ("= 11:00 your time", hidden when the
+  browser zone can't be formatted). `admin-time-zone-guard.test.ts` fails on
+  an admin box without the prop. Keep the label beside the field, not around
+  it, or the hint joins the box's accessible name. Captain boxes stay on the
+  viewer's clock and say "your time".
 - **Render per-match controls only from `admin-match-tools.tsx`.**
   `MatchResultRow` (kickoff, score or ruling, reopen, games, Auto-fetch games,
   Add game) and `StandinMatchBlock` (any-team cover) render on /admin AND in

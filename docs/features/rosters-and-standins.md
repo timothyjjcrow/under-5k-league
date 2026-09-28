@@ -21,8 +21,12 @@ standin cover, and match-night check-ins. Main files:
   import; `setAvailability` too. After the first write throw a typed error
   (`StandinRaceError`; `releasePlayer`'s zero-count `deleteMany`, since a raw
   `delete` dies on P2025 when two releases race) and map `isSerializationConflict`
-  to "just changed, reload". `test/integration/standins-raced.itest.ts` races the
-  pairs; SQLite runs them in sequence, so only `npm run test:pg` tests them.
+  to "just changed, reload". Raced coverage: `standins-raced.itest.ts` (same
+  seat, one open seat, same night, assign vs `releasePlayer`, assign vs
+  `leaveLeague`) and `roster-moves.itest.ts` (concurrent `signFreeAgent`s;
+  promote vs Start through seams). SQLite runs them in sequence, so only
+  `npm run test:pg` tests them. Assign vs admin `withdrawSignup` or
+  `signFreeAgent`, and removal vs a game import, have no raced test.
 - **Never leave stale cover; refuse or report when a person owns the choice.**
   `matchNightRoster` swaps "covered player out, standin in", so a booking whose
   player, seat or fixture is gone counts six in a 5v5 on /schedule, the home page,
@@ -169,6 +173,15 @@ standin cover, and match-night check-ins. Main files:
   and `src/app/matches/[id]/live-series-checkin.tsx` all use it. Refusals come
   from `resolveCheckinSeat` / `checkinClosedReason`, worded once in
   `CHECKIN_REFUSAL_MESSAGE`.
+- **"I'm away" marks a date range OUT in one go** (/me; `markAwayDates` calls
+  `markAwayRange`, `availability-service.ts`): one Serializable transaction
+  (20s timeout for a long range) that judges every fixture before the first
+  write, so a refusal throws with nothing written. It writes only fixtures
+  whose `scheduleRevision` still matches what the page listed (`seen`), never
+  a kickoff the player didn't see, and leaves already-OUT answers alone, so a
+  second save is a no-op. Pure `away-range.ts`: `inAwayRange` (shared with the
+  card's preview), `localDayStartMs` (call it in the BROWSER; the date-only
+  form of the datetime rule) and `AWAY_RANGE_MAX_DAYS` (90).
 - **Players answer through `<CheckinBanner>`** on the home page
   (`src/components/home/my-next-match.tsx`), /schedule and unplayed match pages.
   It needs a published kickoff and closes when the match finishes or its result

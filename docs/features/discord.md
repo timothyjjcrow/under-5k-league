@@ -108,7 +108,10 @@ actions: `src/app/actions/admin-discord.ts`.
   started (`draftStartedAnnouncement`, sent by `startDraft`): the linked
   captains only, in draft order, unlinked captains named in plain text; a
   captain who misses the start loses turns to auto-nomination, while everyone
-  else only needs the link.
+  else only needs the link. Draft-night reminder (`draftReminderAnnouncement`):
+  the captains, then linked players who haven't confirmed the current draft
+  time, at most 20 (`DRAFT_UNCONFIRMED_SHOWN`); only names that fit the
+  2,000-character post are allowlisted, and the rest are counted, never pinged.
 - **Use `mentionsOf` / `mentionUsers`, never hand-rolled lists.** `mentionsOf`
   drops nulls and returns `undefined` when empty, so an unlinked league sends
   the same text as before (`{ users: [undefined] }` fails silently).
@@ -146,7 +149,11 @@ actions: `src/app/actions/admin-discord.ts`.
   `recordResult` included; it deletes the old marker in its result transaction
   so a corrected score is a new event. With no league webhook the marker is
   stamped `suppressed:no-webhook:`, so adding Discord later never replays old
-  scores.
+  scores. It re-reads the match (bracket slot, game count) and the bracket
+  depth itself, so the first send and the retry sweep post the same text: the
+  site's round name (`matchRoundLabel`), and a link that says "Box score" only
+  when a Game row exists ("Match page" for a manual score or ruling). A failed
+  bracket read costs the round name, never the post.
 - **Draft completion posts once per run:** a teams post mentioning linked
   players, then the recap (`afterResponse`); single sales post nothing. A repeat
   completion after Undo posts plain names and no recap, gated by a Setting
