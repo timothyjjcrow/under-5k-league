@@ -1,5 +1,6 @@
 import { listPage } from "@/lib/list-page";
 import { webAnalyticsUrl } from "@/lib/web-analytics";
+import { adminSeasonCards, openBookingCount } from "@/lib/admin-sections";
 import {
   adminAttention,
   attentionTitle,
@@ -313,6 +314,17 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     season && data ? matchNightSlate(season.status, data.matches, nowMs) : [];
   // DB-only and shared with the streamed runner card below.
   const automationLines = season && data ? await loadAutomationAttention() : [];
+  const cards =
+    season && data
+      ? adminSeasonCards({
+          seasonStatus: season.status,
+          draftStatus: data.draft?.status,
+          matches: data.matches,
+          openBookings: openBookingCount(data.assignments, data.matches),
+          archivedPostseasonGames:
+            data.playoffArchive.length + data.tiebreakerArchive.length,
+        })
+      : null;
   const showTiebreakers = data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
@@ -399,12 +411,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             : []),
           { id: "adm-attention", label: "Needs attention" },
           ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
-          { id: "adm-schedule", label: "Schedule & results" },
-          { id: "adm-playoffs", label: "Playoffs" },
+          ...(cards?.schedule
+            ? [{ id: "adm-schedule", label: "Schedule & results" }]
+            : []),
+          ...(cards?.playoffs ? [{ id: "adm-playoffs", label: "Playoffs" }] : []),
           ...(rosterMovesVisible(season, data)
             ? [{ id: "adm-roster", label: "Roster moves" }]
             : []),
-          { id: "adm-standins", label: "Standins" },
+          ...(cards?.standins
+            ? [{ id: "adm-standins", label: "Standins" }]
+            : []),
           { id: "adm-reach", label: "Discord reach" },
           ...(autoSyncVisible(season)
             ? [{ id: "adm-sync", label: "Auto-sync" }]
@@ -466,22 +482,28 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                   <TiebreakerControls season={season} data={data} nowMs={nowMs} />
                 </AdminAnchor>
               ) : null}
-              <AdminAnchor id="adm-schedule">
-                <ScheduleControls
-                  season={season}
-                  data={data}
-                  nowMs={nowMs}
-                />
-              </AdminAnchor>
-              <AdminAnchor id="adm-playoffs">
-                <PlayoffControls season={season} data={data} nowMs={nowMs} />
-              </AdminAnchor>
+              {cards?.schedule ? (
+                <AdminAnchor id="adm-schedule">
+                  <ScheduleControls
+                    season={season}
+                    data={data}
+                    nowMs={nowMs}
+                  />
+                </AdminAnchor>
+              ) : null}
+              {cards?.playoffs ? (
+                <AdminAnchor id="adm-playoffs">
+                  <PlayoffControls season={season} data={data} nowMs={nowMs} />
+                </AdminAnchor>
+              ) : null}
               <AdminAnchor id="adm-roster">
                 <RosterMoves season={season} data={data} />
               </AdminAnchor>
-              <AdminAnchor id="adm-standins">
-                <StandinControls season={season} data={data} />
-              </AdminAnchor>
+              {cards?.standins ? (
+                <AdminAnchor id="adm-standins">
+                  <StandinControls season={season} data={data} />
+                </AdminAnchor>
+              ) : null}
               {setupControls}
             </div>
           </AdminSection>
@@ -515,22 +537,30 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               {reachCard}
             </>
           ) : null}
-          <AdminAnchor id="adm-schedule">
-            <ScheduleControls
-              season={season}
-              data={data}
-              nowMs={nowMs}
-            />
-          </AdminAnchor>
-          <AdminAnchor id="adm-playoffs">
-            <PlayoffControls season={season} data={data} nowMs={nowMs} />
-          </AdminAnchor>
+          {/* Each card only where it has work or data (adminSeasonCards):
+              the same answer the jump bar above was built from. */}
+          {cards?.schedule ? (
+            <AdminAnchor id="adm-schedule">
+              <ScheduleControls
+                season={season}
+                data={data}
+                nowMs={nowMs}
+              />
+            </AdminAnchor>
+          ) : null}
+          {cards?.playoffs ? (
+            <AdminAnchor id="adm-playoffs">
+              <PlayoffControls season={season} data={data} nowMs={nowMs} />
+            </AdminAnchor>
+          ) : null}
           <AdminAnchor id="adm-roster">
             <RosterMoves season={season} data={data} />
           </AdminAnchor>
-          <AdminAnchor id="adm-standins">
-            <StandinControls season={season} data={data} />
-          </AdminAnchor>
+          {cards?.standins ? (
+            <AdminAnchor id="adm-standins">
+              <StandinControls season={season} data={data} />
+            </AdminAnchor>
+          ) : null}
           {season.status !== "SIGNUPS" && season.status !== "DRAFT"
             ? reachCard
             : null}
@@ -1506,13 +1536,25 @@ function SeasonControls({
         action={<Badge tone="accent">{PHASE_LABEL[season.status]}</Badge>}
       />
       <CardBody className="space-y-5">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Players" value={data.players.length} />
-          <Stat
-            label="To start"
-            value={cap.minPlayers}
-            hint={cap.canDraft ? "reached" : `${cap.needed} more`}
-          />
+        {/* The signup counters only mean something while signups can still
+            change the draft; once it has run, the league is teams and
+            fixtures. */}
+        <div
+          className={cn(
+            "grid grid-cols-2 gap-3",
+            configLocked ? "" : "sm:grid-cols-4",
+          )}
+        >
+          {configLocked ? null : (
+            <>
+              <Stat label="Players" value={data.players.length} />
+              <Stat
+                label="To start"
+                value={cap.minPlayers}
+                hint={cap.canDraft ? "reached" : `${cap.needed} more`}
+              />
+            </>
+          )}
           <Stat label="Teams" value={data.teams.length} />
           <Stat label="Matches" value={data.matches.length} />
         </div>
@@ -1687,198 +1729,215 @@ function SeasonControls({
             ) : null}
           </div>
         </details>
-        <ActionForm
-          action={renameSeason}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+        {/* Set once at the start and rarely touched after (the US log shows
+            none of these used past setup), so they fold away instead of
+            standing between the phase controls and the rest of the page. */}
+        <details
+          id="adm-season-settings"
+          className="rounded-lg border border-line px-3 py-1 text-sm"
         >
-          <label htmlFor="seasonName" className="text-muted">
-            Season name
-          </label>
-          <input
-            id="seasonName"
-            name="name"
-            type="text"
-            maxLength={60}
-            defaultValue={season.name}
-            className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save name
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            the big title on the home page
-          </span>
-        </ActionForm>
-        <ActionForm
-          action={setMaxMmr}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
-        >
-          <label htmlFor="seasonMaxMmr" className="text-muted">
-            Soft MMR limit
-          </label>
-          <input
-            id="seasonMaxMmr"
-            name="maxMmr"
-            type="number"
-            min={0}
-            max={HARD_MMR_CEILING}
-            defaultValue={season.maxMmr}
-            className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save limit
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            {season.maxMmr > 0
-              ? `soft limit — signups over ${season.maxMmr} MMR still join the pool; review them here before the draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
-              : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
-          </span>
-        </ActionForm>
-        {/* Editable until the auction starts. These used to be write-once at
-            Create season, so changing your mind about team size or budget meant
-            creating a NEW season and orphaning every signup so far. */}
-        <ActionForm
-          action={setDraftSettings}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-end gap-2 border-t border-line pt-3 text-sm"
-        >
-          <Field label="Team size" htmlFor="cfgTeamSize">
-            <input
-              id="cfgTeamSize"
-              name="teamSize"
-              type="number"
-              min={2}
-              max={10}
-              defaultValue={season.teamSize}
-              className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <Field label="Min teams" htmlFor="cfgMinTeams">
-            <input
-              id="cfgMinTeams"
-              name="minTeams"
-              type="number"
-              min={2}
-              max={32}
-              defaultValue={season.minTeams}
-              className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <Field label="Draft budget ($)" htmlFor="cfgBudget">
-            <input
-              id="cfgBudget"
-              name="draftBudget"
-              type="number"
-              min={10}
-              defaultValue={season.draftBudget}
-              className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <Field label="Budget MMR weight %" htmlFor="cfgWeight">
-            <input
-              id="cfgWeight"
-              name="budgetMmrWeight"
-              type="number"
-              min={0}
-              max={50}
-              defaultValue={season.budgetMmrWeight}
-              className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <SubmitButton variant="secondary" size="sm" disabled={configLocked}>
-            Save draft settings
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            {configLocked
-              ? draftSetupLockedMessage(season.status, data.draft?.status)
-              : "applied when the draft starts"}
-          </span>
-        </ActionForm>
-        <ActionForm
-          action={setMatchSchedule}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
-        >
-          <label htmlFor="matchSchedule" className="text-muted">
-            Match night
-          </label>
-          <input
-            id="matchSchedule"
-            name="matchSchedule"
-            type="text"
-            maxLength={80}
-            defaultValue={season.matchSchedule ?? ""}
-            placeholder={MATCH_SCHEDULE.label}
-            className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save schedule
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            {/* Once fixtures have kickoffs, pages print the night most of
-                them use (a single moved week doesn't change it). */}
-            {fixturesNight
-              ? `players now see the night most fixtures use: ${fixturesNight}`
-              : `shown before signup${season.matchSchedule ? "" : " · using default"}`}
-          </span>
-        </ActionForm>
-        <ActionForm
-          action={setSeriesLengths}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-end gap-3 border-t border-line pt-3 text-sm"
-        >
-          <SeriesField
-            label="Regular season"
-            name="regularBestOf"
-            value={season.regularBestOf}
-            options={[1, 2, 3]}
-          />
-          <SeriesField
-            label="Playoffs"
-            name="playoffBestOf"
-            value={season.playoffBestOf}
-            options={[1, 3, 5, 7]}
-          />
-          <SeriesField
-            label="Grand final"
-            name="finalBestOf"
-            value={season.finalBestOf}
-            options={[1, 3, 5, 7]}
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save series lengths
-          </SubmitButton>
-          {/* These are copied onto each Match row when it is CREATED, so they
-              are read-once per phase, not live. Saving after the fact still
-              writes the Season and re-renders with the new value — a perfect
-              false confirmation — while every existing fixture keeps its old
-              length. Say which ones are already locked in rather than letting
-              an admin "fix" a Bo1 into a Bo3 that never happens. */}
-          <span className="text-xs text-muted">
-            games per match — copied onto each fixture when it is created, so
-            these only affect matches made from now on.
-            {data.matches.some((m) => m.phase === "REGULAR")
-              ? " The regular-season schedule already exists: change its length per match, or regenerate."
-              : ""}
-          </span>
-        </ActionForm>
+          <summary className="flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2 font-medium">
+            Season settings
+            <span className="text-xs font-normal text-muted">
+              name, soft MMR limit, draft settings, match night, series
+              lengths
+            </span>
+          </summary>
+          <div className="space-y-3 pb-3">
+            <ActionForm
+              action={renameSeason}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+            >
+              <label htmlFor="seasonName" className="text-muted">
+                Season name
+              </label>
+              <input
+                id="seasonName"
+                name="name"
+                type="text"
+                maxLength={60}
+                defaultValue={season.name}
+                className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save name
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                the big title on the home page
+              </span>
+            </ActionForm>
+            <ActionForm
+              action={setMaxMmr}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+            >
+              <label htmlFor="seasonMaxMmr" className="text-muted">
+                Soft MMR limit
+              </label>
+              <input
+                id="seasonMaxMmr"
+                name="maxMmr"
+                type="number"
+                min={0}
+                max={HARD_MMR_CEILING}
+                defaultValue={season.maxMmr}
+                className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save limit
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                {season.maxMmr > 0
+                  ? `soft limit — signups over ${season.maxMmr} MMR still join the pool; review them here before the draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
+                  : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
+              </span>
+            </ActionForm>
+            {/* Editable until the auction starts. These used to be write-once at
+                Create season, so changing your mind about team size or budget meant
+                creating a NEW season and orphaning every signup so far. */}
+            <ActionForm
+              action={setDraftSettings}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-end gap-2 border-t border-line pt-3 text-sm"
+            >
+              <Field label="Team size" htmlFor="cfgTeamSize">
+                <input
+                  id="cfgTeamSize"
+                  name="teamSize"
+                  type="number"
+                  min={2}
+                  max={10}
+                  defaultValue={season.teamSize}
+                  className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Min teams" htmlFor="cfgMinTeams">
+                <input
+                  id="cfgMinTeams"
+                  name="minTeams"
+                  type="number"
+                  min={2}
+                  max={32}
+                  defaultValue={season.minTeams}
+                  className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Draft budget ($)" htmlFor="cfgBudget">
+                <input
+                  id="cfgBudget"
+                  name="draftBudget"
+                  type="number"
+                  min={10}
+                  defaultValue={season.draftBudget}
+                  className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Budget MMR weight %" htmlFor="cfgWeight">
+                <input
+                  id="cfgWeight"
+                  name="budgetMmrWeight"
+                  type="number"
+                  min={0}
+                  max={50}
+                  defaultValue={season.budgetMmrWeight}
+                  className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <SubmitButton variant="secondary" size="sm" disabled={configLocked}>
+                Save draft settings
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                {configLocked
+                  ? draftSetupLockedMessage(season.status, data.draft?.status)
+                  : "applied when the draft starts"}
+              </span>
+            </ActionForm>
+            <ActionForm
+              action={setMatchSchedule}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+            >
+              <label htmlFor="matchSchedule" className="text-muted">
+                Match night
+              </label>
+              <input
+                id="matchSchedule"
+                name="matchSchedule"
+                type="text"
+                maxLength={80}
+                defaultValue={season.matchSchedule ?? ""}
+                placeholder={MATCH_SCHEDULE.label}
+                className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save schedule
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                {/* Once fixtures have kickoffs, pages print the night most of
+                    them use (a single moved week doesn't change it). */}
+                {fixturesNight
+                  ? `players now see the night most fixtures use: ${fixturesNight}`
+                  : `shown before signup${season.matchSchedule ? "" : " · using default"}`}
+              </span>
+            </ActionForm>
+            <ActionForm
+              action={setSeriesLengths}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-end gap-3 border-t border-line pt-3 text-sm"
+            >
+              <SeriesField
+                label="Regular season"
+                name="regularBestOf"
+                value={season.regularBestOf}
+                options={[1, 2, 3]}
+              />
+              <SeriesField
+                label="Playoffs"
+                name="playoffBestOf"
+                value={season.playoffBestOf}
+                options={[1, 3, 5, 7]}
+              />
+              <SeriesField
+                label="Grand final"
+                name="finalBestOf"
+                value={season.finalBestOf}
+                options={[1, 3, 5, 7]}
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save series lengths
+              </SubmitButton>
+              {/* These are copied onto each Match row when it is CREATED, so they
+                  are read-once per phase, not live. Saving after the fact still
+                  writes the Season and re-renders with the new value — a perfect
+                  false confirmation — while every existing fixture keeps its old
+                  length. Say which ones are already locked in rather than letting
+                  an admin "fix" a Bo1 into a Bo3 that never happens. */}
+              <span className="text-xs text-muted">
+                games per match — copied onto each fixture when it is created, so
+                these only affect matches made from now on.
+                {data.matches.some((m) => m.phase === "REGULAR")
+                  ? " The regular-season schedule already exists: change its length per match, or regenerate."
+                  : ""}
+              </span>
+            </ActionForm>
+          </div>
+        </details>
       </CardBody>
     </Card>
   );
@@ -4224,14 +4283,40 @@ function PlayoffControls({
           </div>
         ) : null}
         {status.pending > 0 && playoffMatches.length === 0 ? (
-          <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
-            ⚠ {status.pending} regular-season result
-            {status.pending === 1 ? "" : "s"} still needed — the playoffs are
-            locked until every match is entered (
-            {weekList(status.pendingWeeks)}).
-          </div>
+          regularResultsDue(data.matches, nowMs).length > 0 ? (
+            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+              ⚠ {status.pending} regular-season result
+              {status.pending === 1 ? "" : "s"} still needed — the playoffs are
+              locked until every match is entered (
+              {weekList(status.pendingWeeks)}).
+            </div>
+          ) : (
+            // Nothing is overdue: these fixtures just haven't been played, so
+            // a red warning on day one would be crying wolf.
+            <p className="text-xs text-muted">
+              The playoffs unlock once every regular-season result is in (
+              {status.pending} fixture{status.pending === 1 ? "" : "s"} still
+              to play).
+            </p>
+          )
         ) : null}
-        {(unresolvedTeams.length > 0 ||
+        {/* Every team reads as "tied" at zero matches, so gating this on
+            unresolved ties alone printed the whole tiebreaker rulebook from
+            signups on. The rules matter once the regular season is over;
+            before that, one line says ties are provisional. */}
+        {unresolvedTeams.length > 0 &&
+        !status.allComplete &&
+        status.completed > 0 &&
+        tiebreakerMatches.length === 0 &&
+        !playoffField.tiebreakers.error &&
+        playoffMatches.length === 0 ? (
+          <p className="text-xs text-muted">
+            Ties on the table are provisional until the regular season ends.
+            Any tie that still decides qualification or seeding then needs a
+            tiebreaker week, set up here.
+          </p>
+        ) : null}
+        {((unresolvedTeams.length > 0 && status.allComplete) ||
           tiebreakerMatches.length > 0 ||
           playoffField.tiebreakers.error) &&
         playoffMatches.length === 0 ? (
@@ -4529,7 +4614,8 @@ function PlayoffControls({
         <p className="text-xs text-muted">
           New tiebreakers use BO1 knockouts, up to three games per team. Existing brackets keep their published format.
           Series lengths for the regular
-          season, playoffs and final are set in the phase-control panel above.
+          season, playoffs and final are under Season settings on the phase
+          control card.
         </p>
       </CardBody>
     </Card>

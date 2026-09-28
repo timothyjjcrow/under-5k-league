@@ -95,6 +95,8 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Move a match night", rendered: "Move a match night" },
   // The next step sends recovery work to the phase card's disclosure.
   { quoted: "Fix the phase", rendered: "Fix the phase" },
+  // The Playoffs card sends series lengths to the phase card's setup forms.
+  { quoted: "Season settings", rendered: "Season settings" },
   // Reset playoffs and Return to regular season live in this disclosure on
   // the Playoffs card, and the phase card's notes send admins there.
   { quoted: "Fix the bracket", rendered: "Fix the bracket" },
