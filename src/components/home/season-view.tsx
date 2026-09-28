@@ -169,9 +169,9 @@ export function seasonHero(
     );
   }
 
-  // The hero's control slot. A signed-in league member gets their
-  // next-match check-in (it used to be the lowest-contrast strip on the page,
-  // below the hero); the late standin signup above takes the slot instead.
+  // The hero's control slot. A signed-in viewer gets their next-match
+  // check-in (it used to be the lowest-contrast strip on the page, below the
+  // hero), unless the late standin signup above has taken the slot.
   const aside =
     user && !action ? (
       <Suspense
