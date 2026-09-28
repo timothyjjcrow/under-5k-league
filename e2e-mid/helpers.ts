@@ -202,8 +202,12 @@ export async function expectNoOverlappingTargets(
   within?: string,
 ) {
   const overlaps = await page.evaluate((root: string | undefined) => {
-    const SEL = 'a[href], button, [role="button"], summary';
-    const scope = root ? `${root} ${SEL}` : `main ${SEL}`;
+    const SEL = ["a[href]", "button", '[role="button"]', "summary"];
+    // Prefix EVERY alternative: `main a[href], button` scopes only the first,
+    // which let the fixed phone tab bar (outside <main>) "overlap" whatever
+    // page content happened to sit at the bottom of the viewport.
+    const base = root ?? "main";
+    const scope = SEL.map((sel) => `${base} ${sel}`).join(", ");
     const live = [...document.querySelectorAll(scope)].filter((el) => {
       const r = el.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) return false;
