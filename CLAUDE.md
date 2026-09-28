@@ -106,8 +106,9 @@ fail, the static check refuses any entry that isn't an actual move, and the next
 full `--discover` folds the entries into the lists. A moved EQUIVALENT also
 needs its id renamed in the guard's `EQUIVALENT` list, reason and all.
 A full `--discover` also writes `killers` (per protected claim, the test file
-that failed first); verify runs that file alone with `--bail` and falls back to
-the whole suite only if it passes, so the order changes and the rule does not.
+that failed first); verify runs that file alone with `--bail` (once it has
+passed alone on unmutated source) and falls back to the whole suite only if it
+passes, so the order changes and the rule does not.
 CI skips the shards when the trusted classifier reports `needs_mutation: false`
 (only pages/components, assets, docs, or tests the Postgres suite never loads
 changed), `release:both` accepts that skip only on the trusted production

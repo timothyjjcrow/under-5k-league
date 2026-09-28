@@ -443,3 +443,22 @@ export function measureMutant(killer, { run, exists }) {
   }
   return { run: run([]), via: "suite", fallback };
 }
+
+/**
+ * Whether a recorded killer may run first. The whole-suite preflight proves
+ * the unmutated suite green, which is what makes a later failure evidence of
+ * the mutation; a killer's failure needs the same proof for that file ON ITS
+ * OWN. So each killer file runs once against unmutated source, the first
+ * time a claim uses it (`cache` remembers the result per file), and only a
+ * pass makes it trusted. A missing file is passed through so measureMutant
+ * reports it. Returns the killer to use (or null: the whole suite decides)
+ * and, when it was refused, how its unmutated run ended.
+ */
+export function trustedKiller(file, { run, exists, cache }) {
+  if (!file || !exists(file)) return { killer: file ?? null, untrusted: null };
+  if (!cache.has(file)) cache.set(file, run([file]).kind);
+  const alone = cache.get(file);
+  return alone === "pass"
+    ? { killer: file, untrusted: null }
+    : { killer: null, untrusted: alone };
+}

@@ -27,7 +27,7 @@
 // claim in the repo. A protected claim whose baseline `killers` entry names
 // the test file that failed in the last full --discover runs that ONE file
 // first; only when it does not fail does the whole suite run (see
-// measureMutant in ./mutation-claims.mjs). It fails when:
+// trustedKiller and measureMutant in ./mutation-claims.mjs). It fails when:
 //   * a protected claim is no longer caught  → a test that protected it regressed
 //   * a protected claim has DISAPPEARED      → the guard itself was removed
 //   * a live claim is absent from the baseline → discovery was not reviewed
@@ -61,6 +61,7 @@ import {
   measureMutant,
   resolveKillers,
   resolveRenames,
+  trustedKiller,
 } from "./mutation-claims.mjs";
 
 const BASELINE = "test/mutation-baseline.json";
@@ -945,6 +946,7 @@ console.log(
     : `Verifying ${mine.length} protected claims (of ${claims.length} found; baseline saw ${base.totalClaims})…\n`,
 );
 let decidedByKiller = 0;
+const killerAlone = new Map();
 for (const id of mine) {
   const claim = byId.get(id);
   if (!claim) {
@@ -954,12 +956,21 @@ for (const id of mine) {
     );
     continue;
   }
-  const killer = base.killers.get(id) ?? null;
+  const recorded = base.killers.get(id) ?? null;
+  // Runs before the mutant is written: the proof is on unmutated source.
+  const { killer, untrusted } = trustedKiller(recorded, {
+    run: (files) => runSuite({ bail: true, files }),
+    exists: existsSync,
+    cache: killerAlone,
+  });
   const measured = suiteCatches(claim, killer);
-  const fallbackNote = measured.fallback
-    ? `    [killer ${measured.fallback}] ${killer} ${FALLBACK_NOTES[measured.fallback]}, ` +
-      "so the whole suite decided (a full --discover refreshes killers)"
-    : null;
+  const fallbackNote = untrusted
+    ? `    [killer untrusted] ${recorded} ${untrusted === "test-failure" ? "fails" : "does not finish cleanly"} ` +
+      "on its own against unmutated source, so the whole suite decided"
+    : measured.fallback
+      ? `    [killer ${measured.fallback}] ${killer} ${FALLBACK_NOTES[measured.fallback]}, ` +
+        "so the whole suite decided (a full --discover refreshes killers)"
+      : null;
   if (measured.invalidMutation) {
     stopForInvalidMutant(claim, measured.invalidMutation);
   }

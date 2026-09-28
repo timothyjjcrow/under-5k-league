@@ -7,6 +7,7 @@ import {
   measureMutant,
   resolveKillers,
   resolveRenames,
+  trustedKiller,
 } from "./mutation-claims.mjs";
 
 const ids = (src, file = "src/lib/x.ts") =>
@@ -353,4 +354,44 @@ test("a killer that does not fail falls back to the whole suite", () => {
     fallback: "missing",
   });
   assert.deepEqual(gone.calls, [[]]);
+});
+
+test("a killer is trusted only after it passes alone on unmutated source", () => {
+  const killer = "test/integration/draft.itest.ts";
+  const cache = new Map();
+  const seen = [];
+  const deps = (kind, present = true) => ({
+    run: (files) => {
+      seen.push(files);
+      return { kind };
+    },
+    exists: () => present,
+    cache,
+  });
+  assert.deepEqual(trustedKiller(null, deps("pass")), { killer: null, untrusted: null });
+  assert.deepEqual(trustedKiller(killer, deps("pass", false)), {
+    killer,
+    untrusted: null,
+  });
+  assert.deepEqual(seen, []);
+  assert.deepEqual(trustedKiller(killer, deps("pass")), { killer, untrusted: null });
+  // Checked once per file: the cached pass is reused without another run.
+  assert.deepEqual(trustedKiller(killer, deps("test-failure")), {
+    killer,
+    untrusted: null,
+  });
+  assert.deepEqual(seen, [[killer]]);
+  for (const kind of ["test-failure", "infrastructure"]) {
+    const other = `test/integration/${kind}.itest.ts`;
+    assert.deepEqual(trustedKiller(other, deps(kind)), {
+      killer: null,
+      untrusted: kind,
+    });
+    // A refused killer stays refused, and never runs again.
+    assert.deepEqual(trustedKiller(other, deps("pass")), {
+      killer: null,
+      untrusted: kind,
+    });
+  }
+  assert.equal(seen.length, 3);
 });
