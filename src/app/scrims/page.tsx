@@ -274,7 +274,14 @@ export default async function ScrimsPage({
             <EmptyState
               compact
               title="No open scrim times"
-              description="A captain can post the first one above."
+              description={
+                // Only a captain has a post form above to point at.
+                myCaptainTeam && seasonOpen
+                  ? "Post the first one above."
+                  : seasonOpen
+                    ? "Team captains post their practice times here, and none are open right now."
+                    : "This season is closed, so no new times can be posted."
+              }
             />
           ) : (
             open.map((scrim) => {
