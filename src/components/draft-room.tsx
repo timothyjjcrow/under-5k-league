@@ -19,7 +19,8 @@ import {
   buttonClasses,
   textLink,
 } from "@/components/ui";
-import { cn, hasText } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { aboutText } from "@/lib/about-you";
 import { pushToast } from "@/components/toaster";
 import { Countdown } from "@/components/countdown";
 import { DiscordTag } from "@/components/discord-tag";
@@ -1381,6 +1382,11 @@ export function DraftRoom({
   // state we saw, not the live auction. Everything in the lot card dims
   // except the status slot that explains why.
   const lotStale = connectionUnavailable || disconnected;
+  // The player's "About you" box, named as the pool and profile name it. An
+  // older signup's captain note and goals show joined (about-you.ts).
+  const nominatedAbout = state.nominatedPlayer
+    ? aboutText(state.nominatedPlayer, " · ")
+    : "";
 
   return (
     <div className="space-y-6">
@@ -1952,17 +1958,12 @@ export function DraftRoom({
                 />
               </div>
             ) : null}
-            {/* Clamped: these are free text up to 1000 chars each. The full
+            {/* Clamped: this is free text up to 2000 chars. The full
                 text is a click away on the player's profile. */}
-            {hasText(state.nominatedPlayer.captainNote) ? (
+            {nominatedAbout ? (
               <div className="line-clamp-3 [overflow-wrap:anywhere]">
-                <span className="text-muted">Note for captains:</span>{" "}
-                {state.nominatedPlayer.captainNote}
-              </div>
-            ) : null}
-            {hasText(state.nominatedPlayer.statement) ? (
-              <div className="line-clamp-3 [overflow-wrap:anywhere] text-muted">
-                &ldquo;{state.nominatedPlayer.statement}&rdquo;
+                <span className="text-muted">About this player:</span>{" "}
+                {nominatedAbout}
               </div>
             ) : null}
           </div>
@@ -2200,7 +2201,7 @@ function AvailableList({
               className="ml-auto h-11 min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-xs outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9"
             >
               <option value="mmr">Sort: MMR</option>
-              <option value="rank">Sort: Rank</option>
+              <option value="rank">Sort: Medal</option>
               <option value="name">Sort: Name</option>
             </select>
           </div>
