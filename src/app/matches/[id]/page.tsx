@@ -2133,12 +2133,16 @@ function SidePlayers({
                 />
               </div>
               {hasNet || hasGpm || hasLh ? (
+                // Fixed-width gpm, lh and net-worth cells (the has* flags are
+                // per side, so every row has the same cells): the bars then
+                // start at the same x and share one track width down the
+                // side, which is the comparison they exist for.
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-10 text-[11px] tabular-nums text-muted">
                   {hasGpm ? (
-                    <span title="Gold per minute">{p.gpm ?? "—"} gpm</span>
+                    <span className="w-14" title="Gold per minute">{p.gpm ?? "—"} gpm</span>
                   ) : null}
                   {hasLh ? (
-                    <span title="Last hits">{p.lastHits ?? "—"} lh</span>
+                    <span className="w-10" title="Last hits">{p.lastHits ?? "—"} lh</span>
                   ) : null}
                   {hasNet ? (
                     <span
@@ -2154,7 +2158,7 @@ function SidePlayers({
                           style={{ width: `${nwPct}%` }}
                         />
                       </span>
-                      <span className="shrink-0 font-mono text-accent">
+                      <span className="w-11 shrink-0 text-right font-mono text-accent">
                         {formatNetWorth(p.netWorth)}
                       </span>
                     </span>
