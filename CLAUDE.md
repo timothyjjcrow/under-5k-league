@@ -787,8 +787,14 @@ the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
   PLAYOFFS and a champion/final-standings recap on COMPLETE. Bracket
   round-grouping is pure `slotRound` / `groupPlayoffRounds` (`schedule.ts`,
   tested), shared with `/schedule`.
-- **Nav** (`site-header.tsx`) gates links by phase: Teams appears from DRAFT on;
-  Schedule + Leaders from REGULAR_SEASON on. `isActive` keeps "Teams" and
+- **Nav** — `src/lib/site-nav.ts` is the one page list behind the header,
+  Explore, the phone tab bar and the footer. Teams shows from DRAFT on (and
+  the draft room from `DRAFT_ROOM_LEAD_HOURS` before draft night);
+  Schedule and Pick'em once the auction is complete; Leaders and Hero meta
+  from REGULAR_SEASON once a game exists; Record book, Compare and the Hall
+  of Fame only once they have something to show (`getPublicLeagueContent`,
+  whose `hasChampion` is `hasOfficialChampion`). "Season recap" links the
+  finished season's own `/seasons/<id>` page. `isActive` keeps "Teams" and
   "My Team" from both highlighting on your own team page.
 
 ## Inhouse (done)
@@ -1925,7 +1931,11 @@ already in the `Setting` table.
   space or an en dash for an em dash would have stacked prefixes in the tab
   forever with nothing anywhere to notice. A round-trip test pins it.
 - **The live feed is `draftFeedDiff` + `seedDraftFeed`** (`draft-feed.ts`,
-  tested). Rules that each have a silent, in-front-of-everyone failure mode:
+  tested). The room shows only its SALE lines, as a "Recent sales" card (the
+  lot card already carries the live nomination and its bid trail); the
+  nomination and bid lines go to a screen-reader-only status line, and the
+  seed no longer includes the live lot. Rules that each have a silent,
+  in-front-of-everyone failure mode:
   the previous-rosters set includes CAPTAINS (`transferCaptaincy` demotes a
   member while leaving them rostered, and is legal in both states where this
   room polls — filter them out and the room announces the outgoing captain as
@@ -1978,8 +1988,31 @@ already in the `Setting` table.
 
 - `draftRecap` (`src/lib/draft-recap.ts`, tested): biggest single spend, best
   MMR-per-dollar steal, top-spending and least-spending teams, total spent —
-  captains ($0) excluded. Rendered as a "Draft night" card on `/teams`
-  whenever any purchases exist (live during DRAFT, historical after).
+  captains ($0) excluded. Rendered as a "Draft night" card on `/teams` from
+  the auction's own sale receipts (`readDraftSales` on the draft's active
+  run): a season drafted before receipts were recorded has no card, because
+  today's roster prices aren't the auction's once moves and refunds land.
+
+## Team identity: renames, crest colours, jerseys (done)
+
+- **Captains rename their own team** (name + logo) from the team page;
+  admins get the same form there plus the /admin override. One service,
+  `saveTeamIdentity` (`team-identity-service.ts`, Serializable, seam
+  `teamIdentity.save.beforeTx`, `test/integration/team-identity.itest.ts`):
+  active, not-COMPLETE seasons only, names unique within the season, and the
+  captaincy is re-asserted in the `updateMany` WHERE (a transfer mid-edit
+  must not let the outgoing captain rename). The render rule is the pure
+  `canEditTeamIdentity`. The action (`src/app/actions/teams.ts`) logs, expires
+  the `"games"` tag (record matchups embed team names) and posts to Discord at
+  most once per team per `TEAM_IDENTITY_PING_THROTTLE_SECONDS`.
+- **Crest colours** (`team-hues.ts`, pure): each season's teams share the
+  colour wheel evenly in creation order; the root layout publishes them as one
+  small stylesheet keyed by team id (`getTeamHueStyleSheet`), so no caller
+  passes a hue. A failure there only drops back to the old hash hue.
+- **Jerseys** (`team-jerseys.ts`) follow the team, not its name: each set
+  carries the production `Team.id` it was made for, with a roster match
+  (`JERSEY_ROSTER_MATCH_MIN` of its five players, by Steam name) as the
+  fallback for fixtures and restored copies. US league only.
 
 ## Accessibility conventions (done — keep following these)
 
@@ -2014,7 +2047,7 @@ sm:grid-cols-2`) — without it the implicit track is `auto` and a long team
   table width into the page scroll area through the card otherwise — every
   phone got a ~100px horizontal page scroll before the mid-season mobile e2e
   caught it. Flex-wrap chips need `min-w-0` to truncate instead of widening
-  the page (Run-in opponent chips).
+  the page (the old Run-in opponent chips).
 - **The site header is `h-20` (80px)** — anything pinned beneath it must use
   the same offset and be updated TOGETHER: the draft room's fixed compact
   clock bar (`top-20`) and its IntersectionObserver (`rootMargin -80px`),
@@ -2107,8 +2140,11 @@ load-bearing: the status chip spans BOTH phone tracks rather than sitting in
 track 3 (an `auto` track sized by a "Techies Anonymous $4" chip stole ~170px
 back off the name), and heroes ride with the roles below `md`, drop out between
 `md` and `xl`, and take their own track at `xl` — `xl:order-*` swaps them ahead
-of status for the wide layout only. The pool leads the page and the rosters
-follow it; `/teams` is the rosters' real home.
+of status for the wide layout only. The pool is the whole page: standins are
+rows in it with a Standin badge (the "Standins" chip, `?status=standin`), the
+separate roster and captain-hopeful sections are gone, and `/teams` is the
+rosters' home. "Wants captain" (badge and chip) shows only while captains are
+still being chosen, and only on volunteers not yet picked.
 
 **`/inhouse` — order is the product.** The page was room → guide → four ~500px
 box scores → ladder, which put the Elo ladder (the reason anyone comes back)
@@ -2227,8 +2263,9 @@ EmptyState. Two controls with the same accessible name is both a UI wart and
 a strict-mode e2e flake that only fires on the seeds where the filter happens
 to empty the list. The count line now yields when the list is empty.
 
-**`/players` filters live in the URL** (`?q=&pos=&sort=&cap=1&status=free`,
-defaults omitted). They seed from `useSearchParams` on mount — which is why
+**`/players` filters live in the URL** (`?q=&pos=&sort=&cap=1&status=free`
+or `status=standin`, defaults omitted; a stale `cap=1` or `status=standin`
+link with nothing to match shows everyone). They seed from `useSearchParams` on mount — which is why
 `<PlayerPool>` needs its `<Suspense>` boundary — and mirror back via
 `history.replaceState`, NOT `router.replace`: the filter is entirely
 client-side, and a router call re-runs the page's four Prisma queries on every
@@ -2321,7 +2358,7 @@ renders byte-identical to the pre-feature page:
 statement?}` — an older signup's goals, sent only when they add to
   `captainNote`; the row shows the two joined (`aboutText`). Token/title text lives in
   `player-pool.ts` (`inhouseToken`/`pubToken`/…) so the rows, the lg column
-  and the hopefuls cards can never phrase the same fact differently.
+  and any other pool surface can never phrase the same fact differently.
   The component takes `now` (server epoch ms) so SSR and hydration compute
   identical recency labels.
 - The row grid is `rowGrid(withInhouse)` now — ONE computed template shared
@@ -2773,13 +2810,15 @@ ask it made twice. What that turned into:
 
 ## Standings & schedule UX (done)
 
-- **StandingsTable** is now a thin server adapter (`page.tsx`) over the
-  sortable client `src/components/standings-table.tsx`: clickable
-  W/D/L/Diff/Pts headers (`aria-sort`), real league rank kept in the # column,
-  viewer's team row highlighted with a You chip, weekly ▲/▼ movement
-  (`standingsMovement`), ✓/✗ clinch marks (`clinchStatuses` — conservative
-  points-only math, suppressed when everyone makes the bracket). Cut line +
-  shading + arrows only render in league order.
+- **StandingsTable** is a thin server adapter (`standings-table-server.tsx`)
+  over ONE server-rendered layout, `src/components/standings-table.tsx`, used
+  by home, /schedule and the season archive: rank, team with a plain status
+  line (Qualified / Eliminated / Withdrawn / Tiebreaker pending / Tied /
+  Settled by tiebreaker, plus a "Your team" tag), W–D–L, game difference,
+  points, and the last five results on wider screens. There is no sortable
+  "detailed" view any more. Weekly ▲/▼ movement (`standingsMovement`), ✓/✗
+  clinch marks (`clinchStatuses` — conservative points-only math, suppressed
+  when everyone makes the bracket) and the playoff cut line stay.
 - **Tiebreak chain** (`computeStandings`, tested): points → game diff →
   series wins → HEAD-TO-HEAD among the still-tied (a mini-table of the tied
   group's meetings via `headToHeadRanks` — mini points then mini game diff;
@@ -2790,13 +2829,17 @@ ask it made twice. What that turned into:
   property test re-derives every leaf via computeStandings); `clinchStatuses`
   stays deliberately points-only and is unaffected.
 - **/schedule** during REGULAR_SEASON: "Playoff picture" (projected first
-  round via `playoffFirstRound` over live standings) and "Run-in"
-  (`remainingSchedule` — rank-tagged remaining-opponent chips, in-cut
-  opponents accented).
-- **ScheduleWeeks** (`src/components/schedule-weeks.tsx`, client): team filter
-  chips, fully-played past weeks collapsed to a header line, current week
-  gets `id="this-week"` (dashboard deep-links `/schedule#this-week`), byes
-  shown per week (`byeTeamsByWeek`) and kept visible under a team filter.
+  round via `playoffFirstRound` over live standings, plus a playoff tracker
+  line per team). The old "Run-in" card is gone.
+- **ScheduleWeeks** (`src/components/schedule-weeks.tsx`, client): a team
+  dropdown ("All teams" is the way back), this week first, then the weeks to
+  come, then "Earlier weeks" newest first (`orderScheduleWeeks`); a closed
+  week still shows one linked score line per series. The current week gets
+  `id="this-week"` (dashboard deep-links `/schedule#this-week`), byes show per
+  week (`byeTeamsByWeek`) and stay visible under a team filter, and a team
+  with a bye gets a "Week N: bye" note (`teamByeWeek`). In PLAYOFFS and
+  COMPLETE the regular season folds into a closed "Regular-season results"
+  section (`ScheduleFold`, `id="fixtures"`).
 - **Leaders**: `src/components/leader-board.tsx` — full ranked rows, top-5 +
   show-all toggle, viewer's row highlighted and pinned with real rank when
   outside the top 5.
@@ -3425,7 +3468,7 @@ deferred below. The rules that came out of it:
   roles + "no Discord"; /players' standin cards show contact (signed-in
   gated); /me's cover card keys on ACTIVE+unrostered, not type (undrafted
   PLAYER free agents are legal cover), with the bare card still standin-only;
-  profiles get a "Stood in — N matches covered" season line (COMPLETED
+  profiles say "Stood in for N matches" in the Seasons card (COMPLETED
   matches only — recognition is the cheapest standin-recruitment tool).
 - **Honest dead-end copy**: a mid-series swap is impossible by design (remove
   refuses once games import; the seat conflict error says "can't be swapped —

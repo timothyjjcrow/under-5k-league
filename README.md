@@ -16,7 +16,7 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
 
 - **Steam sign-in** (OpenID 2.0) with a dev/mock login for local testing. Real
   logins pull the player's **Steam name + avatar** via the Steam Web API; admins
-  can bulk "Sync avatars" and players can refresh from their profile.
+  can bulk "Sync avatars" and players can refresh from My account (`/me`).
 - **Signups** with live progress toward the minimum needed to start, and an
   optional **soft MMR limit** (e.g. an under-4.5K league) that flags over-limit
   signups for admin review — only the hard 5K+ ceiling refuses anyone.
@@ -33,13 +33,13 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
   OpenDota (auto-detect from rosters, or paste a match id/URL). Winners and
   series scores are recorded automatically, with full box scores (heroes, KDA)
   on a match detail page.
-- **Team & player pages** — rosters, records, and fixtures, a "My Team"
-  shortcut in the nav, and profiles that show each player’s **Steam-verified
+- **Team & player pages** — rosters, records, and fixtures (captains can rename
+  their team and set its logo), a "My Team" shortcut in the nav, and profiles that show each player’s **Steam-verified
   Dota identity** and **ranked medal** — a resource for captains at draft time
   (medals appear in the player pool and draft room).
 - **Player scouting profiles** — on signup players pick their **preferred
-  roles**, list **favorite heroes**, and write what they want from the league +
-  a **note to captains**; all of it shows in the player pool and draft room.
+  roles**, list **favorite heroes**, and write an optional **About you** note
+  for captains; all of it shows in the player pool and draft room.
 - **In-client Dota league** — register the league at dota2.com/league, save the
   **league id**, host matches in private lobbies tagged with it, and one-click
   **sync** pulls every league game automatically (no manual match ids).
