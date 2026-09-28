@@ -826,7 +826,9 @@ automation worker does a small pass about once an hour
   `playerDataRefreshFailedUser` (it goes last next time), and writes a FUTURE
   timestamp into the throttle so the next pass waits
   `PLAYER_DATA_REFRESH_BACKOFF_MS`. A refusal is not a degraded run; only an
-  exception is (`PLAYER_DATA_REFRESH_FAILED`).
+  exception is (`PLAYER_DATA_REFRESH_FAILED`). A game OpenDota answers 404
+  for is not a refusal: `enrichStoredGames` marks it done (`benchmarks: null`)
+  and the pass carries on, so it isn't re-fetched every hour.
 - **Hands off during a live auction** (`profileSyncAllowed`), same as the
   manual button: getDraftState re-reads medals every poll.
 - **One manual button**, "Refresh player data now" (`refreshPlayerData`) in
@@ -1116,7 +1118,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   room header.
 - **Captain-selection vote**: a filled lobby opens in `READY_CHECK`; after all
   ten accept it enters `CAPTAIN_VOTE`. The players choose `VOTE` (elect
-  specific players), `MMR` (highest 2), or `RECORD` (best 2 inhouse records).
+  specific players), `MMR` (highest 2), or `RECORD` (most inhouse wins; players
+  with no win yet fall back to MMR order).
   A ballot atomically reasserts CAPTAIN_VOTE and `voteEndsAt > now`, so a late
   request cannot land after resolution. It resolves when everyone votes or the
   timer expires, then installs the top two and enters `DRAFTING`.
@@ -1488,10 +1491,23 @@ cleanly. Bringing wagering back would need a fresh design, not a revert.
 ## Discord notifications (done)
 
 - `src/lib/discord.ts` — pure message formatters (unit-tested) +
-  `sendDiscordMessage` (best-effort POST to an incoming webhook, 5s timeout,
-  never throws). Webhook URL: `Setting` table key `discordWebhookUrl`
-  (`src/lib/settings.ts`, admin panel card with save/validate/test) with
-  `DISCORD_WEBHOOK_URL` env as fallback.
+  `sendDiscordMessage` (never throws). Webhook URL: `Setting` table key
+  `discordWebhookUrl` (`src/lib/settings.ts`, admin panel card with
+  save/validate/test) with `DISCORD_WEBHOOK_URL` env as fallback.
+- **League posts go through a durable outbox**
+  (`src/lib/league-announcement-outbox.ts`): `sendDiscordMessage` returns true
+  once the row is queued, makes one immediate attempt, and the automation
+  worker's `deliverPendingLeagueAnnouncements` drains the rest in order. How
+  Discord's answer is handled (`discordRefusalKind`, `league-delivery.ts`):
+  400/413 means the MESSAGE was refused, so that post is cancelled and the
+  queue moves on; 401/403/404 means the WEBHOOK refused, so the post is kept
+  and retried only at the slowest interval, which pauses the queue until an
+  admin saves a working webhook (saving or a test post resumes it); anything
+  else retries with backoff. Time-bound posts carry `expiresAt` and are
+  dropped instead of sent late (a live draft's posts expire as a group when
+  the draft ends). The admin Discord card and Needs attention show the
+  queue's delivery health. News posts and `durable: false` sends (webhook
+  health checks) bypass the outbox.
 - **The webhook URL is a bearer credential (anyone holding it can post to the
   channel — prime phishing bait) and is NEVER sent to the client.** The admin
   card renders only a boolean + a masked fingerprint from pure `maskWebhookUrl`
@@ -2093,7 +2109,10 @@ already in the `Setting` table.
   the admin picks week 1's datetime in the Generate-schedule form; every
   regular week and each playoff round (both `createPlayoffBracket` and
   `advancePlayoffBracket`) gets `scheduledAt = first + (week−1)×7d`.
-  Empty input = no times (old behavior); per-match "Set time" still overrides.
+  `generateSchedule` REQUIRES the first match night (an untimed schedule got
+  no check-in, reminder, auto-import or pick'em lock), and Draft → Regular
+  season refuses until fixtures exist (`seasonPhasePolicy`). Per-match
+  "Set time" and "Move a match night" still override.
 
 ## Calendar feed (done)
 
@@ -2190,7 +2209,7 @@ review because both halves are individually correct. Two replacements, both in
   `lg:col-span-3` when the viewer has none. The `COMPLETE` view's twin split
   instead uses `items-start`, because there the short card genuinely should not
   stretch.
-- **A band whose card count is UNKNOWN at render time** (League pulse renders
+- **A band whose card count is UNKNOWN at render time** (a card that renders
   `null` until the league has games; Upcoming and Recent each vanish at the ends
   of a season) uses auto-fit:
   `grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]`.
@@ -2350,7 +2369,7 @@ screen, and two things on this site prove it:
   `AdminSection`s plus a `✎ Rename team` disclosure per team, that alone was
   439 of 442 findings.
 - **A clipping ancestor does not move the rect.** A row scrolled below the fold
-  of `admin/page.tsx`'s `max-h-80 overflow-y-auto` captain list still reports
+  of `admin/page.tsx`'s scrolling signup list (now `md:`-only) still reports
   coordinates hundreds of pixels down the page, landing on the Schedule card's
   controls. That was the other 3-4.
 
@@ -2596,7 +2615,7 @@ statement?}` — an older signup's goals, sent only when they add to
   may have zero/fewer rows but never more than their ruled score. Every
   retained game must have ten unique, attributed users whose team ids agree
   with Radiant/Dire and whose winner agrees with the saved result.
-- `/leaders`, dashboard `LeaguePulse`, and `honors-service.ts` use that same
+- `/leaders`, Home's weekly honors line, and `honors-service.ts` use that same
   gate. Final-but-incomplete weeks visibly wait for repair instead of crowning
   from partial data.
 - `honorsAnnounced:<season>:<week>` is a retryable CAS state, not a simple
@@ -2785,8 +2804,10 @@ coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
 - Admin backfill: `enrichStoredGames` (integration-tested) re-fetches games
   missing the marker by `dotaMatchId` in bounded batches, merging new fields
   WITHOUT touching userId/teamId attribution. The hourly player data refresh
-  enriches a few games per pass (`stopOnFailure`), and "Refresh player data
-  now" does a few more when OpenDota answered; there is no separate button.
+  enriches a few games per pass (`stopOnFailure` stops at a refused call; a
+  404 game is marked done instead and the batch continues), and "Refresh
+  player data now" does a few more when OpenDota answered; there is no
+  separate button.
 
 ## Opponent scouting report (done, branch: ambitious-features)
 
@@ -2841,6 +2862,12 @@ coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
   log, and announce once. Pin/delete use conditional writes; every success,
   authoritative no-op, and stale-tab result revalidates `/`, `/news`, and
   `/admin`.
+- **Create season unpins the old season's news** (`unpinNewsBeforeFinal`,
+  `news-rollover.ts`): posts pinned before that season's grand final was
+  decided are unpinned (the toast names them); anything pinned after the
+  final stays, and every post stays in /news. A season with no
+  authoritative final unpins nothing. The unpin is a guarded claim on
+  `pinned` (seam `news.unpinNewsBeforeFinal.beforeUnpin`).
 - **Discord copy**: "Also post to Discord" (on by default) and "Ping
   @everyone" (off, always the admin's tick) on the form. News posts go
   straight to the webhook with `?wait=true` (`postNewsToDiscord`) — NOT the
@@ -2940,11 +2967,17 @@ ask it made twice. What that turned into:
   W–L–D wraps at Stat's text-3xl in the narrow column), form strip, stake
   one-liner, next-up tile aligned to the ENGINE's nextMatchId so the "next
   series" guarantee and the tile never point at different matches.
-- **League pulse**: latest publishable weekly honors + most-picked known hero,
-  derived through the shared honors and trusted-5v5 boundaries. A final week
-  awaiting boxes and corrupt/unknown-hero imports explain their repair path;
-  the component renders nothing rather than a header-only shell when it has no
-  content or state to explain.
+- **Weekly honors line** (`WeeklyHonorsLine`, replaced League pulse): one
+  open line once a week's honors are official — "Week 4 honors · Player of
+  the week: X (best game …) · Team of the week: Y · All honors" — from the
+  same readiness rows Discord and /leaders use (`honorBestGame` picks the
+  game). With no official honors it renders nothing; the in-progress and
+  waiting-on-box-scores caveats live on /leaders.
+- **Admin line** (`AdminStrip`, admins only): under the hero, the /admin
+  next-step headline word for word plus how many matches Needs attention
+  lists (`adminHomeLine`, `admin-home-line.ts`). It must feed
+  `adminNextStep` and `matchAttention` the same inputs /admin does, or the
+  two headlines drift. Database reads only, never Discord.
 - COMPLETE: champion card + "How it was won" bracket + archive links.
 
 ## Standings & schedule UX (done)
@@ -3541,17 +3574,15 @@ draft night could actually hit were fixed, each sabotage-verified:
 - The admin auto-nominate button no longer renders while PAUSED (it could
   only walk the admin through the confirm into "Draft is not live").
 
-**Deferred deliberately — two-admin sub-second races, all recoverable via
-abortDraft pre-results, none reachable with one admin driving draft night**
-(don't rediscover these as new): captain-management actions (add/remove/
-transfer/randomize/setDraftSettings) hold only read-time draft-status locks
-against a CONCURRENT startDraft; two concurrent addCaptains can mint a
-duplicate draftOrder (the real fix is `@@unique([seasonId, draftOrder])` — a
-schema change deliberately not shipped hours before a live draft);
-setSeasonPhase's claim can't see a same-value DRAFT rival (startDraft writes
-status=DRAFT blindly, so a concurrent flip out of DRAFT still matches its
-WHERE); signFreeAgent/releasePlayer check draft-COMPLETE read-time only
-against a concurrent undoLastSale reopen.
+**Deferred on 2026-08-01, all closed since** (see `docs/DECISIONS.md`,
+"Closed since"; don't cite them as open): the captain-management actions
+(add/remove/transfer/randomize/setDraftSettings), `setSeasonPhase`, and
+`signFreeAgent`/`releasePlayer` now re-read the season and draft inside a
+Serializable transaction, so a concurrent startDraft or undoLastSale reopen
+can't slip past them. Duplicate draft orders are closed by a Serializable
+`addCaptain` plus `startDraft` refusing duplicates; a
+`@@unique([seasonId, draftOrder])` was decided AGAINST (it breaks
+`randomizeDraftOrder`'s one-team-at-a-time rewrite).
 
 ## Standins & replacement hardening (2026-08-02 — a 35-agent audit, then the fix pass)
 

@@ -203,7 +203,8 @@ id is a required mutation claim. Active season, lifecycle/Draft, teams,
 withdrawal flags, played rows, attached games, and replacement collateral are
 read in the same Serializable transaction that deletes/recreates fixtures and
 their reminder markers. Generation refuses stale authority, withdrawn teams,
-landed results, and fewer than two teams. Replacement counts its dependent
+landed results, fewer than two teams, and a missing first match night (an
+untimed fixture gets no check-in, reminder, auto-import or pick'em lock). Replacement counts its dependent
 RSVP/prediction/standin/proposal rows, and displaced standins are told after
 commit. During SIGNUPS/DRAFT, `src/lib/league-lifecycle.ts` requires a
 completed auction before schedule or fantasy work opens;
@@ -213,7 +214,7 @@ legacy Draft row. Result imports require REGULAR_SEASON or PLAYOFFS inside
 their write transaction, which makes them race safely with Abort.
 `DRAFT → REGULAR_SEASON` has **no automatic writer** — the auction finishing
 does not advance the phase; the admin uses the positive-policy
-`setSeasonPhase` handoff. That control is not a generic state editor: it
+`setSeasonPhase` handoff, which refuses until fixtures exist. That control is not a generic state editor: it
 permits safe adjacent moves and narrowly proven recovery shapes, while Start/
 Abort draft, Start/Return playoffs, and crowning own transitions that also
 change dependent data. `/api/calendar` serves every timed active-season fixture
@@ -834,7 +835,13 @@ enums, so every status column is a string whose allowed values live in
   recoverable. Earlier non-terminal rows block later rows so related messages
   cannot intentionally overtake one another. Discord has no idempotency key,
   so a crash after webhook acceptance but before `SENT` commits retains the
-  unavoidable at-least-once duplicate gap.
+  unavoidable at-least-once duplicate gap. Discord's answer decides the row
+  (`discordRefusalKind`): 400/413 cancels that post, 401/403/404 keeps it
+  and pauses the queue at the slowest retry until a working webhook is
+  saved (saving one, or a test post, resumes it), and anything else backs
+  off. A time-bound post carries `expiresAt` and is cancelled rather than
+  sent late; the admin Discord card and Needs attention show the queue's
+  delivery health.
 - `AdminAction` — append-only audit log; deliberately no FKs (records outlive
   what they describe; every table wipe must name it explicitly). Coverage
   includes phase/draft/playoff recovery, session revocation, league and Discord
