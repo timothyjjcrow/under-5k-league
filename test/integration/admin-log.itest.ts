@@ -22,16 +22,15 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 
 import { prisma } from "@/lib/prisma";
 import { logAdminAction, recentAdminActions } from "@/lib/admin-log";
+import { removeCaptain } from "@/app/actions/admin-captains-draft";
+import { assignStandin, removeStandin } from "@/app/actions/admin-roster";
 import {
-  assignStandin,
   generateSchedule,
   recordResult,
-  removeCaptain,
   removeGame,
-  removeStandin,
   setMatchTime,
   setWeekNight,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {

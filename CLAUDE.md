@@ -1661,7 +1661,7 @@ reached a player who wasn't already looking at it.
   string a captain copies by hand and no amount of it makes someone pingable.
   Services return `mentions`/`notifyUserId` and the ACTION does the send, so a
   webhook failure still can't touch the write. NOTE the assign/remove
-  announcement has FOUR SEND sites (`standins.ts` ×2 AND `admin.ts` ×2) — miss
+  announcement has FOUR SEND sites (`standins.ts` ×2 AND `admin-roster.ts` ×2) — miss
   one and the admin path silently stops notifying. The STAND-DOWN message
   (`standinRemovedMessage`) is sent from EVERY path that kills a booking or
   its fixture: both removeStandin paths (one builder site in

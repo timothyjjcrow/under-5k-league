@@ -19,7 +19,7 @@ vi.mock("@/lib/discord", async (importOriginal) => {
   };
 });
 
-import { setDraftNight, startDraft } from "@/app/actions/admin";
+import { setDraftNight, startDraft } from "@/app/actions/admin-captains-draft";
 import { requireAdmin } from "@/lib/auth";
 import {
   getWebhookUrl,

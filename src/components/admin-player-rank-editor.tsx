@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { setPlayerRank } from "@/app/actions/admin";
+import { setPlayerRank } from "@/app/actions/admin-roster";
 import { RANK_MEDALS, rankMedalName } from "@/lib/rank";
 import { ActionForm, SubmitButton } from "./action-form";
 import { RankMedal } from "./ui";

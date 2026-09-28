@@ -23,7 +23,7 @@ import {
   reopenMatch,
   setMatchTime,
   setWeekNight,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { proposeReschedule, respondReschedule } from "@/lib/reschedule-service";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { announceAdminRetime } from "@/lib/retime-announcement";

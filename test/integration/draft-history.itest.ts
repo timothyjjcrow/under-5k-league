@@ -6,7 +6,13 @@ vi.mock("@/lib/discord", async (original) => ({
 }));
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
-import { addCaptain, removeCaptain, startDraft, releasePlayer, signFreeAgent, transferCaptaincy } from "@/app/actions/admin";
+import {
+  addCaptain,
+  removeCaptain,
+  startDraft,
+  transferCaptaincy,
+} from "@/app/actions/admin-captains-draft";
+import { releasePlayer, signFreeAgent } from "@/app/actions/admin-roster";
 import { abortDraft, getDraftState, nominatePlayer, pauseDraft, placeBid, resolveExpiredNomination, resolveStalledNomination, resumeDraft, undoLastSale, voidCurrentLot } from "@/lib/draft-service";
 import { readAcceptedBids } from "@/lib/draft-history";
 import { backfillRosterTenures, captureRosterTenure } from "@/lib/roster-history";

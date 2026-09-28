@@ -22,7 +22,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { reinstateTeam, withdrawTeam } from "@/app/actions/admin";
+import { reinstateTeam, withdrawTeam } from "@/app/actions/admin-roster";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { createPlayoffBracket } from "@/lib/playoff-service";
 import { prisma } from "@/lib/prisma";

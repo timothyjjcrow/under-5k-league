@@ -112,8 +112,8 @@ auction, and completed-season records are read-only.
 **Captains and draft creation.** Captaincy is `Team.captainId` +
 `TeamMember.isCaptain` (there is no CAPTAIN registration type). Admin actions
 `addCaptain`/`removeCaptain`/`transferCaptaincy`/`randomizeDraftOrder`/
-`setDraftSettings`/`setDraftNight` (all `src/app/actions/admin.ts`) configure
-the field. `src/lib/draft-setup.ts` is the shared capability policy: setup is
+`setDraftNight` (`src/app/actions/admin-captains-draft.ts`) and
+`setDraftSettings` (`src/app/actions/admin-season.ts`) configure the field. `src/lib/draft-setup.ts` is the shared capability policy: setup is
 open in SIGNUPS or DRAFT only while the Draft row is missing/NOT_STARTED;
 captain handover is allowed after the auction but never live/paused or in a
 completed season. Every setup action carries the active-season id rendered by
@@ -194,7 +194,8 @@ forfeits. Every path re-reads lifecycle and row authority in its Serializable
 write so it cannot race Start/Abort, phase changes, standin cover, or another
 roster command.
 
-**Schedule generation.** `generateSchedule` (`src/app/actions/admin.ts`) runs
+**Schedule generation.** `generateSchedule`
+(`src/app/actions/admin-schedule-results.ts`) runs
 the pure circle-method round robin (`roundRobin` in `src/lib/schedule.ts`,
 home/away fairness, rotating BYE, optional mirrored second leg) and stamps
 kickoffs as pure arithmetic off `Season.firstMatchNight`
@@ -410,7 +411,7 @@ can either `archiveCompletedSeason` and deliberately stop in offseason, or
 season in one Serializable transaction. `createSeason` cannot conceal an
 unfinished league cancellation.
 
-`archiveIncompleteSeasonAction` (`src/app/actions/admin.ts`) is the separate,
+`archiveIncompleteSeasonAction` (`src/app/actions/admin-season.ts`) is the separate,
 explicit and reversible cancellation path. It deactivates the claimed
 unfinished Season without deleting or changing its phase; in the same
 transaction it parks an IN_PROGRESS/PAUSED auction, clears only its clocks,
@@ -544,7 +545,7 @@ before `sentAt` commits. Routine queue/cancel notifications remain best-effort.
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Pure logic (no DB, no IO)   | `src/lib/<name>.ts` + sibling `<name>.test.ts`                                                                                                               | `draft.ts`, `standings.ts`, `schedule.ts`, `inhouse.ts`, `rank.ts`, `scenarios.ts`                                                    |
 | DB services (transactional) | `src/lib/<name>-service.ts`, covered by `test/integration/*.itest.ts`                                                                                        | `draft-service.ts`, `inhouse-service.ts`, `playoff-service.ts`, `standin-service.ts`, `reschedule-service.ts`, `result-sync-service.ts` |
-| Thin mutations              | `src/app/actions/*.ts` (server actions: auth + parse + delegate + toast + Discord send + revalidate) and `src/app/api/*` route handlers for the polled rooms | `actions/admin.ts`, `actions/registration.ts`, `api/draft/*`, `api/inhouse`                                                             |
+| Thin mutations              | `src/app/actions/*.ts` (server actions: auth + parse + delegate + toast + Discord send + revalidate) and `src/app/api/*` route handlers for the polled rooms | `actions/admin-*.ts`, `actions/registration.ts`, `api/draft/*`, `api/inhouse`                                                           |
 | Server pages                | `src/app/**/page.tsx` — query Prisma directly (no read API), run pure libs, serialize plain props                                                            | `page.tsx` (dashboard), `schedule/page.tsx`                                                                                             |
 | Client leaves               | `src/components/*.tsx` `"use client"` — polling rooms, forms, clocks, toasts                                                                                 | `draft-room.tsx`, `inhouse-room.tsx`, `action-form.tsx`, `local-time.tsx`                                                               |
 

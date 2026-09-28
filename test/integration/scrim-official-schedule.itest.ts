@@ -16,7 +16,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { generateSchedule } from "@/app/actions/admin";
+import { generateSchedule } from "@/app/actions/admin-schedule-results";
 import { sendDiscordMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 import {

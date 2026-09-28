@@ -21,7 +21,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
-import { changeCaptain } from "@/app/actions/admin";
+import { changeCaptain } from "@/app/actions/admin-captains-draft";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";
 import { onceAt, setRaceHook } from "@/lib/race-hook";

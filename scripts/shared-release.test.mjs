@@ -146,7 +146,7 @@ test("the trusted classification decides which CI gates a release needs", () => 
   // A page or wording change still runs PostgreSQL, but not the ratchet.
   assert.deepEqual(gates(classifyEntries([modified("src/app/schedule/page.tsx")]), unchanged), { postgres: true, mutation: false });
   assert.deepEqual(gates(classifyEntries([modified("CLAUDE.md")]), classifyEntries([modified("CLAUDE.md")])), { postgres: true, mutation: false });
-  for (const file of ["src/lib/draft-service.ts", "src/app/actions/admin.ts", "test/integration/draft.itest.ts", "test/mutation-baseline.json", "scripts/mutation-guard.mjs", "prisma/schema.prisma", "package.json"])
+  for (const file of ["src/lib/draft-service.ts", "src/app/actions/admin-season.ts", "test/integration/draft.itest.ts", "test/mutation-baseline.json", "scripts/mutation-guard.mjs", "prisma/schema.prisma", "package.json"])
     assert.deepEqual(gates(classifyEntries([modified(file)]), unchanged), { postgres: true, mutation: true }, file);
   // Either region needing the ratchet makes the release need it.
   assert.deepEqual(gates(classifyEntries([modified("src/app/schedule/page.tsx")]), classifyEntries([modified("src/lib/draft-service.ts")])), { postgres: true, mutation: true });

@@ -3,7 +3,10 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { deleteSeason, reactivateSeasonAction } from "@/app/actions/admin";
+import {
+  deleteSeason,
+  reactivateSeasonAction,
+} from "@/app/actions/admin-season";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { DangerSubmit } from "@/components/danger-submit";
 import {

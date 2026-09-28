@@ -25,11 +25,8 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { leaveLeague, saveRegistration } from "@/app/actions/registration";
-import {
-  setRegistrationMmr,
-  startDraft,
-  withdrawSignup,
-} from "@/app/actions/admin";
+import { startDraft } from "@/app/actions/admin-captains-draft";
+import { setRegistrationMmr, withdrawSignup } from "@/app/actions/admin-roster";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { fetchPlayerRankTier } from "@/lib/dota";

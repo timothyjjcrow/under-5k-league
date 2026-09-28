@@ -18,7 +18,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { createSeason } from "@/app/actions/admin";
+import { createSeason } from "@/app/actions/admin-season";
 import { getWebhookUrl, sendDiscordMessage } from "@/lib/discord";
 import { announceSignupsOpenOnce } from "@/lib/signups-open-announcement";
 import { prisma } from "@/lib/prisma";

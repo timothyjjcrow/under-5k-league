@@ -20,7 +20,11 @@ vi.mock("@/lib/tiebreaker-service", async (original) => {
 
 import { prisma } from "@/lib/prisma";
 import { fetchOpenDotaMatch, steamIdToAccountId } from "@/lib/dota";
-import { recordResult, removeGame, reopenMatch } from "@/app/actions/admin";
+import {
+  recordResult,
+  removeGame,
+  reopenMatch,
+} from "@/app/actions/admin-schedule-results";
 import { advanceTiebreakerWeek, clearTiebreakerWeek, createTiebreakerWeek } from "@/lib/tiebreaker-service";
 import { parseSingleTiebreakerSlot } from "@/lib/tiebreaker-format";
 import { importGameForMatch } from "@/lib/match-import";

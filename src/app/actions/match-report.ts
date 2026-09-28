@@ -15,7 +15,7 @@ import type { ActionResult } from "@/lib/action-result";
 import { actionErrorMessage } from "@/lib/user-facing-error";
 
 // Game imports must also clear the unstable_cache "games" tag (CLAUDE.md:
-// bust the tag from a request scope) — mirrors admin.ts's refreshGames.
+// bust the tag from a request scope) — mirrors admin-shared.ts's refreshGames.
 function refreshGames() {
   updateTag("games");
   updateTag(AUTOMATION_GATE_TAG);

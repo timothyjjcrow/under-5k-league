@@ -18,7 +18,8 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { regularSeasonStartedMessage, sendDiscordMessage } from "@/lib/discord";
-import { setSeasonPhase, startDraft } from "@/app/actions/admin";
+import { setSeasonPhase } from "@/app/actions/admin-season";
+import { startDraft } from "@/app/actions/admin-captains-draft";
 import { pauseDraft, undoLastSale } from "@/lib/draft-service";
 import { nominatePlayer } from "@/lib/draft-service";
 import {

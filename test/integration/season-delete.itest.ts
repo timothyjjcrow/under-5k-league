@@ -35,7 +35,7 @@ import {
   setMatchSchedule,
   setMaxMmr,
   setSeriesLengths,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-season";
 import { updateTag } from "next/cache";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";

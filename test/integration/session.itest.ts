@@ -36,7 +36,7 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-import { revokeAllSessions } from "@/app/actions/admin";
+import { revokeAllSessions } from "@/app/actions/admin-season";
 import { getSessionEpoch, bumpSessionEpoch } from "@/lib/session-epoch";
 import { createSession, destroySession, getSessionUser } from "@/lib/auth";
 import { SESSION_COOKIE } from "@/lib/constants";

@@ -13,14 +13,14 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { updateTag } from "next/cache";
+import { setSeasonPhase } from "@/app/actions/admin-season";
 import {
   recordResult,
   removeGame,
   reopenMatch,
   returnToRegularSeasonAction,
-  setSeasonPhase,
   startPlayoffs,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
 import { playoffSetupRevision } from "@/lib/playoff-command";

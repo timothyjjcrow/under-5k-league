@@ -19,7 +19,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { createSeason } from "@/app/actions/admin";
+import { createSeason } from "@/app/actions/admin-season";
 import { unpinNewsBeforeFinal } from "@/lib/news-rollover";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";

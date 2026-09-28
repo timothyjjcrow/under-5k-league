@@ -18,7 +18,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { setMatchTime } from "@/app/actions/admin";
+import { setMatchTime } from "@/app/actions/admin-schedule-results";
 import { setAvailability } from "@/app/actions/availability";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";

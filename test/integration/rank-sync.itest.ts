@@ -20,7 +20,7 @@ vi.mock("@/lib/steam", async (importOriginal) => ({
   fetchSteamProfiles: vi.fn(async () => new Map()),
 }));
 
-import { refreshPlayerData } from "@/app/actions/admin";
+import { refreshPlayerData } from "@/app/actions/admin-captains-draft";
 import { refreshPlayerDataAutomatically } from "@/lib/player-data-refresh";
 import {
   refreshRank,

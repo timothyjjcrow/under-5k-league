@@ -23,12 +23,12 @@ import {
   leaveLeague,
   saveRegistration,
 } from "@/app/actions/registration";
+import { setDraftNight } from "@/app/actions/admin-captains-draft";
 import {
   reinstateSignup,
-  setDraftNight,
   setRegistrationMmr,
   withdrawSignup,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-roster";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
 import { sendDiscordMessage } from "@/lib/discord";
