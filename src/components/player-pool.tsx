@@ -35,7 +35,7 @@ import {
   type PoolSort,
   type PoolStatusFilter,
 } from "@/lib/player-pool";
-import { pubLastPlayed } from "@/lib/pub-stats";
+import { pubLastPlayed, type PubHero } from "@/lib/pub-stats";
 import { aboutText } from "@/lib/about-you";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
@@ -467,43 +467,7 @@ export function PlayerPool({
                         </span>
                       ) : null}
                       {pub && pub.topHeroes.length > 0 ? (
-                        /* What they ACTUALLY play — the self-picked favorite
-                         heroes live in their own column; these are OpenDota's
-                         lifetime most-played. The visible label is what tells
-                         the two icon strips apart on a phone, where both sit
-                         in one row; it is aria-hidden because the strip's own
-                         spoken label already says it. role="img" + a spoken
-                         label per the decorative-indicator convention; each
-                         icon's title names the hero and its record. */
-                        <span className="flex items-center gap-1">
-                          <span aria-hidden>Most played (pubs)</span>
-                          <span
-                            role="img"
-                            aria-label={`Most played (pubs): ${pub.topHeroes
-                              .map(
-                                (h) =>
-                                  heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
-                              )
-                              .join(", ")}`}
-                            className="flex items-center gap-1"
-                          >
-                            {pub.topHeroes.map((h) => {
-                              const hero = heroById(h.heroId);
-                              // title on the ICON, not a wrapper — the browser
-                              // shows the innermost title, and the img fills any
-                              // span around it.
-                              return hero ? (
-                                <span key={h.heroId} aria-hidden>
-                                  <HeroIcon
-                                    hero={hero}
-                                    size={18}
-                                    title={pubHeroTitle(h)}
-                                  />
-                                </span>
-                              ) : null;
-                            })}
-                          </span>
-                        </span>
+                        <PubHeroStrip heroes={pub.topHeroes} />
                       ) : null}
                       {activity?.quiet ? (
                         <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
@@ -772,6 +736,40 @@ function StatusChip({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * What they ACTUALLY play — the self-picked favorite heroes live in their own
+ * column; these are OpenDota's lifetime most-played. The visible label is what
+ * tells the two icon strips apart on a phone, where both sit in one row; it is
+ * aria-hidden because the strip's own spoken label already says it.
+ * role="img" + a spoken label per the decorative-indicator convention; each
+ * icon's title names the hero and its record.
+ */
+function PubHeroStrip({ heroes }: { heroes: PubHero[] }) {
+  return (
+    <span className="flex items-center gap-1">
+      <span aria-hidden>Most played (pubs)</span>
+      <span
+        role="img"
+        aria-label={`Most played (pubs): ${heroes
+          .map((h) => heroById(h.heroId)?.name ?? `Hero #${h.heroId}`)
+          .join(", ")}`}
+        className="flex items-center gap-1"
+      >
+        {heroes.map((h) => {
+          const hero = heroById(h.heroId);
+          // title on the ICON, not a wrapper — the browser shows the innermost
+          // title, and the img fills any span around it.
+          return hero ? (
+            <span key={h.heroId} aria-hidden>
+              <HeroIcon hero={hero} size={18} title={pubHeroTitle(h)} />
+            </span>
+          ) : null;
+        })}
+      </span>
+    </span>
   );
 }
 
