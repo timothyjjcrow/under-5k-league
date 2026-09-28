@@ -170,7 +170,12 @@ function SeriesList({
               className="block px-5 py-3 text-sm hover:bg-surface-2/40"
             >
               <span className="flex items-center gap-3">
+                {/* min-w-7 + gap-3 = the pl-10 of the hero lines below, so
+                    "vs <team>" and every game line share one left edge
+                    whether the badge reads W, L or D (a bare badge's width
+                    followed its letter and the column went jagged). */}
                 <Badge
+                  className="min-w-7 justify-center px-1"
                   tone={
                     entry.outcome.result === "W"
                       ? "success"
