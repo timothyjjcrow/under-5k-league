@@ -29,9 +29,12 @@ import { claimThrottle } from "./settings";
 // Rules: only a captain of this match, only their own team's players, only
 // those with no answer for the current kickoff (never the captain themselves),
 // only while check-in is open, and at most once per team per match every
-// CHECKIN_NUDGE_THROTTLE_SECONDS. The throttle is an atomic Setting claim,
-// taken after every other check so a refused attempt never burns it, and
-// released if Discord won't take the message.
+// CHECKIN_NUDGE_THROTTLE_SECONDS for the current kickoff (a retime starts a
+// new window). The throttle is an atomic Setting claim, taken after every
+// other check so a refused attempt never burns it, and released only if the
+// post could not be queued. sendDiscordMessage is durable: once the post is
+// queued it returns true whatever Discord answers, and the outbox retries it,
+// so a Discord outage keeps the window and the post goes out late.
 
 export type CheckinNudgeResult =
   | {
@@ -132,7 +135,7 @@ export async function sendCheckinNudge(opts: {
       error: "This league has no Discord channel set up for reminders.",
     };
   }
-  const key = checkinNudgeKey(match.id, teamId);
+  const key = checkinNudgeKey(match.id, teamId, match.scheduleRevision);
   if (!(await claimThrottle(key, CHECKIN_NUDGE_THROTTLE_SECONDS, nowMs))) {
     return {
       ok: false,
@@ -140,8 +143,9 @@ export async function sendCheckinNudge(opts: {
     };
   }
 
-  // Give the window back if nothing went out, but only the claim this call
-  // wrote: a newer claim (another tab, a later window) keeps its row.
+  // Give the window back if the post was never queued (sendDiscordMessage
+  // returned false or this block threw), but only the claim this call wrote:
+  // a newer claim (another tab, a later window) keeps its row.
   let sent = false;
   let reminded = 0;
   let pinged = 0;
@@ -190,17 +194,18 @@ export async function sendCheckinNudge(opts: {
 }
 
 /**
- * When this team's last reminder for the match went out, while it still
- * blocks another (the match page shows it instead of the button). Null when a
- * reminder can be sent.
+ * When this team's last reminder for the match's current kickoff went out,
+ * while it still blocks another (the match page shows it instead of the
+ * button). Null when a reminder can be sent.
  */
 export async function checkinNudgeBlockedSince(
   matchId: string,
   teamId: string,
+  scheduleRevision: number,
   nowMs: number,
 ): Promise<Date | null> {
   const row = await prisma.setting.findUnique({
-    where: { key: checkinNudgeKey(matchId, teamId) },
+    where: { key: checkinNudgeKey(matchId, teamId, scheduleRevision) },
     select: { value: true },
   });
   const sentMs = row ? Date.parse(row.value) : NaN;

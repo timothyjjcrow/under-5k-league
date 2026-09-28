@@ -55,7 +55,10 @@ describe("stored Setting key formats", () => {
       true,
     );
     expect(checkinNudgePrefix("m1")).toBe("checkinNudge:m1:");
-    expect(checkinNudgeKey("m1", "t1")).toBe("checkinNudge:m1:t1");
+    expect(checkinNudgeKey("m1", "t1", 2)).toBe("checkinNudge:m1:t1:2");
+    expect(checkinNudgeKey("m1", "t1", 2).startsWith(checkinNudgePrefix("m1"))).toBe(
+      true,
+    );
     const fixture = fixtureImportCooldownResource("m1");
     expect(fixture).toBe("fixture:m1");
     expect(providerCooldownResourcePrefix("open-dota-match-import", fixture)).toBe(

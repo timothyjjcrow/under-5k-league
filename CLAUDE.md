@@ -1779,12 +1779,17 @@ already in the `Setting` table.
   Matchup card. One Discord post (`checkinNudgeAnnouncement`) that names and
   @-mentions only that team's players with no answer for the current kickoff
   (never the captain, never the other side), with the match link. At most one
-  per team per match per `CHECKIN_NUDGE_THROTTLE_SECONDS` (3h) via
-  `claimThrottle` on `checkinNudge:<match>:<team>` — claimed after every other
-  check (webhook included) and released if nothing goes out (refused or
-  thrown send). The button renders only when the action would accept; once
-  sent it says when the next one is allowed. Keep it a single press with no
-  confirm.
+  per team per match per kickoff per `CHECKIN_NUDGE_THROTTLE_SECONDS` (3h) via
+  `claimThrottle` on `checkinNudge:<match>:<team>:<scheduleRevision>` — the
+  revision is in the key because every retime wipes the answers and leaves the
+  last reminder quoting a dead kickoff, so a new time gets a fresh window at
+  once. Claimed after every other check (webhook included) and released only
+  if the post could not be QUEUED (`sendDiscordMessage` returned false or the
+  block threw). The send is durable: once queued it returns true whatever
+  Discord answers and the outbox retries it, so a Discord outage keeps the
+  window and the post arrives late. The button renders only when the action
+  would accept; once sent it says when the next one is allowed. Keep it a
+  single press with no confirm.
 - **Who may answer for a side** is `loadSidePlayerIds`
   (`availability-service.ts`): the roster minus seats a standin covers, plus
   standins whose signup is active (or absent) and who hold no roster seat this

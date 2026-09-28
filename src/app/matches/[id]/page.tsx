@@ -1204,6 +1204,7 @@ async function MatchPreview({
           sentAt: await checkinNudgeBlockedSince(
             match.id,
             nudgeTeamId,
+            match.scheduleRevision,
             previewNow,
           ),
         }

@@ -25,6 +25,10 @@ import { getWebhookUrl, sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
 import { checkinNudgeKey } from "@/lib/availability";
 import {
+  proposeReschedule,
+  respondReschedule,
+} from "@/lib/reschedule-service";
+import {
   checkinNudgeBlockedSince,
   checkinNudgeToast,
 } from "@/lib/checkin-nudge-service";
@@ -165,7 +169,9 @@ describe("remindUnansweredCheckins", () => {
     expect(mentions).toEqual({ users: [LINKED_ID] });
     expect(
       await prisma.setting.findUnique({
-        where: { key: checkinNudgeKey(s.match.id, s.home.id) },
+        where: {
+          key: checkinNudgeKey(s.match.id, s.home.id, s.match.scheduleRevision),
+        },
       }),
     ).not.toBeNull();
   });
@@ -212,9 +218,10 @@ describe("remindUnansweredCheckins", () => {
     expect(again.error).toMatch(/already got a check-in reminder in the last 3 hours/);
     expect(mockSend).toHaveBeenCalledTimes(1);
 
-    const key = checkinNudgeKey(s.match.id, s.home.id);
+    const rev = s.match.scheduleRevision;
+    const key = checkinNudgeKey(s.match.id, s.home.id, rev);
     expect(
-      await checkinNudgeBlockedSince(s.match.id, s.home.id, Date.now()),
+      await checkinNudgeBlockedSince(s.match.id, s.home.id, rev, Date.now()),
     ).toBeInstanceOf(Date);
 
     // Once the window has passed, the page offers the button again and the
@@ -224,10 +231,50 @@ describe("remindUnansweredCheckins", () => {
     ).toISOString();
     await prisma.setting.update({ where: { key }, data: { value: expired } });
     expect(
-      await checkinNudgeBlockedSince(s.match.id, s.home.id, Date.now()),
+      await checkinNudgeBlockedSince(s.match.id, s.home.id, rev, Date.now()),
     ).toBeNull();
     expect((await nudge(s.match.id)).message).toBeTruthy();
     expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a fresh reminder as soon as a reschedule moves the kickoff", async () => {
+    const s = await setup();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(s.homeCaptain));
+    expect((await nudge(s.match.id)).message).toBeTruthy();
+    expect((await nudge(s.match.id)).error).toMatch(/already got a check-in reminder/);
+
+    // The other captain accepts a new time: every answer is wiped and the
+    // reminder already in Discord quotes the old kickoff.
+    const newTime = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    await proposeReschedule(s.homeCaptain.id, s.match.id, newTime);
+    const request = await prisma.rescheduleRequest.findFirstOrThrow({
+      where: { matchId: s.match.id, status: "PENDING" },
+    });
+    await respondReschedule(s.awayCaptain.id, request.id, true);
+    const moved = await prisma.match.findUniqueOrThrow({
+      where: { id: s.match.id },
+    });
+    expect(moved.scheduleRevision).toBe(s.match.scheduleRevision + 1);
+
+    expect(
+      await checkinNudgeBlockedSince(
+        s.match.id,
+        s.home.id,
+        moved.scheduleRevision,
+        Date.now(),
+      ),
+    ).toBeNull();
+    const res = await nudge(s.match.id);
+    expect(res.error).toBeUndefined();
+    // Annie's answer was about the old night, so she is asked again too, and
+    // the post quotes the new kickoff.
+    expect(res.message).toMatch(/the 3 players who haven't answered/);
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(lastSend().content).toContain(
+      `<t:${Math.floor(newTime.getTime() / 1000)}:`,
+    );
+    // The new kickoff's window is held like any other.
+    expect((await nudge(s.match.id)).error).toMatch(/already got a check-in reminder/);
   });
 
   it("sends exactly once when a captain double-clicks", async () => {
@@ -251,23 +298,30 @@ describe("remindUnansweredCheckins", () => {
     expect(mockSend).not.toHaveBeenCalled();
     expect(
       await prisma.setting.findUnique({
-        where: { key: checkinNudgeKey(s.match.id, s.home.id) },
+        where: {
+          key: checkinNudgeKey(s.match.id, s.home.id, s.match.scheduleRevision),
+        },
       }),
     ).toBeNull();
 
     expect((await nudge(s.match.id)).message).toBeTruthy();
   });
 
-  it("gives the window back when Discord won't take the message", async () => {
+  it("gives the window back when the post can't be queued", async () => {
     const s = await setup();
     vi.mocked(requireUser).mockResolvedValue(sessionFor(s.homeCaptain));
+    // sendDiscordMessage is durable: false means the post was never queued
+    // (no webhook, preview, invalid content, enqueue failure). Once queued it
+    // returns true whatever Discord answers, and the outbox retries it.
     mockSend.mockResolvedValueOnce(false);
 
     const res = await nudge(s.match.id);
     expect(res.error).toMatch(/Couldn't post the reminder/);
     expect(
       await prisma.setting.findUnique({
-        where: { key: checkinNudgeKey(s.match.id, s.home.id) },
+        where: {
+          key: checkinNudgeKey(s.match.id, s.home.id, s.match.scheduleRevision),
+        },
       }),
     ).toBeNull();
 
@@ -284,7 +338,9 @@ describe("remindUnansweredCheckins", () => {
     expect(res.error).toBeTruthy();
     expect(
       await prisma.setting.findUnique({
-        where: { key: checkinNudgeKey(s.match.id, s.home.id) },
+        where: {
+          key: checkinNudgeKey(s.match.id, s.home.id, s.match.scheduleRevision),
+        },
       }),
     ).toBeNull();
     expect((await nudge(s.match.id)).message).toBeTruthy();
