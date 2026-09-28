@@ -658,7 +658,7 @@ describe("draftReminderAnnouncement", () => {
     expect(announcement.content).toBe(
       [
         "⏰ **Draft night reminder: the Season 3 draft is scheduled for <t:1800000000:F> (<t:1800000000:R>).**",
-        "**14** players signed up, **2** captains designated. Player signups stay open until the auction starts.",
+        "**14** players signed up, **2** captains designated. Player signups stay open until an admin closes them for the draft.",
         "Captains, be in the draft room before the auction starts: <@111111111111111111>, Puppey",
         "Still to confirm this draft time (2): <@222222222222222222>, N0tail. Confirm on the signup page.",
         "Draft room: <https://league.example/draft> · Signup page: <https://league.example/me>",
@@ -674,7 +674,7 @@ describe("draftReminderAnnouncement", () => {
 
   it("says truthfully whether player signups are still open", () => {
     const open = draftReminderAnnouncement(base).content;
-    expect(open).toContain("Player signups stay open until the auction starts.");
+    expect(open).toContain("Player signups stay open until an admin closes them for the draft.");
     const closed = draftReminderAnnouncement({
       ...base,
       playerSignupsOpen: false,
@@ -744,12 +744,21 @@ describe("draftReminderAnnouncement", () => {
       name: `Straggler ${i + 1}`,
       discordId: (BigInt("500000000000000000") + BigInt(i)).toString(),
     }));
-    const announcement = draftReminderAnnouncement({
-      ...base,
-      playerCount: 200,
-      captains,
-      unconfirmed,
-    });
+    // Where the captains stop depends on exact lengths, so lengthen the
+    // season name a character at a time until the captains leave room for
+    // some stragglers; a copy change in the header would otherwise need this
+    // fixture retuned by hand.
+    let announcement = draftReminderAnnouncement(base);
+    for (let pad = 0; pad < 60; pad += 1) {
+      announcement = draftReminderAnnouncement({
+        ...base,
+        seasonName: `${base.seasonName}${"x".repeat(pad)}`,
+        playerCount: 200,
+        captains,
+        unconfirmed,
+      });
+      if (announcement.content.includes("Still to confirm this draft time (10): ")) break;
+    }
     const delivered = materializeAllowedMentions(announcement.content, {
       users: announcement.mentionUserIds,
     });

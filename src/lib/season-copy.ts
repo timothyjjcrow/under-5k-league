@@ -171,6 +171,15 @@ export const ADMIN_PHASE_LABEL: Record<string, string> = {
 };
 
 /**
+ * How long player signups stay open, said the same way on Home and in the
+ * draft-night reminder. Neither draft night nor the auction closes them: an
+ * admin does, with Close signups (SIGNUPS → DRAFT) or Start draft, and either
+ * can come before draft night.
+ */
+export const PLAYER_SIGNUPS_OPEN_UNTIL =
+  "until an admin closes them for the draft";
+
+/**
  * One sentence under the season name. Returns "" for an unknown status so a
  * future phase renders nothing rather than a stale line about another one.
  */
@@ -178,7 +187,7 @@ export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
   switch (status) {
     case SEASON_STATUS.SIGNUPS:
       if (i.canDraft)
-        return "Enough players have joined to draft — and signups stay open until draft night, so every few more is another team.";
+        return `Enough players have joined to draft — and signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}, so every few more is another team.`;
       return i.signedUp
         ? "The draft begins once enough players have joined."
         : "Sign up now — the draft begins once enough players have joined.";

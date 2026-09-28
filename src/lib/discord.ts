@@ -24,6 +24,7 @@ import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { runAfterResponse } from "./after-response";
 import { capacityInfo } from "./capacity";
+import { PLAYER_SIGNUPS_OPEN_UNTIL } from "./season-copy";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -1262,8 +1263,9 @@ export type DraftReminderInput = {
   seasonName: string;
   /** Epoch ms of Season.draftAt; rendered as <t:…> so readers see their zone. */
   draftAtMs: number;
-  /** Season still in SIGNUPS: new PLAYER signups close when the auction starts
-   *  (startDraft moves the season to DRAFT; registrationGate then refuses). */
+  /** Season still in SIGNUPS: new PLAYER signups close when an admin moves
+   *  the season to DRAFT (Close signups or Start draft); registrationGate then
+   *  refuses. */
   playerSignupsOpen: boolean;
   /** ACTIVE PLAYER registrations, captains included. */
   playerCount: number;
@@ -1299,7 +1301,7 @@ export function draftReminderAnnouncement(
     `**${m.playerCount}** player${m.playerCount === 1 ? "" : "s"} signed up, ` +
     `**${captainCount}** captain${captainCount === 1 ? "" : "s"} designated. ` +
     (m.playerSignupsOpen
-      ? "Player signups stay open until the auction starts."
+      ? `Player signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}.`
       : "Player signups are closed; standins can still sign up.");
   const footer = `Draft room: <${site}/draft> · Signup page: <${site}/me>`;
 

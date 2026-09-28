@@ -163,7 +163,7 @@ describe("draft-night reminder (integration)", () => {
     expect(content).toContain(`<t:${seconds}:R>`);
     // Captains + ACTIVE players only: no standin, no withdrawal.
     expect(content).toContain("**6** players signed up, **2** captains designated.");
-    expect(content).toContain("Player signups stay open until the auction starts.");
+    expect(content).toContain("Player signups stay open until an admin closes them for the draft.");
     expect(content).toMatch(/Draft room: <https?:\/\/[^>]+\/draft>/);
     expect(content).toMatch(/Signup page: <https?:\/\/[^>]+\/me>/);
     expect(content).toContain(`Captains, be in the draft room before the auction starts: <@${ids.capA}>, Cap B`);

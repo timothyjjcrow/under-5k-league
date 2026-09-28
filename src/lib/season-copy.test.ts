@@ -6,10 +6,12 @@ import {
   mmrCeilingPhrase,
   matchNightText,
   phaseSubtitle,
+  PLAYER_SIGNUPS_OPEN_UNTIL,
   seasonPhaseLabel,
   seasonPhaseTone,
 } from "./season-copy";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { draftReminderAnnouncement } from "./discord";
 
 describe("phaseSubtitle", () => {
   it("asks for players while the season is short of its minimum", () => {
@@ -35,6 +37,25 @@ describe("phaseSubtitle", () => {
     const s = phaseSubtitle(SEASON_STATUS.SIGNUPS, { canDraft: true });
     expect(s).not.toMatch(/once enough players/i);
     expect(s).toMatch(/signups stay open/i);
+  });
+
+  // An admin can close signups (Close signups, or Start draft) before draft
+  // night, so neither Home nor the draft-night reminder may promise draft
+  // night or the auction; both say PLAYER_SIGNUPS_OPEN_UNTIL.
+  it("says signups stay open until an admin closes them, as the reminder does", () => {
+    const s = phaseSubtitle(SEASON_STATUS.SIGNUPS, { canDraft: true });
+    expect(s).toContain(`signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}`);
+    expect(s).not.toMatch(/until draft night|until the auction/i);
+    expect(
+      draftReminderAnnouncement({
+        seasonName: "Season 3",
+        draftAtMs: 1_800_000_000_000,
+        playerSignupsOpen: true,
+        playerCount: 14,
+        captains: [],
+        unconfirmed: [],
+      }).content,
+    ).toContain(`Player signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}.`);
   });
 
   it("says signups are open in BOTH signup states", () => {
