@@ -145,11 +145,16 @@ function RoomStages({ lobby }: { lobby: InhouseState["lobby"] }) {
 
 export function InhouseRoom({
   pollMs = 1500,
-  defaultMmr = 0,
+  signupMmr = 0,
   mmrHint = null,
 }: {
   pollMs?: number;
-  defaultMmr?: number;
+  /**
+   * The viewer's newest league-signup MMR (0 = none). joinQueue always uses
+   * it when there is one, so the join panel shows it as plain text instead
+   * of an input whose value would be ignored.
+   */
+  signupMmr?: number;
   /** Server-computed medal→MMR window note for the queue join panel. */
   mmrHint?: string | null;
 }) {
@@ -167,7 +172,7 @@ export function InhouseRoom({
   const pending =
     reqPending || actionReconciling || disconnected || connectionUnavailable;
   const [selected, setSelected] = useState<string | null>(null);
-  const [mmr, setMmr] = useState<number>(defaultMmr);
+  const [mmr, setMmr] = useState<number>(signupMmr);
   const [soundOn, setSoundOn] = usePersistedFlag("inhouseSound");
   // Clock skew as STATE, not a ref read during render. Reading `ref.current`
   // while rendering is unsafe under concurrent React (the value can differ
@@ -873,6 +878,7 @@ export function InhouseRoom({
             mmr={mmr}
             setMmr={setMmr}
             mmrHint={mmrHint}
+            signupMmr={signupMmr}
             act={act}
             nextGame
           />
@@ -883,6 +889,7 @@ export function InhouseRoom({
             mmr={mmr}
             setMmr={setMmr}
             mmrHint={mmrHint}
+            signupMmr={signupMmr}
             act={act}
           />
         )
@@ -895,6 +902,7 @@ export function InhouseRoom({
           mmr={mmr}
           setMmr={setMmr}
           mmrHint={mmrHint}
+          signupMmr={signupMmr}
           act={act}
         />
       ) : lobby.status === "READY_CHECK" ? (
@@ -1015,6 +1023,7 @@ type QueueControlProps = {
   mmr: number;
   setMmr: (n: number) => void;
   mmrHint: string | null;
+  signupMmr: number;
   act: (body: Record<string, unknown>) => void;
   nextGame?: boolean;
 };
@@ -1030,6 +1039,7 @@ function QueueControls({
   mmr,
   setMmr,
   mmrHint,
+  signupMmr,
   act,
   nextGame = false,
 }: QueueControlProps) {
@@ -1054,6 +1064,26 @@ function QueueControls({
           >
             Leave queue
           </button>
+        ) : signupMmr > 0 ? (
+          // joinQueue always uses the league signup MMR when there is one,
+          // so an input here would be a control that does nothing.
+          <div className="flex flex-col items-center gap-2">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => act({ action: "join", mmr })}
+              className={buttonClasses("accent", "lg")}
+            >
+              {nextGame ? "Join next-game queue →" : "Join queue →"}
+            </button>
+            <p className="text-center text-xs text-muted">
+              Joining at{" "}
+              <span className="tabular-nums text-fg">
+                {signupMmr.toLocaleString()}
+              </span>{" "}
+              MMR, from your league signup
+            </p>
+          </div>
         ) : (
           <div className="flex flex-wrap items-center justify-center gap-2">
             <label htmlFor={mmrInputId} className="text-sm text-muted">
@@ -1068,7 +1098,7 @@ function QueueControls({
               value={mmr || ""}
               placeholder="0"
               onChange={(e) => setMmr(Number(e.target.value))}
-              title="Seeds captain selection and the balance meter. If you've registered for a season, your league signup MMR is used instead."
+              title="Seeds captain selection and the balance meter."
               className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
             />
             <button
@@ -1104,6 +1134,7 @@ function NextGameQueueCard({
   mmr,
   setMmr,
   mmrHint,
+  signupMmr,
   act,
 }: Omit<QueueControlProps, "me" | "nextGame"> & { state: InhouseState }) {
   const titleId = useId();
@@ -1134,6 +1165,7 @@ function NextGameQueueCard({
             mmr={mmr}
             setMmr={setMmr}
             mmrHint={mmrHint}
+            signupMmr={signupMmr}
             act={act}
             nextGame
           />
@@ -1149,6 +1181,7 @@ function QueueView({
   mmr,
   setMmr,
   mmrHint,
+  signupMmr,
   act,
   nextGame = false,
 }: {
@@ -1157,6 +1190,7 @@ function QueueView({
   mmr: number;
   setMmr: (n: number) => void;
   mmrHint: string | null;
+  signupMmr: number;
   act: (body: Record<string, unknown>) => void;
   /** The visible queue will not form until the active lobby closes. */
   nextGame?: boolean;
@@ -1186,6 +1220,7 @@ function QueueView({
       mmr={mmr}
       setMmr={setMmr}
       mmrHint={mmrHint}
+      signupMmr={signupMmr}
       act={act}
       nextGame={nextGame}
     />

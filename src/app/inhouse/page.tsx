@@ -71,9 +71,10 @@ export default async function InhousePage({
       ? "month"
       : "all";
 
-  // Seed the MMR field from the player's most recent league signup, if any,
-  // and fetch the medal so the join panel can explain the MMR check (the
-  // server clamps implausible values to the medal window's floor on join).
+  // The player's most recent league signup MMR, if any (the join panel shows
+  // it instead of an MMR field), and the medal so the join panel can explain
+  // the MMR check for everyone else (the server clamps implausible typed
+  // values to the medal window's floor on join).
   // The completed-game count decides whether the ladder, results and the
   // section nav have anything to show yet (an indexed count, always fresh).
   const [viewerRows, completedGames] = await Promise.all([
@@ -103,13 +104,17 @@ export default async function InhousePage({
   // empty cards (and the section nav would jump between them), so the page is
   // the room plus one line until then.
   const hasGames = completedGames > 0;
-  const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
+  // With a league signup the join panel shows that MMR as plain text (the
+  // server always uses it), so the medal note is only for everyone else.
+  const signupMmr = lastReg?.mmr ?? 0;
+  const mmrWindow =
+    signupMmr > 0 ? null : mmrRangeForRankTier(dbUser?.rankTier ?? null);
   const mmrHint = mmrWindow
     ? `Your ${rankMedalName(dbUser?.rankTier)} medal puts you around ${formatMmrRange(mmrWindow)} MMR — ${
         mmrWindow.min > 0
           ? `a typed value outside that range is set to ${mmrWindow.min}`
           : "a typed value outside that range is treated as unknown"
-      }. League signup MMR, when you have one, is used as-is.`
+      }. If you sign up for a league season, your signup MMR is used instead.`
     : null;
 
   return (
@@ -156,7 +161,7 @@ export default async function InhousePage({
           className="scroll-mt-28"
           aria-label="Live inhouse room"
         >
-          <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} mmrHint={mmrHint} />
+          <InhouseRoom signupMmr={signupMmr} mmrHint={mmrHint} />
           {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
         </section>
 
