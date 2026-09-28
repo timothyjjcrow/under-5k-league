@@ -166,9 +166,13 @@ In the Captains & draft card on `/admin` and inside the room
 - **`saveRegistration` locks three doors while the auction is live or
   paused:** type flips are refused; a WITHDRAWN player can't re-activate by a
   replayed POST (a REMOVED one falls to the write-time claim, whose message is
-  true); MMR is FROZEN with a toast note, not refused, because every poll
-  re-reads it for the pool sort and auto-pick and the admin MMR edit is hidden
-  once the draft starts. Tested in `registration.itest.ts`.
+  true); a PLAYER's MMR is FROZEN with a toast note, not refused, because every
+  poll re-reads it for the pool sort and auto-pick. Tested in
+  `registration.itest.ts`. The admin "Edit medal & MMR"
+  (`AdminPlayerRankEditor`) stays visible until COMPLETE but locks a PLAYER's
+  MMR for the same window (`mmrLocked`, re-checked in `setPlayerRank`, which
+  throws `DraftAlreadyStartedError`); medal corrections stay open, and a
+  standin's MMR never locks.
 
 ## The /draft page and routes
 
@@ -183,6 +187,16 @@ In the Captains & draft card on `/admin` and inside the room
 
 ## The draft room client
 
+- **The cadence comes only from `draftPollCadence`** (`src/lib/room-poll.ts`,
+  the draft binding of `roomPollCadence`). Its fast rate keys on the AUCTION
+  (IN_PROGRESS or PAUSED), not the viewer: a spectator watching a live lot
+  needs the fast poll, and PAUSED counts as live so a resume shows at once. A
+  hidden tab keeps polling only for `draftViewerStake` (a captain, an admin, or
+  a player still in the pool). A failed poll in a live auction retries at the
+  live rate, never the waiting-room rate, so `disconnected` trips promptly.
+  `room-source-guards.test.ts` fails if `DRAFT_ROOM.POLL_*` rates reappear in
+  `draft-room.tsx`. A 429 is back-pressure, not a failure (see
+  `docs/features/admin-and-operations.md`).
 - **Responses are sequence-ordered** (`issueSequence` / `acceptSequence`), so
   a slow tick can't clobber a fresher bid.
 - **The outbid latch is pure.** `wasOutbid` raises it (its same-player guard

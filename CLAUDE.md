@@ -9,11 +9,10 @@ and a Europe league, each with its own database, Discord server and settings.
 > source of truth for builds, migrations, backups, the scheduler, rollback and
 > approval. Nothing in this file or the feature notes overrides them.
 
-Settled decisions and deliberate deferrals are one line each in
-[docs/DECISIONS.md](docs/DECISIONS.md). Check it before proposing a change;
-where anything here disagrees, the register is current, and Tim's product calls
-there are binding. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps routes,
-models and background work.
+[docs/DECISIONS.md](docs/DECISIONS.md) lists settled decisions and deferrals,
+one line each: check it before proposing a change. Where it disagrees with this
+file it is current, and Tim's product calls there bind.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps routes, models and jobs.
 
 ## Feature notes
 
@@ -41,8 +40,7 @@ note before changing that area: it is required reading, not background.
   the active season is the at-most-one `isActive` row (`getActiveSeason`).
 - **Between seasons the league rests in COMPLETE.** Zero active rows (the
   offseason) exists for cancelling a season and reactivating an older one.
-- **Pages, navigation and Home render per phase** so unused features stay
-  hidden; `src/lib/site-nav.ts` decides what is listed.
+- **Pages, navigation and Home render per phase** so unused features hide.
 - **Inhouse is season-independent:** no `seasonId`, no phase gate. It shares
   identity, the latest `Registration.mmr`, Settings, Discord and OpenDota.
 - **There are no websockets.** The rooms poll over HTTP; scheduled work runs in
@@ -60,12 +58,16 @@ note before changing that area: it is required reading, not background.
   `admin-schedule-results.ts`, `admin-discord.ts`) over `admin-shared.ts`.
 - **Route handlers:** `src/app/api/`: the polled rooms, sign-in, the worker
   (`cron/automation`), read-only status (`sync`, `health/*`) and exports.
-- **Auth:** `src/lib/auth.ts` over `session-token.ts` (a jose-signed cookie);
-  `src/proxy.ts` slides sessions up to a 180-day cap, and bumping
-  `session-epoch.ts` signs everyone out. `ADMIN_STEAM_IDS` is authoritative
-  (others are demoted at login; `npm run set-admins` reconciles), and the
-  `bootstrapAdminSteamId` claim is a local-development fallback, never a
-  production path. `/api/auth/dev` needs `ALLOW_DEV_LOGIN`.
+- **Auth:** `src/lib/auth.ts` over `session-token.ts` (a jose-signed cookie).
+  **Authorize on every request, never in the token or the proxy.**
+  `getSessionUser` re-checks the session epoch and re-resolves the role from
+  `ADMIN_STEAM_IDS` (`resolveSessionRole`) on every call, so removing an admin
+  revokes their cookie at once. `src/proxy.ts` only re-issues an ageing cookie
+  with the same uid, epoch and sign-in time (180-day cap); keep
+  `session-token.ts` free of the database and `next/headers`: the proxy
+  imports it. Bumping `session-epoch.ts` signs everyone out, `npm run
+  set-admins` reconciles stored roles, `/api/auth/dev` needs `ALLOW_DEV_LOGIN`,
+  and `bootstrapAdminSteamId` is a local-development fallback only.
 - **UI:** the kit is `src/components/ui.tsx` (server-safe). Home is
   `src/app/page.tsx` plus `src/components/home/` (the shared hero and one view
   per phase). The match page is the folder `src/app/matches/[id]/`: `load.ts`
@@ -169,16 +171,13 @@ invisible to it, so cover those with a hand-written, sabotage-verified test.
   `FILES`, and a moved or renamed guarded function needs a `renames` entry.
 - **Write claims the parser can read.** Keep a claim's `data` a flat object
   literal (hoist conditionals into a variable) and spell WHERE predicates in
-  full (`hostScore: scrim.hostScore`, never shorthand), or CI cannot see the
-  guard.
-- **Read counts from the baseline, never from prose:**
-  `node scripts/mutation-guard.mjs --static` checks it without Postgres.
+  full (`hostScore: scrim.hostScore`, never shorthand), or CI can't see them.
+- **Read claim counts from `test/mutation-baseline.json`, never from prose.**
 
-**Local Postgres:** `npm run pg:up`, point `PG_TEST_URL` at the local
-`ld2l_pgtest` database (never a production, shared or credential-bearing URL),
-run `npm run test:pg`, then ALWAYS `npm run pg:down` to switch the schema back
-to SQLite. The commands, ratchet mechanics and full seam guidance are in
-[concurrency-and-testing](docs/features/concurrency-and-testing.md).
+**Local Postgres:** `npm run pg:up`, then `npm run test:pg` with `PG_TEST_URL`
+on the local `ld2l_pgtest` database only (never a shared or production URL),
+then ALWAYS `npm run pg:down` to switch back to SQLite. Commands, ratchet and
+seams: [concurrency-and-testing](docs/features/concurrency-and-testing.md).
 
 ## Conventions and gotchas
 
@@ -221,10 +220,11 @@ to SQLite. The commands, ratchet mechanics and full seam guidance are in
   (`test:release` and `test:provisioning` for the release and Europe scripts).
 - **Browser:** `npm run test:e2e` (signup, draft, inhouse), `test:e2e:mid` (a
   regular season), `test:e2e:postseason` (playoffs, finished seasons). Each
-  seeds its own database, but all three and `npm run dev` build into `.next`
-  and Next 16 allows one dev server per build folder: run one at a time. CI
-  runs them for both leagues (`NEXT_PUBLIC_LEAGUE_REGION=us` and `eu`); run
-  both when changing shared behaviour.
+  seeds its own database but builds into `.next` like `npm run dev`, and Next
+  16 allows one dev server per build folder: run one at a time. CI runs both
+  leagues (`NEXT_PUBLIC_LEAGUE_REGION=us` and `eu`); run both for shared
+  behaviour. **Make every new spec assert zero uncaught client errors** with
+  `trackPageErrors` (`e2e-mid/helpers.ts`); raw-HTML checks miss client crashes.
 
 ## Cross-cutting UI rules
 

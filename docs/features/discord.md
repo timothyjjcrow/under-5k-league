@@ -104,7 +104,11 @@ actions: `src/app/actions/admin-discord.ts`.
   the covered captain when someone else acted. Reschedule proposed: the other
   captain; accepted: the proposer and booked standins (their ping quoted the old
   time); declined: the proposer. Week reminder: unanswered players only
-  (`unansweredUserIds`). Free-agent signing or release: that player.
+  (`unansweredUserIds`). Free-agent signing or release: that player. Draft
+  started (`draftStartedAnnouncement`, sent by `startDraft`): the linked
+  captains only, in draft order, unlinked captains named in plain text; a
+  captain who misses the start loses turns to auto-nomination, while everyone
+  else only needs the link.
 - **Use `mentionsOf` / `mentionUsers`, never hand-rolled lists.** `mentionsOf`
   drops nulls and returns `undefined` when empty, so an unlinked league sends
   the same text as before (`{ users: [undefined] }` fails silently).
@@ -130,6 +134,13 @@ actions: `src/app/actions/admin-discord.ts`.
   those (series results, champion, playoff rounds), since nothing else would
   re-trigger them. Marker values and keys are stored in production: change a
   format only with a migration, and build keys only via `settings.ts` helpers.
+- **Check the webhook before you claim a marker.** With no league webhook, the
+  week and draft reminders (`reminder-service.ts`), `announceChampionOnce`,
+  `announceSignupsOpenOnce`, `announcePlayoffRoundOnce` and the result nudge
+  return before `claimAnnouncementMarker`, so nothing is burned and a league
+  that adds Discord later still gets the post. Series results are the
+  deliberate exception (below). Pick one of the two on purpose for any new
+  claim-then-send post.
 - **Every decided series goes through `announceSeriesResultOnce`**
   (`match-import.ts`, marker `resultAnnounced:<matchId>`), admin
   `recordResult` included; it deletes the old marker in its result transaction
@@ -261,6 +272,14 @@ actions: `src/app/actions/admin-discord.ts`.
   gives one primary button per state, and the callback's join button only when
   membership is unknown, so CTAs never stack. The typed handle hides behind
   "Can't link? Type your handle" unless linking isn't configured.
+- **On /me, ask for Discord through the next-steps list, not the Home
+  prompt.** The season card comes first, and its derived "Next" list (pure
+  `accountNextSteps`, `src/lib/account-page.ts`, tested in
+  `account-page.test.ts` and `src/components/account-next-steps.test.ts`)
+  points at the Discord card (`#profile-discord`). Its Discord steps appear
+  only once the viewer has signed up (before that the season card is the ask).
+  Discord counts as done only when the linked account is in the server, and
+  unknown membership adds no step.
 - **The dashboard prompt is derived, never dismissible.** `DiscordSetupPrompt`
   (`discord-setup.tsx`, rendered by `src/app/page.tsx`) shows only to ACTIVE
   registrations, in every phase: unlinked gets `DiscordSetupCard` (copy branches
@@ -376,8 +395,12 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
 - **The empty state is the product** (most views; a bare 0/10 reads as a dead
   league). `BoardStats` (last result and MVP, all-time lobbies, established
   ladder leader) comes from `loadBoardStats` (60 s memo on the ladder
-  summary). Last game: newest formed COMPLETED lobby by
-  `[createdAt desc, id desc]`, ended at `inhouseEndedAt`; never `updatedAt`.
+  summary). **Load it only for the empty board:** `resolveSnapshot` calls it
+  and `pingOptInAvailable` only with no lobby and no present player, so a busy
+  queue, when the board syncs most, never pays for the full-history Elo scan;
+  keep that condition when you add to the empty state. Last game: newest
+  formed COMPLETED lobby by `[createdAt desc, id desc]`, ended at
+  `inhouseEndedAt`; never `updatedAt`.
   Monotonic figures only, never a trailing window ("this week" rots in a quiet
   stretch); omit what's missing; no "updated <t:R>" line ("3 days ago").
 - **Keep `public/brand/banner.png` off the board:** its "Under 4.5K, sub-4500

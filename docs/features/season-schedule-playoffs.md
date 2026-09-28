@@ -133,8 +133,12 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   `standings-table.tsx` on home, /schedule and the archive (status line
   Qualified / Eliminated / Withdrawn / Tiebreaker pending / Tied / Settled by
   tiebreaker / "Your team", W-D-L, game difference, points, Last 5 from `sm`).
-  Movement arrows (`standingsMovement`), ✓/✗ marks; the cut line draws only
-  when someone misses the bracket.
+  Movement arrows (`standingsMovement`), ✓/✗ marks.
+- **Draw the cut line and the ✓/✗ marks only when the cut drops an eligible
+  team** (`cutIsReal` in `standings-table-server.tsx`; a team with a pending
+  tiebreaker keeps its mark). When everyone makes the bracket every row would
+  read ✓. Judge it on the whole league (`totalTeams`/`eligibleTeams`), never
+  on the rows a sliced table happens to show.
 - **A dead heat at the cut or a seed line is played off, never guessed.**
   `createPlayoffBracket` refuses while ties are unresolved; the admin Tiebreakers
   card schedules an extra week (`src/app/actions/tiebreakers.ts` over
@@ -169,6 +173,11 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   `playoffStatusLine`, `playoffPathLines`) and `PlayoffStatusLine`: clinch marks,
   /schedule's Playoff tracker, "Tonight's stakes" on regular-season match pages
   (`src/app/matches/[id]/stakes-banner.tsx`), "What we need" on /teams/[id], home.
+- **"Tonight's stakes" stays silent until the night decides something.**
+  `StakesBanner` renders only for a REGULAR match in REGULAR_SEASON once a side
+  has `paths`, a sealed `status` or an `outlook` (forecasts exist only when
+  few enough results remain, `NORMAL_FORECAST_CAP`). Never fill it with an
+  early-season "everyone's in the hunt" card: that is noise.
 
 ## Playoff bracket
 

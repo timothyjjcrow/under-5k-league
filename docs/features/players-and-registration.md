@@ -33,10 +33,11 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
 - **Judge a claim against the medal's window** (`rank.ts`, pure).
   `mmrRangeForRankTier` is the exact star band (154/star, 770/medal to Ancient;
   Divine stars 200; Immortal from 5620) padded evenly to `MMR_WINDOW_MAX`.
-  `clampMmrToRank` snaps a claim outside it, blank included, to the window
-  FLOOR (never inflates); no medal, no clamp. `rankTierExactMinMmr` (unpadded)
-  is for eligibility. `approxRankTierFromMmr` shares the constants, and
-  `rank.test.ts` pins that the two never disagree.
+  `clampMmrToRank` snaps any claim outside the window to its FLOOR: an
+  over-claim drops to it, and an under-claim or a blank (0) rises to it. No
+  medal, no clamp. `rankTierExactMinMmr` (unpadded) is for eligibility.
+  `approxRankTierFromMmr` shares the constants, and `rank.test.ts` pins that
+  the two never disagree.
 - **Keep `saveRegistration`'s order:** fetch a brand-new signup's missing
   medal, then gate the RAW claim plus medal, then clamp and store. Never gate
   the clamped value: the clamp snaps under the ceiling, so any overstated
@@ -94,6 +95,13 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   played" at snapshot time and only while fresh (`pubLastPlayed`); quiet past
   `PUB_QUIET_DAYS`. Profiles reuse the token, and their heroes card shows the
   top-5 pub heroes even with no league games.
+- **Keep pub heroes apart from favorite heroes.** Pool rows show the top 3
+  most-played pub heroes from OpenDota's `/heroes` (`poolPubRecord` slices
+  `topHeroes`; `PubHeroStrip` in `player-pool.tsx`); the self-typed favorite
+  heroes keep their own column. One is what a player plays, the other what
+  they claim, so never merge or substitute them. On a phone both icon strips
+  share one row, so keep the visible "Most played (pubs)" label: it is the only
+  thing that tells them apart.
 - **Last league season** (`loadPoolLastSeasons`): team, record, price, title
   from seasons created before the active one, from the Seasons card's facts.
 - **Show "no Discord" only to viewers allowed contact:** handles are blanked

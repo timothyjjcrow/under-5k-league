@@ -243,10 +243,15 @@ standings. `scrim-service.ts` (post, claim, cancel, end, guests, coaches),
 ## League news
 
 - **News has no season**: the admin card (`src/app/actions/news.ts`) always
-  renders; every change writes `logAdminAction` and revalidates `/`, `/news`,
-  `/admin`. Create is idempotent via a `newsPostRequest:<uuid>` Setting
-  committed with the post (it survives deletion, so a replay can't resurrect a
-  post). Pin and delete are conditional writes.
+  renders; every change writes `logAdminAction`. Create is idempotent via a
+  `newsPostRequest:<uuid>` Setting committed with the post (it survives
+  deletion, so a replay can't resurrect a post). Pin and delete are
+  conditional writes.
+- **Revalidate on every outcome, not just a change.** Every news action calls
+  `refreshNewsSurfaces()` (`/`, `/news`, `/admin`); `toggleNewsPin` and
+  `deleteNewsPost` also call it for the no-op answers ("Already pinned",
+  "Already deleted"), a missing post and the changed-under-you refusal, so a
+  stale admin tab catches up instead of offering the same dead control again.
 - **Home shows each post once**: pinned posts in `PinnedNotices` (max 3),
   newest 3 unpinned in `LeagueNews` (`src/components/home/news.tsx`). `/news`
   lists pinned first, 20 per page; each post is an `<article>` anchored by id,

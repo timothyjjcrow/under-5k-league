@@ -121,14 +121,18 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   board scans the whole table. They share `createPublicSnapshot`
   (`public-cache.ts`): `unstable_cache`, 60s, tag `"games"`, keyed by the
   `publicGameRevision` that `stampResultChange` bumps on every result write.
-  Exception: `fetchAllGamesForScouting` stays a direct query, because a cached
-  wrapper hung the match preview's nested Suspense stream.
+  Exception: the scouting report's `fetchGamesForScouting`
+  (`game-participants.ts`) stays a direct query, because a cached wrapper hung
+  the match preview's nested Suspense stream.
 - **Bust `"games"` from request scope, never from lib.** Server Actions call
   `refreshGames()` (`updateTag`; `admin-shared.ts`, copies in `teams.ts` and
-  `match-report.ts`); route handlers (the automation worker, the test cache
-  route) use `revalidateTag("games", { expire: 0 })`. `revalidatePath` alone
-  does not clear the tag. Team renames bust it too
-  (record matchups embed team names). The TTL only backstops outside writes.
+  `match-report.ts`) for read-your-own-writes. Never swap it for
+  `revalidateTag("games", "max")`: that serves the first reader stale data and
+  refreshes in the background, so the admin or captain who just imported
+  doesn't see their game. Route handlers (the automation worker, the test
+  cache route) use `revalidateTag("games", { expire: 0 })`. `revalidatePath`
+  alone does not clear the tag. Team renames bust it too (record matchups
+  embed team names). The TTL only backstops outside writes.
 - **Tick countdowns in a leaf** (`useSecondsLeft`/`useElapsedMs`,
   `room-clock.tsx`) so only the clock text re-renders every 250ms; never a
   room-level `forceTick`.
@@ -147,6 +151,11 @@ Shared by the draft room and the inhouse room (room-specific rules are in
   `disconnected` at `ROOM_POLL_FAIL_THRESHOLD` failures in a row and any
   success clears it (pure `pollHealthAfter`, `poll-health.ts`), so a flaky
   connection never locks the room.
+- **A 429 on a room poll is back-pressure, not a failure, in BOTH rooms.** Ease
+  off (`rateLimitedMs` in `roomPollCadence`) and never count it toward
+  `disconnected`: tripping it would disable every bid or accept control over a
+  rate limit, the moment a player most needs to act. (The inhouse room's
+  cold-page exception is in `docs/features/inhouse.md`.)
 - **While disconnected, disable every action and say so** (aria-live strip;
   each room folds `disconnected` into `pending`). Never swallow poll failures:
   that is how a frozen auction sold a captain's player. A 404 from

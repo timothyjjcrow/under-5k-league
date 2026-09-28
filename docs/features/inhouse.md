@@ -59,7 +59,9 @@ Every transition is a guarded claim; keep it that way (general rules:
   the target row `{team: null}` (a double-click is one turn), auto-assigning
   the last pool player; `resolveCaptainVote` on `CAPTAIN_VOTE → DRAFTING`
   before installing captains; `startCaptainVote` on `READY_CHECK →
-  CAPTAIN_VOTE`; `startGame` on READY. `maybeFormLobby` runs Serializable and
+  CAPTAIN_VOTE`; `startGame` on READY; `resolveAbandonedLobby` on the exact
+  status it read (a Start or a result landing after its read wins, and two
+  chains tear a dead lobby down once). `maybeFormLobby` runs Serializable and
   treats P2034 or P2002 as the benign loser; Postgres's partial unique
   `InhouseLobby_one_active_idx` is the final one-active barrier. The queue ping
   throttle is `claimThrottle` on `inhouseQueuePingAt`.
@@ -123,6 +125,10 @@ Every transition is a guarded claim; keep it that way (general rules:
   override survives) > the typed value clamped to the medal > the last lobby
   snapshot (clamped), so a blank "Run it back" join keeps a known MMR. Client
   MMR alone never decides captaincy for a registered player.
+- **Keep the queue's "How your MMR is set" note after joining** (`mmrHint`,
+  `src/components/inhouse/queue-view.tsx`). It is the only place that explains
+  why the listed MMR differs from what was typed: a registration MMR overrides
+  the typed value, and a self-reported value is clamped to the medal.
 - **Order by exact keys, never row order.** Queue reads and formation sort
   `[joinedAt, userId]`; formation copies `joinedAt` to
   `InhouseLobbyPlayer.queuedAt`, and later sorts use `[queuedAt, userId]`.
@@ -252,12 +258,26 @@ Every transition is a guarded claim; keep it that way (general rules:
   row per `[lobbyId, kind]`). `inhouseResultMessage` (score, duration, `gameMvp`
   MVP, OpenDota link) goes to the inhouse ALERT webhook; a failed send stays
   PENDING for the worker.
+- **Keep result recovery above the worker's idle early return.** `syncInhouse`
+  (`result-sync-service.ts`) runs `reconcileMissingInhouseResultAnnouncements`
+  before its `!active && queued === 0` return, and that return path still
+  drains one inhouse announcement before repainting the board; only the phase
+  resolvers are skipped. A finished game with nobody queued or polling is the
+  usual state these repair, so below the return they would leave results
+  unrated and unposted.
 - **A void is ordered against its result.** `voidLastResult` flips COMPLETED to
   CANCELLED (ladder and history filter on COMPLETED, so Elo recomputes),
   cancels a PENDING RESULT, and queues a sequence-2 correction behind one
-  SENDING or SENT. Every void posts a correction. A `lobbyId` voids exactly
-  that game (the per-row Void on `/inhouse/history`, `voidInhouseResult`); the
-  bare form serves the room's banner.
+  SENDING or SENT. Every void posts a correction.
+- **Both admin Voids name their lobby:** the room's banner sends
+  `lastResult.lobbyId` and `/inhouse/history` sends its row
+  (`voidInhouseResult`), so a result finishing between look and click can't
+  redirect the void. The bare form (no `lobbyId`, newest by `completedAt`)
+  survives only for API callers.
+- **Keep the per-row Void on `/inhouse/history`.** The room's Void shows only to
+  an admin who PLAYED that game, within 10 minutes of it ending (`lastResult`
+  in `getInhouseState`), so the history row is the only control when players
+  report a wrong auto-import to an admin who wasn't one of the ten.
 
 ## Ladder
 

@@ -213,8 +213,16 @@ Captain report, admin import, league feed and roster scan all end in
   `<RankBadge>` (`ui.tsx`) on players, teams and the draft room. Filled at login
   (`ensureRankTier`/`ensurePubStats` in `users.ts`, missing-only, so login
   pays for OpenDota at most once per account), on `/me` link/refresh
-  (`updateDotaAccount`, `refreshRank` in `src/app/actions/registration.ts`),
-  hourly, and by the admin button.
+  (`updateDotaAccount`, `refreshMyAccounts` in
+  `src/app/actions/registration.ts`), hourly, and by the admin button.
+- **/me has one refresh button, and each half has its own cooldown.** "Refresh
+  my Steam & Dota info" (`refreshMyAccounts`) runs the Steam half (name,
+  avatar) and the OpenDota half (medal, public-data flag, scouting) in
+  parallel. Each takes its own `claimProviderCooldown` claim and handles its
+  own failures, and the toast says what each did, so one provider's cooldown
+  or outage never blocks the other. The claim fails closed: if it can't be
+  recorded, no provider call is made, so a database outage never becomes
+  unthrottled calls on the shared Steam and OpenDota budget.
 - **Private match data.** `User.fhUnavailable` mirrors OpenDota's
   `profile.fh_unavailable`: true means "Expose Public Match Data" is off, the
   top reason a roster scan can't see a player. Store only a definite answer

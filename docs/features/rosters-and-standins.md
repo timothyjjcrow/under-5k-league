@@ -74,9 +74,12 @@ standin cover, and match-night check-ins. Main files:
   that also reads Season and Draft, so a racing `startDraft` wins. Seams
   `admin.promoteStandin.beforeTx` and `.afterGate` (Postgres only) in
   `test/integration/roster-moves.itest.ts`.
-- **Withdrawal goes through `withdrawGateError`.** `leaveLeague` and admin
-  `withdrawSignup` pass `pendingAssignments` (`pendingCoverWhere`), captain,
-  roster and on-the-block facts, then re-check them in the transaction.
+- **Withdrawal goes through `withdrawGateError`.** `leaveLeague` passes
+  `pendingAssignments` (`pendingCoverWhere`), captain, roster and
+  `isOnTheBlock`. Admin `withdrawSignup` passes the same facts except the
+  block, which it checks inline, at read and again in its transaction, so the
+  gate's unit test does not cover the admin refusal
+  (`admin-flow-audit.itest.ts` does). Both paths re-check in the transaction.
   `audience: "self"` (`leaveLeague`) speaks to the player and names only what they
   can do ("ask that team's captain or an admin"); the default is `"admin"`. Use it
   for any new player-facing surface.
