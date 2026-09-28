@@ -74,10 +74,11 @@ import { ThisWeek } from "./this-week";
 import { fmtWhen } from "./when";
 
 /**
- * The hero in the regular season and the playoffs. A league member gets
- * their next match's check-in in the panel (MyNextMatch); someone without a
- * team gets the late standin signup and the inhouse queue instead. The counts
- * are the season's progress, or in the playoffs the teams still alive.
+ * The hero in the regular season and the playoffs. A signed-in viewer gets
+ * their own panel (MyNextMatch: their next match's check-in, or what is true
+ * for them), unless they have no team and no signup: then the late standin
+ * signup and the inhouse queue take the slot. The counts are the season's
+ * progress, or in the playoffs the teams still alive.
  */
 export function seasonHero(
   snapshot: SeasonSnapshot,
