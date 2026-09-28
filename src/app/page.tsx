@@ -225,12 +225,21 @@ export default async function Home() {
   // Primary call-to-action, surfaced right in the hero during signups.
   const isActiveReg = snapshot.myReg?.status === "ACTIVE";
   const isRemovedReg = snapshot.myReg?.status === REGISTRATION_STATUS.REMOVED;
+  // A rostered player already has a team, whatever their registration row
+  // says; asking them to register as a standin would also push their
+  // check-in panel out of the hero.
+  const isRostered =
+    !!user &&
+    snapshot.teams.some((team) =>
+      team.members.some((member) => member.userId === user.id),
+    );
   const standinRegistrationOpen =
     (season.status === "DRAFT" ||
       season.status === "REGULAR_SEASON" ||
       season.status === "PLAYOFFS") &&
     !isActiveReg &&
-    !isRemovedReg;
+    !isRemovedReg &&
+    !isRostered;
   // Signed out, the button goes straight to Steam and carries the sign-in
   // note, which /login would otherwise have shown.
   const standinRegistration = (variant: "primary" | "secondary") =>
