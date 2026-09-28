@@ -28,10 +28,17 @@ export function LeagueLobbyChecklist({
   const [copied, setCopied] = useState(false);
   return (
     <Card tone="feature">
+      {/* The badge rides in the title: in the action slot it sat beside the
+          title column and squeezed the subtitle into a narrow strip on
+          phones. */}
       <CardHeader
-        title="Official lobby checklist"
+        title={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            Official lobby checklist
+            <Badge tone="accent">Captain check</Badge>
+          </span>
+        }
         subtitle="Use the current league ticket in every lobby so the result reaches the league feed."
-        action={<Badge tone="accent">Captain check</Badge>}
       />
       <CardBody className="space-y-3 text-sm">
         <p className="[overflow-wrap:anywhere]">
