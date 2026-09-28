@@ -35,7 +35,16 @@ per-phase or offseason so unused features stay hidden.
   The auction clock is server-authoritative; expired nominations resolve lazily
   on the next poll/action (no cron/websocket).
 - **Mutations**: server actions in `src/app/actions/*` (forms) and JSON route
-  handlers in `src/app/api/draft/*` (the live draft).
+  handlers in `src/app/api/draft/*` (the live draft). Admin actions are split
+  by job (2026-09-28): `admin-season.ts`, `admin-captains-draft.ts`,
+  `admin-roster.ts`, `admin-schedule-results.ts`, `admin-discord.ts`; there is
+  no `admin.ts`, so import each action from its own file. Helpers they share
+  live in `admin-shared.ts`, which must stay WITHOUT `"use server"` (every
+  export of a server module is a callable endpoint). Every admin action opens
+  with `const admin = await adminOrError(); if ("error" in admin) return
+  admin;`, and `test/integration/admin-auth.itest.ts` calls each one signed
+  out and as a plain player. A new `"use server"` admin file must be added to
+  that test's list, which fails until it is.
 - **Auth**: `src/lib/auth.ts` (jose-signed cookie session; the token itself
   lives in `session-token.ts`, DB-free). Sessions SLIDE: `src/proxy.ts`
   re-issues a week-old cookie on GET page loads with the same uid, epoch and
