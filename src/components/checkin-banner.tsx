@@ -185,7 +185,10 @@ export function CheckinBanner({
       <div
         className={
           panel
-            ? "mt-3 grid grid-cols-2 gap-2 [&_button]:w-full [&_form]:min-w-0"
+            ? // px-2: two columns in a phone's hero leave each button ~137px,
+              // and at the default px-4 "✗ Can't make it" broke onto two
+              // lines beside a one-line "✓ I'm in".
+              "mt-3 grid grid-cols-2 gap-2 [&_button]:w-full [&_button]:px-2 [&_form]:min-w-0"
             : "grid w-full min-w-0 grid-cols-1 gap-2 [&_button]:w-full sm:flex sm:w-auto sm:shrink-0 sm:[&_button]:w-auto"
         }
       >
