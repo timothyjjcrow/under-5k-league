@@ -62,7 +62,7 @@ export function playerDirectoryPresentation(
       captainSelectionOpen: false,
       showDraftStatus: true,
       poolTitle: hasStandins ? "Draft pool and standins" : "Draft pool",
-      poolAside: "· track drafted players and who remains",
+      poolAside: "Track drafted players and who remains",
       emptyDescription:
         "No active full-player registrations are available for this auction.",
       availabilityLabel: "Available to draft",
@@ -79,7 +79,7 @@ export function playerDirectoryPresentation(
       captainSelectionOpen: false,
       showDraftStatus: true,
       poolTitle: "Player pool",
-      poolAside: "· review rosters and remaining free agents",
+      poolAside: "Review rosters and remaining free agents",
       emptyDescription:
         "No active full-player registrations are on record for this season.",
       availabilityLabel: "Free agents",
@@ -93,7 +93,7 @@ export function playerDirectoryPresentation(
       captainSelectionOpen: false,
       showDraftStatus: true,
       poolTitle: "Final player field",
-      poolAside: "· season rosters and undrafted registrations",
+      poolAside: "Season rosters and undrafted registrations",
       emptyDescription:
         "No full-player registrations are on record for this completed season.",
       availabilityLabel: "Undrafted",
@@ -106,7 +106,7 @@ export function playerDirectoryPresentation(
     captainSelectionOpen: false,
     showDraftStatus: true,
     poolTitle: "Player pool",
-    poolAside: "· sort, filter and scout the field",
+    poolAside: "Sort, filter and scout the field",
     emptyDescription:
       "No active full-player registrations are on record for this season.",
     availabilityLabel: "Free agents",

@@ -964,6 +964,10 @@ export function SectionTitle({
   className,
 }: {
   children: React.ReactNode;
+  /**
+   * A short note beside the title. On a phone it wraps to its own line, so
+   * don't open it with a separator ("· newest first" left an orphaned dot).
+   */
   aside?: React.ReactNode;
   className?: string;
 }) {

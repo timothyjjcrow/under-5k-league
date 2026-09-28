@@ -276,7 +276,7 @@ export default async function PickemPage({
           {nextOpenDeadline != null ? (
             <PickemDeadlineRefresh targetMs={nextOpenDeadline} />
           ) : null}
-          <SectionTitle aside="· picks lock at kickoff; the crowd's picks stay hidden until then">
+          <SectionTitle aside="Picks lock at kickoff; the crowd's picks stay hidden until then">
             Upcoming matches
           </SectionTitle>
           {open.length === 0 ? (
@@ -439,7 +439,7 @@ export default async function PickemPage({
 
       {history.length > 0 ? (
         <section className="space-y-4">
-          <SectionTitle aside="· newest first">Your picks</SectionTitle>
+          <SectionTitle aside="Newest first">Your picks</SectionTitle>
           <Card>
             <CardBody className="divide-y divide-line/60 p-0">
               {history.map(({ match: m, pickedTeamId: pick, result }) => {
