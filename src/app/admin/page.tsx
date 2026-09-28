@@ -291,6 +291,7 @@ import {
   CardHeader,
   CardSkeleton,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankMedal,
@@ -385,6 +386,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     }));
 
+  // During signups and the draft phase, setting up the season is the job:
+  // the phase and captains cards and the Discord reach card come first.
+  const setupFirst = season?.status === "SIGNUPS" || season?.status === "DRAFT";
   const setupControls = season && data && nextStep ? <>
           <AdminAnchor id="adm-season">
             <SeasonControls season={season} data={data} nextStep={nextStep} />
@@ -420,16 +424,39 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       </Suspense>
     </AdminAnchor>
   ) : null;
+  // The auto-sync card and the import review are spaced like every other
+  // card, and the anchor hides when neither has anything to show (outside
+  // the regular season and playoffs, with no import waiting) so it adds no
+  // gap. Database performance is its own folded section after them: inside
+  // the anchor, a jump to Auto-sync would unfold it too.
   const syncCards = season ? (
-    <AdminAnchor id="adm-sync">
-      <AutoSyncHealth season={season} />
-      <Suspense fallback={<CardSkeleton rows={3} />}>
-        <ImportProgress seasonId={season.id} page={importQuery.importPage} query={importQuery} />
-        <DatabaseHealth />
-      </Suspense>
-    </AdminAnchor>
+    <>
+      <AdminAnchor id="adm-sync" className="space-y-8 empty:hidden">
+        <AutoSyncHealth season={season} />
+        <Suspense fallback={<CardSkeleton rows={3} />}>
+          <ImportProgress seasonId={season.id} page={importQuery.importPage} query={importQuery} />
+        </Suspense>
+      </AdminAnchor>
+      <AdminSection
+        title="Database performance"
+        subtitle="Connection waits, busy connections and timeouts on this server instance."
+      >
+        <Suspense fallback={<CardSkeleton rows={3} />}>
+          <DatabaseHealth />
+        </Suspense>
+      </AdminSection>
+    </>
   ) : null;
 
+  // The chips follow the page's order, so the active chip only ever moves
+  // forward as the admin scrolls down: with setupFirst the phase, captains
+  // and Discord reach chips lead, as their cards do; later they follow the
+  // season's working cards.
+  const setupItems = [
+    { id: "adm-season", label: "Phase" },
+    { id: "adm-captains", label: "Captains & draft" },
+  ];
+  const reachItem = { id: "adm-reach", label: "Discord reach" };
   const jumpItems: { id: string; label: string }[] = [
     ...(handoffFirst
       ? [
@@ -452,6 +479,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             : []),
           { id: "adm-attention", label: "Needs attention" },
           ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
+          ...(setupFirst ? [...setupItems, reachItem] : []),
           ...(cards?.schedule
             ? [{ id: "adm-schedule", label: "Schedule & results" }]
             : []),
@@ -462,17 +490,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           ...(cards?.standins
             ? [{ id: "adm-standins", label: "Standins" }]
             : []),
-          { id: "adm-reach", label: "Discord reach" },
+          ...(setupFirst ? [] : [reachItem]),
           ...(autoSyncVisible(season)
             ? [{ id: "adm-sync", label: "Auto-sync" }]
             : []),
-          { id: "adm-season", label: "Phase" },
-          { id: "adm-captains", label: "Captains & draft" },
+          ...(setupFirst ? [] : setupItems),
           { id: "adm-league", label: "League id" },
         ]
       : []),
-    { id: "adm-automation", label: "Automation" },
     { id: "adm-history", label: "Historical records" },
+    { id: "adm-automation", label: "Automation" },
     // Season-independent: inhouse alerts and the queue board are most
     // important in the offseason, when inhouse is the live mode.
     { id: "adm-discord", label: "Discord" },
@@ -582,7 +609,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               <TiebreakerControls season={season} data={data} nowMs={nowMs} />
             </AdminAnchor>
           ) : null}
-          {season.status === "SIGNUPS" || season.status === "DRAFT" ? (
+          {setupFirst ? (
             <>
               {setupControls}
               {reachCard}
@@ -612,19 +639,22 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               <StandinControls season={season} data={data} />
             </AdminAnchor>
           ) : null}
-          {season.status !== "SIGNUPS" && season.status !== "DRAFT"
-            ? reachCard
-            : null}
+          {setupFirst ? null : reachCard}
           {syncCards}
-          {season.status !== "SIGNUPS" && season.status !== "DRAFT" ? setupControls : null}
+          {setupFirst ? null : setupControls}
           <LeagueControls season={season} />
         </>
       ) : null}
 
       <AdminAnchor id="adm-history">
-        <Suspense fallback={<CardSkeleton rows={3} />}>
-          <HistoryCoverage />
-        </Suspense>
+        <AdminSection
+          title="Historical records"
+          subtitle="How many imported games are indexed and how much roster history is kept, with the tools to fill gaps."
+        >
+          <Suspense fallback={<CardSkeleton rows={3} />}>
+            <HistoryCoverage />
+          </Suspense>
+        </AdminSection>
       </AdminAnchor>
 
       {/* Evergreen: cron also owns offseason/inhouse maintenance, and an
@@ -745,7 +775,7 @@ function OpenNextSeason({
 }) {
   const nextName = nextSeasonName(previous?.name ?? null);
   return (
-    <Card id="adm-new-season" tone="feature" className="scroll-mt-40">
+    <Card id="adm-new-season" tone="feature" className="scroll-mt-40 lg:scroll-mt-56">
       <CardHeader
         headingLevel={2}
         title={season ? "Season handoff" : "Open a new season"}
@@ -872,7 +902,7 @@ function AdminSection({
       id={id}
       data-section-jump
       open={defaultOpen}
-      className="group scroll-mt-40 rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
+      className="group scroll-mt-40 lg:scroll-mt-56 rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
     >
       <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
         <SectionReady />
@@ -903,13 +933,16 @@ function AdminSection({
 /** Anchor target + header offset for a card that keeps its own frame. */
 function AdminAnchor({
   id,
+  className,
   children,
 }: {
   id: string;
+  /** Spacing for an anchor that wraps more than one card. */
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div id={id} className="scroll-mt-40">
+    <div id={id} className={cn("scroll-mt-40 lg:scroll-mt-56", className)}>
       {children}
     </div>
   );
@@ -921,6 +954,12 @@ function AdminAnchor({
  * reachable however far down the page an admin has scrolled. On a phone it
  * scrolls away with the page like every section bar (see SectionNav): pinned,
  * it cost a fifth of the screen on top of the header and the tab bar.
+ *
+ * With up to twenty chips it can't fit one desktop row, and a desktop mouse
+ * can't scroll sideways, so from `lg` it wraps (`wrap`): two rows at most
+ * desktop widths, three near 1024px, about 135px at most. Every jump target
+ * here therefore clears the header plus that bar at `lg` with
+ * `lg:scroll-mt-56` (224px), beside the phone's `scroll-mt-40`.
  *
  * A jump opens the section and, inside it, only a folded AdminSection
  * (`data-section-jump`). Every other disclosure in a card (Fix the phase,
@@ -935,6 +974,7 @@ function AdminJump({ items }: { items: { id: string; label: string }[] }) {
       label="Admin sections"
       sticky
       openNested="marked"
+      wrap
     />
   );
 }
@@ -1374,7 +1414,7 @@ function AdminAttention({
   const sectionLabel = new Map(jumpItems.map((item) => [`#${item.id}`, item.label]));
   const standinsLabel = sectionLabel.get("#adm-standins");
   return (
-    <Card id="adm-attention" className="scroll-mt-40">
+    <Card id="adm-attention" className="scroll-mt-40 lg:scroll-mt-56">
       <CardHeader
         headingLevel={2}
         title={attentionTitle(season.name, items.length + matches.length)}
@@ -1445,12 +1485,14 @@ function AdminAttention({
             </ul>
           </details>
         ) : null}
+        {/* inline-flex min-h-6: on 12px text TAP_SAFE alone left a 22px
+            target, under the 24px minimum. */}
         <p className="text-xs">
           <Link
             href={`/admin/data-quality?season=${season.id}`}
-            className={textLink()}
+            className={textLink("inline-flex min-h-6 items-center")}
           >
-            Check imported-game quality →
+            Check imported-game quality <LinkArrow />
           </Link>
         </p>
       </CardBody>
@@ -2599,33 +2641,46 @@ function CaptainControls({
                     {/* Wraps on a phone: the budget + remove drop to their
                         own line once the name's basis-48 can't fit beside
                         them, and the name itself wraps rather than truncates,
-                        because the order number, avatar and crest take ~90px
-                        of that basis (a long name read "The Couriers of
-                        Catastrophe Wi…" at 390px). */}
+                        because the order number and crest take ~60px of that
+                        basis (a long name read "The Couriers of Catastrophe
+                        Wi…" at 390px). The captain is named in words under
+                        the team: a Steam-less captain's avatar is only
+                        initials, which named the link "RR" to a screen
+                        reader and nobody at all to a sighted admin. */}
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
                         <span className="w-5 shrink-0 text-center text-xs text-muted">
                           {t.draftOrder + 1}
                         </span>
-                        <PlayerLink userId={t.captainId} className="shrink-0">
-                          <Avatar
-                            name={t.captain.name}
-                            src={t.captain.avatar}
-                            size={24}
-                          />
-                        </PlayerLink>
                         <TeamCrest
                           name={t.name}
                           seed={t.id}
                           logoUrl={t.logoUrl}
                           size={28}
                         />
-                        <Link
-                          href={`/teams/${t.id}`}
-                          className="min-w-12 [overflow-wrap:anywhere] hover:text-info hover:underline"
-                        >
-                          {t.name}
-                        </Link>
+                        <span className="min-w-12 [overflow-wrap:anywhere]">
+                          <Link
+                            href={`/teams/${t.id}`}
+                            className="hover:text-info hover:underline"
+                          >
+                            {t.name}
+                          </Link>
+                          <span className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-muted">
+                            <span aria-hidden className="shrink-0">
+                              <Avatar
+                                name={t.captain.name}
+                                src={t.captain.avatar}
+                                size={20}
+                              />
+                            </span>
+                            <span className="min-w-0">
+                              Captain{" "}
+                              <PlayerLink userId={t.captainId}>
+                                {t.captain.name}
+                              </PlayerLink>
+                            </span>
+                          </span>
+                        </span>
                       </span>
                       <span className="ml-auto flex shrink-0 items-center gap-2">
                         <Badge tone="accent" className="shrink-0">
@@ -3343,7 +3398,7 @@ function TiebreakerControls({
               </summary>
               <div className="space-y-2 px-3 pb-3">
                 {weekMatches.map((m) => (
-                  <div key={m.id} id={`admin-tiebreaker-match-${m.id}`} data-testid="admin-tiebreaker-match" className="scroll-mt-40">
+                  <div key={m.id} id={`admin-tiebreaker-match-${m.id}`} data-testid="admin-tiebreaker-match" className="scroll-mt-40 lg:scroll-mt-56">
                     <MatchResultRow
                       id={adminMatchRowId(m.id)}
                       m={m}

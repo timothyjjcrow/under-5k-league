@@ -2,7 +2,9 @@ import { readPoolDiagnostics } from "@/lib/prisma";
 import { readDatabaseDiagnostics } from "@/lib/db-observability";
 
 /** Called only after AdminPage's authorization check. Never expose raw engine
- * metrics, labels, queries or caught error objects to a client component. */
+ * metrics, labels, queries or caught error objects to a client component.
+ * The body of /admin's folded "Database performance" section, which draws
+ * the frame and heading. */
 export async function DatabaseHealth() {
   const pool = await readPoolDiagnostics();
   const sample = readDatabaseDiagnostics();
@@ -11,9 +13,8 @@ export async function DatabaseHealth() {
     ? `${(wait.totalMs / wait.count).toFixed(1)} ms` : "No sample";
   const number = (value: number | null | undefined) => value == null ? "Unavailable" : value.toLocaleString("en-US");
   return (
-    <details className="rounded-lg border border-line p-3 text-sm">
-      <summary className="cursor-pointer py-1 font-semibold">Database performance</summary>
-      <p className="mt-3 text-xs text-muted">
+    <div className="p-5 text-sm">
+      <p className="text-xs text-muted">
         These measurements cover this server instance. Pool counters restart with
         the instance. Recent query summaries are also saved to hosting logs.
         Slow queries and connection failures are separate signals.
@@ -29,6 +30,6 @@ export async function DatabaseHealth() {
       {sample.oversizedSnapshots > 0 ? (
         <p className="mt-3 text-warning">A public data snapshot exceeded the cache size budget. All results are still included; check the hosting performance summary before expanding the history.</p>
       ) : null}
-    </details>
+    </div>
   );
 }

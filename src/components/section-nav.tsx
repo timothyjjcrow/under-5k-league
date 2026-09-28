@@ -90,12 +90,21 @@ export function SectionNav({
   label,
   sticky = false,
   openNested = "first",
+  wrap = false,
 }: {
   items: { id: string; label: string }[];
   label: string;
   sticky?: boolean;
   /** Which disclosure inside a target opens on a jump (see NestedReveal). */
   openNested?: NestedReveal;
+  /**
+   * From desktop width (`lg`) the chips wrap onto more rows instead of
+   * scrolling sideways: most desktop mice can't scroll sideways, so a bar
+   * too long for the width (/admin's) hid half its chips behind the edge
+   * fade. Phones keep the one swipeable row. A sticky bar gets taller, so
+   * the page's jump targets need a larger desktop scroll offset.
+   */
+  wrap?: boolean;
 }) {
   const [active, setActive] = useState("");
   const resolvedHash = useRef("");
@@ -250,7 +259,10 @@ export function SectionNav({
     >
       <ul
         ref={listRef}
-        className="flex gap-1 overflow-x-auto pb-1"
+        className={cn(
+          "flex gap-1 overflow-x-auto pb-1",
+          wrap && "lg:flex-wrap lg:overflow-visible lg:pb-0",
+        )}
         style={{
           maskImage: chipBarMask(edges),
           WebkitMaskImage: chipBarMask(edges),
@@ -263,6 +275,7 @@ export function SectionNav({
               aria-current={active === item.id ? "location" : undefined}
               className={cn(
                 "inline-flex min-h-11 items-center whitespace-nowrap rounded-lg border px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                wrap && "lg:min-h-9",
                 active === item.id
                   ? "border-accent/60 bg-accent/10 text-fg"
                   : "border-transparent text-muted hover:bg-surface-2 hover:text-fg",

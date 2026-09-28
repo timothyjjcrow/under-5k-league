@@ -389,6 +389,32 @@ describe("admin copy names only controls that exist", () => {
     expect(page.match(/^\s*data-section-jump$/gm)).toHaveLength(1);
   });
 
+  // The sticky bar highlights the section in view. When the chips and the
+  // cards disagree on order, that highlight jumps backwards while the admin
+  // scrolls down, and the bar misdescribes the page.
+  it("the jump bar lists sections in the order the page renders them", () => {
+    const page = read("src/app/admin/page.tsx");
+    const barStart = page.indexOf("const jumpItems");
+    const bar = page.slice(barStart, page.indexOf("\n  ];\n", barStart));
+    const body = page.slice(page.indexOf("return (", barStart));
+    // The in-season branches (the season-record branch comes first in both).
+    const seasonBar = bar.slice(bar.indexOf("...(tonight.length > 0"));
+    const season = body.slice(body.indexOf(") : season && data ? ("));
+    const inOrder = (hay: string, ...needles: string[]) => {
+      const at = needles.map((n) => hay.indexOf(n));
+      expect(at.every((i) => i >= 0), needles.join(" | ")).toBe(true);
+      expect(at, needles.join(" < ")).toEqual([...at].sort((a, b) => a - b));
+    };
+    // Signups and the draft phase lead with setting up; later phases put
+    // it after the season's working cards. Chips and cards branch on the
+    // same flag.
+    inOrder(seasonBar, "...(setupFirst ? [...setupItems, reachItem] : [])", 'id: "adm-schedule"', 'id: "adm-standins"', "...(setupFirst ? [] : [reachItem])", 'id: "adm-sync"', "...(setupFirst ? [] : setupItems)", 'id: "adm-league"');
+    inOrder(season, "{setupFirst ? (", "{setupControls}", "{reachCard}", '<AdminAnchor id="adm-schedule">', '<AdminAnchor id="adm-standins">', "{setupFirst ? null : reachCard}", "{syncCards}", "{setupFirst ? null : setupControls}", "<LeagueControls");
+    // The evergreen sections after the season's own.
+    inOrder(bar, 'id: "adm-history"', 'id: "adm-automation"', 'id: "adm-discord"', 'id: "adm-activity"', 'id: "adm-news"', 'id: "adm-security"');
+    inOrder(body, '<AdminAnchor id="adm-history">', '<AdminAnchor id="adm-automation">', "<DiscordSection />", "<AdminActivity />", "<AdminNews ", "<SecurityControls />");
+  });
+
   // Two admin links once sent the admin to /matches/<id>#admin-tools, an id
   // the match page never rendered: they landed at the top of a public page
   // with no admin controls. A link into a match page must name an anchor it

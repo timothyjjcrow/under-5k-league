@@ -355,7 +355,8 @@ export function MatchResultRow({
       id={id}
       className={cn(
         "space-y-2 rounded-lg border border-line p-3",
-        id && "scroll-mt-40",
+        // /admin's wrapped sticky jump bar is taller at lg (see AdminJump).
+        id && "scroll-mt-40 lg:scroll-mt-56",
       )}
     >
       {!resultCorrectionOpen || importedFinal ? (
