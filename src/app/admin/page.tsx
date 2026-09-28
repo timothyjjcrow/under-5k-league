@@ -1124,8 +1124,9 @@ type Season = NonNullable<Awaited<ReturnType<typeof getActiveSeason>>>;
 /**
  * Match night at the top of the page: each of tonight's fixtures with its
  * state, check-ins, standins and next automatic result check, and a jump to
- * its full result controls further down. The match page carries the same
- * admin tools, so the fixture name links there.
+ * its full result controls further down ("Result controls"). The fixture
+ * name opens the public match page (rosters, check-ins, games), which has no
+ * admin controls of its own.
  */
 function TonightMatches({
   season,
@@ -1190,7 +1191,7 @@ function TonightMatches({
                       {matchRoundLabel(m, totalRounds, { bestOf: true })}
                     </span>
                     <Link
-                      href={`/matches/${m.id}#admin-tools`}
+                      href={`/matches/${m.id}`}
                       className={textLink(
                         "min-w-0 flex-1 basis-48 font-medium [overflow-wrap:anywhere]",
                       )}
@@ -1306,10 +1307,11 @@ function AdminAttention({
     unlinkedSignups: data.unlinkedDiscord,
     unlinkedRostered: unlinkedRosterCount(data.teams, data.assignments, openIds),
   });
-  const matches = matchAttention(data.matches);
+  const matches = matchAttention(data.matches, data.teams);
   // A section folded into the season record, or not shown this phase, has no
   // jump target; its line still reads, just without a link.
   const sectionLabel = new Map(jumpItems.map((item) => [`#${item.id}`, item.label]));
+  const standinsLabel = sectionLabel.get("#adm-standins");
   return (
     <Card id="adm-attention" className="scroll-mt-40">
       <CardHeader
@@ -1352,13 +1354,22 @@ function AdminAttention({
                   key={item.id}
                   className="rounded-lg border border-line p-3 text-sm"
                 >
-                  <Link
-                    href={`/matches/${item.id}#admin-tools`}
-                    className={textLink()}
-                  >
+                  {/* Its row in Schedule & results or Playoffs holds the
+                      kickoff time and result controls. */}
+                  <a href={`#adm-match-${item.id}`} className={textLink()}>
                     {fixture(matchById.get(item.id)!)}
-                  </Link>
-                  <p className="mt-1 text-muted">{item.reasons.join(" · ")}</p>
+                  </a>
+                  <p className="mt-1 text-muted">
+                    {item.reasons.join(" · ")}
+                    {item.uncovered > 0 && standinsLabel ? (
+                      <>
+                        {" "}
+                        <a href="#adm-standins" className={textLink()}>
+                          {standinsLabel} →
+                        </a>
+                      </>
+                    ) : null}
+                  </p>
                 </li>
               ))}
             </ul>

@@ -61,7 +61,8 @@ test("Needs attention titles itself by count and links each line to its section"
   for (const href of await card
     .locator('a[href^="#"]')
     .evaluateAll((links) => links.map((link) => link.getAttribute("href")))) {
-    expect(href).toMatch(/^#adm-[a-z-]+$/);
+    // A section, or a match's own row (#adm-match-<id>).
+    expect(href).toMatch(/^#adm-[a-z0-9-]+$/);
     await expect(page.locator(href!)).toHaveCount(1);
   }
   noErrors();

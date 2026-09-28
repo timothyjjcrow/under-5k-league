@@ -2,18 +2,31 @@ import { decodeGamePlayers, trustedGamePlayers } from "./player-stats";
 import { heroById } from "./heroes";
 import { MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { standinConflict, type StandinSlot } from "./standin";
+import { matchCoverIssues } from "./admin-sections";
 
 type AttentionMatch = {
   id: string;
   status: string;
+  homeTeamId: string | null;
+  awayTeamId: string | null;
   scheduledAt: Date | null;
   availability: { userId: string; status: string }[];
-  standins: { replacingUserId: string | null; standinUserId?: string }[];
+  standins: { replacingUserId: string | null; standinUserId: string }[];
   reschedules: { status: string }[];
 };
 
-/** Read-only triage. Future fixtures are never labeled as awaiting results. */
-export function matchAttention(matches: AttentionMatch[], now = Date.now()) {
+/**
+ * Read-only triage. Future fixtures are never labeled as awaiting results.
+ * `uncovered` counts the players out with no cover, exactly as the Standins
+ * card does (matchCoverIssues): only current roster members, so a released
+ * player's old "can't make it" raises nothing, and a booked standin's own
+ * OUT is left to outStandins (the cover that quit, not a seat missing it).
+ */
+export function matchAttention(
+  matches: AttentionMatch[],
+  teams: readonly { id: string; members: readonly { userId: string }[] }[],
+  now = Date.now(),
+): { id: string; reasons: string[]; uncovered: number }[] {
   return matches
     .filter((match) => match.status !== "COMPLETED")
     .flatMap((match) => {
@@ -23,22 +36,19 @@ export function matchAttention(matches: AttentionMatch[], now = Date.now()) {
         reasons.push("Started over 2 hours ago; result still open");
       if (match.reschedules.some((request) => request.status === "PENDING"))
         reasons.push("Reschedule awaiting a response");
-      // A booked standin's own OUT is reported once, by outStandins: they are
-      // the cover that quit, not a player missing cover.
-      const uncovered = match.availability.filter(
-        (rsvp) =>
-          rsvp.status === "OUT" &&
-          !match.standins.some(
-            (cover) =>
-              cover.replacingUserId === rsvp.userId ||
-              cover.standinUserId === rsvp.userId,
-          ),
-      ).length;
+      const uncovered = matchCoverIssues(
+        match,
+        teams,
+        match.standins.map((cover) => ({ ...cover, matchId: match.id })),
+        match.availability
+          .filter((rsvp) => rsvp.status === "OUT")
+          .map((rsvp) => ({ ...rsvp, matchId: match.id })),
+      ).uncovered.length;
       if (uncovered)
         reasons.push(
           `${uncovered} declared absence${uncovered === 1 ? "" : "s"} without assigned cover`,
         );
-      return reasons.length ? [{ id: match.id, reasons }] : [];
+      return reasons.length ? [{ id: match.id, reasons, uncovered }] : [];
     });
 }
 

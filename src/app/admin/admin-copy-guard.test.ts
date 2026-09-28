@@ -369,6 +369,29 @@ describe("admin copy names only controls that exist", () => {
     expect(page.match(/^\s*data-section-jump$/gm)).toHaveLength(1);
   });
 
+  // Two admin links once sent the admin to /matches/<id>#admin-tools, an id
+  // the match page never rendered: they landed at the top of a public page
+  // with no admin controls. A link into a match page must name an anchor it
+  // renders; a match's own admin row (#adm-match-<id>) must exist here.
+  it("admin links into a match land on an anchor that exists", () => {
+    const matchPage = read("src/app/matches/[id]/page.tsx");
+    const anchors = [
+      ...new Set(
+        [...renderedAdmin.matchAll(/\/matches\/\$\{[^}]+\}#([a-z-]+)/g)].map(
+          (m) => m[1],
+        ),
+      ),
+    ];
+    for (const id of anchors) {
+      expect(matchPage.includes(`id="${id}"`), `/matches/…#${id} has no target`).toBe(
+        true,
+      );
+    }
+    const page = read("src/app/admin/page.tsx");
+    expect(page).toContain("href={`#adm-match-${item.id}`}");
+    expect(page).toContain("id={`adm-match-${m.id}`}");
+  });
+
   // The start-of-season step quotes the phase button by name. The label is
   // phaseAdvance's, so the check is that both pages render that name.
   it("the start-of-season step names the button the phase card and draft room render", () => {

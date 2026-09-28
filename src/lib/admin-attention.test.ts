@@ -15,23 +15,35 @@ const now = Date.UTC(2026, 8, 4, 20);
 const match = {
   id: "match",
   status: "SCHEDULED",
+  homeTeamId: "home",
+  awayTeamId: "away",
   scheduledAt: new Date(now + 60_000),
   availability: [],
   standins: [],
   reschedules: [],
 };
+const teams = [
+  { id: "home", members: [{ userId: "p1" }, { userId: "p2" }] },
+  { id: "away", members: [{ userId: "p3" }] },
+  { id: "elsewhere", members: [{ userId: "p9" }] },
+];
 
 describe("read-only match attention", () => {
   it("never treats a future fixture as overdue", () =>
-    expect(matchAttention([match], now)).toEqual([]));
+    expect(matchAttention([match], teams, now)).toEqual([]));
   it("does not flag a newly started series", () =>
     expect(
-      matchAttention([{ ...match, scheduledAt: new Date(now - 60_000) }], now),
+      matchAttention(
+        [{ ...match, scheduledAt: new Date(now - 60_000) }],
+        teams,
+        now,
+      ),
     ).toEqual([]));
   it("identifies a long-running unresolved result", () =>
     expect(
       matchAttention(
         [{ ...match, scheduledAt: new Date(now - 3 * 3600_000) }],
+        teams,
         now,
       )[0].reasons,
     ).toContain("Started over 2 hours ago; result still open"));
@@ -46,6 +58,7 @@ describe("read-only match attention", () => {
             reschedules: [{ status: "PENDING" }],
           },
         ],
+        teams,
         now,
       ),
     ).toEqual([]));
@@ -60,6 +73,7 @@ describe("read-only match attention", () => {
             availability: [{ userId: "p1", status: "OUT" }],
           },
         ],
+        teams,
         now,
       )[0].reasons,
     ).toHaveLength(3));
@@ -71,9 +85,10 @@ describe("read-only match attention", () => {
             ...match,
             reschedules: [{ status: "ACCEPTED" }],
             availability: [{ userId: "p1", status: "OUT" }],
-            standins: [{ replacingUserId: "p1" }],
+            standins: [{ replacingUserId: "p1", standinUserId: "s1" }],
           },
         ],
+        teams,
         now,
       ),
     ).toEqual([]));
@@ -329,6 +344,42 @@ describe("matchAttention and booked standins", () => {
             standins: [{ replacingUserId: "p1", standinUserId: "s1" }],
           },
         ],
+        teams,
+        now,
+      ),
+    ).toEqual([]));
+});
+
+describe("matchAttention counts cover like the Standins card", () => {
+  const out = (...userIds: string[]) =>
+    userIds.map((userId) => ({ userId, status: "OUT" }));
+
+  it("counts only this fixture's roster players, like matchCoverIssues", () => {
+    // p1 is on the home roster; "released" left the league's rosters, and
+    // p9 plays for a team that isn't in this fixture. Neither can be
+    // covered, so neither can need cover.
+    const [item] = matchAttention(
+      [{ ...match, availability: out("p1", "released", "p9") }],
+      teams,
+      now,
+    );
+    expect(item).toEqual({
+      id: "match",
+      reasons: ["1 declared absence without assigned cover"],
+      uncovered: 1,
+    });
+  });
+
+  it("raises nothing for a released player's old OUT", () =>
+    expect(
+      matchAttention([{ ...match, availability: out("released") }], teams, now),
+    ).toEqual([]));
+
+  it("an IN answer never counts", () =>
+    expect(
+      matchAttention(
+        [{ ...match, availability: [{ userId: "p1", status: "IN" }] }],
+        teams,
         now,
       ),
     ).toEqual([]));
