@@ -4,7 +4,6 @@
 // inhouse alert webhooks, the inhouse ping role, test posts, the pinned
 // inhouse queue board, and discarding waiting league posts.
 
-import { requireAdmin } from "@/lib/auth";
 import { str } from "@/lib/form";
 import {
   sendDiscordMessage,
@@ -26,18 +25,15 @@ import {
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import type { ActionResult } from "@/lib/action-result";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
-import { refresh } from "./admin-shared";
+import { adminOrError, refresh } from "./admin-shared";
 
 /** Save the Discord webhook used for league announcements. */
 export async function setDiscordWebhook(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const value = str(formData, "discordWebhookUrl").trim();
   // The field renders EMPTY on purpose — the saved URL is a secret we never
   // send back to the browser. So a blank submit must be a no-op, not a wipe;
@@ -109,11 +105,8 @@ export async function discardWaitingDiscordPosts(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const upToMs = Number(str(formData, "upTo"));
   if (!Number.isSafeInteger(upToMs) || upToMs <= 0) {
     return { error: "Reload the page and try again." };
@@ -139,11 +132,8 @@ export async function clearDiscordWebhook(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   // Delete the board FIRST — it needs the credential we're about to remove,
   // and a pinned message frozen at a stale count is the worst thing this
   // feature can leave behind.
@@ -177,11 +167,8 @@ export async function setInhouseWebhook(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const value = str(formData, "inhouseWebhookUrl").trim();
   // Same rule as the league field: it renders empty because the saved URL is a
   // secret we never send back, so a blank submit is a no-op, never a wipe.
@@ -226,11 +213,8 @@ export async function clearInhouseWebhook(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   // Clearing this MOVES the inhouse channel back to the league webhook, so the
   // board would be stranded in the old channel. Take it down first.
   const torndown = await removeInhouseBoard({ force: true });
@@ -258,11 +242,8 @@ export async function setInhouseAlertWebhook(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const value = str(formData, "inhouseAlertWebhookUrl").trim();
   if (!value) {
     return {
@@ -294,11 +275,8 @@ export async function clearInhouseAlertWebhook(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   await setSetting(SETTING_KEYS.INHOUSE_ALERT_WEBHOOK_URL, "");
   await logAdminAction({
     action: "clearInhouseAlertWebhook",
@@ -322,11 +300,8 @@ export async function setInhousePingRole(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   // Accept a raw snowflake or a pasted <@&id> mention — both are what an admin
   // actually has to hand (right-click → Copy Role ID, or typing \@role).
   const raw = str(formData, "inhousePingRoleId").trim();
@@ -363,11 +338,8 @@ export async function testInhouseWebhook(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   // Gate on the ALERT resolver — the one the send below actually rides
   // (alerts fall back alert → board → league). Gating on the board resolver
   // refused alert-webhook-only leagues a test their send would deliver.
@@ -392,11 +364,8 @@ export async function postInhouseBoard(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const res = await createInhouseBoard();
   refresh();
   return res.ok
@@ -412,11 +381,8 @@ export async function deleteInhouseBoard(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const res = await removeInhouseBoard();
   refresh();
   if (!res.ok) return { error: res.error ?? "Could not remove the board" };
@@ -434,11 +400,8 @@ export async function testDiscordWebhook(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const configured =
     (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ||
     process.env.DISCORD_WEBHOOK_URL;

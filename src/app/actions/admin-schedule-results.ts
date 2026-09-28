@@ -9,7 +9,6 @@ import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { raceHook } from "@/lib/race-hook";
-import { requireAdmin } from "@/lib/auth";
 import { getActiveSeason, singleActiveSeason } from "@/lib/season";
 import { clashesAfterRetime } from "@/lib/standin-service";
 import { announceAdminRetime } from "@/lib/retime-announcement";
@@ -89,6 +88,7 @@ import {
 import { isSerializationConflict } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
 import {
+  adminOrError,
   ActiveSeasonChangedError,
   ResultsLandedError,
   ResultWriteError,
@@ -144,11 +144,8 @@ export async function generateSchedule(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
   if (!expectedActiveSeasonId) {
     return {
@@ -493,12 +490,8 @@ export async function startPlayoffs(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let actor: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    actor = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const actor = await adminOrError();
+  if ("error" in actor) return actor;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
@@ -637,12 +630,8 @@ export async function returnToRegularSeasonAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let actor: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    actor = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const actor = await adminOrError();
+  if ("error" in actor) return actor;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
@@ -724,11 +713,8 @@ export async function recordResult(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const matchId = str(formData, "matchId");
   const homeScore = clampInt(formData, "homeScore", 0, 0, 99);
   const awayScore = clampInt(formData, "awayScore", 0, 0, 99);
@@ -1097,12 +1083,8 @@ export async function importGameAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let admin: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const matchId = str(formData, "matchId");
   const dotaMatchId = parseMatchId(str(formData, "dotaMatchRef"));
   if (!dotaMatchId) return { error: "Enter a valid match id or URL" };
@@ -1123,11 +1105,8 @@ export async function autoDetectAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const matchId = str(formData, "matchId");
   // The admin's explicit override: this button ignores the removal memory, so a
   // game removed by mistake is one click from coming back. Only the automatic
@@ -1183,11 +1162,8 @@ export async function reopenMatch(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const matchId = str(formData, "matchId");
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
 
@@ -1416,12 +1392,8 @@ export async function removeGame(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let admin: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const gameId = str(formData, "gameId");
   const game = await prisma.game.findUnique({
     where: { id: gameId },
@@ -1828,11 +1800,8 @@ export async function setWeekNight(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
   if (!expectedActiveSeasonId) {
     return {
@@ -2147,11 +2116,8 @@ export async function setMatchTime(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
   if (!expectedActiveSeasonId) {
     return {
@@ -2362,11 +2328,8 @@ export async function syncLeagueAction(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   const res = await syncLeagueGames(season.id);

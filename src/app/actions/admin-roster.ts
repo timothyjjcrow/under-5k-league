@@ -7,7 +7,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { raceHook } from "@/lib/race-hook";
-import { requireAdmin } from "@/lib/auth";
 import { captureRosterTenure, closeRosterTenure } from "@/lib/roster-history";
 import { getActiveSeason } from "@/lib/season";
 import {
@@ -76,6 +75,7 @@ import {
   isUniqueViolation,
 } from "@/lib/prisma-errors";
 import {
+  adminOrError,
   DraftAlreadyStartedError,
   CaptainStateChangedError,
   ResultWriteError,
@@ -141,12 +141,8 @@ export async function renameTeam(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let actor: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    actor = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const actor = await adminOrError();
+  if ("error" in actor) return actor;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
@@ -187,11 +183,8 @@ export async function withdrawSignup(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   if (season.status === SEASON_STATUS.COMPLETE) {
@@ -369,11 +362,8 @@ export async function reinstateSignup(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   if (season.status === SEASON_STATUS.COMPLETE) {
@@ -486,11 +476,8 @@ export async function setRegistrationMmr(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   if (season.status === SEASON_STATUS.COMPLETE) {
@@ -593,11 +580,8 @@ export async function setPlayerRank(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const integer = (key: string): number => {
     const raw = formData.get(key);
     return typeof raw === "string" && /^\d+$/.test(raw.trim())
@@ -714,12 +698,8 @@ export async function signFreeAgent(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let actor: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    actor = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const actor = await adminOrError();
+  if ("error" in actor) return actor;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   if (season.status === SEASON_STATUS.SIGNUPS) {
@@ -1104,12 +1084,8 @@ export async function releasePlayer(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let actor: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    actor = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const actor = await adminOrError();
+  if ("error" in actor) return actor;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   if (season.status === SEASON_STATUS.SIGNUPS) {
@@ -1417,11 +1393,8 @@ export async function withdrawTeam(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
@@ -1707,11 +1680,8 @@ export async function reinstateTeam(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
@@ -1786,12 +1756,8 @@ export async function assignStandin(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let admin: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   // One select carries both cases: a userId covers that player, `seat:<teamId>`
   // fills an EMPTY seat on a short roster (replacing nobody).
   const target = str(formData, "replacingUserId");
@@ -1823,12 +1789,8 @@ export async function removeStandin(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  let admin: Awaited<ReturnType<typeof requireAdmin>>;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const res = await removeStandinGuarded({
     assignmentId: str(formData, "assignmentId"),
     actingCaptainId: null,
@@ -1853,11 +1815,8 @@ export async function promoteStandinToPlayer(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const userId = str(formData, "userId");
   // Deterministic SQLite seam: a rival can commit immediately before the
   // authoritative snapshot without trying to open a second writer while this

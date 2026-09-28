@@ -8,7 +8,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { raceHook } from "@/lib/race-hook";
-import { requireAdmin } from "@/lib/auth";
 import {
   archiveCompletedSeason,
   completedSeasonArchiveReadiness,
@@ -50,6 +49,7 @@ import {
   isUniqueViolation,
 } from "@/lib/prisma-errors";
 import {
+  adminOrError,
   ActiveSeasonChangedError,
   DraftSetupLockedError,
   refresh,
@@ -138,11 +138,8 @@ export async function createSeason(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const name = str(formData, "name").trim().slice(0, 60);
   if (!name) return { error: "Enter a season name" };
   // This is the active season the admin was looking at when the form rendered.
@@ -314,11 +311,8 @@ export async function archiveCompletedSeasonAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const result = await archiveCompletedSeason(
     str(formData, "expectedActiveSeasonId").trim(),
   );
@@ -343,11 +337,8 @@ export async function archiveIncompleteSeasonAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const expectedId = str(formData, "expectedActiveSeasonId").trim();
   const expectedUpdatedAt = new Date(
     str(formData, "expectedSeasonUpdatedAt").trim(),
@@ -467,11 +458,8 @@ export async function deleteSeason(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const seasonId = str(formData, "seasonId");
   const season = await prisma.season.findUnique({ where: { id: seasonId } });
   if (!season) return { error: "Unknown season" };
@@ -585,11 +573,8 @@ export async function reactivateSeasonAction(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const res = await reactivateSeason(
     str(formData, "seasonId"),
     new Date(str(formData, "expectedTargetUpdatedAt").trim()),
@@ -665,11 +650,8 @@ export async function setSeasonPhase(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const target = str(formData, "phase") as SeasonStatus;
   if (!SEASON_PHASE_ORDER.includes(target)) return { error: "Invalid phase" };
   const season = await getActiveSeason();
@@ -852,11 +834,8 @@ export async function renameSeason(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const claim = await renderedSeasonClaim(formData);
   if ("error" in claim) return claim;
   const name = str(formData, "name").trim().slice(0, 60);
@@ -882,12 +861,8 @@ export async function revokeAllSessions(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
-  let admin;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   await bumpSessionEpoch();
   await logAdminAction({
     action: "revokeAllSessions",
@@ -905,11 +880,8 @@ export async function setMaxMmr(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const claim = await renderedSeasonClaim(formData);
   if ("error" in claim) return claim;
   const season = claim.season;
@@ -953,11 +925,8 @@ export async function setDraftSettings(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const claim = await renderedSeasonClaim(formData);
   if ("error" in claim) return claim;
   const season = claim.season;
@@ -1049,11 +1018,8 @@ export async function setSeriesLengths(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const claim = await renderedSeasonClaim(formData);
   if ("error" in claim) return claim;
   const season = claim.season;
@@ -1105,11 +1071,8 @@ export async function setLeagueId(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const claim = await renderedSeasonClaim(formData);
   if ("error" in claim) return claim;
   const value = str(formData, "dotaLeagueId").trim();
@@ -1158,11 +1121,8 @@ export async function setMatchSchedule(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
   const claim = await renderedSeasonClaim(formData);
   if ("error" in claim) return claim;
   const value = str(formData, "matchSchedule").trim().slice(0, 80);

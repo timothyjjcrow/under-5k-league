@@ -12,7 +12,7 @@ vi.mock("next/cache", () => ({
 // pipeline, not a re-implementation of it.
 vi.mock("@/lib/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/auth")>()),
-  requireAdmin: vi.fn(),
+  requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })),
 }));
 
 // createSession/getSessionUser talk to next/headers' cookies(), which only

@@ -3,7 +3,7 @@
 // admin-discord.ts).
 //
 // Deliberately NOT a "use server" module: every export of one becomes a
-// Server Action anyone can call, and nothing here checks who is asking. The
+// Server Action anyone can call, and none of these is an action. The
 // error classes are shared so an `instanceof` check matches the class the
 // transaction threw, whichever module threw it. They are thrown from inside a
 // `$transaction` callback when a precondition checked OUTSIDE it has since
@@ -11,7 +11,27 @@
 // callback COMMITS.
 
 import { revalidatePath, updateTag } from "next/cache";
+import { requireAdmin, type SessionUser } from "@/lib/auth";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
+
+/**
+ * The signed-in admin, or the refusal every admin action returns as it is.
+ * Each action opens with:
+ *
+ *   const admin = await adminOrError();
+ *   if ("error" in admin) return admin;
+ *
+ * A signed-out visitor and a signed-in player without the admin role get the
+ * same answer. test/integration/admin-auth.itest.ts calls every exported admin
+ * action both ways.
+ */
+export async function adminOrError(): Promise<SessionUser | { error: string }> {
+  try {
+    return await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+}
 
 export class ActiveSeasonChangedError extends Error {}
 
