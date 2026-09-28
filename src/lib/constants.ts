@@ -147,10 +147,11 @@ export const ROOM_ACTION_TIMEOUT_MS = 15_000;
 
 /**
  * …and the deadline for the inhouse actions that are OpenDota-bound BY DESIGN:
- * `detect` fans out ten 8s recent-match lookups and then up to six 12s match
- * fetches, and `applyResult` adds a 5s Discord send — ~25s worst case, all
- * bounded (dota.ts never retries). `record` is one 12s fetch plus the same
- * tail.
+ * `detect` first asks the lobby bot for its match id (a 3s status read, then
+ * one 12s match fetch when it has one), then fans out ten 8s recent-match
+ * lookups and up to six 12s match fetches, and `applyResult` adds a 5s
+ * Discord send — ~40s worst case, all bounded (dota.ts never retries).
+ * `record` is one 12s fetch plus the same tail.
  *
  * Deliberately NOT applied to every action. Sizing one ceiling to the slowest
  * action would punish the most time-critical one: a hung ACCEPT would sit
