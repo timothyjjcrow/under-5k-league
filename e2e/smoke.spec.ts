@@ -196,9 +196,10 @@ test("typed confirmation actually removes a designated captain", async ({
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
   );
 
-  const dendiRow = page.locator(".max-h-80 div.rounded-lg", {
-    hasText: "Dendi",
-  });
+  const dendiRow = page
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Dendi" });
   await dendiRow.getByRole("button", { name: "make captain" }).click();
   await expect(
     page.getByRole("heading", { name: "Captains (1)" }),

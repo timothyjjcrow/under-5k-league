@@ -2510,8 +2510,11 @@ function CaptainControls({
                     key={t.id}
                     className="rounded-lg border border-line px-3 py-2 text-sm"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="flex min-w-0 items-center gap-2">
+                    {/* Wraps on a phone: the name keeps a real width
+                        (basis-48) and the budget + remove drop to their own
+                        line, instead of squeezing the team name to 0px. */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
                         <span className="w-5 shrink-0 text-center text-xs text-muted">
                           {t.draftOrder + 1}
                         </span>
@@ -2530,10 +2533,12 @@ function CaptainControls({
                         />
                         <Link
                           href={`/teams/${t.id}`}
-                          className="min-w-0 truncate hover:text-info hover:underline"
+                          className="min-w-12 truncate hover:text-info hover:underline"
                         >
                           {t.name}
                         </Link>
+                      </span>
+                      <span className="ml-auto flex shrink-0 items-center gap-2">
                         <Badge tone="accent" className="shrink-0">
                           $
                           {setupOpen
@@ -2541,58 +2546,58 @@ function CaptainControls({
                             : t.budget}
                           {setupOpen ? " projected" : null}
                         </Badge>
-                      </span>
-                      {setupOpen ? (
-                        <ActionForm
-                          action={removeCaptain}
-                          hidden={{
-                            teamId: t.id,
-                            expectedActiveSeasonId: season.id,
-                          }}
-                        >
-                          {/* This deletes the team AND, if any fixture exists,
-                              every match in the SEASON — taking all check-ins,
-                              pick'em picks, standin bookings and open proposals
-                              with it by cascade. It is the twin of Regenerate
-                              schedule and needs the same barrier; it was a bare
-                              `remove` link 12px from "✎ Rename team". */}
-                          <DangerSubmit
-                            token={t.name}
-                            className="shrink-0"
-                            title={`Remove ${t.captain.name} as captain and delete ${t.name}?`}
-                            consequences={[
-                              `${t.name} and its ${t.members.length} roster place(s) are deleted.`,
-                              ...(regularCount > 0
-                                ? [
-                                    `All ${regularCount} fixture(s) in the season are cleared — not just this team's — because the round robin no longer fits.`,
-                                  ]
-                                : []),
-                              ...(regularCount > 0 && collateral.rsvps
-                                ? [
-                                    `${collateral.rsvps} check-in(s) go with them.`,
-                                  ]
-                                : []),
-                              ...(regularCount > 0 && collateral.picks
-                                ? [
-                                    `${collateral.picks} pick'em pick(s) go with them.`,
-                                  ]
-                                : []),
-                              ...(regularCount > 0 && collateral.covers
-                                ? [
-                                    `${collateral.covers} standin booking(s) go with them.`,
-                                  ]
-                                : []),
-                            ]}
-                            recovery={
-                              regularCount > 0
-                                ? "Regenerate the schedule once the captains are final. The check-ins, picks and bookings cannot be restored."
-                                : "No schedule exists yet, so nothing else is affected."
-                            }
+                        {setupOpen ? (
+                          <ActionForm
+                            action={removeCaptain}
+                            hidden={{
+                              teamId: t.id,
+                              expectedActiveSeasonId: season.id,
+                            }}
                           >
-                            remove
-                          </DangerSubmit>
-                        </ActionForm>
-                      ) : null}
+                            {/* This deletes the team AND, if any fixture exists,
+                                every match in the SEASON — taking all check-ins,
+                                pick'em picks, standin bookings and open proposals
+                                with it by cascade. It is the twin of Regenerate
+                                schedule and needs the same barrier; it was a bare
+                                `remove` link 12px from "✎ Rename team". */}
+                            <DangerSubmit
+                              token={t.name}
+                              className="shrink-0"
+                              title={`Remove ${t.captain.name} as captain and delete ${t.name}?`}
+                              consequences={[
+                                `${t.name} and its ${t.members.length} roster place(s) are deleted.`,
+                                ...(regularCount > 0
+                                  ? [
+                                      `All ${regularCount} fixture(s) in the season are cleared — not just this team's — because the round robin no longer fits.`,
+                                    ]
+                                  : []),
+                                ...(regularCount > 0 && collateral.rsvps
+                                  ? [
+                                      `${collateral.rsvps} check-in(s) go with them.`,
+                                    ]
+                                  : []),
+                                ...(regularCount > 0 && collateral.picks
+                                  ? [
+                                      `${collateral.picks} pick'em pick(s) go with them.`,
+                                    ]
+                                  : []),
+                                ...(regularCount > 0 && collateral.covers
+                                  ? [
+                                      `${collateral.covers} standin booking(s) go with them.`,
+                                    ]
+                                  : []),
+                              ]}
+                              recovery={
+                                regularCount > 0
+                                  ? "Regenerate the schedule once the captains are final. The check-ins, picks and bookings cannot be restored."
+                                  : "No schedule exists yet, so nothing else is affected."
+                              }
+                            >
+                              remove
+                            </DangerSubmit>
+                          </ActionForm>
+                        ) : null}
+                      </span>
                     </div>
                     {unverifiedMmrByTeam.has(t.id) ? (
                       /* Its own line, not beside the budget badge: that row
@@ -2828,21 +2833,30 @@ function CaptainControls({
           <h3 className="mb-2 text-sm font-medium text-muted">
             {setupOpen ? "Eligible players" : "Active player signups"}
           </h3>
-          <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1 has-[details[open]]:max-h-[70vh]">
-            {nonCaptains.length === 0 ? (
-              <p className="text-sm text-muted">
-                {setupOpen
-                  ? "No other active full-player signups. At least one undrafted player is required to start."
-                  : "No other active full-player signups."}
-              </p>
-            ) : (
-              nonCaptains.map((p) => (
-                <div
+          {/* One scroll surface on a phone: the page. The list only gets its
+              own scroller from md up, where it sits beside the captains.
+              Each row wraps like the captain rows: the name keeps a real
+              width and the actions drop below it on a phone, and the
+              "wants C" / "private data" badges ride in the chip line, where
+              they used to overlap "make captain". */}
+          {nonCaptains.length === 0 ? (
+            <p className="text-sm text-muted">
+              {setupOpen
+                ? "No other active full-player signups. At least one undrafted player is required to start."
+                : "No other active full-player signups."}
+            </p>
+          ) : (
+            <ul
+              aria-label={setupOpen ? "Eligible players" : "Active player signups"}
+              className="space-y-1.5 md:max-h-[32rem] md:overflow-y-auto md:pr-1 md:has-[details[open]]:max-h-[70vh]"
+            >
+              {nonCaptains.map((p) => (
+                <li
                   key={p.id}
                   className="rounded-lg border border-line px-3 py-1.5 text-sm"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
                       <Avatar
                         name={p.user.name}
                         src={p.user.avatar}
@@ -2850,7 +2864,7 @@ function CaptainControls({
                       />
                       <PlayerLink
                         userId={p.userId}
-                        className="min-w-0 truncate"
+                        className="min-w-12 truncate"
                       >
                         {p.user.name}
                       </PlayerLink>
@@ -2865,22 +2879,8 @@ function CaptainControls({
                       <span className="shrink-0 text-xs text-muted">
                         {p.mmr}
                       </span>
-                      {p.wantsCaptain ? (
-                        <Badge tone="accent" className="shrink-0">
-                          wants C
-                        </Badge>
-                      ) : null}
-                      {p.user.fhUnavailable === true ? (
-                        <Badge
-                          tone="danger"
-                          className="shrink-0"
-                          title="OpenDota reports their match data as private — automatic result import can't see this player's games"
-                        >
-                          private data
-                        </Badge>
-                      ) : null}
                     </span>
-                    <span className="flex shrink-0 items-center gap-3">
+                    <span className="ml-auto flex shrink-0 items-center gap-3">
                       {setupOpen ? (
                         <ActionForm
                           action={addCaptain}
@@ -2940,6 +2940,21 @@ function CaptainControls({
                   <SignupRowMeta
                     reg={p}
                     sweep={membershipSweep}
+                    leading={
+                      <>
+                        {p.wantsCaptain ? (
+                          <Badge tone="accent">wants C</Badge>
+                        ) : null}
+                        {p.user.fhUnavailable === true ? (
+                          <Badge
+                            tone="danger"
+                            title="OpenDota reports their match data as private — automatic result import can't see this player's games"
+                          >
+                            private data
+                          </Badge>
+                        ) : null}
+                      </>
+                    }
                   />
                   {season.status !== SEASON_STATUS.COMPLETE ? (
                     <AdminPlayerRankEditor
@@ -2952,10 +2967,10 @@ function CaptainControls({
                       mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
                     />
                   ) : null}
-                </div>
-              ))
-            )}
-          </div>
+                </li>
+              ))}
+            </ul>
+          )}
           {/* Registered STANDINs get the same moderation as players. Standin
               signups stay open through PLAYOFFS, and
               until this list existed the remove/MMR controls rendered only
@@ -2973,14 +2988,17 @@ function CaptainControls({
                 <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
                   Registered standins ({standinRegs.length})
                 </h4>
-                <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
+                <ul
+                  aria-label="Registered standins"
+                  className="space-y-1.5 md:max-h-80 md:overflow-y-auto md:pr-1"
+                >
                   {standinRegs.map((s) => (
-                    <div
+                    <li
                       key={s.id}
                       className="rounded-lg border border-line px-3 py-1.5 text-sm"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
                           <Avatar
                             name={s.user.name}
                             src={s.user.avatar}
@@ -2988,7 +3006,7 @@ function CaptainControls({
                           />
                           <PlayerLink
                             userId={s.userId}
-                            className="min-w-0 truncate"
+                            className="min-w-12 truncate"
                           >
                             {s.user.name}
                           </PlayerLink>
@@ -3005,6 +3023,7 @@ function CaptainControls({
                           <ActionForm
                             action={withdrawSignup}
                             hidden={{ registrationId: s.id }}
+                            className="ml-auto shrink-0"
                           >
                             <SubmitButton
                               variant="ghost"
@@ -3031,9 +3050,9 @@ function CaptainControls({
                           rankTierManual={s.user.rankTierManual}
                         />
                       ) : null}
-                    </div>
+                    </li>
                   ))}
-                </div>
+                </ul>
               </div>
             );
           })()}
@@ -5865,9 +5884,12 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
 function SignupRowMeta({
   reg,
   sweep,
+  leading,
 }: {
   reg: AdminData["players"][number];
   sweep: Promise<Map<string, GuildMembership>> | null;
+  /** Row-specific badges shown first in the chip line. */
+  leading?: React.ReactNode;
 }) {
   const flags = signupFlags({
     mmr: reg.mmr,
@@ -5879,6 +5901,7 @@ function SignupRowMeta({
   });
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {leading}
       {reg.user.discordId ? (
         <>
           {/* Verified ✓ = proven OWNERSHIP of the handle (the OAuth link) —

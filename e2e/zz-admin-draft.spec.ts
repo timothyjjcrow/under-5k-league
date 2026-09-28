@@ -44,17 +44,21 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   ).toBeVisible();
 
   // Promote exactly OUR two players to captains (Cap One first → they get
-  // draft order 0 and the opening nomination). Rows are divs in the
-  // "Eligible players" scroller.
+  // draft order 0 and the opening nomination). Rows are the items of the
+  // "Eligible players" list.
   await page
-    .locator(".max-h-80 div.rounded-lg", { hasText: "Cap One" })
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Cap One" })
     .getByRole("button", { name: "make captain" })
     .click();
   await expect(
     page.getByRole("heading", { name: /Captains \(1\)/ }),
   ).toBeVisible();
   await page
-    .locator(".max-h-80 div.rounded-lg", { hasText: "Cap Two" })
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Cap Two" })
     .getByRole("button", { name: "make captain" })
     .click();
   await expect(
