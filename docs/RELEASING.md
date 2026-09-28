@@ -1,10 +1,11 @@
 # Releasing GGD2L
 
 The US and Europe sites run the same commit from `main`, and every release
-ships that commit to both with one command. This first section is the whole
-routine release. The appendices cover database and scheduler changes,
-incidents, and the reference material, and link to the guarded procedures that
-govern them.
+ships that commit to both through `npm run release:both`. This first section is
+the whole routine release: plan, check the Previews, stage both production
+candidates, check them, then promote. The appendices cover database and
+scheduler changes, incidents, and the reference material, and link to the
+guarded procedures that govern them.
 
 ## Routine release
 
@@ -62,31 +63,24 @@ both leagues workflow built, or build them yourself with
 `npm run release:both -- --preview-only`, which ends with
 `"status": "previews-verified"` and lists their addresses in the report.
 
-### 3. Release
+### 3. Stage both production candidates
 
 ```sh
-npm run release:both -- --apply
+npm run release:both -- --stage-only --output output/staged-release.json
 ```
 
 In order, this rehearses both Preview deployments, builds a staged production
 candidate for each league from the same commit without touching either live
 domain, and checks each candidate: the read-only database attestation in its
 build, its release, live, ready and automation health, and that its home and
-schedule pages load. Only when both candidates pass does it promote them, one
-league after the other and without rebuilding, confirming each site reports
-the commit and its own league at `/api/health/release`. Finally it scans fresh
-runtime logs and waits for two successful scheduled automation passes on each
-site.
-
-A good run prints these lines and ends with `"status": "verified"`:
+schedule pages load. Neither live site changes. A good run prints these lines
+and ends with `"status": "staged"`:
 
 ```text
 Rehearsing both isolated Preview deployments.
 Building both staged production candidates.
-Observing two scheduled automation passes for us.
-Observing two scheduled automation passes for eu.
 {
-  "status": "verified",
+  "status": "staged",
   "sha": "<the commit you are releasing>",
   "candidates": {
     "us": { "id": "<deployment id>", "url": "<generated address>", "sha": "<the commit>" },
@@ -95,27 +89,55 @@ Observing two scheduled automation passes for eu.
 }
 ```
 
-`output/shared-release.json` then records the previous and new deployment of
-each league, the classifications, the CI run and every promotion. It holds
-deployment ids, commits and outcomes, never credentials. Attach it to the
-private [release evidence record](PRODUCTION-OPERATIONS.md#release-evidence-record)
-that every release fills in.
+Save the staged report to its own file, as above, not to the default
+`output/shared-release.json`. The promote run in step 5 writes its own report
+to that default path before it reads the staged one, so a staged report kept
+there is overwritten and the promotion refuses.
 
-**A visible change gets a look before it goes live.** Every release step 6
-asks for the same focused UI checks, and an error-log scan, on the staged
-production candidates. `--apply` does not stop for them: it scans runtime logs
-only after promotion, and rolls back if it finds errors. For a UI change,
-release in two steps instead:
+### 4. Check the candidates
+
+The staging run already repeated the health probes and loaded database-backed
+pages on each candidate. The rest of
+[Every release](PRODUCTION-OPERATIONS.md#every-release) step 6 is yours, before
+either goes live: on each candidate's address from the staged report, scan its
+runtime error logs for every release, and for a UI change also check the
+changed pages on desktop and mobile. The candidates use the live databases:
+look, but don't save anything or run scheduler actions.
+
+### 5. Promote
 
 ```sh
-npm run release:both -- --stage-only --output <report.json>
-npm run release:both -- --promote-from <report.json>
+npm run release:both -- --promote-from output/staged-release.json
 ```
 
-The first builds and checks both candidates without changing either live site
-and stops with `"status": "staged"`; the report lists each candidate's
-address. The second promotes exactly those candidates, and refuses if
-production changed in between.
+This promotes exactly the staged candidates, one league after the other and
+without rebuilding, and refuses if either live site changed since staging. It
+confirms each site reports the commit and its own league at
+`/api/health/release`, then scans fresh runtime logs and waits for two
+successful scheduled automation passes on each site. A good run prints these
+lines and ends with `"status": "verified"` and the same candidates:
+
+```text
+Observing two scheduled automation passes for us.
+Observing two scheduled automation passes for eu.
+{
+  "status": "verified",
+  "sha": "<the commit you are releasing>",
+  "candidates": { "us": { ... }, "eu": { ... } }
+}
+```
+
+`output/shared-release.json` then records the previous and new deployment of
+each league, the classifications, the CI run and every promotion. It holds
+deployment ids, commits and outcomes, never credentials. Attach it and the
+staged report to the private
+[release evidence record](PRODUCTION-OPERATIONS.md#release-evidence-record)
+that every release fills in.
+
+`npm run release:both -- --apply` runs steps 3 and 5 in one go, with no stop
+for step 4: it scans runtime logs only after promotion, and rolls back if it
+finds errors. On its own it therefore skips the pre-promotion check that
+Every release step 6 asks for, so release in the steps above.
 
 ### If it fails
 
@@ -127,8 +149,13 @@ report's `status` becomes `failed` and its `error` repeats the reason.
   "A regional build or smoke check failed. Neither production domain was
   changed." and the report's `buildFailures` names the league. Fix the cause
   and run the release again.
-- **"production changed during staging; re-plan the release"**: someone
-  deployed a site while you were staging. Run `--check` again.
+- **"Production changed since the staged review"** or **"production changed
+  during staging; re-plan the release"**: someone deployed a site after you
+  staged. Run `--check` again, then stage again.
+- **"Promotion requires a staged paired release at this exact commit"**: the
+  file given to `--promote-from` is not a staged report for the commit you
+  have checked out. The staging run failed, the file was overwritten (see
+  step 3), or you are on another commit. Stage again to its own file.
 - **During or after promotion** (a candidate that will not verify, fresh
   runtime errors, or two scheduled passes not seen): the release puts every
   site it promoted back on that site's previous deployment and says what it
@@ -140,8 +167,8 @@ report's `status` becomes `failed` and its `error` repeats the reason.
 
 ### Rolling back a release that finished
 
-The report records each league's previous deployment as `bases.us` and
-`bases.eu`. To undo a finished release, promote that previous deployment for
+The promote run's report, `output/shared-release.json`, records each
+league's previous deployment as `bases.us` and `bases.eu`. To undo a finished release, promote that previous deployment for
 each affected league in Vercel and follow the
 [Application rollback order](../README.md#application-rollback-order). Never
 undo a migration: the database stays as it is and the older build keeps
@@ -251,8 +278,8 @@ needs a database release always needs the scheduler pause as well.
    described below.
 3. **Record the evidence** in a private file outside the repository (shape
    below), then release with it. Pass `--maintenance-file <private-json>` to
-   every command that builds or promotes production: `--apply`, or
-   `--stage-only` and then `--promote-from`.
+   every command that builds or promotes production: both the `--stage-only`
+   and the `--promote-from` run (and `--apply`, which does both).
 4. **Resume the scheduler.** The release ends with
    `"status": "promoted-awaiting-scheduler-resume"`. Resume each paused
    scheduler (US `npm run scheduler:deploy`, Europe
