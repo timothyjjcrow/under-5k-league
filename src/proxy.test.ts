@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { config, proxy } from "./proxy";
-import { SESSION_COOKIE } from "@/lib/constants";
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from "@/lib/constants";
+import { deploymentCookieName } from "@/lib/cookie-policy";
 import { signSessionToken, verifySessionToken } from "@/lib/session-token";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -51,7 +52,7 @@ describe("proxy: keep active players signed in", () => {
   });
 
   it("runs on pages only, never on /api or static files", () => {
-    const [pattern] = config.matcher;
+    const pattern = config.matcher[0].source;
     const matches = (path: string) =>
       new RegExp(`^${pattern}$`).test(path);
     for (const page of ["/", "/me", "/matches/abc123", "/players/compare"]) {
@@ -68,5 +69,27 @@ describe("proxy: keep active players signed in", () => {
     ]) {
       expect(matches(other), other).toBe(false);
     }
+  });
+
+  it("runs only when the request carries a session cookie", () => {
+    // Both entries cover the same pages; they differ only in which cookie
+    // name lets the request in.
+    const sources = new Set(config.matcher.map((entry) => entry.source));
+    expect(sources.size).toBe(1);
+    const keys = config.matcher.map((entry) => {
+      expect(entry.has).toHaveLength(1);
+      expect(entry.has[0].type).toBe("cookie");
+      return entry.has[0].key;
+    });
+    // Next reads the matcher at build time, so the names are literals there:
+    // they must be the production and development names SESSION_COOKIE
+    // takes, or signed-in players stop getting their session renewed.
+    expect(keys.sort()).toEqual(
+      [
+        deploymentCookieName(LEGACY_SESSION_COOKIE, true),
+        deploymentCookieName(LEGACY_SESSION_COOKIE, false),
+      ].sort(),
+    );
+    expect(keys).toContain(SESSION_COOKIE);
   });
 });

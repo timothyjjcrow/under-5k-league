@@ -38,6 +38,21 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // Pages only: not /api, Next's static files and image optimizer, or any
-  // file with an extension (icons, images, robots.txt, the hero video).
-  matcher: ["/((?!api/|_next/static/|_next/image|.*\\.[A-Za-z0-9]+$).*)"],
+  // file with an extension (icons, images, robots.txt, the hero video). And
+  // only requests that carry a session cookie: signed-out page views,
+  // crawlers and their prefetches would pay for a proxy call that can do
+  // nothing. Next reads this object at build time and resolves no names, so
+  // everything here is a literal: the session cookie is "__Host-ld2l_session"
+  // in production and "ld2l_session" in development, and proxy.test.ts keeps
+  // both in step with SESSION_COOKIE.
+  matcher: [
+    {
+      source: "/((?!api/|_next/static/|_next/image|.*\\.[A-Za-z0-9]+$).*)",
+      has: [{ type: "cookie", key: "__Host-ld2l_session" }],
+    },
+    {
+      source: "/((?!api/|_next/static/|_next/image|.*\\.[A-Za-z0-9]+$).*)",
+      has: [{ type: "cookie", key: "ld2l_session" }],
+    },
+  ],
 };
