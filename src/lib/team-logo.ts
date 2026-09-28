@@ -40,6 +40,11 @@ const SITE_IMAGE_PATH =
  * as an <img> on every team surface, and an image request to the site
  * carries the viewer's cookies, so a logo pointing there would run that
  * endpoint as whoever looks at the team.
+ *
+ * This only sees the address as typed. An outside image URL that redirects
+ * here still gets through, so it is a guard against mistakes, not a security
+ * boundary: every /api GET must stay harmless when a browser loads it as an
+ * image.
  */
 function isAppEndpoint(pathname: string): boolean {
   let decoded = pathname;
