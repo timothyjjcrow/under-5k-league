@@ -403,7 +403,9 @@ test("public statistics metadata is route-specific and invalid archives are noin
 
   // Player history uses the same one-season selector, but a malformed key
   // previously fell back to "All seasons" instead of rejecting the URL.
-  await page.goto("/players");
+  // Rosters live on /teams now; this fixture seeds no signups, so /players
+  // itself has no profile links to follow.
+  await page.goto("/teams");
   const profileHref = await page
     .locator('#main a[href^="/players/"]:not([href="/players/compare"])')
     .first()
@@ -612,8 +614,10 @@ test("a player profile renders career stats and the report card", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
-  await page.goto("/players");
-  // Skip the "Compare players" action link — pick a real profile link.
+  // Rostered players are listed on /teams; this fixture seeds no signups, so
+  // the /players pool is empty.
+  await page.goto("/teams");
+  // Skip any "Compare players" action link — pick a real profile link.
   await page
     .locator('#main a[href^="/players/"]:not([href*="compare"])')
     .first()
