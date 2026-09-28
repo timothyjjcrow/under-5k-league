@@ -16,7 +16,12 @@ describe("/leaders per-game boards", () => {
   // The league's rule: kills and assists per game need 3 games. They once
   // used the adaptive floor, so one-game players ranked early in a season.
   it("rank kills and assists per game only after 3 games, however early in the season", () => {
-    expect(PAGE).toContain("const PER_GAME_MIN_GAMES = 3;");
+    // Defined once beside topBy, and shared with the season recap's Kill
+    // Leader and Playmaker awards (awards.ts).
+    expect(readFileSync(path.join(__dirname, "../../lib/player-stats.ts"), "utf8")).toContain(
+      "export const PER_GAME_MIN_GAMES = 3;",
+    );
+    expect(PAGE).toMatch(/\bPER_GAME_MIN_GAMES,\n\} from "@\/lib\/player-stats";/);
     for (const key of ["killsPerGame", "assistsPerGame"]) {
       expect(board(key), key).toContain("minGames: PER_GAME_MIN_GAMES,");
     }

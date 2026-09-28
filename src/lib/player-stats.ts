@@ -263,6 +263,13 @@ export function currentStreak(linesNewestFirst: PlayerGameLine[]): Streak {
 
 // ---------- Leaderboards ----------
 
+/**
+ * The fewest games a player needs to rank on kills or assists per game: a
+ * flat 3, however early in the season. /leaders and the season recap's Kill
+ * Leader and Playmaker awards both use it, so they name the same player.
+ */
+export const PER_GAME_MIN_GAMES = 3;
+
 // No wins or win-rate key on purpose: those boards ranked a TEAM's record
 // (every regular on the best team tied at the top), and standings plus Team of
 // the Week already show it. Kills and assists are PER GAME for the same reason

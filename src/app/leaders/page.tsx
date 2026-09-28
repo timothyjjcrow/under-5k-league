@@ -24,6 +24,7 @@ import {
   type PlayerGameLine,
   decodeGamePlayers,
   trustedGamePlayers,
+  PER_GAME_MIN_GAMES,
 } from "@/lib/player-stats";
 import type { PlayerStat } from "@/lib/match-import";
 import { careerReportCard, percentLabel } from "@/lib/benchmarks";
@@ -51,9 +52,6 @@ import {
   killParticipationByPlayer,
   leaderIdentity,
 } from "@/lib/leader-ranking";
-
-/** The fewest games a player needs to rank on kills or assists per game. */
-const PER_GAME_MIN_GAMES = 3;
 
 type LeadersSearchParams = { season?: string | string[] };
 
