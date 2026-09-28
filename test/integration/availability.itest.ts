@@ -599,7 +599,7 @@ describe("setAvailability — closing the OUT loop", () => {
     expect(backIns()).toHaveLength(1);
     const [content, mentions] = backIns()[0]!;
     expect(content).toContain("**Roster Player** can make the week 1 match after all");
-    expect(content).toContain(`/matches/${match.id}>`);
+    expect(content).toContain(`/matches/${match.id}#match-standins>`);
     expect(mentions).toEqual({ users: ["555666777888999001"] });
   });
 

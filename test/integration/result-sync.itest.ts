@@ -483,7 +483,7 @@ describe("result sync — league matches (integration)", () => {
     // The scan still ran (and found nothing) before the nudge.
     expect(mockRecent).toHaveBeenCalled();
     expect(nudges()).toHaveLength(1);
-    expect(nudges()[0]![0]).toContain(`/matches/${match.id}>`);
+    expect(nudges()[0]![0]).toContain(`/matches/${match.id}#match-report>`);
     // Only the linked captain is pingable; the other has not linked yet.
     expect(nudges()[0]![1]).toEqual({ users: ["910000000000000001"] });
 

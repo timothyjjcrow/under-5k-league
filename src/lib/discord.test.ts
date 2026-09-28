@@ -467,7 +467,10 @@ describe("discord message formatters", () => {
     expect(msg).toContain(
       "We couldn't find the games for **Alpha** vs **Delta** (Week 3).",
     );
-    expect(msg).toMatch(/Captains: report them on the match page: <[^>]+\/matches\/m1>$/);
+    // Lands on the Report your result card, not the top of the page.
+    expect(msg).toMatch(
+      /Captains: report them on the match page: <[^>]+\/matches\/m1#match-report>$/,
+    );
   });
 
   it("names the score a part-played series is stuck at", () => {
@@ -482,7 +485,7 @@ describe("discord message formatters", () => {
     });
     expect(msg).toContain("**Alpha** vs **Delta** (Semifinal) is stuck at 1–0");
     expect(msg).toContain("report the missing games");
-    expect(msg).toMatch(/<[^>]+\/matches\/m2>$/);
+    expect(msg).toMatch(/<[^>]+\/matches\/m2#match-report>$/);
   });
 
   it("crowns the champion", () => {
@@ -1269,7 +1272,8 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
       "**Dendi** can make the week 4 match after all — **Radiant Raccoons** vs **Dire Wolves** (<t:1800000000:F>).",
     );
     expect(msg).toContain("No need to find cover for them");
-    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>$/);
+    // The Standins card, where the OUT post it answers also lands.
+    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1#match-standins>$/);
     // Unscheduled and hand-built: no kickoff, no link.
     const bare = playerBackInMessage({
       playerName: "Puppey",

@@ -92,7 +92,7 @@ describe("result nudge — the captains hear when a fixture's games can't be fou
     expect(content).toContain(
       "We couldn't find the games for **Alpha** vs **Delta** (Week 2).",
     );
-    expect(content).toContain(`/matches/${match.id}>`);
+    expect(content).toContain(`/matches/${match.id}#match-report>`);
     expect(mentions?.users?.slice().sort()).toEqual(
       captains.map((c) => c.discordId).sort(),
     );

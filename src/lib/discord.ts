@@ -484,7 +484,8 @@ export function resultNudgeMessage(m: {
   gamesFound: number;
 }): string {
   const fixture = `**${name(m.homeName)}** vs **${name(m.awayName)}** (${m.label})`;
-  const link = `<${resolveSiteUrl()}/matches/${m.matchId}>`;
+  // Straight to the Report your result card the post asks captains to use.
+  const link = `<${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.report)}>`;
   if (m.gamesFound === 0) {
     return `📋 We couldn't find the games for ${fixture}. Captains: report them on the match page: ${link}`;
   }
@@ -791,7 +792,11 @@ export function playerBackInMessage(
   const label = fixtureLabel(m);
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
-  const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
+  // The Standins card, like the OUT post this answers: that is where a
+  // booked standin is cancelled.
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`
+    : "";
   return `✅ **${name(m.playerName)}** can make the ${label} after all — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. No need to find cover for them; if you already booked a standin, you can cancel that on the match page.${link}`;
 }
 
