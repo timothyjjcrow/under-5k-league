@@ -311,6 +311,7 @@ const FILES = [
   "src/app/actions/admin.ts",
   "src/app/actions/import-progress.ts",
   "src/app/actions/news.ts",
+  "src/lib/news-rollover.ts",
   "src/app/actions/registration.ts",
   "src/lib/honors-service.ts",
   "src/lib/announcement-marker.ts",
