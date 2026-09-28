@@ -1153,6 +1153,53 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
       .toContain("can't make the week 9 match");
   });
 
+  it("names the fixture by its round in every post about the same playoff match", () => {
+    // The OUT ping, the standin booked in reply, the stand-down and the
+    // reschedule thread must all call the semifinal the same thing.
+    const fixture = {
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      roundLabel: "Semifinal",
+    };
+    expect(
+      standinAssignedMessage({
+        ...fixture,
+        standinName: "Cover",
+        replacedName: "Puppey",
+        teamName: "A",
+        whenMs: null,
+      }),
+    ).toContain("stands in for **Puppey** on **A** — semifinal **A** vs **B**");
+    expect(
+      standinRemovedMessage({ ...fixture, standinName: "Cover", teamName: "A" }),
+    ).toContain("(semifinal **A** vs **B**)");
+    expect(
+      rescheduleProposedMessage({ ...fixture, proposerName: "Cap", whenMs: 0 }),
+    ).toContain("proposed moving the semifinal **A** vs **B**");
+    expect(
+      rescheduleDeclinedMessage({ ...fixture, declinerName: "Cap", whenMs: 0 }),
+    ).toContain("declined moving the semifinal **A** vs **B**");
+    // A fixture the bracket couldn't place keeps the phase name.
+    expect(
+      rescheduleProposedMessage({
+        ...fixture,
+        roundLabel: "Playoffs",
+        proposerName: "Cap",
+        whenMs: 0,
+      }),
+    ).toContain("proposed moving the playoff match **A** vs **B**");
+    expect(
+      standinRemovedMessage({
+        ...fixture,
+        roundLabel: undefined,
+        standinName: "Cover",
+        teamName: "A",
+      }),
+    ).toContain("(playoff match **A** vs **B**)");
+  });
+
   it("tells the captain a player who said OUT can make it after all", () => {
     const msg = playerBackInMessage({
       playerName: "Dendi",

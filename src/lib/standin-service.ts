@@ -17,6 +17,7 @@ import {
 import { mentionsOf } from "./discord-mentions";
 import { standinConflict, standinMmrNote } from "./standin";
 import { isSerializationConflict } from "./prisma-errors";
+import { roundLabelsForPost } from "./playoff-rounds";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -565,6 +566,8 @@ export async function assignStandinGuarded(opts: {
       week: match.week,
       isPlayoff: isPlayoffPhase(match.phase),
       isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
+      // Named by its round, like the OUT ping the booking answers.
+      roundLabel: (await roundLabelsForPost([match])).get(match.id),
       whenMs: match.scheduledAt?.getTime() ?? null,
       matchId: match.id,
     }),
@@ -690,6 +693,9 @@ export async function removeStandinGuarded(opts: {
       week: assignment.match.week,
       isPlayoff: isPlayoffPhase(assignment.match.phase),
       isTiebreaker: assignment.match.phase === MATCH_PHASE.TIEBREAKER,
+      roundLabel: (await roundLabelsForPost([assignment.match])).get(
+        assignment.match.id,
+      ),
       reason: byCaptain ? "CAPTAIN_CANCELLED" : "ADMIN_CANCELLED",
     }),
   };

@@ -945,12 +945,20 @@ describe("reschedule league-calendar rules (integration)", () => {
         scheduledAt: ORIGINAL_NIGHT,
       },
     });
-    await proposeReschedule(a.captainId, semi.id, NIGHT);
+    const proposed = await proposeReschedule(a.captainId, semi.id, NIGHT);
+    // The proposal post names the round too, so the whole thread agrees.
+    expect(proposed.roundLabel).toBe("Semifinal");
     const pending = await pendingFor(semi.id);
     const accepted = await respondReschedule(b.captainId, pending!.id, true);
     if (!accepted.accepted) throw new Error("expected an acceptance");
     expect(accepted.isPlayoff).toBe(true);
     expect(accepted.roundLabel).toBe("Semifinal");
+
+    await proposeReschedule(a.captainId, semi.id, ORIGINAL_NIGHT);
+    const again = await pendingFor(semi.id);
+    const declined = await respondReschedule(b.captainId, again!.id, false);
+    expect(declined.accepted).toBe(false);
+    expect(declined.roundLabel).toBe("Semifinal");
   });
 
   it("re-checks the clash at acceptance, after the rest of the schedule moved", async () => {

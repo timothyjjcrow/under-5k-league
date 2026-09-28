@@ -1266,3 +1266,51 @@ describe("assignment announcement deep link", () => {
     if (res.ok) expect(res.announcement).toContain(`/matches/${match.id}`);
   });
 });
+
+describe("playoff standin posts name the round", () => {
+  // The OUT ping names a semifinal by its round; the booking made in reply
+  // and its stand-down must call it the same thing, not "playoff match".
+  it("assign and remove both say semifinal", async () => {
+    const { season, home, away, homePlayer, sub, match } = await setup();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.PLAYOFFS },
+    });
+    // A 4-team bracket: its two first-round slots are the semifinals.
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { phase: MATCH_PHASE.PLAYOFF, bracketSlot: "R0M0" },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1",
+        homeTeamId: away.id,
+        awayTeamId: home.id,
+      },
+    });
+
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.announcement).toContain("— semifinal **Home** vs **Away**");
+
+    const booking = await prisma.standinAssignment.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+    const removed = await removeStandinGuarded({
+      assignmentId: booking.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(removed.ok).toBe(true);
+    if (removed.ok) {
+      expect(removed.announcement).toContain("(semifinal **Home** vs **Away**)");
+    }
+  });
+});

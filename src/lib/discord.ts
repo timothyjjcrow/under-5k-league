@@ -686,6 +686,25 @@ function playoffFixtureTitle(roundLabel: string | null | undefined): string | nu
     : roundLabel;
 }
 
+/**
+ * How a post names one fixture mid-sentence: "week 3 match", "tiebreaker
+ * match", or a playoff fixture by its round ("semifinal", "grand final").
+ * Every post about the same fixture uses this, so the OUT ping, the standin
+ * booked in reply and the reschedule thread all call it the same thing.
+ */
+function fixtureLabel(m: {
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  roundLabel?: string | null;
+}): string {
+  if (m.isTiebreaker) return "tiebreaker match";
+  if (m.isPlayoff) {
+    return playoffFixtureTitle(m.roundLabel)?.toLowerCase() ?? "playoff match";
+  }
+  return `week ${m.week} match`;
+}
+
 export function playerOutMessage(m: {
   playerName: string;
   homeName: string;
@@ -702,11 +721,7 @@ export function playerOutMessage(m: {
    *  is pointing the captain at. Optional so hand-built calls stay valid. */
   matchId?: string;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff
-      ? (playoffFixtureTitle(m.roundLabel)?.toLowerCase() ?? "playoff match")
-      : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
@@ -723,11 +738,7 @@ export function playerOutMessage(m: {
 export function playerBackInMessage(
   m: Parameters<typeof playerOutMessage>[0],
 ): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff
-      ? (playoffFixtureTitle(m.roundLabel)?.toLowerCase() ?? "playoff match")
-      : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
@@ -795,14 +806,15 @@ export function standinAssignedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
   /** Deep link target — the match page holds the check-in banner. */
   matchId?: string;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const standin = name(m.standinName);
@@ -847,12 +859,13 @@ export function standinRemovedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   /** Why the booking ended; omitted, the post just says to stand down. */
   reason?: StandDownReason;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   const why = m.reason ? ` (${STAND_DOWN_REASON[m.reason]})` : "";
   return `🧩 **${name(m.standinName)}** is no longer standing in for **${name(m.teamName)}** (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) — stand down${why}.`;
 }
@@ -863,12 +876,13 @@ export function rescheduleProposedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   proposerName: string;
   whenMs: number;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
 }
 
@@ -884,12 +898,13 @@ export function rescheduleDeclinedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   declinerName: string;
   whenMs: number;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.`;
 }
 
