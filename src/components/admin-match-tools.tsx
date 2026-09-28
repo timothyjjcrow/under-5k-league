@@ -20,7 +20,12 @@ import {
 import { MATCH_ANCHOR, adminMatchRowId } from "@/lib/match-anchors";
 import { formatMatchTime } from "@/lib/match-time";
 import { type AutoCheck, autoCheckCopy, autoCheckStatus } from "@/lib/result-sync";
-import { seatValue } from "@/lib/standin";
+import {
+  type StandinBooking,
+  coverChoices,
+  seatValue,
+  standinPickerBlock,
+} from "@/lib/standin";
 import {
   parseSingleTiebreakerSlot,
   parseTiebreakerStage,
@@ -628,6 +633,7 @@ export function StandinMatchBlock({
   m,
   teams,
   pool,
+  bookings,
   outRsvps,
   assignments,
   teamName,
@@ -637,11 +643,23 @@ export function StandinMatchBlock({
 }: {
   /** `games` decides the lock: once one is imported, removeStandinGuarded
    *  refuses every removal (it would strip the standin from the rest of the
-   *  series), so the block says so instead of offering "remove". */
-  m: { id: string; homeTeamId: string; awayTeamId: string; games: unknown[] };
+   *  series), so the block says so instead of offering "remove". The kickoff
+   *  and week feed the same-night check (standinPickerBlock). */
+  m: {
+    id: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    scheduledAt: Date | null;
+    week: number;
+    games: unknown[];
+  };
   teams: StandinBlockTeam[];
   /** Who can cover: adminStandinPoolWhere's registrations, MMR first. */
   pool: { userId: string; mmr: number; user: { name: string } }[];
+  /** The season's bookings on unplayed fixtures, this one included — the
+   *  same list the captain's picker checks, so both pickers grey out and
+   *  explain the standins the server would refuse. */
+  bookings: readonly StandinBooking[];
   /** OUT answers for the fixture's current schedule revision. */
   outRsvps: { matchId: string; userId: string; user: { name: string } }[];
   assignments: StandinBlockAssignment[];
@@ -662,6 +680,31 @@ export function StandinMatchBlock({
   const coveredIds = new Set(
     asg.map((a) => a.replacingUserId).filter(Boolean) as string[],
   );
+  // The captain picker's rules, not a second copy of them: a standin already
+  // booked in this match or on another fixture that night is listed last,
+  // disabled, with the reason (standinPickerBlock), and each Covers group
+  // leads with the players who said they can't make it (coverChoices). The
+  // server still refuses both at submit.
+  const target = { matchId: m.id, scheduledAt: m.scheduledAt, week: m.week };
+  const poolChoices = pool.map((s) => ({
+    reg: s,
+    blocked: standinPickerBlock(s.userId, target, bookings),
+  }));
+  const pickerOptions = [
+    ...poolChoices.filter((c) => !c.blocked),
+    ...poolChoices.filter((c) => c.blocked),
+  ];
+  const outIds = new Set(
+    outRsvps.filter((r) => r.matchId === m.id).map((r) => r.userId),
+  );
+  const homeCover = coverChoices(home?.members ?? [], outIds, coveredIds);
+  const awayCover = coverChoices(away?.members ?? [], outIds, coveredIds);
+  // Pre-select only when exactly one uncovered player is out across BOTH
+  // sides, so the form never guesses between two.
+  const outChoices = [...homeCover.choices, ...awayCover.choices].filter(
+    (c) => c.out,
+  );
+  const preselect = outChoices.length === 1 ? outChoices[0].member.userId : "";
   // OPEN SEATS. A short roster is filled by a standin who replaces NOBODY, so
   // it needs its own option — this is the case that had no UI at all, which is
   // why a 4-of-5 team simply could not be covered. One entry per still-open
@@ -764,17 +807,22 @@ export function StandinMatchBlock({
             </option>
             {/* MMR rides in the option text — the captain picker has always
               shown it, and the any-team admin override was choosing blind. */}
-            {pool.map((s) => (
-              <option key={s.userId} value={s.userId}>
-                {s.user.name} ({s.mmr} MMR)
+            {pickerOptions.map(({ reg: s, blocked }) => (
+              <option key={s.userId} value={s.userId} disabled={!!blocked}>
+                {blocked
+                  ? `${s.user.name} (${blocked})`
+                  : `${s.user.name} (${s.mmr} MMR)`}
               </option>
             ))}
           </select>
           <span className="text-xs text-muted">replaces</span>
+          {/* Keyed on the pre-selection: an uncontrolled select keeps its
+              first defaultValue, so a new "can't make it" needs a remount. */}
           <select
+            key={preselect}
             name="replacingUserId"
             required
-            defaultValue=""
+            defaultValue={preselect}
             aria-label="Player being replaced"
             className={selectCls}
           >
@@ -794,22 +842,18 @@ export function StandinMatchBlock({
               </optgroup>
             ) : null}
             <optgroup label={home?.name ?? "Home"}>
-              {home?.members
-                .filter((mm) => !coveredIds.has(mm.userId))
-                .map((mm) => (
-                  <option key={mm.userId} value={mm.userId}>
-                    {mm.user.name}
-                  </option>
-                ))}
+              {homeCover.choices.map(({ member: mm, out }) => (
+                <option key={mm.userId} value={mm.userId}>
+                  {out ? `${mm.user.name} (can't make it)` : mm.user.name}
+                </option>
+              ))}
             </optgroup>
             <optgroup label={away?.name ?? "Away"}>
-              {away?.members
-                .filter((mm) => !coveredIds.has(mm.userId))
-                .map((mm) => (
-                  <option key={mm.userId} value={mm.userId}>
-                    {mm.user.name}
-                  </option>
-                ))}
+              {awayCover.choices.map(({ member: mm, out }) => (
+                <option key={mm.userId} value={mm.userId}>
+                  {out ? `${mm.user.name} (can't make it)` : mm.user.name}
+                </option>
+              ))}
             </optgroup>
           </select>
           <Button type="submit" variant="secondary" size="sm">
@@ -847,7 +891,7 @@ export async function AdminMatchTools({
    *  tools, whose import form this card then points at instead of repeating. */
   viewerHasCaptainTools?: boolean;
 }) {
-  const [season, draft, fixtures, teams, pool, outRsvps, pending] =
+  const [season, draft, fixtures, teams, pool, bookingRows, outRsvps, pending] =
     await Promise.all([
       prisma.season.findUnique({
         where: { id: match.seasonId },
@@ -886,6 +930,29 @@ export async function AdminMatchTools({
         select: { userId: true, mmr: true, user: { select: { name: true } } },
         orderBy: { mmr: "desc" },
       }),
+      // The season's bookings on unplayed fixtures, for the picker's
+      // already-booked / same-night check (the captain's picker reads the same).
+      prisma.standinAssignment.findMany({
+        where: {
+          match: {
+            seasonId: match.seasonId,
+            status: { not: MATCH_STATUS.COMPLETED },
+          },
+        },
+        select: {
+          standinUserId: true,
+          matchId: true,
+          replaced: { select: { name: true } },
+          match: {
+            select: {
+              scheduledAt: true,
+              week: true,
+              homeTeam: { select: { name: true } },
+              awayTeam: { select: { name: true } },
+            },
+          },
+        },
+      }),
       prisma.matchAvailability.findMany({
         where: {
           matchId: match.id,
@@ -908,6 +975,15 @@ export async function AdminMatchTools({
       }),
     ]);
   if (!season?.isActive) return null;
+  const bookings: StandinBooking[] = bookingRows.map((b) => ({
+    standinUserId: b.standinUserId,
+    matchId: b.matchId,
+    replacedName: b.replaced?.name ?? null,
+    homeName: b.match.homeTeam.name,
+    awayName: b.match.awayTeam.name,
+    scheduledAt: b.match.scheduledAt,
+    week: b.match.week,
+  }));
   const draftStatus = draft?.status ?? null;
   const correction = matchCorrectionContext(match, fixtures);
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
@@ -1014,6 +1090,7 @@ export async function AdminMatchTools({
               m={match}
               teams={teams}
               pool={pool}
+              bookings={bookings}
               outRsvps={outRsvps}
               assignments={match.standins}
               teamName={teamName}

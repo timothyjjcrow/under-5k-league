@@ -4319,6 +4319,24 @@ function StandinControls({
     data.assignments.map((a) => [a.standinUserId, a.standin.name]),
   );
   const clashes = standinClashes(data.assignments, data.matches);
+  // The season's bookings on unplayed fixtures, in the shape the picker's
+  // already-booked / same-night check reads (the match page loads the same).
+  const bookings = data.assignments.flatMap((a) => {
+    const fx = upcoming.find((m) => m.id === a.matchId);
+    return fx
+      ? [
+          {
+            standinUserId: a.standinUserId,
+            matchId: a.matchId,
+            replacedName: a.replaced?.name ?? null,
+            homeName: teamName.get(fx.homeTeamId ?? "") ?? "?",
+            awayName: teamName.get(fx.awayTeamId ?? "") ?? "?",
+            scheduledAt: fx.scheduledAt,
+            week: fx.week,
+          },
+        ]
+      : [];
+  });
   const clashLines = clashes.map(({ standinUserId, first, second }) => {
     const label = (m: (typeof upcoming)[number]) =>
       `${teamName.get(m.homeTeamId ?? "") ?? "?"} vs ${teamName.get(m.awayTeamId ?? "") ?? "?"} (wk ${m.week})`;
@@ -4372,6 +4390,7 @@ function StandinControls({
       m={m}
       teams={data.teams}
       pool={data.standins}
+      bookings={bookings}
       outRsvps={data.outRsvps}
       assignments={byMatch.get(m.id) ?? []}
       teamName={teamName}

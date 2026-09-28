@@ -245,6 +245,27 @@ describe("match page admin tools", () => {
     expect(ADMIN).toContain("where: adminStandinPoolWhere(seasonId),");
   });
 
+  it("gives the admin standin picker the captain picker's rules", () => {
+    // Both pickers sit one card apart on the match page. The admin one used
+    // to offer standins the captain one greys out (already booked here or
+    // the same night), which the server then refused as a toast.
+    const block = TOOLS.slice(
+      TOOLS.indexOf("export function StandinMatchBlock("),
+      TOOLS.indexOf("export async function AdminMatchTools("),
+    );
+    expect(block).toContain(
+      "blocked: standinPickerBlock(s.userId, target, bookings)",
+    );
+    expect(block).toMatch(
+      /<option key=\{s\.userId\} value=\{s\.userId\} disabled=\{!!blocked\}>/,
+    );
+    expect(block).toMatch(/coverChoices\(home\?\.members \?\? \[\], outIds, coveredIds\)/);
+    expect(block).toMatch(/coverChoices\(away\?\.members \?\? \[\], outIds, coveredIds\)/);
+    // Both callers pass the season's unplayed-fixture bookings.
+    expect(TOOLS).toMatch(/bookings=\{bookings\}/);
+    expect(ADMIN).toMatch(/bookings=\{bookings\}/);
+  });
+
   it("never repeats the captain's import form for an admin who captains", () => {
     // Two "Auto-fetch games" / "Add game" forms on one page break the
     // one-control-one-name rule; the admin card points at Captain tools.
