@@ -51,6 +51,9 @@ import {
   leaderIdentity,
 } from "@/lib/leader-ranking";
 
+/** The fewest games a player needs to rank on kills or assists per game. */
+const PER_GAME_MIN_GAMES = 3;
+
 type LeadersSearchParams = { season?: string | string[] };
 
 export async function generateMetadata({
@@ -252,9 +255,11 @@ export default async function LeadersPage({
     }));
 
   // Early in a season everyone has few games; don't let the rate floor empty
-  // the board. Cap the floor at the most-played count.
+  // the other average boards. Cap their floor at the most-played count.
+  // Kills and assists per game don't follow it: the league set their minimum
+  // at a flat 3 games, so they stay empty until someone has played 3.
   const maxGames = Math.max(1, ...entries.map((e) => e.summary.games));
-  const rateFloor = Math.min(3, maxGames);
+  const rateFloor = Math.min(PER_GAME_MIN_GAMES, maxGames);
 
   // Every board ranks what the PLAYER did. Total wins and win rate are gone
   // on purpose (they followed the team's record, so the top of each was the
@@ -290,7 +295,7 @@ export default async function LeadersPage({
       valueUnit: "kills / game",
       category: "teamfights",
       key: "killsPerGame",
-      minGames: rateFloor,
+      minGames: PER_GAME_MIN_GAMES,
       format: (r) => r.value.toFixed(1),
       hint: (r) =>
         `${r.summary.kills} kills in ${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
@@ -301,7 +306,7 @@ export default async function LeadersPage({
       valueUnit: "assists / game",
       category: "teamfights",
       key: "assistsPerGame",
-      minGames: rateFloor,
+      minGames: PER_GAME_MIN_GAMES,
       format: (r) => r.value.toFixed(1),
       hint: (r) =>
         `${r.summary.assists} assists in ${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
@@ -313,7 +318,8 @@ export default async function LeadersPage({
       category: "economy",
       key: "games",
       format: (r) => `${r.value}`,
-      hint: (r) => `${r.summary.wins}–${r.summary.losses}`,
+      hint: (r) =>
+        `${r.summary.wins} win${r.summary.wins === 1 ? "" : "s"}, ${r.summary.losses} loss${r.summary.losses === 1 ? "" : "es"}`,
     },
     {
       title: "Best avg GPM",
@@ -572,7 +578,7 @@ export default async function LeadersPage({
           ~1,500px down and honors to the bottom of a ~9,500px page. */}
       <PageTitle
         title="Leaders"
-        subtitle={`${season.name}${season.isActive ? "" : " · archived"} · From complete 5v5 box scores. Per-game boards need at least ${rateFloor} game${rateFloor === 1 ? "" : "s"}; equal values share a rank.`}
+        subtitle={`${season.name}${season.isActive ? "" : " · archived"} · From complete 5v5 box scores. Each average board names its minimum games; equal values share a rank.`}
         action={titleAction}
       />
       <StatsNav
