@@ -60,6 +60,16 @@ describe("match page captain tools order and anchors", () => {
     );
   });
 
+  it("opens only the jump's target, never a folded card inside Captain tools", () => {
+    // Captain tools is a plain section. The SectionNav default opens the
+    // first <details> inside a target, which unfolded the lobby steps and
+    // the "Result didn't show up?" import form on every Captain tools jump.
+    expect(PAGE).toMatch(
+      /<SectionNav\s+items=\{sectionItems\}\s+label="Match sections"\s+openNested="marked"\s*\/>/,
+    );
+    expect(PAGE).not.toContain("data-section-jump");
+  });
+
   it("gives every card a deep link lands on its own id", () => {
     // Discord's player-out message and the dashboard's Respond link land here.
     expect(PAGE).toContain("<Card id={MATCH_ANCHOR.standins}");

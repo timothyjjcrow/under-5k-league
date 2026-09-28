@@ -606,9 +606,16 @@ export default async function MatchDetailPage({
 
       {/* A jump bar earns its space only with three places to go; with one
           or two it just points at what is already on screen. Never pinned
-          here: a pinned bar sat over the box scores. */}
+          here: a pinned bar sat over the box scores. A jump opens only its
+          target (the Scouting fold is the target itself): opening the first
+          disclosure inside Captain tools unfolded the lobby steps and the
+          import form that are folded on purpose. */}
       {sectionItems.length >= 3 ? (
-        <SectionNav items={sectionItems} label="Match sections" />
+        <SectionNav
+          items={sectionItems}
+          label="Match sections"
+          openNested="marked"
+        />
       ) : null}
 
       {!match.season.isActive ? (
