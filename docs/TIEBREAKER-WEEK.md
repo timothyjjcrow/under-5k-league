@@ -137,7 +137,8 @@ is no separate scheduler.
 Coverage lives in `src/lib/tiebreakers.test.ts`,
 `src/lib/single-elimination.test.ts`, the tiebreaker component tests,
 `test/integration/tiebreakers.itest.ts` and the three
-`test/integration/tiebreaker-*lifecycle.itest.ts` suites. The postseason
-browser suite (`e2e-postseason/tiebreaker.spec.ts` and
-`e2e-postseason/weekend-tiebreaker.spec.ts`) drives both the current knockout
-and a published double-elimination bracket through to playoff creation.
+`test/integration/tiebreaker-*lifecycle.itest.ts` suites. In the postseason
+browser suite, `e2e-postseason/tiebreaker.spec.ts` drives both the current
+knockout and a published double-elimination bracket through to playoff
+creation, and `e2e-postseason/weekend-tiebreaker.spec.ts` plays three- and
+eight-team knockouts to the end through the admin controls.
