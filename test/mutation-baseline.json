@@ -1,6 +1,6 @@
 {
   "note": "Exact guarded-claim inventory. Stages 1–3 update retains the previously measured baseline and adds PostgreSQL sabotage evidence for all 27 new/renamed claims plus the result-sync ordinal rebind; new kills were confirmed twice. Reviewed equivalents retain their source justifications. Full CI re-mutates every protected claim in four shards; focused local probes do not claim a fresh full-sweep verification.",
-  "totalClaims": 164,
+  "totalClaims": 168,
   "equivalent": [
     "src/app/actions/admin.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
     "src/app/actions/admin.ts::createSeason::isActive#1",
@@ -49,6 +49,7 @@
     "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#3",
     "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#4",
     "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#5",
+    "src/lib/league-announcement-outbox.ts::resumeLeagueAnnouncements::status#1",
     "src/lib/match-import.ts::importGameForMatch::fantasyLockedAt#1",
     "src/lib/participant-admin.ts::claimParticipantAdmin::role#1",
     "src/lib/playoff-service.ts::advancePlayoffBracket::isActive+status#1",
@@ -147,6 +148,9 @@
     "src/lib/inhouse-service.ts::touchQueueHeartbeat::lastSeenAt#1",
     "src/lib/inhouse-service.ts::voidLastResult::kind+status#1",
     "src/lib/inhouse-service.ts::voidLastResult::status#1",
+    "src/lib/league-announcement-outbox.ts::cancelExpiredLeagueAnnouncements::OR+expiresAt#1",
+    "src/lib/league-announcement-outbox.ts::discardWaitingLeagueAnnouncements::OR+createdAt#1",
+    "src/lib/league-announcement-outbox.ts::expireLeagueAnnouncementGroup::dedupeKey+status#1",
     "src/lib/match-import.ts::announceSeriesResultOnce::status#1",
     "src/lib/match-import.ts::announceSeriesResultOnce::value#1",
     "src/lib/match-import.ts::recomputeSeries::awayScore+homeScore+status#1",

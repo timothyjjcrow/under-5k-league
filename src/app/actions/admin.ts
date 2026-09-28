@@ -126,7 +126,13 @@ import {
   getInhouseWebhookUrl,
   getInhouseAlertWebhookUrl,
   sendInhouseDiscordMessage,
+  draftLiveAnnouncementGroup,
 } from "@/lib/discord";
+import {
+  discardWaitingLeagueAnnouncements,
+  expireLeagueAnnouncementGroup,
+  resumeLeagueAnnouncements,
+} from "@/lib/league-announcement-outbox";
 import { reachabilityNote } from "@/lib/discord-roles";
 import { mentionsOf } from "@/lib/discord-mentions";
 import { logAdminAction } from "@/lib/admin-log";
@@ -2605,6 +2611,7 @@ export async function startDraft(
   await sendDiscordMessage(
     liveAnnouncement.content,
     mentionsOf(liveAnnouncement.mentionUserIds),
+    { expiryGroup: draftLiveAnnouncementGroup(season.id) },
   );
   await logAdminAction({
     action: "startDraft",
@@ -2671,6 +2678,8 @@ export async function undoLastSaleAction(
   });
   await sendDiscordMessage(
     draftSaleUndoneMessage(season.name, res.player, res.team, res.price),
+    undefined,
+    { expiryGroup: draftLiveAnnouncementGroup(season.id) },
   );
   // The durable send may have enqueued work after the earlier refresh. Expire
   // once more so a snapshot rebuilt during Discord I/O cannot miss the row.
@@ -2734,6 +2743,10 @@ export async function abortDraftAction(
       mentionsOf([a.discordId]),
     );
   }
+  // The live-draft posts still waiting (a webhook outage) are stale now.
+  await expireLeagueAnnouncementGroup(
+    draftLiveAnnouncementGroup(season.id),
+  ).catch(() => 0);
   await sendDiscordMessage(
     draftAbortedMessage(season.name, res.playersReturned, res.matchesRemoved),
   );
@@ -2798,7 +2811,9 @@ export async function pauseDraftAction(
     summary: "Paused the live auction and parked its clock",
     seasonId: season.id,
   });
-  await sendDiscordMessage(draftPausedMessage(season.name));
+  await sendDiscordMessage(draftPausedMessage(season.name), undefined, {
+    expiryGroup: draftLiveAnnouncementGroup(season.id),
+  });
   refresh();
   return { message: "Auction paused — clocks are parked until you resume." };
 }
@@ -2830,7 +2845,9 @@ export async function resumeDraftAction(
     summary: "Resumed the auction with a fresh clock",
     seasonId: season.id,
   });
-  await sendDiscordMessage(draftResumedMessage(season.name));
+  await sendDiscordMessage(draftResumedMessage(season.name), undefined, {
+    expiryGroup: draftLiveAnnouncementGroup(season.id),
+  });
   refresh();
   return { message: "Auction resumed — the clock is running again." };
 }
@@ -2862,7 +2879,11 @@ export async function voidCurrentLotAction(
     summary: `Voided the paused live lot for ${res.player}; ${res.nominator} keeps the nomination turn`,
     seasonId: season.id,
   });
-  await sendDiscordMessage(draftLotVoidedMessage(season.name, res.player));
+  await sendDiscordMessage(
+    draftLotVoidedMessage(season.name, res.player),
+    undefined,
+    { expiryGroup: draftLiveAnnouncementGroup(season.id) },
+  );
   refresh();
   return {
     message: `Voided ${res.player}'s lot — no sale recorded. ${res.nominator} keeps the turn; Resume when ready.`,
@@ -6826,17 +6847,59 @@ export async function setDiscordWebhook(
     : null;
 
   await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, webhookUrl);
+  // Posts held back by the old webhook (deleted, token changed) try the new
+  // one on the next run instead of waiting out their slowest retry.
+  const waiting = await resumeLeagueAnnouncements().catch(() => 0);
   await logAdminAction({
     action: "setDiscordWebhook",
     summary: `Replaced the league announcement webhook${movedChannel ? (torndown?.orphaned ? "; the old queue board may be orphaned" : "; the old queue board was removed") : ""}`,
   });
   refresh();
+  const backlog =
+    waiting > 0
+      ? ` ${waiting} waiting post${waiting === 1 ? "" : "s"} will go out over the next few minutes, oldest first — discard them on this card if they're out of date.`
+      : "";
   return {
     message: !movedChannel
-      ? "Webhook saved — announcements are on"
+      ? `Webhook saved — announcements are on.${backlog}`
       : torndown?.orphaned
-        ? "Webhook saved — announcements are on. The old queue board is still in the old channel and can no longer be updated; delete that message by hand, then post a new board below."
-        : "Webhook saved — announcements are on. The queue board was removed from the old channel; post a new one below.",
+        ? `Webhook saved — announcements are on.${backlog} The old queue board is still in the old channel and can no longer be updated; delete that message by hand, then post a new board below.`
+        : `Webhook saved — announcements are on.${backlog} The queue board was removed from the old channel; post a new one below.`,
+  };
+}
+
+/**
+ * Discard the league posts still waiting for Discord — the stale backlog a
+ * webhook outage leaves behind. Only posts queued up to the newest one the
+ * admin was shown (`upTo`) are discarded, so nothing queued after the page
+ * loaded is dropped unseen.
+ */
+export async function discardWaitingDiscordPosts(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const upToMs = Number(str(formData, "upTo"));
+  if (!Number.isSafeInteger(upToMs) || upToMs <= 0) {
+    return { error: "Reload the page and try again." };
+  }
+  const discarded = await discardWaitingLeagueAnnouncements(new Date(upToMs));
+  if (discarded > 0) {
+    await logAdminAction({
+      action: "discardWaitingDiscordPosts",
+      summary: `Discarded ${discarded} league Discord post(s) that were waiting to be sent`,
+    });
+  }
+  refresh();
+  return {
+    message:
+      discarded > 0
+        ? `Discarded ${discarded} waiting post${discarded === 1 ? "" : "s"} — ${discarded === 1 ? "it" : "they"} won't be posted.`
+        : "Nothing was waiting — the posts may have just gone out.",
   };
 }
 
@@ -7155,9 +7218,13 @@ export async function testDiscordWebhook(
   const ok = await sendDiscordMessage(testMessage(), undefined, {
     durable: false,
   });
-  return ok
-    ? { message: "Test message sent — check your Discord" }
-    : { error: "Discord rejected the message — double-check the URL" };
+  if (!ok) {
+    return { error: "Discord rejected the message — double-check the URL" };
+  }
+  // The webhook works, so posts paused behind an earlier refusal try again
+  // on the next run.
+  if ((await resumeLeagueAnnouncements().catch(() => 0)) > 0) refresh();
+  return { message: "Test message sent — check your Discord" };
 }
 
 /** Import all games from the season's Dota league id (OpenDota). */
@@ -7347,13 +7414,19 @@ export async function setDraftNight(
   }
   // Best-effort announcement — the countdown surfaces update either way.
   if (changed) {
-    await sendDiscordMessage(
-      when
-        ? replacedExistingTime
+    if (when) {
+      await sendDiscordMessage(
+        replacedExistingTime
           ? draftRescheduledMessage(season.name, when.getTime())
-          : draftScheduledMessage(season.name, when.getTime())
-        : draftCancelledMessage(season.name),
-    );
+          : draftScheduledMessage(season.name, when.getTime()),
+        undefined,
+        // Stuck behind a webhook outage, "the draft is set for <time>" is
+        // dropped once that time has passed rather than posted after it.
+        { expiresAt: when },
+      );
+    } else {
+      await sendDiscordMessage(draftCancelledMessage(season.name));
+    }
   }
   if (changed) {
     await logAdminAction({

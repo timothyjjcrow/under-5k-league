@@ -19,6 +19,7 @@ import { after } from "next/server";
 import {
   deleteWebhookMessage,
   deliverPendingLeagueAnnouncements,
+  draftLiveAnnouncementGroup,
   patchWebhookMessage,
   postWebhookMessage,
   sendDiscordMessage,
@@ -30,7 +31,9 @@ import { makeUser, sessionFor } from "./factories";
 import { prisma } from "@/lib/prisma";
 import {
   enqueueLeagueAnnouncement,
+  expireLeagueAnnouncementGroup,
   LEAGUE_ANNOUNCEMENT_STATUS,
+  resumeLeagueAnnouncements,
 } from "@/lib/league-announcement-outbox";
 
 // The queue board's transport, exercised over REAL HTTP against a stand-in for
@@ -143,7 +146,8 @@ describe("sendDiscordMessage", () => {
       content: "Durable result",
       status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
       attempts: 1,
-      lastErrorCode: "TRANSPORT_REJECTED",
+      // The status code, never the response body or the webhook URL.
+      lastErrorCode: "DISCORD_503",
     });
     // The bearer credential and arbitrary transport response are never stored.
     expect(JSON.stringify(pending)).not.toContain("tok-secret");
@@ -155,6 +159,83 @@ describe("sendDiscordMessage", () => {
         limit: 1,
       }),
     ).resolves.toEqual({ attempted: 1, delivered: 1, pending: false });
+  });
+
+  it("pauses on a deleted webhook and resumes on the next one, in order", async () => {
+    // Discord answers 404 (Unknown Webhook) once the webhook is deleted.
+    respond = () => ({ status: 404, body: { code: 10015 } });
+    expect(await sendDiscordMessage("Reschedule proposed")).toBe(true);
+    expect(await sendDiscordMessage("Reschedule accepted")).toBe(true);
+    // One request: the second post waits behind the paused first.
+    expect(recorded).toHaveLength(1);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { status: true, lastErrorCode: true },
+      }),
+    ).toEqual([
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, lastErrorCode: "DISCORD_404" },
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, lastErrorCode: null },
+    ]);
+
+    respond = () => ({ status: 204 });
+    await setSetting(
+      SETTING_KEYS.DISCORD_WEBHOOK_URL,
+      `${base}/api/webhooks/2222/new-secret`,
+    );
+    expect(await resumeLeagueAnnouncements()).toBe(2);
+    await deliverPendingLeagueAnnouncements({ limit: 2 });
+    expect(recorded.slice(1).map((r) => [r.url, r.body?.content])).toEqual([
+      ["/api/v10/webhooks/2222/new-secret", "Reschedule proposed"],
+      ["/api/v10/webhooks/2222/new-secret", "Reschedule accepted"],
+    ]);
+  });
+
+  it("skips a post Discord refuses (400) instead of blocking the queue", async () => {
+    respond = (r) =>
+      r.body?.content === "Malformed" ? { status: 400 } : { status: 204 };
+    expect(await sendDiscordMessage("Malformed")).toBe(true);
+    expect(await sendDiscordMessage("Next result")).toBe(true);
+    expect(recorded.map((r) => r.body?.content)).toEqual([
+      "Malformed",
+      "Next result",
+    ]);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { status: true, lastErrorCode: true },
+      }),
+    ).toEqual([
+      {
+        status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+        lastErrorCode: "DISCORD_400",
+      },
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.SENT, lastErrorCode: null },
+    ]);
+  });
+
+  it("drops a live-draft post still waiting when the draft ends", async () => {
+    respond = () => ({ status: 503 });
+    const group = draftLiveAnnouncementGroup("season-1");
+    expect(
+      await sendDiscordMessage("The draft is LIVE", undefined, {
+        expiryGroup: group,
+      }),
+    ).toBe(true);
+    const queued = await prisma.leagueAnnouncement.findFirstOrThrow();
+    expect(queued.dedupeKey?.startsWith(group)).toBe(true);
+
+    expect(await expireLeagueAnnouncementGroup(group)).toBe(1);
+    respond = () => ({ status: 204 });
+    await deliverPendingLeagueAnnouncements({
+      now: new Date(queued.availableAt.getTime() + 60_000),
+      limit: 1,
+    });
+    expect(recorded).toHaveLength(1);
+    expect(await prisma.leagueAnnouncement.findFirstOrThrow()).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "EXPIRED",
+    });
   });
 
   it("supports a true direct transport check without creating outbox work", async () => {
@@ -316,7 +397,7 @@ describe("sendDiscordMessage", () => {
       content: "Durable draft post",
       status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
       attempts: 1,
-      lastErrorCode: "TRANSPORT_REJECTED",
+      lastErrorCode: "DISCORD_503",
     });
 
     // The worker's drain picks it up once Discord is back.

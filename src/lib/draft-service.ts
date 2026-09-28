@@ -31,9 +31,11 @@ import type {
 import { draftTeamsPingKey, weekReminderPrefix } from "./settings";
 import {
   draftCompleteAnnouncement,
+  draftLiveAnnouncementGroup,
   draftRecapMessage,
   sendDiscordMessage,
 } from "./discord";
+import { expireLeagueAnnouncementGroup } from "./league-announcement-outbox";
 import { mentionsOf } from "./discord-mentions";
 import { canViewLeagueContact } from "./visibility";
 import { captureRosterTenure, closeRosterTenure } from "./roster-history";
@@ -287,6 +289,11 @@ async function announceDraftComplete(
 ): Promise<void> {
   const pingKey = draftTeamsPingKey(seasonId, season.runId);
   let unqueuedClaim = false;
+  // The draft is over: live-draft posts still waiting (a webhook outage) are
+  // stale, and must not land after the teams post as if the auction were on.
+  await expireLeagueAnnouncementGroup(
+    draftLiveAnnouncementGroup(seasonId),
+  ).catch(() => 0);
   try {
     const first = await claimDraftTeamsPing(pingKey);
     unqueuedClaim = first;

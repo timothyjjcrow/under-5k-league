@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
 import { splitLinks } from "./linkify";
@@ -16,6 +17,7 @@ import {
   LEAGUE_ANNOUNCEMENT_STATUS,
   type LeagueAnnouncementDelivery,
   type LeagueAnnouncementMarker,
+  type LeagueSendResult,
 } from "./league-announcement-outbox";
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
@@ -1423,6 +1425,19 @@ export type DiscordSendOptions = {
   /** False is reserved for webhook health checks and transport tests. */
   durable?: boolean;
   /**
+   * Time-bound posts are dropped instead of sent once this passes, so a
+   * webhook outage can't deliver a reminder for a match already played.
+   */
+  expiresAt?: Date;
+  /**
+   * For posts that go stale on an event rather than at a known time: every
+   * post still waiting in this group is dropped by
+   * expireLeagueAnnouncementGroup (the live draft's posts once the draft
+   * ends — draftLiveAnnouncementGroup). Rides the dedupe key, so it replaces
+   * `dedupeKey` for these one-off posts.
+   */
+  expiryGroup?: string;
+  /**
    * Queue now, but make the immediate delivery attempt after the HTTP response
    * is sent (runAfterResponse), so the request that triggered the post never
    * waits on Discord. For hot paths such as the live draft, where the captain
@@ -1479,8 +1494,11 @@ export async function sendDiscordMessage(
     event = await enqueueLeagueAnnouncement({
       content,
       mentions: allowed,
-      dedupeKey: options.dedupeKey,
+      dedupeKey: options.expiryGroup
+        ? `${options.expiryGroup}${options.dedupeKey ?? randomUUID()}`
+        : options.dedupeKey,
       marker: options.marker,
+      expiresAt: options.expiresAt ?? null,
     });
   } catch {
     return false;
@@ -1494,7 +1512,7 @@ export async function sendDiscordMessage(
       deliverLeagueAnnouncements({
         limit,
         send: (queuedContent, queuedMentions) =>
-          sendTo(url, queuedContent, queuedMentions),
+          postTo(url, queuedContent, queuedMentions),
       });
     if (options.afterResponse) {
       await runAfterResponse(() => attempt(AFTER_RESPONSE_DELIVERY_LIMIT));
@@ -1542,8 +1560,17 @@ export async function deliverPendingLeagueAnnouncements(
   return deliverLeagueAnnouncements({
     now: options.now,
     limit: options.limit ?? 1,
-    send: (content, mentions) => sendTo(url, content, mentions),
+    send: (content, mentions) => postTo(url, content, mentions),
   });
+}
+
+/**
+ * The expiry group for one season's live-draft posts ("the draft is LIVE",
+ * paused, resumed, a voided lot, an undone sale). They are news only while
+ * the auction runs, so the draft's end drops any still waiting.
+ */
+export function draftLiveAnnouncementGroup(seasonId: string): string {
+  return `draft-live:${seasonId}:`;
 }
 
 /**
@@ -1577,6 +1604,20 @@ async function sendTo(
   content: string,
   mentions?: MentionAllowlist,
 ): Promise<boolean> {
+  return (await postTo(url, content, mentions)) === true;
+}
+
+/**
+ * sendTo, keeping Discord's answer: `true` when accepted, `{ status }` when
+ * Discord answered with an error, `false` when there was no answer at all.
+ * The league queue needs the status to tell a refused post (drop it) from a
+ * dead webhook (pause and tell the admin).
+ */
+async function postTo(
+  url: string | null,
+  content: string,
+  mentions?: MentionAllowlist,
+): Promise<LeagueSendResult> {
   const target = runtimeWebhookUrl(url);
   if (!target) return false;
   if (!discordMutationsAllowed()) return false;
@@ -1605,7 +1646,7 @@ async function sendTo(
       }),
       signal: AbortSignal.timeout(5000),
     });
-    return res.ok;
+    return res.ok ? true : { status: res.status };
   } catch {
     if (process.env.NODE_ENV !== "production") {
       console.warn("[discord] webhook send failed");

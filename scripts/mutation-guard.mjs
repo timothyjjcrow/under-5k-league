@@ -270,6 +270,12 @@ const EQUIVALENT = new Set([
   "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#3",
   "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#4",
   "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#5",
+  // resumeLeagueAnnouncements makes waiting posts due now after an admin saves
+  // a webhook. availableAt is read only for PENDING rows (the outbox's
+  // eligibility and the automation gate's wake time); a SENDING row is timed
+  // by claimedAt and a terminal row is never read again. Stamping availableAt
+  // onto those rows with the predicate deleted therefore changes nothing.
+  "src/lib/league-announcement-outbox.ts::resumeLeagueAnnouncements::status#1",
   // applyPick's ADVANCE claim re-asserts `status: DRAFTING`. It cannot be
   // falsified: the TURN claim a few statements earlier UPDATEs the same lobby
   // row inside the same interactive transaction, so Postgres holds that row's

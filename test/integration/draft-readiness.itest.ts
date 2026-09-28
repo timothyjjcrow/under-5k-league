@@ -215,8 +215,11 @@ describe("draft readiness confirmation", () => {
     // The toast restates the night on the league's clock, zone named, so an
     // admin whose own clock differs can see what they actually saved.
     expect(changed?.message).toContain(formatLeagueTime(DRAFT_TWO));
+    // Stuck behind a webhook outage, the post is dropped once the night passes.
     expect(sendDiscordMessage).toHaveBeenLastCalledWith(
       expect.stringMatching(/previous confirmations expired.*\/me/i),
+      undefined,
+      { expiresAt: DRAFT_TWO },
     );
     let current = await prisma.season.findUniqueOrThrow({
       where: { id: season.id },

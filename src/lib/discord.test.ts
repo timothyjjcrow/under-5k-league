@@ -1404,10 +1404,16 @@ describe("Discord transport diagnostics", () => {
       path.join(process.cwd(), "src/lib/discord.ts"),
       "utf8",
     );
-    const start = source.indexOf("async function sendTo(");
-    const end = source.indexOf("\n}\n", start);
-    expect(start).toBeGreaterThan(-1);
-    const sink = source.slice(start, end);
+    const body = (name: string) => {
+      const start = source.indexOf(`async function ${name}(`);
+      expect(start, name).toBeGreaterThan(-1);
+      return source.slice(start, source.indexOf("\n}\n", start));
+    };
+    // sendTo is the boolean wrapper; postTo is the one network sink, and it
+    // keeps Discord's status for the league queue.
+    expect(body("sendTo")).toContain("postTo(url, content, mentions)");
+    expect(body("sendTo")).not.toContain("fetch(");
+    const sink = body("postTo");
     expect(sink).toContain("const target = runtimeWebhookUrl(url)");
     expect(sink).toContain("fetch(webhookApiUrl(target)");
     expect(sink).not.toContain("fetch(webhookApiUrl(url)");
