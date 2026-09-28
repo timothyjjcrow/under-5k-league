@@ -988,8 +988,9 @@ timeout can prevent scale-to-zero. `/api/health/live` does no database work;
 `/api/health/automation` reuses the cached gate while automation is sleeping.
 Keep the real readiness check for database failure detection and deployment
 verification; reducing its frequency trades slower detection for more idle
-time. See [the database efficiency review](docs/DATABASE-EFFICIENCY-2026-09-05.md)
-for the observed usage of both deployments and the remaining cost levers.
+time. See the
+[5 September 2026 database efficiency review](docs/archive/DATABASE-EFFICIENCY-2026-09-05.md)
+for the usage observed on both deployments then and the remaining cost levers.
 
 Do **not** point a monitor at `/api/sync` to run maintenance. It is a public,
 read-only cursor/watch snapshot used by visible browser tabs; it never imports

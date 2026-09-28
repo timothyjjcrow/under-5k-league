@@ -1,5 +1,9 @@
 # Site quality-of-life implementation — September 4, 2026
 
+> **Archived record (4 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md).
+
 This release implements the practical UI, administration, and read-efficiency work from [the site audit](SITE-AUDIT-2026-09-04.md). The original audit records the before state. Changes are on `codex/site-quality-of-life`.
 
 ## Delivered
@@ -43,6 +47,6 @@ Live Discord OAuth, webhook delivery, production scheduler operation, and Postgr
 - Midseason browser coverage: **all 50 unique scenarios covered successfully**. The final broad run passed 48; two newly added assertions were too strict about Next's duplicated streamed `noindex` tags. They now assert the actual not-found page, presence of noindex, and absence of admin controls. All seven quality-of-life scenarios then passed together. The screenshot harness's pre-hydration caret-style mutation was removed; admin hydration warnings are explicitly checked.
 - Signup/draft/inhouse browser coverage: **all 35 unique scenarios covered successfully**. The broad run passed 34; the hero-picker test was updated to open its new optional section and passed on its focused rerun, including dirty-state feedback.
 - Postseason browser coverage: **10/10 passed**, including guarded recovery, champion consistency, archive, offseason, and new-season handoff.
-- Visual inspection: desktop Home and 390px Schedule, Meta, and revealed admin Discord section; screenshots are in `docs/audit-2026-09-04/` with `-after` filenames.
+- Visual inspection: desktop Home and 390px Schedule, Meta, and revealed admin Discord section; screenshots are in `docs/archive/audit-2026-09-04/` with `-after` filenames.
 
 The browser checks exercised real server actions against disposable fixture data: check-ins, reschedules, registration, invalid result feedback, reversible rulings, draft operations, and inhouse recovery. New tests also cover URL persistence, admin authorization, activity cursor paging with tied timestamps, old news hashes, and scrim history/statistics independence.

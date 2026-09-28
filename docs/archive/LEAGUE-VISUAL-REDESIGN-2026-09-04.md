@@ -1,5 +1,9 @@
 # League visual redesign
 
+> **Archived record (4 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md).
+
 This pass replaces the text-heavy presentation from the earlier home/schedule clarity pass. It keeps the same league data and controls, with visual comparisons carrying more of the explanation.
 
 ## What changed

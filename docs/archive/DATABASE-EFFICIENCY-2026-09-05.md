@@ -1,5 +1,9 @@
 # Database efficiency review — 5 September 2026
 
+> **Archived record (5 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md).
+
 Both leagues run the same application against separate Neon databases. The
 console was inspected read-only at 10:08 UTC. No database schema, production
 configuration, scheduler interval, or hosting plan was changed. Application

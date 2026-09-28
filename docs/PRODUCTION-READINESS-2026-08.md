@@ -1,7 +1,7 @@
 # Production readiness audit — August 2026
 
 This is the release-focused continuation of
-[`PRODUCT-AUDIT-2026-08.md`](./PRODUCT-AUDIT-2026-08.md). Each iteration is a
+[`PRODUCT-AUDIT-2026-08.md`](./archive/PRODUCT-AUDIT-2026-08.md). Each iteration is a
 separate gate. Passing an early gate does **not** authorize deployment while a
 later gate remains open.
 

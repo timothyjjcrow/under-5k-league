@@ -1,5 +1,9 @@
 # Homepage layout release — 5 September 2026
 
+> **Archived record (5 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md).
+
 Status: both regional production deployments are complete and verified.
 
 The homepage sidebar now matches the weekly results card's desktop height.
