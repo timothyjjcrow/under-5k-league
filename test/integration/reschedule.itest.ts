@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { resultNudgeKey } from "@/lib/settings";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+} from "@/lib/league-announcement-outbox";
 import {
   cancelReschedule,
   proposeReschedule,
@@ -245,6 +252,40 @@ describe("reschedule service (integration)", () => {
         await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
       ).scheduledAt?.getTime(),
     ).toBe(NIGHT.getTime());
+  });
+
+  it("an accepted reschedule drops a queued result nudge about the old kickoff", async () => {
+    const { home, away, match } = await setupMatch();
+    // Queued by the worker, not yet delivered (the outbox paused or backing
+    // off): marker finalized, row still pending.
+    const key = resultNudgeKey(match.id, match.scheduleRevision);
+    const eventId = randomUUID();
+    await prisma.setting.create({
+      data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+    });
+    const queued = await enqueueLeagueAnnouncement({
+      content: "We couldn't find the games — captains: report them",
+      dedupeKey: `nudge-source-${match.id}`,
+      marker: { key, eventId },
+    });
+
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    expect(
+      (await respondReschedule(away.captainId, pending!.id, true)).accepted,
+    ).toBe(true);
+
+    const send = vi.fn(async () => true);
+    await deliverLeagueAnnouncements({ send, limit: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      await prisma.leagueAnnouncement.findUniqueOrThrow({
+        where: { id: queued.id },
+      }),
+    ).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "STALE_SOURCE",
+    });
   });
 
   it("opposing captain accepts → match retimed, request ACCEPTED", async () => {

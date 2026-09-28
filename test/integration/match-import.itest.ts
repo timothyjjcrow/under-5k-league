@@ -1,9 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
 import { steamIdToAccountId } from "@/lib/dota";
 import { MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
-import { SETTING_KEYS } from "@/lib/settings";
+import { resultNudgeKey, SETTING_KEYS } from "@/lib/settings";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+} from "@/lib/league-announcement-outbox";
 import {
   autoDetectGamesForMatch,
   gatherTeamAccounts,
@@ -67,6 +73,38 @@ async function addMember(seasonId: string, teamId: string, name: string) {
   return steamIdToAccountId(user.steamId)!;
 }
 
+/**
+ * A result nudge the outbox accepted but has not delivered yet (the queue
+ * paused or backing off), as result-nudge-service leaves it.
+ */
+async function queueResultNudge(matchId: string) {
+  const key = resultNudgeKey(matchId, 0);
+  const eventId = randomUUID();
+  await prisma.setting.create({
+    data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+  });
+  return enqueueLeagueAnnouncement({
+    content: "We couldn't find the games — captains: report them",
+    dedupeKey: `nudge-source-${matchId}`,
+    marker: { key, eventId },
+  });
+}
+
+/** Delivery drops the nudge instead of posting it. */
+async function expectNudgeDropped(queuedId: string) {
+  const send = vi.fn(async () => true);
+  await deliverLeagueAnnouncements({ send, limit: 1 });
+  expect(send).not.toHaveBeenCalled();
+  expect(
+    await prisma.leagueAnnouncement.findUniqueOrThrow({
+      where: { id: queuedId },
+    }),
+  ).toMatchObject({
+    status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+    lastErrorCode: "STALE_SOURCE",
+  });
+}
+
 describe("recomputeSeries", () => {
   // The seam is global state — a hook left armed would fire inside an
   // unrelated test's recompute.
@@ -87,6 +125,18 @@ describe("recomputeSeries", () => {
     expect(m.awayScore).toBe(1);
     expect(m.winnerTeamId).toBe(home.id);
     expect(m.status).toBe("COMPLETED");
+  });
+
+  it("drops a queued 'we couldn't find your games' nudge when the series moves", async () => {
+    const season = await makeSeason();
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const match = await regularMatch(season.id, home.id, away.id);
+    const queued = await queueResultNudge(match.id);
+    await addGame(match.id, "n1", home.id);
+
+    await recomputeSeries(match.id);
+    await expectNudgeDropped(queued.id);
   });
 
   it("reverts a match to SCHEDULED when it has no games", async () => {
@@ -501,6 +551,50 @@ describe("importGameForMatch", () => {
     const r = await importGameForMatch(match.id, "777");
     expect(r.ok).toBe(false);
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+  });
+
+  it("drops a queued 'we couldn't find your games' nudge once the game imports", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeAccts: number[] = [];
+    const awayAccts: number[] = [];
+    for (let i = 0; i < 3; i++)
+      homeAccts.push(await addMember(season.id, home.id, `H${i}`));
+    for (let i = 0; i < 3; i++)
+      awayAccts.push(await addMember(season.id, away.id, `A${i}`));
+    const match = await regularMatch(season.id, home.id, away.id);
+    const queued = await queueResultNudge(match.id);
+
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 556,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        ...homeAccts.map((a, i) => ({
+          account_id: a,
+          player_slot: i,
+          hero_id: 1,
+          isRadiant: true,
+          kills: 1,
+          deaths: 0,
+          assists: 0,
+        })),
+        ...awayAccts.map((a, i) => ({
+          account_id: a,
+          player_slot: 128 + i,
+          hero_id: 2,
+          isRadiant: false,
+          kills: 0,
+          deaths: 1,
+          assists: 0,
+        })),
+      ],
+    });
+
+    expect((await importGameForMatch(match.id, "556")).ok).toBe(true);
+    await expectNudgeDropped(queued.id);
   });
 });
 

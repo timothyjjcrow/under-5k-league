@@ -52,7 +52,9 @@ const nudgeSelect = {
  * claims its own marker before anything is sent, re-reads the fixture after
  * the claim (a result can land in between) and releases the claim when there
  * is nothing left to ask for. No webhook claims nothing. A post that could not
- * be queued is marked failed and the next pass tries it again.
+ * be queued is marked failed and the next pass tries it again. A post still
+ * waiting in the outbox when a game or result lands, or the fixture is moved,
+ * is dropped: those transactions call invalidateResultNudges.
  *
  * Returns how many nudges were queued.
  */

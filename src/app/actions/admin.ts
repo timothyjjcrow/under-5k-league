@@ -163,6 +163,7 @@ import {
 } from "@/lib/honors-service";
 import {
   invalidatePendingAnnouncementMarkers,
+  invalidateResultNudges,
   recordAnnouncementCovered,
 } from "@/lib/announcement-marker";
 import {
@@ -3723,6 +3724,8 @@ export async function recordResult(
             ),
           );
         }
+        // A queued "we couldn't find your games" nudge is answered now.
+        await invalidateResultNudges(tx, match.id);
         if (
           match.phase === MATCH_PHASE.REGULAR &&
           match.status === MATCH_STATUS.COMPLETED
@@ -4731,6 +4734,7 @@ export async function withdrawTeam(
                 ),
               );
             }
+            await invalidateResultNudges(tx, match.id);
             // The single team-withdrawal broadcast replaces noisy per-series
             // result posts. Persist that decision with the result so generic
             // completedAt crash recovery cannot replay these ruled fixtures;
@@ -5883,6 +5887,8 @@ export async function setWeekNight(
             data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
           });
           if (updated.count !== 1) throw new ScheduleMatchChangedError();
+          // A nudge queued for the old kickoff must not post about it.
+          await invalidateResultNudges(tx, match.id);
         }
 
         // Keep the arithmetic anchor used for future playoff rounds aligned with
@@ -6159,6 +6165,8 @@ export async function setMatchTime(
           data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
         });
         if (updated.count !== 1) throw new ScheduleMatchChangedError();
+        // A nudge queued for the old kickoff must not post about it.
+        await invalidateResultNudges(tx, matchId);
 
         const [rsvps, proposals] = await Promise.all([
           tx.matchAvailability.deleteMany({ where: { matchId } }),

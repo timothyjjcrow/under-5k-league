@@ -7,6 +7,7 @@
  * damage the guard prevents, because "an admin clicked the button the panel
  * offered and the league quietly broke" is the shape all six shared.
  */
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({
@@ -59,6 +60,7 @@ import {
   getSetting,
   honorsAnnouncedKey,
   resultAnnouncedKey,
+  resultNudgeKey,
   setSetting,
   SETTING_KEYS,
   weekReminderKey,
@@ -2366,6 +2368,115 @@ describe("recordResult — queued publications follow their source state", () =>
       status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
       lastErrorCode: "STALE_SOURCE",
     });
+  });
+});
+
+/**
+ * A "we couldn't find your games" nudge accepted by the outbox but not yet
+ * delivered (the queue paused or backing off), exactly as
+ * result-nudge-service leaves it: marker finalized, row still PENDING.
+ */
+async function queueResultNudge(matchId: string, revision = 0) {
+  const key = resultNudgeKey(matchId, revision);
+  const eventId = randomUUID();
+  await prisma.setting.create({
+    data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+  });
+  const queued = await enqueueLeagueAnnouncement({
+    content: "We couldn't find the games — captains: report them",
+    dedupeKey: `nudge-source-${matchId}-${revision}`,
+    marker: { key, eventId },
+  });
+  return { key, queued };
+}
+
+/** The queued nudge is dropped at delivery instead of posted. */
+async function expectNudgeDropped(queuedId: string) {
+  const send = vi.fn(async () => true);
+  await deliverLeagueAnnouncements({ send, limit: 1 });
+  expect(send).not.toHaveBeenCalled();
+  expect(
+    await prisma.leagueAnnouncement.findUniqueOrThrow({
+      where: { id: queuedId },
+    }),
+  ).toMatchObject({
+    status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+    lastErrorCode: "STALE_SOURCE",
+  });
+}
+
+describe("a queued result nudge never posts after it has been answered", () => {
+  it("drops the nudge when an administrator records the result", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+    const { key, queued } = await queueResultNudge(target.id);
+
+    expect(
+      (
+        await recordResult(
+          empty,
+          fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+        )
+      )?.error,
+    ).toBeUndefined();
+    expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
+    await expectNudgeDropped(queued.id);
+  });
+
+  it("keeps a nudge that was already delivered recorded", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+    const key = resultNudgeKey(target.id, 0);
+    const value = `sent:v2:${randomUUID()}:${Date.now()}`;
+    await prisma.setting.create({ data: { key, value } });
+
+    await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+    );
+    expect((await prisma.setting.findUniqueOrThrow({ where: { key } })).value).toBe(
+      value,
+    );
+  });
+
+  it("drops a nudge about the old kickoff when the fixture is moved", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const target = matches[0];
+    const { queued } = await queueResultNudge(target.id);
+    const when = new Date(Date.now() + 6 * 864e5);
+
+    const res = await setMatchTime(
+      empty,
+      fd({
+        matchId: target.id,
+        expectedActiveSeasonId: season.id,
+        scheduledAt: when.toISOString(),
+        scheduledAtTs: String(when.getTime()),
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    await expectNudgeDropped(queued.id);
+  });
+
+  it("drops a nudge about the old kickoff when the whole week is moved", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const target = matches[0];
+    const { queued } = await queueResultNudge(target.id);
+    const when = new Date(Date.now() + 6 * 864e5);
+
+    const res = await setWeekNight(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        week: String(target.week),
+        night: when.toISOString(),
+        nightTs: String(when.getTime()),
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    await expectNudgeDropped(queued.id);
   });
 });
 

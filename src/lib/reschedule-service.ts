@@ -9,6 +9,7 @@ import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
 import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
+import { invalidateResultNudges } from "./announcement-marker";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 import {
@@ -419,6 +420,9 @@ export async function respondReschedule(
           throw new UserFacingError(
             "That match is no longer awaiting play",
           );
+        // A "we couldn't find your games" nudge queued for the old kickoff
+        // must not post about it.
+        await invalidateResultNudges(tx, match.id);
 
         // Every RSVP answered the OLD night. Clear them and release the old
         // reminder marker atomically with the retime.
