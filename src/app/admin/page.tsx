@@ -5652,6 +5652,14 @@ function DiscordControls({
           security the saved URL is never shown again — paste a new one to
           replace it, or Remove to turn announcements off.
         </p>
+        <p className="text-xs text-muted">
+          <b>Who gets pinged:</b> league posts mention only the people each
+          post is for, such as a captain who needs cover, a booked standin,
+          the captains when a fixture moves, players who haven&apos;t checked
+          in, drafted and signed players, and the Player of the Week and the
+          champions. League posts never ping a role or everyone, and only
+          players who linked Discord on their profile can be pinged.
+        </p>
 
         <div className="space-y-3 border-t border-line pt-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -5818,23 +5826,23 @@ function DiscordControls({
           <p className="text-xs text-muted">
             {board.pingRoleId ? (
               <>
-                <b>Notifications are on.</b> Two messages ping this role — the
-                queue filling up, and a match being found. Nothing else does,
-                and board edits never notify anyone.
+                <b>The ping role is on.</b> Two inhouse posts ping this role:
+                the queue filling up, and a match being found. Nothing else
+                pings it, and board edits never notify anyone.
               </>
             ) : (
               <>
-                <b>Nothing currently notifies anyone.</b> Board edits are silent
-                by design, and every message suppresses mentions. Set a role
-                here and the &ldquo;queue is filling&rdquo; and &ldquo;match
-                found&rdquo; messages will ping it.
+                <b>No ping role set</b>, so the &ldquo;queue is
+                filling&rdquo; post pings nobody. Set a role here and that post
+                and &ldquo;match found&rdquo; will ping it. Board edits never
+                notify anyone.
               </>
             )}{" "}
             Make the role <b>self-assignable</b> (Server Settings → Onboarding,
             or a Channels &amp; Roles picker) — a ping people can&apos;t opt out
-            of gets the channel muted, which is worse than silence. Players who
-            queued are also mentioned directly when their match is found, if
-            they&apos;ve linked Discord on their profile.
+            of gets the channel muted, which is worse than silence. With or
+            without a role, the ten players are mentioned when their match is
+            found, if they&apos;ve linked Discord on their profile.
           </p>
 
           <p className="text-xs text-muted">
@@ -5889,7 +5897,7 @@ function DiscordControls({
               Queue right now: <b>{board.liveState}</b> —{" "}
               {board.inSync
                 ? "the board is showing this."
-                : "the board hasn't caught up yet (an edit is due on the next page view)."}
+                : "the board hasn't caught up yet. It updates within about a minute."}
             </p>
           ) : null}
 
