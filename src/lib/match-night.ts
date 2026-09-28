@@ -13,6 +13,7 @@
 
 import { MATCH_SCHEDULE, MATCH_STATUS } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
+import { matchNightText } from "./season-copy";
 import { zoneLabel } from "./zone-label";
 import { LEAGUE_LOCALE } from "./zoned-time";
 
@@ -85,17 +86,40 @@ export function fixturesMatchNightLabel(
 }
 
 /**
- * The season's match night: the fixtures' weekly slot once any has a
- * kickoff, else the admin's text, else the deployment default.
+ * The season's match night when there is one to name: the fixtures' weekly
+ * slot once any has a kickoff, else the admin's text, else the deployment
+ * default if that region has announced one. Null when nothing is announced
+ * yet (between seasons, or a region with no default before the admin types
+ * one). The admin's text loses a typed full stop, since every sentence that
+ * quotes it ends itself (matchNightText).
+ */
+export function announcedMatchNight(
+  season: { matchSchedule: string | null } | null,
+  fixtures: readonly FixtureKickoff[],
+  timeZone?: string,
+  locale?: string,
+): string | null {
+  return (
+    fixturesMatchNightLabel(fixtures, timeZone, locale) ??
+    matchNightText(season?.matchSchedule) ??
+    (MATCH_SCHEDULE.announced ? MATCH_SCHEDULE.label : null)
+  );
+}
+
+/**
+ * The season's match night for a page that always prints one: the announced
+ * night (above), else the deployment's "to be announced" line. Every page
+ * that names the night goes through here, so /me, Schedule, How it works and
+ * the admin hint can't disagree.
  */
 export function seasonMatchNightLabel(
-  season: { matchSchedule: string | null },
+  season: { matchSchedule: string | null } | null,
   fixtures: readonly FixtureKickoff[],
   timeZone?: string,
   locale?: string,
 ): string {
   return (
-    fixturesMatchNightLabel(fixtures, timeZone, locale) ??
-    (season.matchSchedule?.trim() || MATCH_SCHEDULE.label)
+    announcedMatchNight(season, fixtures, timeZone, locale) ??
+    MATCH_SCHEDULE.label
   );
 }

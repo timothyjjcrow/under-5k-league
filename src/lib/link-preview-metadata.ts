@@ -46,6 +46,11 @@ export async function homeMetadata(): Promise<Metadata> {
           playerCount: snapshot.playerCount,
           draftAt: season.draftAt,
           matchSchedule: season.matchSchedule,
+          // Request-cached: Home's page reads the same list in this phase.
+          fixtures:
+            season.status === SEASON_STATUS.REGULAR_SEASON
+              ? await getSeasonMatches(season.id)
+              : [],
           championName:
             season.status === SEASON_STATUS.COMPLETE
               ? await championName(season, snapshot.teams)

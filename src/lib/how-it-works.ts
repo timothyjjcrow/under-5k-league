@@ -1,25 +1,7 @@
 // The How it works page's rules, kept pure so they can be tested.
 
 import { HARD_MMR_CEILING, REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
-import { LEAGUE_CONFIG } from "./league-config";
-import { matchNightText } from "./season-copy";
 import { joinSeasonCta } from "./site-nav";
-
-/**
- * The weekly match night to show. The admin sets it per season (Home, /me and
- * Schedule show it); the regional default only fills in when they haven't.
- * The old feature tour always showed the regional default, so it could
- * disagree with Home ("Sundays at 6:00 PM Pacific" beside "Wednesdays, 8pm
- * ET"), and on Europe, whose default is empty, it said "to be announced" after
- * the admin had announced one. The page puts a full stop after it, so a typed
- * one is dropped (matchNightText).
- */
-export function seasonMatchNight(
-  seasonSchedule: string | null | undefined,
-  fallback: string = LEAGUE_CONFIG.matchSchedule.label,
-): string {
-  return matchNightText(seasonSchedule) ?? fallback;
-}
 
 /**
  * Who can join, in one or two sentences. `softLimit` is the season's review

@@ -6,11 +6,8 @@ import { shareMetadata } from "@/lib/share-metadata";
 import { SteamJoin } from "@/components/steam-sign-in";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { SOFT_MMR_LIMIT } from "@/lib/constants";
-import {
-  eligibilityText,
-  howItWorksAction,
-  seasonMatchNight,
-} from "@/lib/how-it-works";
+import { eligibilityText, howItWorksAction } from "@/lib/how-it-works";
+import { seasonMatchNightLabel } from "@/lib/match-night";
 import {
   Card,
   CardBody,
@@ -72,21 +69,30 @@ export default async function HowItWorksPage() {
     getActiveSeason(),
     getSessionUser(),
   ]);
-  const [registration, membership] =
+  const [registration, membership, fixtures] = await Promise.all([
     season && user
-      ? await Promise.all([
-          prisma.registration.findUnique({
-            where: {
-              seasonId_userId: { seasonId: season.id, userId: user.id },
-            },
-            select: { status: true },
-          }),
-          prisma.teamMember.findFirst({
-            where: { seasonId: season.id, userId: user.id },
-            select: { teamId: true },
-          }),
-        ])
-      : [null, null];
+      ? prisma.registration.findUnique({
+          where: {
+            seasonId_userId: { seasonId: season.id, userId: user.id },
+          },
+          select: { status: true },
+        })
+      : null,
+    season && user
+      ? prisma.teamMember.findFirst({
+          where: { seasonId: season.id, userId: user.id },
+          select: { teamId: true },
+        })
+      : null,
+    // The night /me and Schedule print comes from the fixtures once they
+    // have kickoffs (lib/match-night), so this page reads them too.
+    season
+      ? prisma.match.findMany({
+          where: { seasonId: season.id, scheduledAt: { not: null } },
+          select: { scheduledAt: true, status: true },
+        })
+      : [],
+  ]);
 
   const action = howItWorksAction({
     phase: season?.status ?? null,
@@ -157,7 +163,7 @@ export default async function HowItWorksPage() {
               <dt className="font-semibold">When and where</dt>
               <dd className="mt-1 leading-relaxed text-muted">
                 <strong className="font-semibold text-fg">
-                  {seasonMatchNight(season?.matchSchedule)}
+                  {seasonMatchNightLabel(season, fixtures)}
                 </strong>
                 . Games are on {LEAGUE_CONFIG.gameServerRegion} servers, and the
                 schedule shows every kickoff in your local time.

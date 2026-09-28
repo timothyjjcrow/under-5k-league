@@ -1188,7 +1188,7 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
             type="text"
             maxLength={60}
             defaultValue={season.name}
-            className="h-9 w-64 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+            className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
           />
           <SubmitButton variant="secondary" size="sm">
             Save name
@@ -1307,7 +1307,7 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
             maxLength={80}
             defaultValue={season.matchSchedule ?? ""}
             placeholder={MATCH_SCHEDULE.label}
-            className="h-9 w-64 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+            className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
           />
           <SubmitButton variant="secondary" size="sm">
             Save schedule

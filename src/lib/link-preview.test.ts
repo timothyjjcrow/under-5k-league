@@ -21,6 +21,7 @@ function season(overrides: Partial<HomePreviewSeason> = {}): HomePreviewSeason {
     playerCount: 37,
     draftAt: DRAFT_AT,
     matchSchedule: null,
+    fixtures: [],
     championName: null,
     ...overrides,
   };
@@ -112,6 +113,23 @@ describe("homePreview", () => {
         NOW,
       ).description,
     ).toBe("Standings, fixtures and results. Match night: Wednesdays, 8pm ET.");
+  });
+
+  it("names the night the fixtures kick off on once they have times, as /me and Schedule do", () => {
+    // Wednesday 7 October 2026, 7:30 PM Pacific (PDT, UTC-7), weekly.
+    const first = Date.parse("2026-10-08T02:30:00Z");
+    const fixtures = [0, 1, 2].map((week) => ({
+      scheduledAt: new Date(first + week * 7 * 86_400_000),
+      status: "SCHEDULED",
+    }));
+    expect(
+      homePreview(
+        season({ status: "REGULAR_SEASON", matchSchedule: "Sundays, 6pm", fixtures }),
+        NOW,
+      ).description,
+    ).toBe(
+      "Standings, fixtures and results. Match night: Wednesdays at 7:30 PM Pacific time.",
+    );
   });
 
   it("keeps the champion in the preview once the season is complete", () => {

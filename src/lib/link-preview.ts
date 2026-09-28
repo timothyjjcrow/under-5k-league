@@ -13,7 +13,8 @@ import {
   SEASON_STATUS,
 } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
-import { matchNightText, seasonPhaseLabel } from "./season-copy";
+import { announcedMatchNight, type FixtureKickoff } from "./match-night";
+import { seasonPhaseLabel } from "./season-copy";
 import { formatLeagueTime } from "./zoned-time";
 
 export type LinkPreview = { title: string; description: string };
@@ -47,6 +48,9 @@ export type HomePreviewSeason = {
   draftAt: Date | null;
   /** Season.matchSchedule: the admin-set match night, when there is one. */
   matchSchedule: string | null;
+  /** The season's fixtures, which name the night once they have kickoffs
+   *  (lib/match-night). Only the regular season's preview reads them. */
+  fixtures: readonly FixtureKickoff[];
   /** The champion public pages may name (resolveChampionPresentation). */
   championName: string | null;
 };
@@ -92,11 +96,8 @@ export function homePreview(
       return { title, description };
     }
     case SEASON_STATUS.REGULAR_SEASON: {
-      const night =
-        matchNightText(season.matchSchedule) ??
-        (LEAGUE_CONFIG.matchSchedule.announced
-          ? LEAGUE_CONFIG.matchSchedule.label
-          : null);
+      // The same night /me and Schedule print; nothing when none is set.
+      const night = announcedMatchNight(season, season.fixtures);
       return {
         title,
         description: `Standings, fixtures and results.${night ? ` Match night: ${night}.` : ""}`,

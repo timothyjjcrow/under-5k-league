@@ -109,6 +109,19 @@ describe("seasonMatchNightLabel", () => {
     ).toBe("Wednesdays at 20:00 Berlin time");
   });
 
+  it("drops a typed full stop, since every sentence quoting it ends itself", () => {
+    expect(
+      seasonMatchNightLabel({ matchSchedule: " Wednesdays, 8pm ET. " }, []),
+    ).toBe("Wednesdays, 8pm ET");
+    expect(seasonMatchNightLabel({ matchSchedule: " . " }, [])).toBe(
+      MATCH_SCHEDULE.label,
+    );
+  });
+
+  it("uses the deployment default with no season at all", () => {
+    expect(seasonMatchNightLabel(null, [])).toBe(MATCH_SCHEDULE.label);
+  });
+
   it("falls back to the admin's text, then the deployment default", () => {
     expect(
       seasonMatchNightLabel({ matchSchedule: " Thursdays, 19:30 CET " }, [
@@ -133,6 +146,8 @@ describe("pages that print the weekly night once fixtures exist", () => {
       ["src/app/me/page.tsx", "label={seasonMatchNightLabel(season, seasonFixtures)}"],
       ["src/app/schedule/page.tsx", "label={seasonMatchNightLabel(season, matches)}"],
       ["src/app/admin/page.tsx", "fixturesMatchNightLabel(data.matches)"],
+      ["src/app/how-it-works/page.tsx", "{seasonMatchNightLabel(season, fixtures)}"],
+      ["src/lib/link-preview.ts", "announcedMatchNight(season, season.fixtures)"],
     ] as const) {
       const source = readFileSync(page, "utf8");
       expect(source, page).toContain(call);
