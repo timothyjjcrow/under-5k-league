@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AUTO_SYNC, MATCH_STATUS, SEASON_STATUS } from "./constants";
+import { checkinCountsText } from "./checkin-side";
 import {
   TONIGHT_AHEAD_HOURS,
   TONIGHT_FINISHED_HOURS,
@@ -110,7 +111,14 @@ describe("matchNightSide", () => {
       ],
       5,
     );
-    expect(side).toEqual({ confirmed: 2, out: 1, expected: 5, standins: 0 });
+    expect(side).toEqual({
+      in: 2,
+      out: 1,
+      noReply: 2,
+      openSeats: 0,
+      of: 5,
+      standins: 0,
+    });
   });
 
   it("drops a covered player's out and counts the standin's own answer", () => {
@@ -127,7 +135,14 @@ describe("matchNightSide", () => {
       ],
       5,
     );
-    expect(side).toEqual({ confirmed: 1, out: 0, expected: 5, standins: 1 });
+    expect(side).toEqual({
+      in: 1,
+      out: 0,
+      noReply: 4,
+      openSeats: 0,
+      of: 5,
+      standins: 1,
+    });
   });
 
   it("never shows a short roster as complete", () => {
@@ -138,17 +153,37 @@ describe("matchNightSide", () => {
       ["a", "b", "c", "d"].map((userId) => ({ userId, status: "IN" })),
       5,
     );
-    expect(nightSideLabel(side)).toBe("4/5 checked in");
+    expect(nightSideLabel(side)).toBe("4 of 5 in · 1 open seat");
   });
 });
 
 describe("nightSideLabel", () => {
-  it("adds out and standin counts only when there are any", () => {
+  const side = { in: 3, out: 1, noReply: 1, openSeats: 0, of: 5 };
+
+  // The admin Tonight card and the check-in banner (match page, /schedule,
+  // Home) describe the same side of the same match; they must say it the
+  // same way, so the admin label is the banner's text plus its standins.
+  it("is the check-in banner's wording, plus booked standins", () => {
+    expect(nightSideLabel({ ...side, standins: 2 })).toBe(
+      `${checkinCountsText(side)} · 2 standins`,
+    );
+    expect(nightSideLabel({ ...side, standins: 2 })).toBe(
+      "3 of 5 in · 1 out · 1 no reply · 2 standins",
+    );
     expect(
-      nightSideLabel({ confirmed: 3, out: 1, expected: 5, standins: 2 }),
-    ).toBe("3/5 checked in · 1 out · 2 standins");
-    expect(
-      nightSideLabel({ confirmed: 5, out: 0, expected: 5, standins: 1 }),
-    ).toBe("5/5 checked in · 1 standin");
+      nightSideLabel({ in: 5, out: 0, noReply: 0, openSeats: 0, of: 5, standins: 1 }),
+    ).toBe("5 of 5 in · 1 standin");
+    expect(nightSideLabel({ ...side, standins: 0 })).toBe(
+      checkinCountsText(side),
+    );
+  });
+
+  it("words a live series the way the banner does", () => {
+    expect(nightSideLabel({ ...side, standins: 0 }, true)).toBe(
+      checkinCountsText(side, true),
+    );
+    expect(nightSideLabel({ ...side, standins: 0 }, true)).toMatch(
+      /^3 of 5 ready/,
+    );
   });
 });

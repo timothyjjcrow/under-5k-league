@@ -1196,6 +1196,7 @@ function TonightMatches({
                           m.availability,
                           season.teamSize,
                         ),
+                        m.status === MATCH_STATUS.LIVE,
                       ),
                     }))
                   : [];

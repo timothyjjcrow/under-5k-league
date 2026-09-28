@@ -10,6 +10,7 @@ import {
   type AvailabilityRow,
   type StandinLike,
 } from "./availability";
+import { type CheckinSideCounts, checkinCountsText } from "./checkin-side";
 
 const HOUR_MS = 3600_000;
 
@@ -61,13 +62,11 @@ export function matchNightSlate<M extends NightMatch>(
   );
 }
 
-export type NightSide = {
-  /** Players on the match-night roster who checked in. */
-  confirmed: number;
-  /** Players who will play (standins included) and said they can't. */
-  out: number;
-  /** The count check-ins are shown out of (never below the side size). */
-  expected: number;
+/**
+ * One side's check-ins: the banner's counts (in, out, no reply, open seats,
+ * out of the side size) plus how many standins are booked for this side.
+ */
+export type NightSide = CheckinSideCounts & {
   /** Standins booked for this side on this match. */
   standins: number;
 };
@@ -75,7 +74,9 @@ export type NightSide = {
 /**
  * One side's check-ins for the card, on the same standin-aware roster the
  * schedule and the week reminder use: a covered player's old "out" is not a
- * gap any more, and the standin's own answer is the one that counts.
+ * gap any more, and the standin's own answer is the one that counts. The
+ * counts are the ones checkinSide gives the check-in banner, so the admin
+ * card and the match page state the same numbers.
  */
 export function matchNightSide(
   roster: string[],
@@ -87,19 +88,28 @@ export function matchNightSide(
   const covers = standins.filter((cover) => cover.teamId === teamId);
   const side = matchNightRoster(roster, covers);
   const summary = teamAvailability(side, rsvps);
+  const of = expectedSideSize(teamSize, side.length);
   return {
-    confirmed: summary.confirmed,
+    in: summary.confirmed,
     out: summary.out,
-    expected: expectedSideSize(teamSize, side.length),
+    noReply: summary.unanswered,
+    openSeats: of - side.length,
+    of,
     standins: covers.length,
   };
 }
 
-/** "3/5 checked in · 1 out · 1 standin" — the out and standin parts only when non-zero. */
-export function nightSideLabel(side: NightSide): string {
+/**
+ * "3 of 5 in · 1 out · 1 no reply · 1 standin": the check-in banner's own
+ * wording (checkinCountsText), plus the booked standins, which only the
+ * admin card counts. `remainingGames` words a live series as the banner does.
+ */
+export function nightSideLabel(
+  side: NightSide,
+  remainingGames = false,
+): string {
   return [
-    `${side.confirmed}/${side.expected} checked in`,
-    ...(side.out > 0 ? [`${side.out} out`] : []),
+    checkinCountsText(side, remainingGames),
     ...(side.standins > 0
       ? [`${side.standins} standin${side.standins === 1 ? "" : "s"}`]
       : []),
