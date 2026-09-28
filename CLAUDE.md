@@ -3215,6 +3215,20 @@ reports a standin double-booked by a retime, since `standinConflict` is only
 checked when cover is arranged and every retime path could move a fixture onto
 a night they were already booked for.
 
+**Per-match controls also live on the match page (2026-09).** Needs attention
+used to link to a match page with no admin controls, so every fix meant going
+back to /admin and hunting for the row. `src/components/admin-match-tools.tsx`
+now owns `MatchResultRow` (kickoff, score/ruling, reopen, games, Auto-fetch /
+Add game) and `StandinMatchBlock` (any-team cover); /admin and the match page's
+folded "Admin tools" card (admins, active season, `#match-admin`, opened by
+`AutoOpenDetails`) render the SAME components, so actions, confirms and gates
+cannot drift. Both read `matchCorrectionContext` (`league-lifecycle.ts`) for
+the later-round lock and the sole-final check, and `adminStandinPoolWhere`
+for the cover pool. Every /admin result row carries `adminMatchRowId` and
+`RevealHashTarget` opens its folded week, so the card's "Open this match in
+the admin panel" link lands on the row. Don't re-inline either component into
+/admin; `match-page-guards.test.ts` pins it.
+
 ## The 2026-07-31 audit and what it changed (read before re-litigating any of it)
 
 A 44-agent trace→verify→refute audit of the whole codebase, then a fix pass.

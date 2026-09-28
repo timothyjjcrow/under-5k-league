@@ -6,8 +6,23 @@ import { haystackOf, sourceFiles } from "../../test/support/source-files";
 const ROOT = join(__dirname, "..", "..");
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
-/** Every /admin page, joined, so the admin page can be split into files. */
-const adminPages = () => haystackOf(sourceFiles("src/app/admin/**/*.tsx", 3));
+/**
+ * Every /admin page and the admin components they mount, joined, so the admin
+ * page can be split into files. The per-match result row lives in
+ * src/components/admin-match-tools.tsx, shared with the match page's Admin
+ * tools.
+ */
+const adminPages = () =>
+  haystackOf(
+    sourceFiles(
+      [
+        "src/app/admin/**/*.tsx",
+        "src/components/admin-*.tsx",
+        "src/components/admin/**/*.tsx",
+      ],
+      4,
+    ),
+  );
 
 describe("postseason UI lifecycle guards", () => {
   it("does not expose generic phase changes that bypass bracket commands", () => {
@@ -37,8 +52,12 @@ describe("postseason UI lifecycle guards", () => {
     expect(admin).toContain("const scheduleEditingOpen = postAuctionWorkOpen(");
     expect(admin).toContain("const scheduleGenerationLockedReason =");
     expect(admin).toContain("scheduleEditingOpen && openWeeks.length > 0");
-    expect(admin).toContain(
-      "correctionBlockedByLaterRound={hasLaterBracketRound(",
+    // Every result row (on /admin and on the match page) takes its
+    // later-round lock from the one shared rule, which reads the bracket.
+    expect(admin).toContain("{...matchCorrectionContext(m, data.matches)}");
+    expect(admin).toContain("matchCorrectionContext(match, fixtures)");
+    expect(read("src/lib/league-lifecycle.ts")).toMatch(
+      /export function matchCorrectionContext[\s\S]*?hasLaterBracketRound\([\s\S]*?hasLaterTiebreakerStage\(/,
     );
     expect(admin).toContain("resultOpen && !correctionBlockedByLaterRound");
     expect(admin).toContain("const logisticsOpen = matchLogisticsOpen(");

@@ -15,12 +15,16 @@ export function MatchImportControls({
   matchId,
   importAction,
   detectAction,
+  idPrefix = "",
 }: {
   matchId: string;
   importAction: ImportFormAction;
   detectAction: ImportFormAction;
+  /** Keeps ids unique when a page shows two of these for one match (an
+   *  admin who captains it sees their captain card and Admin tools). */
+  idPrefix?: string;
 }) {
-  const inputId = `dota-match-ref-${matchId}`;
+  const inputId = `${idPrefix}dota-match-ref-${matchId}`;
   const helpId = `${inputId}-help`;
 
   async function submitImport(

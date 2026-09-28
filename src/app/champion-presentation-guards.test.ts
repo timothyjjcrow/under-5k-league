@@ -24,11 +24,18 @@ describe("public champion presentation wiring", () => {
   it("passes only resolved champion ids into every public bracket", () => {
     // Every public page and component, not a list of today's bracket pages:
     // a bracket added to (or moved into) another file is covered too. /admin
-    // is not public and legitimately shows the raw stored champion.
+    // is not public and legitimately shows the raw stored champion, and so do
+    // the admin-only components it shares with the match page's Admin tools
+    // (the result row's title-retraction gate reads the stored champion, as
+    // the correction actions do).
     const publicUi = sourceFiles(
       ["src/app/**/*.tsx", "src/components/**/*.tsx"],
       80,
-    ).filter((f) => !f.path.startsWith("src/app/admin/"));
+    ).filter(
+      (f) =>
+        !f.path.startsWith("src/app/admin/") &&
+        !f.path.startsWith("src/components/admin-"),
+    );
     // Four public <Bracket> call sites today (the dashboard has two, then
     // /schedule and /seasons/[id]); fewer means the scan broke.
     const bracketCalls = publicUi.reduce(

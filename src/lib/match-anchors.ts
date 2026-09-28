@@ -12,6 +12,8 @@ export const MATCH_ANCHOR = {
   reschedule: "match-reschedule",
   /** The captain's Standins card. */
   standins: "match-standins",
+  /** The admins-only Admin tools card (/admin's Needs attention lands here). */
+  admin: "match-admin",
 } as const;
 
 /** `/matches/<id>#<anchor>` — a site-relative link to one card. */
@@ -20,4 +22,15 @@ export function matchAnchorPath(
   anchor: (typeof MATCH_ANCHOR)[keyof typeof MATCH_ANCHOR],
 ): string {
   return `/matches/${matchId}#${anchor}`;
+}
+
+/** Every /admin match-row id starts with this. */
+export const ADMIN_MATCH_ROW_PREFIX = "adm-match-";
+
+/**
+ * The id of one match's result row on /admin, so a link can land on the row
+ * itself instead of the top of a very long page.
+ */
+export function adminMatchRowId(matchId: string): string {
+  return `${ADMIN_MATCH_ROW_PREFIX}${matchId}`;
 }

@@ -188,3 +188,53 @@ describe("match page check-in reminder", () => {
     expect(PAGE).toContain("You can send another from");
   });
 });
+
+describe("match page admin tools", () => {
+  const TOOLS = stripLineComments(
+    sourceFile("src/components/admin-match-tools.tsx").text,
+  );
+  const ADMIN = stripLineComments(sourceFile("src/app/admin/page.tsx").text);
+
+  it("renders for admins on the active season, above the games", () => {
+    expect(PAGE).toMatch(
+      /viewer\?\.role === "ADMIN" && match\.season\.isActive \? \(\s*<AdminMatchTools match=\{match\}/,
+    );
+    expect(PAGE.indexOf("<AdminMatchTools")).toBeGreaterThan(-1);
+    expect(PAGE.indexOf("<AdminMatchTools")).toBeLessThan(
+      PAGE.indexOf('id="match-games"'),
+    );
+  });
+
+  it("is one folded card that a jump to #match-admin opens", () => {
+    expect(TOOLS).toMatch(/<AutoOpenDetails\s+id=\{MATCH_ANCHOR\.admin\}/);
+    expect(TOOLS).toMatch(/<h2[^>]*>\s*Admin tools\s*<\/h2>/);
+  });
+
+  it("renders /admin's own result row and standin block, not copies", () => {
+    // One definition of each, shared by both pages, so the actions, confirms
+    // and capability gates can't drift apart.
+    expect(TOOLS).toContain("export function MatchResultRow(");
+    expect(TOOLS).toContain("export function StandinMatchBlock(");
+    expect(ADMIN).not.toMatch(/function (MatchResultRow|StandinMatchBlock)\(/);
+    expect(TOOLS).toContain(
+      "const correction = matchCorrectionContext(match, fixtures);",
+    );
+    expect(ADMIN.match(/\{\.\.\.matchCorrectionContext\(m, data\.matches\)\}/g))
+      .toHaveLength(3);
+    // The same standin pool on both pages.
+    expect(TOOLS).toContain("where: adminStandinPoolWhere(match.seasonId),");
+    expect(ADMIN).toContain("where: adminStandinPoolWhere(seasonId),");
+  });
+
+  it("points every Needs attention item at the match page's admin tools", () => {
+    expect(ADMIN).toContain(
+      "href={matchAnchorPath(item.id, MATCH_ANCHOR.admin)}",
+    );
+    // And every /admin result row is a jump target the card links back to.
+    expect(ADMIN.match(/id=\{adminMatchRowId\(m\.id\)\}/g)).toHaveLength(3);
+    expect(ADMIN).toContain(
+      "<RevealHashTarget prefix={ADMIN_MATCH_ROW_PREFIX} />",
+    );
+    expect(TOOLS).toContain("href={`/admin#${adminMatchRowId(match.id)}`}");
+  });
+});

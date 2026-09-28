@@ -5,6 +5,7 @@ import { LiveSeriesCheckin } from "@/components/live-series-checkin";
 import { AutoOpenDetails } from "@/components/auto-open-details";
 import { fetchGamesForScouting } from "@/lib/game-participants";
 import { GameIdentityEditor } from "@/components/game-identity-editor";
+import { AdminMatchTools } from "@/components/admin-match-tools";
 import {
   decodeGamePlayers,
   parseGamePlayers,
@@ -588,6 +589,13 @@ export default async function MatchDetailPage({
         <Suspense fallback={null}>
           <CaptainTodos match={match} viewerId={viewer!.id} />
         </Suspense>
+      ) : null}
+
+      {/* Admins get this fixture's /admin controls here, folded shut.
+          /admin's Needs attention items land on it (#match-admin), which
+          opens it. Captains' own tools stay as they are below. */}
+      {viewer?.role === "ADMIN" && match.season.isActive ? (
+        <AdminMatchTools match={match} label={postseasonLabel} />
       ) : null}
 
       {/* A jump bar earns its space only with three places to go; with one
@@ -2428,8 +2436,9 @@ async function StandinSection({
         ? match.awayTeamId
         : null;
   if (!myTeamId && !isAdmin) return null;
-  // Admin passing by uses their panel; this card is the captain's tool. An
-  // admin who IS a captain still gets their own team's view.
+  // An admin passing by uses the Admin tools card near the top (any team's
+  // cover); this card is the captain's tool. An admin who IS a captain still
+  // gets their own team's view here.
   if (!myTeamId) return null;
 
   // The service refuses archived-season matches (its guards key on the
