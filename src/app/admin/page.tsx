@@ -174,7 +174,12 @@ import {
   type GuildMembership,
   type PingHealth,
 } from "@/lib/discord-roles";
-import { membershipChipView, signupFlags } from "@/lib/signup-readiness";
+import {
+  membershipChipView,
+  signupFlags,
+  signupNeedsReview,
+} from "@/lib/signup-readiness";
+import { AdminSignupReview } from "@/components/admin-signup-review";
 import {
   DRAFT_READINESS,
   draftReadiness,
@@ -1796,7 +1801,7 @@ function SeasonControls({
               </SubmitButton>
               <span className="text-xs text-muted">
                 {season.maxMmr > 0
-                  ? `soft limit — signups over ${season.maxMmr} MMR still join the pool; review them here before the draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
+                  ? `soft limit: signups over ${season.maxMmr} MMR still join the pool, flagged “over soft limit” under Needs review on Captains & draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
                   : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
               </span>
             </ActionForm>
@@ -2846,130 +2851,138 @@ function CaptainControls({
                 : "No other active full-player signups."}
             </p>
           ) : (
-            <ul
-              aria-label={setupOpen ? "Eligible players" : "Active player signups"}
-              className="space-y-1.5 md:max-h-[32rem] md:overflow-y-auto md:pr-1 md:has-[details[open]]:max-h-[70vh]"
-            >
-              {nonCaptains.map((p) => (
-                <li
-                  key={p.id}
-                  className="rounded-lg border border-line px-3 py-1.5 text-sm"
-                >
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
-                      <Avatar
-                        name={p.user.name}
-                        src={p.user.avatar}
-                        size={22}
-                      />
-                      <PlayerLink
-                        userId={p.userId}
-                        className="min-w-12 truncate"
-                      >
-                        {p.user.name}
-                      </PlayerLink>
-                      {/* Medal beside the claimed number: the pair is what
-                          makes an inflated claim scannable, and the flag
-                          below states the window when they disagree. */}
-                      <RankMedal
-                        rankTier={p.user.rankTier}
-                        size={18}
-                        className="shrink-0"
-                      />
-                      <span className="shrink-0 text-xs text-muted">
-                        {p.mmr}
+            // "Needs review" narrows this to the signups worth a look before
+            // the draft. The soft MMR limit is a review threshold, not a
+            // block, and this is the review tool it points at.
+            <AdminSignupReview
+              label={setupOpen ? "Eligible players" : "Active player signups"}
+              listClassName="space-y-1.5 md:max-h-[32rem] md:overflow-y-auto md:pr-1 md:has-[details[open]]:max-h-[70vh]"
+              rowClassName="rounded-lg border border-line px-3 py-1.5 text-sm"
+              rows={nonCaptains.map((p) => ({
+                key: p.id,
+                needsReview: signupNeedsReview(
+                  regSignupFlags(p, season.maxMmr),
+                  !!p.user.discordId,
+                ),
+                node: (
+                  <>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
+                        <Avatar
+                          name={p.user.name}
+                          src={p.user.avatar}
+                          size={22}
+                        />
+                        <PlayerLink
+                          userId={p.userId}
+                          className="min-w-12 truncate"
+                        >
+                          {p.user.name}
+                        </PlayerLink>
+                        {/* Medal beside the claimed number: the pair is what
+                            makes an inflated claim scannable, and the flag
+                            below states the window when they disagree. */}
+                        <RankMedal
+                          rankTier={p.user.rankTier}
+                          size={18}
+                          className="shrink-0"
+                        />
+                        <span className="shrink-0 text-xs text-muted">
+                          {p.mmr}
+                        </span>
                       </span>
-                    </span>
-                    <span className="ml-auto flex shrink-0 items-center gap-3">
-                      {setupOpen ? (
-                        <ActionForm
-                          action={addCaptain}
-                          hidden={{
-                            userId: p.userId,
-                            expectedActiveSeasonId: season.id,
-                          }}
-                        >
-                          {/* Confirmed because the UNDO is expensive, not the
-                              action: removing a captain again deletes the
-                              team and, once fixtures exist, the season's whole
-                              schedule. Also a real SubmitButton now, so it has
-                              a pending state and can't be double-submitted. */}
-                          <SubmitButton
-                            variant="ghost"
-                            size="sm"
-                            className="text-xs text-accent hover:underline"
-                            confirm={`Make ${p.user.name} a captain? They get a team, and the only way back is removing that team — which also clears the schedule once one exists.`}
+                      <span className="ml-auto flex shrink-0 items-center gap-3">
+                        {setupOpen ? (
+                          <ActionForm
+                            action={addCaptain}
+                            hidden={{
+                              userId: p.userId,
+                              expectedActiveSeasonId: season.id,
+                            }}
                           >
-                            make captain
-                          </SubmitButton>
-                        </ActionForm>
-                      ) : null}
-                      {/* NOT phase-gated. This used to render only during
-                          SIGNUPS and was the action's only control anywhere, so
-                          from the moment the draft started an admin could not
-                          remove a signup at all — while the action itself has no
-                          phase gate and carries an explicit "player is on the
-                          block" guard, i.e. it was written to be used mid-draft.
-                          A player who ghosts after signing up stayed in the
-                          auction pool (where the stall resolver can sell them),
-                          and afterwards in the free-agent and standin dropdowns
-                          for the rest of the season. `withdrawGateError` is the
-                          real gate — it refuses a captain, a rostered player, a
-                          standin who still owes cover, and a non-ACTIVE row. */}
-                      {season.status !== SEASON_STATUS.COMPLETE ? (
-                        <ActionForm
-                          action={withdrawSignup}
-                          hidden={{ registrationId: p.id }}
-                        >
-                          <SubmitButton
-                            variant="ghost"
-                            size="sm"
-                            className="text-danger-soft hover:underline"
-                            confirm={
-                              season.status === "SIGNUPS"
-                                ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
-                                : `Remove ${p.user.name}'s signup? They leave the draft pool and the free-agent and standin lists. Rostered players must be released first — you can reinstate them below.`
-                            }
-                          >
-                            remove
-                          </SubmitButton>
-                        </ActionForm>
-                      ) : null}
-                    </span>
-                  </div>
-                  <SignupRowMeta
-                    reg={p}
-                    sweep={membershipSweep}
-                    leading={
-                      <>
-                        {p.wantsCaptain ? (
-                          <Badge tone="accent">wants C</Badge>
+                            {/* Confirmed because the UNDO is expensive, not the
+                                action: removing a captain again deletes the
+                                team and, once fixtures exist, the season's whole
+                                schedule. Also a real SubmitButton now, so it has
+                                a pending state and can't be double-submitted. */}
+                            <SubmitButton
+                              variant="ghost"
+                              size="sm"
+                              className="text-xs text-accent hover:underline"
+                              confirm={`Make ${p.user.name} a captain? They get a team, and the only way back is removing that team — which also clears the schedule once one exists.`}
+                            >
+                              make captain
+                            </SubmitButton>
+                          </ActionForm>
                         ) : null}
-                        {p.user.fhUnavailable === true ? (
-                          <Badge
-                            tone="danger"
-                            title="OpenDota reports their match data as private — automatic result import can't see this player's games"
+                        {/* NOT phase-gated. This used to render only during
+                            SIGNUPS and was the action's only control anywhere, so
+                            from the moment the draft started an admin could not
+                            remove a signup at all — while the action itself has no
+                            phase gate and carries an explicit "player is on the
+                            block" guard, i.e. it was written to be used mid-draft.
+                            A player who ghosts after signing up stayed in the
+                            auction pool (where the stall resolver can sell them),
+                            and afterwards in the free-agent and standin dropdowns
+                            for the rest of the season. `withdrawGateError` is the
+                            real gate — it refuses a captain, a rostered player, a
+                            standin who still owes cover, and a non-ACTIVE row. */}
+                        {season.status !== SEASON_STATUS.COMPLETE ? (
+                          <ActionForm
+                            action={withdrawSignup}
+                            hidden={{ registrationId: p.id }}
                           >
-                            private data
-                          </Badge>
+                            <SubmitButton
+                              variant="ghost"
+                              size="sm"
+                              className="text-danger-soft hover:underline"
+                              confirm={
+                                season.status === "SIGNUPS"
+                                  ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
+                                  : `Remove ${p.user.name}'s signup? They leave the draft pool and the free-agent and standin lists. Rostered players must be released first — you can reinstate them below.`
+                              }
+                            >
+                              remove
+                            </SubmitButton>
+                          </ActionForm>
                         ) : null}
-                      </>
-                    }
-                  />
-                  {season.status !== SEASON_STATUS.COMPLETE ? (
-                    <AdminPlayerRankEditor
-                      key={`${p.id}:${p.mmr}:${p.user.rankTier}:${p.user.rankTierManual}`}
-                      registrationId={p.id}
-                      name={p.user.name}
-                      mmr={p.mmr}
-                      rankTier={p.user.rankTier}
-                      rankTierManual={p.user.rankTierManual}
-                      mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
+                      </span>
+                    </div>
+                    <SignupRowMeta
+                      reg={p}
+                      sweep={membershipSweep}
+                      maxMmr={season.maxMmr}
+                      leading={
+                        <>
+                          {p.wantsCaptain ? (
+                            <Badge tone="accent">wants C</Badge>
+                          ) : null}
+                          {p.user.fhUnavailable === true ? (
+                            <Badge
+                              tone="danger"
+                              title="OpenDota reports their match data as private — automatic result import can't see this player's games"
+                            >
+                              private data
+                            </Badge>
+                          ) : null}
+                        </>
+                      }
                     />
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+                    {season.status !== SEASON_STATUS.COMPLETE ? (
+                      <AdminPlayerRankEditor
+                        key={`${p.id}:${p.mmr}:${p.user.rankTier}:${p.user.rankTierManual}`}
+                        registrationId={p.id}
+                        name={p.user.name}
+                        mmr={p.mmr}
+                        rankTier={p.user.rankTier}
+                        rankTierManual={p.user.rankTierManual}
+                        mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
+                      />
+                    ) : null}
+                  </>
+                ),
+              }))}
+            />
           )}
           {/* Registered STANDINs get the same moderation as players. Standin
               signups stay open through PLAYOFFS, and
@@ -3039,6 +3052,7 @@ function CaptainControls({
                       <SignupRowMeta
                         reg={s}
                         sweep={membershipSweep}
+                        maxMmr={season.maxMmr}
                       />
                       {season.status !== SEASON_STATUS.COMPLETE ? (
                         <AdminPlayerRankEditor
@@ -5868,6 +5882,21 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   );
 }
 
+/** signupFlags for one registration row (the chips and the review filter). */
+function regSignupFlags(reg: AdminData["players"][number], maxMmr: number) {
+  return signupFlags(
+    {
+      mmr: reg.mmr,
+      roles: reg.roles,
+      favoriteHeroes: reg.favoriteHeroes,
+      statement: reg.statement,
+      captainNote: reg.captainNote,
+      rankTier: reg.user.rankTier,
+    },
+    { maxMmr },
+  );
+}
+
 /**
  * The readiness line under each row of the signup-moderation lists — the
  * prune pass the panel exists for: is this signup reachable on Discord,
@@ -5884,21 +5913,17 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
 function SignupRowMeta({
   reg,
   sweep,
+  maxMmr,
   leading,
 }: {
   reg: AdminData["players"][number];
   sweep: Promise<Map<string, GuildMembership>> | null;
+  /** Season.maxMmr: the soft limit the "over soft limit" flag reads. */
+  maxMmr: number;
   /** Row-specific badges shown first in the chip line. */
   leading?: React.ReactNode;
 }) {
-  const flags = signupFlags({
-    mmr: reg.mmr,
-    roles: reg.roles,
-    favoriteHeroes: reg.favoriteHeroes,
-    statement: reg.statement,
-    captainNote: reg.captainNote,
-    rankTier: reg.user.rankTier,
-  });
+  const flags = regSignupFlags(reg, maxMmr);
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
       {leading}

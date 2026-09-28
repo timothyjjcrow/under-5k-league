@@ -102,6 +102,8 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Fix the bracket", rendered: "Fix the bracket" },
   // withdrawTeam's toast points released standin-pool candidates here.
   { quoted: "Roster moves", rendered: "Roster moves" },
+  // The soft MMR limit's hint sends admins to the signup review filter.
+  { quoted: "Needs review", rendered: "Needs review (" },
   // releasePlayer's quitter note points at the signup remove control's card.
   { quoted: "Captains & draft", rendered: "Captains & draft" },
   // The unverified-captain-MMR confirm and next-step note send the admin to
@@ -176,6 +178,17 @@ describe("admin copy names only controls that exist", () => {
     expect(registration).toContain("review threshold, not a block");
     expect(haystack).not.toContain("MMR are refused");
     expect(haystack).not.toContain("are reviewed before joining");
+  });
+
+  // The soft limit's review tool: the "over soft limit" chip and the Needs
+  // review filter both read Season.maxMmr. signupFlags is unit-tested; this
+  // pins that the signup list actually hands it the season's limit, or the
+  // flag silently never fires and the hint points at an empty review.
+  it("the signup review reads the season's soft MMR limit", () => {
+    const page = read("src/app/admin/page.tsx");
+    expect(page).toContain("regSignupFlags(p, season.maxMmr)");
+    expect(page).toContain("<AdminSignupReview");
+    expect(page.match(/maxMmr=\{season\.maxMmr\}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   // The REFERENCED_CONTROLS check once read the quoting copy too, and
