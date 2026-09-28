@@ -621,8 +621,11 @@ function MatchRow({ match: m }: { match: MatchView }) {
         : m.whenTs != null
           ? "Upcoming"
           : "Time TBD";
+  // Live is danger-soft, the token for danger TEXT on a danger tint
+  // (globals.css): plain danger at this 12px size sits at the AA line on
+  // the live card's tint and under it once the card is hovered.
   const statusColor = m.live
-    ? "text-danger"
+    ? "text-danger-soft"
     : m.done
       ? "text-success"
       : m.awaitingResult || m.whenTs == null
@@ -659,7 +662,11 @@ function MatchRow({ match: m }: { match: MatchView }) {
       aria-label={`${m.homeName} vs ${m.awayName} · ${status}`}
       className={cn(
         "relative flex min-w-0 flex-col bg-surface transition-colors hover:bg-surface-2/60",
-        m.live && "bg-danger/[0.04]",
+        // The live tint is a background IMAGE over bg-surface. As a second
+        // background colour, cn (tailwind-merge) dropped bg-surface and the
+        // card showed the grid's gap colour through the translucent tint.
+        m.live &&
+          "bg-linear-to-b from-danger/[0.04] to-danger/[0.04]",
       )}
     >
       <div className="flex min-h-11 flex-wrap items-center gap-2 px-4 pt-2 sm:px-5">

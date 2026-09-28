@@ -64,6 +64,17 @@ describe("ScheduleWeeks match cards", () => {
     expect(html).not.toContain("details →");
   });
 
+  // The live tint was a second background COLOUR, which tailwind-merge
+  // resolved by dropping bg-surface: the card went translucent over the
+  // grid's gap colour and its red LIVE label fell under AA.
+  it("tints a live card over its surface and labels it in danger-soft", () => {
+    const html = render({ live: true, homeScore: 1 });
+    const article = html.match(/<article[^>]*class="([^"]*)"/)?.[1] ?? "";
+    expect(article.split(" ")).toContain("bg-surface");
+    expect(article).toContain("from-danger/[0.04]");
+    expect(html).toMatch(/aria-label="Live — series at 1–0"[^>]*text-danger-soft/);
+  });
+
   it("keeps the reschedule chip above the card's overlay", () => {
     const html = render({
       reschedulePending: { by: "Cap", ts: null, initial: null },
