@@ -5507,7 +5507,9 @@ function LeagueDeliveryLine({
         </p>
       ) : null}
       {health.refusedRecently > 0 ? (
-        <p className="text-muted">{refusedPostsSentence(health)}</p>
+        <p className="text-muted [overflow-wrap:anywhere]">
+          {refusedPostsSentence(health)}
+        </p>
       ) : null}
       {health.expiredRecently > 0 ? (
         <p className="text-muted">
@@ -5558,8 +5560,10 @@ function DiscordControls({
       id="adm-discord"
       title="Discord notifications"
       subtitle="Configure league announcements plus the year-round inhouse queue board, alerts, and ping role."
-      // Opens itself when league posts are stuck or being refused: in the
-      // offseason there is no Needs attention card to say so.
+      // Opens itself when league posts are stuck: in the offseason there is
+      // no Needs attention card to say so. A post Discord refused does not
+      // open it; the queue already dropped that post, and the card lists it
+      // below for whoever looks.
       defaultOpen={!!delivery && leagueDeliveryAttention(delivery).length > 0}
     >
       <CardBody className="space-y-3">

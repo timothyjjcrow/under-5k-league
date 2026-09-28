@@ -17,6 +17,7 @@ import {
   discordErrorCode,
   discordRefusalKind,
   EXPIRED_ERROR_CODE,
+  refusedPostPreview,
   type LeagueDeliveryHealth,
 } from "./league-delivery";
 import { prisma } from "./prisma";
@@ -596,7 +597,7 @@ export async function loadLeagueDeliveryHealth(
       prisma.leagueAnnouncement.findFirst({
         where: refusedWhere,
         orderBy: { updatedAt: "desc" },
-        select: { lastErrorCode: true },
+        select: { lastErrorCode: true, content: true },
       }),
       prisma.leagueAnnouncement.count({
         where: {
@@ -616,6 +617,7 @@ export async function loadLeagueDeliveryHealth(
     lastDeliveredAt: lastSent?.sentAt ?? null,
     refusedRecently: refused,
     lastRefusedCode: lastRefused?.lastErrorCode ?? null,
+    lastRefusedPreview: refusedPostPreview(lastRefused?.content),
     expiredRecently: expired,
   };
 }

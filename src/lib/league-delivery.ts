@@ -126,6 +126,8 @@ export type LeagueDeliveryHealth = {
   /** Posts Discord refused (and the queue dropped) in DELIVERY_RECENT_MS. */
   refusedRecently: number;
   lastRefusedCode: string | null;
+  /** How the newest refused post started (refusedPostPreview), or null. */
+  lastRefusedPreview: string | null;
   /** Time-bound posts dropped as out of date in DELIVERY_RECENT_MS. */
   expiredRecently: number;
 };
@@ -161,7 +163,13 @@ export function deliveryPaused(health: LeagueDeliveryHealth): boolean {
 /**
  * Lines for the admin panel's "Needs attention" card, or [] when delivery is
  * healthy. A post waiting 15+ minutes means Discord (or the runner) is not
- * taking posts; a refused post means something was silently skipped.
+ * taking posts, and the admin can act on it.
+ *
+ * A post Discord refused is NOT listed here: the queue already dropped it and
+ * nothing on the panel brings it back, so one refused post would otherwise
+ * keep the card at "needs attention" for a whole day. The Discord card still
+ * counts refused posts and shows how the newest one started
+ * (refusedPostsSentence), so an admin can post it by hand.
  */
 export function leagueDeliveryAttention(
   health: LeagueDeliveryHealth,
@@ -186,15 +194,40 @@ export function leagueDeliveryAttention(
         : `${waiting}${reason ? ` — last error: ${reason}` : ""}.`,
     );
   }
-  if (health.refusedRecently > 0) {
-    lines.push(refusedPostsSentence(health));
-  }
   return lines;
 }
 
-/** "Discord refused 2 league posts in the last day (error 400), so …". */
+/** Longest preview of a refused post the admin card shows. */
+const REFUSED_PREVIEW_CHARS = 140;
+
+/**
+ * The first non-blank line of a post, cut to REFUSED_PREVIEW_CHARS: enough
+ * for an admin to tell which post Discord refused. Null for an empty post.
+ */
+export function refusedPostPreview(
+  content: string | null | undefined,
+): string | null {
+  const line = (content ?? "")
+    .split("\n")
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  if (!line) return null;
+  const chars = Array.from(line);
+  return chars.length > REFUSED_PREVIEW_CHARS
+    ? `${chars.slice(0, REFUSED_PREVIEW_CHARS - 1).join("").trimEnd()}…`
+    : line;
+}
+
+/**
+ * "Discord refused 2 league posts in the last day (error 400), so they were
+ * skipped. The latest one started: “…”". Says which post, so an admin can
+ * post it by hand if it still matters.
+ */
 export function refusedPostsSentence(health: LeagueDeliveryHealth): string {
   const n = health.refusedRecently;
   const status = discordStatusOf(health.lastRefusedCode);
-  return `Discord refused ${n} league post${n === 1 ? "" : "s"} in the last day${status ? ` (error ${status})` : ""}, so ${n === 1 ? "it was" : "they were"} skipped.`;
+  const counted = `Discord refused ${n} league post${n === 1 ? "" : "s"} in the last day${status ? ` (error ${status})` : ""}, so ${n === 1 ? "it was" : "they were"} skipped.`;
+  const preview = health.lastRefusedPreview;
+  if (!preview) return counted;
+  return `${counted} ${n === 1 ? "It" : "The latest one"} started: “${preview}”`;
 }

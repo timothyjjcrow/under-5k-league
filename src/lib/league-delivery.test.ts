@@ -7,6 +7,7 @@ import {
   discordRefusalKind,
   isWebhookRefusalCode,
   leagueDeliveryAttention,
+  refusedPostPreview,
   refusedPostsSentence,
   weekReminderExpiresAt,
   type LeagueDeliveryHealth,
@@ -26,6 +27,7 @@ function health(overrides: Partial<LeagueDeliveryHealth> = {}): LeagueDeliveryHe
     lastDeliveredAt: null,
     refusedRecently: 0,
     lastRefusedCode: null,
+    lastRefusedPreview: null,
     expiredRecently: 0,
     ...overrides,
   };
@@ -155,13 +157,81 @@ describe("leagueDeliveryAttention", () => {
     ).toBe(false);
   });
 
-  it("reports posts Discord refused and the queue skipped", () => {
+  it("leaves a refused post off the list: it was dropped, nothing to act on", () => {
+    // One refused post used to hold the card at "needs attention" for a day.
+    const refused = health({ refusedRecently: 1, lastRefusedCode: "DISCORD_400" });
+    expect(leagueDeliveryAttention(refused)).toEqual([]);
+    // A stuck backlog is still listed beside it, and only the backlog.
+    const both = health({
+      waiting: 1,
+      oldestWaitingAt: minutesAgo(16),
+      refusedRecently: 3,
+      lastRefusedCode: "DISCORD_413",
+    });
+    expect(leagueDeliveryAttention(both)).toEqual([
+      "1 league Discord post has been waiting 16 minutes.",
+    ]);
+  });
+});
+
+describe("refusedPostsSentence", () => {
+  it("counts the refused posts", () => {
     const refused = health({ refusedRecently: 2, lastRefusedCode: "DISCORD_400" });
     expect(refusedPostsSentence(refused)).toBe(
       "Discord refused 2 league posts in the last day (error 400), so they were skipped.",
     );
-    expect(leagueDeliveryAttention(refused)).toEqual([
-      refusedPostsSentence(refused),
-    ]);
+  });
+
+  it("says which post it was, so an admin can post it by hand", () => {
+    expect(
+      refusedPostsSentence(
+        health({
+          refusedRecently: 1,
+          lastRefusedCode: "DISCORD_413",
+          lastRefusedPreview: "📋 **Week 3** results are in",
+        }),
+      ),
+    ).toBe(
+      "Discord refused 1 league post in the last day (error 413), so it was skipped. It started: “📋 **Week 3** results are in”",
+    );
+    expect(
+      refusedPostsSentence(
+        health({
+          refusedRecently: 2,
+          lastRefusedCode: "DISCORD_400",
+          lastRefusedPreview: "🧭 Captain news",
+        }),
+      ),
+    ).toBe(
+      "Discord refused 2 league posts in the last day (error 400), so they were skipped. The latest one started: “🧭 Captain news”",
+    );
+  });
+});
+
+describe("refusedPostPreview", () => {
+  it("is the first line that has text", () => {
+    expect(refusedPostPreview("\n  \n  🏆 **Champions** \nsecond line")).toBe(
+      "🏆 **Champions**",
+    );
+    expect(refusedPostPreview("one\r\ntwo")).toBe("one");
+  });
+
+  it("is null for a missing or blank post", () => {
+    expect(refusedPostPreview(null)).toBeNull();
+    expect(refusedPostPreview(undefined)).toBeNull();
+    expect(refusedPostPreview(" \n\t\n")).toBeNull();
+  });
+
+  it("cuts a long line to 140 characters without splitting an emoji", () => {
+    const long = `🔥${"a".repeat(300)}`;
+    const preview = refusedPostPreview(long)!;
+    expect(Array.from(preview)).toHaveLength(140);
+    expect(preview.startsWith("🔥a")).toBe(true);
+    expect(preview.endsWith("…")).toBe(true);
+    const exact = "b".repeat(140);
+    expect(refusedPostPreview(exact)).toBe(exact);
+    // A cut landing inside an emoji keeps the whole emoji.
+    const emojis = "😀".repeat(200);
+    expect(refusedPostPreview(emojis)).toBe(`${"😀".repeat(139)}…`);
   });
 });

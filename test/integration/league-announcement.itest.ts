@@ -661,7 +661,7 @@ describe("league announcement outbox — refusals, expiry and admin controls", (
           sentAt: at(-90),
         },
         {
-          content: "refused",
+          content: "refused\nsecond line",
           createdAt: at(-80),
           status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
           lastErrorCode: "DISCORD_400",
@@ -693,6 +693,7 @@ describe("league announcement outbox — refusals, expiry and admin controls", (
       lastDeliveredAt: at(-90),
       refusedRecently: 1,
       lastRefusedCode: "DISCORD_400",
+      lastRefusedPreview: "refused",
       expiredRecently: 1,
     });
   });
