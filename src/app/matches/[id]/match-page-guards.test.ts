@@ -172,6 +172,12 @@ describe("match page lobby bot panel", () => {
       /!match\.season\.isActive \|\|\s*match\.status === "COMPLETED" \|\|\s*!matchResultsOpen\(match\.season\.status, match\.phase\)/,
     );
     expect(panel).toMatch(/!seesPlayerLobbyPanel\(\s*viewer,\s*match,/);
+    // The players' copy shows only once the bot answers with a lobby, so an
+    // unconnected bot or a missing ticket never reaches them as an alert
+    // meant for an admin, pointing at steps that are in Captain tools.
+    expect(panel).toMatch(
+      /<DotaLobbyControls[^>]*kind="season"[^>]*audience="player"/,
+    );
     // Two panels: the captains' (with the controls) and everyone else's.
     expect(PAGE.match(/<DotaLobbyControls\b/g)).toHaveLength(2);
     expect(PAGE.match(/kind="season"/g)).toHaveLength(2);

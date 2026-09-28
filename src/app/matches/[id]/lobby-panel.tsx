@@ -12,6 +12,9 @@ import { seesPlayerLobbyPanel } from "./lobby-access";
  * The captains' own panel, with the controls, is in the result card inside
  * Captain tools; this one opens in the same windows (season lobby bot on,
  * active season, series not final, results open for the match's phase).
+ * It is the "player" audience: it shows only once the bot answers with a
+ * lobby, because a missing bot connection or ticket is for an admin to fix
+ * and the manual hosting steps sit in Captain tools, not on this viewer's page.
  */
 export async function PlayerLobbyPanel({
   match,
@@ -43,6 +46,7 @@ export async function PlayerLobbyPanel({
       key={`${match.id}:${match.homeScore}:${match.awayScore}`}
       kind="season"
       id={match.id}
+      audience="player"
     />
   );
 }

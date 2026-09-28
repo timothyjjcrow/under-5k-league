@@ -153,7 +153,8 @@ export default async function MatchDetailPage({
 
       {/* The season lobby bot's name and password for the players, standins
           and admins who join it; the captains' copy, with the controls, is in
-          Captain tools. Renders nothing unless the season lobby bot is on. */}
+          Captain tools. Renders nothing unless the season lobby bot is on and
+          answers with a lobby. */}
       {!showCaptainTools ? (
         <Suspense fallback={null}>
           <PlayerLobbyPanel match={match} viewer={viewer} />

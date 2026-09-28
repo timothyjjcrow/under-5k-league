@@ -2022,6 +2022,11 @@ already in the `Setting` table.
   `resolveDotaLobby` lets view it).
   Before the split the players' copy sat in the captain-only result card and
   could never render, so players had no way to see the lobby password.
+  That copy passes `audience="player"` to `DotaLobbyControls`, which then
+  renders only once the bot answers with a lobby (`lobbyPanelVisible`): the
+  hosts' messages for an unconnected bot or a missing ticket tell an admin
+  what to fix and point at manual steps that live in Captain tools, so a
+  player shown them could do neither.
 
 ## MMR-weighted draft budgets (done)
 
