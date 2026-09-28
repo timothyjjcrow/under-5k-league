@@ -1872,7 +1872,8 @@ export async function setDraftNight(
           // not post it. Dropping the old revisions' in-flight markers makes
           // any queued send fail its outbox source check; a reminder already
           // delivered stays recorded, and the new revision re-arms under its
-          // own key (maybeAnnounceDraftNight).
+          // own key (maybeAnnounceDraftNight) — except in the case below,
+          // where no second reminder is posted.
           await invalidatePendingAnnouncementMarkers(
             tx,
             draftReminderPrefix(expectedActiveSeasonId),
@@ -1880,8 +1881,9 @@ export async function setDraftNight(
           );
           // Only DELIVERED reminders survive the line above. If one already
           // pinged everyone and the new time is inside the reminder window,
-          // the rescheduled post below carries the change: without this, every
-          // tweak on draft day would ping every captain again.
+          // the new revision is recorded as covered, so it does NOT re-arm:
+          // the "draft rescheduled" post below carries the change. Without
+          // this, every tweak on draft day would ping every captain again.
           const nowMs = Date.now();
           if (
             when &&
