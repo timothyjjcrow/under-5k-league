@@ -2005,6 +2005,14 @@ already in the `Setting` table.
   `match-page-guards.test.ts` pins that. That test reads every file in the
   folder (`folderSourceFiles`, since a glob can't spell `[id]`), so a rule
   holds wherever its card moves inside the folder.
+  The season lobby bot's panel (off unless `DOTA_SEASON_LOBBY_BOT_ENABLED`)
+  has two render sites on purpose, never both for one viewer: the captains'
+  copy, with Create/Start, inside the result card in Captain tools, and
+  `lobby-panel.tsx`'s copy under the scoreboard for the other players,
+  booked standins and admins (`seesPlayerLobbyPanel`, the same people
+  `resolveDotaLobby` lets view it).
+  Before the split the players' copy sat in the captain-only result card and
+  could never render, so players had no way to see the lobby password.
 
 ## MMR-weighted draft budgets (done)
 

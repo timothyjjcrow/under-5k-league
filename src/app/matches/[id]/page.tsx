@@ -15,6 +15,7 @@ import { CaptainTodos } from "./captain-todos";
 import { CaptainTools } from "./captain-tools";
 import { LiveSeriesCheckin } from "./live-series-checkin";
 import { loadMatch, loadPostseason, parseMatchGames } from "./load";
+import { PlayerLobbyPanel } from "./lobby-panel";
 import { MatchGames } from "./match-games";
 import { MatchPreview } from "./match-preview";
 import { RescheduleSection } from "./reschedule";
@@ -147,6 +148,15 @@ export default async function MatchDetailPage({
             viewer={viewer}
             names={!hasPreview}
           />
+        </Suspense>
+      ) : null}
+
+      {/* The season lobby bot's name and password for the players, standins
+          and admins who join it; the captains' copy, with the controls, is in
+          Captain tools. Renders nothing unless the season lobby bot is on. */}
+      {!showCaptainTools ? (
+        <Suspense fallback={null}>
+          <PlayerLobbyPanel match={match} viewer={viewer} />
         </Suspense>
       ) : null}
 

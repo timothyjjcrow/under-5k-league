@@ -155,6 +155,28 @@ describe("match page result card", () => {
   });
 });
 
+describe("match page lobby bot panel", () => {
+  it("gives players, standins and admins the season lobby's name and password", () => {
+    // resolveDotaLobby lets them view the season lobby, and DOTA-LOBBY-BOT.md
+    // sends players to this panel for the password. It used to sit only in
+    // the captain-only result card, so nobody else could ever see it.
+    expect(CARD("page.tsx")).toMatch(
+      /\{!showCaptainTools \? \(\s*<Suspense fallback=\{null\}>\s*<PlayerLobbyPanel match=\{match\} viewer=\{viewer\} \/>/,
+    );
+    const panel = CARD("lobby-panel.tsx");
+    // The same windows as the captains' panel in the result card.
+    expect(panel).toContain(
+      'if (!viewer || !lobbyBotKindEnabled("season")) return null;',
+    );
+    expect(panel).toMatch(
+      /!match\.season\.isActive \|\|\s*match\.status === "COMPLETED" \|\|\s*!matchResultsOpen\(match\.season\.status, match\.phase\)/,
+    );
+    expect(panel).toMatch(/!seesPlayerLobbyPanel\(\s*viewer,\s*match,/);
+    // Two panels: the captains' (with the controls) and everyone else's.
+    expect(PAGE.match(/<DotaLobbyControls\b/g)).toHaveLength(2);
+    expect(PAGE.match(/kind="season"/g)).toHaveLength(2);
+  });
+});
 
 describe("match page box scores", () => {
   it("keeps Game 1 open and folds later games, still reachable by id", () => {

@@ -34,8 +34,9 @@ export function ReportResultSection({
     !!viewer &&
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
-  // Captain tools only. A final series gets the page's one-line correction
-  // note instead.
+  // Captain tools only; the other players get the lobby bot's panel from
+  // lobby-panel.tsx. A final series gets the page's one-line correction note
+  // instead.
   if (!isCaptain) return null;
   if (!match.season.isActive || match.status === "COMPLETED") return null;
   if (!matchResultsOpen(match.season.status, match.phase)) {
