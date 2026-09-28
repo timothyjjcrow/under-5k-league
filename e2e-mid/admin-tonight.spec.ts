@@ -45,3 +45,24 @@ test("Tonight leads /admin on match night and jumps to each result row", async (
   await expectNoHorizontalOverflow(page, "admin tonight");
   noErrors();
 });
+
+test("Needs attention titles itself by count and links each line to its section", async ({
+  page,
+}) => {
+  const noErrors = trackPageErrors(page);
+  await page.goto(
+    "/api/auth/dev?name=Tonight+Admin&steamId=76561190000994002&admin=1&redirect=/admin",
+  );
+  const card = page.locator("#adm-attention");
+  await expect(card.getByRole("heading", { level: 2 })).toHaveText(
+    /: (all clear|1 thing needs attention|\d+ things need attention)$/,
+  );
+  await expect(card).not.toContainText("match-night checklist");
+  for (const href of await card
+    .locator('a[href^="#"]')
+    .evaluateAll((links) => links.map((link) => link.getAttribute("href")))) {
+    expect(href).toMatch(/^#adm-[a-z-]+$/);
+    await expect(page.locator(href!)).toHaveCount(1);
+  }
+  noErrors();
+});

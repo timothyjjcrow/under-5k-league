@@ -1,5 +1,12 @@
 import { listPage } from "@/lib/list-page";
-import { matchAttention } from "@/lib/admin-attention";
+import {
+  adminAttention,
+  attentionTitle,
+  matchAttention,
+  outStandins,
+  shortTeams,
+  standinClashes,
+} from "@/lib/admin-attention";
 import { cache, Suspense } from "react";
 import { SectionNav, SectionReady } from "@/components/section-nav";
 import { randomUUID } from "node:crypto";
@@ -29,7 +36,7 @@ import {
 import { ImportProgress } from "@/components/import-progress";
 import { DatabaseHealth } from "@/components/database-health";
 import { HistoryCoverage } from "@/components/history-coverage";
-import { seatValue, standinConflict } from "@/lib/standin";
+import { seatValue } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
   carriedSeasonSettings,
@@ -367,6 +374,57 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     </AdminAnchor>
   ) : null;
 
+  const jumpItems: { id: string; label: string }[] = [
+    ...(handoffFirst
+      ? [
+          {
+            id: "adm-new-season",
+            label: season ? "Season handoff" : "Open a new season",
+          },
+        ]
+      : []),
+    ...(season && data && seasonRecord
+      ? [
+          { id: "adm-attention", label: "Needs attention" },
+          { id: "adm-record", label: "Season record" },
+          { id: "adm-league", label: "League id" },
+        ]
+      : season && data
+      ? [
+          ...(tonight.length > 0
+            ? [{ id: "adm-tonight", label: "Tonight" }]
+            : []),
+          { id: "adm-attention", label: "Needs attention" },
+          ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
+          { id: "adm-schedule", label: "Schedule & results" },
+          { id: "adm-playoffs", label: "Playoffs" },
+          ...(rosterMovesVisible(season, data)
+            ? [{ id: "adm-roster", label: "Roster moves" }]
+            : []),
+          { id: "adm-standins", label: "Standins" },
+          { id: "adm-reach", label: "Discord reach" },
+          ...(autoSyncVisible(season)
+            ? [{ id: "adm-sync", label: "Auto-sync" }]
+            : []),
+          { id: "adm-season", label: "Phase" },
+          { id: "adm-captains", label: "Captains & draft" },
+          { id: "adm-league", label: "League id" },
+        ]
+      : []),
+    { id: "adm-automation", label: "Automation" },
+    { id: "adm-history", label: "Historical records" },
+    // Season-independent: inhouse alerts and the queue board are most
+    // important in the offseason, when inhouse is the live mode.
+    { id: "adm-discord", label: "Discord" },
+    { id: "adm-activity", label: "Activity" },
+    { id: "adm-traffic", label: "Traffic" },
+    { id: "adm-news", label: "News" },
+    { id: "adm-security", label: "Security" },
+    ...(handoffFirst
+      ? []
+      : [{ id: "adm-new-season", label: "Season handoff" }]),
+  ];
+
   return (
     <div className="space-y-8">
       <PageTitle
@@ -376,58 +434,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
       {nextStep ? <NextStepBanner nextStep={nextStep} /> : null}
 
-      <AdminJump
-        items={[
-          ...(handoffFirst
-            ? [
-                {
-                  id: "adm-new-season",
-                  label: season ? "Season handoff" : "Open a new season",
-                },
-              ]
-            : []),
-          ...(season && data && seasonRecord
-            ? [
-                { id: "adm-attention", label: "Needs attention" },
-                { id: "adm-record", label: "Season record" },
-                { id: "adm-league", label: "League id" },
-              ]
-            : season && data
-            ? [
-                ...(tonight.length > 0
-                  ? [{ id: "adm-tonight", label: "Tonight" }]
-                  : []),
-                { id: "adm-attention", label: "Needs attention" },
-                ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
-                { id: "adm-schedule", label: "Schedule & results" },
-                { id: "adm-playoffs", label: "Playoffs" },
-                ...(rosterMovesVisible(season, data)
-                  ? [{ id: "adm-roster", label: "Roster moves" }]
-                  : []),
-                { id: "adm-standins", label: "Standins" },
-                { id: "adm-reach", label: "Discord reach" },
-                ...(autoSyncVisible(season)
-                  ? [{ id: "adm-sync", label: "Auto-sync" }]
-                  : []),
-                { id: "adm-season", label: "Phase" },
-                { id: "adm-captains", label: "Captains & draft" },
-                { id: "adm-league", label: "League id" },
-              ]
-            : []),
-          { id: "adm-automation", label: "Automation" },
-          { id: "adm-history", label: "Historical records" },
-          // Season-independent: inhouse alerts and the queue board are most
-          // important in the offseason, when inhouse is the live mode.
-          { id: "adm-discord", label: "Discord" },
-          { id: "adm-activity", label: "Activity" },
-          { id: "adm-traffic", label: "Traffic" },
-          { id: "adm-news", label: "News" },
-          { id: "adm-security", label: "Security" },
-          ...(handoffFirst
-            ? []
-            : [{ id: "adm-new-season", label: "Season handoff" }]),
-        ]}
-      />
+      <AdminJump items={jumpItems} />
 
       {handoffFirst ? (
         <OpenNextSeason
@@ -439,7 +446,12 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
       {season && data && seasonRecord ? (
         <>
-          <AdminAttention season={season} data={data} automation={automationLines} />
+          <AdminAttention
+            season={season}
+            data={data}
+            automation={automationLines}
+            jumpItems={jumpItems}
+          />
           <AdminSection
             id="adm-record"
             title={`${seasonRecord.name} record`}
@@ -484,7 +496,12 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               nowMs={nowMs}
             />
           ) : null}
-          <AdminAttention season={season} data={data} automation={automationLines} />
+          <AdminAttention
+            season={season}
+            data={data}
+            automation={automationLines}
+            jumpItems={jumpItems}
+          />
           {showTiebreakers ? (
             <AdminAnchor id="adm-tiebreakers">
               <TiebreakerControls season={season} data={data} nowMs={nowMs} />
@@ -1023,7 +1040,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // this number and then points at that card ("names them"); counting only
   // data.players (type PLAYER) made the two disagree whenever an unlinked
   // standin existed. DB-only, so the blocking path stays Discord-free.
-  const [rsvps, picks, covers, proposals, unlinkedDiscord] = await Promise.all([
+  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview] = await Promise.all([
     prisma.matchAvailability.count({ where: regularWhere }),
     prisma.prediction.count({ where: regularWhere }),
     prisma.standinAssignment.count({ where: regularWhere }),
@@ -1036,6 +1053,10 @@ async function loadSeasonAdminData(seasonId: string) {
         status: REGISTRATION_STATUS.ACTIVE,
         user: { discordId: null },
       },
+    }),
+    // Imports the automatic sync could not place on its own (Auto-sync card).
+    prisma.importCandidate.count({
+      where: { seasonId, status: "NEEDS_REVIEW" },
     }),
   ]);
   return {
@@ -1051,6 +1072,7 @@ async function loadSeasonAdminData(seasonId: string) {
     tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
     collateral: { rsvps, picks, covers, proposals },
     unlinkedDiscord,
+    importsNeedingReview,
     captainsInRoom,
   };
 }
@@ -1182,92 +1204,147 @@ function TonightMatches({
   );
 }
 
+/**
+ * Every problem on the page as one list, each line linking to the control
+ * that fixes it: season-wide alarms first, then the matches to review. All of
+ * it is read from the database; the Discord line is the DB count of unlinked
+ * players, and the membership details stream into the Discord reach card.
+ */
 function AdminAttention({
   season,
   data,
   automation,
+  jumpItems,
 }: {
   season: Season;
   data: AdminData;
   automation: string[];
+  jumpItems: { id: string; label: string }[];
 }) {
-  const attention = matchAttention(data.matches);
   const names = new Map(data.teams.map((team) => [team.id, team.name]));
+  const fixture = (match: AdminData["matches"][number]) =>
+    `${names.get(match.homeTeamId ?? "") ?? "TBD"} vs ${names.get(match.awayTeamId ?? "") ?? "TBD"}`;
+  const openMatches = data.matches.filter(
+    (match) => match.status !== MATCH_STATUS.COMPLETED,
+  );
+  const openIds = new Set(openMatches.map((match) => match.id));
+  const matchById = new Map(data.matches.map((match) => [match.id, match]));
+  const standinName = new Map(
+    data.assignments.map((booking) => [
+      booking.standinUserId,
+      booking.standin.name,
+    ]),
+  );
+  const rostersLive =
+    data.draft?.status === DRAFT_STATUS.COMPLETE ||
+    season.status === SEASON_STATUS.REGULAR_SEASON ||
+    season.status === SEASON_STATUS.PLAYOFFS ||
+    season.status === SEASON_STATUS.COMPLETE;
+  // Rostered players plus standins still owed on an unplayed match: the
+  // people match-night pings are for.
+  const unlinkedRostered = new Set([
+    ...data.teams.flatMap((team) =>
+      team.members
+        .filter((member) => member.user.discordId == null)
+        .map((member) => member.userId),
+    ),
+    ...data.assignments
+      .filter(
+        (booking) =>
+          openIds.has(booking.matchId) && booking.standin.discordId == null,
+      )
+      .map((booking) => booking.standinUserId),
+  ]).size;
+  const items = adminAttention({
+    seasonStatus: season.status,
+    draftComplete: rostersLive,
+    automation,
+    importsNeedingReview: data.importsNeedingReview,
+    shortTeams: shortTeams(data.teams, season.teamSize).map(
+      ({ team, missing }) => ({ name: team.name, missing }),
+    ),
+    standinClashes: standinClashes(data.assignments, data.matches).map(
+      (clash) => ({
+        standin: standinName.get(clash.standinUserId) ?? "A standin",
+        first: fixture(clash.first),
+        second: fixture(clash.second),
+      }),
+    ),
+    outStandins: outStandins(data.assignments, data.outRsvps, openIds).map(
+      (out) => ({
+        standin: standinName.get(out.userId) ?? "A standin",
+        fixture: fixture(matchById.get(out.matchId)!),
+      }),
+    ),
+    championIssue: resolveChampionPresentation(season, data.matches).issue,
+    unlinkedSignups: data.unlinkedDiscord,
+    unlinkedRostered,
+  });
+  const matches = matchAttention(data.matches);
+  // A section folded into the season record, or not shown this phase, has no
+  // jump target; its line still reads, just without a link.
+  const sectionLabel = new Map(jumpItems.map((item) => [`#${item.id}`, item.label]));
   return (
     <Card id="adm-attention" className="scroll-mt-40">
       <CardHeader
         headingLevel={2}
-        title={`${season.name} — ${attention.length ? "needs attention" : "nothing to review"}`}
-        subtitle={`${PHASE_LABEL[season.status]} · Read-only match-night checklist. Open a match to review its current state.`}
+        title={attentionTitle(season.name, items.length + matches.length)}
       />
-      <CardBody className="space-y-4">
-        {automation.length > 0 ? (
+      <CardBody className="space-y-3">
+        {items.length > 0 ? (
           <ul className="space-y-2">
-            {automation.map((line) => (
-              <li
-                key={line}
-                className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm"
-              >
-                {line}{" "}
-                <a href="#adm-automation" className={textLink()}>
-                  Automation →
-                </a>
-              </li>
-            ))}
+            {items.map((item) => {
+              const label = sectionLabel.get(item.href);
+              return (
+                <li
+                  key={item.key}
+                  className="rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm"
+                >
+                  {item.text}
+                  {label ? (
+                    <>
+                      {" "}
+                      <a href={item.href} className={textLink()}>
+                        {label} →
+                      </a>
+                    </>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         ) : null}
-        {attention.length ? (
-          <details open={attention.length <= 5}>
+        {matches.length > 0 ? (
+          <details open={matches.length <= 5}>
             <summary className="min-h-11 cursor-pointer text-sm font-medium">
-              {attention.length} match{attention.length === 1 ? "" : "es"} to
-              review — show details
+              {matches.length} match{matches.length === 1 ? "" : "es"} to
+              review
             </summary>
             <ul className="space-y-2">
-              {attention.map((item) => {
-                const match = data.matches.find(
-                  (candidate) => candidate.id === item.id,
-                )!;
-                return (
-                  <li
-                    key={item.id}
-                    className="rounded-lg border border-line p-3 text-sm"
+              {matches.map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded-lg border border-line p-3 text-sm"
+                >
+                  <Link
+                    href={`/matches/${item.id}#admin-tools`}
+                    className={textLink()}
                   >
-                    <Link href={`/matches/${item.id}`} className={textLink()}>
-                      {names.get(match.homeTeamId ?? "") ?? "TBD"} vs{" "}
-                      {names.get(match.awayTeamId ?? "") ?? "TBD"}
-                    </Link>
-                    <p className="mt-1 text-muted">
-                      {item.reasons.join(" · ")}
-                    </p>
-                  </li>
-                );
-              })}
+                    {fixture(matchById.get(item.id)!)}
+                  </Link>
+                  <p className="mt-1 text-muted">{item.reasons.join(" · ")}</p>
+                </li>
+              ))}
             </ul>
           </details>
-        ) : (
-          <p className="text-sm text-muted">
-            No missing kickoffs, outstanding reschedules, uncovered declared
-            absences, or long-running results to review.
-          </p>
-        )}
-        <div className="flex flex-wrap gap-3 text-sm">
+        ) : null}
+        <p className="text-xs">
           <Link
             href={`/admin/data-quality?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
+            className={textLink()}
           >
-            Inspect imported-game quality →
+            Check imported-game quality →
           </Link>
-          <Link
-            href="/admin/activity"
-            className={buttonClasses("secondary", "sm")}
-          >
-            Search admin history →
-          </Link>
-        </div>
-        <p className="text-xs text-muted">
-          Use Automation, Auto-sync, and Discord in the section navigation for
-          last-run status, retry timing, and existing recovery controls. This
-          overview does not trigger retries.
         </p>
       </CardBody>
     </Card>
@@ -4377,38 +4454,16 @@ function StandinControls({
   // check already approved — and the only report was a transient toast that
   // could land on a captain with no power to fix the other team's booking.
   // This is the durable, admin-owned surface.
-  const upcomingById = new Map(upcoming.map((m) => [m.id, m]));
-  const coverByStandin = new Map<
-    string,
-    { name: string; matches: (typeof upcoming)[number][] }
-  >();
-  for (const a of data.assignments) {
-    const m = upcomingById.get(a.matchId);
-    if (!m) continue;
-    const cur = coverByStandin.get(a.standinUserId) ?? {
-      name: a.standin.name,
-      matches: [],
-    };
-    cur.matches.push(m);
-    coverByStandin.set(a.standinUserId, cur);
-  }
-  const clashLines: string[] = [];
-  for (const {
-    name: standinName,
-    matches: covered,
-  } of coverByStandin.values()) {
-    for (let i = 0; i < covered.length; i++) {
-      for (let j = i + 1; j < covered.length; j++) {
-        if (standinConflict(covered[i], covered[j])) {
-          const label = (m: (typeof covered)[number]) =>
-            `${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"} (wk ${m.week})`;
-          clashLines.push(
-            `${standinName} covers both ${label(covered[i])} and ${label(covered[j])} the same night — remove one below`,
-          );
-        }
-      }
-    }
-  }
+  const standinName = new Map(
+    data.assignments.map((a) => [a.standinUserId, a.standin.name]),
+  );
+  const clashLines = standinClashes(data.assignments, data.matches).map(
+    ({ standinUserId, first, second }) => {
+      const label = (m: (typeof upcoming)[number]) =>
+        `${teamName.get(m.homeTeamId ?? "") ?? "?"} vs ${teamName.get(m.awayTeamId ?? "") ?? "?"} (wk ${m.week})`;
+      return `${standinName.get(standinUserId) ?? "A standin"} covers both ${label(first)} and ${label(second)} the same night — remove one below`;
+    },
+  );
   // Standins are assigned for the imminent night — group by week and only
   // expand the earliest open one so the current night isn't a scroll away.
   const regularUpcoming = upcoming.filter(
@@ -5418,12 +5473,10 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   // withdrew), and signFreeAgent refuses them — offering them here parks a
   // player on a dead roster one mis-click away. Releasing their players stays
   // available below; that's the legitimate post-withdrawal cleanup.
-  const shortTeams = preStart
+  const short = preStart
     ? []
-    : data.teams.filter(
-        (t) => !t.withdrawn && t.members.length < season.teamSize,
-      );
-  const canSign = !preStart && freeAgents.length > 0 && shortTeams.length > 0;
+    : shortTeams(data.teams, season.teamSize).map(({ team }) => team);
+  const canSign = !preStart && freeAgents.length > 0 && short.length > 0;
   const releasable = preStart
     ? []
     : data.teams.flatMap((t) =>
@@ -5463,14 +5516,14 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
             where nobody is available to fix it. Everywhere else the league
             reports a 4-of-5 side as fully staffed, so this line is the admin's
             only warning before match night. */}
-        {shortTeams.length > 0 ? (
+        {short.length > 0 ? (
           <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
             <b>
-              {shortTeams.length} team
-              {shortTeams.length === 1 ? " is" : "s are"} short of{" "}
+              {short.length} team
+              {short.length === 1 ? " is" : "s are"} short of{" "}
               {season.teamSize}:
             </b>{" "}
-            {shortTeams
+            {short
               .map((t) => `${t.name} (${t.members.length})`)
               .join(", ")}
             .{" "}
@@ -5511,7 +5564,7 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               <option value="" disabled>
                 Team…
               </option>
-              {shortTeams.map((t) => (
+              {short.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name} ({t.members.length}/{season.teamSize})
                 </option>

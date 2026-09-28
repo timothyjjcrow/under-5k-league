@@ -294,6 +294,30 @@ describe("admin copy names only controls that exist", () => {
     expect(page).toContain("href={nextStep.jump.href}");
   });
 
+  // Needs attention links every line to the section that fixes it. The page
+  // drops the link when that section is not in this render's jump bar, so a
+  // target that is NEVER in it would read as a line with no way to act.
+  it("every Needs attention link lands on a section the jump bar can open", () => {
+    const page = read("src/app/admin/page.tsx");
+    const attention = read("src/lib/admin-attention.ts");
+    const targets = [
+      ...new Set(
+        [...attention.matchAll(/href: "#(adm-[a-z-]+)"/g)].map((m) => m[1]),
+      ),
+    ];
+    expect(targets).toEqual(
+      expect.arrayContaining(["adm-automation", "adm-standins", "adm-reach"]),
+    );
+    for (const id of targets) {
+      expect(page.includes(`id="${id}"`), `no element renders id="${id}"`).toBe(true);
+      expect(
+        page.includes(`id: "${id}"`),
+        `#${id} is linked from Needs attention but missing from the jump bar`,
+      ).toBe(true);
+    }
+    expect(page).toContain("<a href={item.href} className={textLink()}>");
+  });
+
   // The start-of-season step quotes the phase button by name. The label is
   // phaseAdvance's, so the check is that both pages render that name.
   it("the start-of-season step names the button the phase card and draft room render", () => {
