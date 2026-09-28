@@ -886,6 +886,47 @@ export function weekReminderMessage(m: WeekReminderInput): string {
   return weekReminderAnnouncement(m).content;
 }
 
+export type CheckinNudgeInput = {
+  captainName: string;
+  teamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  /** Epoch ms of the kickoff; null = unscheduled (the time is left out). */
+  whenMs: number | null;
+  matchId: string;
+  /** The captain's own players with no answer yet. Linked players are
+   *  mentioned; the rest are named so they can still be chased. */
+  waitingOn: { name: string; discordId: string | null }[];
+};
+
+/**
+ * A captain's "please check in" for their OWN team's unanswered players, one
+ * post with the match link. Only the players named here are allowlisted, so
+ * nobody else on either team is pinged.
+ */
+export function checkinNudgeAnnouncement(m: CheckinNudgeInput): {
+  content: string;
+  /** Exact linked users visibly named in `content`. */
+  mentionUserIds: string[];
+} {
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const t = m.whenMs != null ? Math.floor(m.whenMs / 1000) : null;
+  const when = t != null ? ` (<t:${t}:F>, <t:${t}:R>)` : "";
+  const shown = Math.min(m.waitingOn.length, WAITING_SHOWN);
+  const content =
+    `📋 **${name(m.captainName)}** needs check-ins for **${name(m.teamName)}**'s ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}.\n` +
+    `Still waiting on: ${peopleList(m.waitingOn, shown)}. Tap ✓ or ✗ on the match page: <${resolveSiteUrl()}/matches/${m.matchId}>`;
+  return {
+    content,
+    mentionUserIds: mentionIdsOf(m.waitingOn.slice(0, shown)),
+  };
+}
+
 /**
  * Name at most this many unconfirmed players in the draft-night reminder.
  * The post goes to the whole league channel, and one that is mostly a column

@@ -138,6 +138,19 @@ export function outPingPrefix(matchId: string): string {
 }
 
 /**
+ * The claimThrottle key behind a captain's check-in reminder: one per team per
+ * match, so the two captains of a fixture never share (or burn) a window.
+ */
+export function checkinNudgeKey(matchId: string, teamId: string): string {
+  return `${checkinNudgePrefix(matchId)}${teamId}`;
+}
+
+/** Every check-in reminder throttle row of one match (swept with its season). */
+export function checkinNudgePrefix(matchId: string): string {
+  return `checkinNudge:${matchId}:`;
+}
+
+/**
  * Why a player can't answer a fixture's check-in. setAvailability refuses with
  * the long message; the away-dates action reports a short label per fixture.
  * One list, so the two paths can never disagree about who may answer.

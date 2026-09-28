@@ -12,7 +12,12 @@ import {
   HONORS_FAILED_PREFIX,
   HONORS_STALE_PREFIX,
 } from "./announcement-marker";
-import { outPingPrefix, outPingThrottleKey } from "./availability";
+import {
+  checkinNudgeKey,
+  checkinNudgePrefix,
+  outPingPrefix,
+  outPingThrottleKey,
+} from "./availability";
 import { honorsClaimValue } from "./honors-service";
 import {
   draftPresenceKey,
@@ -49,6 +54,8 @@ describe("stored Setting key formats", () => {
     expect(outPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1"))).toBe(
       true,
     );
+    expect(checkinNudgePrefix("m1")).toBe("checkinNudge:m1:");
+    expect(checkinNudgeKey("m1", "t1")).toBe("checkinNudge:m1:t1");
     const fixture = fixtureImportCooldownResource("m1");
     expect(fixture).toBe("fixture:m1");
     expect(providerCooldownResourcePrefix("open-dota-match-import", fixture)).toBe(
@@ -71,6 +78,7 @@ describe("stored Setting key formats", () => {
       playoffRoundBuiltPrefix("s1"),
       tiebreakerDrawPrefix("s1"),
       outPingPrefix("m1"),
+      checkinNudgePrefix("m1"),
       providerCooldownResourcePrefix("open-dota-match-scan", "m1"),
       providerCooldownResourcePrefix(
         "open-dota-match-import",

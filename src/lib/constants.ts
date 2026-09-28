@@ -358,6 +358,11 @@ export const DRAFT_REMINDER = {
 // deciding, short enough that a genuine second withdrawal still gets through.
 export const RSVP_OUT_PING_THROTTLE_SECONDS = 6 * 60 * 60;
 
+// A captain can ping their own team's unanswered players about one match from
+// its page. Once per team per match in this window: enough for a morning nudge
+// and a last call before kickoff, never a way to spam the channel.
+export const CHECKIN_NUDGE_THROTTLE_SECONDS = 3 * 60 * 60;
+
 // Automatic result sync: league games are pulled from OpenDota without anyone
 // pressing a button. The bearer-authenticated maintenance worker owns writes;
 // the sitewide <ResultSyncPing> only observes its cursor/watch snapshot. A

@@ -39,6 +39,10 @@ import {
   UserFacingError,
 } from "@/lib/user-facing-error";
 import { isSerializationConflict } from "@/lib/prisma-errors";
+import {
+  checkinNudgeToast,
+  sendCheckinNudge,
+} from "@/lib/checkin-nudge-service";
 
 /**
  * Record the signed-in player's match-night RSVP (IN | OUT) for a scheduled
@@ -313,4 +317,41 @@ export async function markAwayDates(
     revalidatePath("/", "layout");
   }
   return awayRangeResult(outcome);
+}
+
+/**
+ * A captain's optional "Remind the N who haven't answered": one Discord post
+ * that @-mentions only their own team's players with no answer for this
+ * match. The rules and the throttle live in checkin-nudge-service.ts.
+ */
+export async function remindUnansweredCheckins(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  let res;
+  try {
+    res = await sendCheckinNudge({
+      matchId: str(formData, "matchId"),
+      captainId: user.id,
+      nowMs: Date.now(),
+    });
+  } catch (error) {
+    return {
+      error: actionErrorMessage(
+        error,
+        "Could not send that reminder. Reload and try again.",
+        "availability.nudge",
+      ),
+    };
+  }
+  if (!res.ok) return { error: res.error };
+  // The match page swaps the button for "Reminder sent".
+  revalidatePath("/", "layout");
+  return { message: checkinNudgeToast(res.reminded, res.pinged) };
 }

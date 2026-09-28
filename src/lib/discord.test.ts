@@ -30,6 +30,7 @@ import {
   draftScheduledMessage,
   draftReminderAnnouncement,
   captainAssignedMessage,
+  checkinNudgeAnnouncement,
   playerAwayMessage,
   playerOutMessage,
   rescheduleDeclinedMessage,
@@ -1243,6 +1244,68 @@ describe("weekReminderMessage", () => {
   });
 });
 
+describe("checkinNudgeAnnouncement", () => {
+  const base = {
+    captainName: "Cap",
+    teamName: "Radiant Rats",
+    homeName: "Radiant Rats",
+    awayName: "Dire Dogs",
+    week: 3,
+    isPlayoff: false,
+    whenMs: 1_800_000_000_500,
+    matchId: "m1",
+    waitingOn: [
+      { name: "Linked", discordId: "123456789012345678" },
+      { name: "Unlinked", discordId: null },
+    ],
+  };
+
+  it("mentions only the linked waiters it names and links the match page", () => {
+    const a = checkinNudgeAnnouncement(base);
+    expect(a.content).toContain("**Cap** needs check-ins for **Radiant Rats**'s week 3 match");
+    expect(a.content).toContain("**Radiant Rats** vs **Dire Dogs**");
+    expect(a.content).toContain("<t:1800000000:F>");
+    expect(a.content).toContain("<@123456789012345678>, Unlinked");
+    expect(a.content).toMatch(/<https?:\/\/[^>]+\/matches\/m1>$/);
+    expect(a.mentionUserIds).toEqual(["123456789012345678"]);
+    // Every allowlisted id is visible, so transport adds nobody.
+    expect(
+      materializeAllowedMentions(a.content, { users: a.mentionUserIds }),
+    ).toBe(a.content);
+  });
+
+  it("leaves the time out of an unscheduled fixture and labels playoffs", () => {
+    const a = checkinNudgeAnnouncement({ ...base, whenMs: null, isPlayoff: true });
+    expect(a.content).not.toContain("<t:");
+    expect(a.content).toContain("playoff match");
+    expect(
+      checkinNudgeAnnouncement({ ...base, isPlayoff: true, isTiebreaker: true })
+        .content,
+    ).toContain("tiebreaker match");
+  });
+
+  it("caps the named list and never allowlists a hidden player", () => {
+    const waitingOn = Array.from({ length: 11 }, (_, i) => ({
+      name: `P${i + 1}`,
+      discordId: (BigInt("900000000000000000") + BigInt(i)).toString(),
+    }));
+    const a = checkinNudgeAnnouncement({ ...base, waitingOn });
+    expect(a.content).toContain("+3 more");
+    expect(a.mentionUserIds).toHaveLength(8);
+    expect(a.mentionUserIds).not.toContain(waitingOn[10].discordId);
+    expect(a.content).not.toContain(`<@${waitingOn[10].discordId}>`);
+  });
+
+  it("allowlists nobody when nobody named has linked Discord", () => {
+    const a = checkinNudgeAnnouncement({
+      ...base,
+      waitingOn: [{ name: "A", discordId: null }, { name: "B", discordId: "not-a-snowflake" }],
+    });
+    expect(a.mentionUserIds).toEqual([]);
+    expect(a.content).toContain("A, B");
+  });
+});
+
 describe("rescheduleMessage", () => {
   it("announces the agreed time as a Discord timestamp (reader-local)", () => {
     const msg = rescheduleMessage({
@@ -1538,6 +1601,17 @@ describe("no message unfurls a link preview", () => {
         unconfirmed: [{ name: "B", discordId: null }],
       }).content,
       captainAssignedMessage("A", "T", "123"),
+      checkinNudgeAnnouncement({
+        captainName: "C",
+        teamName: "T",
+        homeName: "T",
+        awayName: "U",
+        week: 1,
+        isPlayoff: false,
+        whenMs: 1_800_000_000_000,
+        matchId: "m1",
+        waitingOn: [{ name: "B", discordId: null }],
+      }).content,
       draftStartedAnnouncement({ seasonName: "S1", captains: [] }).content,
       draftCompleteAnnouncement({
         seasonName: "S1",
@@ -1850,6 +1924,17 @@ describe("no player-supplied name can inject markdown", () => {
       playerCount: 2,
       captains: [{ name: EVIL, discordId: null }],
       unconfirmed: [{ name: EVIL, discordId: null }],
+    }).content,
+    checkinNudgeAnnouncement({
+      captainName: EVIL,
+      teamName: EVIL,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+      matchId: "m1",
+      waitingOn: [{ name: EVIL, discordId: null }],
     }).content,
     adminRetimeMessage({
       clearedRsvps: 2,

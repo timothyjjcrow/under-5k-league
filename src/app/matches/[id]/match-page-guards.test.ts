@@ -164,3 +164,27 @@ describe("match page scouting report", () => {
     expect(PAGE).not.toMatch(/paceProfile|Pace over|PaceLine/);
   });
 });
+
+describe("match page check-in reminder", () => {
+  it("offers the reminder only to a captain, under their own side, while check-in is open", () => {
+    // sendCheckinNudge refuses everyone but this match's captains, anything
+    // but their own team, a closed check-in and a league with no channel;
+    // the button follows the same rules so it never offers a refusal.
+    expect(PAGE).toMatch(
+      /const nudgeTeamId =\s*viewer\?\.id === match\.homeTeam\.captainId\s*\? match\.homeTeamId\s*: viewer\?\.id === match\.awayTeam\.captainId\s*\? match\.awayTeamId\s*: null;/,
+    );
+    expect(PAGE).toMatch(/nudgeTeamId && checkinOpen\s*\? teamAvailability\(/);
+    expect(PAGE).toMatch(/\.unansweredUserIds\.filter\(\(id\) => id !== viewer!\.id\)/);
+    expect(PAGE).toMatch(/nudgeTeamId && nudgeWaiting > 0 && \(await getWebhookUrl\(\)\)/);
+    expect(PAGE).toContain("{nudge && s.teamId === nudge.teamId ? (");
+    expect(PAGE).toMatch(/action=\{remindUnansweredCheckins\}\s*hidden=\{\{ matchId: match\.id \}\}/);
+  });
+
+  it("is a single press with no confirm, and says when the next one is allowed", () => {
+    expect(PAGE).toMatch(
+      /action=\{remindUnansweredCheckins\}[\s\S]{0,300}<SubmitButton variant="secondary" size="sm">/,
+    );
+    expect(PAGE).toContain("checkinNudgeBlockedSince(");
+    expect(PAGE).toContain("You can send another from");
+  });
+});

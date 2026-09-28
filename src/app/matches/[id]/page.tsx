@@ -16,6 +16,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { matchMetadata } from "@/lib/link-preview-metadata";
 import {
+  CHECKIN_NUDGE_THROTTLE_SECONDS,
   LEAGUE_GAME_MODE,
   MATCH_STATUS,
   REGISTRATION_STATUS,
@@ -38,7 +39,10 @@ import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
-import { matchNightRoster } from "@/lib/availability";
+import { matchNightRoster, teamAvailability } from "@/lib/availability";
+import { checkinNudgeBlockedSince } from "@/lib/checkin-nudge-service";
+import { remindUnansweredCheckins } from "@/app/actions/availability";
+import { getWebhookUrl } from "@/lib/discord";
 import {
   canViewLeagueContact,
   canViewNamedMatchAvailability,
@@ -1137,18 +1141,18 @@ async function MatchPreview({
         (viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE ||
           viewerIsMatchCaptain),
     );
+  const nightRoster = (teamId: string) =>
+    matchNightRoster(
+      members.filter((m) => m.teamId === teamId).map((m) => m.userId),
+      match.standins
+        .filter((s) => s.teamId === teamId)
+        .map((s) => ({
+          standinUserId: s.standin.id,
+          replacingUserId: s.replaced?.id ?? null,
+        })),
+    );
   const activeNightRoster = new Set(
-    [match.homeTeamId, match.awayTeamId].flatMap((teamId) =>
-      matchNightRoster(
-        members.filter((m) => m.teamId === teamId).map((m) => m.userId),
-        match.standins
-          .filter((s) => s.teamId === teamId)
-          .map((s) => ({
-            standinUserId: s.standin.id,
-            replacingUserId: s.replaced?.id ?? null,
-          })),
-      ),
-    ),
+    [match.homeTeamId, match.awayTeamId].flatMap(nightRoster),
   );
   // Async server component: this captures request time once for the stale-
   // fixture guard; it is not client render state.
@@ -1167,6 +1171,35 @@ async function MatchPreview({
   const isParticipant =
     !!viewer && checkinOpen && activeNightRoster.has(viewer.id);
   const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
+  // A captain's optional "Remind the N who haven't answered" under their own
+  // side: shown only while check-in is open, someone else on their side owes
+  // an answer, and the league has a Discord channel. Once sent, it says when
+  // the next one is allowed instead (sendCheckinNudge's throttle).
+  const nudgeTeamId =
+    viewer?.id === match.homeTeam.captainId
+      ? match.homeTeamId
+      : viewer?.id === match.awayTeam.captainId
+        ? match.awayTeamId
+        : null;
+  const nudgeWaiting =
+    nudgeTeamId && checkinOpen
+      ? teamAvailability(
+          nightRoster(nudgeTeamId),
+          rsvps,
+        ).unansweredUserIds.filter((id) => id !== viewer!.id).length
+      : 0;
+  const nudge =
+    nudgeTeamId && nudgeWaiting > 0 && (await getWebhookUrl())
+      ? {
+          teamId: nudgeTeamId,
+          waiting: nudgeWaiting,
+          sentAt: await checkinNudgeBlockedSince(
+            match.id,
+            nudgeTeamId,
+            previewNow,
+          ),
+        }
+      : null;
   // Same rule as the dashboard's This-week cards. The season gate mirrors
   // /pickem's canPlay: savePrediction only ever writes to the ACTIVE season,
   // so an archived fixture must never render live buttons.
@@ -1386,6 +1419,49 @@ async function MatchPreview({
                   );
                 })}
               </ul>
+              {nudge && s.teamId === nudge.teamId ? (
+                nudge.sentAt ? (
+                  <p className="mt-3 border-t border-line-soft pt-2 text-xs text-muted">
+                    Check-in reminder sent{" "}
+                    <LocalTime
+                      ts={nudge.sentAt.getTime()}
+                      variant="short"
+                      initial={formatMatchTime(nudge.sentAt, "short")}
+                    />
+                    . You can send another from{" "}
+                    <LocalTime
+                      ts={
+                        nudge.sentAt.getTime() +
+                        CHECKIN_NUDGE_THROTTLE_SECONDS * 1000
+                      }
+                      variant="short"
+                      initial={formatMatchTime(
+                        new Date(
+                          nudge.sentAt.getTime() +
+                            CHECKIN_NUDGE_THROTTLE_SECONDS * 1000,
+                        ),
+                        "short",
+                      )}
+                    />
+                    .
+                  </p>
+                ) : (
+                  <ActionForm
+                    action={remindUnansweredCheckins}
+                    hidden={{ matchId: match.id }}
+                    className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-soft pt-3"
+                  >
+                    <SubmitButton variant="secondary" size="sm">
+                      {nudge.waiting === 1
+                        ? "Remind the 1 who hasn't answered"
+                        : `Remind the ${nudge.waiting} who haven't answered`}
+                    </SubmitButton>
+                    <span className="text-xs text-muted">
+                      One Discord post that pings only them.
+                    </span>
+                  </ActionForm>
+                )
+              ) : null}
             </div>
           ))}
         </CardBody>

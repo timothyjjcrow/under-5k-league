@@ -1773,6 +1773,18 @@ already in the `Setting` table.
   pages (`setAvailability` action — rostered players and assigned standins
   only, no completed matches). Schedule match rows show per-team ✓/✗ counts
   while a match is unplayed.
+- **Captain's check-in reminder** (`src/lib/checkin-nudge-service.ts`,
+  `remindUnansweredCheckins`, `test/integration/checkin-nudge.itest.ts`): an
+  optional one-press button under the captain's OWN side in the match page's
+  Matchup card. One Discord post (`checkinNudgeAnnouncement`) that names and
+  @-mentions only that team's players with no answer for the current kickoff
+  (never the captain, never the other side), with the match link. At most one
+  per team per match per `CHECKIN_NUDGE_THROTTLE_SECONDS` (3h) via
+  `claimThrottle` on `checkinNudge:<match>:<team>` — claimed after every other
+  check (webhook included) and released if nothing goes out (refused or
+  thrown send). The button renders only when the action would accept; once
+  sent it says when the next one is allowed. Keep it a single press with no
+  confirm.
 - **Who may answer for a side** is `loadSidePlayerIds`
   (`availability-service.ts`): the roster minus seats a standin covers, plus
   standins whose signup is active (or absent) and who hold no roster seat this
