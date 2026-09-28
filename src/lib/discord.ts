@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
 import { splitLinks } from "./linkify";
@@ -16,10 +17,12 @@ import {
   LEAGUE_ANNOUNCEMENT_STATUS,
   type LeagueAnnouncementDelivery,
   type LeagueAnnouncementMarker,
+  type LeagueSendResult,
 } from "./league-announcement-outbox";
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { runAfterResponse } from "./after-response";
+import { capacityInfo } from "./capacity";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -51,22 +54,54 @@ const name = escapeDiscordText;
 // embed the GIF (see the normalizeMediaUrl note there).
 // ---------------------------------------------------------------------------
 
+/**
+ * A new full-player signup. Every one of these is an advert for the season,
+ * so it ends with the signup link. The count line uses the site's own ask:
+ * short of the minimum, how many more the draft needs; past it (where the
+ * league sits for most of signup week, since minTeams is a floor), how many
+ * more make another full team. Only the signup that reaches the minimum
+ * celebrates it.
+ */
 export function signupMessage(
   playerName: string,
   signedUp: number,
-  neededToStart: number,
+  season: { teamSize: number; minTeams: number },
   /** Epoch ms of the scheduled draft night, if the admin has set one. */
   draftAtMs?: number | null,
 ): string {
-  const remaining = Math.max(0, neededToStart - signedUp);
-  const tail =
-    remaining === 0
-      ? "that's enough to start the draft! 🎉"
-      : `${remaining} more to start the draft.`;
+  const capacity = capacityInfo(season, signedUp);
+  let tail: string;
+  if (!capacity.canDraft) {
+    tail = `${capacity.needed} more to start the draft.`;
+  } else if (capacity.perTeam <= 0) {
+    tail = "that's enough to start the draft!";
+  } else {
+    const n = capacity.toNextTeam;
+    const next = `${n} more ${n === 1 ? "player" : "players"} makes it ${capacity.teamsFormable + 1} full teams.`;
+    tail =
+      capacity.extra === 0
+        ? `that's enough to start the draft! 🎉 ${next}`
+        : next;
+  }
   const when = draftAtMs
     ? ` Draft night: <t:${Math.floor(draftAtMs / 1000)}:F>.`
     : "";
-  return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when}`;
+  return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
+}
+
+/**
+ * A new season is open for signups: the first thing the channel hears from a
+ * season, so it says what to do (sign up on /me) and, when one is announced,
+ * the weekly match night players are signing up for. Mentions nobody: a
+ * season opening is news for everyone, not something one person owes.
+ */
+export function signupsOpenMessage(
+  seasonName: string,
+  /** The announced weekly night (announcedMatchNight), or null when unset. */
+  matchNight: string | null,
+): string {
+  const night = matchNight ? ` Match night: ${name(matchNight)}.` : "";
+  return `📝 **${name(seasonName)} signups are open!**${night} Sign up: <${resolveSiteUrl()}/me>`;
 }
 
 export function draftScheduledMessage(
@@ -91,9 +126,34 @@ export function captainAssignedMessage(
   captainName: string,
   teamName: string,
   discordId?: string | null,
+  /** The captain being replaced (transferCaptaincy): the same post tells the
+   *  channel, and them, that they no longer captain the team. */
+  previousCaptain?: DraftReminderPerson | null,
 ): string {
   const captain = discordId ? `<@${discordId}>` : `**${name(captainName)}**`;
-  return `🧭 ${captain}, **you now captain ${name(teamName)}.** Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
+  const handover = previousCaptain
+    ? ` ${captainLabel(previousCaptain)} is no longer captain and stays on the roster as a player.`
+    : "";
+  return `🧭 ${captain}, **you now captain ${name(teamName)}.**${handover} Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
+}
+
+/**
+ * A captain's team was removed before the draft (removeCaptain). The ping
+ * that made them captain would otherwise stand uncorrected in the channel.
+ * Their signup is untouched, so they go into the player pool, and the link
+ * after those words is the pool itself (/players), not the reader's own /me.
+ */
+export function captainRemovedMessage(
+  captain: DraftReminderPerson,
+  teamName: string,
+): string {
+  return `🧭 ${captainLabel(captain)} is no longer captain of **${name(teamName)}**: the team was removed before the draft. Their signup stays, so they go into the player pool: <${resolveSiteUrl()}/players>`;
+}
+
+/** `<@id>` for a linked captain, their bold escaped name otherwise. */
+function captainLabel(p: DraftReminderPerson): string {
+  const id = mentionableId(p);
+  return id ? `<@${id}>` : `**${name(p.name)}**`;
 }
 
 export type DraftStartedInput = {
@@ -237,7 +297,7 @@ export function draftCompleteAnnouncement(
 }
 
 export function regularSeasonStartedMessage(seasonName: string): string {
-  return `⚔️ **The ${name(seasonName)} Regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
+  return `⚔️ **The ${name(seasonName)} regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function draftPausedMessage(seasonName: string): string {
@@ -298,6 +358,15 @@ export function draftRecapMessage(r: {
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * A season's own page, scrolled to its bracket. Posts link here rather than
+ * /schedule, which always shows the CURRENT season: after the handoff an old
+ * "playoffs are set" post would open the next season's empty schedule.
+ */
+function seasonBracketUrl(seasonId: string): string {
+  return `${resolveSiteUrl()}/seasons/${encodeURIComponent(seasonId)}#playoffs`;
 }
 
 /** "the semifinals", "the grand final", "Round 3" — a round name mid-sentence. */
@@ -362,8 +431,35 @@ export function matchResultMessage(m: {
   return `${tail} ${link}${record}`;
 }
 
+/**
+ * Automatic import couldn't find a fixture's games (private match data, a
+ * lobby without the league ticket), or found part of the series and then
+ * nothing for hours. The send mentions the two captains, who can report the
+ * games themselves in one click on the match page; nobody else is pinged.
+ */
+export function resultNudgeMessage(m: {
+  matchId: string;
+  homeName: string;
+  awayName: string;
+  /** matchRoundLabel: "Week 3", "Semifinal", "Grand final", "Tiebreaker". */
+  label: string;
+  homeScore: number;
+  awayScore: number;
+  /** Games imported so far; 0 = none found at all. */
+  gamesFound: number;
+}): string {
+  const fixture = `**${name(m.homeName)}** vs **${name(m.awayName)}** (${m.label})`;
+  const link = `<${resolveSiteUrl()}/matches/${m.matchId}>`;
+  if (m.gamesFound === 0) {
+    return `📋 We couldn't find the games for ${fixture}. Captains: report them on the match page: ${link}`;
+  }
+  return `📋 ${fixture} is stuck at ${m.homeScore}–${m.awayScore}: we couldn't find the rest of the series. Captains: report the missing games on the match page: ${link}`;
+}
+
 export function playoffsStartedMessage(
   seasonName: string,
+  /** The bracket link opens this season's page, so it survives the handoff. */
+  seasonId: string,
   pairings: {
     home: string;
     away: string;
@@ -385,22 +481,67 @@ export function playoffsStartedMessage(
       return `• ${side(p.home, p.homeSeed)} vs ${side(p.away, p.awaySeed)}${when}`;
     })
     .join("\n");
-  return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
+  return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${seasonBracketUrl(seasonId)}>`;
+}
+
+/**
+ * The next playoff round has been built from the last one's winners (the
+ * final, in a four-team bracket). The opening bracket and the champion always
+ * posted; the rounds between them didn't, so finalists heard about their
+ * final from the match-night reminder a day before kickoff. The send mentions
+ * the captains of the new fixtures; the times render in each reader's zone.
+ */
+export function playoffRoundSetMessage(m: {
+  seasonName: string;
+  /** The bracket link opens this season's page, so it survives the handoff. */
+  seasonId: string;
+  /** roundName(): "Grand final", "Semifinals", "Quarterfinals", "Round N". */
+  roundName: string;
+  fixtures: { home: string; away: string; whenMs: number | null }[];
+}): string {
+  const lines = m.fixtures.map((f) => {
+    const when =
+      f.whenMs != null && Number.isFinite(f.whenMs)
+        ? ` — <t:${Math.floor(f.whenMs / 1000)}:F> (<t:${Math.floor(f.whenMs / 1000)}:R>)`
+        : " — kickoff time still to be set";
+    return `• **${name(f.home)}** vs **${name(f.away)}**${when}`;
+  });
+  // "Semifinals are set", "Grand final is set", "Round 3 is set".
+  const verb = /s$/.test(m.roundName) ? "are" : "is";
+  return `🏁 **${name(m.seasonName)} ${m.roundName.toLowerCase()} ${verb} set!**\n${lines.join("\n")}\nBracket: <${seasonBracketUrl(m.seasonId)}>`;
 }
 
 export function playoffsReturnedToRegularMessage(seasonName: string): string {
   return `↩️ **${name(seasonName)} playoffs have been withdrawn for a standings correction.** The current bracket is void and the league is back in the Regular season phase. A fresh bracket will be posted after the results are corrected: <${resolveSiteUrl()}/schedule>`;
 }
 
+/**
+ * The season's champions. The roster is congratulated by name, and each
+ * player who linked Discord is mentioned: one of the few pings the league
+ * sends that praises rather than asks. The caller's allowlist is the linked
+ * roster (mentionsOf), which is exactly the mentions this text shows; a
+ * roster is one team, so nothing is ever left out for length.
+ */
 export function championMessage(
   seasonName: string,
   teamName: string,
   seasonId: string,
+  /** The champion team's roster, captain first. Empty names nobody. */
+  roster: DraftReminderPerson[] = [],
 ): string {
   // The season's own page holds the champion, bracket and awards. Older posts
   // link /recap?season=, which redirects there.
   const recap = `${resolveSiteUrl()}/seasons/${encodeURIComponent(seasonId)}`;
-  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — season recap at <${recap}>`;
+  const people = roster.map(personLabel);
+  const cheers =
+    people.length === 0
+      ? ""
+      : ` Congratulations ${
+          people.length === 1
+            ? people[0]
+            : `${people.slice(0, -1).join(", ")} and ${people[people.length - 1]}`
+        }!`;
+  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions!${cheers} GG everyone — season recap at <${recap}>`;
 }
 
 export function freeAgentSignedMessage(
@@ -410,7 +551,9 @@ export function freeAgentSignedMessage(
   // Ends by naming the signed player's next move — a signing is a season-long
   // obligation (every remaining match night), so the send mentions them and
   // the copy tells them what being signed asks of them, the standin-assign rule.
-  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>. ${name(playerName)}: their schedule is yours now — check in on your match pages: <${resolveSiteUrl()}/schedule>`;
+  // It names the team rather than saying "their schedule", which read as the
+  // player's own.
+  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>. ${name(playerName)}: the **${name(teamName)}** match nights are yours now — check in on your match pages: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function playerReleasedMessage(
@@ -530,6 +673,39 @@ export function inhouseResultVoidedMessage(m: {
   return `↩️ **That inhouse result has been voided by an admin** — it's off the ladder, and the result posted for that game no longer stands.${link}`;
 }
 
+/**
+ * A playoff fixture's round, from the name the site gives it
+ * (`matchRoundLabel`): "Semifinal", "Grand final", or "Playoff round 2" in a
+ * bracket deep enough to number its rounds. Null when there is no name, or
+ * the bracket couldn't place the fixture ("Playoffs"), so the caller keeps
+ * its phase-only wording.
+ */
+function playoffFixtureTitle(roundLabel: string | null | undefined): string | null {
+  if (!roundLabel || roundLabel === "Playoffs") return null;
+  return /^Round \d+$/.test(roundLabel)
+    ? `Playoff ${roundLabel.toLowerCase()}`
+    : roundLabel;
+}
+
+/**
+ * How a post names one fixture mid-sentence: "week 3 match", "tiebreaker
+ * match", or a playoff fixture by its round ("semifinal", "grand final").
+ * Every post about the same fixture uses this, so the OUT ping, the standin
+ * booked in reply and the reschedule thread all call it the same thing.
+ */
+function fixtureLabel(m: {
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  roundLabel?: string | null;
+}): string {
+  if (m.isTiebreaker) return "tiebreaker match";
+  if (m.isPlayoff) {
+    return playoffFixtureTitle(m.roundLabel)?.toLowerCase() ?? "playoff match";
+  }
+  return `week ${m.week} match`;
+}
+
 export function playerOutMessage(m: {
   playerName: string;
   homeName: string;
@@ -537,21 +713,37 @@ export function playerOutMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
   /** Deep link target — the match page holds the Standins card the message
    *  is pointing the captain at. Optional so hand-built calls stay valid. */
   matchId?: string;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
   // page with the assign form, not on the front door (the week-reminder shape).
   const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
   return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
+}
+
+/**
+ * The answer to playerOutMessage: the player who said they couldn't make it
+ * now can. setAvailability sends it to the same captain, and only when that
+ * OUT was announced, so a captain still hunting for cover hears to stop.
+ */
+export function playerBackInMessage(
+  m: Parameters<typeof playerOutMessage>[0],
+): string {
+  const label = fixtureLabel(m);
+  const when =
+    m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
+  const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
+  return `✅ **${name(m.playerName)}** can make the ${label} after all — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. No need to find cover for them; if you already booked a standin, you can cancel that on the match page.${link}`;
 }
 
 /** One fixture of an away range, in playerOutMessage's own shape. */
@@ -587,7 +779,9 @@ export function playerAwayMessage(
   for (const [i, f] of fixtures.entries()) {
     const label = f.isTiebreaker
       ? "Tiebreaker match"
-      : f.isPlayoff ? "Playoff match" : `Week ${f.week} match`;
+      : f.isPlayoff
+        ? (playoffFixtureTitle(f.roundLabel) ?? "Playoff match")
+        : `Week ${f.week} match`;
     const when = f.whenMs != null ? ` (<t:${Math.floor(f.whenMs / 1000)}:F>)` : "";
     const link = f.matchId ? ` <${resolveSiteUrl()}/matches/${f.matchId}>` : "";
     const line = `• ${label}: **${name(f.homeName)}** vs **${name(f.awayName)}**${when}${link}`;
@@ -613,14 +807,15 @@ export function standinAssignedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
   /** Deep link target — the match page holds the check-in banner. */
   matchId?: string;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const standin = name(m.standinName);
@@ -636,6 +831,27 @@ export function standinAssignedMessage(m: {
   return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page${link}`;
 }
 
+/**
+ * Why a booking ended, in a few plain words. A fixed list rather than free
+ * text: every path that cancels cover picks one, and nothing player-typed can
+ * reach the post through it.
+ */
+const STAND_DOWN_REASON = {
+  CAPTAIN_CANCELLED: "the team's captain cancelled the booking",
+  ADMIN_CANCELLED: "an admin cancelled the booking",
+  SEAT_FILLED: "the team signed a player for that seat",
+  PLAYER_RELEASED: "the covered player was released",
+  TEAM_WITHDREW: "a team withdrew from the season",
+  FORFEIT: "the match was ruled a forfeit",
+  SCHEDULE_REGENERATED: "the schedule was redone",
+  BRACKET_REBUILT: "the playoff bracket was redone",
+  BRACKET_WITHDRAWN: "the playoff bracket was withdrawn to fix the standings",
+  TIEBREAKER_RESET: "the tiebreaker week was reset",
+  DRAFT_RESET: "the draft was reset",
+} as const;
+
+type StandDownReason = keyof typeof STAND_DOWN_REASON;
+
 export function standinRemovedMessage(m: {
   standinName: string;
   teamName: string;
@@ -644,11 +860,15 @@ export function standinRemovedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
+  /** Why the booking ended; omitted, the post just says to stand down. */
+  reason?: StandDownReason;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
-  return `🧩 **${name(m.standinName)}** is no longer standing in for **${name(m.teamName)}** (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) — stand down.`;
+  const label = fixtureLabel(m);
+  const why = m.reason ? ` (${STAND_DOWN_REASON[m.reason]})` : "";
+  return `🧩 **${name(m.standinName)}** is no longer standing in for **${name(m.teamName)}** (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) — stand down${why}.`;
 }
 
 export function rescheduleProposedMessage(m: {
@@ -657,12 +877,13 @@ export function rescheduleProposedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   proposerName: string;
   whenMs: number;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
 }
 
@@ -678,12 +899,13 @@ export function rescheduleDeclinedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   declinerName: string;
   whenMs: number;
 }): string {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.`;
 }
 
@@ -717,6 +939,10 @@ export type WeekReminderInput = {
   pickemOpen?: boolean;
   /** Teams with no regular fixture this week (an odd number of teams). */
   byeTeamNames?: string[];
+  /** The playoff round these fixtures make up, as `roundGroupLabel` names it
+   *  ("Semifinals", "Grand final", "Round 2"). Anything it can't name — a
+   *  bracket it couldn't place, or a mix of rounds — keeps "Playoff matches". */
+  roundLabel?: string | null;
 };
 
 export type WeekReminderAnnouncement = {
@@ -726,16 +952,40 @@ export type WeekReminderAnnouncement = {
   mentionUserIds: string[];
 };
 
+/** Reader-local day and clock time plus the countdown: "Sunday, 4 October
+ *  2026 20:00 (in 23 hours)". The countdown alone left nobody able to say
+ *  what time the games actually are. */
+function kickoffStamp(ms: number): string {
+  const t = Math.floor(ms / 1000);
+  return `<t:${t}:F> (<t:${t}:R>)`;
+}
+
+/** Header for a playoff reminder: the round's own name where the bracket
+ *  gives one, "Playoff matches" when it doesn't. */
+function playoffReminderHeading(roundLabel: string | null | undefined): string {
+  const label = roundLabel?.trim() ?? "";
+  const numbered = /^Round (\d+)$/.exec(label);
+  if (numbered) return `Playoff round ${numbered[1]} matches`;
+  // "Playoffs" means the bracket couldn't place these fixtures, and "Week N"
+  // means they span rounds; neither names anything a player would recognise.
+  if (!label || label === "Playoffs" || /^Week \d+$/.test(label)) {
+    return "Playoff matches";
+  }
+  return label;
+}
+
 function reminderFixtureBlock(
   f: WeekReminderFixture,
   site: string,
+  /** The header already carries the shared kickoff, so the row skips it. */
+  showKickoff: boolean,
 ): {
   lines: string[];
   mentionUserIds: string[];
 } {
-  const t = Math.floor(f.scheduledAt / 1000);
+  const when = showKickoff ? ` — ${kickoffStamp(f.scheduledAt)}` : "";
   const lines = [
-    `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
+    `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}**${when} · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
   ];
   if (f.waitingOn.length === 0) return { lines, mentionUserIds: [] };
 
@@ -794,7 +1044,9 @@ export function weekReminderAnnouncement(
   const site = resolveSiteUrl();
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week} matches`
-    : m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
+    : m.isPlayoff
+      ? playoffReminderHeading(m.roundLabel)
+      : `Week ${m.week} matches`;
   // With an odd number of teams one rests each week. The reminder is the one
   // post that reaches players who don't open the site, so it names them too:
   // otherwise the resting team watches everyone else check in and wonders.
@@ -808,7 +1060,15 @@ export function weekReminderAnnouncement(
     // The reminder is the one weekly post everyone sees; pick'em otherwise
     // relies on people remembering to visit the page before kickoff.
     (m.pickemOpen ? ` Pick'em closes at kickoff: <${site}/pickem>` : "");
+  // One reminder covers one kickoff, so the time goes once under the header
+  // rather than repeating the same date on every row. Rows only carry their
+  // own time if a caller ever mixes kickoffs.
+  const kickoffs = new Set(
+    m.fixtures.map((f) => Math.floor(f.scheduledAt / 1000)),
+  );
+  const sharedKickoff = kickoffs.size === 1 ? m.fixtures[0].scheduledAt : null;
   const lines = [`⏰ **${label} coming up — check in!**`];
+  if (sharedKickoff != null) lines.push(`Kickoff: ${kickoffStamp(sharedKickoff)}`);
   const includedMentions: string[] = [];
   let shownFixtures = 0;
 
@@ -834,7 +1094,11 @@ export function weekReminderAnnouncement(
   };
 
   for (let index = 0; index < m.fixtures.length; index += 1) {
-    const block = reminderFixtureBlock(m.fixtures[index], site);
+    const block = reminderFixtureBlock(
+      m.fixtures[index],
+      site,
+      sharedKickoff == null,
+    );
     const candidate = [...lines, ...block.lines];
     const omitted = m.fixtures.length - index - 1;
     if (!packedContent(candidate, omitted, index + 1)) break;
@@ -1019,8 +1283,15 @@ function mentionIdsOf(people: DraftReminderPerson[]): string[] {
 const ORACLE_NAMES_SHOWN = 5;
 
 export function weeklyHonorsMessage(honors: {
+  /** The leaderboards link opens this season's boards (/leaders?season=),
+   *  so the post still shows these honors after the next season starts. */
+  seasonId: string;
   week: number;
   playerName: string | null;
+  /** The Player of the Week's linked Discord id. On the first post it
+   *  replaces the name with a mention (the send allowlists the same id); a
+   *  correction never mentions anyone, so it can't ping twice. */
+  playerDiscordId?: string | null;
   playerPoints: number;
   heroName: string | null;
   teamName: string | null;
@@ -1037,8 +1308,13 @@ export function weeklyHonorsMessage(honors: {
       : `🏅 **Week ${honors.week} honors are in!**`,
   ];
   if (honors.playerName) {
+    const player = { name: honors.playerName, discordId: honors.playerDiscordId ?? null };
+    const who =
+      !honors.corrected && mentionableId(player)
+        ? personLabel(player)
+        : `**${name(honors.playerName)}**`;
     lines.push(
-      `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+      `⭐ Player of the Week: ${who} — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
     );
   }
   if (honors.teamName) {
@@ -1067,7 +1343,9 @@ export function weeklyHonorsMessage(honors: {
       "The previous honors are withdrawn; no eligible box-score award remains for this week.",
     );
   }
-  lines.push(`Full leaderboards: <${resolveSiteUrl()}/leaders>`);
+  lines.push(
+    `Full leaderboards: <${resolveSiteUrl()}/leaders?season=${encodeURIComponent(honors.seasonId)}>`,
+  );
   return lines.join("\n");
 }
 
@@ -1084,10 +1362,14 @@ export function rescheduleMessage(m: {
   whenMs: number;
   /** RSVPs the retime invalidated — the rosters have to hear about this. */
   clearedRsvps?: number;
+  /** `matchRoundLabel` ("Semifinal"): names a playoff fixture's round. */
+  roundLabel?: string | null;
 }): string {
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week}`
-    : m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
+    : m.isPlayoff
+      ? (playoffFixtureTitle(m.roundLabel) ?? "Playoffs")
+      : `Week ${m.week}`;
   const t = `<t:${Math.floor(m.whenMs / 1000)}:F>`;
   // Retiming clears every check-in (an old answer about a night nobody is
   // playing). Saying so is the only notice the roster gets — the site shows
@@ -1107,6 +1389,12 @@ export type AdminRetimeMove = {
   isTiebreaker?: boolean;
   /** Epoch ms of the new kickoff; null when the admin CLEARED the time. */
   whenMs: number | null;
+  /** The fixture had no kickoff before this change, so its time is SET, not
+   *  moved: calling a first-ever time a move sends players looking for an
+   *  earlier time they never had. */
+  firstTime?: boolean;
+  /** `matchRoundLabel` ("Semifinal"): names a playoff fixture's round. */
+  roundLabel?: string | null;
 };
 
 const ADMIN_RETIME_MAX_LINES = 10;
@@ -1114,7 +1402,9 @@ const ADMIN_RETIME_MAX_LINES = 10;
 /**
  * An admin retime (Set time, or the week mover). Captain-agreed reschedules
  * always announced; admin moves said nothing, so the only sign a fixture had
- * moved was an empty check-in banner. Kickoffs render as `<t:…:F>`.
+ * moved was an empty check-in banner. Kickoffs render as `<t:…:F>`. A fixture
+ * getting its first time (fixtures generated without times, then a match
+ * night set) reads "Kickoff set"; "moved" is kept for a time that existed.
  */
 export function adminRetimeMessage(m: {
   moves: AdminRetimeMove[];
@@ -1123,7 +1413,9 @@ export function adminRetimeMessage(m: {
   const label = (move: AdminRetimeMove) =>
     move.isTiebreaker
       ? `Tiebreaker week ${move.week}`
-      : move.isPlayoff ? "Playoffs" : `Week ${move.week}`;
+      : move.isPlayoff
+        ? (playoffFixtureTitle(move.roundLabel) ?? "Playoffs")
+        : `Week ${move.week}`;
   const when = (move: AdminRetimeMove) =>
     move.whenMs == null
       ? "unscheduled for now"
@@ -1132,19 +1424,38 @@ export function adminRetimeMessage(m: {
     ? ` Check-ins were reset (${m.clearedRsvps} cleared) — everyone please RSVP again.`
     : "";
   const site = resolveSiteUrl();
+  // Clearing a time is never a first time: there was one to clear.
+  const isSet = (move: AdminRetimeMove) =>
+    !!move.firstTime && move.whenMs != null;
   if (m.moves.length === 1) {
     const [move] = m.moves;
+    if (isSet(move)) {
+      return `🗓️ **Kickoff set** — ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** plays ${when(move)} (set by an admin).${reset} <${site}/matches/${move.matchId}>`;
+    }
     const what = move.whenMs == null ? "is" : "now plays";
     return `🗓️ **Kickoff moved** — ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** ${what} ${when(move)} (set by an admin).${reset} <${site}/matches/${move.matchId}>`;
   }
+  const setCount = m.moves.filter(isSet).length;
+  const movedCount = m.moves.length - setCount;
+  const mixed = setCount > 0 && movedCount > 0;
   const shown = m.moves.slice(0, ADMIN_RETIME_MAX_LINES);
   const lines = shown.map(
     (move) =>
-      `• ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** — ${when(move)}`,
+      `• ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** — ${when(move)}${
+        // Only a mixed post needs to say which lines moved; in the others
+        // the header already says it for every line.
+        mixed && !isSet(move) && move.whenMs != null ? " (moved)" : ""
+      }`,
   );
   const more = m.moves.length - shown.length;
   if (more > 0) lines.push(`• …and ${more} more`);
-  return `🗓️ **Schedule moved** by an admin — ${m.moves.length} matches have new kickoffs:\n${lines.join("\n")}\n${reset.trim() ? `${reset.trim()} ` : ""}Full schedule: <${site}/schedule>`;
+  const header =
+    movedCount === 0
+      ? `🗓️ **Kickoffs set** by an admin — ${setCount} matches now have kickoff times:`
+      : setCount === 0
+        ? `🗓️ **Schedule moved** by an admin — ${m.moves.length} matches have new kickoffs:`
+        : `🗓️ **Schedule updated** by an admin — ${setCount} new kickoff${setCount === 1 ? "" : "s"} and ${movedCount} moved:`;
+  return `${header}\n${lines.join("\n")}\n${reset.trim() ? `${reset.trim()} ` : ""}Full schedule: <${site}/schedule>`;
 }
 
 export function testMessage(): string {
@@ -1423,6 +1734,19 @@ export type DiscordSendOptions = {
   /** False is reserved for webhook health checks and transport tests. */
   durable?: boolean;
   /**
+   * Time-bound posts are dropped instead of sent once this passes, so a
+   * webhook outage can't deliver a reminder for a match already played.
+   */
+  expiresAt?: Date;
+  /**
+   * For posts that go stale on an event rather than at a known time: every
+   * post still waiting in this group is dropped by
+   * expireLeagueAnnouncementGroup (the live draft's posts once the draft
+   * ends — draftLiveAnnouncementGroup). Rides the dedupe key, so it replaces
+   * `dedupeKey` for these one-off posts.
+   */
+  expiryGroup?: string;
+  /**
    * Queue now, but make the immediate delivery attempt after the HTTP response
    * is sent (runAfterResponse), so the request that triggered the post never
    * waits on Discord. For hot paths such as the live draft, where the captain
@@ -1479,8 +1803,11 @@ export async function sendDiscordMessage(
     event = await enqueueLeagueAnnouncement({
       content,
       mentions: allowed,
-      dedupeKey: options.dedupeKey,
+      dedupeKey: options.expiryGroup
+        ? `${options.expiryGroup}${options.dedupeKey ?? randomUUID()}`
+        : options.dedupeKey,
       marker: options.marker,
+      expiresAt: options.expiresAt ?? null,
     });
   } catch {
     return false;
@@ -1494,7 +1821,7 @@ export async function sendDiscordMessage(
       deliverLeagueAnnouncements({
         limit,
         send: (queuedContent, queuedMentions) =>
-          sendTo(url, queuedContent, queuedMentions),
+          postTo(url, queuedContent, queuedMentions),
       });
     if (options.afterResponse) {
       await runAfterResponse(() => attempt(AFTER_RESPONSE_DELIVERY_LIMIT));
@@ -1542,8 +1869,17 @@ export async function deliverPendingLeagueAnnouncements(
   return deliverLeagueAnnouncements({
     now: options.now,
     limit: options.limit ?? 1,
-    send: (content, mentions) => sendTo(url, content, mentions),
+    send: (content, mentions) => postTo(url, content, mentions),
   });
+}
+
+/**
+ * The expiry group for one season's live-draft posts ("the draft is LIVE",
+ * paused, resumed, a voided lot, an undone sale). They are news only while
+ * the auction runs, so the draft's end drops any still waiting.
+ */
+export function draftLiveAnnouncementGroup(seasonId: string): string {
+  return `draft-live:${seasonId}:`;
 }
 
 /**
@@ -1577,6 +1913,20 @@ async function sendTo(
   content: string,
   mentions?: MentionAllowlist,
 ): Promise<boolean> {
+  return (await postTo(url, content, mentions)) === true;
+}
+
+/**
+ * sendTo, keeping Discord's answer: `true` when accepted, `{ status }` when
+ * Discord answered with an error, `false` when there was no answer at all.
+ * The league queue needs the status to tell a refused post (drop it) from a
+ * dead webhook (pause and tell the admin).
+ */
+async function postTo(
+  url: string | null,
+  content: string,
+  mentions?: MentionAllowlist,
+): Promise<LeagueSendResult> {
   const target = runtimeWebhookUrl(url);
   if (!target) return false;
   if (!discordMutationsAllowed()) return false;
@@ -1605,7 +1955,7 @@ async function sendTo(
       }),
       signal: AbortSignal.timeout(5000),
     });
-    return res.ok;
+    return res.ok ? true : { status: res.status };
   } catch {
     if (process.env.NODE_ENV !== "production") {
       console.warn("[discord] webhook send failed");

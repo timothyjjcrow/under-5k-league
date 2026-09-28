@@ -46,6 +46,7 @@ describe("security and league configuration audit trail", () => {
     "setMatchSchedule",
     "setDiscordWebhook",
     "clearDiscordWebhook",
+    "discardWaitingDiscordPosts",
     "setInhouseWebhook",
     "clearInhouseWebhook",
     "setInhouseAlertWebhook",

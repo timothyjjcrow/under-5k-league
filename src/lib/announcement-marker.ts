@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
-import { ANNOUNCE_FAILED_PREFIX } from "./settings";
+import { ANNOUNCE_FAILED_PREFIX, resultNudgePrefix } from "./settings";
 import { raceHook } from "./race-hook";
 
 // ---------------------------------------------------------------------------
@@ -162,6 +162,25 @@ export async function invalidatePendingAnnouncementMarkers(
 }
 
 /**
+ * A queued "we couldn't find your games" nudge (result-nudge-service) speaks
+ * for the fixture as it stood when it was queued. Once a game or a result
+ * lands, or the fixture moves to another kickoff, a nudge still waiting in the
+ * outbox would ask the captains for work they already did, or about a night
+ * nobody is playing. Call this inside the result or retime transaction: the
+ * queued post then fails its outbox source check and is dropped. A nudge that
+ * was already delivered stays recorded, so the same kickoff is never nudged
+ * twice.
+ */
+export function invalidateResultNudges(
+  tx: Pick<Prisma.TransactionClient, "setting" | "leagueAnnouncement">,
+  matchId: string,
+): Promise<number> {
+  return invalidatePendingAnnouncementMarkers(tx, resultNudgePrefix(matchId), {
+    prefix: true,
+  });
+}
+
+/**
  * Record a marker as already delivered without sending anything, because the
  * caller's own announcement covers it. Create-only: an existing marker (a
  * claim, a failure or a real delivery) is never overwritten.
@@ -250,7 +269,14 @@ export async function releaseAnnouncementClaim(
 
 /** A bounded, non-identifying queue key for one marker generation. */
 export function announcementDedupeKey(
-  kind: "series" | "champion" | "reminder" | "honors",
+  kind:
+    | "series"
+    | "champion"
+    | "reminder"
+    | "honors"
+    | "signups"
+    | "round"
+    | "nudge",
   claim: AnnouncementMarkerClaim,
 ): string {
   const markerDigest = createHash("sha256")

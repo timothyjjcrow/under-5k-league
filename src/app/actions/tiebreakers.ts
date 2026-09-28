@@ -45,6 +45,7 @@ export async function resetTiebreakerWeek(_prev: ActionResult, form: FormData): 
             ...assignment,
             isPlayoff: false,
             isTiebreaker: true,
+            reason: "TIEBREAKER_RESET",
           }),
           mentionsOf([assignment.discordId]),
         );

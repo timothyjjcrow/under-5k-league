@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { resultNudgeKey } from "@/lib/settings";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+} from "@/lib/league-announcement-outbox";
 import {
   cancelReschedule,
   proposeReschedule,
@@ -245,6 +252,40 @@ describe("reschedule service (integration)", () => {
         await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
       ).scheduledAt?.getTime(),
     ).toBe(NIGHT.getTime());
+  });
+
+  it("an accepted reschedule drops a queued result nudge about the old kickoff", async () => {
+    const { home, away, match } = await setupMatch();
+    // Queued by the worker, not yet delivered (the outbox paused or backing
+    // off): marker finalized, row still pending.
+    const key = resultNudgeKey(match.id, match.scheduleRevision);
+    const eventId = randomUUID();
+    await prisma.setting.create({
+      data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+    });
+    const queued = await enqueueLeagueAnnouncement({
+      content: "We couldn't find the games — captains: report them",
+      dedupeKey: `nudge-source-${match.id}`,
+      marker: { key, eventId },
+    });
+
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    expect(
+      (await respondReschedule(away.captainId, pending!.id, true)).accepted,
+    ).toBe(true);
+
+    const send = vi.fn(async () => true);
+    await deliverLeagueAnnouncements({ send, limit: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      await prisma.leagueAnnouncement.findUniqueOrThrow({
+        where: { id: queued.id },
+      }),
+    ).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "STALE_SOURCE",
+    });
   });
 
   it("opposing captain accepts → match retimed, request ACCEPTED", async () => {
@@ -882,6 +923,42 @@ describe("reschedule league-calendar rules (integration)", () => {
     await expect(
       proposeReschedule(a.captainId, ab.id, new Date(semiNight.getTime() + HOUR)),
     ).rejects.toThrow(/within four hours of Alpha vs Delta \(Semifinal\)/);
+  });
+
+  it("hands the accepted post a playoff fixture's round name", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const [a, b, c, d] = await Promise.all(
+      ["Alpha", "Bravo", "Charlie", "Delta"].map((n, i) => makeTeam(season.id, n, i)),
+    );
+    // A 4-team bracket: its two first-round slots are the semifinals.
+    const semi = await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 6, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M0", homeTeamId: a.id, awayTeamId: b.id,
+        scheduledAt: ORIGINAL_NIGHT,
+      },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 6, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1", homeTeamId: c.id, awayTeamId: d.id,
+        scheduledAt: ORIGINAL_NIGHT,
+      },
+    });
+    const proposed = await proposeReschedule(a.captainId, semi.id, NIGHT);
+    // The proposal post names the round too, so the whole thread agrees.
+    expect(proposed.roundLabel).toBe("Semifinal");
+    const pending = await pendingFor(semi.id);
+    const accepted = await respondReschedule(b.captainId, pending!.id, true);
+    if (!accepted.accepted) throw new Error("expected an acceptance");
+    expect(accepted.isPlayoff).toBe(true);
+    expect(accepted.roundLabel).toBe("Semifinal");
+
+    await proposeReschedule(a.captainId, semi.id, ORIGINAL_NIGHT);
+    const again = await pendingFor(semi.id);
+    const declined = await respondReschedule(b.captainId, again!.id, false);
+    expect(declined.accepted).toBe(false);
+    expect(declined.roundLabel).toBe("Semifinal");
   });
 
   it("re-checks the clash at acceptance, after the rest of the schedule moved", async () => {

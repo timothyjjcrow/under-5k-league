@@ -571,3 +571,89 @@ describe("setAvailability — retimes and live cover", () => {
     ).toEqual([{ userId: unregistered.id }]);
   });
 });
+
+describe("setAvailability — closing the OUT loop", () => {
+  beforeEach(() => {
+    vi.mocked(requireUser).mockReset();
+    mockSend.mockClear();
+  });
+
+  const backIns = () =>
+    mockSend.mock.calls.filter(([msg]) => String(msg).includes("after all"));
+  const outs = () =>
+    mockSend.mock.calls.filter(([msg]) => String(msg).includes("line up a standin"));
+
+  it("tells the same captain when a player who said OUT can make it after all", async () => {
+    const { match, home, player } = await setupMatch();
+    await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "555666777888999001" },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    await setAvailability({}, rsvpForm(match, "OUT"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
+    expect(res?.error).toBeUndefined();
+
+    expect(outs()).toHaveLength(1);
+    expect(backIns()).toHaveLength(1);
+    const [content, mentions] = backIns()[0]!;
+    expect(content).toContain("**Roster Player** can make the week 1 match after all");
+    expect(content).toContain(`/matches/${match.id}>`);
+    expect(mentions).toEqual({ users: ["555666777888999001"] });
+  });
+
+  it("buzzes a captain at most three times while a player flips back and forth", async () => {
+    const { match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    for (const status of ["OUT", "IN", "OUT", "IN", "OUT", "IN", "OUT"]) {
+      await setAvailability({}, rsvpForm(match, status));
+    }
+    // OUT, "after all", OUT again — then quiet until the window passes.
+    expect(outs()).toHaveLength(2);
+    expect(backIns()).toHaveLength(1);
+    expect(mockSend).toHaveBeenCalledTimes(3);
+  });
+
+  it("says nothing for an IN when no OUT was ever announced", async () => {
+    const { match, player } = await setupMatch();
+    // An OUT on file with no ping behind it (answered before, or never sent).
+    await prisma.matchAvailability.create({
+      data: {
+        matchId: match.id,
+        userId: player.id,
+        status: "OUT",
+        scheduleRevision: match.scheduleRevision,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
+    expect(res?.message).toMatch(/confirmed/i);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("never pings a captain about their own answer", async () => {
+    const { match, home } = await setupMatch();
+    const captain = await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "555666777888999002" },
+    });
+    await prisma.teamMember.create({
+      data: {
+        seasonId: match.seasonId,
+        teamId: home.id,
+        userId: captain.id,
+        isCaptain: true,
+        price: 0,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(captain));
+
+    await setAvailability({}, rsvpForm(match, "OUT"));
+    await setAvailability({}, rsvpForm(match, "IN"));
+    expect(backIns()).toHaveLength(1);
+    expect(backIns()[0]![1]).toBeUndefined();
+  });
+});

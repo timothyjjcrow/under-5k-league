@@ -20,6 +20,7 @@ import { raceHook } from "./race-hook";
 import {
   championAnnouncedKey,
   playoffGamesArchiveKey,
+  playoffRoundAnnouncedPrefix,
   playoffRoundBuiltKey,
   playoffRoundBuiltPrefix,
   resultAnnouncedKey,
@@ -43,7 +44,8 @@ import {
   type OfficialFixtureScrimClash,
 } from "./scrim-service";
 import { playoffRoundLabel, scrimYieldedMessage } from "./scrim-discord";
-import { mentionUsers } from "./discord-mentions";
+import { mentionsOf, mentionUsers } from "./discord-mentions";
+import { announcePlayoffRoundOnce } from "./playoff-round-announcement";
 import { logAdminAction } from "./admin-log";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
@@ -259,6 +261,11 @@ async function removePostseason(
     // them, a reset season could never advance past a round it had already
     // built once.
     where: { key: { startsWith: playoffRoundBuiltPrefix(seasonId) } },
+  });
+  // …and their "round is set" posts: a post still queued for a round this
+  // reset deletes must not go out, and the rebuilt round announces afresh.
+  await tx.setting.deleteMany({
+    where: { key: { startsWith: playoffRoundAnnouncedPrefix(seasonId) } },
   });
   await tx.setting.deleteMany({
     where: { key: championAnnouncedKey(seasonId) },
@@ -701,7 +708,14 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
   const champion = presentedChampionTeamId
     ? await prisma.team.findFirst({
         where: { id: presentedChampionTeamId, seasonId },
-        select: { name: true },
+        select: {
+          name: true,
+          // The roster is congratulated, and its linked players mentioned.
+          members: {
+            orderBy: [{ isCaptain: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+            select: { user: { select: { name: true, discordId: true } } },
+          },
+        },
       })
     : null;
   // Un-crowned since (Reset playoffs) or the season is gone: there is nothing
@@ -713,9 +727,12 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
     await releaseAnnouncementClaim(claim);
     return false;
   }
+  const roster = champion.members.map((member) => member.user);
   const sent = await sendDiscordMessage(
-    championMessage(season.name, champion.name, seasonId),
-    undefined,
+    championMessage(season.name, champion.name, seasonId, roster),
+    // Every linked player on the winning roster: exactly the mentions the
+    // post shows. Nobody else.
+    mentionsOf(roster.map((player) => player.discordId)),
     {
       dedupeKey: announcementDedupeKey("champion", claim),
       marker: { key: claim.key, eventId: claim.eventId },
@@ -1011,6 +1028,13 @@ export async function advancePlayoffBracket(
     // idempotent advance on its next run.
     if (e instanceof ScrimClashChangedError) return false;
     throw e;
+  }
+  // Post-commit and best-effort, like the champion: the round is built
+  // whatever Discord says, and this caller still reports the mutation.
+  try {
+    await announcePlayoffRoundOnce(seasonId, nextRound);
+  } catch {
+    console.error("[playoffs] ROUND_ANNOUNCEMENT_FAILED");
   }
   await reportScrimYields(seasonId, built.scrimClashes, {
     pairs: pairings.length,

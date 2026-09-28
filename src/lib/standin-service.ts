@@ -17,6 +17,7 @@ import {
 import { mentionsOf } from "./discord-mentions";
 import { standinConflict, standinMmrNote } from "./standin";
 import { isSerializationConflict } from "./prisma-errors";
+import { roundLabelsForPost } from "./playoff-rounds";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -154,6 +155,11 @@ export async function assignStandinGuarded(opts: {
   teamId?: string;
   /** null = admin (either team); a userId must captain the covered team. */
   actingCaptainId: string | null;
+  /**
+   * Who pressed the button (defaults to actingCaptainId). The covered team's
+   * captain is mentioned unless they are the one acting.
+   */
+  actingUserId?: string;
 }): Promise<StandinServiceResult> {
   const { matchId, standinUserId, replacingUserId, actingCaptainId } = opts;
   if (!matchId || !standinUserId)
@@ -541,7 +547,16 @@ export async function assignStandinGuarded(opts: {
     // happening to visit the site. Which is why it MENTIONS them: a plain
     // channel line about a game they're now expected at is exactly the
     // message that must not depend on them scrolling back.
-    mentions: mentionsOf([standinUser?.discordId]),
+    // When someone else booked it (an admin), the captain who was told to
+    // line up cover is mentioned too, so they know it's handled. A captain
+    // booking their own cover isn't pinged about their own click.
+    mentions: mentionsOf([
+      standinUser?.discordId,
+      await captainToNotify(
+        coverTeamCaptainId,
+        opts.actingUserId ?? actingCaptainId,
+      ),
+    ]),
     announcement: standinAssignedMessage({
       standinName: standinUser?.name ?? "A standin",
       replacedName,
@@ -551,6 +566,8 @@ export async function assignStandinGuarded(opts: {
       week: match.week,
       isPlayoff: isPlayoffPhase(match.phase),
       isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
+      // Named by its round, like the OUT ping the booking answers.
+      roundLabel: (await roundLabelsForPost([match])).get(match.id),
       whenMs: match.scheduledAt?.getTime() ?? null,
       matchId: match.id,
     }),
@@ -569,6 +586,11 @@ export async function removeStandinGuarded(opts: {
   assignmentId: string;
   /** null = admin; a userId must captain the assignment's team. */
   actingCaptainId: string | null;
+  /**
+   * Who pressed the button (defaults to actingCaptainId). The covered team's
+   * captain is mentioned unless they are the one acting.
+   */
+  actingUserId?: string;
 }): Promise<StandinServiceResult> {
   const assignment = await prisma.standinAssignment.findUnique({
     where: { id: opts.assignmentId },
@@ -652,11 +674,17 @@ export async function removeStandinGuarded(opts: {
         "A game was just imported for this match — the assignment has to stay, or the standin drops out of the rest of the series",
     };
   }
+  const byCaptain =
+    team.captainId === (opts.actingUserId ?? opts.actingCaptainId);
   return {
     ok: true,
     message: "Standin assignment removed",
     // They were told to show up; they need to hear that they no longer are.
-    mentions: mentionsOf([assignment.standin.discordId]),
+    // An admin's removal also reaches the captain, whose seat is open again.
+    mentions: mentionsOf([
+      assignment.standin.discordId,
+      byCaptain ? null : await captainToNotify(team.captainId, null),
+    ]),
     announcement: standinRemovedMessage({
       standinName: assignment.standin.name,
       teamName: team.name,
@@ -665,6 +693,26 @@ export async function removeStandinGuarded(opts: {
       week: assignment.match.week,
       isPlayoff: isPlayoffPhase(assignment.match.phase),
       isTiebreaker: assignment.match.phase === MATCH_PHASE.TIEBREAKER,
+      roundLabel: (await roundLabelsForPost([assignment.match])).get(
+        assignment.match.id,
+      ),
+      reason: byCaptain ? "CAPTAIN_CANCELLED" : "ADMIN_CANCELLED",
     }),
   };
+}
+
+/**
+ * The covered team's captain's Discord id when someone other than the captain
+ * changed their cover, else null. Only a linked account is mentionable.
+ */
+async function captainToNotify(
+  captainId: string,
+  actorId: string | null,
+): Promise<string | null> {
+  if (captainId === actorId) return null;
+  const captain = await prisma.user.findUnique({
+    where: { id: captainId },
+    select: { discordId: true },
+  });
+  return captain?.discordId ?? null;
 }

@@ -724,7 +724,7 @@ describe("weekly-honors announcement retry", () => {
         ]),
       },
     });
-    return { season, match };
+    return { season, match, star };
   }
 
   describe("pick'em Oracle of the Week line", () => {
@@ -829,6 +829,29 @@ describe("weekly-honors announcement retry", () => {
     mockHook.mockResolvedValue("https://discord.test/hook");
     await maybeAnnounceWeekHonors(season.id, 1);
     expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("mentions a linked Player of the Week on the first post, never on a correction", async () => {
+    const { season, star } = await setupCompletedWeek();
+    const discordId = "123456789012345678";
+    await prisma.user.update({ where: { id: star.id }, data: { discordId } });
+
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const [first, firstMentions] = mockSend.mock.calls[0];
+    expect(first).toContain(`⭐ Player of the Week: <@${discordId}> —`);
+    expect(firstMentions).toEqual({ users: [discordId] });
+
+    // A result repair re-opens the week; the correction names the player in
+    // plain text and pings nobody, so nobody is buzzed twice for one award.
+    await prisma.$transaction((tx) => markWeekHonorsStale(tx, season.id, 1));
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    const [correction, correctionMentions] = mockSend.mock.calls[1];
+    expect(correction).toMatch(/Correction: Week 1 honors have been updated/);
+    expect(correction).toContain("⭐ Player of the Week: **Star Carry** —");
+    expect(correction).not.toContain("<@");
+    expect(correctionMentions).toBeUndefined();
   });
 
   it("a result correction survives an in-flight silent-mode suppression", async () => {
@@ -1357,6 +1380,43 @@ describe("champion announcement retry", () => {
       where: { key: championAnnouncedKey(season.id) },
     });
     expect(after.value).not.toMatch(/^failed:/);
+  });
+
+  it("congratulates the champion roster and mentions only its linked players", async () => {
+    const { season, champ } = await crownedSeason();
+    const star = await makeUser("Star");
+    const quiet = await makeUser("Quiet");
+    const outsider = await makeUser("Outsider");
+    const captainId = "123456789012345678";
+    const starId = "223456789012345678";
+    await prisma.user.update({
+      where: { id: champ.captainId },
+      data: { discordId: captainId },
+    });
+    await prisma.user.update({ where: { id: star.id }, data: { discordId: starId } });
+    await prisma.user.update({
+      where: { id: outsider.id },
+      data: { discordId: "323456789012345678" },
+    });
+    const at = (s: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, s));
+    await prisma.teamMember.createMany({
+      data: [
+        { seasonId: season.id, teamId: champ.id, userId: star.id, price: 10, createdAt: at(2) },
+        { seasonId: season.id, teamId: champ.id, userId: champ.captainId, isCaptain: true, createdAt: at(3) },
+        { seasonId: season.id, teamId: champ.id, userId: quiet.id, price: 5, createdAt: at(4) },
+      ],
+    });
+
+    expect(await announceChampionOnce(season.id)).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const [content, mentions] = mockSend.mock.calls[0];
+    // Captain first, then the roster in signing order; the unlinked player is
+    // named, and a linked player on another team is nowhere.
+    expect(content).toContain(
+      `Congratulations <@${captainId}>, <@${starId}> and Quiet!`,
+    );
+    expect(new Set(mentions?.users)).toEqual(new Set([captainId, starId]));
+    expect(content).not.toContain("323456789012345678");
   });
 
   it("the sync sweep reclaims an expired champion lease with its event id", async () => {

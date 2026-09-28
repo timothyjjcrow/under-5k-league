@@ -191,6 +191,9 @@ describe("listAwayFixtures — the /me card's list and render gate", () => {
       message:
         "Marked you out for 1 fixture: Semifinal vs Bravo. Captains can now line up cover.",
     });
+    // The captain's post names the round too, not just "playoff match".
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toContain("can't make the semifinal —");
   });
 
   it("renders nothing for a non-participant or outside the check-in phases", async () => {
@@ -542,13 +545,17 @@ describe("markAwayDates", () => {
 });
 
 describe("markAwayDates + setAvailability share one OUT ping per match", () => {
-  it("a range leaves out a match the player just announced one-by-one", async () => {
+  it("a range leaves out a match whose OUT the captain already heard", async () => {
     const { season, player, mine, days } = await setupSeason();
     vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
 
-    await setAvailability({}, rsvpForm(mine[0], "OUT"));
-    await setAvailability({}, rsvpForm(mine[0], "IN"));
-    expect(mockSend).toHaveBeenCalledTimes(1);
+    // OUT (announced), IN (answered: "after all"), OUT (announced again), IN
+    // (quiet: one answer per window). The captain's last word on mine[0] is
+    // an OUT that still stands inside the throttle window.
+    for (const status of ["OUT", "IN", "OUT", "IN"]) {
+      await setAvailability({}, rsvpForm(mine[0], status));
+    }
+    expect(mockSend).toHaveBeenCalledTimes(3);
 
     const view = await page(player.id);
     const res = await markAwayDates(
@@ -556,23 +563,50 @@ describe("markAwayDates + setAvailability share one OUT ping per match", () => {
       awayForm(season.id, days(1), days(10), view!.fixtures),
     );
     expect(res?.message).toMatch(/^Marked you out for 2 fixtures/);
-    expect(mockSend).toHaveBeenCalledTimes(2);
-    const msg = String(mockSend.mock.calls[1][0]);
+    expect(mockSend).toHaveBeenCalledTimes(4);
+    const msg = String(mockSend.mock.calls[3][0]);
     expect(msg).toContain(`/matches/${mine[1].id}`);
     expect(msg).not.toContain(`/matches/${mine[0].id}`);
   });
 
-  it("a one-match OUT after a range doesn't ping again", async () => {
+  it("a range re-announces a match the captain was told the player could make", async () => {
+    const { season, player, mine, days } = await setupSeason();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    await setAvailability({}, rsvpForm(mine[0], "OUT"));
+    await setAvailability({}, rsvpForm(mine[0], "IN"));
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[1][0])).toContain("after all");
+
+    const view = await page(player.id);
+    await markAwayDates({}, awayForm(season.id, days(1), days(10), view!.fixtures));
+    expect(mockSend).toHaveBeenCalledTimes(3);
+    const msg = String(mockSend.mock.calls[2][0]);
+    expect(msg).toContain(`/matches/${mine[0].id}`);
+    expect(msg).toContain(`/matches/${mine[1].id}`);
+  });
+
+  it("a one-match IN answers a range's OUT, and flapping after it stays bounded", async () => {
     const { season, player, mine, days } = await setupSeason();
     vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
     const view = await page(player.id);
     await markAwayDates({}, awayForm(season.id, days(1), days(10), view!.fixtures));
     expect(mockSend).toHaveBeenCalledTimes(1);
 
+    // The range and the single-match paths share one OUT key per match, so
+    // the single IN answers the range's announcement for that match.
     await setAvailability({}, rsvpForm(mine[0], "IN"));
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[1][0])).toContain("after all");
+
     const out = await setAvailability({}, rsvpForm(mine[0], "OUT"));
     expect(out).toHaveProperty("message");
-    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend).toHaveBeenCalledTimes(3);
+
+    // Inside the window, more flipping is quiet.
+    await setAvailability({}, rsvpForm(mine[0], "IN"));
+    await setAvailability({}, rsvpForm(mine[0], "OUT"));
+    expect(mockSend).toHaveBeenCalledTimes(3);
   });
 
   it("a double submit marks once and announces once", async () => {

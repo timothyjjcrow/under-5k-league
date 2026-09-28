@@ -467,6 +467,31 @@ describe("result sync — league matches (integration)", () => {
     expect(mockMatch).not.toHaveBeenCalled();
   });
 
+  it("asks the captains to report a fixture whose games it could not find", async () => {
+    const { home, match } = await setupNight({ offsetMs: -5 * HOUR });
+    await prisma.user.update({
+      where: { id: home.captainId! },
+      data: { discordId: "910000000000000001" },
+    });
+    const nudges = () =>
+      mockSend.mock.calls.filter(([content]) =>
+        content.includes("We couldn't find the games"),
+      );
+
+    const out = await runResultSync();
+    expect(out.issues).toEqual([]);
+    // The scan still ran (and found nothing) before the nudge.
+    expect(mockRecent).toHaveBeenCalled();
+    expect(nudges()).toHaveLength(1);
+    expect(nudges()[0]![0]).toContain(`/matches/${match.id}>`);
+    // Only the linked captain is pingable; the other has not linked yet.
+    expect(nudges()[0]![1]).toEqual({ users: ["910000000000000001"] });
+
+    // The next pass does not repeat it.
+    await runResultSync();
+    expect(nudges()).toHaveLength(1);
+  });
+
   it("concurrent pings race to one claim — the game imports exactly once", async () => {
     const { match, homeAccts, awayAccts } = await setupNight({
       offsetMs: -2 * HOUR,

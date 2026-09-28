@@ -27,6 +27,7 @@ import {
 } from "@/app/actions/admin";
 import { confirmDraftReadiness } from "@/app/actions/registration";
 import { requireAdmin, requireUser } from "@/lib/auth";
+import { sendDiscordMessage } from "@/lib/discord";
 import {
   DRAFT_STATUS,
   REGISTRATION_STATUS,
@@ -185,6 +186,27 @@ describe("captain designation setup boundaries", () => {
 
     expect(result?.error).toMatch(/locked|not available|season/i);
     expect(await prisma.team.count({ where: { seasonId: season.id } })).toBe(0);
+  });
+
+  it("tells the removed captain on Discord, mentioning them", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    const { user, team } = await makeCaptain(season.id, "Gone Captain", 100, 0);
+    const discordId = "123456789012345678";
+    await prisma.user.update({ where: { id: user.id }, data: { discordId } });
+
+    const result = await removeCaptain(
+      {},
+      setupForm(season.id, { teamId: team.id }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    const send = vi.mocked(sendDiscordMessage);
+    expect(send).toHaveBeenCalledTimes(1);
+    const [content, mentions] = send.mock.calls[0];
+    expect(content).toContain(
+      `<@${discordId}> is no longer captain of **Gone Captain's Team**`,
+    );
+    expect(mentions).toEqual({ users: [discordId] });
   });
 
   it.each([
@@ -551,6 +573,38 @@ describe("captaincy handover", () => {
     }
     return { season, captain, incoming };
   }
+
+  it("tells the channel the outgoing captain is replaced, mentioning both", async () => {
+    const { season, captain, incoming } = await transferableTeam();
+    const outgoingId = "123456789012345678";
+    const incomingId = "223456789012345678";
+    await prisma.user.update({
+      where: { id: captain.user.id },
+      data: { discordId: outgoingId },
+    });
+    await prisma.user.update({
+      where: { id: incoming.user.id },
+      data: { discordId: incomingId },
+    });
+
+    const result = await transferCaptaincy(
+      {},
+      setupForm(season.id, {
+        teamId: captain.team.id,
+        newCaptainUserId: incoming.user.id,
+        expectedCaptainUserId: captain.user.id,
+      }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    const send = vi.mocked(sendDiscordMessage);
+    expect(send).toHaveBeenCalledTimes(1);
+    const [content, mentions] = send.mock.calls[0];
+    expect(content).toContain(
+      `<@${incomingId}>, **you now captain Outgoing Captain's Team.** <@${outgoingId}> is no longer captain and stays on the roster as a player.`,
+    );
+    expect(new Set(mentions?.users)).toEqual(new Set([incomingId, outgoingId]));
+  });
 
   it("atomically switches Team.captainId and leaves exactly one captain flag", async () => {
     const { season, captain, incoming } = await transferableTeam();

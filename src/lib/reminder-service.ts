@@ -21,11 +21,13 @@ import {
   teamAvailability,
 } from "./availability";
 import { draftReminderKey, weekReminderKey } from "./settings";
-import { byeTeamsByWeek } from "./schedule";
+import { byeTeamsByWeek, roundGroupLabel } from "./schedule";
+import { loadPlayoffRoundsBySeason } from "./playoff-rounds";
 import { draftReminderDue } from "./draft-setup";
 import { DRAFT_READINESS, draftReadiness } from "./draft-readiness";
 import { raceHook } from "./race-hook";
 import { mentionsOf } from "./discord-mentions";
+import { weekReminderExpiresAt } from "./league-delivery";
 import {
   announcementDedupeKey,
   claimAnnouncementMarker,
@@ -253,9 +255,26 @@ export async function maybeAnnounceUpcomingWeek(season: {
     }),
   }));
 
+  // A playoff reminder names its round ("Semifinals coming up"). The depth
+  // read is a garnish: if it fails the header says "Playoff matches", as it
+  // always did, rather than costing the reminder.
+  const isPlayoff = isPlayoffPhase(next.phase);
+  let roundLabel: string | null = null;
+  if (isPlayoff) {
+    let depth = 0;
+    try {
+      depth =
+        (await loadPlayoffRoundsBySeason([season.id])).get(season.id) ?? 0;
+    } catch {
+      // Depth 0: the formatter keeps "Playoff matches".
+    }
+    roundLabel = roundGroupLabel(matches, depth);
+  }
+
   const announcement = weekReminderAnnouncement({
     week: next.week,
-    isPlayoff: isPlayoffPhase(next.phase),
+    isPlayoff,
+    roundLabel,
     isTiebreaker: next.phase === MATCH_PHASE.TIEBREAKER,
     fixtures,
     pickemOpen: matches.some((m) => predictionOpen(m)),
@@ -274,6 +293,14 @@ export async function maybeAnnounceUpcomingWeek(season: {
     {
       dedupeKey: announcementDedupeKey("reminder", claim),
       marker: { key: claim.key, eventId: claim.eventId },
+      // Stuck behind a webhook outage, it is dropped at kickoff (a catch-up
+      // queued after kickoff keeps its BEHIND_HOURS window) instead of being
+      // posted once the games it announces are over.
+      expiresAt: weekReminderExpiresAt(
+        next.scheduledAt!.getTime(),
+        now,
+        WEEK_REMINDER.BEHIND_HOURS,
+      ),
     },
   );
   if (!sent) {
@@ -443,6 +470,9 @@ export async function maybeAnnounceDraftNight(season: {
     {
       dedupeKey: announcementDedupeKey("reminder", claim),
       marker: { key: claim.key, eventId: claim.eventId },
+      // No "behind" allowance for the draft (see DRAFT_REMINDER): once the
+      // time has passed, a queued reminder is dropped rather than posted.
+      expiresAt: new Date(currentDraftAtMs!),
     },
   );
   if (!sent) {

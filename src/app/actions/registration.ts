@@ -690,8 +690,9 @@ export async function saveRegistration(
     };
   }
 
-  // Announce brand-new full-player signups (not updates or standins) with a
-  // countdown to the draft threshold.
+  // Announce brand-new full-player signups (not updates or standins) with the
+  // site's current ask: players to the draft minimum, or past it, players to
+  // the next full team.
   if (createdNew && type === REGISTRATION_TYPE.PLAYER) {
     const playerCount = await prisma.registration.count({
       where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
@@ -700,7 +701,7 @@ export async function saveRegistration(
       signupMessage(
         user.name,
         playerCount,
-        season.minTeams * season.teamSize,
+        season,
         season.draftAt?.getTime() ?? null,
       ),
     );

@@ -122,13 +122,21 @@ import {
   draftRescheduledMessage,
   draftScheduledMessage,
   captainAssignedMessage,
+  captainRemovedMessage,
   webhookIdOf,
   getInhouseWebhookUrl,
   getInhouseAlertWebhookUrl,
   sendInhouseDiscordMessage,
+  draftLiveAnnouncementGroup,
 } from "@/lib/discord";
+import {
+  discardWaitingLeagueAnnouncements,
+  expireLeagueAnnouncementGroup,
+  resumeLeagueAnnouncements,
+} from "@/lib/league-announcement-outbox";
 import { reachabilityNote } from "@/lib/discord-roles";
 import { mentionsOf } from "@/lib/discord-mentions";
+import { announceSignupsOpenOnce } from "@/lib/signups-open-announcement";
 import { logAdminAction } from "@/lib/admin-log";
 import { productionDeleteBackupError } from "@/lib/backup-receipt.mjs";
 import {
@@ -155,6 +163,7 @@ import {
 } from "@/lib/honors-service";
 import {
   invalidatePendingAnnouncementMarkers,
+  invalidateResultNudges,
   recordAnnouncementCovered,
 } from "@/lib/announcement-marker";
 import {
@@ -501,6 +510,12 @@ export async function createSeason(
       : `Created "${name}" from the offseason`,
     seasonId: handoff.newSeasonId,
   });
+  // Post-commit and best-effort: the season exists whatever Discord says.
+  try {
+    await announceSignupsOpenOnce(handoff.newSeasonId);
+  } catch {
+    console.error("[admin] SIGNUPS_OPEN_ANNOUNCEMENT_FAILED");
+  }
   refresh();
   return { message: `Created ${name}` };
 }
@@ -1241,6 +1256,7 @@ export async function removeCaptain(
   await raceHook("admin.removeCaptain.beforeTx");
   let removed: {
     captainName: string;
+    captainDiscordId: string | null;
     teamName: string;
     fixtures: number;
   };
@@ -1344,6 +1360,7 @@ export async function removeCaptain(
         );
         return {
           captainName: team.captain.name,
+          captainDiscordId: team.captain.discordId,
           teamName: team.name,
           fixtures,
         };
@@ -1385,6 +1402,14 @@ export async function removeCaptain(
         : ""),
     seasonId: season.id,
   });
+  // addCaptain pinged them "you now captain X"; correct that in the channel.
+  await sendDiscordMessage(
+    captainRemovedMessage(
+      { name: removed.captainName, discordId: removed.captainDiscordId },
+      removed.teamName,
+    ),
+    mentionsOf([removed.captainDiscordId]),
+  );
   refresh();
   return {
     message: removed.fixtures
@@ -1443,6 +1468,7 @@ export async function transferCaptaincy(
     incomingName: string;
     outgoingName: string;
     incomingDiscordId: string | null;
+    outgoingDiscordId: string | null;
   };
   try {
     transferred = await prisma.$transaction(
@@ -1577,6 +1603,7 @@ export async function transferCaptaincy(
           incomingName: incoming.user.name,
           outgoingName: team.captain.name,
           incomingDiscordId: incoming.user.discordId,
+          outgoingDiscordId: team.captain.discordId,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -1619,8 +1646,11 @@ export async function transferCaptaincy(
       transferred.incomingName,
       transferred.teamName,
       transferred.incomingDiscordId,
+      { name: transferred.outgoingName, discordId: transferred.outgoingDiscordId },
     ),
-    mentionsOf([transferred.incomingDiscordId]),
+    // Both captains: the outgoing one was told "you now captain X" once, and
+    // this post is what says that no longer holds.
+    mentionsOf([transferred.incomingDiscordId, transferred.outgoingDiscordId]),
   );
   refresh();
   return {
@@ -2605,6 +2635,7 @@ export async function startDraft(
   await sendDiscordMessage(
     liveAnnouncement.content,
     mentionsOf(liveAnnouncement.mentionUserIds),
+    { expiryGroup: draftLiveAnnouncementGroup(season.id) },
   );
   await logAdminAction({
     action: "startDraft",
@@ -2671,6 +2702,8 @@ export async function undoLastSaleAction(
   });
   await sendDiscordMessage(
     draftSaleUndoneMessage(season.name, res.player, res.team, res.price),
+    undefined,
+    { expiryGroup: draftLiveAnnouncementGroup(season.id) },
   );
   // The durable send may have enqueued work after the earlier refresh. Expire
   // once more so a snapshot rebuilt during Discord I/O cannot miss the row.
@@ -2730,10 +2763,15 @@ export async function abortDraftAction(
         awayName: a.awayName,
         week: a.week,
         isPlayoff: a.isPlayoff,
+        reason: "DRAFT_RESET",
       }),
       mentionsOf([a.discordId]),
     );
   }
+  // The live-draft posts still waiting (a webhook outage) are stale now.
+  await expireLeagueAnnouncementGroup(
+    draftLiveAnnouncementGroup(season.id),
+  ).catch(() => 0);
   await sendDiscordMessage(
     draftAbortedMessage(season.name, res.playersReturned, res.matchesRemoved),
   );
@@ -2798,7 +2836,9 @@ export async function pauseDraftAction(
     summary: "Paused the live auction and parked its clock",
     seasonId: season.id,
   });
-  await sendDiscordMessage(draftPausedMessage(season.name));
+  await sendDiscordMessage(draftPausedMessage(season.name), undefined, {
+    expiryGroup: draftLiveAnnouncementGroup(season.id),
+  });
   refresh();
   return { message: "Auction paused — clocks are parked until you resume." };
 }
@@ -2830,7 +2870,9 @@ export async function resumeDraftAction(
     summary: "Resumed the auction with a fresh clock",
     seasonId: season.id,
   });
-  await sendDiscordMessage(draftResumedMessage(season.name));
+  await sendDiscordMessage(draftResumedMessage(season.name), undefined, {
+    expiryGroup: draftLiveAnnouncementGroup(season.id),
+  });
   refresh();
   return { message: "Auction resumed — the clock is running again." };
 }
@@ -2862,7 +2904,11 @@ export async function voidCurrentLotAction(
     summary: `Voided the paused live lot for ${res.player}; ${res.nominator} keeps the nomination turn`,
     seasonId: season.id,
   });
-  await sendDiscordMessage(draftLotVoidedMessage(season.name, res.player));
+  await sendDiscordMessage(
+    draftLotVoidedMessage(season.name, res.player),
+    undefined,
+    { expiryGroup: draftLiveAnnouncementGroup(season.id) },
+  );
   refresh();
   return {
     message: `Voided ${res.player}'s lot — no sale recorded. ${res.nominator} keeps the turn; Resume when ready.`,
@@ -3173,6 +3219,7 @@ export async function generateSchedule(
         awayName: a.awayName,
         week: a.week,
         isPlayoff: false,
+        reason: "SCHEDULE_REGENERATED",
       }),
       mentionsOf([a.discordId]),
     );
@@ -3320,6 +3367,7 @@ export async function startPlayoffs(
         awayName: a.awayName,
         week: a.week,
         isPlayoff: true,
+        reason: "BRACKET_REBUILT",
       }),
       mentionsOf([a.discordId]),
     );
@@ -3330,6 +3378,7 @@ export async function startPlayoffs(
   await sendDiscordMessage(
     playoffsStartedMessage(
       season.name,
+      season.id,
       bracket.map((m) => ({
         home: name.get(m.homeTeamId) ?? "?",
         away: name.get(m.awayTeamId) ?? "?",
@@ -3427,6 +3476,7 @@ export async function returnToRegularSeasonAction(
         awayName: assignment.awayName,
         week: assignment.week,
         isPlayoff: true,
+        reason: "BRACKET_WITHDRAWN",
       }),
       mentionsOf([assignment.discordId]),
     );
@@ -3674,6 +3724,8 @@ export async function recordResult(
             ),
           );
         }
+        // A queued "we couldn't find your games" nudge is answered now.
+        await invalidateResultNudges(tx, match.id);
         if (
           match.phase === MATCH_PHASE.REGULAR &&
           match.status === MATCH_STATUS.COMPLETED
@@ -3790,6 +3842,7 @@ export async function recordResult(
         week: outcome.week,
         isPlayoff: isPlayoffPhase(outcome.phase),
         isTiebreaker: outcome.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "FORFEIT",
       }),
       mentionsOf([booking.standin.discordId]),
     );
@@ -4183,6 +4236,7 @@ export async function signFreeAgent(
         week: a.match.week,
         isPlayoff: isPlayoffPhase(a.match.phase),
         isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "SEAT_FILLED",
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4471,6 +4525,7 @@ export async function releasePlayer(
         week: a.match.week,
         isPlayoff: isPlayoffPhase(a.match.phase),
         isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "PLAYER_RELEASED",
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4679,6 +4734,7 @@ export async function withdrawTeam(
                 ),
               );
             }
+            await invalidateResultNudges(tx, match.id);
             // The single team-withdrawal broadcast replaces noisy per-series
             // result posts. Persist that decision with the result so generic
             // completedAt crash recovery cannot replay these ruled fixtures;
@@ -4778,6 +4834,7 @@ export async function withdrawTeam(
         week: a.match.week,
         isPlayoff: isPlayoffPhase(a.match.phase),
         isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "TEAM_WITHDREW",
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4894,8 +4951,9 @@ export async function assignStandin(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let admin: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    admin = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -4909,6 +4967,7 @@ export async function assignStandin(
     replacingUserId: seat ? null : target,
     teamId: seat ?? undefined,
     actingCaptainId: null, // admin override — either team
+    actingUserId: admin.id,
   });
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
@@ -4932,14 +4991,16 @@ export async function removeStandin(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let admin: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    admin = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
   const res = await removeStandinGuarded({
     assignmentId: str(formData, "assignmentId"),
     actingCaptainId: null,
+    actingUserId: admin.id,
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
@@ -5701,6 +5762,8 @@ export async function setWeekNight(
     currentRetimed: number;
     laterRetimed: number;
     retimedIds: string[];
+    /** Retimed fixtures that had no kickoff before (announced as "set"). */
+    firstTimeIds: string[];
     rsvps: number;
     proposals: number;
     hadCanonicalNight: boolean;
@@ -5798,6 +5861,7 @@ export async function setWeekNight(
             currentRetimed: 0,
             laterRetimed: 0,
             retimedIds: [],
+            firstTimeIds: [],
             rsvps: 0,
             proposals: 0,
             hadCanonicalNight: current != null,
@@ -5823,6 +5887,8 @@ export async function setWeekNight(
             data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
           });
           if (updated.count !== 1) throw new ScheduleMatchChangedError();
+          // A nudge queued for the old kickoff must not post about it.
+          await invalidateResultNudges(tx, match.id);
         }
 
         // Keep the arithmetic anchor used for future playoff rounds aligned with
@@ -5877,6 +5943,9 @@ export async function setWeekNight(
           currentRetimed: currentMoves.length,
           laterRetimed: laterMoves.length,
           retimedIds,
+          firstTimeIds: moves
+            .filter(({ match }) => match.scheduledAt == null)
+            .map(({ match }) => match.id),
           rsvps: rsvps.count,
           proposals: proposals.count,
           hadCanonicalNight: current != null,
@@ -5959,7 +6028,11 @@ export async function setWeekNight(
     outcome.retimedIds,
   );
   refresh();
-  const announced = await announceAdminRetime(outcome.retimedIds, outcome.rsvps);
+  const announced = await announceAdminRetime(
+    outcome.retimedIds,
+    outcome.rsvps,
+    outcome.firstTimeIds,
+  );
   return {
     ok: true,
     message:
@@ -6005,6 +6078,8 @@ export async function setMatchTime(
     seasonId: string;
     rsvps: number;
     proposals: number;
+    /** The fixture had no kickoff before: announced as "set", not "moved". */
+    firstTime: boolean;
   };
   try {
     outcome = await prisma.$transaction(
@@ -6063,6 +6138,7 @@ export async function setMatchTime(
             seasonId: currentSeason.id,
             rsvps: 0,
             proposals: 0,
+            firstTime: false,
           };
         }
         const scrimClash = scheduledAt
@@ -6089,6 +6165,8 @@ export async function setMatchTime(
           data: { scheduledAt, scheduleRevision: { increment: 1 }, autoSyncedAt: null, autoSyncAttempts: 0 },
         });
         if (updated.count !== 1) throw new ScheduleMatchChangedError();
+        // A nudge queued for the old kickoff must not post about it.
+        await invalidateResultNudges(tx, matchId);
 
         const [rsvps, proposals] = await Promise.all([
           tx.matchAvailability.deleteMany({ where: { matchId } }),
@@ -6114,6 +6192,7 @@ export async function setMatchTime(
           seasonId: currentSeason.id,
           rsvps: rsvps.count,
           proposals: proposals.count,
+          firstTime: before.scheduledAt == null,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -6166,7 +6245,11 @@ export async function setMatchTime(
   const clashes = scheduledAt
     ? await clashesAfterRetime(outcome.seasonId, [matchId])
     : [];
-  const announced = await announceAdminRetime([matchId], outcome.rsvps);
+  const announced = await announceAdminRetime(
+    [matchId],
+    outcome.rsvps,
+    outcome.firstTime ? [matchId] : [],
+  );
   return {
     message: `${
       scheduledAt
@@ -6826,17 +6909,59 @@ export async function setDiscordWebhook(
     : null;
 
   await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, webhookUrl);
+  // Posts held back by the old webhook (deleted, token changed) try the new
+  // one on the next run instead of waiting out their slowest retry.
+  const waiting = await resumeLeagueAnnouncements().catch(() => 0);
   await logAdminAction({
     action: "setDiscordWebhook",
     summary: `Replaced the league announcement webhook${movedChannel ? (torndown?.orphaned ? "; the old queue board may be orphaned" : "; the old queue board was removed") : ""}`,
   });
   refresh();
+  const backlog =
+    waiting > 0
+      ? ` ${waiting} waiting post${waiting === 1 ? "" : "s"} will go out over the next few minutes, oldest first — discard them on this card if they're out of date.`
+      : "";
   return {
     message: !movedChannel
-      ? "Webhook saved — announcements are on"
+      ? `Webhook saved — announcements are on.${backlog}`
       : torndown?.orphaned
-        ? "Webhook saved — announcements are on. The old queue board is still in the old channel and can no longer be updated; delete that message by hand, then post a new board below."
-        : "Webhook saved — announcements are on. The queue board was removed from the old channel; post a new one below.",
+        ? `Webhook saved — announcements are on.${backlog} The old queue board is still in the old channel and can no longer be updated; delete that message by hand, then post a new board below.`
+        : `Webhook saved — announcements are on.${backlog} The queue board was removed from the old channel; post a new one below.`,
+  };
+}
+
+/**
+ * Discard the league posts still waiting for Discord — the stale backlog a
+ * webhook outage leaves behind. Only posts queued up to the newest one the
+ * admin was shown (`upTo`) are discarded, so nothing queued after the page
+ * loaded is dropped unseen.
+ */
+export async function discardWaitingDiscordPosts(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const upToMs = Number(str(formData, "upTo"));
+  if (!Number.isSafeInteger(upToMs) || upToMs <= 0) {
+    return { error: "Reload the page and try again." };
+  }
+  const discarded = await discardWaitingLeagueAnnouncements(new Date(upToMs));
+  if (discarded > 0) {
+    await logAdminAction({
+      action: "discardWaitingDiscordPosts",
+      summary: `Discarded ${discarded} league Discord post(s) that were waiting to be sent`,
+    });
+  }
+  refresh();
+  return {
+    message:
+      discarded > 0
+        ? `Discarded ${discarded} waiting post${discarded === 1 ? "" : "s"} — ${discarded === 1 ? "it" : "they"} won't be posted.`
+        : "Nothing was waiting — the posts may have just gone out.",
   };
 }
 
@@ -7155,9 +7280,13 @@ export async function testDiscordWebhook(
   const ok = await sendDiscordMessage(testMessage(), undefined, {
     durable: false,
   });
-  return ok
-    ? { message: "Test message sent — check your Discord" }
-    : { error: "Discord rejected the message — double-check the URL" };
+  if (!ok) {
+    return { error: "Discord rejected the message — double-check the URL" };
+  }
+  // The webhook works, so posts paused behind an earlier refusal try again
+  // on the next run.
+  if ((await resumeLeagueAnnouncements().catch(() => 0)) > 0) refresh();
+  return { message: "Test message sent — check your Discord" };
 }
 
 /** Import all games from the season's Dota league id (OpenDota). */
@@ -7347,13 +7476,19 @@ export async function setDraftNight(
   }
   // Best-effort announcement — the countdown surfaces update either way.
   if (changed) {
-    await sendDiscordMessage(
-      when
-        ? replacedExistingTime
+    if (when) {
+      await sendDiscordMessage(
+        replacedExistingTime
           ? draftRescheduledMessage(season.name, when.getTime())
-          : draftScheduledMessage(season.name, when.getTime())
-        : draftCancelledMessage(season.name),
-    );
+          : draftScheduledMessage(season.name, when.getTime()),
+        undefined,
+        // Stuck behind a webhook outage, "the draft is set for <time>" is
+        // dropped once that time has passed rather than posted after it.
+        { expiresAt: when },
+      );
+    } else {
+      await sendDiscordMessage(draftCancelledMessage(season.name));
+    }
   }
   if (changed) {
     await logAdminAction({

@@ -57,6 +57,7 @@ import {
   setDiscordWebhook,
   clearDiscordWebhook,
   testDiscordWebhook,
+  discardWaitingDiscordPosts,
   setInhouseWebhook,
   clearInhouseWebhook,
   setInhouseAlertWebhook,
@@ -123,7 +124,17 @@ import {
   automationHealthView,
   type AutomationHealthRecord,
 } from "@/lib/automation-health";
-import { LEAGUE_ANNOUNCEMENT_STATUS } from "@/lib/league-announcement-outbox";
+import {
+  LEAGUE_ANNOUNCEMENT_STATUS,
+  loadLeagueDeliveryHealth,
+} from "@/lib/league-announcement-outbox";
+import {
+  deliveryErrorLabel,
+  deliveryPaused,
+  leagueDeliveryAttention,
+  refusedPostsSentence,
+  type LeagueDeliveryHealth,
+} from "@/lib/league-delivery";
 import { INHOUSE_ANNOUNCEMENT_STATUS } from "@/lib/inhouse-announcement-outbox";
 import { DangerSubmit } from "@/components/danger-submit";
 import { ChaseCopy } from "@/components/chase-copy";
@@ -263,7 +274,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
   const season = await getActiveSeason();
 
-  const data = season ? await loadSeasonAdminData(season.id) : null;
+  // Delivery health is database-only, so it can sit on the blocking path.
+  const [data, delivery] = await Promise.all([
+    season ? loadSeasonAdminData(season.id) : null,
+    season ? loadLeagueDeliveryHealth().catch(() => null) : null,
+  ]);
   const showTiebreakers = data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
@@ -335,7 +350,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
       {season && data ? (
         <>
-          <AdminAttention season={season} data={data} />
+          <AdminAttention season={season} data={data} delivery={delivery} />
           {showTiebreakers ? (
             <AdminAnchor id="adm-tiebreakers">
               <TiebreakerControls season={season} data={data} />
@@ -917,17 +932,40 @@ async function loadSeasonAdminData(seasonId: string) {
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
 type Season = NonNullable<Awaited<ReturnType<typeof getActiveSeason>>>;
 
-function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
+function AdminAttention({
+  season,
+  data,
+  delivery,
+}: {
+  season: Season;
+  data: AdminData;
+  delivery: LeagueDeliveryHealth | null;
+}) {
   const attention = matchAttention(data.matches);
+  const deliveryLines = delivery ? leagueDeliveryAttention(delivery) : [];
   const names = new Map(data.teams.map((team) => [team.id, team.name]));
   return (
     <Card id="adm-attention" className="scroll-mt-40">
       <CardHeader
         headingLevel={2}
-        title={`${season.name} — ${attention.length ? "needs attention" : "nothing to review"}`}
+        title={`${season.name} — ${attention.length || deliveryLines.length ? "needs attention" : "nothing to review"}`}
         subtitle={`${PHASE_LABEL[season.status]} · Read-only match-night checklist. Open a match to review its current state.`}
       />
       <CardBody className="space-y-4">
+        {deliveryLines.length ? (
+          <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm">
+            <ul className="space-y-1">
+              {deliveryLines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              <a href="#adm-discord" className={textLink()}>
+                Open Discord notifications →
+              </a>
+            </p>
+          </div>
+        ) : null}
         {attention.length ? (
           <details open={attention.length <= 5}>
             <summary className="min-h-11 cursor-pointer text-sm font-medium">
@@ -5405,13 +5443,15 @@ async function DiscordSection({ seasonId }: { seasonId: string | null }) {
   // Resolve it server-side only to derive a boolean + a masked fingerprint.
   const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
   const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
-  const [board, pingHealth, discordReach] = await Promise.all([
+  const [board, pingHealth, discordReach, delivery] = await Promise.all([
     getInhouseBoardStatus(),
     getPingHealth(),
     getDiscordReachFunnel(seasonId),
+    loadLeagueDeliveryHealth().catch(() => null),
   ]);
   return (
     <DiscordControls
+      delivery={delivery}
       status={{
         configured: !!activeWebhook,
         masked: maskWebhookUrl(activeWebhook),
@@ -5427,25 +5467,104 @@ async function DiscordSection({ seasonId }: { seasonId: string | null }) {
   );
 }
 
+/**
+ * Whether league posts are actually getting through. The badge above only
+ * says a webhook URL is saved; this says what Discord did with the posts.
+ * Error codes only — the webhook URL never reaches the page.
+ */
+function LeagueDeliveryLine({
+  health,
+  paused,
+}: {
+  health: LeagueDeliveryHealth;
+  paused: boolean;
+}) {
+  const lastError =
+    health.waiting > 0 ? deliveryErrorLabel(health.headErrorCode) : null;
+  return (
+    <div className="space-y-2 text-sm">
+      <p className="text-muted">
+        {health.lastDeliveredAt ? (
+          <>
+            Last post delivered{" "}
+            <AutomationTimestamp
+              value={health.lastDeliveredAt}
+              emptyLabel="never"
+            />
+          </>
+        ) : (
+          "No league post delivered yet"
+        )}
+        {" · "}
+        {health.waiting > 0 ? `${health.waiting} waiting` : "nothing waiting"}
+        {lastError ? ` · last error: ${lastError}` : null}
+      </p>
+      {paused ? (
+        <p className="text-danger">
+          Posting is paused: Discord refuses this webhook (it was deleted, its
+          token changed, or it lost access to the channel). Paste a new webhook
+          URL below and the waiting posts go out, oldest first.
+        </p>
+      ) : null}
+      {health.refusedRecently > 0 ? (
+        <p className="text-muted [overflow-wrap:anywhere]">
+          {refusedPostsSentence(health)}
+        </p>
+      ) : null}
+      {health.expiredRecently > 0 ? (
+        <p className="text-muted">
+          {health.expiredRecently} out-of-date post
+          {health.expiredRecently === 1 ? " was" : "s were"} dropped in the
+          last day instead of posting late (reminders after kickoff, draft
+          posts after the draft).
+        </p>
+      ) : null}
+      {health.waiting > 0 && health.newestWaitingAt ? (
+        <ActionForm
+          action={discardWaitingDiscordPosts}
+          hidden={{ upTo: String(health.newestWaitingAt.getTime()) }}
+        >
+          <SubmitButton
+            variant="ghost"
+            size="sm"
+            confirm={`Discard the ${health.waiting} league post${health.waiting === 1 ? "" : "s"} waiting to go to Discord? ${health.waiting === 1 ? "It" : "They"} will never be posted.`}
+          >
+            Discard {health.waiting} waiting post
+            {health.waiting === 1 ? "" : "s"}
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
+    </div>
+  );
+}
+
 function DiscordControls({
   status,
+  delivery,
   board,
   pingHealth,
   discordReach,
   mutationsAllowed,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
+  delivery: LeagueDeliveryHealth | null;
   board: InhouseBoardStatus;
   pingHealth: PingHealth;
   discordReach: DiscordReachFunnel;
   mutationsAllowed: boolean;
 }) {
   const { configured, masked, envManaged } = status;
+  const paused = !!delivery && deliveryPaused(delivery);
   return (
     <AdminSection
       id="adm-discord"
       title="Discord notifications"
       subtitle="Configure league announcements plus the year-round inhouse queue board, alerts, and ping role."
+      // Opens itself when league posts are stuck: in the offseason there is
+      // no Needs attention card to say so. A post Discord refused does not
+      // open it; the queue already dropped that post, and the card lists it
+      // below for whoever looks.
+      defaultOpen={!!delivery && leagueDeliveryAttention(delivery).length > 0}
     >
       <CardBody className="space-y-3">
         {!mutationsAllowed ? (
@@ -5475,7 +5594,9 @@ function DiscordControls({
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {configured ? (
             <>
-              <Badge tone="success">Configured</Badge>
+              <Badge tone={paused ? "danger" : "success"}>
+                {paused ? "Refused by Discord" : "Configured"}
+              </Badge>
               <span className="font-mono text-xs text-muted">{masked}</span>
               {envManaged ? (
                 <span className="text-xs text-muted">
@@ -5487,6 +5608,9 @@ function DiscordControls({
             <Badge tone="neutral">Not configured</Badge>
           )}
         </div>
+        {delivery && (configured || delivery.waiting > 0) ? (
+          <LeagueDeliveryLine health={delivery} paused={paused} />
+        ) : null}
 
         <ActionForm
           action={setDiscordWebhook}
@@ -5531,6 +5655,14 @@ function DiscordControls({
           the announcements channel, copy the URL and paste it here. For
           security the saved URL is never shown again — paste a new one to
           replace it, or Remove to turn announcements off.
+        </p>
+        <p className="text-xs text-muted">
+          <b>Who gets pinged:</b> league posts mention only the people each
+          post is for, such as a captain who needs cover, a booked standin,
+          the captains when a fixture moves, players who haven&apos;t checked
+          in, drafted and signed players, and the Player of the Week and the
+          champions. League posts never ping a role or everyone, and only
+          players who linked Discord on their profile can be pinged.
         </p>
 
         <div className="space-y-3 border-t border-line pt-3">
@@ -5698,23 +5830,23 @@ function DiscordControls({
           <p className="text-xs text-muted">
             {board.pingRoleId ? (
               <>
-                <b>Notifications are on.</b> Two messages ping this role — the
-                queue filling up, and a match being found. Nothing else does,
-                and board edits never notify anyone.
+                <b>The ping role is on.</b> Two inhouse posts ping this role:
+                the queue filling up, and a match being found. Nothing else
+                pings it, and board edits never notify anyone.
               </>
             ) : (
               <>
-                <b>Nothing currently notifies anyone.</b> Board edits are silent
-                by design, and every message suppresses mentions. Set a role
-                here and the &ldquo;queue is filling&rdquo; and &ldquo;match
-                found&rdquo; messages will ping it.
+                <b>No ping role set</b>, so the &ldquo;queue is
+                filling&rdquo; post pings nobody. Set a role here and that post
+                and &ldquo;match found&rdquo; will ping it. Board edits never
+                notify anyone.
               </>
             )}{" "}
             Make the role <b>self-assignable</b> (Server Settings → Onboarding,
             or a Channels &amp; Roles picker) — a ping people can&apos;t opt out
-            of gets the channel muted, which is worse than silence. Players who
-            queued are also mentioned directly when their match is found, if
-            they&apos;ve linked Discord on their profile.
+            of gets the channel muted, which is worse than silence. With or
+            without a role, the ten players are mentioned when their match is
+            found, if they&apos;ve linked Discord on their profile.
           </p>
 
           <p className="text-xs text-muted">
@@ -5769,7 +5901,7 @@ function DiscordControls({
               Queue right now: <b>{board.liveState}</b> —{" "}
               {board.inSync
                 ? "the board is showing this."
-                : "the board hasn't caught up yet (an edit is due on the next page view)."}
+                : "the board hasn't caught up yet. It updates within about a minute."}
             </p>
           ) : null}
 

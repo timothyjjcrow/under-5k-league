@@ -9,6 +9,7 @@ import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
 import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
+import { invalidateResultNudges } from "./announcement-marker";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 import {
@@ -18,6 +19,7 @@ import {
 } from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
 import { rescheduleDeadline } from "./schedule";
+import { roundLabelsForPost } from "./playoff-rounds";
 import { isSerializationConflict } from "./prisma-errors";
 
 export type AcceptedReschedule = {
@@ -26,6 +28,8 @@ export type AcceptedReschedule = {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` ("Semifinal"), so the post names a playoff round. */
+  roundLabel: string | null;
   newTime: Date;
   /** The captain who PROPOSED it — they asked and have been waiting. */
   notifyUserId: string | null;
@@ -51,6 +55,8 @@ export type ProposedReschedule = {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` ("Semifinal"), so the post names a playoff round. */
+  roundLabel: string | null;
   proposedTime: Date;
   /**
    * The captain who owes an answer (the OTHER one). A proposal is a question
@@ -67,6 +73,8 @@ export type DeclinedReschedule = {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` ("Semifinal"), so the post names a playoff round. */
+  roundLabel: string | null;
   /** The time that was refused — named so a channel that has seen several
    *  proposals go by can tell WHICH one this closes. */
   proposedTime: Date;
@@ -165,6 +173,21 @@ async function assertFitsLeagueCalendar(
     );
 }
 
+/**
+ * The fixture's round name for a post (`matchRoundLabel`, "Semifinal"). Read
+ * after the write commits, never inside the SERIALIZABLE transaction: a
+ * display label has no business in its read set.
+ */
+async function postRoundLabel(match: {
+  id: string;
+  seasonId: string;
+  phase: string;
+  week: number;
+  bracketSlot: string | null;
+}): Promise<string | null> {
+  return (await roundLabelsForPost([match])).get(match.id) ?? null;
+}
+
 /** Create (or supersede) the match's open proposal. Captains only. */
 export async function proposeReschedule(
   userId: string,
@@ -179,8 +202,9 @@ export async function proposeReschedule(
   // the same instant each cancel what they can see and then both insert,
   // leaving TWO open proposals. The loser was a zombie the other captain could
   // accept days later, retiming the match out from under everyone.
+  let proposed;
   try {
-    return await prisma.$transaction(
+    proposed = await prisma.$transaction(
       async (tx) => {
         // These are authority reads, not presentation data: season turnover,
         // a phase advance, a result sync, or a captain replacement between a
@@ -263,6 +287,13 @@ export async function proposeReschedule(
         });
 
         return {
+          fixture: {
+            id: match.id,
+            seasonId: match.seasonId,
+            phase: match.phase,
+            week: match.week,
+            bracketSlot: match.bracketSlot,
+          },
           homeName: match.homeTeam.name,
           awayName: match.awayTeam.name,
           week: match.week,
@@ -286,6 +317,8 @@ export async function proposeReschedule(
       );
     throw error;
   }
+  const { fixture, ...announcement } = proposed;
+  return { ...announcement, roundLabel: await postRoundLabel(fixture) };
 }
 
 /**
@@ -328,6 +361,13 @@ export async function respondReschedule(
             throw new UserFacingError("That proposal is no longer open");
           return {
             accepted: false as const,
+            fixture: {
+              id: match.id,
+              seasonId: match.seasonId,
+              phase: match.phase,
+              week: match.week,
+              bracketSlot: match.bracketSlot,
+            },
             homeName: match.homeTeam.name,
             awayName: match.awayTeam.name,
             week: match.week,
@@ -416,6 +456,9 @@ export async function respondReschedule(
           throw new UserFacingError(
             "That match is no longer awaiting play",
           );
+        // A "we couldn't find your games" nudge queued for the old kickoff
+        // must not post about it.
+        await invalidateResultNudges(tx, match.id);
 
         // Every RSVP answered the OLD night. Clear them and release the old
         // reminder marker atomically with the retime.
@@ -452,6 +495,8 @@ export async function respondReschedule(
           standinUserIds: standins.map((s) => s.standinUserId),
           matchId: match.id,
           seasonId: match.seasonId,
+          phase: match.phase,
+          bracketSlot: match.bracketSlot,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -464,7 +509,10 @@ export async function respondReschedule(
     throw error;
   }
 
-  if (!outcome.accepted) return outcome;
+  if (!outcome.accepted) {
+    const { fixture, ...declined } = outcome;
+    return { ...declined, roundLabel: await postRoundLabel(fixture) };
+  }
   try {
     options.onAcceptedCommit?.();
   } catch {
@@ -477,6 +525,14 @@ export async function respondReschedule(
   const standinClashes = await clashesAfterRetime(outcome.seasonId, [
     outcome.matchId,
   ]);
+  // The round's name for the post, read outside the SERIALIZABLE write.
+  const roundLabel = await postRoundLabel({
+    id: outcome.matchId,
+    seasonId: outcome.seasonId,
+    phase: outcome.phase,
+    week: outcome.week,
+    bracketSlot: outcome.bracketSlot,
+  });
   return {
     accepted: true,
     homeName: outcome.homeName,
@@ -484,6 +540,7 @@ export async function respondReschedule(
     week: outcome.week,
     isPlayoff: outcome.isPlayoff,
     isTiebreaker: outcome.isTiebreaker,
+    roundLabel,
     newTime: outcome.newTime,
     notifyUserId: outcome.notifyUserId,
     clearedRsvps: outcome.clearedRsvps,
