@@ -75,6 +75,11 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
   await expect(page.getByText("Scouting report")).toBeVisible();
+  // On a phone the scouting card starts folded to its heading; a tap opens it.
+  const scouting = page.locator("#match-scouting");
+  await expect(scouting).toHaveJSProperty("open", false);
+  await scouting.locator(":scope > summary").click();
+  await expect(scouting).toHaveJSProperty("open", true);
   await expect(
     page.getByRole("heading", { name: "Matchup", exact: true }),
   ).toBeVisible();
@@ -133,8 +138,11 @@ test("captains can report an open series and get a clear correction handoff once
     .getByRole("link", { name: "Scouting", exact: true })
     .click();
   await expect(page).toHaveURL(/#match-scouting$/);
+  // The card is a disclosure (folded on a phone): the jump opens it and
+  // focuses its summary, which carries the "Scouting report" heading.
+  await expect(page.locator("#match-scouting")).toHaveJSProperty("open", true);
   await expect(
-    page.getByRole("heading", { name: "Scouting report" }),
+    page.locator("#match-scouting > summary"),
   ).toBeFocused();
   await matchSections
     .getByRole("link", { name: "Matchup", exact: true })

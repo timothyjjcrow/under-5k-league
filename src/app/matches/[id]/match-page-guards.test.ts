@@ -148,3 +148,19 @@ describe("match page box scores", () => {
     expect(PAGE).toContain("Recorded net worth");
   });
 });
+
+describe("match page scouting report", () => {
+  it("starts folded on phones, keeping the Scouting jump's id on the fold", () => {
+    expect(PAGE).toMatch(
+      /<AutoOpenDetails\s+id="match-scouting"\s+openFromWidth="64rem"/,
+    );
+    expect(PAGE).toContain('{ id: "match-scouting", label: "Scouting" }');
+  });
+
+  it("shows only heroes with two games behind them, pubs labelled, no pace", () => {
+    expect(PAGE).toContain("threats: threatList(board)");
+    expect(PAGE).toMatch(/comfortPicks\(\s*pools\[i\],\s*parsePubStats\(r\.pubStats\)\?\.topHeroes,/);
+    expect(PAGE).toMatch(/\{pubs \? \(\s*<span className="text-xs text-muted">\s*pubs/);
+    expect(PAGE).not.toMatch(/paceProfile|Pace over|PaceLine/);
+  });
+});

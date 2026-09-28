@@ -203,6 +203,10 @@ test("warm public statistics refresh on the first read after real admin correcti
       expect(sample, "the season meta states how many complete games it counts").not.toBeNull();
       await expect(warm.scouting.page.getByRole("heading", { name: "Scouting report", exact: true })).toBeVisible();
       expect(warm.scouting.html).toContain("Scouting report");
+      // Before removal the dossier has the game (one pick per hero, below the
+      // two-game floor), so it is not the no-history state.
+      expect(warm.scouting.html).toContain("No hero played twice in league games yet");
+      expect(warm.scouting.html).not.toContain("No league history yet");
       expect(warm.scouting.text).toContain(fixture.playerName);
       for (const { page: publicPage } of Object.values(warm)) {
         await expect(publicPage.getByRole("link", { name: "Admin", exact: true })).toHaveCount(0);

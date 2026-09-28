@@ -2670,11 +2670,17 @@ coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
 
 - Pure `src/lib/scouting.ts` (tested): `playerHeroPool` (per-hero W-L/KDA),
   `threatBoard` (team-wide ban list, adaptive `max(2, ceil(picks/25))`
-  floor; `contested` = most-picked fallback), `paceProfile` (win/loss avg
-  minutes; 0-duration games excluded — unreported ≠ data), `dossierEmpty`.
+  floor; `contested` = most-picked fallback), `dossierEmpty`, and the two
+  display rules: `threatList` (ban board = heroes won on at the floor, else
+  most picked) and `comfortPicks`, both behind `SCOUT_MIN_GAMES` (2) —
+  a league of a handful of games per player made every comfort pick ×1.
+  A player with no hero at the floor shows their stored pub top heroes,
+  labelled "pubs". The pace line (avg win/loss minutes) was dropped.
   Role coverage reuses `pool-stats.roleCoverage`.
 - Rendered as a two-sided "Scouting report" card in the `/matches/[id]`
-  preview (both dossiers public), over ALL seasons' stored box scores.
+  preview (both dossiers public), over ALL seasons' stored box scores. It
+  is an `AutoOpenDetails` (id `match-scouting`): folded on phones, opened
+  from 64rem up and by the Scouting jump.
 
 ## Playoff scenario engine (done, branch: ambitious-features)
 
