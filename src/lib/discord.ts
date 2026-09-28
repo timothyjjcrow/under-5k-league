@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
+import { MATCH_ANCHOR, matchAnchorPath } from "./match-anchors";
 import { splitLinks } from "./linkify";
 import { escapeDiscordText } from "./discord-escape";
 import {
@@ -738,8 +739,10 @@ export function playerOutMessage(m: {
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
-  // page with the assign form, not on the front door (the week-reminder shape).
-  const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
+  // Standins card itself, not the top of the page or the front door.
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`
+    : "";
   return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
 }
 
@@ -795,7 +798,9 @@ export function playerAwayMessage(
         ? (playoffFixtureTitle(f.roundLabel) ?? "Playoff match")
         : `Week ${f.week} match`;
     const when = f.whenMs != null ? ` (<t:${Math.floor(f.whenMs / 1000)}:F>)` : "";
-    const link = f.matchId ? ` <${resolveSiteUrl()}/matches/${f.matchId}>` : "";
+    const link = f.matchId
+      ? ` <${resolveSiteUrl()}${matchAnchorPath(f.matchId, MATCH_ANCHOR.standins)}>`
+      : "";
     const line = `• ${label}: **${name(f.homeName)}** vs **${name(f.awayName)}**${when}${link}`;
     const rest = fixtures.length - i;
     // Leave room for the "and N more" line whenever anything could follow.
@@ -894,9 +899,15 @@ export function rescheduleProposedMessage(m: {
   roundLabel?: string | null;
   proposerName: string;
   whenMs: number;
+  /** Deep link to the Reschedule card, where the other captain answers.
+   *  Optional so hand-built calls stay valid. */
+  matchId?: string;
 }): string {
   const label = fixtureLabel(m);
-  return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
+  const where = m.matchId
+    ? `on the match page: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.reschedule)}>`
+    : "on the match page.";
+  return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond ${where}`;
 }
 
 /**
@@ -916,9 +927,15 @@ export function rescheduleDeclinedMessage(m: {
   roundLabel?: string | null;
   declinerName: string;
   whenMs: number;
+  /** Deep link to the Reschedule card, where the proposer can try another
+   *  time. Optional so hand-built calls stay valid. */
+  matchId?: string;
 }): string {
   const label = fixtureLabel(m);
-  return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.`;
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.reschedule)}>`
+    : "";
+  return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.${link}`;
 }
 
 /** Cap the ping list so one badly-organised team can't produce a wall of
@@ -1143,6 +1160,47 @@ export function weekReminderAnnouncement(
 /** Backward-compatible pure formatter for surfaces/tests that need only text. */
 export function weekReminderMessage(m: WeekReminderInput): string {
   return weekReminderAnnouncement(m).content;
+}
+
+export type CheckinNudgeInput = {
+  captainName: string;
+  teamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  /** Epoch ms of the kickoff; null = unscheduled (the time is left out). */
+  whenMs: number | null;
+  matchId: string;
+  /** The captain's own players with no answer yet. Linked players are
+   *  mentioned; the rest are named so they can still be chased. */
+  waitingOn: { name: string; discordId: string | null }[];
+};
+
+/**
+ * A captain's "please check in" for their OWN team's unanswered players, one
+ * post with the match link. Only the players named here are allowlisted, so
+ * nobody else on either team is pinged.
+ */
+export function checkinNudgeAnnouncement(m: CheckinNudgeInput): {
+  content: string;
+  /** Exact linked users visibly named in `content`. */
+  mentionUserIds: string[];
+} {
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const t = m.whenMs != null ? Math.floor(m.whenMs / 1000) : null;
+  const when = t != null ? ` (<t:${t}:F>, <t:${t}:R>)` : "";
+  const shown = Math.min(m.waitingOn.length, WAITING_SHOWN);
+  const content =
+    `📋 **${name(m.captainName)}** needs check-ins for **${name(m.teamName)}**'s ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}.\n` +
+    `Still waiting on: ${peopleList(m.waitingOn, shown)}. Tap ✓ or ✗ on the match page: <${resolveSiteUrl()}/matches/${m.matchId}>`;
+  return {
+    content,
+    mentionUserIds: mentionIdsOf(m.waitingOn.slice(0, shown)),
+  };
 }
 
 /**
@@ -1376,6 +1434,9 @@ export function rescheduleMessage(m: {
   clearedRsvps?: number;
   /** `matchRoundLabel` ("Semifinal"): names a playoff fixture's round. */
   roundLabel?: string | null;
+  /** Deep link to the match page, where players check in again (the admin
+   *  retime's shape). Optional so hand-built calls stay valid. */
+  matchId?: string;
 }): string {
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week}`
@@ -1389,7 +1450,10 @@ export function rescheduleMessage(m: {
   const reset = m.clearedRsvps
     ? ` Check-ins were reset (${m.clearedRsvps} cleared) — everyone please RSVP again.`
     : "";
-  return `🗓️ **Rescheduled** — ${label}: **${name(m.homeName)}** vs **${name(m.awayName)}** now plays ${t} (both captains agreed).${reset}`;
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}/matches/${m.matchId}>`
+    : "";
+  return `🗓️ **Rescheduled** — ${label}: **${name(m.homeName)}** vs **${name(m.awayName)}** now plays ${t} (both captains agreed).${reset}${link}`;
 }
 
 export type AdminRetimeMove = {

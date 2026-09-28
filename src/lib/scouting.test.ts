@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  comfortPicks,
   dossierEmpty,
-  paceProfile,
   playerHeroPool,
+  SCOUT_MIN_GAMES,
   threatBoard,
+  threatList,
+  type HeroPoolRow,
   type ScoutGame,
   type ScoutLine,
 } from "./scouting";
@@ -190,88 +193,6 @@ describe("threatBoard", () => {
   });
 });
 
-describe("paceProfile", () => {
-  it("returns the empty profile when nothing qualifies", () => {
-    expect(paceProfile(["a"], [])).toEqual({
-      games: 0,
-      winAvgMins: null,
-      lossAvgMins: null,
-      longestMins: null,
-      shortestMins: null,
-    });
-  });
-
-  it("excludes games with durationSecs 0 and games without our players", () => {
-    const games: ScoutGame[] = [
-      game({ durationSecs: 0, lines: [line({ heroId: 1, userId: "a" })] }),
-      game({ durationSecs: 1800, lines: [line({ heroId: 1, userId: "z" })] }),
-      game({ durationSecs: 1800, lines: [line({ heroId: 1, userId: null })] }),
-      game({ durationSecs: 2400, lines: [line({ heroId: 1, userId: "a" })] }),
-    ];
-    const pace = paceProfile(["a"], games);
-    expect(pace.games).toBe(1);
-    expect(pace.longestMins).toBe(40);
-    expect(pace.shortestMins).toBe(40);
-  });
-
-  it("attributes wins to the majority side, even when players split across sides", () => {
-    const games: ScoutGame[] = [
-      // 2 of 3 lines on radiant -> team side radiant; radiant wins -> win (30m)
-      game({
-        radiantWin: true,
-        durationSecs: 1800,
-        lines: [
-          line({ heroId: 1, userId: "a", isRadiant: true }),
-          line({ heroId: 2, userId: "b", isRadiant: true }),
-          line({ heroId: 3, userId: "c", isRadiant: false }),
-        ],
-      }),
-      // all on dire; radiant wins -> loss (50m)
-      game({
-        radiantWin: true,
-        durationSecs: 3000,
-        lines: [line({ heroId: 1, userId: "a", isRadiant: false })],
-      }),
-    ];
-    const pace = paceProfile(["a", "b", "c"], games);
-    expect(pace.games).toBe(2);
-    expect(pace.winAvgMins).toBe(30);
-    expect(pace.lossAvgMins).toBe(50);
-    expect(pace.longestMins).toBe(50);
-    expect(pace.shortestMins).toBe(30);
-  });
-
-  it("breaks a side tie toward radiant", () => {
-    const games: ScoutGame[] = [
-      game({
-        radiantWin: true,
-        durationSecs: 1200,
-        lines: [
-          line({ heroId: 1, userId: "a", isRadiant: true }),
-          line({ heroId: 2, userId: "b", isRadiant: false }),
-        ],
-      }),
-    ];
-    // Tie -> radiant; radiant won -> counted as a win.
-    const pace = paceProfile(["a", "b"], games);
-    expect(pace.winAvgMins).toBe(20);
-    expect(pace.lossAvgMins).toBeNull();
-  });
-
-  it("averages minutes to 1 decimal and nulls a side with no games", () => {
-    const games: ScoutGame[] = [
-      game({ radiantWin: true, durationSecs: 1500, lines: [line({ heroId: 1, isRadiant: true })] }),
-      game({ radiantWin: true, durationSecs: 1600, lines: [line({ heroId: 1, isRadiant: true })] }),
-    ];
-    const pace = paceProfile(["a"], games);
-    // (1500 + 1600) / 2 / 60 = 25.833... -> 25.8
-    expect(pace.winAvgMins).toBe(25.8);
-    expect(pace.lossAvgMins).toBeNull();
-    expect(pace.longestMins).toBe(26.7);
-    expect(pace.shortestMins).toBe(25);
-  });
-});
-
 describe("dossierEmpty", () => {
   const emptyBoard = threatBoard([], []);
 
@@ -286,5 +207,94 @@ describe("dossierEmpty", () => {
       false,
     );
     expect(dossierEmpty([[], []], threatBoard(["a"], games))).toBe(false);
+  });
+});
+
+function poolRow(heroId: number, games: number, wins = 0): HeroPoolRow {
+  return {
+    heroId,
+    games,
+    wins,
+    winRate: Math.round((wins / games) * 100),
+    kda: 3,
+  };
+}
+
+describe("comfortPicks", () => {
+  it("shows only league heroes played at least twice, most played first", () => {
+    expect(SCOUT_MIN_GAMES).toBe(2);
+    const picks = comfortPicks(
+      [poolRow(1, 4), poolRow(2, 2), poolRow(3, 1), poolRow(4, 1)],
+      [{ heroId: 9, games: 300, wins: 150 }],
+    );
+    expect(picks?.source).toBe("league");
+    expect(picks?.heroes.map((h) => h.heroId)).toEqual([1, 2]);
+  });
+
+  it("caps the list", () => {
+    const picks = comfortPicks(
+      [poolRow(1, 5), poolRow(2, 4), poolRow(3, 3), poolRow(4, 2)],
+      null,
+    );
+    expect(picks?.heroes.map((h) => h.heroId)).toEqual([1, 2, 3]);
+  });
+
+  it("falls back to pub heroes when no league hero reaches the floor", () => {
+    const picks = comfortPicks(
+      [poolRow(1, 1), poolRow(2, 1)],
+      [
+        { heroId: 7, games: 210, wins: 110 },
+        { heroId: 8, games: 0, wins: 0 },
+        { heroId: 9, games: 90, wins: 40 },
+      ],
+    );
+    expect(picks).toEqual({
+      source: "pubs",
+      heroes: [
+        { heroId: 7, games: 210, wins: 110 },
+        { heroId: 9, games: 90, wins: 40 },
+      ],
+    });
+  });
+
+  it("is null with nothing to show", () => {
+    expect(comfortPicks([poolRow(1, 1)], null)).toBeNull();
+    expect(comfortPicks([], [])).toBeNull();
+    expect(comfortPicks([], undefined)).toBeNull();
+  });
+});
+
+describe("threatList", () => {
+  const win = (heroId: number) =>
+    game({ radiantWin: true, lines: [line({ heroId, isRadiant: true })] });
+  const loss = (heroId: number) =>
+    game({ radiantWin: false, lines: [line({ heroId, isRadiant: true })] });
+
+  it("ranks heroes they win on as the ban board", () => {
+    const board = threatBoard(["a"], [win(1), win(1), loss(2), loss(2), win(3)]);
+    expect(threatList(board)).toEqual({
+      ranked: true,
+      rows: [expect.objectContaining({ heroId: 1, picks: 2, wins: 2 })],
+    });
+  });
+
+  it("falls back to most picked, but never a one-off", () => {
+    const board = threatBoard(
+      ["a"],
+      [loss(1), loss(1), loss(1), loss(2), loss(2), win(3), loss(4)],
+    );
+    const list = threatList(board);
+    expect(list.ranked).toBe(false);
+    expect(list.rows.map((r) => r.heroId)).toEqual([1, 2]);
+  });
+
+  it("is empty when every hero was picked once", () => {
+    const board = threatBoard(["a"], [win(1), loss(2), win(3)]);
+    expect(threatList(board)).toEqual({ ranked: false, rows: [] });
+  });
+
+  it("caps the list", () => {
+    const games = [1, 2, 3, 4, 5, 6, 7].flatMap((hero) => [win(hero), win(hero)]);
+    expect(threatList(threatBoard(["a"], games)).rows).toHaveLength(5);
   });
 });

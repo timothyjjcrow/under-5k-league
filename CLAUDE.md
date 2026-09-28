@@ -1838,6 +1838,23 @@ already in the `Setting` table.
   pages (`setAvailability` action — rostered players and assigned standins
   only, no completed matches). Schedule match rows show per-team ✓/✗ counts
   while a match is unplayed.
+- **Captain's check-in reminder** (`src/lib/checkin-nudge-service.ts`,
+  `remindUnansweredCheckins`, `test/integration/checkin-nudge.itest.ts`): an
+  optional one-press button under the captain's OWN side in the match page's
+  Matchup card. One Discord post (`checkinNudgeAnnouncement`) that names and
+  @-mentions only that team's players with no answer for the current kickoff
+  (never the captain, never the other side), with the match link. At most one
+  per team per match per kickoff per `CHECKIN_NUDGE_THROTTLE_SECONDS` (3h) via
+  `claimThrottle` on `checkinNudge:<match>:<team>:<scheduleRevision>` — the
+  revision is in the key because every retime wipes the answers and leaves the
+  last reminder quoting a dead kickoff, so a new time gets a fresh window at
+  once. Claimed after every other check (webhook included) and released only
+  if the post could not be QUEUED (`sendDiscordMessage` returned false or the
+  block threw). The send is durable: once queued it returns true whatever
+  Discord answers and the outbox retries it, so a Discord outage keeps the
+  window and the post arrives late. The button renders only when the action
+  would accept; once sent it says when the next one is allowed. Keep it a
+  single press with no confirm.
 - **Who may answer for a side** is `loadSidePlayerIds`
   (`availability-service.ts`): the roster minus seats a standin covers, plus
   standins whose signup is active (or absent) and who hold no roster seat this
@@ -2735,11 +2752,17 @@ coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
 
 - Pure `src/lib/scouting.ts` (tested): `playerHeroPool` (per-hero W-L/KDA),
   `threatBoard` (team-wide ban list, adaptive `max(2, ceil(picks/25))`
-  floor; `contested` = most-picked fallback), `paceProfile` (win/loss avg
-  minutes; 0-duration games excluded — unreported ≠ data), `dossierEmpty`.
+  floor; `contested` = most-picked fallback), `dossierEmpty`, and the two
+  display rules: `threatList` (ban board = heroes won on at the floor, else
+  most picked) and `comfortPicks`, both behind `SCOUT_MIN_GAMES` (2) —
+  a league of a handful of games per player made every comfort pick ×1.
+  A player with no hero at the floor shows their stored pub top heroes,
+  labelled "pubs". The pace line (avg win/loss minutes) was dropped.
   Role coverage reuses `pool-stats.roleCoverage`.
 - Rendered as a two-sided "Scouting report" card in the `/matches/[id]`
-  preview (both dossiers public), over ALL seasons' stored box scores.
+  preview (both dossiers public), over ALL seasons' stored box scores. It
+  is an `AutoOpenDetails` (id `match-scouting`): folded on phones, opened
+  from 64rem up and by the Scouting jump.
 
 ## Playoff scenario engine (done, branch: ambitious-features)
 
@@ -3262,6 +3285,25 @@ per seat) which is how a short roster gets covered at all; and `clashesAfterReti
 reports a standin double-booked by a retime, since `standinConflict` is only
 checked when cover is arranged and every retime path could move a fixture onto
 a night they were already booked for.
+
+**Per-match controls also live on the match page (2026-09).** Needs attention
+used to link to a match page with no admin controls, so every fix meant going
+back to /admin and hunting for the row. `src/components/admin-match-tools.tsx`
+now owns `MatchResultRow` (kickoff, score/ruling, reopen, games, Auto-fetch /
+Add game) and `StandinMatchBlock` (any-team cover); /admin and the match page's
+folded "Admin tools" card (admins, active season, `#match-admin`, opened by
+`AutoOpenDetails`) render the SAME components, so actions, confirms and gates
+cannot drift. Both read `matchCorrectionContext` (`league-lifecycle.ts`) for
+the later-round lock and the sole-final check, and `adminStandinPoolWhere`
+for the cover pool. Every /admin result row carries `adminMatchRowId` and
+`RevealHashTarget` opens its folded week, so the card's "Open this match in
+the admin panel" link lands on the row. Don't re-inline either component into
+/admin; `match-page-guards.test.ts` pins it. An admin who CAPTAINS the match
+already has Auto-fetch games / Add game in Captain tools, so the card points
+there (`captainImportOnPage`) instead of a second identically named form;
+the admin import override stays one link away on /admin. `StandinMatchBlock`
+shows "Locked: series already started" instead of remove once a game is
+imported, as the captain's card does (removeStandinGuarded refuses it).
 
 ## The 2026-07-31 audit and what it changed (read before re-litigating any of it)
 

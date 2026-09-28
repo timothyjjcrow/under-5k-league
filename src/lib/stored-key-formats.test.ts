@@ -14,6 +14,8 @@ import {
 } from "./announcement-marker";
 import {
   outBackPingThrottleKey,
+  checkinNudgeKey,
+  checkinNudgePrefix,
   outPingPrefix,
   outPingThrottleKey,
 } from "./availability";
@@ -72,6 +74,11 @@ describe("stored Setting key formats", () => {
     expect(
       outBackPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1")),
     ).toBe(true);
+    expect(checkinNudgePrefix("m1")).toBe("checkinNudge:m1:");
+    expect(checkinNudgeKey("m1", "t1", 2)).toBe("checkinNudge:m1:t1:2");
+    expect(checkinNudgeKey("m1", "t1", 2).startsWith(checkinNudgePrefix("m1"))).toBe(
+      true,
+    );
     const fixture = fixtureImportCooldownResource("m1");
     expect(fixture).toBe("fixture:m1");
     expect(providerCooldownResourcePrefix("open-dota-match-import", fixture)).toBe(
@@ -97,6 +104,7 @@ describe("stored Setting key formats", () => {
       signupsOpenAnnouncedKey("s1"),
       outPingPrefix("m1"),
       resultNudgePrefix("m1"),
+      checkinNudgePrefix("m1"),
       providerCooldownResourcePrefix("open-dota-match-scan", "m1"),
       providerCooldownResourcePrefix(
         "open-dota-match-import",

@@ -90,6 +90,7 @@ import {
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
 import type { Match, StandinAssignment, User } from "@prisma/client";
+import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 
 // The link preview names the page and the season.
 export function generateMetadata() {
@@ -1054,7 +1055,7 @@ function ReportResultPrompt({
         </div>
       </div>
       <Link
-        href={`/matches/${match.id}#match-tools`}
+        href={matchAnchorPath(match.id, MATCH_ANCHOR.report)}
         className={buttonClasses("primary", "sm")}
       >
         Report result →

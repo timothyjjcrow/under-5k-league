@@ -19,6 +19,7 @@ import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
+import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { scheduleFilterTeamId, weekStartsCollapsed } from "@/lib/schedule";
 import type { PlayoffPathLine } from "@/components/playoff-outlook";
 
@@ -785,7 +786,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
         ) : null}
         {m.reportResult ? (
           <Link
-            href={`/matches/${m.id}#match-tools`}
+            href={matchAnchorPath(m.id, MATCH_ANCHOR.report)}
             className="relative z-10 inline-flex min-h-11 shrink-0 items-center rounded px-1 text-xs font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
           >
             Report result

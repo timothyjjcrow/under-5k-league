@@ -127,6 +127,7 @@ import {
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
 import { homeMetadata } from "@/lib/link-preview-metadata";
+import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
 
 const PHASE_ORDER = [
@@ -896,7 +897,10 @@ async function MyNextMatch({
               />
             </strong>
           </span>
-          <Link href={`/matches/${next.id}`} className={textLink("shrink-0")}>
+          <Link
+            href={matchAnchorPath(next.id, MATCH_ANCHOR.reschedule)}
+            className={textLink("shrink-0")}
+          >
             Respond <LinkArrow />
           </Link>
         </div>

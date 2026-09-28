@@ -145,12 +145,20 @@ test("players check in and captains bring in standins without any lineup confirm
     await page.reload();
     await expect(page.getByRole("heading", { name: "Game 1", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "✓ Ready for the next game", exact: true })).toHaveCount(1);
+    // The readiness prompt sits under the scoreboard, above the finished box score.
+    const readyTop = (await page.locator("#match-live-checkin").boundingBox())!.y;
+    const gameTop = (await page.getByRole("heading", { name: "Game 1", exact: true }).boundingBox())!.y;
+    expect(readyTop).toBeLessThan(gameTop);
     await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(f.users[f.teamSize * 2].id);
     await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
     await page.getByRole("button", { name: "Assign standin", exact: true }).click();
     await expect.poll(() => db.standinAssignment.count({ where: {
       matchId: f.matchId, teamId: f.homeId, standinUserId: f.users[f.teamSize * 2].id, replacingUserId: f.users[1].id,
     } })).toBe(1);
+    // Game 1 is in, so the server refuses removing that cover: the card says
+    // it is locked instead of offering a Remove that can only fail.
+    await expect(page.getByText("Locked: series already started", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
     await noLineupCard(page);
 
     await login(page, f.users[f.teamSize * 2], path);

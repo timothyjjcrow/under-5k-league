@@ -34,7 +34,7 @@ export async function LiveSeriesCheckin({ matchId }: { matchId: string }) {
   // out, and the standin covering them is in.
   if (!(await loadSidePlayerIds(prisma, match, ownTeam.id)).has(viewer.id)) return null;
   return (
-    <section id="match-live-checkin" aria-label="Ready for the next game" className="scroll-mt-40">
+    <section id="match-live-checkin" aria-label="Ready for the next game" className="scroll-mt-24">
       <CheckinBanner matchId={match.id} scheduleRevision={match.scheduleRevision} heading="Ready for the next game" remainingGames myRsvp={ownRsvp?.status ?? null} viewerIsCaptain={ownTeam.captainId === viewer.id} />
     </section>
   );

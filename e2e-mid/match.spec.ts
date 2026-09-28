@@ -40,6 +40,19 @@ test("a completed match page renders the box score with an MVP chip", async ({
       .locator(gameTarget!)
       .getByRole("heading", { name: "Game 1", exact: true }),
   ).toBeInViewport();
+  // Every fixture series has two games. The second folds to its result line
+  // (a full box score is a phone-height and a half), and its chip opens it.
+  const secondGame = page.getByRole("link", { name: /^Game 2 / }).first();
+  const secondTarget = await secondGame.getAttribute("href");
+  expect(secondTarget).toMatch(/^#game-/);
+  const secondBox = page.locator(secondTarget!);
+  await expect(secondBox).toHaveJSProperty("open", false);
+  await secondGame.click();
+  await expect(secondBox).toHaveJSProperty("open", true);
+  await expect(
+    secondBox.getByRole("heading", { name: "Game 2", exact: true }),
+  ).toBeInViewport();
+  await expect(secondBox.getByText("Recorded net worth")).toBeVisible();
   await expectNoHorizontalOverflow(page, "mobile match center box score");
 
   assertNoErrors();
@@ -62,23 +75,19 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
   await expect(page.getByText("Scouting report")).toBeVisible();
-  const matchSections = page.getByRole("navigation", {
-    name: "Match sections",
-  });
-  await matchSections
-    .getByRole("link", { name: "Scouting", exact: true })
-    .click();
-  await expect(page).toHaveURL(/#match-scouting$/);
-  await expect(
-    page.getByRole("heading", { name: "Scouting report" }),
-  ).toBeFocused();
-  await matchSections
-    .getByRole("link", { name: "Matchup", exact: true })
-    .click();
-  await expect(page).toHaveURL(/#match-matchup$/);
+  // On a phone the scouting card starts folded to its heading; a tap opens it.
+  const scouting = page.locator("#match-scouting");
+  await expect(scouting).toHaveJSProperty("open", false);
+  await scouting.locator(":scope > summary").click();
+  await expect(scouting).toHaveJSProperty("open", true);
   await expect(
     page.getByRole("heading", { name: "Matchup", exact: true }),
-  ).toBeFocused();
+  ).toBeVisible();
+  // A visitor's preview has two cards, so there is no jump bar: with only
+  // two places to go it would point at what is already on screen.
+  await expect(
+    page.getByRole("navigation", { name: "Match sections" }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Captain tools", exact: true }),
   ).toHaveCount(0);
@@ -115,11 +124,54 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.locator("#match-games").getByRole("button", { name: "✓ I'm in" }),
   ).toBeVisible();
-  await captainJump.click();
+  // A captain's preview has three places to go, so it gets the jump bar,
+  // and each chip is named after the card it lands on.
+  const matchSections = page.getByRole("navigation", {
+    name: "Match sections",
+  });
+  await expect(matchSections.getByRole("link")).toHaveText([
+    "Matchup",
+    "Scouting",
+    "Captain tools",
+  ]);
+  await matchSections
+    .getByRole("link", { name: "Scouting", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#match-scouting$/);
+  // The card is a disclosure (folded on a phone): the jump opens it and
+  // focuses its summary, which carries the "Scouting report" heading.
+  await expect(page.locator("#match-scouting")).toHaveJSProperty("open", true);
+  await expect(
+    page.locator("#match-scouting > summary"),
+  ).toBeFocused();
+  await matchSections
+    .getByRole("link", { name: "Matchup", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#match-matchup$/);
+  await expect(
+    page.getByRole("heading", { name: "Matchup", exact: true }),
+  ).toBeFocused();
+  // The section bar's chip opens Captain tools at its heading, where the
+  // reschedule and standin cards come first; the scoreboard's jump goes
+  // past them to lobby setup and reporting.
+  await matchSections
+    .getByRole("link", { name: "Captain tools", exact: true })
+    .click();
   await expect(page).toHaveURL(/#match-tools$/);
   await expect(
     page.getByRole("heading", { name: "Captain tools", exact: true }),
   ).toBeInViewport();
+  await expect(
+    page.getByRole("heading", { name: "Reschedule", exact: true }),
+  ).toBeVisible();
+  // The other captain, one tap from their profile (and their Discord handle
+  // when they have one on file).
+  await expect(
+    page.getByText("Opposing captain:", { exact: true }),
+  ).toBeVisible();
+  await captainJump.click();
+  await expect(page).toHaveURL(/#match-report$/);
+  await expect(page.locator("#match-report")).toBeInViewport();
   await expect(
     page.getByRole("heading", { name: "Official lobby checklist" }),
   ).toBeVisible();
@@ -128,7 +180,7 @@ test("captains can report an open series and get a clear correction handoff once
   ).toBeVisible();
   await expect(
     page.getByText(
-      /League-feed checks begin 25 minutes .* repeat about every 3 minutes/,
+      /from 25 minutes after kickoff the league feed is checked about every 3 minutes/,
     ),
   ).toBeVisible();
   await expect(
@@ -146,9 +198,22 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.getByRole("button", { name: "Copy league id" }),
   ).toBeVisible();
+  // The step-by-step list is folded for captains who have hosted before.
+  const lobbySteps = page.getByText("Lobby setup, step by step", {
+    exact: true,
+  });
+  await expect(lobbySteps).toBeVisible();
+  await expect(page.getByText(/creates the private lobby/)).toBeHidden();
+  await lobbySteps.click();
+  await expect(page.getByText(/creates the private lobby/)).toBeVisible();
+  // Nobody has played before kickoff, so the import form is folded too, one
+  // tap away, with the wrong-ticket advice said once inside it.
   const matchRef = page.getByRole("textbox", {
     name: "Dota match ID or URL",
   });
+  await expect(matchRef).toBeHidden();
+  await page.getByText("Result didn't show up?", { exact: true }).click();
+  await expect(page.getByText(/used the wrong ticket/)).toHaveCount(1);
   await expect(matchRef).toBeVisible();
   await expect(
     page.getByText(
@@ -207,9 +272,20 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.getByText("Series complete", { exact: true }),
   ).toBeVisible();
+  // A final series has no captain tools left: one quiet line under the
+  // games says how to get a wrong result fixed, with no jump button.
   await expect(
-    page.getByRole("heading", { name: "Need a result correction?" }),
+    page.getByText(
+      "Result wrong? Send an admin this page and the Dota match ID.",
+      { exact: true },
+    ),
   ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Result correction ↓" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Captain tools", exact: true }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Report your result" }),
   ).toHaveCount(0);

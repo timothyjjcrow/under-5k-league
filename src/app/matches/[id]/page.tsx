@@ -2,8 +2,10 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
 import { Suspense } from "react";
 import { LiveSeriesCheckin } from "@/components/live-series-checkin";
+import { AutoOpenDetails } from "@/components/auto-open-details";
 import { fetchGamesForScouting } from "@/lib/game-participants";
 import { GameIdentityEditor } from "@/components/game-identity-editor";
+import { AdminMatchTools } from "@/components/admin-match-tools";
 import {
   decodeGamePlayers,
   parseGamePlayers,
@@ -14,15 +16,22 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { matchMetadata } from "@/lib/link-preview-metadata";
-import { AUTO_SYNC, LEAGUE_GAME_MODE } from "@/lib/constants";
+import {
+  CHECKIN_NUDGE_THROTTLE_SECONDS,
+  LEAGUE_GAME_MODE,
+  MATCH_STATUS,
+  REGISTRATION_STATUS,
+} from "@/lib/constants";
 import {
   howToHostParts,
+  leagueResultCopy,
   NO_TICKET_REPORT_SUBTITLE,
   NO_TICKET_RESULT_NOTE,
+  waitingForResultNote,
 } from "@/lib/match-hosting";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
-import { seatValue } from "@/lib/standin";
+import { coverChoices, seatValue, standinPickerBlock } from "@/lib/standin";
 import { roleShort } from "@/lib/roles";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
@@ -32,10 +41,16 @@ import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
-import { matchNightRoster } from "@/lib/availability";
-import { canViewNamedMatchAvailability } from "@/lib/visibility";
+import { matchNightRoster, teamAvailability } from "@/lib/availability";
+import { checkinNudgeBlockedSince } from "@/lib/checkin-nudge-service";
+import { remindUnansweredCheckins } from "@/app/actions/availability";
+import { getWebhookUrl } from "@/lib/discord";
 import {
-  isPlayoffPhase,
+  canViewLeagueContact,
+  canViewNamedMatchAvailability,
+} from "@/lib/visibility";
+import { DiscordTag } from "@/components/discord-tag";
+import {
   matchCheckinOpen,
   matchLogisticsOpen,
   matchResultsOpen,
@@ -45,6 +60,8 @@ import {
 import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { groupPlayoffRounds, matchRoundLabel } from "@/lib/schedule";
+import { loadRescheduleDeadline } from "@/lib/reschedule-service";
+import { FIXTURE_CONFLICT_WINDOW_MS } from "@/lib/fixture-conflict";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
@@ -74,21 +91,27 @@ import {
   type Grade,
 } from "@/lib/benchmarks";
 import {
+  comfortPicks,
   dossierEmpty,
-  paceProfile,
   playerHeroPool,
   threatBoard,
-  type HeroPoolRow,
-  type PaceProfile,
+  threatList,
+  type ComfortPicks as ComfortPicksResult,
   type ScoutGame,
-  type ThreatBoard,
+  type ScoutThreats,
 } from "@/lib/scouting";
+import { parsePubStats, pubCheckedAgo } from "@/lib/pub-stats";
 import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
 import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "@/lib/tiebreaker-format";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import {
+  playoffMatchContext,
+  playoffMatchContextText,
+} from "@/lib/playoff-match-context";
 import { teamHueVar } from "@/lib/team-hues";
+import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import {
   Avatar,
   Badge,
@@ -101,7 +124,6 @@ import {
   HeroIcon,
   KDA,
   LinkArrow,
-  PageTitle,
   PlayerLink,
   RankBadge,
   RoleBadges,
@@ -187,12 +209,16 @@ export default async function MatchDetailPage({
           },
           select: {
             id: true,
+            week: true,
             phase: true,
             bracketSlot: true,
             status: true,
             winnerTeamId: true,
             homeTeamId: true,
             awayTeamId: true,
+            // Names for the playoff context line's next opponent.
+            homeTeam: { select: { name: true } },
+            awayTeam: { select: { name: true } },
           },
         });
   const championPresentation = resolveChampionPresentation(
@@ -203,13 +229,27 @@ export default async function MatchDetailPage({
     match,
     groupPlayoffRounds(postseason).totalRounds,
   );
+  // What this knockout series decides: where the winner goes and that the
+  // loser is out. Tiebreakers keep their own banner.
+  const playoffContext = playoffMatchContext(match, postseason);
+  const bracketTeamName = new Map(
+    postseason.flatMap((m): [string, string][] => [
+      [m.homeTeamId, m.homeTeam.name],
+      [m.awayTeamId, m.awayTeam.name],
+    ]),
+  );
   const tiebreakerStage = parseTiebreakerStage(match.bracketSlot)?.stage;
   const viewer = await getSessionUser();
   const isCaptain =
     !!viewer &&
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
-  const showCaptainTools = isCaptain && match.season.isActive;
+  // A final series has nothing left for a captain to do here: corrections go
+  // through an admin, so it gets one line under the games, not a tools jump.
+  const showCaptainTools =
+    isCaptain && match.season.isActive && match.status !== "COMPLETED";
+  const showCorrectionNote =
+    isCaptain && match.season.isActive && match.status === "COMPLETED";
   // A finished match tells a signed-in picker how their pick'em call went,
   // so nobody has to go back to /pickem to find out.
   const pickemCalls =
@@ -237,47 +277,46 @@ export default async function MatchDetailPage({
     match.status !== "COMPLETED" &&
     match.scheduledAt != null &&
     match.scheduledAt.getTime() < renderedAt;
+  // Each label names the card it jumps to. Played games get no entry: the
+  // scoreboard's Game chips already jump to each box score.
   const sectionItems = [
     ...(hasPreview
       ? [
-          { id: "match-games", label: "Match night" },
           { id: "match-matchup", label: "Matchup" },
           { id: "match-scouting", label: "Scouting" },
         ]
-      : [{ id: "match-games", label: "Games" }]),
+      : []),
     ...(showCaptainTools
-      ? [{ id: "match-tools", label: "Captain tools" }]
+      ? [{ id: MATCH_ANCHOR.tools, label: "Captain tools" }]
       : []),
   ];
 
   return (
     <div className="space-y-6">
-      {/* The page's h1 names the fixture, like its tab title and link
-          preview, so someone moving by headings knows which match this is. */}
-      <PageTitle
-        title={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
-        subtitle={`${match.season.name} · ${postseasonLabel}`}
-        action={
-          <ContextBackLink
-            href={
-              match.season.isActive
-                ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
-                  ? match.phase === "TIEBREAKER"
-                    ? "/schedule#tiebreakers"
-                    : "/schedule#fixtures"
-                  : "/schedule#playoff-bracket"
-                : `/seasons/${match.seasonId}`
-            }
-            className={buttonClasses("secondary", "sm")}
-          >
-            {match.season.isActive
+      {/* A small back link, not a title block: the scoreboard below is the
+          page's visible title, so a phone reaches it without scrolling past
+          the team names printed twice. The destination still follows how
+          the viewer arrived (schedule, bracket or a season's archive). */}
+      <p>
+        <ContextBackLink
+          href={
+            match.season.isActive
               ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
-                ? "← Schedule"
-                : "← Playoff bracket"
-              : `← ${match.season.name}`}
-          </ContextBackLink>
-        }
-      />
+                ? match.phase === "TIEBREAKER"
+                  ? "/schedule#tiebreakers"
+                  : "/schedule#fixtures"
+                : "/schedule#playoff-bracket"
+              : `/seasons/${match.seasonId}`
+          }
+          className={textLink("text-sm")}
+        >
+          {match.season.isActive
+            ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
+              ? "← Schedule"
+              : "← Playoff bracket"
+            : `← ${match.season.name}`}
+        </ContextBackLink>
+      </p>
 
       {match.phase === "TIEBREAKER" ? (
         <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
@@ -293,6 +332,33 @@ export default async function MatchDetailPage({
           }</p> : null}
           <Link href={match.season.isActive ? "/schedule#tiebreakers" : `/seasons/${match.seasonId}`} className="inline-block py-1 text-info hover:underline">{match.season.isActive ? "View full tiebreaker bracket" : "View tiebreaker results"} <LinkArrow /></Link>
         </div>
+      ) : null}
+
+      {playoffContext ? (
+        <p className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm [overflow-wrap:anywhere]">
+          {playoffMatchContextText(
+            playoffContext,
+            (teamId) => bracketTeamName.get(teamId) ?? "TBD",
+            LEAGUE_CONFIG.name,
+          )}
+          {playoffContext.kind === "decided" ? (
+            <>
+              {" "}
+              <Link
+                href={
+                  playoffContext.nextMatchId
+                    ? `/matches/${playoffContext.nextMatchId}`
+                    : match.season.isActive
+                      ? "/schedule#playoff-bracket"
+                      : `/seasons/${match.seasonId}`
+                }
+                className={textLink("whitespace-nowrap")}
+              >
+                {playoffContext.nextMatchId ? "Next match" : "Bracket"} <LinkArrow />
+              </Link>
+            </>
+          ) : null}
+        </p>
       ) : null}
 
       <Card className="relative overflow-hidden">
@@ -318,7 +384,14 @@ export default async function MatchDetailPage({
           }}
         />
         <CardBody className="relative space-y-6 px-3 py-6 sm:px-6 sm:py-8">
+          {/* The page's h1 names the fixture, like its tab title and link
+              preview, so someone moving by headings knows which match this
+              is. On screen the team names right below say the same. */}
+          <h1 className="sr-only">
+            {match.homeTeam.name} vs {match.awayTeam.name}
+          </h1>
           <div className="flex flex-wrap items-center justify-center gap-2">
+            <Badge>{postseasonLabel}</Badge>
             <Badge>Bo{match.bestOf}</Badge>
             {match.status === "COMPLETED" ? (
               <>
@@ -439,14 +512,22 @@ export default async function MatchDetailPage({
               />
             ) : null}
             {showCaptainTools ? (
-              <a href="#match-tools" className={buttonClasses("primary", "sm")}>
-                {match.status === "COMPLETED"
-                  ? "Result correction ↓"
-                  : !matchResultsOpen(match.season.status, match.phase)
-                    ? "Captain tools ↓"
-                    : match.status === "LIVE" || games.length > 0
-                      ? "Record next game ↓"
-                      : "Set up & report ↓"}
+              // Lands on lobby setup and reporting, which now follow the
+              // reschedule and standin cards; anything waiting on the
+              // captain there gets its own line under the scoreboard.
+              <a
+                href={`#${
+                  matchResultsOpen(match.season.status, match.phase)
+                    ? MATCH_ANCHOR.report
+                    : MATCH_ANCHOR.tools
+                }`}
+                className={buttonClasses("primary", "sm")}
+              >
+                {!matchResultsOpen(match.season.status, match.phase)
+                  ? "Captain tools ↓"
+                  : match.status === "LIVE" || games.length > 0
+                    ? "Record next game ↓"
+                    : "Set up & report ↓"}
               </a>
             ) : null}
           </div>
@@ -493,9 +574,40 @@ export default async function MatchDetailPage({
         ) : null}
       </Card>
 
-      {/* One chip would only point at the section right below it. */}
-      {sectionItems.length > 1 ? (
-        <SectionNav items={sectionItems} label="Match sections" sticky />
+      {/* Between games, being ready for the next one is the only thing a
+          player has to do here, so it sits right under the scoreboard, not
+          after every box score. It renders only for players on either side. */}
+      {match.status === "LIVE" && match.season.isActive ? (
+        <Suspense fallback={null}>
+          <LiveSeriesCheckin matchId={match.id} />
+        </Suspense>
+      ) : null}
+
+      {/* What is waiting on this captain, one line each, linking to the card
+          that answers it: those cards sit below the scoreboard and every
+          box score, about a phone-height or more down the page. */}
+      {showCaptainTools ? (
+        <Suspense fallback={null}>
+          <CaptainTodos match={match} viewerId={viewer!.id} />
+        </Suspense>
+      ) : null}
+
+      {/* Admins get this fixture's /admin controls here, folded shut.
+          /admin's Needs attention items land on it (#match-admin), which
+          opens it. Captains' own tools stay as they are below. */}
+      {viewer?.role === "ADMIN" && match.season.isActive ? (
+        <AdminMatchTools
+          match={match}
+          label={postseasonLabel}
+          viewerHasCaptainTools={showCaptainTools}
+        />
+      ) : null}
+
+      {/* A jump bar earns its space only with three places to go; with one
+          or two it just points at what is already on screen. Never pinned
+          here: a pinned bar sat over the box scores. */}
+      {sectionItems.length >= 3 ? (
+        <SectionNav items={sectionItems} label="Match sections" />
       ) : null}
 
       {!match.season.isActive ? (
@@ -504,14 +616,19 @@ export default async function MatchDetailPage({
           part of {match.season.name}; its schedule, reporting, and logistics
           are read-only.
         </div>
-      ) : match.status !== "COMPLETED" &&
-        match.scheduledAt &&
-        match.scheduledAt.getTime() < renderedAt ? (
+      ) : resultPending && match.status !== "LIVE" && games.length === 0 ? (
+        // Once a game is in, the LIVE badge and the score say it all. Before
+        // that, say where things stand without promising an import: forfeits
+        // and private match data never arrive on their own.
         <div className="rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-muted">
-          <strong className="text-fg">Result pending.</strong> The scheduled
-          kickoff has passed, but this series is not final yet. A captain can
-          report the Dota game until the{" "}
-          {isPlayoffPhase(match.phase) ? "playoffs end" : "regular season ends"}.
+          <strong className="text-fg">Waiting for the result.</strong> Kickoff
+          has passed and no game is recorded yet.
+          {!matchResultsOpen(match.season.status, match.phase)
+            ? null
+            : ` ${waitingForResultNote({
+                hasLeagueTicket: !!match.season.dotaLeagueId,
+                viewerIsCaptain: showCaptainTools,
+              })}`}
         </div>
       ) : null}
 
@@ -523,7 +640,7 @@ export default async function MatchDetailPage({
 
       <section
         id="match-games"
-        className="scroll-mt-40 space-y-6"
+        className="scroll-mt-24 space-y-6"
         aria-label={hasPreview ? "Match preview" : "Match games"}
       >
         {games.length === 0 && match.status !== "COMPLETED" ? (
@@ -565,45 +682,31 @@ export default async function MatchDetailPage({
               0,
             );
             const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
-            return (
-              <Card
-                key={g.id}
-                id={`game-${g.id}`}
-                className="scroll-mt-40 overflow-hidden"
+            // 0s / 0-0 means the header stats never got reported — showing
+            // "0m 0s · 0-0 kills" reads as a real (absurd) game.
+            const gameLine =
+              [
+                g.durationSecs > 0
+                  ? `${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s`
+                  : null,
+                g.radiantScore + g.direScore > 0
+                  ? `${g.radiantScore}-${g.direScore} kills`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || undefined;
+            const openDota = (
+              <a
+                href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
+                target="_blank"
+                rel="noreferrer"
+                className={textLink("whitespace-nowrap text-xs")}
               >
-                <CardHeader
-                  title={`Game ${i + 1}`}
-                  headingLevel={2}
-                  // 0s / 0-0 means the header stats never got reported — showing
-                  // "0m 0s · 0-0 kills" reads as a real (absurd) game.
-                  subtitle={
-                    [
-                      g.durationSecs > 0
-                        ? `${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s`
-                        : null,
-                      g.radiantScore + g.direScore > 0
-                        ? `${g.radiantScore}-${g.direScore} kills`
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || undefined
-                  }
-                  action={
-                    <div className="flex items-center gap-2">
-                      {winnerName ? (
-                        <Badge tone="success">{winnerName} won</Badge>
-                      ) : null}
-                      <a
-                        href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={textLink("whitespace-nowrap text-xs")}
-                      >
-                        OpenDota <LinkArrow out />
-                      </a>
-                    </div>
-                  }
-                />
+                OpenDota <LinkArrow out />
+              </a>
+            );
+            const boxScore = (
+              <>
                 <CardBody className="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2">
                   <NetWorthAdvantage
                     radiantName={radiantName}
@@ -631,21 +734,83 @@ export default async function MatchDetailPage({
                   />
                 </CardBody>
                 {viewer?.role === "ADMIN" ? <GameIdentityEditor gameId={g.id} /> : null}
+              </>
+            );
+            if (i === 0) {
+              return (
+                <Card
+                  key={g.id}
+                  id={`game-${g.id}`}
+                  className="scroll-mt-24 overflow-hidden"
+                >
+                  <CardHeader
+                    title={`Game ${i + 1}`}
+                    headingLevel={2}
+                    subtitle={gameLine}
+                    action={
+                      <div className="flex items-center gap-2">
+                        {winnerName ? (
+                          <Badge tone="success">{winnerName} won</Badge>
+                        ) : null}
+                        {openDota}
+                      </div>
+                    }
+                  />
+                  {boxScore}
+                </Card>
+              );
+            }
+            // Later games fold to their result line, as /inhouse does: a
+            // full box score is about 1,760px on a phone, so an open Bo3 was
+            // 7,000px. The id stays on the <details>, and a jump from the
+            // scoreboard's Game chips (or a shared #game- link) opens it.
+            return (
+              <Card key={g.id} className="overflow-hidden">
+                <AutoOpenDetails
+                  id={`game-${g.id}`}
+                  className="group/game scroll-mt-24"
+                >
+                  <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-4 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+                    <div className="min-w-0 flex-1 basis-48">
+                      <h2 className="text-base font-semibold leading-snug text-fg">
+                        Game {i + 1}
+                      </h2>
+                      {gameLine ? (
+                        <p className="mt-1.5 text-sm text-muted">{gameLine}</p>
+                      ) : null}
+                    </div>
+                    <span className="flex min-w-0 items-center gap-3">
+                      {winnerName ? (
+                        <Badge tone="success">{winnerName} won</Badge>
+                      ) : null}
+                      <span
+                        aria-hidden
+                        className="text-muted transition-transform group-open/game:rotate-180 motion-reduce:transition-none"
+                      >
+                        ▾
+                      </span>
+                    </span>
+                  </summary>
+                  <div className="border-t border-line-soft">
+                    <p className="flex justify-end px-5 pt-4">{openDota}</p>
+                    {boxScore}
+                  </div>
+                </AutoOpenDetails>
               </Card>
             );
           })
         )}
       </section>
 
-      {match.status === "LIVE" && match.season.isActive ? (
-        <Suspense fallback={null}>
-          <LiveSeriesCheckin matchId={match.id} />
-        </Suspense>
+      {showCorrectionNote ? (
+        <p className="text-sm text-muted">
+          Result wrong? Send an admin this page and the Dota match ID.
+        </p>
       ) : null}
       {showCaptainTools ? (
         <section
-          id="match-tools"
-          className="scroll-mt-40 space-y-4"
+          id={MATCH_ANCHOR.tools}
+          className="scroll-mt-24 space-y-4"
           aria-labelledby="match-tools-title"
         >
           <div className="flex items-center gap-3 border-t border-line pt-6">
@@ -663,22 +828,216 @@ export default async function MatchDetailPage({
             </h2>
             <Badge className="ml-auto">Your match</Badge>
           </div>
+          <OpposingCaptain
+            captainId={
+              match.homeTeam.captainId === viewer!.id
+                ? match.awayTeam.captainId
+                : match.homeTeam.captainId
+            }
+            showContact={canViewLeagueContact(
+              viewer,
+              match.homeTeam.captainId === viewer!.id
+                ? match.awayTeam.captainId
+                : match.homeTeam.captainId,
+              // A captain of this match in the active season: agreeing the
+              // lobby and any new time with the other captain is their job.
+              isCaptain,
+            )}
+          />
           {/* These components keep their own write-time capability gates,
-              including read-only correction and stranded-proposal cleanup. */}
-          <ReportResultSection match={match} renderedAt={renderedAt} />
-          {match.status !== "COMPLETED" ? (
-            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-              <div className="min-w-0">
-                <RescheduleSection match={match} />
-              </div>
-              <div className="min-w-0">
-                <StandinSection match={match} />
-              </div>
+              including locked reporting and stranded-proposal cleanup. The
+              cards that may need an answer (a proposed time, a player who
+              can't make it) come first; lobby setup and reporting follow,
+              with their own anchor for the scoreboard's jump. */}
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+            <div className="min-w-0 empty:hidden">
+              <RescheduleSection match={match} />
             </div>
-          ) : null}
+            <div className="min-w-0 empty:hidden">
+              <StandinSection
+                match={match}
+                seriesStarted={games.length > 0}
+              />
+            </div>
+          </div>
+          <div id={MATCH_ANCHOR.report} className="scroll-mt-24">
+            <ReportResultSection match={match} renderedAt={renderedAt} />
+          </div>
         </section>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * One line per thing waiting on this captain, each linking to the card that
+ * answers it: a player on their roster who can't make it and has no cover, and
+ * a time the other captain proposed. Both cards sit inside Captain tools,
+ * below the scoreboard and any box scores; without this a captain arriving
+ * from a Discord ping had to scroll a phone-height or more to learn anything
+ * was waiting. Each line uses the same capability gate as its card, so it
+ * never points at a card that isn't there.
+ */
+async function CaptainTodos({
+  match,
+  viewerId,
+}: {
+  match: {
+    id: string;
+    seasonId: string;
+    status: string;
+    scheduleRevision: number;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeam: { captainId: string };
+    awayTeam: { captainId: string };
+    season: { isActive: boolean; status: string };
+    standins: { replaced: { id: string } | null }[];
+  };
+  viewerId: string;
+}) {
+  const myTeamId =
+    match.homeTeam.captainId === viewerId
+      ? match.homeTeamId
+      : match.awayTeam.captainId === viewerId
+        ? match.awayTeamId
+        : null;
+  if (!myTeamId || !match.season.isActive) return null;
+  const [draft, roster, outRows, pending] = await Promise.all([
+    prisma.draft.findUnique({
+      where: { seasonId: match.seasonId },
+      select: { status: true },
+    }),
+    prisma.teamMember.findMany({
+      where: { seasonId: match.seasonId, teamId: myTeamId },
+      select: { userId: true, user: { select: { name: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.matchAvailability.findMany({
+      where: {
+        matchId: match.id,
+        status: "OUT",
+        scheduleRevision: match.scheduleRevision,
+      },
+      select: { userId: true },
+    }),
+    prisma.rescheduleRequest.findFirst({
+      where: {
+        matchId: match.id,
+        status: "PENDING",
+        proposedById: { not: viewerId },
+      },
+      select: { proposedTime: true, proposedBy: { select: { name: true } } },
+    }),
+  ]);
+  const uncoveredOut = standinAssignmentOpen(
+    match.season.status,
+    draft?.status,
+    match.status,
+  )
+    ? coverChoices(
+        roster,
+        new Set(outRows.map((r) => r.userId)),
+        new Set(
+          match.standins.flatMap((s) => (s.replaced ? [s.replaced.id] : [])),
+        ),
+      )
+        .choices.filter((c) => c.out)
+        .map((c) => c.member.user.name)
+    : [];
+  const answer =
+    pending &&
+    matchLogisticsOpen(match.season.status, draft?.status, match.status)
+      ? pending
+      : null;
+  if (uncoveredOut.length === 0 && !answer) return null;
+  return (
+    <ul
+      aria-label="Waiting on you"
+      className="space-y-2 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-4 py-3 text-sm"
+    >
+      {uncoveredOut.length > 0 ? (
+        <li className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+            <span aria-hidden>✗ </span>
+            <strong>{uncoveredOut.join(", ")}</strong>{" "}
+            {uncoveredOut.length === 1
+              ? "can't make it and has no cover yet."
+              : "can't make it and have no cover yet."}
+          </span>
+          <a
+            href={`#${MATCH_ANCHOR.standins}`}
+            className={textLink("shrink-0 font-medium")}
+          >
+            Find a standin <span aria-hidden>↓</span>
+          </a>
+        </li>
+      ) : null}
+      {answer ? (
+        <li className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+            <span aria-hidden>⏳ </span>
+            <strong>{answer.proposedBy.name}</strong> proposed moving this
+            match to{" "}
+            <strong>
+              <LocalTime
+                ts={answer.proposedTime.getTime()}
+                variant="full"
+                initial={formatMatchTime(answer.proposedTime, "full")}
+              />
+            </strong>
+            .
+          </span>
+          <a
+            href={`#${MATCH_ANCHOR.reschedule}`}
+            className={textLink("shrink-0 font-medium")}
+          >
+            Answer <span aria-hidden>↓</span>
+          </a>
+        </li>
+      ) : null}
+    </ul>
+  );
+}
+
+/**
+ * "Opposing captain: <name> <copyable Discord handle>" at the top of Captain
+ * tools. Captains agree lobby times, hosting and reschedules with each other,
+ * and the handle used to be a team page or profile away.
+ */
+async function OpposingCaptain({
+  captainId,
+  showContact,
+}: {
+  captainId: string;
+  /** canViewLeagueContact's answer for this viewer and captain. */
+  showContact: boolean;
+}) {
+  const captain = await prisma.user.findUnique({
+    where: { id: captainId },
+    select: { id: true, name: true, discordName: true, discordId: true },
+  });
+  if (!captain) return null;
+  return (
+    <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+      <span>Opposing captain:</span>
+      <PlayerLink
+        userId={captain.id}
+        className="font-medium text-fg [overflow-wrap:anywhere]"
+      >
+        {captain.name}
+      </PlayerLink>
+      {showContact ? (
+        captain.discordName ? (
+          <DiscordTag
+            name={captain.discordName}
+            verified={!!captain.discordId}
+          />
+        ) : (
+          <span className="text-xs">(no Discord on file)</span>
+        )
+      ) : null}
+    </p>
   );
 }
 
@@ -754,35 +1113,60 @@ async function MatchPreview({
   // Mirror setAvailability's decisive capability gate: an RSVP is about one
   // published, upcoming match night. LIVE readiness is its own banner
   // (LiveSeriesCheckin), including after the first game's import.
-  const [previewSeason, previewDraft, myPrediction] = await Promise.all([
-    prisma.season.findUnique({
-      where: { id: match.seasonId },
-      select: { isActive: true, status: true },
-    }),
-    prisma.draft.findUnique({
-      where: { seasonId: match.seasonId },
-      select: { status: true },
-    }),
-    // Signed-in only: the Matchup card's pick tray (pickemControlFor below).
-    viewer
-      ? prisma.prediction.findUnique({
-          where: { matchId_userId: { matchId: match.id, userId: viewer.id } },
-          select: { pickedTeamId: true },
-        })
-      : Promise.resolve(null),
-  ]);
+  const [previewSeason, previewDraft, myPrediction, viewerRegistration] =
+    await Promise.all([
+      prisma.season.findUnique({
+        where: { id: match.seasonId },
+        select: { isActive: true, status: true },
+      }),
+      prisma.draft.findUnique({
+        where: { seasonId: match.seasonId },
+        select: { status: true },
+      }),
+      // Signed-in only: the Matchup card's pick tray (pickemControlFor below).
+      viewer
+        ? prisma.prediction.findUnique({
+            where: { matchId_userId: { matchId: match.id, userId: viewer.id } },
+            select: { pickedTeamId: true },
+          })
+        : Promise.resolve(null),
+      // The Matchup card's captain contact chips (canViewLeagueContact below).
+      viewer
+        ? prisma.registration.findUnique({
+            where: {
+              seasonId_userId: { seasonId: match.seasonId, userId: viewer.id },
+            },
+            select: { status: true },
+          })
+        : Promise.resolve(null),
+    ]);
+  // Each captain's Discord handle, for the people allowed league contact:
+  // admins, active registrants (standins included, who need to reach the
+  // captain they cover for) and the two captains of this match.
+  const viewerIsMatchCaptain =
+    !!viewer &&
+    (viewer.id === match.homeTeam.captainId ||
+      viewer.id === match.awayTeam.captainId);
+  const captainContact = (captainId: string) =>
+    canViewLeagueContact(
+      viewer,
+      captainId,
+      !!previewSeason?.isActive &&
+        (viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE ||
+          viewerIsMatchCaptain),
+    );
+  const nightRoster = (teamId: string) =>
+    matchNightRoster(
+      members.filter((m) => m.teamId === teamId).map((m) => m.userId),
+      match.standins
+        .filter((s) => s.teamId === teamId)
+        .map((s) => ({
+          standinUserId: s.standin.id,
+          replacingUserId: s.replaced?.id ?? null,
+        })),
+    );
   const activeNightRoster = new Set(
-    [match.homeTeamId, match.awayTeamId].flatMap((teamId) =>
-      matchNightRoster(
-        members.filter((m) => m.teamId === teamId).map((m) => m.userId),
-        match.standins
-          .filter((s) => s.teamId === teamId)
-          .map((s) => ({
-            standinUserId: s.standin.id,
-            replacingUserId: s.replaced?.id ?? null,
-          })),
-      ),
-    ),
+    [match.homeTeamId, match.awayTeamId].flatMap(nightRoster),
   );
   // Async server component: this captures request time once for the stale-
   // fixture guard; it is not client render state.
@@ -801,6 +1185,36 @@ async function MatchPreview({
   const isParticipant =
     !!viewer && checkinOpen && activeNightRoster.has(viewer.id);
   const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
+  // A captain's optional "Remind the N who haven't answered" under their own
+  // side: shown only while check-in is open, someone else on their side owes
+  // an answer, and the league has a Discord channel. Once sent, it says when
+  // the next one is allowed instead (sendCheckinNudge's throttle).
+  const nudgeTeamId =
+    viewer?.id === match.homeTeam.captainId
+      ? match.homeTeamId
+      : viewer?.id === match.awayTeam.captainId
+        ? match.awayTeamId
+        : null;
+  const nudgeWaiting =
+    nudgeTeamId && checkinOpen
+      ? teamAvailability(
+          nightRoster(nudgeTeamId),
+          rsvps,
+        ).unansweredUserIds.filter((id) => id !== viewer!.id).length
+      : 0;
+  const nudge =
+    nudgeTeamId && nudgeWaiting > 0 && (await getWebhookUrl())
+      ? {
+          teamId: nudgeTeamId,
+          waiting: nudgeWaiting,
+          sentAt: await checkinNudgeBlockedSince(
+            match.id,
+            nudgeTeamId,
+            match.scheduleRevision,
+            previewNow,
+          ),
+        }
+      : null;
   // Same rule as the dashboard's This-week cards. The season gate mirrors
   // /pickem's canPlay: savePrediction only ever writes to the ACTIVE season,
   // so an archived fixture must never render live buttons.
@@ -820,8 +1234,18 @@ async function MatchPreview({
     (h) => h.opponentId === match.awayTeamId,
   );
 
-  const side = (teamId: string, name: string, logoUrl: string | null) => {
+  const side = (
+    teamId: string,
+    name: string,
+    logoUrl: string | null,
+    captainId: string,
+  ) => {
     const roster = members.filter((m) => m.teamId === teamId);
+    const captainRow = roster.find((m) => m.userId === captainId);
+    const captain =
+      captainRow?.user.discordName && captainContact(captainId)
+        ? captainRow.user
+        : null;
     const subs = match.standins.filter((s) => s.teamId === teamId);
     const replacedIds = new Set(
       subs.map((s) => s.replaced?.id).filter(Boolean),
@@ -832,11 +1256,21 @@ async function MatchPreview({
         (m) => m.homeTeamId === teamId || m.awayTeamId === teamId,
       ),
     );
-    return { teamId, name, logoUrl, roster, subs, replacedIds, form };
+    return { teamId, name, logoUrl, roster, subs, replacedIds, form, captain };
   };
   const sides = [
-    side(match.homeTeamId, match.homeTeam.name, match.homeTeam.logoUrl),
-    side(match.awayTeamId, match.awayTeam.name, match.awayTeam.logoUrl),
+    side(
+      match.homeTeamId,
+      match.homeTeam.name,
+      match.homeTeam.logoUrl,
+      match.homeTeam.captainId,
+    ),
+    side(
+      match.awayTeamId,
+      match.awayTeam.name,
+      match.awayTeam.logoUrl,
+      match.awayTeam.captainId,
+    ),
   ];
 
   return (
@@ -872,7 +1306,7 @@ async function MatchPreview({
 
       <StakesBanner match={match} seasonMatches={seasonMatches} />
 
-      <Card id="match-matchup" className="scroll-mt-40 overflow-hidden">
+      <Card id="match-matchup" className="scroll-mt-24 overflow-hidden">
         <CardHeader
           title="Matchup"
           headingLevel={2}
@@ -909,6 +1343,17 @@ async function MatchPreview({
                 </Link>
                 {s.form.length > 0 ? <FormStrip form={s.form} /> : null}
               </div>
+              {/* Its own line, not squeezed into the captain's roster row,
+                  which already truncates the name on a phone. */}
+              {s.captain ? (
+                <p className="mb-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                  <span>Captain&apos;s Discord</span>
+                  <DiscordTag
+                    name={s.captain.discordName}
+                    verified={!!s.captain.discordId}
+                  />
+                </p>
+              ) : null}
               <ul className="space-y-1">
                 {s.roster.map((m) => {
                   const reg = regByUser.get(m.userId);
@@ -989,6 +1434,49 @@ async function MatchPreview({
                   );
                 })}
               </ul>
+              {nudge && s.teamId === nudge.teamId ? (
+                nudge.sentAt ? (
+                  <p className="mt-3 border-t border-line-soft pt-2 text-xs text-muted">
+                    Check-in reminder sent{" "}
+                    <LocalTime
+                      ts={nudge.sentAt.getTime()}
+                      variant="short"
+                      initial={formatMatchTime(nudge.sentAt, "short")}
+                    />
+                    . You can send another from{" "}
+                    <LocalTime
+                      ts={
+                        nudge.sentAt.getTime() +
+                        CHECKIN_NUDGE_THROTTLE_SECONDS * 1000
+                      }
+                      variant="short"
+                      initial={formatMatchTime(
+                        new Date(
+                          nudge.sentAt.getTime() +
+                            CHECKIN_NUDGE_THROTTLE_SECONDS * 1000,
+                        ),
+                        "short",
+                      )}
+                    />
+                    .
+                  </p>
+                ) : (
+                  <ActionForm
+                    action={remindUnansweredCheckins}
+                    hidden={{ matchId: match.id }}
+                    className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-soft pt-3"
+                  >
+                    <SubmitButton variant="secondary" size="sm">
+                      {nudge.waiting === 1
+                        ? "Remind the 1 who hasn't answered"
+                        : `Remind the ${nudge.waiting} who haven't answered`}
+                    </SubmitButton>
+                    <span className="text-xs text-muted">
+                      One Discord post that pings only them.
+                    </span>
+                  </ActionForm>
+                )
+              ) : null}
             </div>
           ))}
         </CardBody>
@@ -1022,6 +1510,8 @@ async function MatchPreview({
             userId: m.userId,
             name: m.user.name,
             roles: regByUser.get(m.userId)?.roles ?? "",
+            pubStats: m.user.pubStats,
+            pubStatsAt: m.user.pubStatsAt,
           })),
         }))}
       />
@@ -1134,10 +1624,14 @@ async function StakesBanner({
 }
 
 /**
- * The pre-match dossier: each roster's comfort heroes, the heroes to ban
- * (best win rate at a meaningful sample), and how fast their games run —
- * computed from every box score the league has ever stored, both teams
- * visible to everyone (it's all public data).
+ * The pre-match dossier: each player's comfort heroes and the team's heroes to
+ * ban, from every box score the league has ever stored (both teams visible to
+ * everyone; it's all public data). A hero shows only with SCOUT_MIN_GAMES
+ * games behind it: at this league's size one game is noise. A player with no
+ * such hero shows their stored pub heroes instead, labelled as pubs.
+ *
+ * Starts folded on phones, where it was about 1,000px, and opens by itself
+ * on a wide screen or when the Scouting jump lands on it.
  */
 async function ScoutingReport({
   sides,
@@ -1146,7 +1640,13 @@ async function ScoutingReport({
     teamId: string;
     name: string;
     logoUrl: string | null;
-    roster: { userId: string; name: string; roles: string }[];
+    roster: {
+      userId: string;
+      name: string;
+      roles: string;
+      pubStats: string | null;
+      pubStatsAt: Date | null;
+    }[];
   }[];
 }) {
   // Uncached on purpose — see fetchAllGamesForScouting in cached-queries.ts:
@@ -1165,85 +1665,127 @@ async function ScoutingReport({
       assists: p.assists,
     })),
   }));
+  // Async server component: request time once, for the pub snapshots' age.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
 
   const dossiers = sides.map((side) => {
     const ids = side.roster.map((r) => r.userId);
     const board = threatBoard(ids, scoutGames);
-    const pools = side.roster.map((r) => ({
-      ...r,
-      pool: playerHeroPool(r.userId, scoutGames),
-    }));
+    const pools = side.roster.map((r) => playerHeroPool(r.userId, scoutGames));
+    const comfort = side.roster.flatMap((r, i) => {
+      const picks = comfortPicks(
+        pools[i],
+        parsePubStats(r.pubStats)?.topHeroes,
+      );
+      return picks
+        ? [
+            {
+              userId: r.userId,
+              name: r.name,
+              picks,
+              checked: pubCheckedAgo(r.pubStatsAt?.getTime() ?? null, nowMs),
+            },
+          ]
+        : [];
+    });
     return {
       ...side,
-      board,
-      pools,
-      pace: paceProfile(ids, scoutGames),
+      threats: threatList(board),
+      threatsFloor: board.minPicks,
+      comfort,
       coverage: roleCoverage(side.roster),
-      empty: dossierEmpty(
-        pools.map((p) => p.pool),
-        board,
-      ),
+      empty: dossierEmpty(pools, board),
     };
   });
+  const anyPubs = dossiers.some((d) =>
+    d.comfort.some((c) => c.picks.source === "pubs"),
+  );
 
   return (
-    <Card id="match-scouting" className="scroll-mt-40 overflow-hidden">
-      <CardHeader
-        title="Scouting report"
-        headingLevel={2}
-        subtitle="All recorded league games"
-      />
-      <CardBody className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {dossiers.map((d) => (
-          <div
-            key={d.teamId}
-            className="min-w-0 rounded-lg border border-line p-3"
-          >
-            <div className="mb-2.5 flex min-w-0 items-center gap-2">
-              <TeamCrest
-                name={d.name}
-                seed={d.teamId}
-                logoUrl={d.logoUrl}
-                size={22}
-                className="rounded-md"
-              />
-              <span className="min-w-0 font-display text-base font-semibold [overflow-wrap:anywhere]">
-                {d.name}
-              </span>
-            </div>
-            {d.empty ? (
-              <p className="py-4 text-center text-sm text-muted">
-                No league history yet — they&apos;re a mystery.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                <ThreatList board={d.board} />
-                <ComfortPicks pools={d.pools} />
-                <PaceLine pace={d.pace} coverage={d.coverage} />
-              </div>
-            )}
+    <Card className="overflow-hidden">
+      <AutoOpenDetails
+        id="match-scouting"
+        openFromWidth="64rem"
+        className="group/scouting scroll-mt-24"
+      >
+        <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold leading-snug text-fg">
+              Scouting report
+            </h2>
+            <p className="mt-1.5 text-sm leading-relaxed text-muted">
+              Heroes played twice or more in league games
+            </p>
           </div>
-        ))}
-      </CardBody>
+          <span
+            aria-hidden
+            className="mt-0.5 text-muted transition-transform group-open/scouting:rotate-180 motion-reduce:transition-none"
+          >
+            ▾
+          </span>
+        </summary>
+        <CardBody className="grid grid-cols-1 gap-4 border-t border-line-soft lg:grid-cols-2">
+          {dossiers.map((d) => (
+            <div
+              key={d.teamId}
+              className="min-w-0 rounded-lg border border-line p-3"
+            >
+              <div className="mb-2.5 flex min-w-0 items-center gap-2">
+                <TeamCrest
+                  name={d.name}
+                  seed={d.teamId}
+                  logoUrl={d.logoUrl}
+                  size={22}
+                  className="rounded-md"
+                />
+                <span className="min-w-0 font-display text-base font-semibold [overflow-wrap:anywhere]">
+                  {d.name}
+                </span>
+              </div>
+              {d.threats.rows.length === 0 && d.comfort.length === 0 ? (
+                <p className="py-4 text-center text-sm text-muted">
+                  {d.empty
+                    ? "No league history yet — they're a mystery."
+                    : "No hero played twice in league games yet."}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  <ThreatList threats={d.threats} minPicks={d.threatsFloor} />
+                  <ComfortPicks players={d.comfort} />
+                </div>
+              )}
+              <RoleGaps coverage={d.coverage} />
+            </div>
+          ))}
+          {anyPubs ? (
+            <p className="text-xs text-muted lg:col-span-2">
+              <span className="font-medium">pubs</span>: no hero played twice
+              in league games yet, so these are the player&apos;s most-played
+              heroes in public games, from their last profile sync.
+            </p>
+          ) : null}
+        </CardBody>
+      </AutoOpenDetails>
     </Card>
   );
 }
 
-function ThreatList({ board }: { board: ThreatBoard }) {
-  // Only heroes they actually WIN on earn "ban board" framing — a 0-2 hero is
-  // not a threat. Without any winning hero at the floor, fall back to plain
-  // most-picked framing.
-  const threats = board.rows.filter((r) => r.winRate >= 50);
-  const ranked = threats.length > 0;
-  const rows = (ranked ? threats : board.contested).slice(0, 5);
-  if (rows.length === 0) return null;
+function ThreatList({
+  threats,
+  minPicks,
+}: {
+  threats: ScoutThreats;
+  minPicks: number;
+}) {
+  if (threats.rows.length === 0) return null;
   return (
     <div>
       <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted">
-        {ranked ? `Ban board (${board.minPicks}+ picks)` : "Most picked"}
+        {threats.ranked ? `Ban board (${minPicks}+ picks)` : "Most picked"}
       </div>
       <ul className="space-y-1">
-        {rows.map((r) => {
+        {threats.rows.map((r) => {
           const hero = heroById(r.heroId);
           return (
             <li key={r.heroId} className="flex items-center gap-2 text-sm">
@@ -1279,81 +1821,81 @@ function ThreatList({ board }: { board: ThreatBoard }) {
 }
 
 function ComfortPicks({
-  pools,
+  players,
 }: {
-  pools: { userId: string; name: string; pool: HeroPoolRow[] }[];
+  players: {
+    userId: string;
+    name: string;
+    picks: ComfortPicksResult;
+    /** How old the player's pub snapshot is ("3d ago"), when known. */
+    checked: string | null;
+  }[];
 }) {
-  const withPool = pools.filter((p) => p.pool.length > 0);
-  if (withPool.length === 0) return null;
+  if (players.length === 0) return null;
   return (
     <div>
       <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted">
         Comfort picks
       </div>
       <ul className="space-y-1">
-        {withPool.map((p) => (
-          <li key={p.userId} className="flex items-center gap-2 text-sm">
-            <PlayerLink
-              userId={p.userId}
-              className="w-28 shrink-0 truncate text-xs"
-            >
-              {p.name}
-            </PlayerLink>
-            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-              {p.pool.slice(0, 3).map((h) => {
-                const hero = heroById(h.heroId);
-                const name = hero?.name ?? `Hero ${h.heroId}`;
-                return (
-                  <span
-                    key={h.heroId}
-                    role="img"
-                    aria-label={`${name}: ${h.games} games, ${h.winRate}% wins`}
-                    title={`${name} — ${h.wins}–${h.games - h.wins} (${h.winRate}%)`}
-                    className="inline-flex items-center gap-1 rounded border border-line bg-surface-2/50 px-1 py-px text-[11px]"
-                  >
-                    {hero ? <HeroIcon hero={hero} size={16} /> : null}
-                    <span aria-hidden className="tabular-nums text-muted">
-                      ×{h.games}
+        {players.map((p) => {
+          const pubs = p.picks.source === "pubs";
+          return (
+            <li key={p.userId} className="flex items-center gap-2 text-sm">
+              <PlayerLink
+                userId={p.userId}
+                className="w-28 shrink-0 truncate text-xs"
+              >
+                {p.name}
+              </PlayerLink>
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+                {p.picks.heroes.map((h) => {
+                  const hero = heroById(h.heroId);
+                  const name = hero?.name ?? `Hero ${h.heroId}`;
+                  const winRate = Math.round((h.wins / h.games) * 100);
+                  const where = pubs ? "pub games" : "league games";
+                  return (
+                    <span
+                      key={h.heroId}
+                      role="img"
+                      aria-label={`${name}: ${h.games} ${where}, ${winRate}% wins`}
+                      title={`${name} — ${h.wins}–${h.games - h.wins} in ${where} (${winRate}%)${pubs && p.checked ? `, checked ${p.checked}` : ""}`}
+                      className="inline-flex items-center gap-1 rounded border border-line bg-surface-2/50 px-1 py-px text-[11px]"
+                    >
+                      {hero ? <HeroIcon hero={hero} size={16} /> : null}
+                      <span aria-hidden className="tabular-nums text-muted">
+                        ×{h.games}
+                      </span>
                     </span>
+                  );
+                })}
+                {pubs ? (
+                  <span className="text-xs text-muted">
+                    pubs
+                    {p.checked ? (
+                      <span className="sr-only">, checked {p.checked}</span>
+                    ) : null}
                   </span>
-                );
-              })}
-            </span>
-          </li>
-        ))}
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
 }
 
-function PaceLine({
-  pace,
-  coverage,
-}: {
-  pace: PaceProfile;
-  coverage: RoleCount[];
-}) {
+/** Roles nobody on the roster declared, from their signups. */
+function RoleGaps({ coverage }: { coverage: RoleCount[] }) {
   const gaps = coverage.filter((c) => c.count === 0);
-  const bits: string[] = [];
-  if (pace.winAvgMins != null) bits.push(`wins avg ${pace.winAvgMins}m`);
-  if (pace.lossAvgMins != null) bits.push(`losses avg ${pace.lossAvgMins}m`);
-  if (bits.length === 0 && gaps.length === 0) return null;
+  if (gaps.length === 0 || gaps.length >= 5) return null;
   return (
-    <div className="space-y-1 border-t border-line/70 pt-2 text-xs text-muted">
-      {bits.length > 0 ? (
-        <p>
-          Pace over {pace.games} game{pace.games === 1 ? "" : "s"}:{" "}
-          {bits.join(" · ")}
-        </p>
-      ) : null}
-      {gaps.length > 0 && gaps.length < 5 ? (
-        <p>
-          No declared{" "}
-          {gaps.map((g) => `${g.label.toLowerCase()} (${g.key})`).join(", ")} —
-          somebody&apos;s flexing.
-        </p>
-      ) : null}
-    </div>
+    <p className="mt-3 border-t border-line/70 pt-2 text-xs text-muted">
+      No declared{" "}
+      {gaps.map((g) => `${g.label.toLowerCase()} (${g.key})`).join(", ")} —
+      somebody&apos;s flexing.
+    </p>
   );
 }
 
@@ -1485,7 +2027,6 @@ function SidePlayers({
   maxNet: number;
   mvpId?: string | null;
 }) {
-  const totalNet = players.reduce((s, p) => s + (p.netWorth ?? 0), 0);
   const hasNet = players.some((p) => p.netWorth != null);
   const hasGpm = players.some((p) => p.gpm != null);
   const hasLh = players.some((p) => p.lastHits != null);
@@ -1513,14 +2054,8 @@ function SidePlayers({
             <Badge className="shrink-0">Loss</Badge>
           )}
         </span>
-        {hasNet ? (
-          <span className="shrink-0 text-xs text-muted">
-            Net worth{" "}
-            <span className="font-mono text-accent">
-              {formatNetWorth(totalNet)}
-            </span>
-          </span>
-        ) : null}
+        {/* No team net-worth total here: the Recorded net worth panel above
+            both sides already prints it. */}
       </div>
       <ul className="space-y-0.5">
         {ordered.map((p, idx) => {
@@ -1627,48 +2162,63 @@ const GRADE_CHIP: Record<ReturnType<typeof gradeTone>, string> = {
   muted: "border-line text-muted",
 };
 
+const GRADE_TEXT: Record<ReturnType<typeof gradeTone>, string> = {
+  success: "text-success",
+  accent: "text-accent",
+  default: "text-fg/80",
+  muted: "text-muted",
+};
+
 /**
- * The hero report card: per-metric worldwide percentile grades (from
- * OpenDota's benchmarks) as a compact chip strip under a player's line.
- * Absent entirely for games imported before benchmarks were stored.
+ * The hero report card (per-metric worldwide percentile grades from OpenDota's
+ * benchmarks) as ONE overall chip under a player's line; tapping it opens the
+ * metrics by name. Seven chips per player was up to 80 per game, with
+ * abbreviations like "HD/min" and "TD" explained nowhere, beside the raw
+ * numbers they graded. Absent for games imported before benchmarks were
+ * stored.
  */
 function ReportCardStrip({ line }: { line: PlayerStat }) {
   const rows = gameReportCard(line);
-  if (rows.length === 0) return null;
   const avg = cardAverage(rows);
-  const overall: Grade | null = avg == null ? null : gradeFor(avg);
+  if (avg == null) return null;
+  const overall: Grade = gradeFor(avg);
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-[42px]">
-      {overall ? (
-        <span
-          role="img"
-          aria-label={`Overall report-card grade ${overall} — ${percentLabel(avg!)} vs the world on this hero`}
-          title={`vs the world on this hero: ${percentLabel(avg!)}`}
-          className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs font-semibold uppercase tracking-wide",
-            GRADE_CHIP[gradeTone(overall)],
-          )}
-        >
-          <span aria-hidden>Report {overall}</span>
+    <details className="group/report mt-1.5 pl-10">
+      <summary
+        title={`vs the world on this hero: ${percentLabel(avg)}`}
+        className={cn(
+          "inline-flex min-h-6 cursor-pointer list-none items-center gap-1 rounded border px-1.5 text-xs font-semibold uppercase tracking-wide [&::-webkit-details-marker]:hidden",
+          GRADE_CHIP[gradeTone(overall)],
+        )}
+      >
+        Report {overall}
+        <span className="sr-only">
+          , {percentLabel(avg)} vs the world on this hero
         </span>
-      ) : null}
-      {rows.map((r) => (
         <span
-          key={r.key}
-          role="img"
-          aria-label={`${r.label}: grade ${r.grade}, ${percentLabel(r.pct)}`}
-          title={`${r.label} — ${percentLabel(r.pct)}`}
-          className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs tabular-nums",
-            GRADE_CHIP[gradeTone(r.grade)],
-          )}
+          aria-hidden
+          className="text-[10px] transition-transform group-open/report:rotate-180 motion-reduce:transition-none"
         >
-          <span aria-hidden>
-            {r.short} <b>{r.grade}</b>
-          </span>
+          ▾
         </span>
-      ))}
-    </div>
+      </summary>
+      <ul className="mt-1.5 max-w-xs space-y-0.5 text-xs">
+        {rows.map((r) => (
+          <li key={r.key} className="flex items-baseline justify-between gap-3">
+            <span className="text-muted">{r.label}</span>
+            <span className="shrink-0 tabular-nums">
+              {percentLabel(r.pct)}{" "}
+              <b className={cn("font-semibold", GRADE_TEXT[gradeTone(r.grade)])}>
+                {r.grade}
+              </b>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-[11px] text-muted">
+        Percentiles against everyone playing this hero worldwide.
+      </p>
+    </details>
   );
 }
 
@@ -1736,17 +2286,8 @@ async function ReportResultSection({
       />
     ) : null;
   }
-  if (!match.season.isActive) return null;
-  if (match.status === "COMPLETED") {
-    return (
-      <Card>
-        <CardHeader
-          title="Need a result correction?"
-          subtitle="Captains cannot rewrite a final series. Send an admin this match page and the incorrect Dota match ID; they can remove or re-import the game without hiding the audit trail."
-        />
-      </Card>
-    );
-  }
+  // A final series gets the page's one-line correction note instead.
+  if (!match.season.isActive || match.status === "COMPLETED") return null;
   if (!matchResultsOpen(match.season.status, match.phase)) {
     return (
       <Card>
@@ -1766,19 +2307,19 @@ async function ReportResultSection({
   const afterScheduledTime =
     match.scheduledAt != null && match.scheduledAt.getTime() <= renderedAt;
   const gamesRecorded = match.homeScore + match.awayScore;
-  const leagueCheckMinutes = Math.round(AUTO_SYNC.LEAGUE_INTERVAL_SECONDS / 60);
-  const leagueTitle =
-    match.status === "LIVE"
-      ? `Game ${gamesRecorded} recorded — series ${match.homeScore}–${match.awayScore}`
-      : afterScheduledTime
-        ? "Waiting for league result"
-        : "Result recording";
-  const leagueSubtitle =
-    match.status === "LIVE"
-      ? `The series stays open for the next lobby. The league feed keeps checking about every ${leagueCheckMinutes} minutes, and player-account recovery is already available if the next lobby uses the wrong ticket.`
-      : afterScheduledTime
-        ? `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. If the whole series is still missing ${Math.round(AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF / 60)} hours after the scheduled match time, player-account recovery starts automatically.`
-        : `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. Player-account recovery protects the result if an old or incorrect ticket is used.`;
+  const live = match.status === "LIVE";
+  const leagueTitle = live
+    ? `Game ${gamesRecorded} recorded — series ${match.homeScore}–${match.awayScore}`
+    : afterScheduledTime
+      ? "Waiting for league result"
+      : "Result recording";
+  // One sentence on when games show up, and the wrong-ticket advice said
+  // once, both from AUTO_SYNC (leagueResultCopy).
+  const leagueCopy = leagueResultCopy({ live });
+  // Before kickoff (or with no time set) nobody has played yet, so the import
+  // form stays one tap away under a disclosure instead of leading the card.
+  const foldImport =
+    !!match.season.dotaLeagueId && !live && !afterScheduledTime;
   const hostParts = howToHostParts({
     homeTeamName: match.homeTeam.name,
     bestOf: match.bestOf,
@@ -1810,22 +2351,37 @@ async function ReportResultSection({
           title={match.season.dotaLeagueId ? leagueTitle : "Report your result"}
           subtitle={
             match.season.dotaLeagueId
-              ? leagueSubtitle
+              ? leagueCopy.lead
               : NO_TICKET_REPORT_SUBTITLE
           }
         />
         <CardBody className="space-y-3">
-          {match.season.dotaLeagueId ? (
-            <p className="text-xs text-muted">
-              Need recovery now? Auto-fetch checks the linked player accounts,
-              or add either lobby&apos;s Dota match id directly.
-            </p>
-          ) : null}
-          <MatchImportControls
-            matchId={match.id}
-            importAction={captainImportGame}
-            detectAction={captainAutoDetect}
-          />
+          {foldImport ? (
+            <details>
+              <summary className="cursor-pointer py-2 text-sm font-medium text-fg">
+                Result didn&apos;t show up?
+              </summary>
+              <div className="mt-2 space-y-3">
+                <p className="text-xs text-muted">{leagueCopy.recovery}</p>
+                <MatchImportControls
+                  matchId={match.id}
+                  importAction={captainImportGame}
+                  detectAction={captainAutoDetect}
+                />
+              </div>
+            </details>
+          ) : (
+            <>
+              {match.season.dotaLeagueId ? (
+                <p className="text-xs text-muted">{leagueCopy.recovery}</p>
+              ) : null}
+              <MatchImportControls
+                matchId={match.id}
+                importAction={captainImportGame}
+                detectAction={captainAutoDetect}
+              />
+            </>
+          )}
         </CardBody>
       </Card>
     </div>
@@ -1860,11 +2416,16 @@ function HowToHost({ parts, note }: { parts: string[]; note: string }) {
 // to your roster + the season's unrostered ACTIVE signups.
 async function StandinSection({
   match,
+  seriesStarted,
 }: {
+  /** A game is imported: removeStandinGuarded refuses every removal now. */
+  seriesStarted: boolean;
   match: {
     id: string;
     seasonId: string;
     status: string;
+    week: number;
+    scheduledAt: Date | null;
     scheduleRevision: number;
     homeTeamId: string;
     awayTeamId: string;
@@ -1882,8 +2443,9 @@ async function StandinSection({
         ? match.awayTeamId
         : null;
   if (!myTeamId && !isAdmin) return null;
-  // Admin passing by uses their panel; this card is the captain's tool. An
-  // admin who IS a captain still gets their own team's view.
+  // An admin passing by uses the Admin tools card near the top (any team's
+  // cover); this card is the captain's tool. An admin who IS a captain still
+  // gets their own team's view here.
   if (!myTeamId) return null;
 
   // The service refuses archived-season matches (its guards key on the
@@ -1959,11 +2521,60 @@ async function StandinSection({
     ]);
   const rosteredIds = new Set(rostered.map((m) => m.userId));
   const pool = registrations.filter((r) => !rosteredIds.has(r.userId));
+  // The pool's bookings on unplayed fixtures (this one included): the server
+  // refuses a standin already booked in this match or on another fixture the
+  // same night, so those are listed last, disabled, with the reason.
+  const bookings =
+    assignOpen && pool.length > 0
+      ? await prisma.standinAssignment.findMany({
+          where: {
+            standinUserId: { in: pool.map((r) => r.userId) },
+            match: {
+              seasonId: match.seasonId,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          select: {
+            standinUserId: true,
+            matchId: true,
+            replaced: { select: { name: true } },
+            match: {
+              select: {
+                scheduledAt: true,
+                week: true,
+                homeTeam: { select: { name: true } },
+                awayTeam: { select: { name: true } },
+              },
+            },
+          },
+        })
+      : [];
+  const pickerTarget = {
+    matchId: match.id,
+    scheduledAt: match.scheduledAt,
+    week: match.week,
+  };
+  const bookingRows = bookings.map((b) => ({
+    standinUserId: b.standinUserId,
+    matchId: b.matchId,
+    replacedName: b.replaced?.name ?? null,
+    homeName: b.match.homeTeam.name,
+    awayName: b.match.awayTeam.name,
+    scheduledAt: b.match.scheduledAt,
+    week: b.match.week,
+  }));
+  const poolChoices = pool.map((r) => ({
+    reg: r,
+    blocked: standinPickerBlock(r.userId, pickerTarget, bookingRows),
+  }));
+  const pickerOptions = [
+    ...poolChoices.filter((c) => !c.blocked),
+    ...poolChoices.filter((c) => c.blocked),
+  ];
   // One seat, one standin — players already covered leave the Covers list.
   const coveredIds = new Set(
-    assignments.map((a) => a.replaced?.id).filter(Boolean),
+    assignments.flatMap((a) => (a.replaced ? [a.replaced.id] : [])),
   );
-  const coverable = roster.filter((m) => !coveredIds.has(m.userId));
   // OPEN SEATS on this captain's own roster. A team that lost a player
   // mid-season is short, and a standin filling that seat replaces nobody — the
   // case that previously had no UI anywhere, so a 4-of-5 side could not be
@@ -1979,18 +2590,23 @@ async function StandinSection({
     teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
   // OUT-and-uncovered on MY roster: the admin card has always alerted on
   // this; the captain — who owns the assign form below — saw only the small
-  // ✗ in the preview grid.
-  const outIds = new Set(outRows.map((r) => r.userId));
-  const uncoveredOut = roster.filter(
-    (m) => outIds.has(m.userId) && !coveredIds.has(m.userId),
+  // ✗ in the preview grid. They also lead the Covers list, pre-selected when
+  // there is exactly one, so covering them stays one pick and one tap.
+  const cover = coverChoices(
+    roster,
+    new Set(outRows.map((r) => r.userId)),
+    coveredIds,
   );
+  const uncoveredOut = cover.choices
+    .filter((c) => c.out)
+    .map((c) => c.member);
 
   // A phase where assignment is closed and nothing is booked has nothing to
   // say — don't render an empty card with a disabled story.
   if (!assignOpen && assignments.length === 0) return null;
 
   return (
-    <Card>
+    <Card id={MATCH_ANCHOR.standins} className="scroll-mt-24">
       <CardHeader
         title="Standins"
         subtitle="Someone can't make it? Line up cover from the standin pool yourself — the assignment announces to Discord."
@@ -2024,7 +2640,14 @@ async function StandinSection({
                   )}
                   <span className="text-muted">· {teamNameOf(a.teamId)}</span>
                 </span>
-                {a.teamId === myTeamId ? (
+                {a.teamId !== myTeamId ? null : seriesStarted ? (
+                  // Removing cover mid-series would drop the standin from the
+                  // remaining games, so the server refuses it. Say so rather
+                  // than offer a button that can only fail.
+                  <span className="ml-auto text-xs text-muted">
+                    Locked: series already started
+                  </span>
+                ) : (
                   <ActionForm
                     action={captainRemoveStandin}
                     hidden={{ assignmentId: a.id }}
@@ -2039,7 +2662,7 @@ async function StandinSection({
                       Remove
                     </SubmitButton>
                   </ActionForm>
-                ) : null}
+                )}
               </li>
             ))}
           </ul>
@@ -2056,6 +2679,12 @@ async function StandinSection({
           <p className="text-sm text-muted">
             Nobody is in the standin pool right now — ask around the Discord;
             late joiners can still sign up as standins.
+          </p>
+        ) : poolChoices.every((c) => c.blocked) ? (
+          <p className="text-sm text-muted">
+            Everyone in the standin pool is already booked for this match or
+            another one that night — ask around the Discord; late joiners can
+            still sign up as standins.
           </p>
         ) : (
           <ActionForm
@@ -2076,38 +2705,53 @@ async function StandinSection({
               {/* Option text carries what the 9pm decision needs: seat fit
                   (roles) and whether a ping can reach them at all. "no
                   Discord" = neither a verified link nor a typed handle. */}
-              {pool.map((r) => {
+              {/* Someone the server would refuse (already in this match, or
+                  booked the same night) stays listed but can't be picked,
+                  and says why. */}
+              {pickerOptions.map(({ reg: r, blocked }) => {
                 const roles = roleShort(r.roles).join("/");
                 const unreachable = !r.user.discordId && !r.user.discordName;
                 return (
-                  <option key={r.userId} value={r.userId}>
-                    {r.user.name} ({r.mmr} MMR
-                    {roles ? ` · ${roles}` : ""}
-                    {unreachable ? " · no Discord" : ""})
+                  <option key={r.userId} value={r.userId} disabled={!!blocked}>
+                    {blocked
+                      ? `${r.user.name} (${blocked})`
+                      : `${r.user.name} (${r.mmr} MMR${roles ? ` · ${roles}` : ""}${unreachable ? " · no Discord" : ""})`}
                   </option>
                 );
               })}
             </select>
+            {/* Keyed on the pre-selection: an uncontrolled select keeps its
+                first defaultValue, so a new "can't make it" needs a remount. */}
             <select
+              key={cover.preselect ?? ""}
               name="replacingUserId"
               required
               aria-label="Player they cover"
               className="h-10 min-w-0 max-w-full rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
-              defaultValue=""
+              defaultValue={cover.preselect ?? ""}
             >
               <option value="" disabled>
                 Covers…
               </option>
+              {cover.choices
+                .filter((c) => c.out)
+                .map(({ member: m }) => (
+                  <option key={m.userId} value={m.userId}>
+                    {m.user.name} (can&apos;t make it)
+                  </option>
+                ))}
               {openSeats > 0 ? (
                 <option value={seatValue(myTeamId)}>
                   an empty roster seat ({openSeats} unfilled)
                 </option>
               ) : null}
-              {coverable.map((m) => (
-                <option key={m.userId} value={m.userId}>
-                  {m.user.name}
-                </option>
-              ))}
+              {cover.choices
+                .filter((c) => !c.out)
+                .map(({ member: m }) => (
+                  <option key={m.userId} value={m.userId}>
+                    {m.user.name}
+                  </option>
+                ))}
             </select>
             <SubmitButton variant="secondary" size="sm">
               Assign standin
@@ -2125,6 +2769,7 @@ async function RescheduleSection({
   match: {
     id: string;
     seasonId: string;
+    phase: string;
     status: string;
     scheduledAt: Date | null;
     scheduleRevision: number;
@@ -2136,7 +2781,7 @@ async function RescheduleSection({
     getSessionUser(),
     prisma.season.findUnique({
       where: { id: match.seasonId },
-      select: { isActive: true, status: true },
+      select: { isActive: true, status: true, firstMatchNight: true },
     }),
     prisma.draft.findUnique({
       where: { seasonId: match.seasonId },
@@ -2156,14 +2801,33 @@ async function RescheduleSection({
     matchLogisticsOpen(season.status, draft?.status, match.status);
 
   if (isCaptain && canRetime) {
+    // Async server component: request time, once, for the form's earliest
+    // allowed time and the deadline read (not client render state).
+    // eslint-disable-next-line react-hooks/purity
+    const nowMs = Date.now();
+    // The same deadline the service enforces, shown under the form.
+    const deadline = pending
+      ? null
+      : await loadRescheduleDeadline(
+          prisma,
+          match,
+          season.firstMatchNight,
+          nowMs,
+        );
     return (
-      <RescheduleCard match={match} viewerId={viewer!.id} pending={pending} />
+      <RescheduleCard
+        match={match}
+        viewerId={viewer!.id}
+        pending={pending}
+        deadline={deadline}
+        nowMs={nowMs}
+      />
     );
   }
   if (isCaptain && pending) {
     const mine = pending.proposedById === viewer!.id;
     return (
-      <Card>
+      <Card id={MATCH_ANCHOR.reschedule} className="scroll-mt-24">
         <CardHeader
           title="Reschedule locked"
           subtitle="This match can no longer be moved. You can close the stranded proposal so it does not look actionable."
@@ -2200,7 +2864,10 @@ async function RescheduleSection({
   // spectators/scouts aren't blindsided by a moved match.
   if (!pending) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted">
+    <div
+      id={MATCH_ANCHOR.reschedule}
+      className="flex scroll-mt-24 flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted"
+    >
       <span aria-hidden>⏳</span>
       <span>
         Reschedule proposed —{" "}
@@ -2221,6 +2888,8 @@ async function RescheduleCard({
   match,
   viewerId,
   pending,
+  deadline,
+  nowMs,
 }: {
   match: {
     id: string;
@@ -2237,23 +2906,20 @@ async function RescheduleCard({
     proposedTime: Date;
     proposedBy: { name: string };
   } | null;
+  /** A new time must be before this (the playoffs); null = no limit. */
+  deadline: Date | null;
+  nowMs: number;
 }) {
   if (match.status === "COMPLETED") return null;
   const checkinCount = pending
     ? await prisma.matchAvailability.count({ where: { matchId: match.id, scheduleRevision: match.scheduleRevision } })
     : 0;
-  const fmt = (d: Date) =>
-    d.toLocaleString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
   const mine = pending?.proposedById === viewerId;
+  const clashHours = Math.round(FIXTURE_CONFLICT_WINDOW_MS / 3_600_000);
+  const hintId = `proposed-time-hint-${match.id}`;
 
   return (
-    <Card>
+    <Card id={MATCH_ANCHOR.reschedule} className="scroll-mt-24">
       <CardHeader
         title="Reschedule"
         subtitle={
@@ -2268,11 +2934,24 @@ async function RescheduleCard({
             <span className="min-w-[14rem] flex-1">
               {mine ? "You" : <strong>{pending.proposedBy.name}</strong>}{" "}
               proposed{" "}
+              {/* Old and new side by side, so the answer doesn't need the
+                  current kickoff looked up elsewhere. */}
+              {match.scheduledAt ? (
+                <>
+                  moving it from{" "}
+                  <LocalTime
+                    ts={match.scheduledAt.getTime()}
+                    variant="full"
+                    initial={formatMatchTime(match.scheduledAt, "full")}
+                  />{" "}
+                  to{" "}
+                </>
+              ) : null}
               <strong>
                 <LocalTime
                   ts={pending.proposedTime.getTime()}
                   variant="full"
-                  initial={fmt(pending.proposedTime)}
+                  initial={formatMatchTime(pending.proposedTime, "full")}
                 />
               </strong>
               {mine ? " — waiting on the other captain." : "."}
@@ -2329,13 +3008,19 @@ async function RescheduleCard({
             </label>
             {/* The two captains may sit in different zones, so each proposes
                 on their own clock; the admin boxes use the league's. Say
-                which one this is. */}
+                which one this is. Starts on the current kickoff, and the
+                browser keeps it between now and the deadline; the server
+                still checks every rule. */}
             <span className="inline-flex max-w-full flex-wrap items-center gap-2">
               <LocalDatetimeField
                 id={`proposed-time-${match.id}`}
                 name="proposedTime"
                 tsName="proposedTs"
                 required
+                defaultTs={match.scheduledAt?.getTime() ?? null}
+                minTs={nowMs}
+                maxTs={deadline ? deadline.getTime() - 60_000 : null}
+                describedBy={hintId}
                 className="h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm text-fg"
               />
               <span aria-hidden="true" className="text-xs text-muted">
@@ -2345,6 +3030,22 @@ async function RescheduleCard({
             <SubmitButton variant="secondary" size="sm">
               Propose new time
             </SubmitButton>
+            <p id={hintId} className="basis-full text-xs text-muted">
+              {deadline ? (
+                <>
+                  Must be before{" "}
+                  <LocalTime
+                    ts={deadline.getTime()}
+                    variant="full"
+                    initial={formatMatchTime(deadline, "full")}
+                  />
+                  , when the playoffs start, and not within {clashHours}{" "}
+                  hours of another match or scrim for either team.
+                </>
+              ) : (
+                `Must not be within ${clashHours} hours of another match or scrim for either team.`
+              )}
+            </p>
           </ActionForm>
         )}
       </CardBody>

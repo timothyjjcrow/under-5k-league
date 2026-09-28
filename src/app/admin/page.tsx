@@ -23,7 +23,7 @@ import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
 import { ImportProgress } from "@/components/import-progress";
 import { DatabaseHealth } from "@/components/database-health";
 import { HistoryCoverage } from "@/components/history-coverage";
-import { seatValue, standinConflict } from "@/lib/standin";
+import { standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
   createSeason,
@@ -36,11 +36,6 @@ import {
   generateSchedule,
   startPlayoffs,
   returnToRegularSeasonAction,
-  recordResult,
-  assignStandin,
-  removeStandin,
-  removeGame,
-  setMatchTime,
   setWeekNight,
   syncPlayerRanks,
   syncAllRanks,
@@ -69,8 +64,6 @@ import {
   revokeAllSessions,
   signFreeAgent,
   releasePlayer,
-  importGameAction,
-  autoDetectAction,
   setDraftNight,
   promoteStandinToPlayer,
   undoLastSaleAction,
@@ -81,7 +74,6 @@ import {
   transferCaptaincy,
   withdrawTeam,
   reinstateTeam,
-  reopenMatch,
   reinstateSignup,
   setDraftSettings,
 } from "@/app/actions/admin";
@@ -90,7 +82,7 @@ import {
   scheduleTiebreakerWeek,
   resetTiebreakerWeek,
 } from "@/app/actions/tiebreakers";
-import { hasLaterTiebreakerStage, parseSingleTiebreakerSlot, parseTiebreakerStage, TIEBREAKER_RULES, TIEBREAKER_SUMMARY } from "@/lib/tiebreaker-format";
+import { parseTiebreakerStage, TIEBREAKER_RULES, TIEBREAKER_SUMMARY } from "@/lib/tiebreaker-format";
 import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
 import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
 import { schedulableAdminTiebreakerGroups } from "@/components/admin-tiebreaker-view";
@@ -165,15 +157,13 @@ import {
   roundName,
   slotRound,
   groupPlayoffRounds,
-  hasLaterBracketRound,
 } from "@/lib/schedule";
 import { fixturesMatchNightLabel } from "@/lib/match-night";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { playoffSetupRevision } from "@/lib/playoff-command";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
-  matchLogisticsOpen,
-  matchResultsOpen,
+  matchCorrectionContext,
   postAuctionWorkOpen,
 } from "@/lib/league-lifecycle";
 import {
@@ -208,7 +198,18 @@ import {
   regularSeasonStatus,
   pendingResultsMessage,
 } from "@/lib/schedule-status";
-import { MatchImportControls } from "@/components/match-import-controls";
+import {
+  MatchResultRow,
+  StandinMatchBlock,
+  adminStandinPoolWhere,
+} from "@/components/admin-match-tools";
+import { RevealHashTarget } from "@/components/reveal-hash-target";
+import {
+  ADMIN_MATCH_ROW_PREFIX,
+  MATCH_ANCHOR,
+  adminMatchRowId,
+  matchAnchorPath,
+} from "@/lib/match-anchors";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   StartDraftControl,
@@ -351,6 +352,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       {season && data ? (
         <>
           <AdminAttention season={season} data={data} delivery={delivery} />
+          {/* The match page's "Open this match in the admin panel" link lands
+              on a result row, often inside a folded week. */}
+          <RevealHashTarget prefix={ADMIN_MATCH_ROW_PREFIX} />
           {showTiebreakers ? (
             <AdminAnchor id="adm-tiebreakers">
               <TiebreakerControls season={season} data={data} />
@@ -803,24 +807,10 @@ async function loadSeasonAdminData(seasonId: string) {
         include: { user: true },
         orderBy: [{ wantsCaptain: "desc" }, { mmr: "desc" }],
       }),
-      // Registered standins PLUS undrafted full players. A pool-dry draft
-      // leaves ACTIVE PLAYER signups unrostered, and assignStandinGuarded
-      // accepts them — but the panel only listed type=STANDIN and hid itself
-      // when there were none, so an admin with two undrafted players and an
-      // OUT on match night had no cover to offer. Rostered players are
-      // filtered out below (they play for their own team).
+      // Registered standins PLUS undrafted full players — the same pool the
+      // match page's Admin tools offer (adminStandinPoolWhere).
       prisma.registration.findMany({
-        where: {
-          seasonId,
-          status: "ACTIVE",
-          OR: [
-            { type: "STANDIN" },
-            {
-              type: "PLAYER",
-              user: { teamMemberships: { none: { seasonId } } },
-            },
-          ],
-        },
+        where: adminStandinPoolWhere(seasonId),
         include: { user: true },
         orderBy: { mmr: "desc" },
       }),
@@ -949,7 +939,7 @@ function AdminAttention({
       <CardHeader
         headingLevel={2}
         title={`${season.name} — ${attention.length || deliveryLines.length ? "needs attention" : "nothing to review"}`}
-        subtitle={`${PHASE_LABEL[season.status]} · Read-only match-night checklist. Open a match to review its current state.`}
+        subtitle={`${PHASE_LABEL[season.status]} · Match-night checklist. Each match opens its Admin tools on the match page, where you can fix it.`}
       />
       <CardBody className="space-y-4">
         {deliveryLines.length ? (
@@ -982,7 +972,10 @@ function AdminAttention({
                     key={item.id}
                     className="rounded-lg border border-line p-3 text-sm"
                   >
-                    <Link href={`/matches/${item.id}`} className={textLink()}>
+                    <Link
+                      href={matchAnchorPath(item.id, MATCH_ANCHOR.admin)}
+                      className={textLink()}
+                    >
                       {names.get(match.homeTeamId ?? "") ?? "TBD"} vs{" "}
                       {names.get(match.awayTeamId ?? "") ?? "TBD"}
                     </Link>
@@ -2629,14 +2622,14 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
                 {weekMatches.map((m) => (
                   <div key={m.id} id={`admin-tiebreaker-match-${m.id}`} data-testid="admin-tiebreaker-match" className="scroll-mt-40">
                     <MatchResultRow
+                      id={adminMatchRowId(m.id)}
                       m={m}
                       teams={data.teams}
                       expectedActiveSeasonId={season.id}
                       seasonStatus={season.status}
                       draftStatus={data.draft?.status ?? null}
                       championTeamId={season.championTeamId}
-                      correctionBlockedByLaterRound={hasLaterTiebreakerStage(m, tiebreakerMatches)}
-                      isSoleLatestPlayoffSeries={false}
+                      {...matchCorrectionContext(m, data.matches)}
                       label={
                         <Link
                           href={`/matches/${m.id}`}
@@ -2666,9 +2659,6 @@ function ScheduleControls({
 }) {
   const status = regularSeasonStatus(data.matches);
   const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
-  const tiebreakerMatches = data.matches.filter(
-    (m) => m.phase === "TIEBREAKER",
-  );
   const playoffField = projectPlayoffField(data.teams, data.matches);
   const collateral = data.collateral;
   const draftStatus = data.draft?.status ?? null;
@@ -2920,16 +2910,14 @@ function ScheduleControls({
                     {weekMatches.map((m) => (
                       <MatchResultRow
                         key={m.id}
+                        id={adminMatchRowId(m.id)}
                         m={m}
                         teams={data.teams}
                         expectedActiveSeasonId={season.id}
                         seasonStatus={season.status}
                         draftStatus={data.draft?.status ?? null}
                         championTeamId={season.championTeamId}
-                        correctionBlockedByLaterRound={
-                          tiebreakerMatches.length > 0
-                        }
-                        isSoleLatestPlayoffSeries={false}
+                        {...matchCorrectionContext(m, data.matches)}
                         label={
                           <Link
                             href={`/matches/${m.id}`}
@@ -2956,16 +2944,6 @@ function ScheduleControls({
               const pending = playoff.filter(
                 (m) => m.status !== "COMPLETED",
               ).length;
-              const latestRound = Math.max(
-                ...playoff.map((match) => slotRound(match.bracketSlot)),
-              );
-              const latestRoundMatches = playoff.filter(
-                (match) => slotRound(match.bracketSlot) === latestRound,
-              );
-              const soleLatestPlayoffId =
-                latestRoundMatches.length === 1
-                  ? latestRoundMatches[0].id
-                  : null;
               return (
                 <details
                   open={pending > 0}
@@ -2981,17 +2959,14 @@ function ScheduleControls({
                     {playoff.map((m) => (
                       <MatchResultRow
                         key={m.id}
+                        id={adminMatchRowId(m.id)}
                         m={m}
                         teams={data.teams}
                         expectedActiveSeasonId={season.id}
                         seasonStatus={season.status}
                         draftStatus={data.draft?.status ?? null}
                         championTeamId={season.championTeamId}
-                        correctionBlockedByLaterRound={hasLaterBracketRound(
-                          playoff,
-                          m.bracketSlot,
-                        )}
-                        isSoleLatestPlayoffSeries={soleLatestPlayoffId === m.id}
+                        {...matchCorrectionContext(m, data.matches)}
                         label={
                           <Link
                             href={`/matches/${m.id}`}
@@ -3010,345 +2985,6 @@ function ScheduleControls({
         )}
       </CardBody>
     </Card>
-  );
-}
-
-// One match's result + scheduling + imported-games controls. Used by the
-// week-grouped and playoff sections of ScheduleControls.
-function MatchResultRow({
-  m,
-  teams,
-  label,
-  expectedActiveSeasonId,
-  seasonStatus,
-  draftStatus,
-  championTeamId,
-  correctionBlockedByLaterRound,
-  isSoleLatestPlayoffSeries,
-}: {
-  m: AdminData["matches"][number];
-  teams: AdminData["teams"];
-  label: React.ReactNode;
-  expectedActiveSeasonId: string;
-  seasonStatus: string;
-  draftStatus: string | null;
-  championTeamId: string | null;
-  correctionBlockedByLaterRound: boolean;
-  isSoleLatestPlayoffSeries: boolean;
-}) {
-  const home = teams.find((t) => t.id === m.homeTeamId);
-  const away = teams.find((t) => t.id === m.awayTeamId);
-  const resultOpen = matchResultsOpen(seasonStatus, m.phase);
-  const resultCorrectionOpen = resultOpen && !correctionBlockedByLaterRound;
-  const importedFinal =
-    m.games.length > 0 && m.status === MATCH_STATUS.COMPLETED && !m.forfeit;
-  const championIsFinalParticipant =
-    seasonStatus === SEASON_STATUS.COMPLETE &&
-    m.phase === MATCH_PHASE.FINAL &&
-    m.status === MATCH_STATUS.COMPLETED &&
-    championTeamId != null &&
-    (championTeamId === m.homeTeamId || championTeamId === m.awayTeamId);
-  const championshipFinalCorrection =
-    championIsFinalParticipant && isSoleLatestPlayoffSeries;
-  const crownedGrandFinal =
-    championshipFinalCorrection && m.winnerTeamId === championTeamId;
-  const conflictingChampionFinal =
-    championshipFinalCorrection && m.winnerTeamId !== championTeamId;
-  const unresolvedCompletedFinal =
-    seasonStatus === SEASON_STATUS.COMPLETE &&
-    m.phase === MATCH_PHASE.FINAL &&
-    m.status === MATCH_STATUS.COMPLETED &&
-    !championshipFinalCorrection;
-  const canReopenManual =
-    m.games.length === 0 &&
-    (resultCorrectionOpen || championshipFinalCorrection);
-  const canCorrectImported =
-    resultCorrectionOpen || championshipFinalCorrection;
-  const logisticsOpen = matchLogisticsOpen(seasonStatus, draftStatus, m.status);
-  return (
-    <div className="space-y-2 rounded-lg border border-line p-3">
-      {!resultCorrectionOpen || importedFinal ? (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          {label}
-          <span className="min-w-0 flex-1 text-right">{home?.name ?? "?"}</span>
-          <strong className="tabular-nums">
-            {m.homeScore}–{m.awayScore}
-          </strong>
-          <span className="min-w-0 flex-1">{away?.name ?? "?"}</span>
-          {m.status === MATCH_STATUS.COMPLETED ? (
-            <Badge tone="success">
-              {m.forfeit ? "final · forfeit" : "final"}
-            </Badge>
-          ) : null}
-          <span className="w-full text-xs text-muted">
-            {correctionBlockedByLaterRound
-              ? m.phase === MATCH_PHASE.REGULAR ||
-                m.phase === MATCH_PHASE.TIEBREAKER
-                ? "Tiebreaker fixtures depend on this result. Use Reset tiebreaker week in the Playoffs controls before correcting it."
-                : "This series already advanced a later playoff round. It is read-only because changing its winner would strand downstream teams; use Reset playoffs to reseed the full bracket before correcting it."
-              : !resultOpen
-                ? m.phase === MATCH_PHASE.TIEBREAKER
-                  ? "Tiebreaker results are read-only once playoffs begin. Return to Regular season before correcting one."
-                  : m.phase === MATCH_PHASE.REGULAR
-                    ? "Regular-season results are read-only outside the active Regular season phase. Move the phase back and reseed before correcting one."
-                    : crownedGrandFinal
-                      ? "This result crowned the champion. Use the grand-final correction below to retract the title and reopen only this series."
-                      : conflictingChampionFinal
-                        ? "The stored champion conflicts with this completed final. Use the correction below to retract the inconsistent title and reconcile only this series."
-                        : unresolvedCompletedFinal
-                          ? championTeamId == null
-                            ? "This completed grand final has no authoritative champion. Move the season back to Playoffs with the phase control, then reconcile this result; title-retraction controls stay hidden because no title exists."
-                            : !championIsFinalParticipant
-                              ? "The recorded champion is not a participant in this completed grand final. Use the dedicated playoff recovery controls to restore a consistent bracket and title; targeted title-retraction controls stay hidden because this final cannot safely retract that team."
-                              : "The bracket does not have one sole authoritative latest final. Use the dedicated playoff recovery controls to restore a single consistent final before targeted title correction is available."
-                          : "Playoff results are read-only unless the active season is in Playoffs."
-                : `Score derived from ${m.games.length} imported game${m.games.length === 1 ? "" : "s"}. Remove the incorrect game below; the series recomputes automatically.`}
-          </span>
-        </div>
-      ) : (
-        <ActionForm
-          action={recordResult}
-          className="flex flex-wrap items-center gap-2 text-sm"
-          hidden={{ matchId: m.id, expectedActiveSeasonId }}
-        >
-          {label}
-          {/* Keep each team name with its input. Letting two independent
-              flex-1 labels absorb the whole phone-width shortfall squeezed
-              them to 9px; a single long word then widened /admin itself. */}
-          <div className="grid min-w-0 basis-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2 sm:basis-auto sm:flex-1">
-            <label className="min-w-0 text-right">
-              <span className="mb-1 block break-words leading-tight [overflow-wrap:anywhere]">
-                {home?.name ?? "?"}
-              </span>
-              <input
-                id={`home-score-${m.id}`}
-                aria-label={`${home?.name ?? "Home team"} series score`}
-                name="homeScore"
-                type="number"
-                min={0}
-                max={m.bestOf}
-                required
-                defaultValue={m.homeScore}
-                className="ml-auto block h-8 w-14 rounded-md border border-line bg-surface-2/50 px-2 text-center"
-              />
-            </label>
-            <span className="pb-2 text-muted">–</span>
-            <label className="min-w-0">
-              <span className="mb-1 block break-words leading-tight [overflow-wrap:anywhere]">
-                {away?.name ?? "?"}
-              </span>
-              <input
-                id={`away-score-${m.id}`}
-                aria-label={`${away?.name ?? "Away team"} series score`}
-                name="awayScore"
-                type="number"
-                min={0}
-                max={m.bestOf}
-                required
-                defaultValue={m.awayScore}
-                className="block h-8 w-14 rounded-md border border-line bg-surface-2/50 px-2 text-center"
-              />
-            </label>
-          </div>
-          {/* The recorded score stays official for standings/gameDiff. The flag
-            badges the ruling and keeps it out of performance-only power
-            rankings. Re-saving with the box unchecked un-rules it. */}
-          <label className="flex items-center gap-1 text-xs text-muted">
-            <input
-              type="checkbox"
-              name="forfeit"
-              required={m.games.length > 0}
-              defaultChecked={m.forfeit}
-              className="h-3.5 w-3.5 accent-[var(--color-brand)]"
-            />
-            forfeit / ruling
-          </label>
-          {m.status === "COMPLETED" ? (
-            <Badge tone="success">
-              {m.forfeit ? "final · forfeit" : "final"}
-            </Badge>
-          ) : null}
-          {/* This button had NO confirm, and the score boxes default to the
-            current score — 0–0 on an unplayed match — with Enter submitting
-            from either field. Every match row on the page carries one, so a
-            stray Enter while reading marked a series FINAL at 0–0: it stops
-            auto-sync for that fixture, posts the wrong score to Discord, and
-            on a PLAYOFF row feeds advancePlayoffBracket, which is how a wrong
-            team reaches the next round. Name the teams and the score so the
-            dialog is about THIS row, and say what marking it final does. */}
-          <SubmitButton
-            variant="secondary"
-            size="sm"
-            /* Deliberately does NOT quote the score: these inputs are
-             uncontrolled, so a server-rendered string would state the STORED
-             score while the admin has typed a different one — a confirm that
-             lies about its own effect is worse than none. Name the fixture,
-             point at the boxes, and state what "final" costs. */
-            confirm={`Record the score in the boxes as the FINAL result for ${home?.name ?? "home"} v ${away?.name ?? "away"}?\n\nCheck the two score boxes first. A played series must reach its real finish; use the forfeit / ruling box only when an admin is ending it early. Marking a match final stops automatic result import for it${
-              m.phase === "PLAYOFF" || m.phase === "FINAL"
-                ? " and advances the playoff bracket"
-                : m.phase === "TIEBREAKER" && (parseTiebreakerStage(m.bracketSlot) || parseSingleTiebreakerSlot(m.bracketSlot))
-                  ? " and creates the next tiebreaker game when needed; this result locks once that dependent game exists"
-                : ""
-            }, and "Reopen for import" only undoes it while no games are attached.`}
-          >
-            {m.games.length > 0 ? "Save ruling" : "Save as final"}
-          </SubmitButton>
-          {m.games.length > 0 ? (
-            <span className="w-full text-xs text-muted">
-              The imported games currently account for {m.homeScore}–
-              {m.awayScore}. A ruling may add awarded wins, but cannot erase a
-              played win.
-            </span>
-          ) : null}
-        </ActionForm>
-      )}
-
-      {/* A hand-entered score marks the match COMPLETED with zero games, and
-          every import path then refuses it forever — so a stray Save (these
-          boxes default to 0 and Enter submits) used to cost the series its box
-          score permanently. This is the way back. */}
-      {canReopenManual && m.status === "COMPLETED" ? (
-        <ActionForm
-          action={reopenMatch}
-          className="flex flex-wrap items-center gap-2 text-xs text-muted"
-          hidden={{ matchId: m.id, expectedActiveSeasonId }}
-        >
-          <span>
-            {championshipFinalCorrection
-              ? conflictingChampionFinal
-                ? "Recorded by hand — the stored champion conflicts with this winner."
-                : "Recorded by hand — this result crowned the champion."
-              : "Recorded by hand — no games imported."}
-          </span>
-          <SubmitButton
-            variant="ghost"
-            size="sm"
-            confirm={
-              championshipFinalCorrection
-                ? `${conflictingChampionFinal ? "Retract the inconsistent champion" : "Retract the champion"} and reopen only the grand final? The hand-entered score is cleared; earlier playoff rounds stay intact.`
-                : "Reopen this match so its real games can be imported? The hand-entered score is cleared."
-            }
-          >
-            {championshipFinalCorrection
-              ? conflictingChampionFinal
-                ? "Reopen final & retract title"
-                : "Reopen grand final"
-              : "Reopen for import"}
-          </SubmitButton>
-        </ActionForm>
-      ) : null}
-
-      {logisticsOpen ? (
-        <ActionForm
-          action={setMatchTime}
-          className="flex flex-wrap items-end gap-2 text-xs text-muted"
-          hidden={{ matchId: m.id, expectedActiveSeasonId }}
-        >
-          {/* The label sits BESIDE the field, not around it: the field now
-              carries its zone name and "your time" hint, and a wrapping label
-              folds both into the box's accessible name ("Kickoff time Pacific
-              time = 9:57 AM your time"). They are its description instead. */}
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`scheduledAt-${m.id}`}>Kickoff time</label>
-            <LocalDatetimeField
-              id={`scheduledAt-${m.id}`}
-              name="scheduledAt"
-              tsName="scheduledAtTs"
-              defaultTs={m.scheduledAt?.getTime()}
-              timeZone={LEAGUE_CONFIG.timeZone}
-              className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-            />
-          </div>
-          <SubmitButton variant="secondary" size="sm">
-            {m.scheduledAt ? "Update time" : "Set time"}
-          </SubmitButton>
-          <span className="w-full">
-            Changing or clearing kickoff resets player check-ins, cancels open
-            reschedule proposals, and reopens this week&rsquo;s Discord
-            reminder.
-          </span>
-        </ActionForm>
-      ) : (
-        <p className="text-xs text-muted">
-          Kickoff:{" "}
-          {m.scheduledAt ? (
-            <LocalTime
-              ts={m.scheduledAt.getTime()}
-              variant="full"
-              initial={formatMatchTime(m.scheduledAt, "full")}
-            />
-          ) : (
-            "not set"
-          )}{" "}
-          ·{" "}
-          {m.status !== MATCH_STATUS.SCHEDULED
-            ? `time editing is unavailable while this match is ${m.status.toLowerCase()}.`
-            : seasonStatus === SEASON_STATUS.COMPLETE
-              ? "kickoff editing is locked because the completed season is read-only."
-              : seasonStatus === SEASON_STATUS.SIGNUPS
-                ? "kickoff editing opens after the auction is complete."
-                : seasonStatus === SEASON_STATUS.DRAFT &&
-                    draftStatus !== DRAFT_STATUS.COMPLETE
-                  ? "kickoff editing opens when the auction is complete."
-                  : "kickoff editing is locked in the current league phase."}
-        </p>
-      )}
-
-      {m.games.length > 0 ? (
-        <ul className="space-y-1 border-t border-line/60 pt-2 text-xs">
-          {m.games.map((g) => {
-            const winner = teams.find((t) => t.id === g.winnerTeamId);
-            return (
-              <li key={g.id} className="flex items-center justify-between">
-                <a
-                  href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={textLink()}
-                >
-                  Game {g.dotaMatchId} · {winner ? `${winner.name} won` : "tie"}{" "}
-                  · {Math.floor(g.durationSecs / 60)}m
-                </a>
-                {canCorrectImported ? (
-                  <ActionForm action={removeGame}>
-                    <input type="hidden" name="gameId" value={g.id} />
-                    <SubmitButton
-                      variant="ghost"
-                      size="sm"
-                      className="text-danger-soft hover:underline"
-                      confirm={
-                        championshipFinalCorrection
-                          ? `${conflictingChampionFinal ? "Retract the inconsistent champion" : "Retract the champion"}, remove this imported game, and recompute only the grand final? Earlier rounds stay intact.`
-                          : "Remove this imported game and recompute the series?"
-                      }
-                    >
-                      remove
-                    </SubmitButton>
-                  </ActionForm>
-                ) : (
-                  <span className="text-muted">read-only</span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
-
-      {resultCorrectionOpen && m.status !== MATCH_STATUS.COMPLETED ? (
-        <MatchImportControls
-          matchId={m.id}
-          importAction={importGameAction}
-          detectAction={autoDetectAction}
-        />
-      ) : m.status === MATCH_STATUS.COMPLETED &&
-        (resultCorrectionOpen || championshipFinalCorrection) ? (
-        <p className="text-xs text-muted">
-          This series is final. Reopen a hand-entered result or remove an
-          incorrect imported game before adding another.
-        </p>
-      ) : null}
-    </div>
   );
 }
 
@@ -3922,7 +3558,9 @@ function StandinControls({
                       <StandinMatchBlock
                         key={m.id}
                         m={m}
-                        data={data}
+                        teams={data.teams}
+                        pool={data.standins}
+                        outRsvps={data.outRsvps}
                         assignments={byMatch.get(m.id) ?? []}
                         teamName={teamName}
                         teamSize={season.teamSize}
@@ -3958,7 +3596,9 @@ function StandinControls({
                     <StandinMatchBlock
                       key={m.id}
                       m={m}
-                      data={data}
+                      teams={data.teams}
+                      pool={data.standins}
+                      outRsvps={data.outRsvps}
                       assignments={byMatch.get(m.id) ?? []}
                       teamName={teamName}
                       teamSize={season.teamSize}
@@ -3977,200 +3617,6 @@ function StandinControls({
         )}
       </CardBody>
     </Card>
-  );
-}
-
-// One match's standin controls: an OUT-players alert, current assignments,
-// and the assign form. Shared by the week-grouped and playoff sections above.
-function StandinMatchBlock({
-  m,
-  data,
-  assignments,
-  teamName,
-  label,
-  teamSize,
-  assignOpen,
-}: {
-  m: AdminData["matches"][number];
-  data: AdminData;
-  assignments: AdminData["assignments"];
-  teamName: Map<string, string>;
-  label: React.ReactNode;
-  teamSize: number;
-  /** The card-level phase gate — the assign form hides where the service
-   *  would refuse; removal stays rendered (cleanup is legal everywhere). */
-  assignOpen: boolean;
-}) {
-  const home = data.teams.find((t) => t.id === m.homeTeamId);
-  const away = data.teams.find((t) => t.id === m.awayTeamId);
-  const asg = assignments;
-  // A player already covered can't be covered again (the service refuses a
-  // second cover for one seat), so don't offer them — the captain-facing card
-  // has always filtered these and the admin one didn't.
-  const coveredIds = new Set(
-    asg.map((a) => a.replacingUserId).filter(Boolean) as string[],
-  );
-  // OPEN SEATS. A short roster is filled by a standin who replaces NOBODY, so
-  // it needs its own option — this is the case that had no UI at all, which is
-  // why a 4-of-5 team simply could not be covered. One entry per still-open
-  // seat, already-filled ones subtracted.
-  const openSeats = [home, away].flatMap((t) => {
-    if (!t) return [];
-    const filled = asg.filter(
-      (a) => a.teamId === t.id && a.replacingUserId == null,
-    ).length;
-    const open = teamSize - t.members.length - filled;
-    return open > 0 ? [{ team: t, open }] : [];
-  });
-  return (
-    <div className="space-y-2 rounded-lg border border-line p-3">
-      <div className="text-sm font-medium">
-        {label}: {home?.name ?? "?"} vs {away?.name ?? "?"}
-      </div>
-      {(() => {
-        // Only current roster members can need cover — a released
-        // player's (or unassigned standin's) stale OUT row would
-        // otherwise raise an alert no assignment can ever clear.
-        const rosterIds = new Set(
-          [home, away].flatMap((t) => t?.members.map((mm) => mm.userId) ?? []),
-        );
-        const out = data.outRsvps.filter(
-          (r) => r.matchId === m.id && rosterIds.has(r.userId),
-        );
-        const covered = new Set(
-          asg.map((a) => a.replacingUserId).filter(Boolean),
-        );
-        const needing = out.filter((r) => !covered.has(r.userId));
-        // The OTHER direction: an assigned STANDIN who has declared OUT. The
-        // roster filter above deliberately excludes them, so the seat read as
-        // covered while the cover had quit — the one state this card exists
-        // to catch that it couldn't see. Distinct copy because the fix path
-        // differs (remove/replace, not add).
-        const assignedIds = new Set(asg.map((a) => a.standinUserId));
-        const standinOut = data.outRsvps.filter(
-          (r) => r.matchId === m.id && assignedIds.has(r.userId),
-        );
-        return (
-          <>
-            {needing.length > 0 ? (
-              <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
-                ✗ Can&apos;t make it:{" "}
-                <b>{needing.map((r) => r.user.name).join(", ")}</b> — assign a
-                standin below.
-              </div>
-            ) : null}
-            {standinOut.length > 0 ? (
-              <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
-                ✗ Assigned standin{" "}
-                <b>{standinOut.map((r) => r.user.name).join(", ")}</b> has
-                declared OUT — remove that assignment and arrange other cover.
-              </div>
-            ) : null}
-          </>
-        );
-      })()}
-      {asg.length > 0 ? (
-        <ul className="space-y-1">
-          {asg.map((a) => (
-            <li
-              key={a.id}
-              className="flex items-center justify-between text-xs text-muted"
-            >
-              <span>
-                {/* A null `replaced` is an EMPTY-SEAT cover, not missing data —
-                    it used to render as "in for ?". */}
-                {a.replaced
-                  ? `${a.standin.name} in for ${a.replaced.name}`
-                  : `${a.standin.name} filling an open seat`}{" "}
-                · {teamName.get(a.teamId)}
-              </span>
-              <ActionForm action={removeStandin}>
-                <input type="hidden" name="assignmentId" value={a.id} />
-                <SubmitButton
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-danger-soft hover:underline"
-                  confirm={`Remove ${a.standin.name} from this match? They are told to stand down in Discord — if this was a mis-click they will have been pinged twice for nothing.`}
-                >
-                  remove
-                </SubmitButton>
-              </ActionForm>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {!assignOpen ? null : (
-        <ActionForm
-          action={assignStandin}
-          className="flex flex-wrap items-center gap-2"
-        >
-          <input type="hidden" name="matchId" value={m.id} />
-          <select
-            name="standinUserId"
-            required
-            defaultValue=""
-            aria-label="Standin"
-            className={selectCls}
-          >
-            <option value="" disabled>
-              Standin…
-            </option>
-            {/* MMR rides in the option text — the captain picker has always
-              shown it, and the any-team admin override was choosing blind. */}
-            {data.standins.map((s) => (
-              <option key={s.userId} value={s.userId}>
-                {s.user.name} ({s.mmr} MMR)
-              </option>
-            ))}
-          </select>
-          <span className="text-xs text-muted">replaces</span>
-          <select
-            name="replacingUserId"
-            required
-            defaultValue=""
-            aria-label="Player being replaced"
-            className={selectCls}
-          >
-            <option value="" disabled>
-              Player…
-            </option>
-            {/* Open seats first: on a short roster this is the thing the admin
-              came here to do, and it used to be impossible. The `seat:` prefix
-              is unpacked by the action into a null replacingUserId + teamId. */}
-            {openSeats.length > 0 ? (
-              <optgroup label="Open roster seat">
-                {openSeats.map(({ team, open }) => (
-                  <option key={`seat-${team.id}`} value={seatValue(team.id)}>
-                    {team.name} — empty seat ({open} of {teamSize} unfilled)
-                  </option>
-                ))}
-              </optgroup>
-            ) : null}
-            <optgroup label={home?.name ?? "Home"}>
-              {home?.members
-                .filter((mm) => !coveredIds.has(mm.userId))
-                .map((mm) => (
-                  <option key={mm.userId} value={mm.userId}>
-                    {mm.user.name}
-                  </option>
-                ))}
-            </optgroup>
-            <optgroup label={away?.name ?? "Away"}>
-              {away?.members
-                .filter((mm) => !coveredIds.has(mm.userId))
-                .map((mm) => (
-                  <option key={mm.userId} value={mm.userId}>
-                    {mm.user.name}
-                  </option>
-                ))}
-            </optgroup>
-          </select>
-          <Button type="submit" variant="secondary" size="sm">
-            Assign
-          </Button>
-        </ActionForm>
-      )}
-    </div>
   );
 }
 

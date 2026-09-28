@@ -72,7 +72,7 @@ const STATE_MARKERS: {
   { file: "src/components/league-results-map.tsx", what: "result letters", pattern: /\? "Live"/g, min: 1 },
   { file: "src/components/season-grid.tsx", what: "season grid result letters", pattern: /cell\.live\s+\? "Live"/g, min: 1 },
   { file: "src/components/tiebreaker-bracket.tsx", what: "tiebreaker game status", pattern: /statusLabels\[game\.status\]/g, min: 1 },
-  { file: "src/app/matches/[id]/page.tsx", what: "report-card grades", pattern: /Report \{overall\}<|<b>\{r\.grade\}<\/b>/g, min: 2 },
+  { file: "src/app/matches/[id]/page.tsx", what: "report-card grades", pattern: /Report \{overall\}\s*<|\{r\.grade\}\s*<\/b>/g, min: 2 },
   { file: "src/components/leader-board.tsx", what: "You chip", pattern: />\s*You\s*</g, min: 1 },
 ];
 
