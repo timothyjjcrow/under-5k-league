@@ -1309,7 +1309,7 @@ function SteamDotaCard({
         {fhUnavailable === true ? (
           <div
             role="alert"
-            className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
+            className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger-soft"
           >
             <b>Your Dota match data is private</b> — league results can&apos;t
             auto-import your games, and your medal/stats stay invisible. In Dota

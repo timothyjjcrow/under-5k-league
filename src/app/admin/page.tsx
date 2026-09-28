@@ -3997,7 +3997,7 @@ function PlayoffControls({
         ) : null}
         {season.status === SEASON_STATUS.COMPLETE &&
         championPresentation.issue ? (
-          <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+          <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger-soft">
             <b>Champion state needs review.</b>{" "}
             {storedChampion
               ? `${storedChampion.name} is stored as champion, but that record does not match one authoritative completed grand-final winner.`
@@ -4021,7 +4021,7 @@ function PlayoffControls({
             // The count past kickoff, like the next step and the Schedule
             // card above: counting every unplayed fixture here asked for
             // scores of games that kick off later tonight.
-            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger-soft">
               ⚠ {dueRegular.pending} regular-season result
               {dueRegular.pending === 1 ? "" : "s"} past kickoff still needed (
               {weekList(dueRegular.pendingWeeks)})

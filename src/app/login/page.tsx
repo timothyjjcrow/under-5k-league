@@ -82,7 +82,7 @@ export default async function LoginPage({
           {errorCopy ? (
             <div
               role="alert"
-              className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2.5 text-sm text-danger"
+              className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2.5 text-sm text-danger-soft"
             >
               {errorCopy}
             </div>

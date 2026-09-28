@@ -153,7 +153,7 @@ export function StandingsTableView({
                   <span
                     className={cn(
                       "block font-display text-lg leading-none tabular-nums",
-                      inCut ? "font-medium text-success/80" : "text-muted",
+                      inCut ? "font-medium text-success" : "text-muted",
                     )}
                   >
                     {row.rank}

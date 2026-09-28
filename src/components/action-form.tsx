@@ -137,7 +137,7 @@ export function ActionForm({
               ref={errorRef}
               id={errorId}
               tabIndex={-1}
-              className="basis-full w-full col-span-full scroll-mt-40 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger focus:outline-none focus:ring-2 focus:ring-danger/50"
+              className="basis-full w-full col-span-full scroll-mt-40 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger-soft focus:outline-none focus:ring-2 focus:ring-danger/50"
             >
               {state.error === SIGN_IN_REQUIRED ? (
                 <SignInRequired />

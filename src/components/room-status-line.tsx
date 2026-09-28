@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import type { RoomStatus } from "@/lib/room-status";
 
 const TONE_CLASSES: Record<RoomStatus["tone"], string> = {
-  danger: "border-danger/40 bg-danger/10 text-danger",
+  danger: "border-danger/40 bg-danger/10 text-danger-soft",
   warning: "border-warning/40 bg-warning/10 text-warning",
   info: "border-info/40 bg-info/10 text-info",
 };

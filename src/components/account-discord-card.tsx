@@ -176,7 +176,7 @@ export function AccountDiscordCard({
               note.tone === "success"
                 ? "rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
                 : note.tone === "danger"
-                  ? "rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+                  ? "rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger-soft"
                   : "rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm text-muted"
             }
           >

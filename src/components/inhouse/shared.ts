@@ -41,7 +41,7 @@ export function sideMeta(isRadiant: boolean) {
         name: "Dire",
         badge: "danger" as const,
         ring: "border-danger/50",
-        chip: "bg-danger/10 text-danger border-danger/30",
+        chip: "bg-danger/10 text-danger-soft border-danger/30",
         dot: "bg-danger",
       };
 }

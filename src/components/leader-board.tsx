@@ -168,7 +168,7 @@ function BoardRow({
               </PlayerLink>
             )}
             {r.isViewer ? (
-              <span className="rounded bg-info/15 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-info">
+              <span className="rounded bg-info/15 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-info-soft">
                 You
               </span>
             ) : null}
