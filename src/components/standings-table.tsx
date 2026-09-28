@@ -87,7 +87,8 @@ export function StandingsTableView({
 
   return (
     // table-fixed + explicit column widths via <colgroup>: the Team column
-    // absorbs whatever is left, so long names can't widen the page. Widths
+    // absorbs whatever is left and its name truncates, so long names can't
+    // widen the page or stretch a row. Widths
     // MUST live on <col>. A display:none cell drops out of its row, and the
     // cells after it slide onto the wrong <col>. So the one column that
     // hides on phones (Last 5) is the LAST one, with a w-0 <col> there, and
@@ -195,11 +196,16 @@ export function StandingsTableView({
                       className="shrink-0 rounded-md"
                     />
                     <div className="min-w-0 flex-1">
+                      {/* One line, truncated: on a phone the fixed columns
+                          leave the name ~90px, and a wrapping name stacked a
+                          long team onto five lines. The full name is the
+                          link's text, its tooltip and the team page. */}
                       <Link
                         href={`/teams/${row.teamId}`}
-                        className="-my-1 inline-flex min-h-8 min-w-6 items-center py-1 text-sm font-semibold leading-snug transition-colors [overflow-wrap:anywhere] hover:text-info"
+                        title={row.name}
+                        className="-my-1 inline-flex min-h-8 min-w-6 max-w-full items-center py-1 text-sm font-semibold leading-snug transition-colors hover:text-info"
                       >
-                        {row.name}
+                        <span className="truncate">{row.name}</span>
                       </Link>
                       <StatusLine
                         row={row}
