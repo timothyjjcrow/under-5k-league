@@ -18,6 +18,7 @@ import {
   matchResultMessage,
   playerReleasedMessage,
   playoffsStartedMessage,
+  playoffRoundSetMessage,
   playoffsReturnedToRegularMessage,
   championMessage,
   maskWebhookUrl,
@@ -352,6 +353,33 @@ describe("discord message formatters", () => {
     expect(msg).toMatch(/bracket is void/i);
     expect(msg).toMatch(/Regular season/i);
     expect(msg).toContain("/schedule");
+  });
+
+  it("announces the next playoff round with reader-local kickoffs", () => {
+    const msg = playoffRoundSetMessage({
+      seasonName: "Season 7",
+      roundName: "Grand final",
+      fixtures: [{ home: "Alpha", away: "Delta", whenMs: 1_800_000_000_000 }],
+    });
+    expect(msg).toContain("**Season 7 grand final is set!**");
+    expect(msg).toContain(
+      "• **Alpha** vs **Delta** — <t:1800000000:F> (<t:1800000000:R>)",
+    );
+    expect(msg).toMatch(/\nBracket: <[^>]+\/schedule>$/);
+  });
+
+  it("agrees the verb with a plural round and says when a kickoff is unset", () => {
+    const msg = playoffRoundSetMessage({
+      seasonName: "Season 7",
+      roundName: "Semifinals",
+      fixtures: [
+        { home: "A", away: "D", whenMs: null },
+        { home: "B", away: "C", whenMs: 1_800_000_000_000 },
+      ],
+    });
+    expect(msg).toContain("**Season 7 semifinals are set!**");
+    expect(msg).toContain("• **A** vs **D** — kickoff time still to be set");
+    expect(msg.split("\n")).toHaveLength(4);
   });
 
   it("crowns the champion", () => {
@@ -1758,6 +1786,11 @@ describe("no player-supplied name can inject markdown", () => {
       { home: EVIL, away: EVIL, homeSeed: 1, awaySeed: 4, whenMs: 1_800_000_000_000 },
     ]),
     championMessage("Season 1", EVIL, "s1"),
+    playoffRoundSetMessage({
+      seasonName: EVIL,
+      roundName: "Grand final",
+      fixtures: [{ home: EVIL, away: EVIL, whenMs: null }],
+    }),
     freeAgentSignedMessage(EVIL, EVIL),
     playerReleasedMessage(EVIL, EVIL),
     teamWithdrewMessage(EVIL, 3),

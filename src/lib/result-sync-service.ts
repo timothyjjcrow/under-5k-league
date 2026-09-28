@@ -34,10 +34,13 @@ import {
   claimThrottle,
   getSetting,
   HONORS_ANNOUNCED_PREFIX,
+  parsePlayoffRoundAnnouncedKey,
+  PLAYOFF_ROUND_ANNOUNCED_PREFIX,
   RESULT_ANNOUNCED_PREFIX,
   SETTING_KEYS,
 } from "./settings";
 import { advancePlayoffBracket, announceChampionOnce } from "./playoff-service";
+import { announcePlayoffRoundOnce } from "./playoff-round-announcement";
 import { advanceTiebreakerWeek } from "./tiebreaker-service";
 import { syncInhouseBoard } from "./inhouse-board-service";
 import {
@@ -878,6 +881,10 @@ async function retryFailedAnnouncements(
   if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
     return { deadlineReached: true };
   }
+  await retryFailedPlayoffRoundAnnouncement(options);
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    return { deadlineReached: true };
+  }
   await retryPendingHonorAnnouncements({
     limit: 1,
     shouldContinue: () => canStartWork(options, MIN_DISCORD_STEP_MS),
@@ -990,6 +997,31 @@ async function retryFailedChampionAnnouncements(
       await announceChampionOnce(activeChampion.id);
     }
   }
+}
+
+/**
+ * A "next playoff round is set" post whose send could not be queued, or whose
+ * claim outlived a crashed worker. One per pass; announcePlayoffRoundOnce
+ * re-checks the round and drops the marker when there is nothing left to say
+ * (the round was reset away or played out), so a stale marker cannot be
+ * retried forever.
+ */
+async function retryFailedPlayoffRoundAnnouncement(
+  options: RunResultSyncOptions,
+): Promise<void> {
+  const pending = await nextRecoverableMarker(
+    PLAYOFF_ROUND_ANNOUNCED_PREFIX,
+    Date.now(),
+  );
+  if (!pending || !canStartWork(options, MIN_DISCORD_STEP_MS)) return;
+  const target = parsePlayoffRoundAnnouncedKey(pending.key);
+  if (!target) {
+    await prisma.setting.deleteMany({
+      where: { key: pending.key, value: pending.value },
+    });
+    return;
+  }
+  await announcePlayoffRoundOnce(target.seasonId, target.round);
 }
 
 /**

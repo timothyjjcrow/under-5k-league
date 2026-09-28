@@ -72,7 +72,7 @@ export const SETTING_KEYS = {
 // per-entity rows: exactly-once markers (resultAnnounced:<matchId>,
 // weekReminder:<season>:<week>:<kickoffMs>, draftReminder:<season>:<revision>,
 // honorsAnnounced:<season>:<week>, playoffRoundBuilt:<season>:<round>,
-// signupsOpenAnnounced:<season>), JSON
+// playoffRoundAnnounced:<season>:<round>, signupsOpenAnnounced:<season>), JSON
 // state blobs (playoffGamesArchive:<season>, importSkip:<season>,
 // leagueSyncSkip:<season>) and per-pair throttles
 // (outPing:<matchId>:<userId>, providerCooldown:*), plus tiebreakerDraw:
@@ -239,6 +239,36 @@ export function playoffRoundBuiltPrefix(seasonId: string): string {
   return `playoffRoundBuilt:${seasonId}:`;
 }
 
+/**
+ * Exactly-once marker for the "next playoff round is set" post
+ * (announcePlayoffRoundOnce). A bracket reset deletes these with the round
+ * markers above, which cancels a still-queued post for a round that no longer
+ * exists and lets the rebuilt round announce itself afresh.
+ */
+export const PLAYOFF_ROUND_ANNOUNCED_PREFIX = "playoffRoundAnnounced:";
+
+export function playoffRoundAnnouncedKey(
+  seasonId: string,
+  round: number,
+): string {
+  return `${playoffRoundAnnouncedPrefix(seasonId)}${round}`;
+}
+
+export function playoffRoundAnnouncedPrefix(seasonId: string): string {
+  return `${PLAYOFF_ROUND_ANNOUNCED_PREFIX}${seasonId}:`;
+}
+
+/** The season and round a playoffRoundAnnouncedKey names (for the retry sweep). */
+export function parsePlayoffRoundAnnouncedKey(
+  key: string,
+): { seasonId: string; round: number } | null {
+  if (!key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX)) return null;
+  const match = /^(.+):(\d{1,4})$/.exec(
+    key.slice(PLAYOFF_ROUND_ANNOUNCED_PREFIX.length),
+  );
+  return match ? { seasonId: match[1], round: Number(match[2]) } : null;
+}
+
 /** The saved opening draw of one tiebreaker group (JSON array of team ids). */
 export function tiebreakerDrawKey(seasonId: string, groupKey: string): string {
   return `${tiebreakerDrawPrefix(seasonId)}${groupKey}`;
@@ -364,6 +394,7 @@ export function seasonSettingScopeWhere(
     { key: leagueSyncSkipKey(seasonId) },
     { key: importSkipKey(seasonId) },
     { key: { startsWith: playoffRoundBuiltPrefix(seasonId) } },
+    { key: { startsWith: playoffRoundAnnouncedPrefix(seasonId) } },
   ];
   const matchScope = matchIds.flatMap<Prisma.SettingWhereInput>((matchId) => [
     { key: resultAnnouncedKey(matchId) },

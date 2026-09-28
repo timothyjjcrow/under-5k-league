@@ -21,6 +21,9 @@ import {
   draftTeamsPingPrefix,
   fixtureImportCooldownResource,
   importSkipKey,
+  parsePlayoffRoundAnnouncedKey,
+  playoffRoundAnnouncedKey,
+  playoffRoundAnnouncedPrefix,
   playoffRoundBuiltKey,
   playoffRoundBuiltPrefix,
   providerCooldownKey,
@@ -44,6 +47,12 @@ describe("stored Setting key formats", () => {
     expect(draftTeamsPingPrefix("s1")).toBe("draftTeamsPing:s1:");
     expect(playoffRoundBuiltKey("s1", 2)).toBe("playoffRoundBuilt:s1:2");
     expect(playoffRoundBuiltPrefix("s1")).toBe("playoffRoundBuilt:s1:");
+    expect(playoffRoundAnnouncedKey("s1", 2)).toBe("playoffRoundAnnounced:s1:2");
+    expect(playoffRoundAnnouncedPrefix("s1")).toBe("playoffRoundAnnounced:s1:");
+    expect(
+      parsePlayoffRoundAnnouncedKey(playoffRoundAnnouncedKey("s1", 2)),
+    ).toEqual({ seasonId: "s1", round: 2 });
+    expect(parsePlayoffRoundAnnouncedKey("playoffRoundBuilt:s1:2")).toBeNull();
     expect(tiebreakerDrawKey("s1", "g")).toBe("tiebreakerDraw:s1:g");
     expect(tiebreakerDrawPrefix("s1")).toBe("tiebreakerDraw:s1:");
     expect(signupsOpenAnnouncedKey("s1")).toBe("signupsOpenAnnounced:s1");
@@ -71,6 +80,7 @@ describe("stored Setting key formats", () => {
       draftPresencePrefix("s1"),
       draftTeamsPingPrefix("s1"),
       playoffRoundBuiltPrefix("s1"),
+      playoffRoundAnnouncedPrefix("s1"),
       tiebreakerDrawPrefix("s1"),
       signupsOpenAnnouncedKey("s1"),
       outPingPrefix("m1"),

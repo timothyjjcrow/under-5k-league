@@ -405,6 +405,31 @@ export function playoffsStartedMessage(
   return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
 }
 
+/**
+ * The next playoff round has been built from the last one's winners (the
+ * final, in a four-team bracket). The opening bracket and the champion always
+ * posted; the rounds between them didn't, so finalists heard about their
+ * final from the match-night reminder a day before kickoff. The send mentions
+ * the captains of the new fixtures; the times render in each reader's zone.
+ */
+export function playoffRoundSetMessage(m: {
+  seasonName: string;
+  /** roundName(): "Grand final", "Semifinals", "Quarterfinals", "Round N". */
+  roundName: string;
+  fixtures: { home: string; away: string; whenMs: number | null }[];
+}): string {
+  const lines = m.fixtures.map((f) => {
+    const when =
+      f.whenMs != null && Number.isFinite(f.whenMs)
+        ? ` — <t:${Math.floor(f.whenMs / 1000)}:F> (<t:${Math.floor(f.whenMs / 1000)}:R>)`
+        : " — kickoff time still to be set";
+    return `• **${name(f.home)}** vs **${name(f.away)}**${when}`;
+  });
+  // "Semifinals are set", "Grand final is set", "Round 3 is set".
+  const verb = /s$/.test(m.roundName) ? "are" : "is";
+  return `🏁 **${name(m.seasonName)} ${m.roundName.toLowerCase()} ${verb} set!**\n${lines.join("\n")}\nBracket: <${resolveSiteUrl()}/schedule>`;
+}
+
 export function playoffsReturnedToRegularMessage(seasonName: string): string {
   return `↩️ **${name(seasonName)} playoffs have been withdrawn for a standings correction.** The current bracket is void and the league is back in the Regular season phase. A fresh bracket will be posted after the results are corrected: <${resolveSiteUrl()}/schedule>`;
 }

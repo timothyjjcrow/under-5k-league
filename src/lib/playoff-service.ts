@@ -20,6 +20,7 @@ import { raceHook } from "./race-hook";
 import {
   championAnnouncedKey,
   playoffGamesArchiveKey,
+  playoffRoundAnnouncedPrefix,
   playoffRoundBuiltKey,
   playoffRoundBuiltPrefix,
   resultAnnouncedKey,
@@ -44,6 +45,7 @@ import {
 } from "./scrim-service";
 import { playoffRoundLabel, scrimYieldedMessage } from "./scrim-discord";
 import { mentionUsers } from "./discord-mentions";
+import { announcePlayoffRoundOnce } from "./playoff-round-announcement";
 import { logAdminAction } from "./admin-log";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
@@ -259,6 +261,11 @@ async function removePostseason(
     // them, a reset season could never advance past a round it had already
     // built once.
     where: { key: { startsWith: playoffRoundBuiltPrefix(seasonId) } },
+  });
+  // …and their "round is set" posts: a post still queued for a round this
+  // reset deletes must not go out, and the rebuilt round announces afresh.
+  await tx.setting.deleteMany({
+    where: { key: { startsWith: playoffRoundAnnouncedPrefix(seasonId) } },
   });
   await tx.setting.deleteMany({
     where: { key: championAnnouncedKey(seasonId) },
@@ -1011,6 +1018,13 @@ export async function advancePlayoffBracket(
     // idempotent advance on its next run.
     if (e instanceof ScrimClashChangedError) return false;
     throw e;
+  }
+  // Post-commit and best-effort, like the champion: the round is built
+  // whatever Discord says, and this caller still reports the mutation.
+  try {
+    await announcePlayoffRoundOnce(seasonId, nextRound);
+  } catch {
+    console.error("[playoffs] ROUND_ANNOUNCEMENT_FAILED");
   }
   await reportScrimYields(seasonId, built.scrimClashes, {
     pairs: pairings.length,
