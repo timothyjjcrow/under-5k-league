@@ -31,6 +31,7 @@ import {
   avgKnownMmr,
   inhouseAlerts,
   inhouseLobbyCode,
+  inhouseScanStatus,
   inhouseTitleFlag,
   mmrBalance,
   orderCaptains,
@@ -2391,7 +2392,7 @@ function ReadyView({
 }: {
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
-  /** The server clock from the last poll (see scanNote). */
+  /** The server clock from the last poll (see inhouseScanStatus). */
   serverNow: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
@@ -2430,7 +2431,7 @@ function ReadyView({
         {me.canRecord ? (
           <ResultControls
             folded
-            scanNote={scanNote(lobby.scanOpensAt, serverNow)}
+            scan={inhouseScanStatus(lobby.scanOpensAt, serverNow)}
             pending={pending}
             act={act}
           />
@@ -2444,57 +2445,48 @@ function ReadyView({
   );
 }
 
-/**
- * The automatic scan's status line, from the server's own scan window
- * (`lobby.scanOpensAt`, the same clock maybeAutoDetectResult waits on) and the
- * server clock of the last poll. Poll-driven, not ticking: calling Date.now()
- * during render makes the render non-idempotent (React may run it twice and
- * keep either result). It only lags by one poll.
- */
-function scanNote(scanOpensAt: number | null, serverNow: number) {
-  if (scanOpensAt == null || serverNow >= scanOpensAt) {
-    return {
-      live: true,
-      text: "Auto-scan is running · results appear after the game ends.",
-    };
-  }
-  const minutes = Math.max(1, Math.ceil((scanOpensAt - serverNow) / 60_000));
-  return { live: false, text: `Auto-scan starts in ${minutes} min.` };
+/** The automatic scan's status line (see inhouseScanStatus). */
+function scanStatusText(scan: { live: boolean; minutesLeft: number }) {
+  return scan.live
+    ? "Auto-scan is running · results appear after the game ends."
+    : `Auto-scan starts in ${scan.minutesLeft} min.`;
 }
 
 /**
- * The manual result paths: "Auto-detect result" (scan the ten players' recent
- * games now) and "Record by match ID". The automatic scan normally records the
- * game with nobody pressing anything — these cover a game it can't see yet.
- * Shared by the Set up and Play screens, because a lobby is being played from
- * the moment teams lock whether or not anyone pressed Start. `folded` (Set up)
- * keeps both behind one disclosure so they don't compete with getting into the
+ * The manual result paths: "Game over? Check now" (scan the ten players'
+ * recent games now) and "Record by match ID". The automatic scan normally
+ * records the game with nobody pressing anything; these cover a game it can't
+ * see yet. Shared by the Set up and Play screens, because a lobby is being
+ * played from the moment teams lock whether or not anyone pressed Start.
+ *
+ * "Check now" only appears once the automatic scan's window opens
+ * (inhouseScanStatus): before that the game can't be over, and each press is
+ * a ten-player OpenDota scan that could only fail. `folded` (Set up) keeps
+ * both behind one disclosure so they don't compete with getting into the
  * Dota lobby.
  */
 function ResultControls({
   folded = false,
-  scanNote: note,
+  scan,
   pending,
   act,
 }: {
   folded?: boolean;
-  scanNote: { live: boolean; text: string };
+  scan: { live: boolean; minutesLeft: number };
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
 }) {
   const [matchId, setMatchId] = useState("");
-  const detect = (
-    <div>
-      <button
-        disabled={pending}
-        onClick={() => act({ action: "detect" })}
-        className={buttonClasses(folded ? "secondary" : "accent", "md")}
-      >
-        {pending ? "Fetching from OpenDota…" : "Auto-detect result"}
-      </button>
-      <p className="mx-auto mt-2 max-w-sm text-xs text-muted">{note.text}</p>
-    </div>
-  );
+  const checkNow = scan.live ? (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() => act({ action: "detect" })}
+      className={buttonClasses("secondary", "md")}
+    >
+      {pending ? "Fetching from OpenDota…" : "Game over? Check now"}
+    </button>
+  ) : null;
   const form = (
     <form
       onSubmit={(event) => {
@@ -2544,7 +2536,8 @@ function ResultControls({
           Game over and no result yet? Record it
         </summary>
         <div className="mt-2 space-y-3 text-center">
-          {detect}
+          <p className="text-xs text-muted">{scanStatusText(scan)}</p>
+          {checkNow}
           {form}
         </div>
       </details>
@@ -2552,11 +2545,17 @@ function ResultControls({
   }
   return (
     <div className="mt-4 space-y-3">
-      {detect}
+      <div>
+        <p className="text-sm">
+          The result records automatically after the game.
+        </p>
+        <p className="mx-auto mt-1 max-w-sm text-xs text-muted">
+          {scanStatusText(scan)}
+        </p>
+      </div>
+      {checkNow}
       <details className="mx-auto max-w-lg border-t border-info/20 pt-2 text-left">
-        <summary className={summaryClass}>
-          Have a match ID? Record it manually
-        </summary>
+        <summary className={summaryClass}>Record by match ID</summary>
         {form}
       </details>
     </div>
@@ -2642,14 +2641,15 @@ function InProgressView({
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
   offset: number;
-  /** The server clock from the last poll (see scanNote). */
+  /** The server clock from the last poll (see inhouseScanStatus). */
   serverNow: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
 }) {
-  // Poll-driven (not ticking) — only gates the "auto-scan is live" note, which
-  // flips once, minutes in; the visible timer ticks in <ElapsedClock>.
-  const note = scanNote(lobby.scanOpensAt, serverNow);
+  // Poll-driven (not ticking): it flips once, minutes in, and only gates the
+  // scan note and the "Check now" button. The visible timer ticks in
+  // <ElapsedClock>.
+  const scan = inhouseScanStatus(lobby.scanOpensAt, serverNow);
 
   return (
     <div className="space-y-5">
@@ -2672,12 +2672,12 @@ function InProgressView({
           </p>
         ) : null}
         {me.canRecord ? (
-          <ResultControls scanNote={note} pending={pending} act={act} />
+          <ResultControls scan={scan} pending={pending} act={act} />
         ) : (
           <p className="mt-3 text-sm text-muted">
-            {note.live
+            {scan.live
               ? "The result is pulled from OpenDota automatically once the game ends."
-              : `The result is pulled from OpenDota automatically. ${note.text}`}
+              : `The result is pulled from OpenDota automatically. ${scanStatusText(scan)}`}
           </p>
         )}
       </div>

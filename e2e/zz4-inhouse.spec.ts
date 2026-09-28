@@ -274,11 +274,19 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // The observer (team 1 captain) starts the game clock from the UI.
   await page.getByRole("button", { name: "Start the game clock" }).click();
 
-  // Live view: pulsing banner, elapsed clock, auto-detect controls, rosters.
+  // Live view: pulsing banner, elapsed clock, result note, rosters. A game
+  // that just started can't be over, so the manual "Check now" scan stays
+  // hidden until the automatic scan's window opens; the match-ID path is
+  // there from the start.
   await expect(page.getByText("Game in progress")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Auto-detect result/ }),
+    page.getByText("The result records automatically after the game."),
   ).toBeVisible();
+  await expect(page.getByText(/Auto-scan starts in \d+ min\./)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Check now/ }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Record by match ID")).toBeVisible();
   await expect(page.getByText("Radiant").first()).toBeVisible();
   await expect(page.getByText("Dire").first()).toBeVisible();
   await captureRoom(page, "in-progress");

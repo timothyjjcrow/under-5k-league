@@ -6,6 +6,7 @@ import {
   inhouseAlerts,
   inhouseDetectWindow,
   inhouseLobbyCode,
+  inhouseScanStatus,
   inhouseTitleFlag,
   mmrBalance,
   readyCheckEndedToast,
@@ -848,5 +849,51 @@ describe("inhouseDetectWindow", () => {
     expect(
       inhouseDetectWindow({ status, createdAtMs: FORMED, startedAtMs: null }),
     ).toBeNull();
+  });
+});
+
+describe("inhouseScanStatus", () => {
+  const OPENS = Date.UTC(2026, 8, 20, 18, 8);
+  const MIN = 60_000;
+
+  it("counts whole minutes up to the scan window, never below one", () => {
+    expect(inhouseScanStatus(OPENS, OPENS - 8 * MIN)).toEqual({
+      live: false,
+      minutesLeft: 8,
+    });
+    expect(inhouseScanStatus(OPENS, OPENS - 7 * MIN - 1)).toEqual({
+      live: false,
+      minutesLeft: 8,
+    });
+    expect(inhouseScanStatus(OPENS, OPENS - 1)).toEqual({
+      live: false,
+      minutesLeft: 1,
+    });
+  });
+
+  it("is live from the moment the window opens", () => {
+    expect(inhouseScanStatus(OPENS, OPENS)).toEqual({
+      live: true,
+      minutesLeft: 0,
+    });
+    expect(inhouseScanStatus(OPENS, OPENS + 30 * MIN).live).toBe(true);
+  });
+
+  it("treats an unknown window as open rather than hiding the check", () => {
+    expect(inhouseScanStatus(null, OPENS).live).toBe(true);
+  });
+
+  it("keeps a game that just started out of the manual check", () => {
+    // The room hides "Game over? Check now" until `live`: a game Start was
+    // pressed on a moment ago can't be over yet.
+    const started = OPENS - INHOUSE.DETECT_MIN_MINUTES * MIN;
+    const window = inhouseDetectWindow({
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      createdAtMs: started - 20 * MIN,
+      startedAtMs: started,
+    });
+    expect(inhouseScanStatus(window!.opensAtMs, started + 3_000).live).toBe(
+      false,
+    );
   });
 });

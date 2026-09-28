@@ -298,7 +298,7 @@ export const INHOUSE = {
   DETECT_MIN_MINUTES: 8,
   DETECT_READY_MIN_MINUTES: 15,
   DETECT_INTERVAL_SECONDS: 180,
-  // Floor between MANUAL "Auto-detect result" presses. Short enough that the
+  // Floor between MANUAL "Check now" presses. Short enough that the
   // button still feels responsive, long enough that ten players spamming it
   // can't drain the shared OpenDota budget the league's result sync needs.
   DETECT_MANUAL_GAP_SECONDS: 20,

@@ -461,6 +461,33 @@ export function inhouseDetectWindow(lobby: {
   return null;
 }
 
+/**
+ * Where the automatic result scan stands, for the room: `live` once the scan
+ * window (`inhouseDetectWindow`'s opensAtMs, sent as `lobby.scanOpensAt`) has
+ * opened, otherwise the whole minutes until it does (at least 1).
+ *
+ * `live` also gates the manual "Game over? Check now" button. A press scans
+ * all ten players' recent OpenDota games, and before the window opens the
+ * game can't plausibly be over, so an early press could only fail while
+ * spending the OpenDota budget league result sync shares. A null window is
+ * treated as open, so the button is never lost to a missing value.
+ *
+ * `serverNow` is the server clock of the last poll: calling Date.now() while
+ * rendering would make the render non-idempotent.
+ */
+export function inhouseScanStatus(
+  scanOpensAt: number | null,
+  serverNow: number,
+): { live: boolean; minutesLeft: number } {
+  if (scanOpensAt == null || serverNow >= scanOpensAt) {
+    return { live: true, minutesLeft: 0 };
+  }
+  return {
+    live: false,
+    minutesLeft: Math.max(1, Math.ceil((scanOpensAt - serverNow) / 60_000)),
+  };
+}
+
 export type MmrBalance = {
   avg1: number;
   avg2: number;
