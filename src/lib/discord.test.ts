@@ -109,20 +109,43 @@ describe("Discord mention materialization", () => {
 });
 
 describe("discord message formatters", () => {
+  // 4 teams of 5: the draft minimum is 20 players.
+  const FOUR_OF_FIVE = { teamSize: 5, minTeams: 4 };
+
   it("counts down remaining signups", () => {
-    const msg = signupMessage("Zai", 17, 20);
+    const msg = signupMessage("Zai", 17, FOUR_OF_FIVE);
     expect(msg).toContain("**Zai**");
     expect(msg).toContain("17 players");
-    expect(msg).toContain("3 more to start");
+    expect(msg).toContain("3 more to start the draft.");
   });
 
-  it("celebrates when signups hit the threshold", () => {
-    expect(signupMessage("Zai", 20, 20)).toContain("enough to start");
-    expect(signupMessage("Zai", 25, 20)).toContain("enough to start");
+  it("celebrates only the signup that reaches the minimum", () => {
+    const msg = signupMessage("Zai", 20, FOUR_OF_FIVE);
+    expect(msg).toContain("that's enough to start the draft! 🎉");
+    expect(msg).toContain("5 more players makes it 5 full teams.");
+  });
+
+  it("past the minimum, counts toward the next full team like the site", () => {
+    // Signups are uncapped, so "enough to start the draft" would repeat for
+    // the rest of signup week; the site says how many make another team.
+    const msg = signupMessage("Moonwalker", 34, { teamSize: 5, minTeams: 6 });
+    expect(msg).toContain("34 players in, 1 more player makes it 7 full teams.");
+    expect(msg).not.toContain("enough to start");
+    expect(signupMessage("Zai", 25, FOUR_OF_FIVE)).toContain(
+      "25 players in, 5 more players makes it 6 full teams.",
+    );
+  });
+
+  it("ends every signup post with the signup link", () => {
+    for (const count of [1, 17, 20, 34]) {
+      expect(signupMessage("Zai", count, FOUR_OF_FIVE)).toMatch(
+        /Join them: <https?:\/\/[^>]+\/me>$/,
+      );
+    }
   });
 
   it("uses singular for the first signup", () => {
-    expect(signupMessage("Zai", 1, 20)).toContain("1 player in");
+    expect(signupMessage("Zai", 1, FOUR_OF_FIVE)).toContain("1 player in");
   });
 
   it("announces a season opening with its match night and the signup link", () => {
@@ -495,11 +518,12 @@ describe("draft scheduling", () => {
   });
 
   it("signupMessage appends draft night only when one is set", () => {
-    expect(signupMessage("Dendi", 3, 20, 1_800_000_000_000)).toContain(
-      "Draft night: <t:1800000000:F>",
+    const season = { teamSize: 5, minTeams: 4 };
+    expect(signupMessage("Dendi", 3, season, 1_800_000_000_000)).toContain(
+      "Draft night: <t:1800000000:F>. Join them:",
     );
-    expect(signupMessage("Dendi", 3, 20)).not.toContain("Draft night");
-    expect(signupMessage("Dendi", 3, 20, null)).not.toContain("Draft night");
+    expect(signupMessage("Dendi", 3, season)).not.toContain("Draft night");
+    expect(signupMessage("Dendi", 3, season, null)).not.toContain("Draft night");
   });
 });
 
@@ -1663,7 +1687,8 @@ describe("no message unfurls a link preview", () => {
 
   it("wraps every site link in angle brackets", () => {
     const messages = [
-      signupMessage("Zai", 3, 20),
+      signupMessage("Zai", 3, { teamSize: 5, minTeams: 4 }),
+      signupMessage("Zai", 34, { teamSize: 5, minTeams: 6 }),
       draftScheduledMessage("S1", 1_800_000_000_000),
       draftRescheduledMessage("S1", 1_800_000_000_000),
       draftCancelledMessage("S1"),
@@ -1865,7 +1890,7 @@ describe("no player-supplied name can inject markdown", () => {
   const EVIL = "[free mmr](https://evil.test)";
 
   const messages = () => [
-    signupMessage(EVIL, 3, 10),
+    signupMessage(EVIL, 3, { teamSize: 5, minTeams: 2 }),
     signupsOpenMessage(EVIL, EVIL),
     draftCompleteAnnouncement({
       seasonName: "S1",

@@ -22,6 +22,7 @@ import {
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { runAfterResponse } from "./after-response";
+import { capacityInfo } from "./capacity";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -53,22 +54,39 @@ const name = escapeDiscordText;
 // embed the GIF (see the normalizeMediaUrl note there).
 // ---------------------------------------------------------------------------
 
+/**
+ * A new full-player signup. Every one of these is an advert for the season,
+ * so it ends with the signup link. The count line uses the site's own ask:
+ * short of the minimum, how many more the draft needs; past it (where the
+ * league sits for most of signup week, since minTeams is a floor), how many
+ * more make another full team. Only the signup that reaches the minimum
+ * celebrates it.
+ */
 export function signupMessage(
   playerName: string,
   signedUp: number,
-  neededToStart: number,
+  season: { teamSize: number; minTeams: number },
   /** Epoch ms of the scheduled draft night, if the admin has set one. */
   draftAtMs?: number | null,
 ): string {
-  const remaining = Math.max(0, neededToStart - signedUp);
-  const tail =
-    remaining === 0
-      ? "that's enough to start the draft! 🎉"
-      : `${remaining} more to start the draft.`;
+  const capacity = capacityInfo(season, signedUp);
+  let tail: string;
+  if (!capacity.canDraft) {
+    tail = `${capacity.needed} more to start the draft.`;
+  } else if (capacity.perTeam <= 0) {
+    tail = "that's enough to start the draft!";
+  } else {
+    const n = capacity.toNextTeam;
+    const next = `${n} more ${n === 1 ? "player" : "players"} makes it ${capacity.teamsFormable + 1} full teams.`;
+    tail =
+      capacity.extra === 0
+        ? `that's enough to start the draft! 🎉 ${next}`
+        : next;
+  }
   const when = draftAtMs
     ? ` Draft night: <t:${Math.floor(draftAtMs / 1000)}:F>.`
     : "";
-  return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when}`;
+  return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
 }
 
 /**
