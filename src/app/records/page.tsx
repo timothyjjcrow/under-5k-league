@@ -73,7 +73,10 @@ const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 
 const TITLE = "min-w-0 truncate text-sm font-semibold";
 const VALUE = "text-right font-display text-lg font-bold tabular-nums sm:text-left";
 const WHO = "flex min-w-0 items-center gap-2 text-sm";
-const MATCH_LINK = textLink("shrink-0 text-xs font-semibold");
+// justify-self-end: on a phone every row is its own grid, so the auto track
+// is as wide as that row's value ("674 GPM") and a left-aligned link sat at a
+// different x on every row.
+const MATCH_LINK = textLink("shrink-0 justify-self-end text-xs font-semibold");
 
 type User = { id: string; name: string; avatar: string | null };
 
@@ -99,15 +102,24 @@ function PlayerRecordRow({ record, holder, season }: { record: PlayerRecord; hol
   );
 }
 
-function GameRecordRow({ record, matchup, season }: { record: GameRecord; matchup: string; season: string | null }) {
+type Matchup = { home: string; away: string };
+
+function GameRecordRow({ record, matchup, season }: { record: GameRecord; matchup: Matchup | null; season: string | null }) {
   return (
     <li className={ROW}>
       <span className={TITLE}><span aria-hidden="true">{record.emoji} </span>{record.title}</span>
       <span className={VALUE}>{gameValue(record)}</span>
       <span className={`${WHO} text-muted`}>
-        {/* The matchup is which game this was: two lines, never a cut-off
-            opponent. */}
-        <span className="line-clamp-2 min-w-0 text-fg [overflow-wrap:anywhere]">{matchup}</span>
+        {/* The matchup is which game this was, so each team truncates on its
+            own and the opponent wraps to a second line when both don't fit:
+            a two-line clamp over the whole string cut a long home team off
+            mid-name and never reached the opponent. */}
+        {matchup ? (
+          <span className="flex min-w-0 flex-wrap gap-x-1 text-fg">
+            <span className="min-w-0 max-w-full truncate">{matchup.home}</span>
+            <span className="min-w-0 max-w-full truncate"><span className="text-muted">vs</span> {matchup.away}</span>
+          </span>
+        ) : <span className="min-w-0 truncate text-fg">League match</span>}
         <span className="shrink-0 tabular-nums">· {record.score}</span>
         {season ? <span className="hidden truncate text-xs md:inline">· {season}</span> : null}
       </span>
@@ -150,7 +162,7 @@ export default async function RecordsPage({
   const seasonName = new Map(seasons.map((season) => [season.id, season.name]));
   const matchupOf = new Map(games.map((game) => [
     game.matchId,
-    `${game.match.homeTeam.name} vs ${game.match.awayTeam.name}`,
+    { home: game.match.homeTeam.name, away: game.match.awayTeam.name },
   ]));
   // The picker offers the seasons with games (and a picked one). With one
   // season of games there is no picker: "All seasons" and that season are
@@ -232,7 +244,7 @@ export default async function RecordsPage({
                     <GameRecordRow
                       key={record.key}
                       record={record}
-                      matchup={matchupOf.get(record.matchId) ?? "League match"}
+                      matchup={matchupOf.get(record.matchId) ?? null}
                       season={seasonLabel(record.seasonId)}
                     />
                   ))}
