@@ -1,13 +1,21 @@
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { loadSidePlayerIds } from "@/lib/availability-service";
+import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { matchCheckinOpen } from "@/lib/league-lifecycle";
 import { CheckinBanner } from "./checkin-banner";
 
 /** While a series is LIVE, a player on either side (or the standin covering
  * them) can say they're ready for the remaining games. Rendered only for that
- * viewer; everyone else gets nothing. */
-export async function LiveSeriesCheckin({ matchId }: { matchId: string }) {
+ * viewer; everyone else gets nothing. `names: false` keeps the captain's
+ * named list off when the page's Matchup card already shows it. */
+export async function LiveSeriesCheckin({
+  matchId,
+  names = true,
+}: {
+  matchId: string;
+  names?: boolean;
+}) {
   const viewer = await getSessionUser();
   if (!viewer) return null;
   const match = await prisma.match.findUnique({
@@ -33,9 +41,10 @@ export async function LiveSeriesCheckin({ matchId }: { matchId: string }) {
   // The same who-plays-for-this-side rule check-ins use: a covered player is
   // out, and the standin covering them is in.
   if (!(await loadSidePlayerIds(prisma, match, ownTeam.id)).has(viewer.id)) return null;
+  const side = await loadCheckinSide({ matchId, viewer, names });
   return (
     <section id="match-live-checkin" aria-label="Ready for the next game" className="scroll-mt-24">
-      <CheckinBanner matchId={match.id} scheduleRevision={match.scheduleRevision} heading="Ready for the next game" remainingGames myRsvp={ownRsvp?.status ?? null} viewerIsCaptain={ownTeam.captainId === viewer.id} />
+      <CheckinBanner matchId={match.id} scheduleRevision={match.scheduleRevision} heading="Ready for the next game" remainingGames myRsvp={ownRsvp?.status ?? null} viewerIsCaptain={ownTeam.captainId === viewer.id} side={side} />
     </section>
   );
 }

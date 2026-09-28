@@ -30,6 +30,7 @@ export function ProfileHeader({
   isStandin,
   wantsCaptainNow,
   subtitle,
+  subtitleIsPastSeason,
   signup,
   pubScout,
   pubLast,
@@ -62,6 +63,9 @@ export function ProfileHeader({
   isStandin: boolean;
   wantsCaptainNow: boolean;
   subtitle: string | null;
+  /** The subtitle is their latest past league line, not the current season's
+   *  (they aren't in it), so it carries no "Edit your signup" link. */
+  subtitleIsPastSeason: boolean;
   /** Their ACTIVE signup this season, if any. */
   signup: { mmr: number; roles: string } | null;
   pubScout: PoolPub | null;
@@ -147,7 +151,9 @@ export function ProfileHeader({
             {subtitle ? (
               <div className="mt-1 text-sm text-muted">
                 {subtitle}
-                {isSelf ? (
+                {/* The signup link belongs to the current season's line,
+                    not to a past season's. */}
+                {isSelf && !subtitleIsPastSeason ? (
                   <>
                     {" · "}
                     <Link href="/me" className={textLink()}>

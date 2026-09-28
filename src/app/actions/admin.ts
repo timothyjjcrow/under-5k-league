@@ -15,6 +15,8 @@ import {
   reactivateSeason,
   singleActiveSeason,
 } from "@/lib/season";
+import { unpinnedNewsNote } from "@/lib/news";
+import { unpinNewsBeforeFinal } from "@/lib/news-rollover";
 import {
   assignStandinGuarded,
   clashesAfterRetime,
@@ -503,11 +505,36 @@ export async function createSeason(
       seasonId: handoff.archivedSeason.id,
     });
   }
+  // Last season's pinned posts ("Grand final this Sunday") would otherwise sit
+  // under the new season's signup hero until someone remembered them. After
+  // the handoff has committed and best effort: the new season is open either
+  // way, and the toast names what was unpinned so it can be pinned again.
+  let unpinned: string[] = [];
+  try {
+    const previousSeasonId =
+      handoff.archivedSeason?.id ??
+      (
+        await prisma.season.findFirst({
+          where: { isActive: false },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          select: { id: true },
+        })
+      )?.id;
+    if (previousSeasonId) {
+      unpinned = await unpinNewsBeforeFinal(previousSeasonId);
+    }
+  } catch (error) {
+    console.error("createSeason: could not unpin last season's news", error);
+  }
   await logAdminAction({
     action: "createSeason",
-    summary: handoff.archivedSeason
-      ? `Created "${name}" after closing "${handoff.archivedSeason.name}"`
-      : `Created "${name}" from the offseason`,
+    summary:
+      (handoff.archivedSeason
+        ? `Created "${name}" after closing "${handoff.archivedSeason.name}"`
+        : `Created "${name}" from the offseason`) +
+      (unpinned.length > 0
+        ? `; unpinned ${unpinned.length} news post${unpinned.length === 1 ? "" : "s"} from before last season's final`
+        : ""),
     seasonId: handoff.newSeasonId,
   });
   // Post-commit and best-effort: the season exists whatever Discord says.
@@ -517,7 +544,8 @@ export async function createSeason(
     console.error("[admin] SIGNUPS_OPEN_ANNOUNCEMENT_FAILED");
   }
   refresh();
-  return { message: `Created ${name}` };
+  const note = unpinnedNewsNote(unpinned);
+  return { message: note ? `Created ${name}. ${note}` : `Created ${name}` };
 }
 
 /** Close a valid completed season without immediately opening signups. */

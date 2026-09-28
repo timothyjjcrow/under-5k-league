@@ -36,6 +36,7 @@ import { roleShort } from "@/lib/roles";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
 import { CheckinBanner } from "@/components/checkin-banner";
+import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { signInHref } from "@/lib/sign-in";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -579,7 +580,7 @@ export default async function MatchDetailPage({
           after every box score. It renders only for players on either side. */}
       {match.status === "LIVE" && match.season.isActive ? (
         <Suspense fallback={null}>
-          <LiveSeriesCheckin matchId={match.id} />
+          <LiveSeriesCheckin matchId={match.id} names={!hasPreview} />
         </Suspense>
       ) : null}
 
@@ -1184,6 +1185,12 @@ async function MatchPreview({
     );
   const isParticipant =
     !!viewer && checkinOpen && activeNightRoster.has(viewer.id);
+  // The banner's side line (counts only: the Matchup card below already
+  // names each answer for the captains who may see them).
+  const checkinSideView =
+    isParticipant && viewer
+      ? await loadCheckinSide({ matchId: match.id, viewer, names: false })
+      : null;
   const myRsvp = viewer ? (rsvpByUser.get(viewer.id) ?? null) : null;
   // A captain's optional "Remind the N who haven't answered" under their own
   // side: shown only while check-in is open, someone else on their side owes
@@ -1292,6 +1299,7 @@ async function MatchPreview({
           }
           whenTs={match.scheduledAt?.getTime()}
           myRsvp={myRsvp}
+          side={checkinSideView}
         />
       ) : !viewer && checkinOpen ? (
         // Signed out, nothing above tells a player they can check in here.
@@ -1389,7 +1397,7 @@ async function MatchPreview({
                           ) : rsvp === "OUT" ? (
                             <span className="text-danger">✗ out</span>
                           ) : (
-                            <span className="text-muted">—</span>
+                            <span className="text-muted">no reply</span>
                           )}
                         </span>
                       ) : null}
@@ -1426,7 +1434,7 @@ async function MatchPreview({
                           ) : subRsvp === "OUT" ? (
                             <span className="text-danger">✗ out</span>
                           ) : (
-                            <span className="text-muted">—</span>
+                            <span className="text-muted">no reply</span>
                           )}
                         </span>
                       ) : null}

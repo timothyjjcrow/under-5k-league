@@ -77,6 +77,28 @@ describe("league progress presentation", () => {
     expect(result.scheduled).toBe(1);
   });
 
+  it("counts each week's final results for the week bars", () => {
+    const old = new Date(now - 7 * 86_400_000);
+    const result = leagueProgress(
+      [
+        match("w1a", "COMPLETED", 1, old),
+        match("w1b", "COMPLETED", 1, old),
+        match("w3a", "COMPLETED", 3, new Date(now)),
+        match("w3b", "LIVE", 3, new Date(now)),
+        { ...match("tb", "COMPLETED", 4, old), phase: "TIEBREAKER" },
+        { ...match("po", "COMPLETED", 5, old), phase: "PLAYOFF" },
+      ],
+      now,
+    );
+    // Week 2 had no fixtures at all; later non-regular weeks are not bars.
+    expect(result.weeks).toEqual([
+      { week: 1, total: 2, completed: 2 },
+      { week: 2, total: 0, completed: 0 },
+      { week: 3, total: 2, completed: 1 },
+    ]);
+    expect(leagueProgress([], now).weeks).toEqual([]);
+  });
+
   it("does not invent a current week for an empty, final, or stale-only schedule", () => {
     expect(leagueProgress([], now)).toMatchObject({
       total: 0,

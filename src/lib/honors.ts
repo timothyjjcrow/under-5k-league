@@ -105,3 +105,54 @@ export function weeklyHonors(
 
   return { player, team };
 }
+
+/** One game line: the hero and K/D/A behind "12/2/18 on Tiny". */
+export type HonorBestGame = {
+  heroId: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+};
+
+/**
+ * A player's best single game of the week: the one weeklyHonors takes the
+ * Player of the Week's hero from (most points, then the lower hero id), with
+ * its K/D/A. Lines without a hero never count, as there. Kept apart from
+ * weeklyHonors on purpose: its result is hashed into the Discord announcement
+ * marker, so a new field there would read as a changed award.
+ */
+export function honorBestGame(
+  games: HonorsGame[],
+  userId: string,
+): HonorBestGame | null {
+  let best: (HonorBestGame & { points: number }) | null = null;
+  for (const g of games) {
+    for (const p of g.players) {
+      if (p.userId !== userId || p.heroId == null) continue;
+      const points = fantasyPoints(p, p.isRadiant === g.radiantWin);
+      const better =
+        !best ||
+        points > best.points ||
+        (points === best.points &&
+          (p.heroId < best.heroId ||
+            (p.heroId === best.heroId &&
+              // Same hero, same points: a stable pick, whatever the order.
+              (p.deaths < best.deaths ||
+                (p.deaths === best.deaths &&
+                  (p.kills > best.kills ||
+                    (p.kills === best.kills && p.assists > best.assists)))))));
+      if (better) {
+        best = {
+          heroId: p.heroId,
+          kills: p.kills,
+          deaths: p.deaths,
+          assists: p.assists,
+          points,
+        };
+      }
+    }
+  }
+  if (!best) return null;
+  const { points: _points, ...line } = best;
+  return line;
+}

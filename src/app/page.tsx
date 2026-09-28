@@ -1,28 +1,27 @@
 import { PlayoffOutlook, playoffStatusLine } from "@/components/playoff-outlook";
-import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { RegularSeasonProgress } from "@/components/league-progress";
-import { LeagueResultsMap } from "@/components/league-results-map";
 import { leagueProgress } from "@/lib/league-progress";
 import { cache, Fragment, Suspense, type ReactNode } from "react";
-import { getSeasonGameLeaders } from "@/lib/cached-queries";
-import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
-import { draftNightSoon } from "@/lib/draft-setup";
+import { draftNightSoon, draftSetupOpen } from "@/lib/draft-setup";
 import {
   getSeasonMatches,
   getSeasonSnapshot,
   getViewerFantasyEntered,
   type SeasonSnapshot,
 } from "@/lib/queries";
-import { fantasyListed, seasonStatsListed } from "@/lib/site-nav";
-import { getPublicLeagueContent } from "@/lib/public-navigation";
+import { fantasyListed } from "@/lib/site-nav";
 import { prisma } from "@/lib/prisma";
 import {
   computeStandings,
   standingsMovement,
 } from "@/lib/standings";
-import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
+import {
+  clinchFromReport,
+  playoffOutlookShown,
+  seasonScenarioReport,
+} from "@/lib/stakes";
 import {
   projectPlayoffField,
   publicDeadHeatTeamIds,
@@ -49,13 +48,9 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "@/lib/availability";
-import { weeklyHonors } from "@/lib/honors";
-import {
-  HONOR_WEEK_STATE,
-  isNoPerformanceHonorWeek,
-} from "@/lib/honors-readiness";
+import { honorBestGame, weeklyHonors } from "@/lib/honors";
+import { HONOR_WEEK_STATE } from "@/lib/honors-readiness";
 import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
-import { heroMeta } from "@/lib/hero-meta";
 import { heroById } from "@/lib/heroes";
 import type { Match } from "@prisma/client";
 import {
@@ -67,33 +62,33 @@ import {
   CardSkeleton,
   DiscordButton,
   EmptyState,
-  FormStrip,
-  HeroIcon,
   LinkArrow,
   LinkifiedText,
   PlayerLink,
-  Progress,
   RankBadge,
   RoleBadges,
   ScheduleCallout,
   Skeleton,
-  Stat,
-  SteamSafetyNote,
+  TAP_SAFE,
   TeamCrest,
   buttonClasses,
   textLink,
 } from "@/components/ui";
-import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
+import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import { DiscordSetupPrompt } from "@/components/discord-setup";
 import {
-  AUTO_SYNC,
+  DISCORD_INVITE_URL,
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
   GAME_SERVER_REGION,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
 } from "@/lib/constants";
+import { matchAttention } from "@/lib/admin-attention";
+import { adminHomeLine } from "@/lib/admin-home-line";
 import { pickemControlFor, predictionOpen } from "@/lib/pickem";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { PickemTray } from "@/components/pickem-pick-form";
@@ -109,26 +104,52 @@ import {
   DRAFT_PASSED_LABEL,
   HISTORY_PHASE_LABEL,
   draftPhasePresentation,
+  leagueEligibilityLine,
+  leaguePitch,
   phaseSubtitle,
   seasonPhaseLabel,
   seasonPhaseTone,
 } from "@/lib/season-copy";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
+import { announcedMatchNight } from "@/lib/match-night";
 import { firstMedia } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
-import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
+import { rosterOrder } from "@/lib/team-roster";
+import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
+import { loadCheckinSide } from "@/lib/checkin-side-service";
+import { playoffStatuses, type TeamPlayoffStatus } from "@/lib/playoff-status";
+import { PlayoffStatusLine } from "@/components/playoff-status-line";
+import {
+  DRAFT_READINESS,
+  draftReadiness,
+  owedDraftConfirmation,
+  type DraftReadiness,
+} from "@/lib/draft-readiness";
+import { confirmDraftReadiness } from "@/app/actions/registration";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   resolveChampionPresentation,
   type ChampionPresentation,
 } from "@/lib/champion-presentation";
 import {
   canViewAvailabilitySummary,
+  canViewLeagueContact,
   hasActiveLeagueParticipation,
+  type VisibilityViewer,
 } from "@/lib/visibility";
+import { DiscordTag } from "@/components/discord-tag";
 import { homeMetadata } from "@/lib/link-preview-metadata";
 import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
-import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
+import {
+  getDefendingChampion,
+  type DefendingChampion,
+} from "@/lib/official-champion";
+import {
+  SteamSignInButton,
+  SteamSignInLink,
+  SteamSignInNote,
+} from "@/components/steam-sign-in";
 
 const PHASE_ORDER = [
   "SIGNUPS",
@@ -163,11 +184,14 @@ export default async function Home() {
   const snapshot = await getSeasonSnapshot(user?.id);
 
   if (!snapshot) {
-    const latestSeason = await prisma.season.findFirst({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true, status: true },
-    });
+    const [latestSeason, defending] = await Promise.all([
+      prisma.season.findFirst({
+        where: { isActive: false },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, name: true, status: true },
+      }),
+      getDefendingChampion(null),
+    ]);
     return (
       <div className="mx-auto max-w-2xl py-10">
         <Hero
@@ -180,7 +204,18 @@ export default async function Home() {
                 : `${latestSeason.name} was archived before completion during the ${PHASE_STEP[latestSeason.status] ?? HISTORY_PHASE_LABEL[latestSeason.status] ?? latestSeason.status} phase. Browse its saved state or play an inhouse while administrators organize what comes next.`
               : "There isn't an active season yet. Explore how the league works or play an inhouse while the first season is organized."
           }
+          pitch={
+            user ? undefined : (
+              <LeaguePitch matchNight={announcedMatchNight(null, [])} />
+            )
+          }
         />
+        {defending ? (
+          <DefendingChampionLine
+            champion={defending}
+            className="mt-4 justify-center"
+          />
+        ) : null}
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href="/inhouse" className={buttonClasses("accent")}>
             Play an inhouse <LinkArrow />
@@ -204,6 +239,11 @@ export default async function Home() {
             </Link>
           ) : null}
         </div>
+        {/* News has no season, and between seasons is when the next one gets
+            announced: the pinned strip and the latest posts show here too. */}
+        <Suspense fallback={null}>
+          <PinnedNotices className="mt-5" />
+        </Suspense>
         {/* Inhouse is the only live play surface during the offseason. Keep its
             actual queue/lobby state visible here too, rather than replacing a
             useful "4/10 queued" signal with a generic hero button. */}
@@ -216,12 +256,16 @@ export default async function Home() {
             <InhouseStrip />
           </div>
         </Suspense>
+        <Suspense fallback={null}>
+          <LeagueNews className="mt-6" />
+        </Suspense>
       </div>
     );
   }
 
   const { season } = snapshot;
   const draftPresentation = draftPhasePresentation(snapshot.draftStatus);
+  const signedOutSignups = !user && season.status === "SIGNUPS";
 
   // Primary call-to-action, surfaced right in the hero during signups.
   const isActiveReg = snapshot.myReg?.status === "ACTIVE";
@@ -241,18 +285,28 @@ export default async function Home() {
     !isActiveReg &&
     !isRemovedReg &&
     !isRostered;
-  // Signed out, the button goes straight to Steam and carries the sign-in
-  // note, which /login would otherwise have shown.
-  const standinRegistration = (variant: "primary" | "secondary") =>
-    user ? (
-      <Link href="/me" className={buttonClasses(variant, "lg")}>
-        Register as a standin <LinkArrow />
-      </Link>
-    ) : (
-      <SteamSignInButton next="/me" variant={variant}>
-        Sign in to stand in <LinkArrow />
-      </SteamSignInButton>
-    );
+  // Signed in without a team: the standin signup is on /me.
+  const standinRegistration = (variant: "primary" | "secondary") => (
+    <Link href="/me" className={buttonClasses(variant, "lg")}>
+      Register as a standin <LinkArrow />
+    </Link>
+  );
+  // Signed out from the draft on, the button just signs in and comes back
+  // here: it used to read "Sign in to stand in", which told rostered players
+  // opening a Discord link signed out to sign up as standins. Newcomers get
+  // the standin route as a line under it. Both go straight to Steam, so the
+  // sign-in note rides along (/login would otherwise have shown it).
+  const signInButton = (variant: "primary" | "secondary") => (
+    <SteamSignInButton next="/" variant={variant}>
+      Sign in with Steam <LinkArrow />
+    </SteamSignInButton>
+  );
+  const newcomerStandinLine = (
+    <p className="w-full text-sm text-muted">
+      New here?{" "}
+      <SteamSignInLink next="/me">Sign in to join as a standin</SteamSignInLink>
+    </p>
+  );
   const steamNote = user ? null : <SteamSignInNote />;
   let heroAction: ReactNode = null;
   // Draft night during Signups: from shortly before the scheduled time until
@@ -265,6 +319,24 @@ export default async function Home() {
     // eslint-disable-next-line react-hooks/purity
     Date.now(),
   );
+  // A designated captain, before the auction: they get one line of their own
+  // (see CaptainLine) wherever the hero stands for the draft.
+  const captaining =
+    !!user && snapshot.teams.some((team) => team.captainId === user.id);
+  // The draft-night confirmation a signed-up player still owes, if any. It is
+  // asked in the hero's panel (SignupsAside), so it follows that panel's
+  // window: on draft night the panel gives way to the draft room and /me keeps
+  // the button.
+  const owedConfirmation =
+    season.status === "SIGNUPS" && !draftRoomSoon
+      ? owedDraftConfirmation({
+          seasonStatus: season.status,
+          draftStatus: snapshot.draftStatus,
+          draftAt: season.draftAt,
+          draftRevision: season.draftRevision,
+          registration: snapshot.myReg,
+        })
+      : null;
   if (season.status === "SIGNUPS") {
     // How it works rides along during signups: the draft, match nights and
     // who can join, on one screen, for visitors deciding whether to sign up.
@@ -301,20 +373,59 @@ export default async function Home() {
         </Link>
         {sideLink}
       </>
+    ) : captaining ? (
+      <>
+        {sideLink}
+        <CaptainLine />
+      </>
     ) : (
       sideLink
     );
   } else if (season.status === "DRAFT") {
+    // The viewer's own team, once they are on one: a player is rostered when
+    // they are bought, a captain's roster is worth a line once it is final.
+    const draftDone = snapshot.draftStatus === DRAFT_STATUS.COMPLETE;
+    const myDraftTeam = user
+      ? snapshot.teams.find((team) =>
+          team.members.some((member) => member.userId === user.id),
+        )
+      : undefined;
+    const teamLine =
+      user && myDraftTeam && (myDraftTeam.captainId !== user.id || draftDone) ? (
+        <YourTeamLine
+          team={myDraftTeam}
+          viewerId={user.id}
+          teamSize={season.teamSize}
+          captainContact={await captainContact(
+            user,
+            myDraftTeam.captainId,
+            isActiveReg,
+          )}
+          fixturesSoon={draftDone}
+        />
+      ) : null;
     heroAction = (
       <>
         <Link href="/draft" className={buttonClasses("accent", "lg")}>
           {draftPresentation.action}
         </Link>
+        {/* Before Start only: once the auction runs, the room is the
+            captain's whole job and the pool is inside it. Nothing else on
+            this view prints the draft time, so the line carries it. */}
+        {captaining && draftSetupOpen(season.status, snapshot.draftStatus) ? (
+          <CaptainLine draftAt={season.draftAt} />
+        ) : null}
+        {teamLine}
         {standinRegistrationOpen ? (
-          <>
-            {standinRegistration("secondary")}
-            {steamNote}
-          </>
+          user ? (
+            standinRegistration("secondary")
+          ) : (
+            <>
+              {signInButton("secondary")}
+              {newcomerStandinLine}
+              {steamNote}
+            </>
+          )
         ) : null}
       </>
     );
@@ -322,13 +433,40 @@ export default async function Home() {
     // Someone without a team mid-season can still play tonight: the inhouse
     // queue has no season gate, and it was otherwise the last thing on the
     // page, below the news.
-    heroAction = (
+    const inhouse = (
+      <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
+        Play an inhouse <LinkArrow />
+      </Link>
+    );
+    heroAction = !user ? (
+      <>
+        {signInButton("primary")}
+        {inhouse}
+        {newcomerStandinLine}
+        {steamNote}
+      </>
+    ) : season.status === "PLAYOFFS" ? (
+      // Two or three matches are left, so the standin signup has almost no
+      // use: the playoffs lead, and the signup is a line.
+      <>
+        <Link
+          href="/schedule#playoff-bracket"
+          className={buttonClasses("primary", "lg")}
+        >
+          Follow the playoffs <LinkArrow />
+        </Link>
+        {inhouse}
+        <p className="w-full text-sm text-muted">
+          Want to play?{" "}
+          <Link href="/me" className={textLink()}>
+            Register as a standin
+          </Link>
+        </p>
+      </>
+    ) : (
       <>
         {standinRegistration("primary")}
-        <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
-          Play an inhouse <LinkArrow />
-        </Link>
-        {steamNote}
+        {inhouse}
       </>
     );
   }
@@ -347,6 +485,26 @@ export default async function Home() {
       ])
     : [[] as Match[], 0];
   const championPresentation = resolveChampionPresentation(season, matches);
+  // Whether SeasonView will draw the viewer's stakes card, so its skeleton
+  // reserves the card only when it comes: a regular-season viewer on a team
+  // still in the race (not withdrawn, in a field of two or more) once the
+  // first regular-season result is final (playoffOutlookShown).
+  const viewerTeam = user
+    ? snapshot.teams.find((t) => t.members.some((m) => m.userId === user.id))
+    : undefined;
+  const stakeCardExpected =
+    season.status === "REGULAR_SEASON" &&
+    !!viewerTeam &&
+    !viewerTeam.withdrawn &&
+    snapshot.teams.filter((t) => !t.withdrawn).length >= 2 &&
+    playoffOutlookShown(matches);
+  // Until this season crowns someone, Home keeps naming the last champion.
+  // Signups and the draft only: from the regular season on, the dashboard is
+  // about this season's race.
+  const defending =
+    season.status === "SIGNUPS" || season.status === "DRAFT"
+      ? await getDefendingChampion(season.createdAt)
+      : null;
 
   // Stable phase facts: league counts should be readable from the first paint.
   let heroMeta: ReactNode = null;
@@ -383,12 +541,22 @@ export default async function Home() {
             tone="accent"
           />
         )}
-        {season.draftAt ? (
-          <span className="flex items-center text-sm text-muted">
-            🗓️ Draft{" "}
-            {/* passedLabel, because this chip is the ONLY thing here carrying a
-                date. Without it a slipped draft night rendered a bare
-                "🗓️ Draft" — a label with nothing after it — since the countdown
+        {season.draftAt && !owedConfirmation ? (
+          // The page's one printing of the draft date: the signup card below
+          // used to repeat it with a second countdown. A player who still
+          // owes the draft-night confirmation reads it in the hero's panel
+          // instead, printed beside the button that confirms it.
+          <span className="text-sm text-muted">
+            <span aria-hidden>🗓️</span> Draft{" "}
+            <strong className="font-medium text-fg">
+              <LocalTime
+                ts={season.draftAt.getTime()}
+                variant="short"
+                initial={formatMatchTime(season.draftAt, "short")}
+              />
+            </strong>
+            {/* passedLabel, because this chip owns the date it prints. Without
+                it a slipped draft night read as a plan, since the countdown
                 goes quiet 3h past. The season being in SIGNUPS is what makes
                 the state reachable at all: the phase does not advance itself. */}
             <Countdown
@@ -436,7 +604,11 @@ export default async function Home() {
     heroMeta = (
       <>
         {alive > 0 ? (
-          <HeroStat value={alive} label="teams still alive" tone="accent" />
+          <HeroStat
+            value={alive}
+            label={alive === 1 ? "team still alive" : "teams still alive"}
+            tone="accent"
+          />
         ) : null}
         {currentRoundLabel(playoff) ? (
           <Badge tone="accent">{currentRoundLabel(playoff)}</Badge>
@@ -444,26 +616,10 @@ export default async function Home() {
       </>
     );
   } else if (season.status === "COMPLETE") {
-    const champion = snapshot.teams.find(
-      (team) => team.id === championPresentation.championTeamId,
-    );
-    heroMeta = champion ? (
-      <span className="flex items-center gap-2">
-        <TeamCrest
-          name={champion.name}
-          seed={champion.id}
-          logoUrl={champion.logoUrl}
-          size={26}
-          className="rounded-md ring-2 ring-amber-400/50"
-        />
-        <span className="font-display text-lg font-semibold">
-          {champion.name}
-        </span>
-        <Badge tone="accent">
-          <span aria-hidden="true">🏆</span> Champions
-        </Badge>
-      </span>
-    ) : null;
+    // The champion card directly below is the page's one champion block (it
+    // also carries the final's score and the "needs review" state), so the
+    // hero names no team. Its button is the page's one way to the season's
+    // page, where the recap lives; /recap redirects there too.
     heroAction = (
       <Link
         href={`/seasons/${season.id}`}
@@ -491,39 +647,90 @@ export default async function Home() {
       >
         <MyNextMatch
           seasonId={season.id}
-          userId={user.id}
-          playoffRounds={playoffTotalRounds(matches)}
-          byeMatches={season.status === "REGULAR_SEASON" ? matches : []}
+          seasonStatus={season.status}
+          viewer={user}
+          viewerHasActiveRegistration={isActiveReg}
+          teamSize={season.teamSize}
+          matches={matches}
+          teams={snapshot.teams}
+          championTeamId={championPresentation.championTeamId}
+          standin={
+            isActiveReg &&
+            snapshot.myReg?.type === REGISTRATION_TYPE.STANDIN
+          }
         />
       </Suspense>
     ) : season.status === "SIGNUPS" && isActiveReg && !draftRoomSoon ? (
       // On draft night the aside gives way, so the hero's action column can
       // carry "Enter the draft room" to the players about to be drafted.
-      <SignupsAside snapshot={snapshot} />
+      <SignupsAside
+        snapshot={snapshot}
+        owed={owedConfirmation}
+        captaining={captaining}
+      />
     ) : null;
+
+  // The admin's own line under the hero (AdminStrip); players never see it.
+  const isAdmin = user?.role === "ADMIN";
+
+  const hero = (
+    <Hero
+      phase={season.status}
+      phaseLabel={seasonPhaseLabel(season.status, snapshot.draftStatus)}
+      active={season.status === "DRAFT" ? draftPresentation.live : undefined}
+      title={season.name}
+      subtitle={
+        signedOutSignups
+          ? ""
+          : phaseSubtitle(season.status, {
+              canDraft: snapshot.capacity.canDraft,
+              signedUp: isActiveReg,
+              draftStatus: snapshot.draftStatus,
+              hasChampion: championPresentation.championTeamId != null,
+            })
+      }
+      pitch={
+        signedOutSignups ? (
+          // It takes the phase sentence's place: the badge, the counts and
+          // the Steam button already say signups are open and what is
+          // missing, and a newcomer first needs to know what this is.
+          <LeaguePitch matchNight={announcedMatchNight(season, [])} />
+        ) : undefined
+      }
+      action={heroAction}
+      meta={heroMeta}
+      aside={heroAside}
+      rail={<SeasonTimeline phase={season.status} />}
+    />
+  );
 
   return (
     <div className="space-y-8">
-      <Hero
-        phase={season.status}
-        phaseLabel={seasonPhaseLabel(season.status, snapshot.draftStatus)}
-        active={season.status === "DRAFT" ? draftPresentation.live : undefined}
-        title={season.name}
-        subtitle={phaseSubtitle(season.status, {
-          canDraft: snapshot.capacity.canDraft,
-          draftStatus: snapshot.draftStatus,
-          hasChampion: championPresentation.championTeamId != null,
-        })}
-        action={heroAction}
-        meta={heroMeta}
-        aside={heroAside}
-        rail={<SeasonTimeline phase={season.status} />}
-      />
+      {defending || isAdmin ? (
+        <div className="space-y-3">
+          {hero}
+          {defending ? <DefendingChampionLine champion={defending} /> : null}
+          {isAdmin ? (
+            <Suspense
+              fallback={
+                <div className="skeleton h-12 rounded-[var(--radius)]" />
+              }
+            >
+              <AdminStrip snapshot={snapshot} />
+            </Suspense>
+          ) : null}
+        </div>
+      ) : (
+        hero
+      )}
       {/* Signed up but unreachable — the one cohort every Discord notification
-          in the app silently skips. Renders nothing for everyone else, and is
-          phase-independent on purpose: a player who signs up during SIGNUPS and
-          links nothing is still unreachable in week 4. */}
-      {user ? (
+          in the app silently skips. Renders nothing for everyone else, and runs
+          through every phase that still has games on purpose: a player who
+          signs up during SIGNUPS and links nothing is still unreachable in
+          week 4. Once the season is complete nobody needs to reach them for
+          it ("your captain has no way to reach you" was false by then), and
+          signing up for the next season asks again. */}
+      {user && season.status !== "COMPLETE" ? (
         <Suspense fallback={null}>
           <DiscordSetupPrompt userId={user.id} seasonId={season.id} />
         </Suspense>
@@ -539,9 +746,7 @@ export default async function Home() {
         <PinnedNotices />
       </Suspense>
       {season.status === "SIGNUPS" && (
-        <Suspense fallback={<CardSkeleton rows={4} />}>
-          <SignupsView snapshot={snapshot} loggedIn={!!user} />
-        </Suspense>
+        <SignupsView snapshot={snapshot} loggedIn={!!user} />
       )}
       {season.status === "DRAFT" && <DraftPhaseView snapshot={snapshot} />}
       {(season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS") && (
@@ -549,7 +754,14 @@ export default async function Home() {
           {/* MyNextMatch is NOT rendered here any more — it lives in the hero's
               control slot, which is the whole point: the RSVP a captain depends
               on used to be the lowest-contrast strip on the page. */}
-          <Suspense fallback={<SeasonViewSkeleton />}>
+          <Suspense
+            fallback={
+              <SeasonViewSkeleton
+                playoffs={season.status === "PLAYOFFS"}
+                stakeCard={stakeCardExpected}
+              />
+            }
+          >
             <SeasonView
               snapshot={snapshot}
               userId={user?.id}
@@ -596,28 +808,47 @@ export default async function Home() {
 }
 
 // Fallback for the mid-season dashboard. It MUST mirror the real bands — This
-// week, the standings/your-team split, the three-up deck, then the side games —
-// or the page paints one layout and then visibly rearranges into another.
-function SeasonViewSkeleton() {
+// week, then the standings (beside the viewer's stakes card, when SeasonView
+// draws one) or in the playoffs the bracket, the Coming up / Recent results
+// pair, then the side games — or the page paints one layout and then visibly
+// rearranges into another.
+function SeasonViewSkeleton({
+  playoffs,
+  stakeCard,
+}: {
+  playoffs: boolean;
+  /** SeasonView will draw the viewer's stakes card beside the standings. */
+  stakeCard: boolean;
+}) {
   return (
     <div className="space-y-6">
       <CardSkeleton rows={4} />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="min-w-0 lg:col-span-2">
-          <CardSkeleton rows={6} />
+      {playoffs ? (
+        <CardSkeleton rows={6} />
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div
+            className={cn(
+              "min-w-0",
+              stakeCard ? "lg:col-span-2" : "lg:col-span-3",
+            )}
+          >
+            <CardSkeleton rows={6} />
+          </div>
+          {stakeCard ? (
+            <div className="order-first min-w-0 lg:order-none">
+              <CardSkeleton rows={3} />
+            </div>
+          ) : null}
         </div>
-        <div className="min-w-0">
-          <CardSkeleton rows={4} />
-        </div>
-      </div>
+      )}
       <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
         {Array.from({ length: 2 }).map((_, i) => (
           <CardSkeleton key={i} rows={3} className="min-w-0" />
         ))}
       </div>
-      <div className="skeleton h-20 rounded-xl" />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, i) => (
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
+        {Array.from({ length: 2 }).map((_, i) => (
           <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
         ))}
       </div>
@@ -637,22 +868,38 @@ function currentRoundLabel(playoff: Match[]): string | null {
   return `${roundName(round, total)} underway`;
 }
 
-// Latest admin announcements — pinned first, capped at three with a link to
-// the full /news archive. Renders nothing when the league has no news.
-const loadHomeNews = cache(() =>
-  prisma.newsPost.findMany({
-    orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-    take: 3,
-  }),
-);
+// Admin announcements, in two parts: the pinned posts ride the strip under
+// the hero, and the League news card lists the latest of the rest, so a pinned
+// post is never shown twice. Each part is capped at three; /news has them all.
+// News has no season, so the offseason view renders both too.
+const loadHomeNews = cache(async () => {
+  const newest = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+  const [pinned, latest] = await Promise.all([
+    prisma.newsPost.findMany({
+      where: { pinned: true },
+      orderBy: newest,
+      take: 3,
+      select: { id: true, title: true },
+    }),
+    prisma.newsPost.findMany({
+      where: { pinned: false },
+      orderBy: newest,
+      take: 3,
+    }),
+  ]);
+  return { pinned, latest };
+});
 
-async function PinnedNotices() {
-  const posts = (await loadHomeNews()).filter((post) => post.pinned);
+async function PinnedNotices({ className }: { className?: string }) {
+  const { pinned: posts } = await loadHomeNews();
   if (!posts.length) return null;
   return (
     <aside
       aria-label="Pinned announcements"
-      className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-sm"
+      className={cn(
+        "rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-sm",
+        className,
+      )}
     >
       {posts.map((post) => (
         <Link
@@ -668,12 +915,12 @@ async function PinnedNotices() {
   );
 }
 
-async function LeagueNews() {
-  const posts = await loadHomeNews();
+async function LeagueNews({ className }: { className?: string }) {
+  const { latest: posts } = await loadHomeNews();
   if (posts.length === 0) return null;
 
   return (
-    <Card>
+    <Card className={className}>
       <CardHeader
         headingLevel={2}
         title="League news"
@@ -698,12 +945,6 @@ async function LeagueNews() {
                     href={`/news?${new URLSearchParams({ post: p.id })}#${p.id}`}
                     className="hover:text-info"
                   >
-                    {p.pinned ? (
-                      <>
-                        <span aria-hidden="true">📌 </span>
-                        <span className="sr-only">Pinned: </span>
-                      </>
-                    ) : null}
                     {p.title}
                   </Link>
                 </h3>
@@ -734,88 +975,145 @@ async function LeagueNews() {
   );
 }
 
-// The signed-in player's next unplayed match with one-click check-in — the
-// thing a rostered player most wants from the home page mid-season.
+// The signed-in league member's panel in the hero mid-season: their next
+// unplayed match with one-click check-in, the thing a rostered player most
+// wants from the home page, and otherwise what is actually true for them.
 async function MyNextMatch({
   seasonId,
-  userId,
-  playoffRounds,
-  byeMatches,
+  seasonStatus,
+  viewer,
+  viewerHasActiveRegistration,
+  teamSize,
+  matches,
+  teams,
+  championTeamId,
+  standin,
 }: {
   seasonId: string;
-  userId: string;
-  /** playoffTotalRounds of the season, so a playoff fixture reads "Semifinal". */
-  playoffRounds: number;
-  /** The season's matches while a regular week can be a bye; else empty. */
-  byeMatches: Match[];
+  seasonStatus: string;
+  viewer: NonNullable<VisibilityViewer>;
+  viewerHasActiveRegistration: boolean;
+  teamSize: number;
+  /** The season's matches, as Home already read them. */
+  matches: Match[];
+  teams: SeasonSnapshot["teams"];
+  /** The confirmed champion (`resolveChampionPresentation`), if any. */
+  championTeamId: string | null;
+  /** The viewer has an ACTIVE standin registration. */
+  standin: boolean;
 }) {
-  const myTeams = await prisma.teamMember.findMany({
-    where: { seasonId, userId },
-    select: { teamId: true, team: { select: { withdrawn: true } } },
+  const userId = viewer.id;
+  const teamById = new Map(teams.map((t) => [t.id, t]));
+  const rosterTeams = teams.filter((t) =>
+    t.members.some((m) => m.userId === userId),
+  );
+  // Assigned standins are participants too: without their bookings they'd
+  // get no check-in prompt anywhere but the match page itself. The covered
+  // player's bookings say when someone else has their seat.
+  const bookings = await prisma.standinAssignment.findMany({
+    where: {
+      match: { seasonId },
+      OR: [{ standinUserId: userId }, { replacingUserId: userId }],
+    },
+    select: {
+      matchId: true,
+      teamId: true,
+      standinUserId: true,
+      replacingUserId: true,
+      standin: { select: { name: true } },
+    },
   });
-  const teamIds = myTeams.map((t) => t.teamId);
-
-  // Assigned standins are participants too — without this they'd get no
-  // check-in prompt anywhere but the match page itself.
-  // A check-in answers for an exact future match night. LIVE, untimed and
-  // stale-unreported fixtures remain visible elsewhere, but none can become
-  // the player's primary RSVP prompt.
   // Async server component: Date.now is request-time state, not render replay.
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
-  const freshFrom = new Date(nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000);
+  const { next, live, covered, idle, teamId } = myMatchPanel({
+    userId,
+    seasonStatus,
+    rosterTeamIds: rosterTeams.map((t) => t.id),
+    withdrawnTeamIds: new Set(
+      rosterTeams.filter((t) => t.withdrawn).map((t) => t.id),
+    ),
+    standin,
+    championTeamId,
+    matches,
+    bookings,
+    nowMs,
+  });
+  const playoffRounds = playoffTotalRounds(matches);
+  const teamNameOf = (id: string) => teamById.get(id)?.name ?? "?";
   // A team resting this week is told so before the match after it, instead
   // of the panel jumping silently to a fixture a week away.
-  const playingTeam = myTeams.find((t) => !t.team.withdrawn);
-  const byeWeek = playingTeam
-    ? teamByeWeek(byeMatches, playingTeam.teamId, nowMs)
-    : null;
-  const byeNote =
-    byeWeek != null ? <ByeWeekNote week={byeWeek} who="Your team" /> : null;
-  const mine = {
-    seasonId,
-    status: "SCHEDULED" as const,
-    scheduledAt: { gte: freshFrom },
-    OR: [
-      ...(teamIds.length
-        ? [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }]
-        : []),
-      { standins: { some: { standinUserId: userId } } },
-    ],
-  };
-  // Chronological, not week order — an accepted reschedule can legally move a
-  // match past the next week's night, and the banner should point at whatever
-  // actionable fixture plays first.
-  const order = [
-    { scheduledAt: { sort: "asc" as const, nulls: "last" as const } },
-    { week: "asc" as const },
-    { createdAt: "asc" as const },
-  ];
-  const candidates = await prisma.match.findMany({
-    where: mine,
-    orderBy: order,
-    include: { homeTeam: true, awayTeam: true, standins: true },
-  });
-  // A named standin replaces the roster seat for this match. The replaced
-  // player must not get a success toast for an RSVP that every readiness count
-  // intentionally ignores; the assigned standin gets the prompt instead.
-  const next = candidates.find((match) => {
-    if (match.standins.some((a) => a.standinUserId === userId)) return true;
-    const rosterTeamId = teamIds.find(
-      (id) => id === match.homeTeamId || id === match.awayTeamId,
-    );
-    if (!rosterTeamId) return false;
-    return !match.standins.some(
-      (a) => a.teamId === rosterTeamId && a.replacingUserId === userId,
-    );
-  });
-  // The hero's control slot must never be an empty 23rem column, so an
-  // unrostered viewer (or a player whose season is done) gets the spectator
-  // form of the same thing rather than nothing at all.
-  if (!next && byeNote) {
+  const byeWeek =
+    teamId && seasonStatus === "REGULAR_SEASON"
+      ? teamByeWeek(matches, teamId, nowMs)
+      : null;
+  const notes = (
+    <>
+      {byeWeek != null ? <ByeWeekNote week={byeWeek} who="Your team" /> : null}
+      {live ? (
+        // A series being played is not the check-in (the match page has its
+        // own "ready for the next game"), so it is a link, above the prompt.
+        <Link
+          href={`/matches/${live.match.id}`}
+          className="group flex items-center gap-3 rounded-[var(--radius)] border border-danger/40 bg-danger/10 px-4 py-3 text-sm"
+        >
+          <span
+            aria-hidden
+            className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
+          />
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <span className="font-medium">Your series is live</span>{" "}
+            <span className="text-muted">
+              ·{" "}
+              {live.teamId === live.match.homeTeamId
+                ? `${live.match.homeScore}–${live.match.awayScore}`
+                : `${live.match.awayScore}–${live.match.homeScore}`}{" "}
+              vs{" "}
+              {teamNameOf(
+                live.teamId === live.match.homeTeamId
+                  ? live.match.awayTeamId
+                  : live.match.homeTeamId,
+              )}
+            </span>
+          </span>
+          <span className="shrink-0 text-info group-hover:underline">
+            Match page <LinkArrow />
+          </span>
+        </Link>
+      ) : null}
+      {covered ? (
+        <Link
+          href={`/matches/${covered.match.id}`}
+          className="group flex items-start gap-3 rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm"
+        >
+          <span className="shrink-0 rounded bg-surface-2 px-2 py-0.5 text-xs font-semibold text-muted">
+            Covered
+          </span>
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <span className="font-medium">
+              {matchRoundLabel(covered.match, playoffRounds)}:
+            </span>{" "}
+            <span className="text-muted">
+              {covered.booking.standin.name} is standing in for you.
+            </span>
+          </span>
+          <span className="shrink-0 text-info group-hover:underline">
+            <LinkArrow />
+          </span>
+        </Link>
+      ) : null}
+    </>
+  );
+
+  // The hero's control slot must never be an empty 23rem column, so every
+  // branch below renders something.
+  if (!next && (live || covered)) {
+    return <div className="space-y-2">{notes}</div>;
+  }
+  if (!next && byeWeek != null) {
     return (
       <div className="space-y-2">
-        {byeNote}
+        {notes}
         <Link
           href="/schedule#fixtures"
           className={buttonClasses("secondary", "sm", "w-full")}
@@ -825,25 +1123,45 @@ async function MyNextMatch({
       </div>
     );
   }
+  const myTeam = teamId ? teamById.get(teamId) : undefined;
+  if (!next && idle === "no-fixtures" && myTeam) {
+    // Rostered, schedule not out yet: who they play for is the useful part.
+    return (
+      <YourTeamLine
+        team={myTeam}
+        viewerId={userId}
+        teamSize={teamSize}
+        captainContact={await captainContact(
+          viewer,
+          myTeam.captainId,
+          viewerHasActiveRegistration,
+        )}
+        fixturesSoon
+      />
+    );
+  }
   if (!next) {
+    const onlyFinalLeft =
+      matches.some((m) => m.phase === "FINAL" && m.status !== "COMPLETED") &&
+      !matches.some((m) => m.phase === "PLAYOFF" && m.status !== "COMPLETED");
+    const copy = idleCopy(idle, onlyFinalLeft);
     return (
       <Card className="p-4 text-sm">
-        <div className="font-medium">No match of your own coming up</div>
-        <p className="mt-1 text-muted">
-          You&apos;re not on a roster for an upcoming fixture — the week&apos;s
-          games are still worth watching.
-        </p>
+        <div className="font-medium">{copy.title}</div>
+        <p className="mt-1 text-muted">{copy.text}</p>
         <Link
-          href="/schedule#fixtures"
+          href={copy.href}
           className={buttonClasses("secondary", "sm", "mt-3 w-full")}
         >
-          See this week&apos;s schedule <LinkArrow />
+          {copy.cta} <LinkArrow />
         </Link>
       </Card>
     );
   }
 
-  const [myRsvp, pendingReschedule] = await Promise.all([
+  const homeTeam = teamById.get(next.homeTeamId);
+  const awayTeam = teamById.get(next.awayTeamId);
+  const [myRsvp, pendingReschedule, side] = await Promise.all([
     prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: next.id, userId }, scheduleRevision: next.scheduleRevision },
       select: { status: true },
@@ -852,6 +1170,10 @@ async function MyNextMatch({
       where: { matchId: next.id, status: "PENDING" },
       include: { proposedBy: { select: { name: true } } },
     }),
+    // Who the viewer is in this match and how their side stands. A captain
+    // gets the names behind the count right under the buttons, so chasing
+    // the no-replies starts here rather than on the match page.
+    loadCheckinSide({ matchId: next.id, viewer }),
   ]);
 
   // A proposal awaiting THIS viewer's answer gets a strip right on the
@@ -859,25 +1181,24 @@ async function MyNextMatch({
   const awaitingMyAnswer =
     !!pendingReschedule &&
     pendingReschedule.proposedById !== userId &&
-    (next.homeTeam.captainId === userId || next.awayTeam.captainId === userId);
+    (homeTeam?.captainId === userId || awayTeam?.captainId === userId);
 
   return (
     <div className="space-y-2">
-      {byeNote}
+      {notes}
       <CheckinBanner
         variant="panel"
         eyebrow={`Your next match · ${matchRoundLabel(next, playoffRounds, { bestOf: true })}`}
         matchId={next.id}
         scheduleRevision={next.scheduleRevision}
-        remainingGames={next.status === "LIVE"}
-        heading={`${next.homeTeam.name} vs ${next.awayTeam.name}`}
+        heading={`${teamNameOf(next.homeTeamId)} vs ${teamNameOf(next.awayTeamId)}`}
         when={fmtWhen(next.scheduledAt)}
         whenTs={next.scheduledAt?.getTime()}
         myRsvp={myRsvp?.status ?? null}
         viewerIsCaptain={
-          next.homeTeam.captainId === userId ||
-          next.awayTeam.captainId === userId
+          homeTeam?.captainId === userId || awayTeam?.captainId === userId
         }
+        side={side}
         detailsHref={`/matches/${next.id}`}
       />
       {awaitingMyAnswer ? (
@@ -907,6 +1228,168 @@ async function MyNextMatch({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The captain's Discord handle for their teammate's team line: members only
+ * (the league-wide contact rule), and never the viewer's own.
+ */
+async function captainContact(
+  viewer: NonNullable<VisibilityViewer>,
+  captainId: string,
+  viewerHasActiveRegistration: boolean,
+) {
+  if (
+    viewer.id === captainId ||
+    !canViewLeagueContact(viewer, captainId, viewerHasActiveRegistration)
+  ) {
+    return null;
+  }
+  return prisma.user.findUnique({
+    where: { id: captainId },
+    select: { discordName: true, discordId: true },
+  });
+}
+
+/**
+ * The viewer's own team in the hero, from the moment they are drafted until
+ * their first fixture exists: home listed every roster but never said "you're
+ * on Team 3, your captain is ...". A player gets their captain (with the
+ * captain's Discord handle, for members); a captain gets their roster count.
+ */
+function YourTeamLine({
+  team,
+  viewerId,
+  teamSize,
+  captainContact,
+  fixturesSoon,
+}: {
+  team: SeasonSnapshot["teams"][number];
+  viewerId: string;
+  teamSize: number;
+  captainContact: { discordName: string; discordId: string | null } | null;
+  /** The auction is over and fixtures are what comes next. */
+  fixturesSoon: boolean;
+}) {
+  const captaining = team.captainId === viewerId;
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/70 p-4 text-sm backdrop-blur-sm">
+      <p className="font-medium [overflow-wrap:anywhere]">
+        {captaining ? "Your team: " : "You’re on "}
+        <Link href={`/teams/${team.id}`} className={textLink("font-semibold")}>
+          {team.name}
+        </Link>
+      </p>
+      {captaining ? (
+        <p className="mt-1 text-muted">
+          Your roster: {team.members.length}/{teamSize}
+          {fixturesSoon ? " · Fixtures coming soon" : ""}
+        </p>
+      ) : (
+        <>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted">
+            <span className="[overflow-wrap:anywhere]">
+              Captain{" "}
+              <PlayerLink userId={team.captainId} className="text-fg">
+                {team.captain.name}
+              </PlayerLink>
+            </span>
+            {captainContact?.discordName ? (
+              <DiscordTag
+                name={captainContact.discordName}
+                verified={!!captainContact.discordId}
+              />
+            ) : null}
+          </p>
+          {fixturesSoon ? (
+            <p className="mt-1 text-muted">Fixtures coming soon.</p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** What the hero's panel says when there is nothing to check in for. */
+function idleCopy(
+  idle: PanelIdle,
+  onlyFinalLeft: boolean,
+): { title: string; text: string; href: string; cta: string } {
+  const schedule = { href: "/schedule#fixtures", cta: "See the schedule" };
+  const bracket = { href: "/schedule#playoff-bracket", cta: "See the bracket" };
+  switch (idle) {
+    case "no-fixtures":
+      return {
+        title: "Fixtures are coming soon",
+        text: "Your team's schedule hasn't been published yet.",
+        ...schedule,
+      };
+    case "games-played":
+      return {
+        title: "Your regular season is done",
+        text: "Your team has played every regular-season fixture.",
+        href: "/schedule#standings",
+        cta: "See the standings",
+      };
+    case "no-upcoming":
+      return {
+        title: "Nothing to check in for yet",
+        text: "Your team's next match has no kickoff time yet, or its result is still coming in.",
+        ...schedule,
+      };
+    case "bracket-pending":
+      return {
+        title: "The playoff bracket is on its way",
+        text: "Playoff fixtures show here once the bracket is drawn.",
+        href: "/schedule#playoff-bracket",
+        cta: "See the playoff schedule",
+      };
+    case "through":
+      return {
+        title: "You're through",
+        text: "Your next round is drawn once the other series finish.",
+        ...bracket,
+      };
+    case "champion":
+      return {
+        title: "Champions",
+        text: "Your team won the final.",
+        ...bracket,
+      };
+    case "final-review":
+      return {
+        title: "The final is under review",
+        text: "Your team played the final. The champion is named once the league confirms the result.",
+        ...bracket,
+      };
+    case "season-over":
+      return {
+        title: "Your season is over",
+        text: "Thanks for playing. The playoffs go on without you.",
+        href: "/schedule#playoff-bracket",
+        cta: onlyFinalLeft ? "Follow the final" : "Follow the playoffs",
+      };
+    case "withdrawn":
+      return {
+        title: "Your team has withdrawn",
+        text: "Its remaining fixtures were forfeited. The rest of the league is still worth watching.",
+        ...schedule,
+      };
+    case "standin-list":
+      return {
+        title: "You're on the standin list",
+        text: "No booking yet. Captains book standins from a match page when they need cover.",
+        href: "/schedule#fixtures",
+        cta: "See this week's schedule",
+      };
+    default:
+      return {
+        title: "No match of your own coming up",
+        text: "You're not on a team this season. The week's games are still worth watching.",
+        href: "/schedule#fixtures",
+        cta: "See this week's schedule",
+      };
+  }
 }
 
 // ---------- Hero ----------
@@ -961,6 +1444,7 @@ function Hero({
   active,
   title,
   subtitle,
+  pitch,
   action,
   meta,
   aside,
@@ -970,7 +1454,10 @@ function Hero({
   phaseLabel?: string;
   active?: boolean;
   title: string;
+  /** The phase in one sentence; "" renders nothing. */
   subtitle: string;
+  /** What the league is, for a signed-out visitor (see LeaguePitch). */
+  pitch?: ReactNode;
   action?: ReactNode;
   meta?: ReactNode;
   aside?: ReactNode;
@@ -1050,9 +1537,10 @@ function Hero({
           <h1 className="mt-3 font-display text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl">
             {title}
           </h1>
-          {!leagueDashboard ? (
+          {!leagueDashboard && subtitle ? (
             <p className="mt-2 max-w-xl text-muted sm:text-lg">{subtitle}</p>
           ) : null}
+          {!leagueDashboard ? pitch : null}
           {leagueDashboard && action ? (
             <div className="mt-5 flex flex-wrap gap-2 [&>a]:min-h-11 [&>a]:px-4 [&>a]:py-2 [&>a]:text-sm">
               {action}
@@ -1106,11 +1594,33 @@ function HeroActions({ children }: { children: ReactNode }) {
 // are purely visual (aria-hidden) with sr-only state text on each label.
 function SeasonTimeline({ phase }: { phase: string }) {
   const current = PHASE_ORDER.findIndex((p) => p === phase);
+  const next = current >= 0 ? PHASE_ORDER[current + 1] : undefined;
   return (
     // No frame of its own: it renders inside the hero's footer rail, which owns
     // the border and the background.
     <div>
-      <ol aria-label="Season progress" className="flex items-start">
+      {/* Phones show the current step only: five steps across 390px pushed
+          the page down for what the phase badge already says. The full list
+          stays for screen readers, so this line is hidden from them. */}
+      {current >= 0 ? (
+        <p
+          aria-hidden
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:hidden"
+        >
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-accent bg-accent/15 text-[11px] font-semibold text-accent">
+            {current + 1}
+          </span>
+          <span className="font-medium text-fg">{PHASE_STEP[phase]}</span>
+          <span className="text-muted">
+            Step {current + 1} of {PHASE_ORDER.length}
+            {next ? ` · Next: ${PHASE_STEP[next]}` : ""}
+          </span>
+        </p>
+      ) : null}
+      <ol
+        aria-label="Season progress"
+        className={cn("flex items-start", current >= 0 && "max-sm:sr-only")}
+      >
         {PHASE_ORDER.map((p, i) => {
           const done = current >= 0 && i < current;
           const isCurrent = i === current;
@@ -1175,6 +1685,74 @@ function SeasonTimeline({ phase }: { phase: string }) {
   );
 }
 
+/**
+ * For admins only, one line under the hero: the admin panel's next step and
+ * how many open matches its Needs attention card lists, linking the panel.
+ * Home otherwise showed Tim exactly what a visitor sees on match night.
+ * Database reads only (request-cached matches plus one query for the open
+ * matches' check-ins, covers and reschedules), never a Discord call.
+ */
+async function AdminStrip({ snapshot }: { snapshot: SeasonSnapshot }) {
+  const { season } = snapshot;
+  const [matches, open] = await Promise.all([
+    getSeasonMatches(season.id),
+    prisma.match.findMany({
+      where: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+      select: {
+        id: true,
+        status: true,
+        scheduledAt: true,
+        scheduleRevision: true,
+        availability: {
+          select: { userId: true, status: true, scheduleRevision: true },
+        },
+        standins: { select: { replacingUserId: true } },
+        reschedules: { select: { status: true } },
+      },
+    }),
+  ]);
+  // Check-ins count for the fixture's current time only, as on the panel.
+  const attention = matchAttention(
+    open.map((match) => ({
+      ...match,
+      availability: match.availability.filter(
+        (rsvp) => rsvp.scheduleRevision === match.scheduleRevision,
+      ),
+    })),
+  );
+  const { step, attention: attentionLine } = adminHomeLine({
+    seasonStatus: season.status,
+    draftStatus: snapshot.draftStatus,
+    playerCount: snapshot.playerCount,
+    minPlayers: snapshot.capacity.minPlayers,
+    teams: snapshot.teams,
+    matches,
+    hasChampion:
+      resolveChampionPresentation(season, matches).championTeamId != null,
+    attentionCount: attention.length,
+  });
+  return (
+    <Link
+      href="/admin"
+      className="group flex items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm transition-colors hover:border-muted/60"
+    >
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <Badge tone="info">Admin</Badge>
+        <span className="text-fg">{step}</span>
+        {attentionLine ? (
+          <span className="text-muted">
+            <span aria-hidden>· </span>
+            {attentionLine}
+          </span>
+        ) : null}
+      </span>
+      <span className="shrink-0 font-medium text-accent group-hover:underline">
+        Open admin <LinkArrow />
+      </span>
+    </Link>
+  );
+}
+
 // The inhouse scene runs year-round but was invisible from the dashboard.
 // A slim strip keeps it one click away in every phase. Read-only queries —
 // lobby formation/resolution stays lazy on the /inhouse poll.
@@ -1231,694 +1809,639 @@ async function InhouseStrip() {
 // ---------- SIGNUPS ----------
 
 /**
+ * "Defending champions: Radiant Raccoons (Season 9) →", one line under the
+ * hero from the offseason until the next season crowns someone. The link goes
+ * to that season's page, where the final and the rosters are.
+ */
+function DefendingChampionLine({
+  champion,
+  className,
+}: {
+  champion: DefendingChampion;
+  className?: string;
+}) {
+  return (
+    <p
+      className={cn(
+        "flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted",
+        className,
+      )}
+    >
+      <TeamCrest
+        name={champion.teamName}
+        seed={champion.teamId}
+        logoUrl={champion.logoUrl}
+        size={20}
+        className="rounded"
+      />
+      <span>Defending champions:</span>
+      <Link
+        href={`/seasons/${champion.seasonId}`}
+        className={cn(textLink(), "min-w-0 font-medium [overflow-wrap:anywhere]")}
+      >
+        {champion.teamName} ({champion.seasonName}) <LinkArrow />
+      </Link>
+    </p>
+  );
+}
+
+/**
+ * The league in one sentence plus who can join and when games are, for a
+ * signed-out visitor on Home (signups and the offseason). Nothing else above
+ * the fold said what the league is. No step strip: the hero's season
+ * timeline already shows the steps.
+ */
+function LeaguePitch({ matchNight }: { matchNight: string | null }) {
+  return (
+    <>
+      <p className="mt-2 max-w-xl text-muted sm:text-lg">{leaguePitch()}</p>
+      <p className="mt-2 max-w-xl text-sm text-muted">
+        {leagueEligibilityLine(matchNight)}
+      </p>
+    </>
+  );
+}
+
+/**
  * The hero's control slot for a player who has already signed up.
  *
  * MUST always render something — the Hero drops its identity column to full
  * width without an `aside`, so a branch that returns null here would leave a
  * 23rem hole (the rule `MyNextMatch`'s no-match branch exists for).
  *
- * The ask is the whole point, so it states the CURRENT one rather than a fixed
- * slogan: short of the minimum that's what still blocks the draft, past it
- * (where the league sits for most of signup week, since minTeams is a floor)
- * it's the next whole team.
+ * It asks one thing at a time. A player who still owes the draft-night
+ * confirmation gets it here as one tap, beside the draft time it confirms:
+ * the only other way in was a link a screen further down that opened the top
+ * of /me, with the real button far below that. It is the same action and
+ * button name as /me, whose button stays; the hero's chip gives up the date
+ * for this viewer, so the page still prints it once. Everyone else gets the
+ * standing ask, filling the rest of the league, and its control. The numbers
+ * behind that ask sit in the hero's own counts and phase line beside this
+ * panel, so it states only the ask.
  */
-function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
-  const { capacity, playerCount } = snapshot;
-  const short = !capacity.canDraft;
-  const n = short ? capacity.needed : capacity.toNextTeam;
+function SignupsAside({
+  snapshot,
+  owed,
+  captaining,
+}: {
+  snapshot: SeasonSnapshot;
+  owed: ReturnType<typeof owedDraftConfirmation>;
+  captaining: boolean;
+}) {
+  const { season } = snapshot;
+  const { draftAt } = season;
+  const stale = owed === DRAFT_READINESS.STALE;
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/70 p-4 backdrop-blur-sm sm:p-5">
-      <p className="font-display text-lg font-semibold">You&apos;re in</p>
-      <p className="mt-1 text-sm text-muted">
-        {playerCount} signed up.{" "}
-        <strong className="text-fg">
-          {n} more {n === 1 ? "player" : "players"}
-        </strong>{" "}
-        {short
-          ? `and the draft can run.`
-          : `makes it ${capacity.teamsFormable + 1} full teams.`}{" "}
-        Know anyone who&apos;d fit?
-      </p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <InviteLink />
-        <Link href="/how-it-works" className={textLink("text-sm")}>
-          How it works <LinkArrow />
-        </Link>
-      </div>
-      <p className="mt-2 text-xs text-muted">
-        Copies this season&apos;s link — it unfurls with the details in Discord.
-      </p>
-      {/* No draft-night line here. It was the page's THIRD printing of that
-          date — the hero's own chip sits directly above this panel and the
-          signup card repeats it in full below, which on a phone stacked two
-          identical countdowns 400px apart. This panel does one job: the ask,
-          and the control to act on it. */}
+      {owed && draftAt ? (
+        <>
+          <p className="font-display text-lg font-semibold">
+            {stale ? "The draft time changed" : "You're in"}
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            <span aria-hidden>🗓️</span> Draft night{" "}
+            <strong className="font-medium text-fg">
+              <LocalTime
+                ts={draftAt.getTime()}
+                variant="full"
+                initial={formatMatchTime(draftAt, "full")}
+              />
+            </strong>
+            <Countdown
+              targetMs={draftAt.getTime()}
+              eventLabel="Draft"
+              passedLabel={DRAFT_PASSED_LABEL}
+            />
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            {stale
+              ? "Confirm the new time so the admins know you can still make it."
+              : "Confirm you’ve seen the time and still plan to play this season."}
+          </p>
+          <ActionForm
+            action={confirmDraftReadiness}
+            className="mt-3"
+            hidden={{
+              expectedActiveSeasonId: season.id,
+              draftRevision: String(season.draftRevision),
+              draftAtTs: String(draftAt.getTime()),
+            }}
+          >
+            <SubmitButton
+              variant={stale ? "accent" : "primary"}
+              className="w-full"
+            >
+              {stale ? "Confirm updated draft time" : "Confirm I’m ready for draft"}
+            </SubmitButton>
+          </ActionForm>
+        </>
+      ) : (
+        <>
+          <p className="font-display text-lg font-semibold">You&apos;re in</p>
+          <p className="mt-1 text-sm text-muted">Know anyone who&apos;d fit?</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <InviteLink />
+            <Link href="/how-it-works" className={textLink("text-sm")}>
+              How it works <LinkArrow />
+            </Link>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Copies this season&apos;s link — it unfurls with the details in
+            Discord.
+          </p>
+        </>
+      )}
+      {captaining ? (
+        <CaptainLine className="mt-3 border-t border-line-soft pt-3" />
+      ) : null}
     </div>
   );
 }
 
-async function SignupsView({
+/**
+ * The one captain-only line on home before the auction: what a captain can do
+ * that week is scout the pool. It deliberately carries no budget or
+ * nomination slot. Start sets the MMR-weighted budgets from the final captain
+ * pool, and the order can be re-randomised until then, so any figure shown
+ * earlier is a guess that can still change. Once the auction runs, the draft
+ * room shows the real budget, live.
+ *
+ * `draftAt` only where nothing else on the page prints the draft time; it then
+ * owns saying the time has passed, like every surface that prints it.
+ */
+function CaptainLine({
+  draftAt,
+  className,
+}: {
+  draftAt?: Date | null;
+  className?: string;
+}) {
+  return (
+    <p className={cn("text-sm text-muted", className)}>
+      <span className="font-medium text-fg">You’re captaining</span>
+      {draftAt ? (
+        <>
+          {" · "}Draft{" "}
+          <LocalTime
+            ts={draftAt.getTime()}
+            variant="short"
+            initial={formatMatchTime(draftAt, "short")}
+          />
+          <Countdown
+            targetMs={draftAt.getTime()}
+            eventLabel="Draft"
+            passedLabel={DRAFT_PASSED_LABEL}
+          />
+        </>
+      ) : null}
+      {" · "}
+      <Link href="/players" className={textLink()}>
+        Scout the pool <LinkArrow />
+      </Link>
+    </p>
+  );
+}
+
+/**
+ * What the draft-night confirmation says about the viewer, as one plain status
+ * line. A badge and a link used to say "Confirm draft night" twice here, and
+ * the link only opened the top of /me.
+ */
+function draftReadinessStatus(readiness: DraftReadiness): string {
+  switch (readiness) {
+    case DRAFT_READINESS.READY:
+      return "Draft night confirmed ✓";
+    case DRAFT_READINESS.STALE:
+      return "Draft time changed — not confirmed yet";
+    default:
+      return "Draft night not confirmed yet";
+  }
+}
+
+/**
+ * Everything below the hero during signups. The counts, the minimum and the
+ * draft date live in the hero ONCE: this view used to restate them in a signup
+ * card heading, a progress sentence and four stat tiles (whose figures are
+ * /players' own strip), so "37 signed up" printed three times and "3 more for
+ * another team" three ways. What is left here is what the hero can't carry:
+ * the viewer's own signup, and who is in.
+ */
+function SignupsView({
   snapshot,
   loggedIn,
 }: {
   snapshot: SeasonSnapshot;
   loggedIn: boolean;
 }) {
-  const { season, playerCount, standinCount, capacity, myReg } = snapshot;
+  const { season, capacity, myReg } = snapshot;
   const isActivePlayer = myReg?.status === "ACTIVE" && myReg.type === "PLAYER";
   const isStandin = myReg?.status === "ACTIVE" && myReg.type === "STANDIN";
   const isRemoved = myReg?.status === REGISTRATION_STATUS.REMOVED;
   const myDraftReadiness =
-    isActivePlayer && season.draftAt
+    isActivePlayer &&
+    season.draftAt &&
+    draftSetupOpen(season.status, snapshot.draftStatus)
       ? draftReadiness(myReg, season.draftRevision)
       : null;
 
-  // Teams need captains as much as they need players — surface how many
-  // have volunteered so the "can we actually draft?" picture is complete.
-  const captainVolunteers = await prisma.registration.count({
-    where: {
-      seasonId: season.id,
-      status: "ACTIVE",
-      type: "PLAYER",
-      wantsCaptain: true,
-    },
-  });
-
   return (
     <div className="space-y-6">
-      <ScheduleCallout label={season.matchSchedule} />
-      <Card>
-        <CardBody className="space-y-5">
-          {/* `minTeams` is the FLOOR the draft needs, never a cap: nothing
-              refuses a signup past it (registrationGate checks the MMR ceiling
-              and the SIGNUPS phase, nothing else) and startDraft forms one team
-              per captain, so the 31st player on a 6-team season just becomes a
-              7th team. This headline used to read "31 / 30 players to start"
-              over a progress bar pegged at 100% — a fraction above 1, which is
-              the universal shape of "sold out", shown to exactly the person
-              deciding whether to bother signing up. Past the minimum it counts
-              UP instead, and the bar retargets on the next whole team. */}
-          {/* A real <h2>, not a styled span: this card is what the page exists
-              for, and the whole outline was h1 "Season 7" then straight to the
-              h3s of "Pool composition" and "Who's in" — so heading navigation
-              skipped the signup card and the count entirely. No visual change;
-              the line already looked and read like the card's title. */}
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
-            <h2 className="min-w-0 font-medium">
-              {capacity.canDraft
-                ? `${playerCount} player${playerCount === 1 ? "" : "s"} signed up`
-                : `${playerCount} / ${capacity.minPlayers} player minimum`}
-              <span className="font-normal text-muted">
-                {" "}
-                · teams of {season.teamSize}
-                {season.maxMmr > 0 ? ` · ${season.maxMmr} MMR soft limit` : ""}
-              </span>
-            </h2>
-            <span className="shrink-0 text-muted">
-              {capacity.canDraft
-                ? "Player minimum met — still open"
-                : `${capacity.needed} more needed`}
-            </span>
-          </div>
-          {season.draftAt ? (
-            <p className="text-sm text-muted">
-              🗓️ Draft night:{" "}
-              <strong className="text-fg">
-                <LocalTime
-                  ts={season.draftAt.getTime()}
-                  variant="full"
-                  initial={formatMatchTime(season.draftAt, "full")}
-                />
-              </strong>
-              {/* This line PRINTS the date, so it owns saying the date has
-                  gone. Before, a slipped draft night read "🗓️ Draft night:
-                  Sun, Jul 26" with no chip — a past date rendered as a plan. */}
-              <Countdown
-                targetMs={season.draftAt.getTime()}
-                eventLabel="Draft"
-                passedLabel={DRAFT_PASSED_LABEL}
-              />
-            </p>
-          ) : null}
-          {capacity.canDraft ? (
-            <div className="space-y-2">
-              {/* Scaled to the next whole team, so the bar keeps meaning
-                  something instead of sitting full for the rest of signups —
-                  and so its EMPTY slice is exactly the players still needed,
-                  narrowing from a team's worth down to one. Not
-                  leftover/teamSize: that renders empty at an exact multiple,
-                  which is the healthiest the league gets. */}
-              <Progress
-                value={playerCount}
-                max={capacity.nextTeamTarget}
-                label="Player signup capacity"
-              />
-              <p className="text-sm text-muted">
-                The {season.minTeams}-team minimum is covered — signups stay
-                open, and every {season.teamSize} more players is another team.{" "}
-                <strong className="text-fg">{capacity.toNextTeam} more</strong>{" "}
-                would make it {capacity.teamsFormable + 1} full teams.
-              </p>
-            </div>
-          ) : (
-            <Progress
-              value={playerCount}
-              max={capacity.minPlayers}
-              label="Players needed to run the league"
-            />
-          )}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat label="Players" value={playerCount} />
-            <Stat label="Standins" value={standinCount} />
-            <Stat
-              label="Full teams possible"
-              value={capacity.teamsFormable}
-              hint={
-                capacity.canDraft
-                  ? `minimum ${season.minTeams}`
-                  : `of ${season.minTeams} needed`
-              }
-            />
-            <Stat
-              label="Captain volunteers"
-              value={captainVolunteers}
-              /* One captain per TEAM, and the team count grows with the pool —
-                 pinning this hint to minTeams told a 37-player season it needed
-                 6 captains when seating everyone takes 7. */
-              hint={`need ${Math.max(season.minTeams, capacity.teamsFormable)}`}
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            {!loggedIn ? (
-              // The Why Steam sign-in? note below is this button's notice.
-              <SteamSignInButton next="/me">
-                Sign in with Steam to join
-              </SteamSignInButton>
-            ) : isActivePlayer ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge
-                  tone={
-                    myDraftReadiness === DRAFT_READINESS.STALE
-                      ? "danger"
-                      : myDraftReadiness === DRAFT_READINESS.AWAITING
-                        ? "accent"
-                        : "success"
-                  }
-                >
-                  {myDraftReadiness === DRAFT_READINESS.READY
-                    ? "Draft night confirmed"
-                    : myDraftReadiness === DRAFT_READINESS.STALE
-                      ? "Draft confirmation expired"
-                      : myDraftReadiness === DRAFT_READINESS.AWAITING
-                        ? "Confirm draft night"
-                        : "You’re signed up to play"}
-                </Badge>
-                <Link href="/me" className={buttonClasses("secondary")}>
-                  {myDraftReadiness === DRAFT_READINESS.STALE ? (
-                    <>
-                      Reconfirm draft night <LinkArrow />
-                    </>
-                  ) : myDraftReadiness === DRAFT_READINESS.AWAITING ? (
-                    <>
-                      Confirm draft night <LinkArrow />
-                    </>
-                  ) : (
-                    "Review your signup"
-                  )}
-                </Link>
-              </div>
-            ) : isStandin ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge tone="info">You&apos;re registered as a standin</Badge>
-                <Link href="/me" className={buttonClasses("secondary")}>
-                  Switch to full player
-                </Link>
-              </div>
-            ) : isRemoved ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge tone="danger">Your signup was removed</Badge>
-                <Link href="/me" className={buttonClasses("secondary")}>
-                  See status and next steps
-                </Link>
-              </div>
-            ) : (
-              <Link href="/me" className={buttonClasses("primary", "lg")}>
-                Join the season <LinkArrow />
-              </Link>
-            )}
-            {/* One Discord CTA in <main> at a time. A signed-up player who
-                hasn't linked already gets <DiscordSetupPrompt> above, which
-                sequences the SAME invite as "1. Join the server" and a link
-                step after it — so this button competed with its own
-                instructions, three identical discord.gg links on one screen
-                (the footer has the third). Registered viewers are exactly the
-                cohort that prompt covers; everyone else still needs this. */}
-            {!isActivePlayer && !isStandin && !isRemoved ? (
-              <DiscordButton size="lg" />
-            ) : null}
-          </div>
-
-          {!loggedIn ? <SteamSafetyNote /> : null}
-        </CardBody>
-      </Card>
-
-      {/* Captains are designated DURING signups and `getSeasonSnapshot`
-          already fetches them for every dashboard render — the page just threw
-          them away until now, so a season with six captains picked said
-          nothing about it. Who is captaining is one of the few things a
-          prospect can weigh before committing a season of Wednesdays. */}
-      {snapshot.teams.length > 0 ? (
+      {/* Signed out, the hero's pitch already names the match night. */}
+      {loggedIn ? <ScheduleCallout label={season.matchSchedule} /> : null}
+      {/* The viewer's own signup, as a status line. Joining is the hero's
+          button (a second "Sign in with Steam to join" sat a screen below
+          it), and a removed signup is the hero's "Signup removed" button. */}
+      {isActivePlayer || isStandin ? (
         <Card>
           <CardHeader
             headingLevel={2}
-            title="Captains so far"
-            subtitle={`${snapshot.teams.length} team${snapshot.teams.length === 1 ? "" : "s"} lined up — more captains can still be named before the draft`}
+            className="border-b-0"
+            title={
+              isStandin
+                ? "You’re registered as a standin"
+                : "You’re signed up to play"
+            }
+            subtitle={
+              <>
+                Teams of {season.teamSize}
+                {season.maxMmr > 0 ? ` · ${season.maxMmr} MMR soft limit` : ""}
+                {myDraftReadiness
+                  ? ` · ${draftReadinessStatus(myDraftReadiness)}`
+                  : ""}
+              </>
+            }
+            action={
+              <Link
+                href={
+                  myDraftReadiness && myDraftReadiness !== DRAFT_READINESS.READY
+                    ? "/me#draft-commitment"
+                    : "/me"
+                }
+                className={buttonClasses("secondary")}
+              >
+                {isStandin ? "Switch to full player" : "Review your signup"}
+              </Link>
+            }
           />
-          <CardBody>
-            <div className="flex flex-wrap gap-2">
-              {snapshot.teams.map((t) => (
-                <PlayerLink
-                  key={t.id}
-                  userId={t.captain.id}
-                  className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
-                >
-                  <Avatar
-                    name={t.captain.name}
-                    src={t.captain.avatar}
-                    size={26}
-                  />
-                  <span className="text-sm">{t.captain.name}</span>
-                  <RankBadge rankTier={t.captain.rankTier} />
-                </PlayerLink>
-              ))}
-            </div>
-          </CardBody>
         </Card>
       ) : null}
+      {/* One Discord CTA in <main> at a time. A signed-up player who hasn't
+          linked gets <DiscordSetupPrompt> above, which sequences the SAME
+          invite as "1. Join the server" and a link step after it, so this
+          row is for everyone that prompt can't cover. */}
+      {!isActivePlayer && !isStandin && !isRemoved && DISCORD_INVITE_URL ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm">
+          <p className="min-w-[min(14rem,100%)] flex-1 text-muted">
+            {loggedIn
+              ? "Questions before you join? Ask in the league Discord."
+              : "Questions before you sign up? Ask in the league Discord."}
+          </p>
+          <DiscordButton />
+        </div>
+      ) : null}
 
-      <Suspense fallback={null}>
-        <PoolComposition seasonId={season.id} />
-      </Suspense>
-
-      <Card>
-        <CardHeader
-          headingLevel={2}
-          title="Who's in"
-          /* Named the count: the chip list is capped at 12, so a 30-player
-             season silently hid 18 people behind a "View all →" that gave no
-             reason to click. */
-          subtitle={
-            playerCount > 12
-              ? `Latest 12 of ${playerCount} players`
-              : "Latest players to sign up"
-          }
-          action={
-            <Link href="/players" className={textLink("text-sm")}>
-              View all <LinkArrow />
-            </Link>
-          }
+      <Suspense fallback={<CardSkeleton rows={2} />}>
+        <WhoIsIn
+          seasonId={season.id}
+          playerCount={snapshot.playerCount}
+          teamsNeeded={Math.max(season.minTeams, capacity.teamsFormable)}
+          captains={snapshot.teams.map((team) => team.captain)}
         />
-        <CardBody>
-          <Suspense fallback={<Skeleton className="h-8 w-full" />}>
-            <RecentSignups seasonId={season.id} />
-          </Suspense>
-        </CardBody>
-      </Card>
+      </Suspense>
     </div>
   );
 }
 
-async function RecentSignups({ seasonId }: { seasonId: string }) {
-  const regs = await prisma.registration.findMany({
-    where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-    // Only the fields the chips render — this list serializes into the page.
-    include: {
-      user: { select: { id: true, name: true, avatar: true, rankTier: true } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: 12,
-  });
-  if (regs.length === 0) {
-    return (
-      <EmptyState
-        title="No signups yet"
-        description="Be the first to join this season."
-      />
-    );
-  }
-  return (
-    <div className="flex flex-wrap gap-2">
-      {regs.map((r) => (
-        <PlayerLink
-          key={r.id}
-          userId={r.userId}
-          className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
-        >
-          <Avatar name={r.user.name} src={r.user.avatar} size={26} />
-          <span className="text-sm">{r.user.name}</span>
-          <RankBadge rankTier={r.user.rankTier} />
-          <RoleBadges roles={r.roles} />
-          {r.mmr > 0 ? (
-            <span className="text-xs text-muted">{r.mmr}</span>
-          ) : null}
-        </PlayerLink>
-      ))}
-    </div>
-  );
-}
+type SignupChipPlayer = {
+  userId: string;
+  name: string;
+  avatar: string | null;
+  rankTier: number | null;
+  roles: string;
+  mmr: number;
+};
 
-async function PoolComposition({ seasonId }: { seasonId: string }) {
-  const regs = await prisma.registration.findMany({
-    where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-    select: { roles: true, mmr: true },
-  });
-  if (regs.length === 0) return null;
+/** The latest signups shown beside the captains, however many captains. */
+const WHO_IS_IN_LATEST = 12;
 
-  const roles = roleCoverage(regs);
-  const dist = mmrDistribution(regs);
-  const avg = averageMmr(regs);
-  const maxRole = Math.max(1, ...roles.map((r) => r.count));
-  const maxBucket = Math.max(1, ...dist.map((b) => b.count));
+/**
+ * "Who's in": the captains first (they used to have a card of their own,
+ * "Captains so far", repeating half this list), then the latest signups, and
+ * one line on the positions the pool is short of. That line replaces a whole
+ * card of role and MMR bars whose buckets were mostly empty; /players keeps
+ * the scouting detail.
+ */
+async function WhoIsIn({
+  seasonId,
+  playerCount,
+  teamsNeeded,
+  captains,
+}: {
+  seasonId: string;
+  playerCount: number;
+  teamsNeeded: number;
+  captains: SeasonSnapshot["teams"][number]["captain"][];
+}) {
+  const captainIds = captains.map((captain) => captain.id);
+  const [pool, latest] = await Promise.all([
+    prisma.registration.findMany({
+      where: { seasonId, status: "ACTIVE", type: "PLAYER" },
+      select: { userId: true, roles: true, mmr: true },
+    }),
+    prisma.registration.findMany({
+      where: {
+        seasonId,
+        status: "ACTIVE",
+        type: "PLAYER",
+        userId: { notIn: captainIds },
+      },
+      // Only the fields the chips render — this list serializes into the page.
+      select: {
+        userId: true,
+        roles: true,
+        mmr: true,
+        user: { select: { name: true, avatar: true, rankTier: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: WHO_IS_IN_LATEST,
+    }),
+  ]);
+  const signupOf = new Map(pool.map((reg) => [reg.userId, reg]));
+  // A captain is in the pool through their own signup; one without an active
+  // player signup isn't "in" as a player, so the chip would be a claim the
+  // count beside it doesn't make.
+  const captainChips: SignupChipPlayer[] = captains.flatMap((captain) => {
+    const reg = signupOf.get(captain.id);
+    return reg
+      ? [
+          {
+            userId: captain.id,
+            name: captain.name,
+            avatar: captain.avatar,
+            rankTier: captain.rankTier,
+            roles: reg.roles,
+            mmr: reg.mmr,
+          },
+        ]
+      : [];
+  });
+  const latestChips: SignupChipPlayer[] = latest.map((reg) => ({
+    userId: reg.userId,
+    name: reg.user.name,
+    avatar: reg.user.avatar,
+    rankTier: reg.user.rankTier,
+    roles: reg.roles,
+    mmr: reg.mmr,
+  }));
+  const shown = captainChips.length + latestChips.length;
+  const shortage = shortRolesLine(roleCoverage(pool), teamsNeeded, pool.length);
 
   return (
     <Card>
       <CardHeader
         headingLevel={2}
-        title="Pool composition"
-        subtitle={`Role coverage & MMR spread · avg ${avg} MMR`}
+        title="Who's in"
+        /* Names the cap: the list stops at the latest few, so a 30-player
+           season silently hid 18 people behind a "View all →" that gave no
+           reason to click. */
+        subtitle={
+          captainChips.length > 0
+            ? `Captains first, then the latest signups${shown < playerCount ? ` · ${shown} of ${playerCount} players` : ""}`
+            : shown < playerCount
+              ? `Latest ${shown} of ${playerCount} players`
+              : "Latest players to sign up"
+        }
+        action={
+          <Link href="/players" className={textLink("text-sm")}>
+            View all <LinkArrow />
+          </Link>
+        }
       />
-      <CardBody className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
-        <div className="space-y-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            Preferred roles
-          </div>
-          {roles.map((r) => (
-            <StatBar
-              key={r.key}
-              label={r.label}
-              count={r.count}
-              max={maxRole}
-              tone="brand"
-            />
-          ))}
-        </div>
-        <div className="space-y-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            MMR distribution
-          </div>
-          {dist.map((b) => (
-            <StatBar
-              key={b.label}
-              label={b.label}
-              count={b.count}
-              max={maxBucket}
-              tone="accent"
-            />
-          ))}
-        </div>
+      <CardBody className="space-y-3">
+        {shown === 0 ? (
+          <EmptyState
+            title="No signups yet"
+            description="Be the first to join this season."
+          />
+        ) : (
+          <>
+            {shortage ? <p className="text-sm text-muted">{shortage}</p> : null}
+            {/* Compact on phones: name, captain mark and MMR only, so the
+                chips wrap two to a row instead of stacking twelve tall rows
+                of medals and bare role digits. */}
+            <div className="flex flex-wrap gap-2">
+              {captainChips.map((player) => (
+                <SignupChip key={player.userId} player={player} captain />
+              ))}
+              {latestChips.map((player) => (
+                <SignupChip key={player.userId} player={player} />
+              ))}
+            </div>
+          </>
+        )}
       </CardBody>
     </Card>
   );
 }
 
-function StatBar({
-  label,
-  count,
-  max,
-  tone,
+function SignupChip({
+  player,
+  captain = false,
 }: {
-  label: string;
-  count: number;
-  max: number;
-  tone: "brand" | "accent";
+  player: SignupChipPlayer;
+  captain?: boolean;
 }) {
-  const pct = max > 0 ? Math.round((count / max) * 100) : 0;
   return (
-    <div className="flex items-center gap-3 text-sm">
-      <span className="w-24 shrink-0 truncate text-muted" title={label}>
-        {label}
-      </span>
-      <div className="h-2.5 flex-1 rounded-full bg-surface-2">
-        <div
-          className={`bar-fill h-full rounded-full ${tone === "brand" ? "bg-brand" : "bg-accent"}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="w-6 shrink-0 text-right tabular-nums">{count}</span>
-    </div>
+    <PlayerLink
+      userId={player.userId}
+      className="flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-2.5 hover:border-muted/60 hover:no-underline sm:gap-2 sm:pr-3"
+    >
+      <Avatar name={player.name} src={player.avatar} size={22} />
+      <span className="min-w-0 truncate text-sm">{player.name}</span>
+      {captain ? (
+        <span
+          title="Captain"
+          className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded border border-accent/40 bg-accent/15 px-1 text-[11px] font-semibold text-accent"
+        >
+          <span aria-hidden>C</span>
+          <span className="sr-only">captain</span>
+        </span>
+      ) : null}
+      <RankBadge rankTier={player.rankTier} className="hidden sm:inline-flex" />
+      <RoleBadges roles={player.roles} className="hidden sm:inline-flex" />
+      {player.mmr > 0 ? (
+        <span className="shrink-0 text-xs text-muted">{player.mmr} MMR</span>
+      ) : null}
+    </PlayerLink>
   );
 }
 
 // ---------- DRAFT ----------
 
-// A read-only glance at the live auction so the dashboard tells the story
-// without opening the draft room: who's on the block, what's left in the
-// pool, and the latest sales. Never resolves clocks — that stays in /draft.
-// Live and paused auctions only: once the draft is complete there is nothing
-// to watch, and the hero's "Review the draft results" link and the rosters
-// below already cover it.
-async function DraftPulse({ seasonId }: { seasonId: string }) {
-  const draft = await prisma.draft.findUnique({ where: { seasonId } });
-  if (
-    !draft ||
-    (draft.status !== DRAFT_STATUS.IN_PROGRESS &&
-      draft.status !== DRAFT_STATUS.PAUSED)
-  ) {
-    return null;
-  }
-
-  const rostered = await prisma.teamMember.findMany({
-    where: { seasonId },
-    select: { userId: true },
-  });
-  const [poolLeft, sales, nominated, leadingTeam, nominatorTeam] =
-    await Promise.all([
-      prisma.registration.count({
-        where: {
-          seasonId,
-          status: "ACTIVE",
-          type: "PLAYER",
-          userId: { notIn: rostered.map((m) => m.userId) },
-        },
-      }),
-      prisma.teamMember.findMany({
-        where: { seasonId, isCaptain: false },
-        orderBy: { createdAt: "desc" },
-        take: 3,
-        include: { user: true, team: true },
-      }),
-      draft.nominatedUserId
-        ? prisma.user.findUnique({ where: { id: draft.nominatedUserId } })
-        : null,
-      draft.currentBidTeamId
-        ? prisma.team.findUnique({ where: { id: draft.currentBidTeamId } })
-        : null,
-      draft.nominatorTeamId
-        ? prisma.team.findUnique({
-            where: { id: draft.nominatorTeamId },
-            select: { name: true },
-          })
-        : null,
-    ]);
-
-  return (
-    <Card>
-      <CardHeader
-        headingLevel={2}
-        title="Live from the draft room"
-        action={
-          <Link href="/draft" className={buttonClasses("accent", "sm")}>
-            Watch live <LinkArrow />
-          </Link>
-        }
-      />
-      <CardBody className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
-        <div className="min-w-0">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            On the block
-          </div>
-          {nominated ? (
-            <div className="mt-2 flex items-center gap-2.5">
-              <Avatar name={nominated.name} src={nominated.avatar} size={34} />
-              <div className="min-w-0">
-                <PlayerLink
-                  userId={nominated.id}
-                  className="block truncate font-medium"
-                >
-                  {nominated.name}
-                </PlayerLink>
-                <div className="truncate text-xs text-muted">
-                  ${draft.currentBid}
-                  {leadingTeam
-                    ? ` — ${leadingTeam.name} leads`
-                    : " opening bid"}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-muted">
-              {draft.status === DRAFT_STATUS.PAUSED
-                ? "The draft is paused."
-                : nominatorTeam
-                  ? `${nominatorTeam.name} is on the clock to nominate.`
-                  : "Waiting on the next nomination…"}
-            </p>
-          )}
-        </div>
-        <Stat label="Players left in pool" value={poolLeft} />
-        <div className="min-w-0">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            Latest sales
-          </div>
-          {sales.length > 0 ? (
-            <ul className="mt-2 space-y-1 text-sm">
-              {sales.map((s) => (
-                <li
-                  key={s.id}
-                  className="flex items-center justify-between gap-2"
-                >
-                  <PlayerLink userId={s.userId} className="min-w-6 truncate">
-                    {s.user.name}
-                  </PlayerLink>
-                  {/* Price always shows; only the free-text team name gives
-                      way — a shrink-0 span here crushed the player link and
-                      bled past the card on phones. */}
-                  <span className="flex min-w-0 items-center gap-1 text-xs text-muted">
-                    <span className="shrink-0">${s.price} ·</span>
-                    <span className="min-w-0 max-w-[10rem] truncate">
-                      {s.team.name}
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2 text-sm text-muted">No sales yet.</p>
-          )}
-        </div>
-      </CardBody>
-    </Card>
-  );
-}
-
+/**
+ * Everything below the hero in the Draft phase: while the auction runs, one
+ * line pointing at the draft room, then every roster as one compact table.
+ *
+ * Home used to show the lot on the block, the pool count and the latest
+ * sales, read once when the page loaded. The auction moves every few seconds
+ * and this page never refreshes, so the lot was stale almost at once; the
+ * draft room is the live view. The rosters were six tall cards of "Empty
+ * slot" rows (about 390px each on a phone), with the $0 captain listed last.
+ */
 function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
-  const { teams, season } = snapshot;
+  const { teams, season, draftStatus } = snapshot;
+  // Budgets are real only once the auction starts: Start replaces every
+  // team's placeholder with its MMR-weighted budget from the final captain
+  // pool. Before that every team showed the same flat figure, one no captain
+  // would actually get.
+  const budgetsSet = !draftSetupOpen(season.status, draftStatus);
+  const running =
+    draftStatus === DRAFT_STATUS.IN_PROGRESS ||
+    draftStatus === DRAFT_STATUS.PAUSED;
   return (
     <div className="space-y-6">
-      <Suspense fallback={null}>
-        <DraftPulse seasonId={season.id} />
-      </Suspense>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {teams.map((t) => {
-          const spent = t.members.reduce((sum, m) => sum + m.price, 0);
-          const startingBudget = t.budget + spent;
-          return (
-            <Card key={t.id} interactive>
-              <CardHeader
-                headingLevel={2}
-                title={
-                  <Link
-                    href={`/teams/${t.id}`}
-                    className="flex items-center gap-2 hover:text-info"
-                  >
-                    <TeamCrest
-                      name={t.name}
-                      seed={t.id}
-                      logoUrl={t.logoUrl}
-                      size={24}
-                      className="rounded-md"
-                    />
-                    {t.name}
-                  </Link>
-                }
-                subtitle={
-                  <span>
-                    Captain:{" "}
-                    <PlayerLink userId={t.captainId} className="text-muted">
-                      {t.captain.name}
-                    </PlayerLink>
-                  </span>
-                }
-                action={<Badge tone="accent">${t.budget} left</Badge>}
+      {running ? (
+        <Link
+          href="/draft"
+          className="group flex items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm transition-colors hover:border-muted/60"
+        >
+          <span className="flex min-w-0 items-center gap-2.5">
+            {draftStatus === DRAFT_STATUS.IN_PROGRESS ? (
+              <span
+                aria-hidden
+                className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
               />
-              <CardBody className="space-y-4">
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between text-xs text-muted">
-                    <span>
-                      Spent ${spent} of ${startingBudget}
-                    </span>
-                    <span>
-                      {t.members.length}/{season.teamSize} roster
-                    </span>
-                  </div>
-                  <Progress
-                    value={spent}
-                    max={startingBudget}
-                    label={`${t.name} draft budget spent`}
-                  />
-                </div>
-                <RosterList members={t.members} teamSize={season.teamSize} />
-              </CardBody>
-            </Card>
-          );
-        })}
-      </div>
+            ) : null}
+            <span className="font-medium">
+              {draftStatus === DRAFT_STATUS.PAUSED
+                ? "The draft is paused"
+                : "The draft is live"}
+            </span>
+          </span>
+          <span className="shrink-0 font-medium text-accent group-hover:underline">
+            Watch <LinkArrow />
+          </span>
+        </Link>
+      ) : null}
+      <Card className="overflow-hidden">
+        <CardHeader
+          headingLevel={2}
+          title="Rosters"
+          subtitle={`${teams.length} ${teams.length === 1 ? "team" : "teams"} · ${season.teamSize} players each`}
+        />
+        <CardBody className="p-0">
+          <table className="w-full table-fixed text-sm">
+            <caption className="sr-only">
+              {budgetsSet
+                ? "Each team's players, captain first, with seats filled and budget left"
+                : "Each team's captain and seats filled"}
+            </caption>
+            <colgroup>
+              <col />
+              <col className="w-16" />
+              {budgetsSet ? <col className="w-20 sm:w-24" /> : null}
+            </colgroup>
+            <thead className="text-xs text-muted">
+              <tr className="border-b border-line">
+                <th
+                  scope="col"
+                  id="draft-roster-col-team"
+                  className="px-4 py-2 text-left font-medium"
+                >
+                  Team
+                </th>
+                <th scope="col" className="px-2 py-2 text-right font-medium">
+                  Seats
+                </th>
+                {budgetsSet ? (
+                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                    Budget left
+                  </th>
+                ) : null}
+              </tr>
+            </thead>
+            {/* One row group per team. The row header is the team alone: the
+                roster sits in its own cell below it (Seats and Budget span
+                both rows), so a screen reader names each cell by the team,
+                not by the whole roster. The roster cell points back at the
+                team and the Team column with `headers`. */}
+            {teams.map((t, i) => (
+              <tbody
+                key={t.id}
+                className={i > 0 ? "border-t border-line-soft" : undefined}
+              >
+                <tr className="align-top">
+                  <th
+                    scope="row"
+                    id={`draft-roster-${t.id}`}
+                    className="min-w-0 px-4 pt-3 text-left font-normal"
+                  >
+                    <Link
+                      href={`/teams/${t.id}`}
+                      className="flex min-w-0 items-center gap-2 font-semibold hover:text-info"
+                    >
+                      <TeamCrest
+                        name={t.name}
+                        seed={t.id}
+                        logoUrl={t.logoUrl}
+                        size={22}
+                        className="shrink-0 rounded"
+                      />
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        {t.name}
+                      </span>
+                    </Link>
+                  </th>
+                  <td rowSpan={2} className="px-2 py-3 text-right tabular-nums">
+                    {t.members.length}/{season.teamSize}
+                  </td>
+                  {budgetsSet ? (
+                    <td
+                      rowSpan={2}
+                      className="px-4 py-3 text-right tabular-nums"
+                    >
+                      ${t.budget}
+                    </td>
+                  ) : null}
+                </tr>
+                <tr className="align-top">
+                  {/* leading-7: two wrapped lines of tap-safe links must not
+                      overlap each other. */}
+                  <td
+                    headers={`draft-roster-col-team draft-roster-${t.id}`}
+                    className="min-w-0 px-4 pt-1 pb-3 leading-7 text-muted [overflow-wrap:anywhere]"
+                  >
+                    {rosterOrder(t.members).map((m, j) => (
+                      <Fragment key={m.id}>
+                        {j > 0 ? ", " : null}
+                        <PlayerLink userId={m.userId} className="text-fg">
+                          {m.user.name}
+                        </PlayerLink>
+                        {m.isCaptain ? (
+                          <span
+                            title="Captain"
+                            className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-accent/40 bg-accent/15 px-1 align-middle text-[11px] font-semibold text-accent"
+                          >
+                            <span aria-hidden>C</span>
+                            <span className="sr-only">captain</span>
+                          </span>
+                        ) : budgetsSet ? (
+                          <span className="text-xs"> ${m.price}</span>
+                        ) : null}
+                      </Fragment>
+                    ))}
+                  </td>
+                </tr>
+              </tbody>
+            ))}
+          </table>
+        </CardBody>
+      </Card>
     </div>
   );
 }
 
-function RosterList({
-  members,
-  teamSize,
-}: {
-  members: SeasonSnapshot["teams"][number]["members"];
-  teamSize: number;
-}) {
-  const slots = Array.from({ length: teamSize });
-  return (
-    <ul className="space-y-1.5">
-      {slots.map((_, i) => {
-        const m = members[i];
-        return (
-          <li
-            key={i}
-            className="flex items-center justify-between rounded-md border border-line/60 px-2.5 py-1.5 text-sm"
-          >
-            {m ? (
-              <>
-                <span className="flex items-center gap-2">
-                  <Avatar name={m.user.name} src={m.user.avatar} size={22} />
-                  <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
-                  {m.isCaptain ? (
-                    <Badge tone="accent" className="ml-1">
-                      C
-                    </Badge>
-                  ) : null}
-                </span>
-                <span className="text-muted">
-                  {m.isCaptain ? "—" : `$${m.price}`}
-                </span>
-              </>
-            ) : (
-              <span className="text-muted">Empty slot</span>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 // ---------- REGULAR SEASON / PLAYOFFS ----------
-
-/** The side-game band's desktop columns: one per tile (2 to 5). */
-const SIDE_GAME_COLUMNS: Record<number, string> = {
-  2: "lg:grid-cols-2",
-  3: "lg:grid-cols-3",
-  4: "lg:grid-cols-4",
-  5: "lg:grid-cols-5",
-};
 
 async function SeasonView({
   snapshot,
@@ -1961,14 +2484,12 @@ async function SeasonView({
   const myTeam = userId
     ? teams.find((t) => t.members.some((m) => m.userId === userId))
     : undefined;
-  const myRow = myTeam
-    ? standings.find((s) => s.teamId === myTeam.id)
-    : undefined;
-  const myRank = myTeam
-    ? standings.findIndex((s) => s.teamId === myTeam.id) + 1
-    : 0;
   const myScenario = myTeam ? (report?.teams.get(myTeam.id) ?? null) : null;
-  const myStakeLine = myScenario ? playoffStatusLine(myScenario) : null;
+  // Each team's playoff outlook waits for the first final regular-season
+  // series; before it every team would read "Playoff spot still open".
+  const outlookShown = playoffOutlookShown(matches);
+  const myStakeLine =
+    myScenario && outlookShown ? playoffStatusLine(myScenario) : null;
   // "Next up" must be the SAME match the stake line's "next series" is about
   // (the engine orders by kickoff when times exist) — falling back to
   // chronological order, like the MyNextMatch banner above.
@@ -2009,7 +2530,7 @@ async function SeasonView({
       (a, b) =>
         b.week - a.week || b.createdAt.getTime() - a.createdAt.getTime(),
     )
-    .slice(0, 5);
+    .slice(0, 4);
 
   // Visible to everyone — spectators and unrostered players had no way to
   // see what's coming up without leaving the dashboard. Chronological, not
@@ -2063,41 +2584,31 @@ async function SeasonView({
         : false,
   });
 
-  // Leaders and Hero meta get tiles when the menus list them (site-nav.ts):
-  // before the league's first game both open onto empty boards. The content
-  // flags are the layout's shared snapshot, so this costs no query.
-  const showSeasonStats = seasonStatsListed({
-    phase: season.status,
-    hasGames: (await getPublicLeagueContent(null)).hasGames,
-  });
-  const sideGameCount = 2 + (showFantasy ? 1 : 0) + (showSeasonStats ? 2 : 0);
-
-  // The side-game band renders BELOW the table now. It used to sit above both
+  // The side-game band renders BELOW the table. It used to sit above both
   // the standings and This-week, so the secondary loop (pick'em, fantasy) got
   // the first full-width band on the page while the primary one — your match,
   // your team, the table — started below it.
+  //
+  // It only offers what is live: Pick'em while a fixture is open for picks,
+  // Fantasy by the menus' rule, and Inhouse always (it runs any night). The
+  // Leaders and Hero meta tiles are gone: they repeated the menus. auto-fit,
+  // because the count runs from one to three.
   const sideGames = (
-    <div
-      className={cn(
-        "grid grid-cols-1 gap-3",
-        sideGameCount === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
-        SIDE_GAME_COLUMNS[sideGameCount],
-      )}
-    >
-      <SideGameLink
-        href="/pickem"
-        icon="🔮"
-        title="Pick'em"
-        hint={
-          pickemOpen > 0
-            ? userId
+    <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
+      {pickemOpen > 0 ? (
+        <SideGameLink
+          href="/pickem"
+          icon="🔮"
+          title="Pick'em"
+          hint={
+            userId
               ? picksMissing > 0
                 ? `${picksMissing} pick${picksMissing === 1 ? "" : "s"} to make — call it`
                 : "All picks in — oracle board"
               : `${pickemOpen} ${pickemOpen === 1 ? "match" : "matches"} open — call it`
-            : "See the oracle board"
-        }
-      />
+          }
+        />
+      ) : null}
       {showFantasy ? (
         <SideGameLink
           href="/fantasy"
@@ -2112,29 +2623,86 @@ async function SeasonView({
         title="Inhouse"
         hint="Pick-up 5v5s, any night"
       />
-      {showSeasonStats ? (
-        <>
-          <SideGameLink
-            href="/leaders"
-            icon="🥇"
-            title="Leaders"
-            hint="Stat boards & weekly honors"
-          />
-          <SideGameLink
-            href="/meta"
-            icon="🧪"
-            title="Hero meta"
-            hint="What the league picks & wins with"
-          />
-        </>
-      ) : null}
     </div>
+  );
+
+  // The viewer's own team card. Mid-season it carries only what the table
+  // beside it can't: the playoff stakes of the next series (their row is
+  // already highlighted there with rank, points and W/D/L). No stakes yet
+  // (before the first final series) means no card, and the table takes the
+  // band. In the playoffs the table is gone and the card says where the team
+  // stands in the bracket instead.
+  const myStakeCard =
+    myTeam && myScenario && myStakeLine ? (
+      <Card tone="feature">
+        <CardHeader headingLevel={2} title="Your team" subtitle={myTeam.name} />
+        <CardBody className="space-y-3">
+          {/* The stakes are about ONE match, the scenario engine's
+              nextMatchId, so the block names that opponent and links it. The
+              hero's check-in panel already shows its kickoff. */}
+          {myNextMatch ? (
+            <Link
+              href={`/matches/${myNextMatch.id}`}
+              className="block rounded-lg border border-accent/30 bg-accent/5 p-3 text-sm transition-colors hover:border-accent/50"
+            >
+              <p className="mb-2 text-xs text-muted [overflow-wrap:anywhere]">
+                Next series: vs{" "}
+                {teamName.get(
+                  myNextMatch.homeTeamId === myTeam.id
+                    ? myNextMatch.awayTeamId
+                    : myNextMatch.homeTeamId,
+                ) ?? "?"}
+              </p>
+              <PlayoffOutlook
+                scenario={myScenario}
+                teamNames={teamName}
+                matchId={myNextMatch.id}
+                compact
+              />
+            </Link>
+          ) : (
+            // Done playing, but the table can still decide something.
+            <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
+              <PlayoffOutlook scenario={myScenario} teamNames={teamName} />
+            </div>
+          )}
+          <Link
+            href={`/teams/${myTeam.id}`}
+            className={textLink("inline-block text-sm font-medium")}
+          >
+            Team page <LinkArrow />
+          </Link>
+        </CardBody>
+      </Card>
+    ) : null;
+  // Shared with /teams and the team page. No status (no bracket yet, or a
+  // title still under review) means no card: the hero's panel covers those.
+  const myPlayoffStatus =
+    season.status === "PLAYOFFS" && myTeam
+      ? (playoffStatuses(
+          [myTeam],
+          matches,
+          championTeamId,
+          seasonViewNow,
+        ).get(myTeam.id) ?? null)
+      : null;
+  const myPlayoffCard =
+    myTeam && myPlayoffStatus ? (
+      <PlayoffTeamCard
+        team={myTeam}
+        status={myPlayoffStatus}
+        seed={seedsFromFirstRound(playoffMatches).get(myTeam.id) ?? null}
+        teamName={teamName}
+      />
+    ) : null;
+  const regularSeasonTableLink = (
+    <Link href="/schedule#standings" className={textLink("text-sm")}>
+      Regular-season table <LinkArrow />
+    </Link>
   );
 
   return (
     <div className="space-y-6">
-      {/* During playoffs the bracket IS the story — it leads, and the
-          regular-season standings drop below as context. */}
       {season.status === "REGULAR_SEASON" ? (
         <TiebreakerNotice
           report={report}
@@ -2144,6 +2712,26 @@ async function SeasonView({
           hasTiebreakers={matches.some((m) => m.phase === "TIEBREAKER")}
         />
       ) : null}
+
+      {/* This week's games lead in every phase; in the playoffs that is the
+          round in progress, with its check-ins, and the bracket follows. */}
+      <Suspense fallback={slateIds.size > 0 ? <CardSkeleton rows={3} /> : null}>
+        <ThisWeek
+          season={season}
+          matches={matches}
+          teams={teams}
+          teamName={teamName}
+          teamLogoUrl={teamLogoUrl}
+          report={outlookShown ? report : null}
+          showCheckins={showCheckins}
+          myPicks={userId ? myPicks : null}
+          pickemPlayable={
+            season.isActive &&
+            postAuctionWorkOpen(season.status, snapshot.draftStatus)
+          }
+        />
+      </Suspense>
+
       {showBracket ? (
         // overflow-hidden on the CARD: Bracket's root is `overflow-x-auto` over
         // a `min-w-max` row, and Chrome propagates that inner width into the
@@ -2154,12 +2742,17 @@ async function SeasonView({
             headingLevel={2}
             title="Playoff bracket"
             action={
-              <Link
-                href="/schedule#playoff-bracket"
-                className={textLink("text-sm")}
-              >
-                Full bracket <LinkArrow />
-              </Link>
+              // The regular-season table decides nothing once the bracket is
+              // drawn, so Home links it on Schedule instead of printing it.
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {regularSeasonTableLink}
+                <Link
+                  href="/schedule#playoff-bracket"
+                  className={textLink("text-sm")}
+                >
+                  Full bracket <LinkArrow />
+                </Link>
+              </div>
             }
           />
           <CardBody className="p-0 pt-4">
@@ -2175,267 +2768,103 @@ async function SeasonView({
           <CardBody>
             <EmptyState
               title="Waiting for the bracket"
-              description="The league is in Playoffs, but the first-round fixtures have not been seeded yet. Final standings remain below while administrators prepare the bracket."
+              description="The league is in Playoffs, but the first-round fixtures haven't been drawn yet. The regular-season table decides the seeds."
               action={
-                <Link
-                  href="/schedule#playoff-bracket"
-                  className={buttonClasses("secondary", "sm")}
-                >
-                  Open playoff schedule <LinkArrow />
-                </Link>
+                <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
+                  {regularSeasonTableLink}
+                  <Link
+                    href="/schedule#playoff-bracket"
+                    className={textLink("text-sm")}
+                  >
+                    Playoff schedule <LinkArrow />
+                  </Link>
+                </div>
               }
             />
           </CardBody>
         </Card>
-      ) : null}
-
-      <Suspense fallback={slateIds.size > 0 ? <CardSkeleton rows={3} /> : null}>
-        <ThisWeek
-          season={season}
-          matches={matches}
-          teams={teams}
-          teamName={teamName}
-          teamLogoUrl={teamLogoUrl}
-          report={report}
-          showCheckins={showCheckins}
-          myPicks={userId ? myPicks : null}
-          pickemPlayable={
-            season.isActive &&
-            postAuctionWorkOpen(season.status, snapshot.draftStatus)
-          }
-        />
-      </Suspense>
-
-      {/* THE DASHBOARD BAND. Two grids, not one 2/3 + 1/3 split.
-          The old layout put the standings alone in a col-span-2 column and
-          stacked four cards in the 1/3 rail; CSS grid stretched the row to the
-          taller side, so the lower-left of the page was a measured 728×790px of
-          nothing. Splitting it means each band is sized by its own contents.
-          min-w-0 on every item: grid items otherwise refuse to shrink below
-          their content, letting a long team name widen the page on mobile. */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div
-          className={cn(
-            "min-w-0",
-            // No personal card to sit beside it? Then the table takes the
-            // whole band rather than leaving a third of it empty.
-            myTeam ? "lg:col-span-2" : "lg:col-span-3",
-          )}
-        >
-          <Card>
-            <CardHeader
-              headingLevel={2}
-              title="Standings"
-              action={
-                <Link
-                  href="/schedule#standings"
-                  className={textLink("text-sm")}
-                >
-                  Full standings <LinkArrow />
-                </Link>
-              }
-            />
-            <CardBody className="p-0">
-              <StandingsTable
-                standings={standings}
-                totalTeams={standings.length}
-                eligibleTeams={playoffField.eligibleTeamIds.length}
-                teamName={teamName}
-                teamLogoUrl={teamLogoUrl}
-                withdrawnIds={
-                  new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
-                }
-                formByTeam={teamForm}
-                playoffCut={
-                  season.status === "REGULAR_SEASON"
-                    ? playoffField.bracketSize
-                    : undefined
-                }
-                playoffSeedByTeam={playoffField.seedByTeam}
-                unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
-                  playoffField,
-                  matches,
-                )}
-                clinch={clinchFromReport(report)}
-            playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
-                viewerTeamId={myTeam?.id}
-                movement={standingsMovement(
-                  teams.map((t) => t.id),
-                  matches,
-                )}
-              />
-            </CardBody>
-          </Card>
-        </div>
-        {myTeam ? (
-          // order-first on phones: a rostered player's own team used to land
-          // ~2,500px down the mobile page, below the full standings table.
-          <div className="order-first min-w-0 lg:order-none">
-            <Card tone="feature">
+      ) : (
+        /* THE DASHBOARD BAND. The table and the viewer's stakes card, when
+           there is one; otherwise the table takes the whole band rather than
+           leaving a third of it empty. min-w-0 on every item: grid items
+           otherwise refuse to shrink below their content, letting a long
+           team name widen the page on mobile. */
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div
+            className={cn(
+              "min-w-0",
+              myStakeCard ? "lg:col-span-2" : "lg:col-span-3",
+            )}
+          >
+            <Card>
               <CardHeader
                 headingLevel={2}
-                title="Your team"
-                subtitle={myTeam.name}
-              />
-              <CardBody className="space-y-3">
-                {myRow && myRow.played > 0 ? (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-2">
-                      <Stat
-                        label="League rank"
-                        value={`#${myRank}`}
-                        hint={`of ${teams.length} teams`}
-                      />
-                      <Stat
-                        label="League points"
-                        value={String(myRow.points)}
-                      />
-                    </div>
-                    <div
-                      className="grid grid-cols-3 gap-2 text-center"
-                      aria-label={`${myRow.wins} wins, ${myRow.draws} draws, ${myRow.losses} losses`}
-                    >
-                      {[
-                        {
-                          label: "Wins",
-                          value: myRow.wins,
-                          tone: "text-success border-success/20 bg-success/5",
-                        },
-                        {
-                          label: "Draws",
-                          value: myRow.draws,
-                          tone: "text-accent border-accent/20 bg-accent/5",
-                        },
-                        {
-                          label: "Losses",
-                          value: myRow.losses,
-                          tone: "text-danger border-danger/20 bg-danger/5",
-                        },
-                      ].map((stat) => (
-                        <div
-                          key={stat.label}
-                          className={cn("rounded-lg border py-2", stat.tone)}
-                        >
-                          <div className="font-display text-2xl tabular-nums">
-                            {stat.value}
-                          </div>
-                          <div className="text-[10px] uppercase tracking-wider">
-                            {stat.label}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    {(teamForm.get(myTeam.id)?.length ?? 0) > 0 ? (
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                        <span>Recent form</span>
-                        <div title="Newest first · W = win, D = draw, L = loss">
-                          <FormStrip form={teamForm.get(myTeam.id)!} />
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {/* The stake line and the next fixture are ONE block, not two
-                    stacked boxes. They were always about the same match — the
-                    tile is aligned to the scenario engine's `nextMatchId` so
-                    "win the next series" and the fixture named underneath can
-                    never disagree — and the hero's check-in panel is already
-                    showing that fixture with its RSVP a screen above. Naming
-                    the OPPONENT rather than "us vs them" drops the third
-                    printing of the viewer's own team name on one card. */}
-                {myNextMatch ? (
+                title="Standings"
+                action={
                   <Link
-                    href={`/matches/${myNextMatch.id}`}
-                    className={cn(
-                      "block rounded-lg border p-3 text-sm transition-colors",
-                      myStakeLine
-                        ? "border-accent/30 bg-accent/5 hover:border-accent/50"
-                        : "border-line bg-surface-2/40 hover:border-muted/60",
-                    )}
+                    href="/schedule#standings"
+                    className={textLink("text-sm")}
                   >
-                    {myStakeLine ? (
-                      <div className="mb-2">
-                        <PlayoffOutlook scenario={myScenario!} teamNames={teamName} matchId={myNextMatch.id} compact />
-                      </div>
-                    ) : null}
-                    <div className="text-xs uppercase text-muted">
-                      {matchRoundLabel(myNextMatch, playoffRounds)} · next up
-                    </div>
-                    <div className="mt-1 font-medium">
-                      vs{" "}
-                      {teamName.get(
-                        myNextMatch.homeTeamId === myTeam.id
-                          ? myNextMatch.awayTeamId
-                          : myNextMatch.homeTeamId,
-                      ) ?? "?"}
-                    </div>
-                    {myNextMatch.scheduledAt ? (
-                      <div className="mt-1 text-xs text-muted">
-                        <LocalTime
-                          ts={myNextMatch.scheduledAt.getTime()}
-                          variant="full"
-                          initial={fmtWhen(myNextMatch.scheduledAt) ?? ""}
-                        />
-                      </div>
-                    ) : null}
+                    Full standings <LinkArrow />
                   </Link>
-                ) : myStakeLine ? (
-                  // Done playing, but the table can still decide something.
-                  <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
-                    <PlayoffOutlook scenario={myScenario!} teamNames={teamName} />
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted">No upcoming matches.</p>
-                )}
-                <Link
-                  href={`/teams/${myTeam.id}`}
-                  className={textLink("inline-block text-sm font-medium")}
-                >
-                  Team page <LinkArrow />
-                </Link>
+                }
+              />
+              <CardBody className="p-0">
+                <StandingsTable
+                  standings={standings}
+                  totalTeams={standings.length}
+                  eligibleTeams={playoffField.eligibleTeamIds.length}
+                  teamName={teamName}
+                  teamLogoUrl={teamLogoUrl}
+                  withdrawnIds={
+                    new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+                  }
+                  formByTeam={teamForm}
+                  playoffCut={playoffField.bracketSize}
+                  playoffSeedByTeam={playoffField.seedByTeam}
+                  unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
+                    playoffField,
+                    matches,
+                  )}
+                  clinch={clinchFromReport(report)}
+                  playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
+                  viewerTeamId={myTeam?.id}
+                  movement={standingsMovement(
+                    teams.map((t) => t.id),
+                    matches,
+                  )}
+                />
               </CardBody>
             </Card>
           </div>
-        ) : null}
-      </div>
-
-      {/* The map sets the desktop row height. Size containment keeps the
-          sidebar's lists from stretching the row; only the lists scroll. */}
-      <div className="grid grid-cols-1 items-stretch gap-6 xl:grid-cols-3">
-        <div
-          className={cn(
-            "min-w-0",
-            upcoming.length || recentResults.length
-              ? "xl:col-span-2"
-              : "xl:col-span-3",
-          )}
-        >
-          <LeagueResultsMap
-            className="h-full"
-            standings={standings}
-            matches={matches}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-          />
+          {myStakeCard ? (
+            // order-first on phones: the viewer's stakes sit above the table.
+            <div className="order-first min-w-0 lg:order-none">
+              {myStakeCard}
+            </div>
+          ) : null}
         </div>
-        <div className={cn(
-            "flex min-w-0 flex-col gap-4 xl:min-h-[26rem] xl:[contain:size]",
-            !upcoming.length && !recentResults.length && "hidden",
-          )}>
+      )}
+
+      {/* In the playoffs, where the viewer's team stands in the bracket;
+          then what comes after this slate and what just finished: short plain
+          lists with a link to the rest. auto-fit, because any card can be
+          missing (nothing left to play, nothing played yet), and items-start
+          so the shorter card doesn't stretch into an empty box. There is no
+          week-by-week results grid here: the table's form column and Recent
+          results already say it, and Schedule keeps the full grid. */}
+      {myPlayoffCard || upcoming.length > 0 || recentResults.length > 0 ? (
+        <div className="grid items-start gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
+          {myPlayoffCard}
           {upcoming.length > 0 ? (
-            <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden xl:flex-1">
+            <Card className="min-w-0 overflow-hidden">
               <CardHeader
-                className="shrink-0 px-4 py-3"
+                className="px-4 py-3"
                 headingLevel={2}
                 title="Coming up"
                 subtitle="After this week's slate"
               />
-              <CardBody
-                className="min-h-0 max-h-60 overflow-y-auto overscroll-y-contain p-0 focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent xl:max-h-none xl:flex-1"
-                tabIndex={0}
-                role="region"
-                aria-label="Upcoming matches; scroll for more"
-              >
+              <CardBody className="p-0">
                 <ul className="divide-y divide-line/60">
                   {upcoming.map((m) => (
                     <li key={m.id}>
@@ -2469,7 +2898,7 @@ async function SeasonView({
               <Link
                 href="/schedule#fixtures"
                 className={textLink(
-                  "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
+                  "my-0 block rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
                 Full schedule <LinkArrow />
@@ -2478,18 +2907,13 @@ async function SeasonView({
           ) : null}
 
           {recentResults.length > 0 ? (
-            <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden xl:flex-[1.4]">
+            <Card className="min-w-0 overflow-hidden">
               <CardHeader
-                className="shrink-0 px-4 py-3"
+                className="px-4 py-3"
                 headingLevel={2}
                 title="Recent results"
               />
-              <CardBody
-                className="min-h-0 max-h-80 overflow-y-auto overscroll-y-contain p-0 focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent xl:max-h-none xl:flex-1"
-                tabIndex={0}
-                role="region"
-                aria-label="Recent results; scroll for more"
-              >
+              <CardBody className="p-0">
                 <ul className="divide-y divide-line/60">
                   {recentResults.map((m) => (
                     <li key={m.id}>
@@ -2552,7 +2976,7 @@ async function SeasonView({
               <Link
                 href="/schedule#fixtures"
                 className={textLink(
-                  "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
+                  "my-0 block rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
                 All results <LinkArrow />
@@ -2560,13 +2984,15 @@ async function SeasonView({
             </Card>
           ) : null}
         </div>
-      </div>
+      ) : null}
 
-      <AnalysisDisclosure title="Player & hero highlights">
-        <Suspense fallback={null}>
-          <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
-        </Suspense>
-      </AnalysisDisclosure>
+      <Suspense fallback={null}>
+        <WeeklyHonorsLine
+          seasonId={season.id}
+          teams={teams}
+          teamName={teamName}
+        />
+      </Suspense>
       {sideGames}
     </div>
   );
@@ -2835,12 +3261,13 @@ async function ThisWeek({
 }
 
 /**
- * A taste of the league's stat life: the latest weekly honors and the
- * most-contested hero, teasing /leaders and /meta. A pending honors status can
- * still render before usable games exist so a final-but-broken box score is
- * never presented as merely an in-progress week.
+ * The latest weekly honors as one open line: "Week 4 honors · Player of the
+ * Week: X (best game 12/2/18 on Tiny) · Team of the Week: Y". Only official
+ * honors (the same readiness rows Discord and /leaders use); until a week has
+ * them it renders nothing, and /leaders explains a week still in progress or
+ * waiting on box scores.
  */
-async function LeaguePulse({
+async function WeeklyHonorsLine({
   seasonId,
   teams,
   teamName,
@@ -2849,211 +3276,119 @@ async function LeaguePulse({
   teams: SeasonSnapshot["teams"];
   teamName: Map<string, string>;
 }) {
-  // Shared, tag-busted scan (cached-queries.ts) rather than a private copy of
-  // the same query — an all-games roll-up repeated per request per viewer.
-  const [games, honorReadiness, viewer] = await Promise.all([
-    getSeasonGameLeaders(seasonId),
-    getSeasonHonorReadiness(seasonId),
-    getSessionUser(),
-  ]);
-  if (games.length === 0 && honorReadiness.length === 0) return null;
-  const viewerIsAdmin = viewer?.role === "ADMIN";
-
-  const parsed = games.map((g) => {
-    const decoded = decodeGamePlayers(g.players);
-    return { ...g, decoded, lines: trustedGamePlayers(decoded) };
-  });
-  const hasBoxScoreIssue = parsed.some(
-    (game) => game.decoded.malformed || !game.decoded.completeRoster,
+  const latest = (await getSeasonHonorReadiness(seasonId)).find(
+    (row) => row.state === HONOR_WEEK_STATE.READY && row.games.length > 0,
   );
-  const hasUnknownHero = parsed.some(
-    (game) =>
-      game.lines.length === 10 &&
-      game.lines.some((player) => !heroById(player.heroId)),
-  );
-  const hasDataIssue = hasBoxScoreIssue || hasUnknownHero;
+  if (!latest) return null;
   const teamOf = new Map(
     teams.flatMap((t) => t.members.map((m) => [m.userId, t.id] as const)),
   );
-
-  // Same readiness rows Discord uses: a final score alone cannot crown an
-  // award while its played games are missing or their 5v5 attribution is bad.
-  const latestReady = honorReadiness.find(
-    (row) => row.state === HONOR_WEEK_STATE.READY && row.games.length > 0,
-  );
-  const latestPending = honorReadiness.find(
-    (row) => row.state !== HONOR_WEEK_STATE.READY,
-  );
-  const newestHonorWeek = honorReadiness[0];
-  const latestNoPerformance = isNoPerformanceHonorWeek(newestHonorWeek)
-    ? newestHonorWeek
-    : null;
-  const latestWeek = latestReady?.week ?? 0;
-  const honors = latestReady
-    ? weeklyHonors(latestReady.games, teamOf)
-    : { player: null, team: null };
+  const honors = weeklyHonors(latest.games, teamOf);
   const potw = honors.player
     ? await prisma.user.findUnique({
         where: { id: honors.player.userId },
-        select: { id: true, name: true, avatar: true },
+        select: { id: true, name: true },
       })
     : null;
-
-  // The league's most-contested hero so far.
-  const meta = heroMeta(
-    parsed
-      // Keep the dashboard teaser inside the same trust boundary as /meta.
-      // A newly added hero is omitted until the bundled hero catalogue is
-      // updated instead of rendering a misleading partial hero pool.
-      .filter(
-        (game) =>
-          game.lines.length === 10 &&
-          game.lines.every((player) => heroById(player.heroId)),
-      )
-      .map((g) => ({
-        radiantWin: g.radiantWin,
-        lines: g.lines.map((p) => ({
-          userId: p.userId,
-          heroId: p.heroId,
-          isRadiant: p.isRadiant,
-          kills: p.kills,
-          deaths: p.deaths,
-          assists: p.assists,
-        })),
-      })),
-  );
-  const topPick = meta.rows[0];
-  const topHero = topPick ? heroById(topPick.heroId) : null;
-
-  // Avoid a header-only shell when there is neither publishable league data
-  // nor a state that needs explaining.
-  if (
-    !latestPending &&
-    !latestNoPerformance &&
-    !honors.player &&
-    !honors.team &&
-    !topPick &&
-    !hasDataIssue
-  ) {
-    return null;
-  }
+  if (!potw && !honors.team) return null;
+  const best = potw ? honorBestGame(latest.games, potw.id) : null;
+  const bestHero = best
+    ? (heroById(best.heroId)?.name ?? `Hero #${best.heroId}`)
+    : null;
 
   return (
-    <Card className="min-w-0">
-      <CardHeader
-        headingLevel={2}
-        title="League pulse"
-        action={
-          <Link href="/leaders" className={textLink("text-sm")}>
-            Leaders <LinkArrow />
+    <section
+      aria-labelledby="home-weekly-honors"
+      className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-2 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm"
+    >
+      <h2 id="home-weekly-honors" className="text-sm font-semibold">
+        Week {latest.week} honors
+      </h2>
+      {potw ? (
+        <p className="min-w-0 [overflow-wrap:anywhere]">
+          <span aria-hidden>⭐ </span>
+          <span className="text-muted">Player of the Week:</span>{" "}
+          <PlayerLink userId={potw.id} className="font-medium">
+            {potw.name}
+          </PlayerLink>
+          {best ? (
+            <span className="text-muted">
+              {" "}
+              (best game {best.kills}/{best.deaths}/{best.assists} on{" "}
+              {bestHero})
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+      {honors.team ? (
+        <p className="min-w-0 [overflow-wrap:anywhere]">
+          <span aria-hidden>🛡️ </span>
+          <span className="text-muted">Team of the Week:</span>{" "}
+          <Link
+            href={`/teams/${honors.team.teamId}`}
+            className={cn(TAP_SAFE, "font-medium hover:text-info")}
+          >
+            {teamName.get(honors.team.teamId) ?? "?"}
           </Link>
-        }
+        </p>
+      ) : null}
+      <Link href="/leaders#weekly-honors" className={textLink("text-sm")}>
+        All honors <LinkArrow />
+      </Link>
+    </section>
+  );
+}
+
+/**
+ * Home's "Your team" card in the playoffs: the seed and where the team stands
+ * in the bracket, in the words /teams and the team page use ("Semifinal vs
+ * X", "Out in the quarterfinal (lost 1–2 to Y)"), instead of regular-season
+ * rank and points, which decide nothing any more.
+ */
+function PlayoffTeamCard({
+  team,
+  status,
+  seed,
+  teamName,
+}: {
+  team: { id: string; name: string };
+  status: TeamPlayoffStatus;
+  seed: number | null;
+  teamName: Map<string, string>;
+}) {
+  const line = (
+    <>
+      {seed != null ? (
+        <p className="text-xs uppercase text-muted">Seed #{seed}</p>
+      ) : null}
+      <PlayoffStatusLine
+        status={status}
+        teamName={teamName}
+        className="mt-1 text-sm"
       />
-      <CardBody className="space-y-3 text-sm">
-        {hasDataIssue ? (
-          <div className="flex min-w-0 items-start gap-2 text-accent">
-            <span aria-hidden className="shrink-0">
-              ⚠
-            </span>
-            {/* The repair steps are admin work; players only need to know
-                some games are not counted yet. */}
-            {viewerIsAdmin ? (
-              <span>
-                Some imported games are omitted from League pulse. Incomplete or
-                invalid 5v5 box scores must be inspected, removed, and
-                re-imported; unknown hero IDs require a hero-catalogue update.{" "}
-                <Link href="/admin/data-quality" className={textLink()}>
-                  Open data quality <LinkArrow />
-                </Link>
-              </span>
-            ) : (
-              <span className="text-muted">
-                A few games are still being checked, so they are not counted
-                here yet.
-              </span>
-            )}
-          </div>
-        ) : null}
-        {latestPending ? (
-          <div className="flex min-w-0 items-start gap-2 text-muted">
-            <span aria-hidden className="shrink-0">
-              ⏳
-            </span>
-            <span>
-              {latestPending.state === HONOR_WEEK_STATE.IN_PROGRESS
-                ? `Week ${latestPending.week} is still in progress; honors publish after the full slate is final.`
-                : `Week ${latestPending.week} is final, but honors are waiting for complete, valid 5v5 box scores.`}
-            </span>
-          </div>
-        ) : null}
-        {latestNoPerformance ? (
-          <div className="flex min-w-0 items-start gap-2 text-muted">
-            <span aria-hidden className="shrink-0">
-              ◇
-            </span>
-            <span>
-              Week {latestNoPerformance.week} is final with no played games, so
-              no performance honors were awarded.
-            </span>
-          </div>
-        ) : null}
-        {potw && honors.player ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className="shrink-0">
-              ⭐
-            </span>
-            <span className="min-w-0 flex-1 leading-relaxed">
-              <PlayerLink userId={potw.id} className="font-medium">
-                {potw.name}
-              </PlayerLink>{" "}
-              <span className="text-muted">
-                · Week {latestWeek} Player of the Week · {honors.player.points}{" "}
-                impact points
-              </span>
-            </span>
-          </div>
-        ) : null}
-        {honors.team ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className="shrink-0">
-              🛡️
-            </span>
-            <span className="min-w-0 flex-1 leading-relaxed">
-              <Link
-                href={`/teams/${honors.team.teamId}`}
-                className="font-medium hover:text-info"
-              >
-                {teamName.get(honors.team.teamId) ?? "?"}
-              </Link>{" "}
-              <span className="text-muted">
-                · Week {latestWeek} team · {honors.team.gameWins} game win
-                {honors.team.gameWins === 1 ? "" : "s"}
-              </span>
-            </span>
-          </div>
-        ) : null}
-        {topPick ? (
-          <div className="flex min-w-0 items-center gap-2">
-            {/* Unknown hero ids are omitted above until the catalogue updates. */}
-            {topHero ? (
-              <HeroIcon hero={topHero} size={22} />
-            ) : (
-              <span
-                aria-hidden
-                className="h-[22px] w-[22px] shrink-0 rounded-md border border-line/70 bg-surface-2"
-              />
-            )}
-            <span className="min-w-0 flex-1 leading-relaxed">
-              <Link href="/meta" className="font-medium hover:text-info">
-                {topHero?.name ?? `Hero #${topPick.heroId}`}
-              </Link>{" "}
-              <span className="text-muted">
-                · most picked · {topPick.picks} pick
-                {topPick.picks === 1 ? "" : "s"}, {topPick.winRate}% wins
-              </span>
-            </span>
-          </div>
-        ) : null}
+    </>
+  );
+  return (
+    <Card tone="feature" className="min-w-0">
+      <CardHeader headingLevel={2} title="Your team" subtitle={team.name} />
+      <CardBody className="space-y-3">
+        {status.kind === "playing" ? (
+          // The series being played (or next) opens its match page.
+          <Link
+            href={`/matches/${status.matchId}`}
+            className="block rounded-lg border border-accent/30 bg-accent/5 p-3 transition-colors hover:border-accent/50"
+          >
+            {line}
+          </Link>
+        ) : (
+          <div>{line}</div>
+        )}
+        <Link
+          href={`/teams/${team.id}`}
+          className={textLink("inline-block text-sm font-medium")}
+        >
+          Team page <LinkArrow />
+        </Link>
       </CardBody>
     </Card>
   );
@@ -3082,7 +3417,7 @@ function SideGameLink({
         <span className="block text-sm font-medium group-hover:text-info">
           {title}
         </span>
-        <span className="block truncate text-xs text-muted">{hint}</span>
+        <span className="block text-xs text-muted">{hint}</span>
       </span>
     </Link>
   );
@@ -3268,18 +3603,15 @@ async function CompleteView({
               title={champion ? "The season lives on" : "Season record"}
             />
             <CardBody className="space-y-3 text-sm">
+              {/* No season-page button here: the hero's "Relive the season" is
+                  the page's one way there (it used to have a twin, "Season
+                  recap", going to the same place). */}
               <p className="text-muted">
                 {champion
-                  ? "Relive it — awards and superlatives, the stat boards, and the records this season may have etched into league history."
+                  ? "Its stat lines stay on the leaderboards, any record it set is in the record book, and every season is kept in the history."
                   : "Results remain available while administrators repair the championship state. No team is presented as champion until the grand final is authoritative."}
               </p>
               <div className="flex flex-wrap gap-2">
-                <Link
-                  href={`/seasons/${season.id}`}
-                  className={buttonClasses("accent")}
-                >
-                  <span aria-hidden="true">🏆</span> Season recap <LinkArrow />
-                </Link>
                 <Link href="/leaders" className={buttonClasses("secondary")}>
                   Leaderboards
                 </Link>
@@ -3294,12 +3626,6 @@ async function CompleteView({
           </Card>
         </div>
       </div>
-      <LeagueResultsMap
-        standings={standings}
-        matches={matches}
-        teamName={teamName}
-        teamLogoUrl={teamLogoUrl}
-      />
     </div>
   );
 }

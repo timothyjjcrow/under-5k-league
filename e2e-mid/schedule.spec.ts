@@ -132,9 +132,19 @@ test("player check-in and captain reschedule stay synchronized end to end", asyn
   await expect(
     page.locator('[role="img"][aria-label^="1 of 5 confirmed"]'),
   ).toHaveCount(1);
+  // The banner counts the player's own side, on phones too; the names
+  // behind that count are for captains, so a player sees none.
+  await expect(page.getByText(/^1 of 5 in\b/)).toBeVisible();
+  await expect(page.getByText("No reply", { exact: true })).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/schedule participant check-in");
 
   await login(page, "Schedule Home Captain", LOGISTICS.homeCaptain, matchHref!);
+  // The captain is spoken to as the captain, and the Matchup card names who
+  // hasn't answered yet.
+  await expect(page.getByText(/^You're captaining /)).toBeVisible();
+  await expect(
+    page.locator("#match-matchup").getByText("no reply", { exact: true }).first(),
+  ).toBeVisible();
   const proposed = await page.evaluate(() => {
     const d = new Date(Date.now() + 2 * 24 * 3600_000);
     const pad = (n: number) => String(n).padStart(2, "0");

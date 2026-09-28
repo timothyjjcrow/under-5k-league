@@ -7,23 +7,27 @@
 // sentence spends that whole time contradicting the "Ready to draft" badge
 // rendered directly beside it.
 
-import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { DRAFT_STATUS, HARD_MMR_CEILING, SEASON_STATUS } from "./constants";
+import { LEAGUE_CONFIG } from "./league-config";
 
 /**
  * What a `<Countdown passedLabel>` says about a draft night that has been and
  * gone while the season is still taking signups.
  *
- * ONE constant because THREE surfaces print that date — the hero chip, the
- * signup card, and the signed-up player's hero panel — and the third was added
- * in the same change that fixed the first two, with no chip at all. Anything
- * rendering `season.draftAt` owns saying it has passed; sharing the string is
- * how that stays true.
+ * ONE constant because several surfaces print that date (the dashboard
+ * hero's chip, its draft-night confirmation and captain line, /me, the draft
+ * room and a team page), and one was once added in the same change that fixed
+ * the others, with no chip at all. Anything rendering `season.draftAt` owns
+ * saying it has passed; sharing the string is how that stays true.
  */
 export const DRAFT_PASSED_LABEL = "start overdue";
 
 export type PhaseCopyInput = {
   /** Has the player count reached `minTeams x teamSize`? SIGNUPS only. */
   canDraft?: boolean;
+  /** The viewer already has an active signup. SIGNUPS only: they aren't
+   *  asked to sign up again. */
+  signedUp?: boolean;
   /** The auction's state inside the broader DRAFT season phase. */
   draftStatus?: string | null;
   /** COMPLETE only: whether the authoritative grand final crowned a team. */
@@ -173,8 +177,10 @@ export const ADMIN_PHASE_LABEL: Record<string, string> = {
 export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
   switch (status) {
     case SEASON_STATUS.SIGNUPS:
-      return i.canDraft
-        ? "Enough players have joined to draft — and signups stay open until draft night, so every few more is another team."
+      if (i.canDraft)
+        return "Enough players have joined to draft — and signups stay open until draft night, so every few more is another team.";
+      return i.signedUp
+        ? "The draft begins once enough players have joined."
         : "Sign up now — the draft begins once enough players have joined.";
     case SEASON_STATUS.DRAFT:
       switch (i.draftStatus) {
@@ -208,4 +214,28 @@ export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
  */
 export function matchNightText(raw: string | null | undefined): string | null {
   return raw?.trim().replace(/[.\s]+$/, "") || null;
+}
+
+/**
+ * What the league is, in one sentence, for a visitor who has never heard of
+ * it. Home's hero otherwise went straight from a season name and team-count
+ * maths to "Sign in with Steam to join"; the only description lived in link
+ * previews. Deliberately says nothing about cost or dates, which vary.
+ */
+export function leaguePitch(name: string = LEAGUE_CONFIG.name): string {
+  return `${name} is an amateur Dota 2 league: captains draft players in a live auction, then teams play weekly matches and playoffs.`;
+}
+
+/**
+ * Who can join and when games are, beside the pitch. The MMR figure is the
+ * one hard limit the signup form enforces (HARD_MMR_CEILING), not a season's
+ * soft review threshold, which never turns anyone away. The match night is
+ * the announced one (announcedMatchNight), never a hardcoded time, so each
+ * region prints its own; null says it is still to be announced.
+ */
+export function leagueEligibilityLine(matchNight: string | null): string {
+  const mmr = `Open to players up to ${HARD_MMR_CEILING.toLocaleString("en-US")} MMR`;
+  return matchNight
+    ? `${mmr} · Match night: ${matchNight}`
+    : `${mmr} · Match night to be announced`;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  latestLeagueLine,
   profileSeasonNote,
   profileSeasonRecord,
   profileSeasonRows,
@@ -228,5 +229,84 @@ describe("profileSeasonRows", () => {
       appearances: [app({ games: 1, seriesWins: 2, seriesLosses: 1, seriesDraws: 1 })],
     });
     expect(profileSeasonRecord(row)).toBe("2W 1D 1L series · 1 game");
+  });
+});
+
+describe("latestLeagueLine", () => {
+  it("names the newest season and its team", () => {
+    expect(
+      latestLeagueLine(
+        rows({
+          tenures: [
+            tenure(),
+            tenure({
+              seasonId: "s2",
+              teamId: "b",
+              teamName: "Bravo",
+              joinedAt: new Date("2026-05-10"),
+            }),
+          ],
+        }),
+      ),
+    ).toBe("Season 2 · Bravo");
+  });
+
+  it("leads with the title when that season was won", () => {
+    expect(
+      latestLeagueLine(
+        rows({
+          tenures: [tenure({ captain: true })],
+          champions: new Map([["s1", "a"]]),
+        }),
+      ),
+    ).toBe("Season 1 champion · Alpha");
+  });
+
+  it("prefers a title in the newest season over the roster team", () => {
+    // Rostered on Alpha, covered for the champion Bravo in the same season.
+    expect(
+      latestLeagueLine(
+        rows({
+          tenures: [tenure()],
+          covers: [{ seasonId: "s1", teamId: "b", matchId: "m1" }],
+          champions: new Map([["s1", "b"]]),
+        }),
+      ),
+    ).toBe("Season 1 champion · Bravo");
+  });
+
+  it("does not reach back past the newest season for an older title", () => {
+    expect(
+      latestLeagueLine(
+        rows({
+          tenures: [
+            tenure(),
+            tenure({
+              seasonId: "s2",
+              teamId: "b",
+              teamName: "Bravo",
+              joinedAt: new Date("2026-05-10"),
+            }),
+          ],
+          champions: new Map([["s1", "a"]]),
+        }),
+      ),
+    ).toBe("Season 2 · Bravo");
+  });
+
+  it("says a standin-only season was cover, games played or not", () => {
+    const covers = [{ seasonId: "s2", teamId: "c", matchId: "m1" }];
+    expect(latestLeagueLine(rows({ covers }))).toBe(
+      "Season 2 · Stood in for Charlie",
+    );
+    expect(
+      latestLeagueLine(
+        rows({ covers, appearances: [app({ seasonId: "s2", teamId: "c" })] }),
+      ),
+    ).toBe("Season 2 · Stood in for Charlie");
+  });
+
+  it("is null with no league season", () => {
+    expect(latestLeagueLine([])).toBeNull();
   });
 });

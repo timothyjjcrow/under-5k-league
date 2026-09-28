@@ -134,6 +134,26 @@ test("mid-playoffs renders the real bracket and supports tracing a run", async (
   await expect(
     primaryNav.getByRole("link", { name: "Playoffs", exact: true }),
   ).toHaveCount(0);
+  // The round in progress leads and the bracket follows it. The finished
+  // regular-season table is one link to Schedule, not printed on Home.
+  const round = page.getByRole("heading", {
+    name: "The round in progress",
+    level: 2,
+  });
+  const bracketTitle = page.getByRole("heading", {
+    name: "Playoff bracket",
+    level: 2,
+  });
+  await expect(round).toBeVisible();
+  expect((await round.boundingBox())!.y).toBeLessThan(
+    (await bracketTitle.boundingBox())!.y,
+  );
+  await expect(
+    page.getByRole("table", { name: "League standings", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator("#main").getByRole("link", { name: "Regular-season table" }),
+  ).toHaveAttribute("href", "/schedule#standings");
   const bracket = page.getByRole("region", { name: "Playoff bracket" });
   await expect(bracket).toBeVisible();
   await expect(
@@ -381,6 +401,18 @@ test("complete-season public pages agree on the champion and recap", async ({
   await expect(
     page.getByRole("img", { name: "Champion crowned" }),
   ).toBeVisible();
+  // One champion block (the card; the hero names no team) and one way to
+  // the season's page, from the hero.
+  const main = page.locator("#main");
+  const hero = main
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { level: 1 }) });
+  await expect(hero).toContainText("That's a wrap");
+  await expect(hero).not.toContainText(champion);
+  await expect(
+    main.getByRole("link", { name: "Relive the season", exact: true }),
+  ).toHaveAttribute("href", /^\/seasons\/[^/?#]+$/);
+  await expect(main.getByRole("link", { name: /Season recap/ })).toHaveCount(0);
 
   await page.goto("/schedule");
   await expect(
@@ -570,6 +602,14 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.getByRole("link", { name: "Review Season 9 (fixture)" }),
   ).toBeVisible();
+  // The title stays on the front page until another season crowns someone.
+  const defending = page
+    .locator("#main")
+    .getByRole("link", { name: /\(Season 9 \(fixture\)\)$/ });
+  await expect(
+    page.getByText("Defending champions:", { exact: true }),
+  ).toBeVisible();
+  await expect(defending).toHaveAttribute("href", /^\/seasons\//);
   await expectNoHorizontalOverflow(page, "/ offseason home");
 
   await page.goto("/how-it-works");
@@ -660,6 +700,7 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.locator("#main").getByText("Signups open", { exact: true }),
   ).toBeVisible();
+  await expect(defending).toBeVisible();
   await expectNoHorizontalOverflow(page, "/ next-season signups");
   assertNoErrors();
 });

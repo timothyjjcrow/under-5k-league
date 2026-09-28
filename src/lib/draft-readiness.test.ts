@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 import {
   DRAFT_READINESS,
   draftReadiness,
   draftReadinessCounts,
+  owedDraftConfirmation,
   parseSeenDraftSchedule,
   seenScheduleIsCurrent,
 } from "./draft-readiness";
@@ -89,5 +91,105 @@ describe("the draft schedule a form showed", () => {
     expect(seenScheduleIsCurrent(seen, { draftRevision: 2, draftAt: null })).toBe(
       false,
     );
+  });
+});
+
+describe("owedDraftConfirmation", () => {
+  const draftAt = new Date("2026-08-15T18:00:00Z");
+  const confirmedAt = new Date("2026-08-03T20:00:00Z");
+  const unconfirmed = {
+    status: "ACTIVE",
+    type: "PLAYER",
+    draftConfirmedRevision: null,
+    draftConfirmedAt: null,
+  };
+  const base = {
+    seasonStatus: SEASON_STATUS.SIGNUPS,
+    draftStatus: null,
+    draftAt,
+    draftRevision: 3,
+    registration: unconfirmed,
+  };
+
+  it("asks a full player who has never confirmed", () => {
+    expect(owedDraftConfirmation(base)).toBe(DRAFT_READINESS.AWAITING);
+  });
+
+  it("asks again once the time has moved since the confirmation", () => {
+    expect(
+      owedDraftConfirmation({
+        ...base,
+        registration: {
+          ...unconfirmed,
+          draftConfirmedRevision: 2,
+          draftConfirmedAt: confirmedAt,
+        },
+      }),
+    ).toBe(DRAFT_READINESS.STALE);
+  });
+
+  it("asks nothing of a player already confirmed for this time", () => {
+    expect(
+      owedDraftConfirmation({
+        ...base,
+        registration: {
+          ...unconfirmed,
+          draftConfirmedRevision: 3,
+          draftConfirmedAt: confirmedAt,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("asks nothing before a draft time is set", () => {
+    expect(owedDraftConfirmation({ ...base, draftAt: null })).toBeNull();
+  });
+
+  it("asks only an active full player", () => {
+    expect(owedDraftConfirmation({ ...base, registration: null })).toBeNull();
+    expect(
+      owedDraftConfirmation({
+        ...base,
+        registration: { ...unconfirmed, type: "STANDIN" },
+      }),
+    ).toBeNull();
+    for (const status of ["WITHDRAWN", "REMOVED"]) {
+      expect(
+        owedDraftConfirmation({
+          ...base,
+          registration: { ...unconfirmed, status },
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("follows the window confirmDraftReadiness accepts", () => {
+    // The Draft chapter before Start is still setup.
+    expect(
+      owedDraftConfirmation({
+        ...base,
+        seasonStatus: SEASON_STATUS.DRAFT,
+        draftStatus: DRAFT_STATUS.NOT_STARTED,
+      }),
+    ).toBe(DRAFT_READINESS.AWAITING);
+    for (const draftStatus of [
+      DRAFT_STATUS.IN_PROGRESS,
+      DRAFT_STATUS.PAUSED,
+      DRAFT_STATUS.COMPLETE,
+    ]) {
+      expect(
+        owedDraftConfirmation({
+          ...base,
+          seasonStatus: SEASON_STATUS.DRAFT,
+          draftStatus,
+        }),
+      ).toBeNull();
+    }
+    expect(
+      owedDraftConfirmation({
+        ...base,
+        seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      }),
+    ).toBeNull();
   });
 });

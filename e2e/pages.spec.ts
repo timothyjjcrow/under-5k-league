@@ -128,13 +128,18 @@ test("season history lists every season with the current one badged", async ({
   await expect(page.getByText("Current", { exact: true })).toBeVisible();
 });
 
-test("home renders the season timeline, pool composition, and footer", async ({
+test("home renders the season timeline, who's in, and footer", async ({
   page,
 }) => {
   await page.goto("/");
+  // The signup list carries the captains and the roles in short supply; the
+  // old Pool composition card of role and MMR bars is gone.
   await expect(
-    page.getByRole("heading", { name: "Pool composition", level: 2 }),
+    page.getByRole("heading", { name: "Who's in", level: 2 }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Pool composition" }),
+  ).toHaveCount(0);
   // The old hero tagline went away when the footer was slimmed down — anchor
   // the footer assertion on its stable Discord CTA instead.
   const discord = page.getByRole("contentinfo").getByText("Join our Discord");

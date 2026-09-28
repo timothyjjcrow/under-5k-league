@@ -36,17 +36,18 @@ describe("dashboard draft-night countdowns", () => {
   it("finds the countdowns it is supposed to be guarding", () => {
     // If the element is ever renamed or the props move to a wrapper, this test
     // would pass by finding nothing at all — which is how a guard rots into
-    // decoration. Five draft-night countdowns exist today (two on the
-    // dashboard, one on /me, one in the draft waiting room, one on a team
-    // page before its fixtures exist); lower this only when one is
-    // deliberately removed.
+    // decoration. Six draft-night countdowns exist today (on the dashboard:
+    // the hero's draft chip, the hero panel's draft-night confirmation and
+    // the captain line in the Draft phase; one on /me, one in the draft
+    // waiting room, one on a team page before its fixtures exist); lower
+    // this only when one is deliberately removed.
     expect(countdowns.length).toBeGreaterThan(0);
     expect(
       draftNight.length,
       `found ${draftNight.length} draft-night <Countdown>s in ${[
         ...new Set(draftNight.map((c) => c.file)),
       ].join(", ")}`,
-    ).toBeGreaterThanOrEqual(4);
+    ).toBeGreaterThanOrEqual(6);
   });
 
   it("carries passedLabel wherever it counts down to a draft night", () => {

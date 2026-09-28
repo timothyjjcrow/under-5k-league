@@ -69,7 +69,6 @@ const STATE_MARKERS: {
   { file: "src/components/schedule-weeks.tsx", what: "live/final status", pattern: /\{status\}\n/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "forfeit marker", pattern: /Ruled result/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "bye chip", pattern: />\s*Bye\s*</g, min: 1 },
-  { file: "src/components/league-results-map.tsx", what: "result letters", pattern: /\? "Live"/g, min: 1 },
   { file: "src/components/season-grid.tsx", what: "season grid result letters", pattern: /cell\.live\s+\? "Live"/g, min: 1 },
   { file: "src/components/tiebreaker-bracket.tsx", what: "tiebreaker game status", pattern: /statusLabels\[game\.status\]/g, min: 1 },
   { file: "src/app/matches/[id]/page.tsx", what: "report-card grades", pattern: /Report \{overall\}\s*<|\{r\.grade\}\s*<\/b>/g, min: 2 },

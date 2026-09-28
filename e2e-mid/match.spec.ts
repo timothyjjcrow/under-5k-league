@@ -117,6 +117,10 @@ test("captains can report an open series and get a clear correction handoff once
     .getByRole("link", { name: "details →" })
     .getAttribute("href");
   expect(openHref).toMatch(/^\/matches\//);
+  // The banner also says how the captain's own side stands.
+  await expect(
+    checkInBanner.getByText("Your side:", { exact: true }),
+  ).toBeVisible();
 
   await page.goto(openHref!);
   const captainJump = page.getByRole("link", { name: "Set up & report ↓" });

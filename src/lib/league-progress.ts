@@ -21,6 +21,17 @@ export function leagueProgress(matches: SlateMatch[], nowMs: number) {
   const focusWeeks = open
     .filter((match) => isRelevantOpenMatch(match, nowMs))
     .map((match) => match.week);
+  const totalWeeks = Math.max(0, ...regular.map((match) => match.week));
+  // Each week's own share of final results, so the week bars fill as the
+  // season is played instead of only marking where it is.
+  const weeks = Array.from({ length: totalWeeks }, (_, index) => {
+    const inWeek = regular.filter((match) => match.week === index + 1);
+    return {
+      week: index + 1,
+      total: inWeek.length,
+      completed: inWeek.filter((match) => match.status === "COMPLETED").length,
+    };
+  });
   return {
     total: regular.length,
     completed,
@@ -28,7 +39,8 @@ export function leagueProgress(matches: SlateMatch[], nowMs: number) {
     awaiting,
     untimed,
     scheduled,
-    totalWeeks: Math.max(0, ...regular.map((match) => match.week)),
+    totalWeeks,
+    weeks,
     focusWeek: focusWeeks.length ? Math.min(...focusWeeks) : null,
     tiebreakerTotal: tiebreakers.length,
     tiebreakerCompleted: tiebreakers.length - tiebreakerOpen.length,

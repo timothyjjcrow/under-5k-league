@@ -572,37 +572,6 @@ export function TeamCrest({
   );
 }
 
-// ---------- Progress ----------
-
-export function Progress({
-  value,
-  max,
-  label,
-  className,
-}: {
-  value: number;
-  max: number;
-  label: string;
-  className?: string;
-}) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={Math.max(0, max)}
-      aria-valuenow={Math.max(0, Math.min(value, max))}
-      className={cn("h-2.5 w-full rounded-full bg-surface-2", className)}
-    >
-      <div
-        className="bar-fill h-full rounded-full bg-brand transition-all"
-        style={{ width: `${pct}%` }}
-      />
-    </div>
-  );
-}
-
 // ---------- Skeleton ----------
 
 /** A shimmering placeholder block for loading states. */
@@ -966,8 +935,8 @@ export function SectionTitle({
 }: {
   children: React.ReactNode;
   /**
-   * A short note beside the title. On a phone it wraps to its own line, so
-   * don't open it with a separator ("· newest first" left an orphaned dot).
+   * A short note beside the title. Don't open it with a separator: the title
+   * draws its own "·" between the two, and only while they share a line.
    */
   aside?: React.ReactNode;
   className?: string;
@@ -976,13 +945,26 @@ export function SectionTitle({
     <h2
       className={cn(
         "flex flex-wrap items-center gap-x-2.5 gap-y-1 text-lg font-semibold leading-snug",
+        // Clips the separator when the note wraps (below); horizontal only,
+        // so nothing above or below the title is cut off.
+        aside ? "overflow-x-clip" : null,
         className,
       )}
     >
       <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-accent" />
       <span>{children}</span>
       {aside ? (
-        <span className="font-sans text-sm font-normal text-muted">
+        <span className="relative font-sans text-sm font-normal text-muted">
+          {/* The separator sits in the gap before the note. When the note
+              wraps to its own line (a phone), the gap is past the heading's
+              left edge and the dot is clipped, so no line opens with a stray
+              "·". It is decoration, left out of the heading's name. */}
+          <span
+            aria-hidden
+            className="absolute right-full top-0 w-2.5 text-center"
+          >
+            ·
+          </span>
           {aside}
         </span>
       ) : null}
@@ -1270,33 +1252,5 @@ export function ShieldCheckIcon({
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       <path d="m9 12 2 2 4-4" />
     </svg>
-  );
-}
-
-/**
- * Reassurance for players wary of "Sign in with Steam". This copy is also the
- * collection notice: login creates the durable Steam identity and immediately
- * performs the documented public OpenDota enrichment.
- */
-export function SteamSafetyNote({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border border-line bg-surface-2/40 p-4 text-left",
-        className,
-      )}
-    >
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <ShieldCheckIcon size={18} className="text-success" />
-        Why Steam sign-in?
-      </div>
-      <p className="mt-2 text-xs leading-relaxed text-muted">
-        Steam verifies your <b className="font-medium text-fg">SteamID64</b>.
-        This creates or updates your league profile with your public name,
-        avatar, and profile link; we derive your Dota account and use OpenDota
-        for your medal and public match activity. You sign in on Steam&apos;s
-        own site, so we never receive your Steam password or email.
-      </p>
-    </div>
   );
 }

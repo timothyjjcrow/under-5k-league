@@ -18,7 +18,7 @@ import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { getRosterHistory } from "@/lib/player-roster-history";
 import { appearanceCareers } from "@/lib/appearance-careers";
 import { playerProfileMetadata, shareMetadata } from "@/lib/share-metadata";
-import { profileSeasonRows } from "@/lib/profile-seasons";
+import { latestLeagueLine, profileSeasonRows } from "@/lib/profile-seasons";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
@@ -519,12 +519,19 @@ export default async function PlayerProfilePage({
   const isStandin = activeReg?.type === "STANDIN";
   const isCaptain = !!membership?.isCaptain;
   // Season context only: the badges already say Captain / Standin and the
-  // team box names the team, so the subtitle doesn't repeat either.
-  const subtitle = season
-    ? activeReg && !team && !isStandin
-      ? `Registered · ${season.name}`
-      : season.name
-    : null;
+  // team box names the team, so the subtitle doesn't repeat either. Someone
+  // not in the current season (or with no season running) gets their latest
+  // league line instead of a season they haven't joined, so last season's
+  // champion still reads as one after the handoff.
+  const inCurrentSeason = !!activeReg || !!team;
+  const pastLine = inCurrentSeason ? null : latestLeagueLine(seasonRows);
+  const subtitle =
+    pastLine ??
+    (season
+      ? activeReg && !team && !isStandin
+        ? `Registered · ${season.name}`
+        : season.name
+      : null);
   // A signature hero for the banner backdrop: most-played if we have games,
   // otherwise the player's first listed favorite.
   const signatureHero =
@@ -640,6 +647,7 @@ export default async function PlayerProfilePage({
         isStandin={isStandin}
         wantsCaptainNow={wantsCaptainNow}
         subtitle={subtitle}
+        subtitleIsPastSeason={!!pastLine}
         signup={activeReg}
         pubScout={pubScout}
         pubLast={pubLast}
