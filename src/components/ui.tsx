@@ -935,8 +935,8 @@ export function SectionTitle({
 }: {
   children: React.ReactNode;
   /**
-   * A short note beside the title. On a phone it wraps to its own line, so
-   * don't open it with a separator ("· newest first" left an orphaned dot).
+   * A short note beside the title. Don't open it with a separator: the title
+   * draws its own "·" between the two, and only while they share a line.
    */
   aside?: React.ReactNode;
   className?: string;
@@ -945,13 +945,26 @@ export function SectionTitle({
     <h2
       className={cn(
         "flex flex-wrap items-center gap-x-2.5 gap-y-1 text-lg font-semibold leading-snug",
+        // Clips the separator when the note wraps (below); horizontal only,
+        // so nothing above or below the title is cut off.
+        aside ? "overflow-x-clip" : null,
         className,
       )}
     >
       <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-accent" />
       <span>{children}</span>
       {aside ? (
-        <span className="font-sans text-sm font-normal text-muted">
+        <span className="relative font-sans text-sm font-normal text-muted">
+          {/* The separator sits in the gap before the note. When the note
+              wraps to its own line (a phone), the gap is past the heading's
+              left edge and the dot is clipped, so no line opens with a stray
+              "·". It is decoration, left out of the heading's name. */}
+          <span
+            aria-hidden
+            className="absolute right-full top-0 w-2.5 text-center"
+          >
+            ·
+          </span>
           {aside}
         </span>
       ) : null}

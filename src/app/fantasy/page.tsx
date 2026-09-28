@@ -453,12 +453,12 @@ export default async function FantasyPage({
           <SectionTitle
             aside={
               readOnly
-                ? "· archived — these were the final fives"
+                ? "Archived — these were the final fives"
                 : season.status === "COMPLETE"
-                  ? "· season complete — these are the final fives"
+                  ? "Season complete — these are the final fives"
                   : locked
-                    ? "· locked for the season — scores update as games are imported"
-                    : "· picks lock when the first game is imported"
+                    ? "Locked for the season — scores update as games are imported"
+                    : "Picks lock when the first game is imported"
             }
           >
             {myRoster ? "Your fantasy five" : "Pick your fantasy five"}
