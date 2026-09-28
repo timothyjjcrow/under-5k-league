@@ -65,6 +65,16 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Add game", rendered: "Add game" },
   { quoted: "Match ID or URL", rendered: "Match ID or URL" },
   { quoted: "Season handoff", rendered: "Season handoff" },
+  // /seasons sends an admin who wants to reactivate an old season to these
+  // two folded options under Season handoff.
+  {
+    quoted: "Archive without opening the next season",
+    rendered: "Archive without opening the next season",
+  },
+  {
+    quoted: "Need to cancel this unfinished season?",
+    rendered: "Need to cancel this unfinished season?",
+  },
   { quoted: "Remove webhook", rendered: "Remove webhook" },
   { quoted: "Use the league channel instead", rendered: "Use the league channel instead" },
   {
