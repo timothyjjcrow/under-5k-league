@@ -842,7 +842,7 @@ export function DraftRoom({
     return (
       <div
         role="alert"
-        className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
+        className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-8 text-center"
       >
         <div className="text-lg font-semibold">
           This draft room is out of date
@@ -884,7 +884,7 @@ export function DraftRoom({
         <div
           role="status"
           aria-live="polite"
-          className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
+          className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-8 text-center"
         >
           <div className="text-lg font-semibold">
             The draft room hasn&apos;t loaded
@@ -1061,7 +1061,7 @@ export function DraftRoom({
         <div className="space-y-6">
           {roomAlerts}
           {viewerTeamBanner}
-          <div className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-6 text-center">
+          <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-6 text-center">
             <div className="text-lg font-semibold">
               The auction is not available
             </div>

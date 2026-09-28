@@ -28,7 +28,7 @@ export async function DatabaseHealth() {
         <div><dt className="text-muted">Public data refreshes / shared waits</dt><dd>{number(sample.refreshes)} / {number(sample.sharedRefreshes)}</dd></div>
       </dl>
       {sample.oversizedSnapshots > 0 ? (
-        <p className="mt-3 text-warning">A public data snapshot exceeded the cache size budget. All results are still included; check the hosting performance summary before expanding the history.</p>
+        <p className="mt-3 text-accent">A public data snapshot exceeded the cache size budget. All results are still included; check the hosting performance summary before expanding the history.</p>
       ) : null}
     </div>
   );

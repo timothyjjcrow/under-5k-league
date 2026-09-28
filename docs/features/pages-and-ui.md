@@ -51,6 +51,12 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Tokens:** `--color-surface-3` is an OPAQUE elevation step (translucent
   lets scrolled rows show through a table header); `--color-line-soft` is a
   rule inside a dense list (`--color-line` boxes every row).
+- **Use only colour tokens `globals.css` defines.** Tailwind v4 emits nothing
+  for an undefined one, so `text-warning` rendered plain text with no error.
+  Warnings and attention use `accent` (amber: the passed-date chip, the tied
+  chip, "No reply", the rooms' delayed status line).
+  `src/components/color-token-guards.test.ts` fails on a token-shaped colour
+  class (`warning`, `surface-1`, `info-strong`) that `globals.css` lacks.
 - **`CardHeader` wraps instead of crushing:** `flex-wrap` + `basis-48` on the
   title keeps a link action inline and drops a whole form to its own line.
   Title and subtitle clamp (`min-w-0`, `[overflow-wrap:anywhere]`), so free

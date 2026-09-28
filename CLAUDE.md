@@ -172,7 +172,6 @@ invisible to it, so cover those with a hand-written, sabotage-verified test.
 - **Write claims the parser can read.** Keep a claim's `data` a flat object
   literal (hoist conditionals into a variable) and spell WHERE predicates in
   full (`hostScore: scrim.hostScore`, never shorthand), or CI can't see them.
-- **Read claim counts from `test/mutation-baseline.json`, never from prose.**
 
 **Local Postgres:** `npm run pg:up`, then `npm run test:pg` with `PG_TEST_URL`
 on the local `ld2l_pgtest` database only (never a shared or production URL),
@@ -260,8 +259,9 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 - **Give visual-only indicators an accessible name** (`role="img"` +
   `aria-label`, glyphs `aria-hidden`). Toggles use `aria-pressed`, unlabeled
   selects `aria-label`, countdowns `role="timer"`.
-- **Use one `<h1>` per page, and give one control one accessible name** (two
-  controls sharing a name are a UI wart and a strict-mode e2e flake).
+- **Use one `<h1>` per page and one accessible name per control.**
+- **Use only colour tokens `globals.css` defines;** Tailwind emits nothing for
+  others. Warnings are `accent`; red text on a red tint is `text-danger-soft`.
 
 ### Components and copy
 

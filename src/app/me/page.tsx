@@ -1376,7 +1376,7 @@ function SteamDotaCard({
         ) : null}
 
         {override != null ? (
-          <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
+          <div className="space-y-2 rounded-lg border border-accent/30 bg-accent/10 p-3 text-sm">
             <p>
               Your Dota account ({override}) is a manual link from an older
               version of the league site and is not ownership-verified. You
