@@ -37,6 +37,7 @@ import {
   SectionTitle,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { Match } from "@prisma/client";
@@ -285,7 +286,10 @@ export default async function SeasonArchivePage({
         }
       />
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <Link href="/seasons" className="text-muted hover:text-info">
+        <Link
+          href="/seasons"
+          className={textLink("text-muted hover:text-info")}
+        >
           ← All seasons
         </Link>
         <div className="flex flex-wrap gap-2">
@@ -560,9 +564,12 @@ export default async function SeasonArchivePage({
                           src={m.user.avatar}
                           size={24}
                         />
+                        {/* my-0 keeps the whole 44px target in the row's
+                            height; with TAP_SAFE's -my-1 each hit box hung
+                            over the next row's. */}
                         <PlayerLink
                           userId={m.userId}
-                          className="inline-flex min-h-11 min-w-0 items-center [overflow-wrap:anywhere]"
+                          className="my-0 inline-flex min-h-11 min-w-0 items-center [overflow-wrap:anywhere]"
                         >
                           {m.user.name}
                         </PlayerLink>
