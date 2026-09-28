@@ -4,7 +4,7 @@ import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
 import { cn, initials, teamInitials } from "@/lib/utils";
 import { teamHueVar } from "@/lib/team-hues";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
-import { type Hero, heroById, heroIcon, parseHeroList } from "@/lib/heroes";
+import { heroById, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
 import { splitLinks } from "@/lib/linkify";
@@ -12,6 +12,7 @@ import { splitLeadingEmoji } from "@/lib/leading-emoji";
 import { CountUp } from "./count-up";
 import { NewsMedia } from "./news-media";
 import { TeamLogoImage } from "./team-logo-image";
+import { HeroIcon } from "./hero-icon";
 
 // ---------- Button ----------
 
@@ -991,38 +992,9 @@ export function SectionTitle({
 
 // ---------- Hero icons ----------
 
-export function HeroIcon({
-  hero,
-  size = 26,
-  className,
-  title,
-}: {
-  hero: Hero;
-  size?: number;
-  className?: string;
-  /** Hover text override. Needed because the browser shows the INNERMOST
-   *  title under the cursor, and this img fills any wrapper — a title on a
-   *  wrapping span is unreachable. Defaults to the hero name, so the
-   *  existing call sites render byte-identically. */
-  title?: string;
-}) {
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={heroIcon(hero)}
-      alt={hero.name}
-      title={title ?? hero.name}
-      width={size}
-      height={size}
-      loading="lazy"
-      style={{ width: size, height: size }}
-      className={cn(
-        "shrink-0 rounded-md border border-line/70 bg-surface-2 object-cover",
-        className,
-      )}
-    />
-  );
-}
+// The portrait itself lives in hero-icon.tsx: falling back to initials when
+// the CDN fails needs client state.
+export { HeroIcon };
 
 /**
  * A grid of a player's or team's most-played heroes, each with a win-rate
