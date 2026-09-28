@@ -600,7 +600,7 @@ function OpenDotaGuide({ matchDataPrivate }: { matchDataPrivate: boolean }) {
           <p className="text-muted">
             Step 1 fixes it. Once it&apos;s on, refresh your medal on{" "}
             <Link href="/me#profile-dota" className={textLink()}>
-              your profile
+              My account
             </Link>{" "}
             so this note clears.
           </p>

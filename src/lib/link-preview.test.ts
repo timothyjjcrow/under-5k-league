@@ -104,7 +104,7 @@ describe("homePreview", () => {
     expect(homePreview(season({ status: "REGULAR_SEASON" }), NOW)).toEqual({
       title: "Season 7 · Regular season",
       description:
-        "Standings, fixtures and results. Match night: Sundays at 6:00 PM Pacific.",
+        "Standings, fixtures and results. Match night: Sundays at 6:00 PM Pacific time.",
     });
     expect(
       homePreview(
