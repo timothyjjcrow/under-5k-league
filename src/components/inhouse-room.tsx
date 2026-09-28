@@ -2558,9 +2558,9 @@ function CopyChip({ value, label }: { value: string; label: string }) {
 /**
  * What the ten players do once teams lock: one hosts the Dota 2 lobby with the
  * fixed shared credentials, selects the required league ticket, and everyone
- * joins their team's Discord voice channel. Result discovery remains the
- * existing player-account scan; the ticket makes the private game available
- * to OpenDota for that scan to find.
+ * joins their team's Discord voice channel. The ticket makes the private game
+ * available to OpenDota. When the bot hosted, the result is looked up by the
+ * match id the bot saw; otherwise the scan searches the players' histories.
  */
 function GameSetupCard({
   lobby,

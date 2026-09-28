@@ -31,6 +31,7 @@ import {
   type OpenDotaMatch,
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
+import { botReportedMatchId, inhouseBotGameStatus } from "./dota-lobby-service";
 import { classifyGame } from "./match-import";
 import {
   inhouseLobbyMessage,
@@ -1335,9 +1336,10 @@ function buildResult(
  * being played (READY or IN_PROGRESS — Start is optional) can complete, and
  * only one caller wins the claim — an admin cancel (or a rival record with a
  * different match id) racing the slow OpenDota fetch must never be
- * overwritten, and a CANCELLED lobby must never resurrect as COMPLETED. The claim winner stamps per-player Elo deltas and
- * transactionally queues the Discord announcement. A claimed outbox worker
- * sends it after commit and retries through the site heartbeat.
+ * overwritten, and a CANCELLED lobby must never resurrect as COMPLETED. The
+ * claim winner stamps per-player Elo deltas and transactionally queues the
+ * Discord announcement. A claimed outbox worker sends it after commit and
+ * retries through the site heartbeat.
  */
 async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
   // The claim AND the teamFixes loop commit together, as one transaction.
@@ -1653,6 +1655,33 @@ export async function autoDetectResult(
   return { ok: true };
 }
 
+/**
+ * The record-by-match-ID check, shared by a pasted id and the lobby bot's id.
+ * A given id is trusted this far and no further:
+ *   - the game must have started after this lobby formed — the floor
+ *     findInhouseGame enforces too, so a PRIOR game between the same ten
+ *     (yesterday's inhouse, a rematch id typo) can never close this one;
+ *   - the classifyGame roster check must find at least two linked players per
+ *     side. That is thinner than the background scan's three: someone vouched
+ *     for this specific id (a player pasting it, or the bot that hosted it),
+ *     and it is the escape hatch for lobbies where most players have
+ *     "Expose Public Match Data" off.
+ */
+function checkMatchForLobby(
+  od: OpenDotaMatch,
+  lobbyCreatedAt: Date,
+  players: LobbyPlayerFull[],
+):
+  | { ok: true; result: BuiltResult }
+  | { ok: false; reason: "before-lobby" | "not-these-teams" } {
+  if (od.start_time < Math.floor(lobbyCreatedAt.getTime() / 1000))
+    return { ok: false, reason: "before-lobby" };
+  const result = buildResult(od, players, 2);
+  return result
+    ? { ok: true, result }
+    : { ok: false, reason: "not-these-teams" };
+}
+
 /** Record the result from a specific Dota match id/URL (fetched via OpenDota). */
 export async function recordMatch(
   viewer: SessionUser,
@@ -1702,27 +1731,17 @@ export async function recordMatch(
         "Couldn't fetch that match from OpenDota (is the ID right and public?)",
     };
   }
-  // Same floor findInhouseGame enforces: a PRIOR game between the same ten
-  // players (yesterday's inhouse, a rematch id typo) must not close this one.
-  if (od.start_time < Math.floor(lobby.createdAt.getTime() / 1000)) {
-    return {
-      ok: false,
-      error: "That match started before this lobby formed — wrong game?",
-    };
-  }
-  // Humans vouched for this specific match id, so accept a thinner roster
-  // match than the background scan demands (2 recognizable players per side
-  // instead of 3) — the escape hatch for lobbies where most players have
-  // "Expose Public Match Data" off and auto-detect is structurally blind.
-  const built = buildResult(od, lobby.players, 2);
-  if (!built) {
+  const checked = checkMatchForLobby(od, lobby.createdAt, lobby.players);
+  if (!checked.ok) {
     return {
       ok: false,
       error:
-        "Couldn't match that game to these teams — at least two linked players per side need public match data (check the ID too).",
+        checked.reason === "before-lobby"
+          ? "That match started before this lobby formed — wrong game?"
+          : "Couldn't match that game to these teams — at least two linked players per side need public match data (check the ID too).",
     };
   }
-  if (!(await applyResult(lobby.id, built))) {
+  if (!(await applyResult(lobby.id, checked.result))) {
     return {
       ok: false,
       error:
@@ -1741,6 +1760,12 @@ export async function recordMatch(
  * Runs for a lobby being played — READY or IN_PROGRESS — on the clock
  * inhouseDetectWindow picks, so ten players who go straight into Dota without
  * pressing the optional Start are still recorded.
+ *
+ * When the lobby bot launched the game, the bot's match id comes first: one
+ * OpenDota match lookup instead of ten recent-match lists, validated exactly
+ * like a pasted id (checkMatchForLobby). The history scan stays the fallback —
+ * for games hosted without the bot, a bot id that isn't this lobby's game, and
+ * a bot game OpenDota still lacks after DETECT_BOT_MATCH_WAIT_MINUTES.
  */
 export function maybeAutoDetectResult(): Promise<boolean>;
 export function maybeAutoDetectResult(
@@ -1767,6 +1792,7 @@ export async function maybeAutoDetectResult(
       createdAt: true,
       startedAt: true,
       detectedAt: true,
+      radiantTeam: true,
     },
   });
   if (!lobby) return finish(false);
@@ -1823,11 +1849,50 @@ export async function maybeAutoDetectResult(
       },
     },
   });
-  const { result: found, deadlineReached } = await findInhouseGame(
-    players,
-    Math.floor(lobby.createdAt.getTime() / 1000),
-    fetchOptions,
+  // An empty roster means a rival moved the lobby or the claim on first.
+  if (players.length === 0) return finish(false);
+
+  let found: BuiltResult | null = null;
+  let deadlineReached = false;
+  let scanHistories = true;
+  // The bot read never throws: no bot, an unreachable one, or a game it didn't
+  // host all come back without a match id, and the history scan runs as ever.
+  const botMatchId = botReportedMatchId(
+    await inhouseBotGameStatus(
+      { id: lobby.id, radiantTeam: lobby.radiantTeam, players },
+      fetchOptions,
+    ),
   );
+  if (botMatchId) {
+    const od = await fetchOpenDotaMatch(botMatchId, fetchOptions);
+    if (
+      !canStartOpenDotaFetch(fetchOptions) ||
+      openDotaBudgetExpired(fetchOptions)
+    ) {
+      deadlineReached = true;
+    } else if (od) {
+      // Never recorded on the bot's word alone: the same floor and roster
+      // check as a pasted id. A game that fails them isn't this lobby's, so
+      // look through the players' histories instead.
+      const checked = checkMatchForLobby(od, lobby.createdAt, players);
+      if (checked.ok) found = checked.result;
+    } else {
+      // Not on OpenDota yet — the game is still running or still publishing.
+      // One lookup per interval until then, not the ten-player scan.
+      scanHistories =
+        now - detectWindow.clockMs >=
+        INHOUSE.DETECT_BOT_MATCH_WAIT_MINUTES * 60_000;
+    }
+  }
+  if (!found && !deadlineReached && scanHistories) {
+    const scanned = await findInhouseGame(
+      players,
+      Math.floor(lobby.createdAt.getTime() / 1000),
+      fetchOptions,
+    );
+    found = scanned.result;
+    deadlineReached = scanned.deadlineReached === true;
+  }
   if (deadlineReached) {
     // The attempt did not finish, so it must not buy a full backoff interval.
     // Restore only the exact claim this invocation stamped; a newer poll or an

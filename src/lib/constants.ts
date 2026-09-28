@@ -301,6 +301,13 @@ export const INHOUSE = {
   // can't drain the shared OpenDota budget the league's result sync needs.
   DETECT_MANUAL_GAP_SECONDS: 20,
   DETECT_INTERVAL_MAX_SECONDS: 1800,
+  // When the lobby bot launched the game it knows the Dota match id, so each
+  // scan looks up that ONE match instead of ten players' histories. While
+  // OpenDota doesn't have it yet the history scan is skipped — for this long
+  // after the detect clock starts. Past it, something happened to the bot's
+  // game (a crashed launch, a remake hosted by hand), so the history scan
+  // runs again as well.
+  DETECT_BOT_MATCH_WAIT_MINUTES: 120,
   // Heartbeats describe availability; they never own queue membership. A
   // browser may suspend a hidden tab for minutes or hours without a leave.
   QUEUE_HEARTBEAT_SECONDS: 30,

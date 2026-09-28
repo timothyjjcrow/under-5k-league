@@ -58,6 +58,7 @@ describe("automatic inhouse detection read budget", () => {
         createdAt: true,
         startedAt: true,
         detectedAt: true,
+        radiantTeam: true,
       },
     });
     expect(roster).not.toHaveBeenCalled();

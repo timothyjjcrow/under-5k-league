@@ -146,6 +146,12 @@ export function DotaLobbyControls({
               the series.
             </p>
           ) : null}
+          {state === "started" && kind === "inhouse" && !recoveryOnly ? (
+            <p className="text-xs text-muted">
+              The bot will record this result automatically once the game
+              ends.
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             {!recoveryOnly && view.canControl && ["idle", "released"].includes(state) ? (
               <button
