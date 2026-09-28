@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTOMATION_STALE_AFTER_MS,
+  automationAttention,
   automationProbeView,
   automationHealthView,
+  automationQuiet,
   formatAutomationDuration,
   type AutomationHealthRecord,
   type AutomationIdleWindow,
@@ -364,6 +366,133 @@ describe("automationProbeView", () => {
 
     for (const [state, status] of guardedCases) {
       expect(automationProbeView(state, NOW, IDLE_WINDOW).status).toBe(status);
+    }
+  });
+});
+
+describe("automationHealthView problem", () => {
+  it("names why a degraded runner is degraded", () => {
+    expect(automationHealthView(record(), NOW).problem).toBeNull();
+    expect(
+      automationHealthView(
+        record({ lastStatus: "RUNNING", leaseExpiresAt: new Date(NOW - 1) }),
+        NOW,
+      ).problem,
+    ).toBe("LEASE_EXPIRED");
+    expect(
+      automationHealthView(
+        record({ lastStatus: "FAILED", consecutiveFailures: 1 }),
+        NOW,
+      ).problem,
+    ).toBe("FAILED");
+    expect(
+      automationHealthView(
+        record({ lastStatus: "DEGRADED", consecutiveFailures: 1 }),
+        NOW,
+      ).problem,
+    ).toBe("INCOMPLETE");
+    expect(
+      automationHealthView(
+        record({
+          lastFinishedAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+          lastSuccessAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+        }),
+        NOW,
+      ).problem,
+    ).toBe("OVERDUE");
+    expect(
+      automationHealthView(record({ lastStatus: "SURPRISE" }), NOW).problem,
+    ).toBe("UNKNOWN_STATUS");
+  });
+});
+
+describe("automationQuiet and automationAttention", () => {
+  const clear = { league: 2, inhouse: 1, markerRetries: 0, stuck: 0 };
+
+  it("folds a healthy runner with nothing stuck, even with posts queued", () => {
+    const healthy = automationHealthView(record(), NOW);
+    expect(automationQuiet(healthy, clear)).toBe(true);
+    expect(automationAttention(healthy, clear)).toEqual([]);
+    const running = automationHealthView(
+      record({ lastStatus: "RUNNING", leaseExpiresAt: new Date(NOW + 60_000) }),
+      NOW,
+    );
+    expect(automationQuiet(running, clear)).toBe(true);
+    expect(automationAttention(running, clear)).toEqual([]);
+  });
+
+  it("stays open when the backlog is unreadable, stuck or retrying", () => {
+    const healthy = automationHealthView(record(), NOW);
+    expect(automationQuiet(healthy, undefined)).toBe(false);
+    expect(automationQuiet(healthy, { ...clear, stuck: 1 })).toBe(false);
+    expect(automationQuiet(healthy, { ...clear, markerRetries: 1 })).toBe(
+      false,
+    );
+    expect(automationAttention(healthy, { ...clear, stuck: 1 })).toEqual([
+      "1 Discord post has waited over 10 minutes to send.",
+    ]);
+    expect(
+      automationAttention(healthy, { ...clear, stuck: 3, markerRetries: 2 }),
+    ).toEqual([
+      "3 Discord posts have waited over 10 minutes to send.",
+      "2 Discord announcements are waiting to be sent again after a failed send or a result correction.",
+    ]);
+  });
+
+  it("raises one plain line for each unhealthy runner state", () => {
+    const lines = (view: ReturnType<typeof automationHealthView>) =>
+      automationAttention(view, clear);
+    expect(lines(automationHealthView(undefined, NOW))).toEqual([
+      "Automation status can't be read. Check that the database is reachable.",
+    ]);
+    expect(lines(automationHealthView(null, NOW))[0]).toMatch(
+      /^Automation has never run/,
+    );
+    expect(
+      lines(
+        automationHealthView(
+          record({ lastStatus: "FAILED", consecutiveFailures: 3 }),
+          NOW,
+        ),
+      ),
+    ).toEqual([
+      "Automation's last run failed (3 runs in a row), so results, reminders and Discord posts may be late.",
+    ]);
+    expect(
+      lines(
+        automationHealthView(
+          record({ lastStatus: "DEGRADED", consecutiveFailures: 1 }),
+          NOW,
+        ),
+      ),
+    ).toEqual([
+      "Automation's last run left work unfinished, so results, reminders and Discord posts may be late.",
+    ]);
+    expect(
+      lines(
+        automationHealthView(
+          record({ lastStatus: "RUNNING", leaseExpiresAt: new Date(NOW - 1) }),
+          NOW,
+        ),
+      )[0],
+    ).toContain("Run maintenance now");
+    expect(
+      lines(
+        automationHealthView(
+          record({
+            lastFinishedAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+            lastSuccessAt: new Date(NOW - AUTOMATION_STALE_AFTER_MS - 1),
+          }),
+          NOW,
+        ),
+      )[0],
+    ).toMatch(/hasn't finished a run in over four minutes/);
+    for (const view of [
+      automationHealthView(undefined, NOW),
+      automationHealthView(null, NOW),
+      automationHealthView(record({ lastStatus: "FAILED" }), NOW),
+    ]) {
+      expect(automationQuiet(view, clear)).toBe(false);
     }
   });
 });

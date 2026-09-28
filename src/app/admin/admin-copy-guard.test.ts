@@ -83,6 +83,8 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
     rendered: "Send alerts to the board channel instead",
   },
   { quoted: "Abort draft", rendered: "Abort draft" },
+  // Needs attention's lost-lease line sends admins to the runner's button.
+  { quoted: "Run maintenance now", rendered: "Run maintenance now" },
   { quoted: "Start draft", rendered: "Start draft" },
   // The pre-draft next-step points at the funnel that names the unlinked.
   { quoted: "Discord reach", rendered: "Discord reach" },

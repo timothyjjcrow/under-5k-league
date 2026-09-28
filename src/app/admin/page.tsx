@@ -1,6 +1,6 @@
 import { listPage } from "@/lib/list-page";
 import { matchAttention } from "@/lib/admin-attention";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 import { SectionNav, SectionReady } from "@/components/section-nav";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
@@ -136,8 +136,13 @@ import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
 import { getAutomationGateDecision } from "@/lib/automation-gate";
 import {
+  AUTOMATION_BACKLOG_STUCK_MS,
+  automationAttention,
   automationHealthView,
+  automationQuiet,
+  type AutomationBacklog,
   type AutomationHealthRecord,
+  type AutomationHealthView,
 } from "@/lib/automation-health";
 import { LEAGUE_ANNOUNCEMENT_STATUS } from "@/lib/league-announcement-outbox";
 import { INHOUSE_ANNOUNCEMENT_STATUS } from "@/lib/inhouse-announcement-outbox";
@@ -296,6 +301,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     season && data ? adminNextStepFor(season, data, nowMs) : null;
   const tonight =
     season && data ? matchNightSlate(season.status, data.matches, nowMs) : [];
+  // DB-only and shared with the streamed runner card below.
+  const automationLines = season && data ? await loadAutomationAttention() : [];
   const showTiebreakers = data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
@@ -432,7 +439,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
       {season && data && seasonRecord ? (
         <>
-          <AdminAttention season={season} data={data} />
+          <AdminAttention season={season} data={data} automation={automationLines} />
           <AdminSection
             id="adm-record"
             title={`${seasonRecord.name} record`}
@@ -477,7 +484,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               nowMs={nowMs}
             />
           ) : null}
-          <AdminAttention season={season} data={data} />
+          <AdminAttention season={season} data={data} automation={automationLines} />
           {showTiebreakers ? (
             <AdminAnchor id="adm-tiebreakers">
               <TiebreakerControls season={season} data={data} nowMs={nowMs} />
@@ -764,9 +771,10 @@ function AdminSection({
   defaultOpen = false,
   headingLevel = 3,
 }: {
-  id: string;
+  /** Omit when a wrapping AdminAnchor already carries the section's id. */
+  id?: string;
   title: string;
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   children: React.ReactNode;
   defaultOpen?: boolean;
   /** 2 for a section that stands in for top-level cards (the season record). */
@@ -1174,7 +1182,15 @@ function TonightMatches({
   );
 }
 
-function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
+function AdminAttention({
+  season,
+  data,
+  automation,
+}: {
+  season: Season;
+  data: AdminData;
+  automation: string[];
+}) {
   const attention = matchAttention(data.matches);
   const names = new Map(data.teams.map((team) => [team.id, team.name]));
   return (
@@ -1185,6 +1201,21 @@ function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
         subtitle={`${PHASE_LABEL[season.status]} · Read-only match-night checklist. Open a match to review its current state.`}
       />
       <CardBody className="space-y-4">
+        {automation.length > 0 ? (
+          <ul className="space-y-2">
+            {automation.map((line) => (
+              <li
+                key={line}
+                className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm"
+              >
+                {line}{" "}
+                <a href="#adm-automation" className={textLink()}>
+                  Automation →
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {attention.length ? (
           <details open={attention.length <= 5}>
             <summary className="min-h-11 cursor-pointer text-sm font-medium">
@@ -4730,30 +4761,49 @@ function AutomationTimestamp({
   );
 }
 
+type AutomationSnapshot = {
+  now: number;
+  /** undefined = the runner row could not be read; null = it never ran. */
+  state: AutomationHealthRecord | null | undefined;
+  backlog: AutomationBacklog | undefined;
+  idleWindow: { nextWakeAtMs: number; hardWakeAtMs: number } | undefined;
+};
+
 /**
- * Production-wide runner health. This is separate from AutoSyncHealth below:
- * that card explains per-match scan/backoff state during playable phases,
- * while this one answers whether the single scheduled worker is alive and
- * safe to recover in every phase (including offseason and no season).
+ * The runner row, the Discord delivery backlog and the gate's idle window,
+ * read once per request: the runner card and Needs attention share it. DB
+ * only (the gate snapshot is cached), and it never throws — a readiness
+ * incident reads as "unavailable" instead of taking the admin page down.
  */
-async function AutomationRunnerHealth() {
-  let state: AutomationHealthRecord | null | undefined;
-  let backlog:
-    | {
-        league: number;
-        inhouse: number;
-        markerRetries: number;
-      }
-    | undefined;
-  let idleWindow:
-    | { nextWakeAtMs: number; hardWakeAtMs: number }
-    | undefined;
-  // Async SERVER component: one value per request. The React purity rule is
-  // aimed at client re-renders, not a server health snapshot.
-  // eslint-disable-next-line react-hooks/purity
+const loadAutomationSnapshot = cache(async (): Promise<AutomationSnapshot> => {
   const now = Date.now();
+  const stuckBefore = new Date(now - AUTOMATION_BACKLOG_STUCK_MS);
+  const queuedLeague = {
+    status: {
+      in: [
+        LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+        LEAGUE_ANNOUNCEMENT_STATUS.SENDING,
+      ],
+    },
+  };
+  const queuedInhouse = {
+    status: {
+      in: [
+        INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+        INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
+      ],
+    },
+  };
   try {
-    const [runner, league, inhouse, markerRetries, gate] = await Promise.all([
+    const [
+      runner,
+      league,
+      inhouse,
+      stuckLeague,
+      stuckInhouse,
+      markerRetries,
+      gate,
+    ] = await Promise.all([
       prisma.automationRunState.findUnique({
         where: { key: AUTOMATION_RUN_KEY },
         select: {
@@ -4770,25 +4820,13 @@ async function AutomationRunnerHealth() {
           lastSummary: true,
         },
       }),
+      prisma.leagueAnnouncement.count({ where: queuedLeague }),
+      prisma.inhouseAnnouncement.count({ where: queuedInhouse }),
       prisma.leagueAnnouncement.count({
-        where: {
-          status: {
-            in: [
-              LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
-              LEAGUE_ANNOUNCEMENT_STATUS.SENDING,
-            ],
-          },
-        },
+        where: { ...queuedLeague, createdAt: { lt: stuckBefore } },
       }),
       prisma.inhouseAnnouncement.count({
-        where: {
-          status: {
-            in: [
-              INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
-              INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
-            ],
-          },
-        },
+        where: { ...queuedInhouse, createdAt: { lt: stuckBefore } },
       }),
       prisma.setting.count({
         where: {
@@ -4803,48 +4841,100 @@ async function AutomationRunnerHealth() {
       }),
       getAutomationGateDecision(now).catch(() => ({ run: true }) as const),
     ]);
-    state = runner;
-    backlog = { league, inhouse, markerRetries };
-    if (!gate.run) {
-      idleWindow = {
-        nextWakeAtMs: Math.min(
-          gate.snapshot.nextWakeAtMs,
-          gate.snapshot.hardWakeAtMs,
-        ),
-        hardWakeAtMs: gate.snapshot.hardWakeAtMs,
-      };
-    }
+    return {
+      now,
+      state: runner,
+      backlog: {
+        league,
+        inhouse,
+        markerRetries,
+        stuck: stuckLeague + stuckInhouse,
+      },
+      idleWindow: gate.run
+        ? undefined
+        : {
+            nextWakeAtMs: Math.min(
+              gate.snapshot.nextWakeAtMs,
+              gate.snapshot.hardWakeAtMs,
+            ),
+            hardWakeAtMs: gate.snapshot.hardWakeAtMs,
+          },
+    };
   } catch {
-    // The admin panel remains usable during a migration/readiness incident.
     // `undefined` is intentionally distinct from a missing (never-run) row.
-    state = undefined;
-    backlog = undefined;
+    return { now, state: undefined, backlog: undefined, idleWindow: undefined };
   }
+});
 
+async function loadAutomationAttention(): Promise<string[]> {
+  const { now, state, backlog, idleWindow } = await loadAutomationSnapshot();
+  return automationAttention(
+    automationHealthView(state, now, idleWindow),
+    backlog,
+  );
+}
+
+/**
+ * Production-wide runner health. This is separate from AutoSyncHealth below:
+ * that card explains per-match scan/backoff state during playable phases,
+ * while this one answers whether the single scheduled worker is alive and
+ * safe to recover in every phase (including offseason and no season).
+ *
+ * Healthy, it folds to one line; the details stay one click away, and any
+ * problem also raises a line in Needs attention.
+ */
+async function AutomationRunnerHealth() {
+  const { now, state, backlog, idleWindow } = await loadAutomationSnapshot();
   const health = automationHealthView(state, now, idleWindow);
-  const emptyTime = state === undefined ? "Unavailable" : "Never";
+  const lastRun = state?.lastSuccessAt ?? state?.lastFinishedAt ?? null;
+  if (automationQuiet(health, backlog)) {
+    return (
+      <AdminSection
+        title="Automation runner"
+        subtitle={
+          <>
+            {health.kind === "RUNNING" ? "Healthy · running now" : "Healthy"}
+            {lastRun ? (
+              <>
+                {" · last run "}
+                <AutomationTimestamp value={lastRun} emptyLabel="Never" />
+              </>
+            ) : null}
+          </>
+        }
+      >
+        <CardBody>
+          <AutomationRunnerDetails
+            health={health}
+            state={state}
+            backlog={backlog}
+          />
+        </CardBody>
+      </AdminSection>
+    );
+  }
   const badgeTone =
-    health.kind === "HEALTHY"
-      ? "success"
-      : health.kind === "RUNNING"
-        ? "accent"
-        : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
-          ? "danger"
+    health.kind === "RUNNING"
+      ? "accent"
+      : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
+        ? "danger"
+        : health.kind === "HEALTHY"
+          ? "success"
           : "neutral";
   const calloutClass =
-    health.kind === "HEALTHY"
-      ? "border-success/30 bg-success/10"
-      : health.kind === "RUNNING"
-        ? "border-accent/30 bg-accent/10"
-        : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
-          ? "border-danger/30 bg-danger/10"
+    health.kind === "RUNNING"
+      ? "border-accent/30 bg-accent/10"
+      : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
+        ? "border-danger/30 bg-danger/10"
+        : health.kind === "HEALTHY"
+          ? "border-success/30 bg-success/10"
           : "border-line bg-surface-2/40";
 
   return (
     <Card>
       <CardHeader
         title="Automation runner"
-        subtitle="Database-owned maintenance for result imports and league background work, available in every league phase."
+        subtitle="The scheduled worker behind result imports, reminders and Discord posts, in every league phase."
         action={<Badge tone={badgeTone}>{health.label}</Badge>}
       />
       <CardBody className="space-y-5">
@@ -4852,134 +4942,159 @@ async function AutomationRunnerHealth() {
           <div className="font-medium text-fg">{health.headline}</div>
           <p className="mt-1 text-sm text-muted">{health.description}</p>
         </div>
+        <AutomationRunnerDetails
+          health={health}
+          state={state}
+          backlog={backlog}
+        />
+      </CardBody>
+    </Card>
+  );
+}
 
-        <StatStrip>
-          <StatCell
-            label="Last attempt"
-            value={
-              <AutomationTimestamp
-                value={state?.lastAttemptAt}
-                emptyLabel={emptyTime}
-              />
-            }
-          />
-          <StatCell
-            label="Last success"
-            value={
-              <AutomationTimestamp
-                value={state?.lastSuccessAt}
-                emptyLabel={emptyTime}
-              />
-            }
-          />
-          <StatCell label="Source" value={health.sourceLabel} />
-          <StatCell label="Duration" value={health.durationLabel} />
-          <StatCell
-            label="Failure streak"
-            value={health.consecutiveFailures}
-            tone={health.consecutiveFailures > 0 ? "accent" : "muted"}
-          />
-        </StatStrip>
+function AutomationRunnerDetails({
+  health,
+  state,
+  backlog,
+}: {
+  health: AutomationHealthView;
+  state: AutomationHealthRecord | null | undefined;
+  backlog: AutomationBacklog | undefined;
+}) {
+  const emptyTime = state === undefined ? "Unavailable" : "Never";
+  return (
+    <div className="space-y-5">
+      <StatStrip>
+        <StatCell
+          label="Last attempt"
+          value={
+            <AutomationTimestamp
+              value={state?.lastAttemptAt}
+              emptyLabel={emptyTime}
+            />
+          }
+        />
+        <StatCell
+          label="Last success"
+          value={
+            <AutomationTimestamp
+              value={state?.lastSuccessAt}
+              emptyLabel={emptyTime}
+            />
+          }
+        />
+        <StatCell label="Source" value={health.sourceLabel} />
+        <StatCell label="Duration" value={health.durationLabel} />
+        <StatCell
+          label="Failure streak"
+          value={health.consecutiveFailures}
+          tone={health.consecutiveFailures > 0 ? "accent" : "muted"}
+        />
+      </StatStrip>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-lg border border-line bg-surface-2/30 p-4">
-            <h4 className="font-medium text-fg">Lease and work signals</h4>
-            {health.signals.length > 0 ? (
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
-                {health.signals.map((signal) => (
-                  <li key={signal}>{signal}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-muted">
-                No persisted lease, deferred-work, or failure signal is
-                recorded.
-              </p>
-            )}
-            {health.leaseExpiresAt ? (
-              <p className="mt-2 text-xs text-muted">
-                Lease {health.leaseActive ? "expires" : "expired"} at{" "}
-                <AutomationTimestamp
-                  value={health.leaseExpiresAt}
-                  emptyLabel="Not recorded"
-                />
-                .
-              </p>
-            ) : null}
-          </div>
-
-          <div className="rounded-lg border border-line bg-surface-2/30 p-4">
-            <h4 className="font-medium text-fg">Expected cadence</h4>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-lg border border-line bg-surface-2/30 p-4">
+          <h4 className="font-medium text-fg">Latest run</h4>
+          {health.signals.length > 0 ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+              {health.signals.map((signal) => (
+                <li key={signal}>{signal}</li>
+              ))}
+            </ul>
+          ) : (
             <p className="mt-2 text-sm text-muted">
-              Production checks the schedule every minute. When work is due it
-              runs the database-owned maintenance pass; when caught up it can
-              sleep until the next known deadline, with a hard reconciliation
-              roughly once per hour.
+              No failure or unfinished work is recorded.
             </p>
+          )}
+          {health.leaseExpiresAt ? (
             <p className="mt-2 text-xs text-muted">
-              A manual pass uses the same owner-and-token lease as cron. It can
-              recover an expired run, but it cannot force, overlap, or clear an
-              active owner.
+              {health.leaseActive
+                ? "The current run's lock expires "
+                : "The last run's lock expired "}
+              <AutomationTimestamp
+                value={health.leaseExpiresAt}
+                emptyLabel="Not recorded"
+              />
+              .
             </p>
-          </div>
+          ) : null}
         </div>
 
         <div className="rounded-lg border border-line bg-surface-2/30 p-4">
-          <h4 className="font-medium text-fg">Durable delivery backlog</h4>
-          {backlog ? (
-            backlog.league + backlog.inhouse + backlog.markerRetries > 0 ? (
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
-                <li>{backlog.league} league-channel message(s) pending</li>
-                <li>{backlog.inhouse} inhouse message(s) pending</li>
-                <li>
-                  {backlog.markerRetries} result, champion, reminder, or honors
-                  marker(s) awaiting retry
-                </li>
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-muted">
-                No league, inhouse, or marker retry is waiting for delivery.
-              </p>
-            )
-          ) : (
-            <p className="mt-2 text-sm text-danger">
-              Backlog state is unavailable until database readiness is restored.
-            </p>
-          )}
+          <h4 className="font-medium text-fg">How often it runs</h4>
+          <p className="mt-2 text-sm text-muted">
+            Production checks every minute. When work is due it runs a pass;
+            when everything is caught up it can wait for the next known
+            deadline, and it always reconciles about once an hour.
+          </p>
           <p className="mt-2 text-xs text-muted">
-            Pending work survives a process restart and drains in order. A
-            growing count means Discord or the scheduled runner needs attention.
+            A manual run takes the same lock as the scheduled one: it can take
+            over a run that stopped, but never one that is still going.
           </p>
         </div>
+      </div>
 
-        <div
-          className="flex flex-wrap items-start justify-between gap-4 border-t border-line pt-4"
-          role="group"
-          aria-labelledby="automation-manual-run-title"
-        >
-          <div className="min-w-0 flex-1 basis-64">
-            <div
-              id="automation-manual-run-title"
-              className="font-medium text-fg"
-            >
-              Manual recovery
-            </div>
-            <p className="mt-1 text-sm text-muted">
-              {health.disabledReason ??
-                "Run a bounded pass now. If cron acquires the lease first, this request exits without starting duplicate work."}
-            </p>
+      <div className="rounded-lg border border-line bg-surface-2/30 p-4">
+        <h4 className="font-medium text-fg">Discord posts waiting to send</h4>
+        {backlog ? (
+          backlog.league + backlog.inhouse + backlog.markerRetries > 0 ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+              <li>{backlog.league} league-channel post(s) queued</li>
+              <li>{backlog.inhouse} inhouse post(s) queued</li>
+              {backlog.stuck > 0 ? (
+                <li className="text-danger">
+                  {backlog.stuck} of those queued over{" "}
+                  {AUTOMATION_BACKLOG_STUCK_MS / 60_000} minutes ago
+                </li>
+              ) : null}
+              <li>
+                {backlog.markerRetries} announcement(s) waiting to be sent
+                again after a failed send or a result correction
+              </li>
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-muted">Nothing is waiting.</p>
+          )
+        ) : (
+          <p className="mt-2 text-sm text-danger">
+            Can&apos;t read the queue until the database is reachable again.
+          </p>
+        )}
+        <p className="mt-2 text-xs text-muted">
+          Queued posts survive a restart and go out in order, usually within a
+          minute or two. Posts waiting longer than{" "}
+          {AUTOMATION_BACKLOG_STUCK_MS / 60_000} minutes mean Discord or the
+          scheduler needs attention.
+        </p>
+      </div>
+
+      <div
+        className="flex flex-wrap items-start justify-between gap-4 border-t border-line pt-4"
+        role="group"
+        aria-labelledby="automation-manual-run-title"
+      >
+        <div className="min-w-0 flex-1 basis-64">
+          <div
+            id="automation-manual-run-title"
+            className="font-medium text-fg"
+          >
+            Manual recovery
           </div>
-          <ActionForm action={runMaintenanceNow}>
-            <SubmitButton
-              variant={health.kind === "DEGRADED" ? "accent" : "secondary"}
-              disabled={!health.canRunNow}
-            >
-              Run maintenance now
-            </SubmitButton>
-          </ActionForm>
+          <p className="mt-1 text-sm text-muted">
+            {health.disabledReason ??
+              "Run a bounded pass now. If the scheduled run starts first, this request stops without doing the work twice."}
+          </p>
         </div>
-      </CardBody>
-    </Card>
+        <ActionForm action={runMaintenanceNow}>
+          <SubmitButton
+            variant={health.kind === "DEGRADED" ? "accent" : "secondary"}
+            disabled={!health.canRunNow}
+          >
+            Run maintenance now
+          </SubmitButton>
+        </ActionForm>
+      </div>
+    </div>
   );
 }
 

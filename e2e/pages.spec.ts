@@ -376,11 +376,15 @@ test("captain setup and draft preflight fit a phone viewport", async ({
   await expect(
     page.getByRole("button", { name: "Start draft" }),
   ).toBeDisabled();
+  const runner = page.locator("#adm-automation");
   await expect(
-    page.getByRole("heading", { name: "Automation runner", level: 3 }),
+    runner.getByRole("heading", { name: "Automation runner", level: 3 }),
   ).toBeVisible();
+  // A healthy runner folds to one line; its details stay one click away.
+  const folded = runner.locator("details:not([open]) > summary");
+  if (await folded.count()) await folded.click();
   await expect(
-    page.getByRole("button", { name: "Run maintenance now" }),
+    runner.getByRole("button", { name: "Run maintenance now" }),
   ).toBeVisible();
   expect(
     await page.evaluate(
