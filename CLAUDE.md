@@ -2464,7 +2464,10 @@ that rots while mirroring to it keeps looking fine.
 **`/admin` is anchors + disclosure, and both halves matter.** It was 6,948px /
 11,501px — the longest page in the app by 36%, and the tool the league is run
 from on match night. `AdminJump` is sticky at `top-20` (the header offset the
-draft room's clock bar uses) and every card is an `AdminAnchor`; the five cards
+draft room's clock bar uses) and every card is an `AdminAnchor`. Its chips
+follow the page's card order (a source guard checks it) and, from `lg`, wrap
+onto rows (`SectionNav wrap`) rather than hide past the edge, so its jump
+targets use `lg:scroll-mt-56` to clear the taller bar. The five cards
 touched ONCE — Discord, the Valve league id, news, security, next season —
 are `AdminSection`, a `<details>` whose `<summary>` keeps the title as a real
 visible heading (so a scanning admin AND the e2e assertions still find it).
