@@ -484,6 +484,19 @@ export default async function Home() {
       ])
     : [[] as Match[], 0];
   const championPresentation = resolveChampionPresentation(season, matches);
+  // Whether SeasonView will draw the viewer's stakes card, so its skeleton
+  // reserves the card only when it comes: a regular-season viewer on a team
+  // still in the race (not withdrawn, in a field of two or more) once the
+  // first regular-season result is final (playoffOutlookShown).
+  const viewerTeam = user
+    ? snapshot.teams.find((t) => t.members.some((m) => m.userId === user.id))
+    : undefined;
+  const stakeCardExpected =
+    season.status === "REGULAR_SEASON" &&
+    !!viewerTeam &&
+    !viewerTeam.withdrawn &&
+    snapshot.teams.filter((t) => !t.withdrawn).length >= 2 &&
+    playoffOutlookShown(matches);
   // Until this season crowns someone, Home keeps naming the last champion.
   // Signups and the draft only: from the regular season on, the dashboard is
   // about this season's race.
@@ -743,7 +756,7 @@ export default async function Home() {
             fallback={
               <SeasonViewSkeleton
                 playoffs={season.status === "PLAYOFFS"}
-                rostered={isRostered}
+                stakeCard={stakeCardExpected}
               />
             }
           >
@@ -793,16 +806,17 @@ export default async function Home() {
 }
 
 // Fallback for the mid-season dashboard. It MUST mirror the real bands — This
-// week, then the standings (beside a rostered viewer's stakes card) or in the
-// playoffs the bracket, the Coming up / Recent results pair, then the side
-// games — or the page paints one layout and then visibly rearranges into
-// another.
+// week, then the standings (beside the viewer's stakes card, when SeasonView
+// draws one) or in the playoffs the bracket, the Coming up / Recent results
+// pair, then the side games — or the page paints one layout and then visibly
+// rearranges into another.
 function SeasonViewSkeleton({
   playoffs,
-  rostered,
+  stakeCard,
 }: {
   playoffs: boolean;
-  rostered: boolean;
+  /** SeasonView will draw the viewer's stakes card beside the standings. */
+  stakeCard: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -814,12 +828,12 @@ function SeasonViewSkeleton({
           <div
             className={cn(
               "min-w-0",
-              rostered ? "lg:col-span-2" : "lg:col-span-3",
+              stakeCard ? "lg:col-span-2" : "lg:col-span-3",
             )}
           >
             <CardSkeleton rows={6} />
           </div>
-          {rostered ? (
+          {stakeCard ? (
             <div className="order-first min-w-0 lg:order-none">
               <CardSkeleton rows={3} />
             </div>
