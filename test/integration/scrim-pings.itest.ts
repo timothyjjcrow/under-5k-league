@@ -110,6 +110,35 @@ describe("scrim pings (integration)", () => {
     );
   });
 
+  it("mentions the captains once per posting team per hour, and still posts every time", async () => {
+    const { captains } = await league(3);
+    const [poster, other, third] = captains;
+    const post = async (captain: (typeof captains)[number], hoursAhead: number) => {
+      actAs(captain.user);
+      const at = Date.now() + (3 * 24 + hoursAhead) * HOUR;
+      const result = await createScrimAction(
+        empty,
+        fd({ scheduledAt: "picked", scheduledAtTs: String(at) }),
+      );
+      expect(result?.ok).toBe(true);
+    };
+
+    // Three slots for the week in one sitting: one buzz, three posts.
+    await post(poster, 0);
+    await post(poster, 24);
+    await post(poster, 48);
+    expect(sends()).toHaveLength(3);
+    expect(mentioned(sends()[0])).toEqual([other.discordId, third.discordId].sort());
+    for (const call of sends().slice(1)) {
+      expect(call[0]).toContain(`**${poster.team.name}** posted a scrim time`);
+      expect(call[1]).toBeUndefined();
+    }
+
+    // The window is per posting team: another captain's first post rings.
+    await post(other, 72);
+    expect(mentioned(sends()[3])).toEqual([poster.discordId, third.discordId].sort());
+  });
+
   it("still reports a committed post as posted when the ping list can't be read", async () => {
     const { season, captains } = await league(3);
     const [poster] = captains;

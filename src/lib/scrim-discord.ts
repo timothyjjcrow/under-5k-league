@@ -24,6 +24,19 @@ function matchup(hostTeamName: string, opponentTeamName: string | null): string 
     : `**${name(hostTeamName)}**`;
 }
 
+/**
+ * A new scrim time @-mentions the other captains at most once per posting
+ * team in this window. A captain posting the week's five slots in one
+ * sitting, or posting and cancelling, would otherwise buzz every captain's
+ * phone five times, the kind of noise that gets the channel muted. Later
+ * posts in the window still go to the channel, just without the mentions.
+ */
+export const SCRIM_POST_PING_THROTTLE_SECONDS = 60 * 60;
+
+export function scrimPostPingKey(hostTeamId: string): string {
+  return `scrimPostPing:${hostTeamId}`;
+}
+
 /** To the OTHER captains: a new time they could claim. */
 export function scrimPostedMessage(m: {
   scrimId: string;

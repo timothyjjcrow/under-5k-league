@@ -9,10 +9,13 @@ import { actionErrorMessage } from "@/lib/user-facing-error";
 import { sendDiscordMessage } from "@/lib/discord";
 import { mentionUsers } from "@/lib/discord-mentions";
 import {
+  SCRIM_POST_PING_THROTTLE_SECONDS,
   scrimCancelledMessage,
   scrimClaimedMessage,
+  scrimPostPingKey,
   scrimPostedMessage,
 } from "@/lib/scrim-discord";
+import { claimThrottle } from "@/lib/settings";
 import { scrimBookedToast } from "@/lib/scrim-view";
 import {
   addScrimGuest as addGuestInService,
@@ -38,12 +41,20 @@ function refreshScrims(scrimId?: string) {
 /**
  * Ping exactly the captains who have to act — never a broadcast — after the
  * write has committed. Best-effort: a Discord hiccup must never turn a
- * booking that succeeded into an error toast.
+ * booking that succeeded into an error toast. `mention: false` still posts
+ * the message for them, without ringing anyone's phone.
  */
-async function pingCaptains(content: string, userIds: string[]) {
+async function pingCaptains(
+  content: string,
+  userIds: string[],
+  { mention = true }: { mention?: boolean } = {},
+) {
   if (userIds.length === 0) return;
   try {
-    await sendDiscordMessage(content, await mentionUsers(userIds));
+    await sendDiscordMessage(
+      content,
+      mention ? await mentionUsers(userIds) : undefined,
+    );
   } catch {
     // Never log the raw error: a database failure can carry a connection URL.
     console.error("[scrims] SCRIM_PING_FAILED");
@@ -73,6 +84,18 @@ export async function createScrim(
   try {
     const posted = await createInService(auth.user.id, scheduledAt, bestOf);
     refreshScrims();
+    // One mention per posting team per window; a throttle-store failure
+    // mentions anyway (the post is committed, and a missed ping is worse).
+    let mention = true;
+    try {
+      mention = await claimThrottle(
+        scrimPostPingKey(posted.hostTeam.id),
+        SCRIM_POST_PING_THROTTLE_SECONDS,
+        Date.now(),
+      );
+    } catch {
+      mention = true;
+    }
     await pingCaptains(
       scrimPostedMessage({
         scrimId: posted.id,
@@ -81,6 +104,7 @@ export async function createScrim(
         bestOf: posted.bestOf,
       }),
       posted.notifyUserIds,
+      { mention },
     );
     return {
       ok: true,
