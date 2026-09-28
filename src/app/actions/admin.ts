@@ -181,6 +181,7 @@ import {
   carriedTeamIdentityNote,
   uniqueDefaultTeamName,
   teamIdentitySummary,
+  teamNameAfterCaptainChange,
 } from "@/lib/team-identity";
 import {
   describeScrimConflict,
@@ -1468,6 +1469,293 @@ export async function removeCaptain(
     message: removed.fixtures
       ? `${removed.captainName} is no longer a captain — the schedule was cleared, regenerate it once captains are final`
       : `${removed.captainName} is no longer a captain`,
+  };
+}
+
+/**
+ * Before the draft, hand a team to a different signup without deleting it.
+ *
+ * Remove captain + make captain used to be the only way, and it threw away the
+ * team row: its name, logo and draft-order slot, with a fresh "<name>'s Team"
+ * in their place. This keeps the team and swaps only who captains it. The
+ * outgoing captain drops back into the player pool as an ordinary signup (a
+ * pre-draft roster is the captain alone), and the incoming one takes the
+ * captain's roster seat at $0, exactly as addCaptain would have seated them.
+ *
+ * Same lock as the rest of captain setup (draftSetupOpen), judged again at
+ * the WRITE: the Team claim re-asserts the captain it read, that the season is
+ * still active in SIGNUPS/DRAFT, and that the auction has not started. A Start
+ * draft racing this click therefore sees either the old captain or the new
+ * one, never a team whose captain changed after the auction began.
+ */
+export async function changeCaptain(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
+  try {
+    actor = await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const teamId = str(formData, "teamId");
+  const newCaptainUserId = str(formData, "newCaptainUserId").trim();
+  const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
+  const expectedCaptainUserId = str(formData, "expectedCaptainUserId").trim();
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  if (!expectedActiveSeasonId || expectedActiveSeasonId !== season.id) {
+    return {
+      error:
+        "The active season changed while this page was open — reload before changing a captain.",
+    };
+  }
+  if (!expectedCaptainUserId) {
+    return { error: "Reload the team before changing its captain." };
+  }
+  if (!newCaptainUserId) return { error: "Pick the new captain." };
+
+  // Seam: the rival is a Start draft (or another admin's captain change)
+  // committing between this click and the transaction below.
+  await raceHook("admin.changeCaptain.beforeTx");
+  let changed: {
+    teamName: string;
+    renamedFrom: string | null;
+    incomingName: string;
+    outgoingName: string;
+    incomingDiscordId: string | null;
+  };
+  try {
+    changed = await prisma.$transaction(
+      async (tx) => {
+        const [
+          currentSeason,
+          draft,
+          team,
+          incomingUser,
+          incomingReg,
+          incomingSeat,
+          outgoingCover,
+          otherTeams,
+        ] = await Promise.all([
+          tx.season.findUnique({ where: { id: expectedActiveSeasonId } }),
+          tx.draft.findUnique({
+            where: { seasonId: expectedActiveSeasonId },
+            select: { status: true },
+          }),
+          tx.team.findUnique({
+            where: { id: teamId },
+            include: { members: true, captain: true },
+          }),
+          tx.user.findUnique({ where: { id: newCaptainUserId } }),
+          tx.registration.findUnique({
+            where: {
+              seasonId_userId: {
+                seasonId: expectedActiveSeasonId,
+                userId: newCaptainUserId,
+              },
+            },
+          }),
+          // Captains hold a roster seat, so one lookup answers both "already
+          // captains a team" and "already on a roster".
+          tx.teamMember.findUnique({
+            where: {
+              seasonId_userId: {
+                seasonId: expectedActiveSeasonId,
+                userId: newCaptainUserId,
+              },
+            },
+          }),
+          // Cover booked for the outgoing captain would point at someone no
+          // longer on the team (withdrawGateError's refuse-don't-cancel rule).
+          tx.standinAssignment.count({
+            where: {
+              replacingUserId: expectedCaptainUserId,
+              teamId,
+              match: {
+                seasonId: expectedActiveSeasonId,
+                status: { not: MATCH_STATUS.COMPLETED },
+              },
+            },
+          }),
+          tx.team.findMany({
+            where: { seasonId: expectedActiveSeasonId, id: { not: teamId } },
+            select: { name: true },
+          }),
+        ]);
+        if (!currentSeason?.isActive) throw new ActiveSeasonChangedError();
+        if (!draftSetupOpen(currentSeason.status, draft?.status)) {
+          throw new DraftSetupLockedError(
+            draftSetupLockedMessage(currentSeason.status, draft?.status),
+          );
+        }
+        if (!team || team.seasonId !== currentSeason.id) {
+          throw new CaptainStateChangedError("Unknown team");
+        }
+        if (team.captainId !== expectedCaptainUserId) {
+          throw new CaptainStateChangedError(
+            `${team.name}'s captain already changed — reload and try again.`,
+          );
+        }
+        if (team.captainId === newCaptainUserId) {
+          throw new CaptainStateChangedError(
+            `${team.captain.name} already captains ${team.name}`,
+          );
+        }
+        if (team.members.some((m) => !m.isCaptain)) {
+          throw new CaptainStateChangedError(
+            `${team.name} already has players on its roster`,
+          );
+        }
+        const outgoing = team.members.find(
+          (m) => m.userId === expectedCaptainUserId && m.isCaptain,
+        );
+        if (!outgoing) {
+          throw new CaptainStateChangedError(
+            "The current captain's roster spot is missing — reload and try again.",
+          );
+        }
+        if (!incomingUser) throw new CaptainStateChangedError("Unknown player");
+        if (
+          !incomingReg ||
+          incomingReg.status !== REGISTRATION_STATUS.ACTIVE ||
+          incomingReg.type !== REGISTRATION_TYPE.PLAYER
+        ) {
+          throw new CaptainStateChangedError(
+            `${incomingUser.name} isn't an active player signup this season`,
+          );
+        }
+        if (incomingSeat) {
+          throw new CaptainStateChangedError(
+            `${incomingUser.name} already captains a team`,
+          );
+        }
+        if (outgoingCover > 0) {
+          throw new CaptainStateChangedError(
+            `${team.captain.name} has standin cover booked on an unplayed match — remove that booking first.`,
+          );
+        }
+
+        const teamName = teamNameAfterCaptainChange(
+          team.name,
+          team.captain.name,
+          incomingUser.name,
+          otherTeams.map((other) => other.name),
+        );
+        // THE claim: the captain this request judged, and the setup window it
+        // judged it in, re-asserted at the write. Losing it throws, so nothing
+        // below commits.
+        const claimed = await tx.team.updateMany({
+          where: {
+            id: team.id,
+            seasonId: currentSeason.id,
+            captainId: expectedCaptainUserId,
+            season: {
+              isActive: true,
+              status: { in: [SEASON_STATUS.SIGNUPS, SEASON_STATUS.DRAFT] },
+              OR: [
+                { draft: { is: null } },
+                { draft: { is: { status: DRAFT_STATUS.NOT_STARTED } } },
+              ],
+            },
+          },
+          data: { captainId: incomingUser.id, name: teamName },
+        });
+        if (claimed.count === 0) throw new CaptainStateChangedError();
+
+        const historyAt = new Date();
+        await closeRosterTenure(
+          tx,
+          outgoing,
+          "PRE_DRAFT_CAPTAIN_CHANGED",
+          actor.id,
+          historyAt,
+        );
+        const vacated = await tx.teamMember.deleteMany({
+          where: {
+            id: outgoing.id,
+            teamId: team.id,
+            userId: expectedCaptainUserId,
+            isCaptain: true,
+          },
+        });
+        if (vacated.count === 0) throw new CaptainStateChangedError();
+        const seat = await tx.teamMember.create({
+          data: {
+            seasonId: currentSeason.id,
+            teamId: team.id,
+            userId: incomingUser.id,
+            isCaptain: true,
+            price: 0,
+          },
+        });
+        await captureRosterTenure(
+          tx,
+          seat,
+          {
+            kind: "CAPTAIN_DESIGNATION",
+            mmr: incomingReg.mmr || null,
+            roles: incomingReg.roles,
+            actorId: actor.id,
+          },
+          historyAt,
+        );
+        return {
+          teamName,
+          renamedFrom: teamName === team.name ? null : team.name,
+          incomingName: incomingUser.name,
+          outgoingName: team.captain.name,
+          incomingDiscordId: incomingUser.discordId,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if (error instanceof DraftSetupLockedError) return { error: error.message };
+    if (error instanceof CaptainStateChangedError) {
+      return {
+        error:
+          error.message ||
+          "That team or captain just changed — reload and try again.",
+      };
+    }
+    if (
+      error instanceof ActiveSeasonChangedError ||
+      isSerializationConflict(error)
+    ) {
+      return {
+        error:
+          "The season, draft, or captain list just changed — reload and try again.",
+      };
+    }
+    if (isUniqueViolation(error)) {
+      return {
+        error:
+          "That player was just made a captain elsewhere — reload and try again.",
+      };
+    }
+    throw error;
+  }
+  await logAdminAction({
+    action: "changeCaptain",
+    summary:
+      `Changed the captain of "${changed.teamName}" from ${changed.outgoingName} to ${changed.incomingName}` +
+      (changed.renamedFrom ? ` (renamed from "${changed.renamedFrom}")` : ""),
+    seasonId: season.id,
+  });
+  await sendDiscordMessage(
+    captainAssignedMessage(
+      changed.incomingName,
+      changed.teamName,
+      changed.incomingDiscordId,
+    ),
+    mentionsOf([changed.incomingDiscordId]),
+  );
+  refresh();
+  return {
+    message: `${changed.incomingName} now captains ${changed.teamName}${
+      changed.renamedFrom ? ` (renamed from ${changed.renamedFrom})` : ""
+    }. ${changed.outgoingName} is back in the player pool.`,
   };
 }
 

@@ -58,6 +58,7 @@ import {
   archiveIncompleteSeasonAction,
   setSeasonPhase,
   addCaptain,
+  changeCaptain,
   removeCaptain,
   randomizeDraftOrder,
   generateSchedule,
@@ -259,6 +260,7 @@ import { missingCaptainsConfirmLine } from "@/lib/draft-presence";
 import { readCaptainPresence } from "@/lib/draft-presence-service";
 import { AdminPlayerRankEditor } from "@/components/admin-player-rank-editor";
 import { TeamIdentityForm } from "@/components/team-identity-form";
+import { isGeneratedTeamNameFor } from "@/lib/team-identity";
 import {
   Avatar,
   Badge,
@@ -2564,47 +2566,52 @@ function CaptainControls({
                               expectedActiveSeasonId: season.id,
                             }}
                           >
-                            {/* This deletes the team AND, if any fixture exists,
+                            {/* Once any fixture exists this deletes the team AND
                                 every match in the SEASON — taking all check-ins,
                                 pick'em picks, standin bookings and open proposals
                                 with it by cascade. It is the twin of Regenerate
                                 schedule and needs the same barrier; it was a bare
-                                `remove` link 12px from "✎ Rename team". */}
+                                `remove` link 12px from "✎ Rename team". With no
+                                schedule only the team goes, which a plain confirm
+                                covers (and Change captain keeps the team). */}
+                            {regularCount === 0 ? (
+                              <SubmitButton
+                                variant="ghost"
+                                size="sm"
+                                className="shrink-0 text-danger-soft hover:underline"
+                                confirm={`Remove ${t.captain.name} as captain and delete ${t.name}? Its name and logo go with it. To keep the team and hand it to someone else, use Change captain instead.`}
+                              >
+                                remove
+                              </SubmitButton>
+                            ) : (
                             <DangerSubmit
                               token={t.name}
                               className="shrink-0"
                               title={`Remove ${t.captain.name} as captain and delete ${t.name}?`}
                               consequences={[
                                 `${t.name} and its ${t.members.length} roster place(s) are deleted.`,
-                                ...(regularCount > 0
-                                  ? [
-                                      `All ${regularCount} fixture(s) in the season are cleared — not just this team's — because the round robin no longer fits.`,
-                                    ]
-                                  : []),
-                                ...(regularCount > 0 && collateral.rsvps
+                                `All ${regularCount} fixture(s) in the season are cleared — not just this team's — because the round robin no longer fits.`,
+                                ...(collateral.rsvps
                                   ? [
                                       `${collateral.rsvps} check-in(s) go with them.`,
                                     ]
                                   : []),
-                                ...(regularCount > 0 && collateral.picks
+                                ...(collateral.picks
                                   ? [
                                       `${collateral.picks} pick'em pick(s) go with them.`,
                                     ]
                                   : []),
-                                ...(regularCount > 0 && collateral.covers
+                                ...(collateral.covers
                                   ? [
                                       `${collateral.covers} standin booking(s) go with them.`,
                                     ]
                                   : []),
                               ]}
-                              recovery={
-                                regularCount > 0
-                                  ? "Regenerate the schedule once the captains are final. The check-ins, picks and bookings cannot be restored."
-                                  : "No schedule exists yet, so nothing else is affected."
-                              }
+                              recovery="Regenerate the schedule once the captains are final. The check-ins, picks and bookings cannot be restored."
                             >
                               remove
                             </DangerSubmit>
+                            )}
                           </ActionForm>
                         ) : null}
                       </span>
@@ -2638,6 +2645,54 @@ function CaptainControls({
                             note="Captains can also change this themselves on their team page."
                           />
                         </div>
+                      </details>
+                    ) : null}
+                    {/* Before the draft a team is its captain alone, so handing it
+                        to another signup keeps the team row: name, logo and
+                        draft-order slot. The outgoing captain goes back to the
+                        pool. Nothing is deleted, so a plain confirm. */}
+                    {setupOpen && nonCaptains.length > 0 ? (
+                      <details className="mt-1.5">
+                        <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                          ⇄ Change captain
+                        </summary>
+                        <ActionForm
+                          action={changeCaptain}
+                          className="mt-1.5 flex flex-wrap items-center gap-2"
+                          hidden={{
+                            teamId: t.id,
+                            expectedActiveSeasonId: season.id,
+                            expectedCaptainUserId: t.captainId,
+                          }}
+                        >
+                          <select
+                            name="newCaptainUserId"
+                            required
+                            defaultValue=""
+                            aria-label={`New captain for ${t.name}`}
+                            className={selectCls}
+                          >
+                            <option value="" disabled>
+                              New captain…
+                            </option>
+                            {nonCaptains.map((p) => (
+                              <option key={p.userId} value={p.userId}>
+                                {p.user.name}
+                              </option>
+                            ))}
+                          </select>
+                          <SubmitButton
+                            variant="secondary"
+                            size="sm"
+                            confirm={`Hand ${t.name} to the selected player? ${t.captain.name} goes back to the player pool. The team keeps its logo and draft-order slot${isGeneratedTeamNameFor(t.name, t.captain.name) ? ", and its name follows the new captain" : ", and its name"}.`}
+                          >
+                            Change captain
+                          </SubmitButton>
+                        </ActionForm>
+                        <p className="mt-1 text-xs text-muted">
+                          Keeps the team, unlike remove. {t.captain.name} stays
+                          signed up and can be drafted.
+                        </p>
                       </details>
                     ) : null}
                     {season.status !== SEASON_STATUS.COMPLETE && captainReg.get(t.captainId) ? (
@@ -2905,16 +2960,17 @@ function CaptainControls({
                               expectedActiveSeasonId: season.id,
                             }}
                           >
-                            {/* Confirmed because the UNDO is expensive, not the
-                                action: removing a captain again deletes the
-                                team and, once fixtures exist, the season's whole
-                                schedule. Also a real SubmitButton now, so it has
-                                a pending state and can't be double-submitted. */}
+                            {/* Confirmed because an undo can be expensive:
+                                removing a captain again deletes the team and,
+                                once fixtures exist, the season's whole
+                                schedule. Change captain is the cheap way back.
+                                Also a real SubmitButton, so it has a pending
+                                state and can't be double-submitted. */}
                             <SubmitButton
                               variant="ghost"
                               size="sm"
                               className="text-xs text-accent hover:underline"
-                              confirm={`Make ${p.user.name} a captain? They get a team, and the only way back is removing that team — which also clears the schedule once one exists.`}
+                              confirm={`Make ${p.user.name} a captain? They get their own team. Change captain can hand that team to someone else later; removing the team also clears the schedule once one exists.`}
                             >
                               make captain
                             </SubmitButton>

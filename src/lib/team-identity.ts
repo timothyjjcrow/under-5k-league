@@ -218,6 +218,39 @@ export function uniqueDefaultTeamName(
 }
 
 /**
+ * Is `name` the one addCaptain generated for this captain ("Zai's Team", or
+ * "Zai's Team 2" when that was taken)? A name somebody typed is not.
+ */
+export function isGeneratedTeamNameFor(name: string, captainName: string): boolean {
+  const base = defaultTeamName(captainName);
+  if (teamNameKey(name) === teamNameKey(base)) return true;
+  const numbered = /^(.*) (\d+)$/.exec(normalizeTeamName(name));
+  if (!numbered || Number(numbered[2]) < 2) return false;
+  const suffix = ` ${numbered[2]}`;
+  return (
+    teamNameKey(numbered[1]) ===
+    teamNameKey(capLength(base, TEAM_NAME_MAX_LENGTH - suffix.length).trim())
+  );
+}
+
+/**
+ * A team's name after an admin changes its captain before the draft. A name
+ * someone chose stays (that is why the swap keeps the team). A name still
+ * generated from the outgoing captain would now name the wrong person, so it
+ * follows the new captain, numbered past the other teams' names.
+ */
+export function teamNameAfterCaptainChange(
+  currentName: string,
+  outgoingCaptainName: string,
+  incomingCaptainName: string,
+  otherTeamNames: readonly string[],
+): string {
+  return isGeneratedTeamNameFor(currentName, outgoingCaptainName)
+    ? uniqueDefaultTeamName(incomingCaptainName, otherTeamNames)
+    : currentName;
+}
+
+/**
  * What a returning captain's new team keeps from the last team they captained
  * (their own account only — the caller looks up teams by captainId). Nothing
  * is carried that would be worse than the default: a generated

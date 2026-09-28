@@ -66,7 +66,7 @@ const UNRECOVERABLE: Array<{ action: string; why: string }> = [
   },
   {
     action: "removeCaptain",
-    why: "deletes every fixture in the season, not just that team's",
+    why: "once fixtures exist, deletes every fixture in the season, not just that team's",
   },
 ];
 

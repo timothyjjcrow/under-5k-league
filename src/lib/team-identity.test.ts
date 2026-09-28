@@ -9,6 +9,8 @@ import {
   teamIdentitySummary,
   teamNameKey,
   TEAM_NAME_MAX_LENGTH,
+  isGeneratedTeamNameFor,
+  teamNameAfterCaptainChange,
   uniqueDefaultTeamName,
 } from "./team-identity";
 import { SEASON_STATUS } from "./constants";
@@ -307,5 +309,54 @@ describe("uniqueDefaultTeamName", () => {
     expect(second.length).toBeLessThanOrEqual(TEAM_NAME_MAX_LENGTH);
     expect(second.endsWith(" 2")).toBe(true);
     expect(teamNameKey(second)).not.toBe(teamNameKey(first));
+  });
+});
+
+describe("isGeneratedTeamNameFor", () => {
+  it("is true only for the name addCaptain gave this captain", () => {
+    expect(isGeneratedTeamNameFor("Zai's Team", "Zai")).toBe(true);
+    expect(isGeneratedTeamNameFor("Zai's Team 3", "Zai")).toBe(true);
+    expect(isGeneratedTeamNameFor("Zai's Team 1", "Zai")).toBe(false);
+    expect(isGeneratedTeamNameFor("Zai's Squad", "Zai")).toBe(false);
+    expect(isGeneratedTeamNameFor("Mira's Team", "Zai")).toBe(false);
+  });
+});
+
+describe("teamNameAfterCaptainChange", () => {
+  it("keeps a name somebody chose", () => {
+    expect(
+      teamNameAfterCaptainChange("Radiant Raccoons", "Zai", "Mira", []),
+    ).toBe("Radiant Raccoons");
+    // Another captain's generated name is a chosen name for this team.
+    expect(teamNameAfterCaptainChange("Bob's Team", "Zai", "Mira", [])).toBe(
+      "Bob's Team",
+    );
+  });
+
+  it("moves the outgoing captain's generated name to the new captain", () => {
+    expect(teamNameAfterCaptainChange("Zai's Team", "Zai", "Mira", [])).toBe(
+      "Mira's Team",
+    );
+    expect(teamNameAfterCaptainChange("zai's  TEAM", "Zai", "Mira", [])).toBe(
+      "Mira's Team",
+    );
+    // The numbered form addCaptain used when "Zai's Team" was taken.
+    expect(teamNameAfterCaptainChange("Zai's Team 2", "Zai", "Mira", [])).toBe(
+      "Mira's Team",
+    );
+  });
+
+  it("numbers the new name past the other teams' names", () => {
+    expect(
+      teamNameAfterCaptainChange("Zai's Team", "Zai", "Mira", ["Mira's Team"]),
+    ).toBe("Mira's Team 2");
+  });
+
+  it("recognises a long generated name that was cut to fit its number", () => {
+    const long = "x".repeat(TEAM_NAME_MAX_LENGTH);
+    const numbered = uniqueDefaultTeamName(long, [uniqueDefaultTeamName(long, [])]);
+    expect(teamNameAfterCaptainChange(numbered, long, "Mira", [])).toBe(
+      "Mira's Team",
+    );
   });
 });
