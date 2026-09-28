@@ -138,11 +138,11 @@ describe("howItWorksAction", () => {
       expect(howItWorksAction({ ...base, phase })).toEqual({
         kind: "sign-in",
         next: "/me",
-        label: "Sign up as a standin",
+        label: "Register as a standin",
       });
       expect(
         howItWorksAction({ ...base, phase, signedIn: true }),
-      ).toMatchObject({ href: "/me", label: "Sign up as a standin" });
+      ).toMatchObject({ href: "/me", label: "Register as a standin" });
       // Someone already playing or covering has nothing to sign up for.
       expect(
         howItWorksAction({

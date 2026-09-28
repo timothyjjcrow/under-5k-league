@@ -119,7 +119,7 @@ export function howItWorksAction({
       : { kind: "sign-in", next: "/me", label: join.label };
   }
   if (standinSignupOpen({ phase, registrationStatus }) && !onRoster) {
-    const label = "Sign up as a standin";
+    const label = "Register as a standin";
     return signedIn
       ? { kind: "link", href: "/me", label }
       : { kind: "sign-in", next: "/me", label };

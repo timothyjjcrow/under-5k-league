@@ -186,8 +186,8 @@ export default async function HowItWorksPage() {
             <div className="min-w-0">
               <dt className="font-semibold">Can&apos;t play every week?</dt>
               <dd className="mt-1 leading-relaxed text-muted">
-                Sign up as a standin: standins cover when a team is short, and
-                can sign up until the playoffs end. Or play{" "}
+                Register as a standin: standins cover when a team is short, and
+                can register until the playoffs end. Or play{" "}
                 <Link href="/inhouse" className={textLink()}>
                   inhouses
                 </Link>
