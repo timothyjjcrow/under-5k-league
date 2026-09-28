@@ -311,7 +311,7 @@ describe("editTeamIdentity — the captain's own team page", () => {
     expect(log.summary).toBe(`Set "Zai's Team" to a custom logo (as captain)`);
   });
 
-  it("posts a captain's changes to Discord at most once per window, logging every one", async () => {
+  it("announces every rename, and a captain's logo-only changes at most once per window, logging every one", async () => {
     const { home } = await league();
     signIn(home.user);
 
@@ -320,25 +320,39 @@ describe("editTeamIdentity — the captain's own team page", () => {
       fd({ teamId: home.team.id, name: "Radiant Raccoons" }),
     );
     expect(first).toEqual({ message: "Saved Radiant Raccoons" });
+    // A second rename inside the window is announced too: every rename is.
     const second = await editTeamIdentity(
       empty,
       fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/d.png" }),
     );
-    expect(second).toEqual({
+    expect(second).toEqual({ message: "Saved Dire Raccoons" });
+    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sendDiscordMessage).mock.calls[1][0]).toContain(
+      "**Radiant Raccoons** is now **Dire Raccoons**",
+    );
+    // A logo-only change inside the window is saved and logged, not posted.
+    const third = await editTeamIdentity(
+      empty,
+      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/e.png" }),
+    );
+    expect(third).toEqual({
       message:
-        "Saved Dire Raccoons. Discord already heard about a change to this team in the last 15 minutes, so this one wasn't posted there.",
+        "Saved Dire Raccoons. Discord already heard about a change to this team in the last 15 minutes, so this logo change wasn't posted there.",
     });
-    expect((await teamRow(home.team.id)).name).toBe("Dire Raccoons");
-    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(1);
-    expect(await prisma.adminAction.count()).toBe(2);
+    expect((await teamRow(home.team.id)).logoUrl).toBe("https://cdn.example/e.png");
+    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(2);
+    expect(await prisma.adminAction.count()).toBe(3);
 
     // An admin's edit is never held back.
     const admin = await makeUser("Tim", "ADMIN");
     signIn(admin);
-    await editTeamIdentity(empty, fd({ teamId: home.team.id, name: "Admin Raccoons" }));
-    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(2);
+    await editTeamIdentity(
+      empty,
+      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/f.png" }),
+    );
+    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(3);
 
-    // Once the window has passed, the captain's next change posts again.
+    // Once the window has passed, the captain's next logo change posts again.
     await prisma.setting.update({
       where: { key: `teamIdentityPing:${home.team.id}` },
       data: { value: new Date(Date.now() - 16 * 60_000).toISOString() },
@@ -346,13 +360,10 @@ describe("editTeamIdentity — the captain's own team page", () => {
     signIn(home.user);
     const later = await editTeamIdentity(
       empty,
-      fd({ teamId: home.team.id, name: "Radiant Raccoons" }),
+      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/g.png" }),
     );
-    expect(later).toEqual({ message: "Saved Radiant Raccoons" });
-    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(3);
-    expect(vi.mocked(sendDiscordMessage).mock.calls[2][0]).toContain(
-      "**Admin Raccoons** is now **Radiant Raccoons**",
-    );
+    expect(later).toEqual({ message: "Saved Dire Raccoons" });
+    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(4);
   });
 
   it("refuses the outgoing captain when captaincy moves mid-save", async () => {
