@@ -531,6 +531,14 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.getByRole("link", { name: "Review Season 9 (fixture)" }),
   ).toBeVisible();
+  // The title stays on the front page until another season crowns someone.
+  const defending = page
+    .locator("#main")
+    .getByRole("link", { name: /\(Season 9 \(fixture\)\)$/ });
+  await expect(
+    page.getByText("Defending champions:", { exact: true }),
+  ).toBeVisible();
+  await expect(defending).toHaveAttribute("href", /^\/seasons\//);
   await expectNoHorizontalOverflow(page, "/ offseason home");
 
   await page.goto("/how-it-works");
@@ -621,6 +629,7 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.locator("#main").getByText("Signups open", { exact: true }),
   ).toBeVisible();
+  await expect(defending).toBeVisible();
   await expectNoHorizontalOverflow(page, "/ next-season signups");
   assertNoErrors();
 });

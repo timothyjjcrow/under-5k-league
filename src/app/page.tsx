@@ -137,6 +137,10 @@ import {
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
 import { homeMetadata } from "@/lib/link-preview-metadata";
+import {
+  getDefendingChampion,
+  type DefendingChampion,
+} from "@/lib/official-champion";
 import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
 
 const PHASE_ORDER = [
@@ -172,11 +176,14 @@ export default async function Home() {
   const snapshot = await getSeasonSnapshot(user?.id);
 
   if (!snapshot) {
-    const latestSeason = await prisma.season.findFirst({
-      where: { isActive: false },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true, status: true },
-    });
+    const [latestSeason, defending] = await Promise.all([
+      prisma.season.findFirst({
+        where: { isActive: false },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, name: true, status: true },
+      }),
+      getDefendingChampion(null),
+    ]);
     return (
       <div className="mx-auto max-w-2xl py-10">
         <Hero
@@ -195,6 +202,12 @@ export default async function Home() {
             )
           }
         />
+        {defending ? (
+          <DefendingChampionLine
+            champion={defending}
+            className="mt-4 justify-center"
+          />
+        ) : null}
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href="/inhouse" className={buttonClasses("accent")}>
             Play an inhouse <LinkArrow />
@@ -391,6 +404,13 @@ export default async function Home() {
       ])
     : [[] as Match[], 0];
   const championPresentation = resolveChampionPresentation(season, matches);
+  // Until this season crowns someone, Home keeps naming the last champion.
+  // Signups and the draft only: from the regular season on, the dashboard is
+  // about this season's race.
+  const defending =
+    season.status === "SIGNUPS" || season.status === "DRAFT"
+      ? await getDefendingChampion(season.createdAt)
+      : null;
 
   // Stable phase facts: league counts should be readable from the first paint.
   let heroMeta: ReactNode = null;
@@ -560,35 +580,46 @@ export default async function Home() {
       />
     ) : null;
 
+  const hero = (
+    <Hero
+      phase={season.status}
+      phaseLabel={seasonPhaseLabel(season.status, snapshot.draftStatus)}
+      active={season.status === "DRAFT" ? draftPresentation.live : undefined}
+      title={season.name}
+      subtitle={
+        signedOutSignups
+          ? ""
+          : phaseSubtitle(season.status, {
+              canDraft: snapshot.capacity.canDraft,
+              draftStatus: snapshot.draftStatus,
+              hasChampion: championPresentation.championTeamId != null,
+            })
+      }
+      pitch={
+        signedOutSignups ? (
+          // It takes the phase sentence's place: the badge, the counts and
+          // the Steam button already say signups are open and what is
+          // missing, and a newcomer first needs to know what this is.
+          <LeaguePitch matchNight={announcedMatchNight(season, [])} />
+        ) : undefined
+      }
+      action={heroAction}
+      meta={heroMeta}
+      aside={heroAside}
+      rail={<SeasonTimeline phase={season.status} />}
+    />
+  );
+
   return (
     <div className="space-y-8">
-      <Hero
-        phase={season.status}
-        phaseLabel={seasonPhaseLabel(season.status, snapshot.draftStatus)}
-        active={season.status === "DRAFT" ? draftPresentation.live : undefined}
-        title={season.name}
-        subtitle={
-          signedOutSignups
-            ? ""
-            : phaseSubtitle(season.status, {
-                canDraft: snapshot.capacity.canDraft,
-                draftStatus: snapshot.draftStatus,
-                hasChampion: championPresentation.championTeamId != null,
-              })
-        }
-        pitch={
-          signedOutSignups ? (
-            // It takes the phase sentence's place: the badge, the counts and
-            // the Steam button already say signups are open and what is
-            // missing, and a newcomer first needs to know what this is.
-            <LeaguePitch matchNight={announcedMatchNight(season, [])} />
-          ) : undefined
-        }
-        action={heroAction}
-        meta={heroMeta}
-        aside={heroAside}
-        rail={<SeasonTimeline phase={season.status} />}
-      />
+      {defending ? (
+        <div className="space-y-3">
+          {hero}
+          <DefendingChampionLine champion={defending} />
+        </div>
+      ) : (
+        hero
+      )}
       {/* Signed up but unreachable — the one cohort every Discord notification
           in the app silently skips. Renders nothing for everyone else, and is
           phase-independent on purpose: a player who signs up during SIGNUPS and
@@ -1299,6 +1330,43 @@ async function InhouseStrip() {
 }
 
 // ---------- SIGNUPS ----------
+
+/**
+ * "Defending champions: Radiant Raccoons (Season 9) →", one line under the
+ * hero from the offseason until the next season crowns someone. The link goes
+ * to that season's page, where the final and the rosters are.
+ */
+function DefendingChampionLine({
+  champion,
+  className,
+}: {
+  champion: DefendingChampion;
+  className?: string;
+}) {
+  return (
+    <p
+      className={cn(
+        "flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted",
+        className,
+      )}
+    >
+      <TeamCrest
+        name={champion.teamName}
+        seed={champion.teamId}
+        logoUrl={champion.logoUrl}
+        size={20}
+        className="rounded"
+      />
+      <span>Defending champions:</span>
+      <Link
+        href={`/seasons/${champion.seasonId}`}
+        className={cn(textLink(), "min-w-0 font-medium [overflow-wrap:anywhere]")}
+      >
+        {champion.teamName} ({champion.seasonName}) <LinkArrow />
+      </Link>
+    </p>
+  );
+}
 
 /**
  * The league in one sentence plus who can join and when games are, for a
