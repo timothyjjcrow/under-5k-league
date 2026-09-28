@@ -32,6 +32,7 @@ function panel(
     rosterTeamIds: ["A"],
     withdrawnTeamIds: new Set(),
     standin: false,
+    championTeamId: null,
     bookings: [],
     nowMs: now,
     ...over,
@@ -159,8 +160,15 @@ describe("myMatchPanel: when there is nothing to check in for", () => {
 
   describe("in the playoffs", () => {
     const regular = match({ id: "r", status: "COMPLETED", winnerTeamId: "A" });
-    const playoffs = (matches: PanelMatch[]) =>
-      panel({ seasonStatus: "PLAYOFFS", matches: [regular, ...matches] }).idle;
+    const playoffs = (
+      matches: PanelMatch[],
+      championTeamId: string | null = null,
+    ) =>
+      panel({
+        seasonStatus: "PLAYOFFS",
+        championTeamId,
+        matches: [regular, ...matches],
+      }).idle;
 
     it("waits for the bracket to be drawn", () => {
       expect(playoffs([])).toBe("bracket-pending");
@@ -191,13 +199,25 @@ describe("myMatchPanel: when there is nothing to check in for", () => {
       ).toBe("no-upcoming");
     });
 
-    it("crowns the final's winner", () => {
-      expect(
-        playoffs([
-          match({ id: "sf", phase: "PLAYOFF", status: "COMPLETED", winnerTeamId: "A" }),
-          match({ id: "f", phase: "FINAL", status: "COMPLETED", winnerTeamId: "A" }),
-        ]),
-      ).toBe("champion");
+    const final = (winnerTeamId: string) => [
+      match({ id: "sf", phase: "PLAYOFF", status: "COMPLETED", winnerTeamId: "A" }),
+      match({ id: "f", phase: "FINAL", status: "COMPLETED", winnerTeamId }),
+    ];
+
+    it("crowns the final's winner only once the title is confirmed", () => {
+      expect(playoffs(final("A"), "A")).toBe("champion");
+    });
+
+    it("holds the title while a finished final is unconfirmed", () => {
+      // The final's winner alone is not the champion: every other surface
+      // withholds the title until the league confirms it.
+      expect(playoffs(final("A"))).toBe("final-review");
+      // The losing finalist isn't told the playoffs go on without them.
+      expect(playoffs(final("B"))).toBe("final-review");
+    });
+
+    it("says the season is over for a finalist who lost a confirmed final", () => {
+      expect(playoffs(final("B"), "B")).toBe("season-over");
     });
   });
 });

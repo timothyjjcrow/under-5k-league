@@ -590,7 +590,11 @@ export default async function Home() {
     heroMeta = (
       <>
         {alive > 0 ? (
-          <HeroStat value={alive} label="teams still alive" tone="accent" />
+          <HeroStat
+            value={alive}
+            label={alive === 1 ? "team still alive" : "teams still alive"}
+            tone="accent"
+          />
         ) : null}
         {currentRoundLabel(playoff) ? (
           <Badge tone="accent">{currentRoundLabel(playoff)}</Badge>
@@ -635,6 +639,7 @@ export default async function Home() {
           teamSize={season.teamSize}
           matches={matches}
           teams={snapshot.teams}
+          championTeamId={championPresentation.championTeamId}
           standin={
             isActiveReg &&
             snapshot.myReg?.type === REGISTRATION_TYPE.STANDIN
@@ -965,6 +970,7 @@ async function MyNextMatch({
   teamSize,
   matches,
   teams,
+  championTeamId,
   standin,
 }: {
   seasonId: string;
@@ -975,6 +981,8 @@ async function MyNextMatch({
   /** The season's matches, as Home already read them. */
   matches: Match[];
   teams: SeasonSnapshot["teams"];
+  /** The confirmed champion (`resolveChampionPresentation`), if any. */
+  championTeamId: string | null;
   /** The viewer has an ACTIVE standin registration. */
   standin: boolean;
 }) {
@@ -1010,6 +1018,7 @@ async function MyNextMatch({
       rosterTeams.filter((t) => t.withdrawn).map((t) => t.id),
     ),
     standin,
+    championTeamId,
     matches,
     bookings,
     nowMs,
@@ -1326,6 +1335,12 @@ function idleCopy(
       return {
         title: "Champions",
         text: "Your team won the final.",
+        ...bracket,
+      };
+    case "final-review":
+      return {
+        title: "The final is under review",
+        text: "Your team played the final. The champion is named once the league confirms the result.",
         ...bracket,
       };
     case "season-over":

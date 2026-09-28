@@ -35,7 +35,9 @@ export type PanelBooking = {
  *   result is overdue
  * - `bracket-pending`: playoffs, but the bracket isn't drawn yet
  * - `through`: won their round; the next one isn't drawn yet
- * - `champion`: won the final
+ * - `champion`: won the final, and the league has confirmed the title
+ * - `final-review`: played a finished final whose champion the league has
+ *   not confirmed (every other surface withholds the title then too)
  * - `season-over`: missed the playoffs or knocked out
  * - `withdrawn`: every team they are on has withdrawn
  * - `standin-list`: registered as a standin, no booking coming up
@@ -48,6 +50,7 @@ export type PanelIdle =
   | "bracket-pending"
   | "through"
   | "champion"
+  | "final-review"
   | "season-over"
   | "withdrawn"
   | "standin-list"
@@ -77,6 +80,9 @@ export function myMatchPanel<
   withdrawnTeamIds: ReadonlySet<string>;
   /** An ACTIVE standin registration. */
   standin: boolean;
+  /** The champion public pages may show (`resolveChampionPresentation`),
+   *  null while the title is unconfirmed. A final's winner alone is not it. */
+  championTeamId: string | null;
   matches: readonly M[];
   bookings: readonly B[];
   nowMs: number;
@@ -143,6 +149,7 @@ function idleState(
     seasonStatus: string;
     rosterTeamIds: readonly string[];
     standin: boolean;
+    championTeamId: string | null;
     matches: readonly PanelMatch[];
   },
   teamId: string | null,
@@ -160,8 +167,14 @@ function idleState(
     const decided = bracket.filter(
       (m) => plays(m) && m.status === MATCH_STATUS.COMPLETED && m.winnerTeamId,
     );
-    if (decided.some((m) => m.phase === MATCH_PHASE.FINAL && m.winnerTeamId === teamId))
-      return "champion";
+    // A finished final crowns no one by itself: the title shows only once
+    // the league confirms it, the same rule as every other surface. Until
+    // then both finalists hear that it is under review.
+    if (decided.some((m) => m.phase === MATCH_PHASE.FINAL)) {
+      if (input.championTeamId === teamId) return "champion";
+      if (input.championTeamId == null) return "final-review";
+      return "season-over";
+    }
     if (!bracket.some(plays) || decided.some((m) => m.winnerTeamId !== teamId))
       return "season-over";
     return bracket.some((m) => plays(m) && m.status !== MATCH_STATUS.COMPLETED)
