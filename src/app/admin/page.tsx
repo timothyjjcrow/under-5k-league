@@ -6717,12 +6717,14 @@ type NewsPostRow = {
  * Discord card — it is a diagnostic, and must never delay the controls above it.
  */
 async function AdminActivity() {
-  const rows = await recentAdminActions(40);
+  // A preview only: the full log, with search, lives at /admin/activity, so
+  // a 40-row copy here was the same list twice.
+  const rows = await recentAdminActions(5);
   return (
     <AdminSection
       id="adm-activity"
       title="Recent admin activity"
-      subtitle="Who changed what, newest first — the record of destructive actions."
+      subtitle="The last five changes, newest first. The full log is searchable on its own page."
     >
       <CardBody className="space-y-3">
         {rows.length === 0 ? (
@@ -6750,7 +6752,7 @@ async function AdminActivity() {
           </ul>
         )}
         <Link href="/admin/activity" className={textLink()}>
-          Search and browse all recorded activity →
+          All admin activity →
         </Link>
       </CardBody>
     </AdminSection>

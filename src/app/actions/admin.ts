@@ -133,7 +133,8 @@ import {
 } from "@/lib/discord";
 import { reachabilityNote } from "@/lib/discord-roles";
 import { mentionsOf } from "@/lib/discord-mentions";
-import { logAdminAction } from "@/lib/admin-log";
+import { fixtureLogName, logAdminAction } from "@/lib/admin-log";
+import { fixtureLogLabel } from "@/lib/admin-log-copy";
 import { productionDeleteBackupError } from "@/lib/backup-receipt.mjs";
 import {
   createInhouseBoard,
@@ -4987,10 +4988,7 @@ export async function assignStandin(
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
   await sendDiscordMessage(res.announcement, res.mentions);
-  await logAdminAction({
-    action: "assignStandin",
-    summary: `${res.message} (match ${str(formData, "matchId")})`,
-  });
+  await logAdminAction({ action: "assignStandin", summary: res.summary });
   refresh();
   // If the announcement structurally can't reach them (unlinked, not in the
   // server, stuck behind the rules screen), the person arranging the cover
@@ -5017,10 +5015,7 @@ export async function removeStandin(
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
-  await logAdminAction({
-    action: "removeStandin",
-    summary: `${res.message} (assignment ${str(formData, "assignmentId")})`,
-  });
+  await logAdminAction({ action: "removeStandin", summary: res.summary });
   refresh();
   return { message: res.message };
 }
@@ -5045,7 +5040,7 @@ export async function importGameAction(
   if (!res.ok) return { error: res.error };
   await logAdminAction({
     action: "importGameAction",
-    summary: `Imported Dota match ${dotaMatchId} into match ${matchId}`,
+    summary: `Imported Dota match ${dotaMatchId} into ${await fixtureLogName(matchId)}`,
   });
   refreshGames();
   return { ok: true, message: "Game imported" };
@@ -5083,7 +5078,7 @@ export async function autoDetectAction(
   if (res.imported > 0) {
     await logAdminAction({
       action: "autoDetectAction",
-      summary: `Auto-detected ${res.imported} game(s) for match ${matchId} after scanning ${res.scanned} player(s)`,
+      summary: `Auto-detected ${res.imported} game(s) for ${await fixtureLogName(matchId)} after scanning ${res.scanned} player(s)`,
     });
   }
   return {
@@ -5368,11 +5363,21 @@ export async function removeGame(
               championTeamId: true,
             },
           },
+          homeTeam: { select: { name: true } },
+          awayTeam: { select: { name: true } },
         },
       },
     },
   });
   if (!game) return { error: "That game is already gone" };
+  // Names, not ids: the log has no foreign keys and must read on its own.
+  const fixtureName = fixtureLogLabel({
+    phase: game.match.phase,
+    week: game.match.week,
+    bracketSlot: game.match.bracketSlot,
+    homeName: game.match.homeTeam.name,
+    awayName: game.match.awayTeam.name,
+  });
   const correctingCrownedFinal =
     game.match.phase === MATCH_PHASE.FINAL &&
     game.match.status === MATCH_STATUS.COMPLETED &&
@@ -5606,7 +5611,7 @@ export async function removeGame(
             actorName: admin.name,
             action: "removeGame",
             seasonId: match.seasonId,
-            summary: `Removed Dota game ${fresh.dotaMatchId} from fixture ${match.id} (week ${match.week}); score ${match.homeScore}-${match.awayScore} → ${projection.homeScore}-${projection.awayScore}`.slice(0, 500),
+            summary: `Removed Dota game ${fresh.dotaMatchId} from ${fixtureName}; score ${match.homeScore}-${match.awayScore} → ${projection.homeScore}-${projection.awayScore}`.slice(0, 500),
           },
         });
         await stampResultChange(tx);
@@ -6231,7 +6236,7 @@ export async function setMatchTime(
   if (!outcome.changed) return { message: "Kickoff time unchanged" };
   await logAdminAction({
     action: "setMatchTime",
-    summary: `${scheduledAt ? "Set" : "Cleared"} kickoff for match ${matchId} — cleared ${outcome.rsvps} check-in(s) and cancelled ${outcome.proposals} open reschedule proposal(s)`,
+    summary: `${scheduledAt ? "Set" : "Cleared"} the kickoff for ${await fixtureLogName(matchId)} — cleared ${outcome.rsvps} check-in(s) and cancelled ${outcome.proposals} open reschedule proposal(s)`,
     seasonId: outcome.seasonId,
   });
   refresh();
