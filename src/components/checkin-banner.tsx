@@ -12,6 +12,7 @@ import {
   standinSeatText,
   type CheckinSideView,
 } from "@/lib/checkin-side";
+import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { cn } from "@/lib/utils";
 
 /**
@@ -261,7 +262,7 @@ function SideSummary({
         </span>
         {side.role === "captain" && sideNeedsCover(side.counts) ? (
           <Link
-            href={`/matches/${matchId}#match-tools`}
+            href={matchAnchorPath(matchId, MATCH_ANCHOR.standins)}
             className={textLink("whitespace-nowrap")}
           >
             Line up cover <LinkArrow />
