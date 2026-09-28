@@ -5,6 +5,7 @@ import {
 } from "@/lib/draft-room-admin";
 import { prisma } from "@/lib/prisma";
 import {
+  generateRegularSchedule,
   makeCaptain,
   makePlayer,
   makeSeason,
@@ -86,9 +87,23 @@ describe("loadStartDraftPreflight", () => {
 describe("loadRegularSeasonStep", () => {
   it("offers the Regular season phase button's confirm in the Draft phase", async () => {
     const season = await makeSeason({ status: "DRAFT" });
+    await makeTeam(season.id, "Home", 0);
+    await makeTeam(season.id, "Away", 1);
+    await generateRegularSchedule(season.id);
     expect(await loadRegularSeasonStep(season)).toEqual({
       confirmation:
-        "Start the Regular season? League navigation and match tools update immediately, and Discord receives a league-start announcement.",
+        "Start the Regular season? Automatic result sync and the weekly Discord reminder switch on, captains can report results, and Discord gets a season-start post listing week 1's fixtures.",
+    });
+  });
+
+  // The Regular season waits for fixtures, so until the schedule is
+  // generated the finished room points the admin at it instead.
+  it("points at the schedule until it exists", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    await makeTeam(season.id, "Home", 0);
+    await makeTeam(season.id, "Away", 1);
+    expect(await loadRegularSeasonStep(season)).toEqual({
+      needsSchedule: true,
     });
   });
 

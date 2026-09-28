@@ -172,13 +172,36 @@ describe("adminNextStep — draft", () => {
     expect(s.title).toMatch(/PAUSED/);
   });
 
-  it("keeps the draft-complete banner that everything else was modelled on", () => {
+  it("sends a finished auction to the schedule first, then names the season start", () => {
+    // The Regular season waits for fixtures, so the step names both moves
+    // in order and links to the schedule card.
     const s = at({
       seasonStatus: SEASON_STATUS.DRAFT,
       draftStatus: DRAFT_STATUS.COMPLETE,
     });
-    expect(s.title).toMatch(/Regular season/);
+    expect(s.title).toBe(
+      "Next step: generate the schedule (with a first match night), then start the Regular season.",
+    );
+    expect(s.jump?.href).toBe("#adm-schedule");
+    expect(s.detail).toContain(`“${START_REGULAR_SEASON}”`);
     expect(s.detail).toMatch(/result sync/i);
+    expect(s.detail).toMatch(/week 1/);
+  });
+
+  it("points at the phase button once the schedule exists", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.DRAFT,
+      draftStatus: DRAFT_STATUS.COMPLETE,
+      regularMatchCount: 6,
+      scheduledRegularCount: 6,
+      pendingRegularResults: 6,
+    });
+    expect(s.title).toBe("Next step: start the Regular season.");
+    expect(s.jump?.href).toBe("#adm-season");
+    expect(s.detail).toContain(`“${START_REGULAR_SEASON}”`);
+    // Check-in already works in Draft once fixtures have match nights, so
+    // the step must not claim it waits for the season.
+    expect(s.detail).not.toMatch(/check-in/i);
   });
 });
 

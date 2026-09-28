@@ -1188,6 +1188,9 @@ function SeasonControls({
         target: phase,
         draftStatus: data.draft?.status,
         matchCount: data.matches.length,
+        regularMatchCount: data.matches.filter(
+          (match) => match.phase === MATCH_PHASE.REGULAR,
+        ).length,
         hasPlayedResult,
         hasImportedGame,
         postseasonMatchCount: playoff.length,

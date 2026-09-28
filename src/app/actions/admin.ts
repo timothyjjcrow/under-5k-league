@@ -814,6 +814,57 @@ export async function reactivateSeasonAction(
   };
 }
 
+/**
+ * The opening week as the season-start post lists it: the first week's
+ * fixtures in kickoff order, and the teams with a bye. Read after the phase
+ * commits, for the announcement only.
+ */
+async function seasonOpeningSlate(seasonId: string) {
+  const [fixtures, teams] = await Promise.all([
+    prisma.match.findMany({
+      where: { seasonId, phase: MATCH_PHASE.REGULAR },
+      orderBy: [{ week: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: {
+        week: true,
+        scheduledAt: true,
+        homeTeamId: true,
+        awayTeamId: true,
+        homeTeam: { select: { name: true } },
+        awayTeam: { select: { name: true } },
+      },
+    }),
+    prisma.team.findMany({
+      where: { seasonId, withdrawn: false },
+      orderBy: { draftOrder: "asc" },
+      select: { id: true, name: true },
+    }),
+  ]);
+  if (fixtures.length === 0) return undefined;
+  const week = fixtures[0].week;
+  const opening = fixtures
+    .filter((fixture) => fixture.week === week)
+    .map((fixture, index) => ({ fixture, index }))
+    // Kickoff order, untimed last, creation order within a kickoff.
+    .sort(
+      (a, b) =>
+        (a.fixture.scheduledAt?.getTime() ?? Infinity) -
+          (b.fixture.scheduledAt?.getTime() ?? Infinity) || a.index - b.index,
+    )
+    .map(({ fixture }) => fixture);
+  const playing = new Set(
+    opening.flatMap((fixture) => [fixture.homeTeamId, fixture.awayTeamId]),
+  );
+  return {
+    week,
+    fixtures: opening.map((fixture) => ({
+      home: fixture.homeTeam.name,
+      away: fixture.awayTeam.name,
+      whenMs: fixture.scheduledAt?.getTime() ?? null,
+    })),
+    byes: teams.filter((team) => !playing.has(team.id)).map((team) => team.name),
+  };
+}
+
 /** Apply a policy-approved, non-destructive phase handoff or recovery. */
 export async function setSeasonPhase(
   _prev: ActionResult,
@@ -838,30 +889,40 @@ export async function setSeasonPhase(
   if (season.status === target) {
     return { error: `The season is already in ${PHASE_LABELS[target]}` };
   }
-  const [draft, matchCount, playedResults, importedGames, postseasonMatches] =
-    await Promise.all([
-      prisma.draft.findUnique({
-        where: { seasonId: season.id },
-        select: { status: true },
-      }),
-      prisma.match.count({ where: { seasonId: season.id } }),
-      prisma.match.count({
-        where: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
-      }),
-      prisma.game.count({ where: { match: { seasonId: season.id } } }),
-      prisma.match.findMany({
-        where: {
-          seasonId: season.id,
-          phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
-        },
-        select: { phase: true, bracketSlot: true },
-      }),
-    ]);
+  const [
+    draft,
+    matchCount,
+    regularMatchCount,
+    playedResults,
+    importedGames,
+    postseasonMatches,
+  ] = await Promise.all([
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
+    prisma.match.count({ where: { seasonId: season.id } }),
+    prisma.match.count({
+      where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
+    }),
+    prisma.match.count({
+      where: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
+    }),
+    prisma.game.count({ where: { match: { seasonId: season.id } } }),
+    prisma.match.findMany({
+      where: {
+        seasonId: season.id,
+        phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+      },
+      select: { phase: true, bracketSlot: true },
+    }),
+  ]);
   const transition = seasonPhasePolicy({
     current: season.status,
     target,
     draftStatus: draft?.status,
     matchCount,
+    regularMatchCount,
     hasPlayedResult: playedResults > 0,
     hasImportedGame: importedGames > 0,
     postseasonMatchCount: postseasonMatches.length,
@@ -882,6 +943,7 @@ export async function setSeasonPhase(
           currentSeason,
           currentDraft,
           currentMatchCount,
+          currentRegularCount,
           playedNow,
           gamesNow,
           postseasonNow,
@@ -892,6 +954,9 @@ export async function setSeasonPhase(
             select: { status: true },
           }),
           tx.match.count({ where: { seasonId: season.id } }),
+          tx.match.count({
+            where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
+          }),
           tx.match.count({
             where: {
               seasonId: season.id,
@@ -921,6 +986,7 @@ export async function setSeasonPhase(
           target,
           draftStatus: currentDraft?.status,
           matchCount: currentMatchCount,
+          regularMatchCount: currentRegularCount,
           hasPlayedResult: playedNow > 0,
           hasImportedGame: gamesNow > 0,
           postseasonMatchCount: postseasonNow.length,
@@ -970,8 +1036,10 @@ export async function setSeasonPhase(
     season.status === SEASON_STATUS.DRAFT &&
     target === SEASON_STATUS.REGULAR_SEASON
   ) {
+    // The phase has committed; a failed read only costs the post its list.
+    const opening = await seasonOpeningSlate(season.id).catch(() => undefined);
     const sent = await sendDiscordMessage(
-      regularSeasonStartedMessage(season.name),
+      regularSeasonStartedMessage(season.name, opening),
     );
     if (!sent) {
       notificationWarning =

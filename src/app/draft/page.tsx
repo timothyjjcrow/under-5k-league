@@ -113,22 +113,32 @@ export default async function DraftPage() {
       }
     : undefined;
   // Same action and confirm as the Regular season phase button on /admin.
-  const adminFinish = regularSeasonStep ? (
-    <ActionForm
-      action={setSeasonPhase}
-      hidden={{
-        expectedActiveSeasonId: season.id,
-        phase: SEASON_STATUS.REGULAR_SEASON,
-      }}
-    >
-      <SubmitButton
-        variant="accent"
-        confirm={regularSeasonStep.confirmation}
+  // The season waits for fixtures, so a finished auction with no schedule
+  // points at the schedule card instead.
+  const adminFinish =
+    regularSeasonStep && "needsSchedule" in regularSeasonStep ? (
+      <Link
+        href="/admin#adm-schedule"
+        className={buttonClasses("accent", "md")}
       >
-        Start the Regular season
-      </SubmitButton>
-    </ActionForm>
-  ) : undefined;
+        Generate the schedule first
+      </Link>
+    ) : regularSeasonStep ? (
+      <ActionForm
+        action={setSeasonPhase}
+        hidden={{
+          expectedActiveSeasonId: season.id,
+          phase: SEASON_STATUS.REGULAR_SEASON,
+        }}
+      >
+        <SubmitButton
+          variant="accent"
+          confirm={regularSeasonStep.confirmation}
+        >
+          Start the Regular season
+        </SubmitButton>
+      </ActionForm>
+    ) : undefined;
 
   return (
     <div className="space-y-4">

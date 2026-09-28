@@ -7,8 +7,9 @@ import { MISSING_LEAGUE_TICKET_WARNING } from "./match-hosting";
  *
  * The panel had exactly ONE next-step banner — draft-complete → Regular season —
  * added because that transition is silent and everything it gates (auto result
- * sync, match-night check-in, the weekly Discord reminder, the Schedule/Leaders
- * nav) fails QUIETLY when it is missed. But that is not the only silent
+ * sync, result reporting, the weekly Discord reminder, the Leaders nav) fails
+ * QUIETLY when it is missed. The schedule comes first: the Regular season
+ * waits for fixtures, so that step names both, in order. But that is not the only silent
  * transition, it is just the first one anyone got burned by:
  *
  * - A generated schedule with no kickoff times disables auto-sync, week
@@ -129,8 +130,9 @@ const JUMP = {
   tiebreakers: { href: "#adm-tiebreakers", label: "Go to Tiebreakers" },
 } as const satisfies Record<string, NextStepJump>;
 
-/** The phase card's forward button into the Regular season. */
-export const START_REGULAR_SEASON = "Start regular season";
+/** The phase card's forward button into the Regular season. The draft room
+ * offers the same move under the same name once the auction is finished. */
+export const START_REGULAR_SEASON = "Start the Regular season";
 
 export type PhaseAdvance = {
   target: SeasonStatus;
@@ -163,7 +165,7 @@ export function phaseAdvance(seasonStatus: string): PhaseAdvance | null {
     return {
       target: SEASON_STATUS.REGULAR_SEASON,
       label: START_REGULAR_SEASON,
-      hint: "Turns on automatic result sync and the weekly Discord reminder, and tells the league on Discord that the season has started.",
+      hint: "Turns on automatic result sync, result reporting and the weekly Discord reminder, and posts week 1's fixtures to Discord.",
     };
   }
   return null;
@@ -250,10 +252,20 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       };
     }
     if (draftStatus === DRAFT_STATUS.COMPLETE) {
+      // Two steps in a fixed order: the Regular season refuses to start
+      // without fixtures, and its Discord post lists week 1.
+      if (regularMatchCount === 0) {
+        return {
+          title:
+            "Next step: generate the schedule (with a first match night), then start the Regular season.",
+          detail: `The auction is finished. Generate the round robin in Schedule & results; players can check in as soon as fixtures have match nights. Then use “${START_REGULAR_SEASON}” in phase control: it switches on automatic result sync and the weekly Discord reminder and posts week 1's fixtures to Discord.`,
+          tone: "action",
+          jump: JUMP.schedule,
+        };
+      }
       return {
-        title: "Next step: move the season to Regular season.",
-        detail:
-          "The auction is finished, but until you do, automatic result sync, match-night check-in, the weekly Discord reminder and the Schedule/Leaders nav links all stay switched off.",
+        title: "Next step: start the Regular season.",
+        detail: `The schedule is ready. Until you press “${START_REGULAR_SEASON}” in phase control, automatic result sync, the weekly Discord reminder and result reporting stay off, and Discord hasn't been told the season has started.`,
         tone: "action",
         jump: JUMP.phase,
       };

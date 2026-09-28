@@ -236,8 +236,42 @@ export function draftCompleteAnnouncement(
   };
 }
 
-export function regularSeasonStartedMessage(seasonName: string): string {
-  return `⚔️ **The ${name(seasonName)} Regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
+/** The most opening fixtures the season-start post lists one per line. */
+const OPENING_FIXTURES_SHOWN = 12;
+
+/**
+ * The season-start post. The Regular season can only start once fixtures
+ * exist, so the post carries the opening week: who plays whom and when, and
+ * who has the bye. Without it no player heard their week-1 opponent or
+ * kickoff until the reminder a day before.
+ */
+export function regularSeasonStartedMessage(
+  seasonName: string,
+  opening?: {
+    week: number;
+    fixtures: { home: string; away: string; whenMs: number | null }[];
+    byes: string[];
+  },
+): string {
+  const head = `⚔️ **The ${name(seasonName)} Regular season is live.**`;
+  const link = `<${resolveSiteUrl()}/schedule>`;
+  if (!opening || opening.fixtures.length === 0) {
+    return `${head} Check the schedule, match times, and availability for opening week: ${link}`;
+  }
+  const shown = opening.fixtures.slice(0, OPENING_FIXTURES_SHOWN);
+  const lines = shown.map((f) => {
+    const when =
+      f.whenMs != null && Number.isFinite(f.whenMs)
+        ? ` — <t:${Math.floor(f.whenMs / 1000)}:F>`
+        : "";
+    return `• ${name(f.home)} vs ${name(f.away)}${when}`;
+  });
+  const more = opening.fixtures.length - shown.length;
+  if (more > 0) lines.push(`• and ${more} more on the schedule`);
+  const byes = opening.byes.length
+    ? `\nBye: ${opening.byes.map((team) => name(team)).join(", ")}`
+    : "";
+  return `${head} Week ${opening.week}:\n${lines.join("\n")}${byes}\nCheck in for your match and see the full schedule: ${link}`;
 }
 
 export function draftPausedMessage(seasonName: string): string {

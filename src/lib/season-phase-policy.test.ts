@@ -19,6 +19,7 @@ const base = (
   target: SEASON_STATUS.DRAFT,
   draftStatus: null,
   matchCount: 0,
+  regularMatchCount: 0,
   hasPlayedResult: false,
   hasImportedGame: false,
   postseasonMatchCount: 0,
@@ -83,6 +84,8 @@ describe("seasonPhasePolicy — normal lifecycle", () => {
               current: row.current,
               target,
               draftStatus: row.draftStatus,
+              // A schedule exists from the finished auction on.
+              regularMatchCount: row.current === SEASON_STATUS.SIGNUPS ? 0 : 6,
               postseasonMatchCount: row.postseasonMatchCount,
               postseasonBracketReady: row.postseasonMatchCount > 0,
               hasChampion: row.hasChampion,
@@ -103,6 +106,43 @@ describe("seasonPhasePolicy — normal lifecycle", () => {
     );
     expect(state.available).toBe(false);
     expect(state.reason).toMatch(/finish the auction/i);
+  });
+
+  // Starting with no fixtures posted "season is live" to Discord with
+  // nothing to play and told every rostered player they had no fixture.
+  it("waits for the schedule before the Regular season starts", () => {
+    const state = seasonPhasePolicy(
+      base({
+        current: SEASON_STATUS.DRAFT,
+        target: SEASON_STATUS.REGULAR_SEASON,
+        draftStatus: DRAFT_STATUS.COMPLETE,
+      }),
+    );
+    expect(state.available).toBe(false);
+    expect(state.reason).toMatch(/Generate the schedule first/);
+    expect(state.reason).toMatch(/first match night/);
+    const ready = seasonPhasePolicy(
+      base({
+        current: SEASON_STATUS.DRAFT,
+        target: SEASON_STATUS.REGULAR_SEASON,
+        draftStatus: DRAFT_STATUS.COMPLETE,
+        matchCount: 3,
+        regularMatchCount: 3,
+      }),
+    );
+    expect(ready.available).toBe(true);
+    expect(ready.confirmation).toMatch(/week 1's fixtures/);
+  });
+
+  it("names the unfinished auction before the missing schedule", () => {
+    const state = seasonPhasePolicy(
+      base({
+        current: SEASON_STATUS.DRAFT,
+        target: SEASON_STATUS.REGULAR_SEASON,
+        draftStatus: DRAFT_STATUS.PAUSED,
+      }),
+    );
+    expect(state.reason).toMatch(/paused, not finished/);
   });
 
   it("does not open Draft over existing match data", () => {

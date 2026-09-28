@@ -5,6 +5,7 @@ import {
   haystackOf,
   sourceFiles,
 } from "../../../test/support/source-files";
+import { START_REGULAR_SEASON } from "../../lib/admin-next-step";
 
 /**
  * Copy on /admin must not name a control that doesn't exist.
@@ -262,6 +263,13 @@ describe("admin copy names only controls that exist", () => {
       ).toBe(true);
     }
     expect(page).toContain("href={nextStep.jump.href}");
+  });
+
+  // The start-of-season step quotes the phase button by name. The label is
+  // phaseAdvance's, so the check is that both pages render that name.
+  it("the start-of-season step names the button the phase card and draft room render", () => {
+    expect(read("src/app/admin/page.tsx")).toContain("{advance.label}");
+    expect(read("src/app/draft/page.tsx")).toContain(START_REGULAR_SEASON);
   });
 
   // The missing-ticket warning is only worth anything if the page wires it.

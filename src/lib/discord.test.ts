@@ -129,6 +129,39 @@ describe("discord message formatters", () => {
     expect(msg).toContain("/schedule");
   });
 
+  it("lists the opening week's fixtures, kickoffs and byes in the season-start post", () => {
+    const whenMs = Date.UTC(2026, 9, 7, 18, 0);
+    const msg = regularSeasonStartedMessage("S1", {
+      week: 1,
+      fixtures: [
+        { home: "[free](https://evil.test)", away: "Beta", whenMs },
+        { home: "Gamma", away: "Delta", whenMs: null },
+      ],
+      byes: ["Eps_ilon"],
+    });
+    expect(msg).toContain("Week 1:");
+    expect(msg).toContain(`Beta — <t:${whenMs / 1000}:F>`);
+    // An untimed fixture is listed without a made-up time.
+    expect(msg).toContain("• Gamma vs Delta\n");
+    expect(msg).toContain("Bye: Eps\\_ilon");
+    // Team names are escaped like every other announcement.
+    expect(msg).not.toContain("](");
+    expect(msg).toContain("/schedule>");
+  });
+
+  it("caps a long opening week and says how many more are on the schedule", () => {
+    const fixtures = Array.from({ length: 15 }, (_, i) => ({
+      home: `H${i}`,
+      away: `A${i}`,
+      whenMs: null,
+    }));
+    const msg = regularSeasonStartedMessage("S1", { week: 1, fixtures, byes: [] });
+    expect(msg).toContain("• H11 vs A11");
+    expect(msg).not.toContain("• H12 vs A12");
+    expect(msg).toContain("• and 3 more on the schedule");
+    expect(msg).not.toContain("Bye:");
+  });
+
   it("announces a decided series with the winner and links its match page", () => {
     const msg = matchResultMessage({
       matchId: "m42",
