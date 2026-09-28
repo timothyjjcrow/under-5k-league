@@ -107,6 +107,8 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
             create: users.map((user, player) => ({
               userId: user.id,
               team: team(player),
+              // Ember (0) is always on team 1 and Wisp (5) always on team 2.
+              isCaptain: player === 0 || player === 5,
               mmr: 4500 - player * 100,
             })),
           },
@@ -120,6 +122,19 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
     await expect(page.getByText("Page 1 of 2")).toBeVisible();
     const history = page.getByRole("list", { name: "Completed inhouse games" });
     await expect(history.locator(":scope > li")).toHaveCount(100);
+    // Rows name the sides after their captains; a signed-out visitor played
+    // none of them, so no row says "You won" or "You lost".
+    await expect(
+      page
+        .locator(`#result-${lobbyId(98)}`)
+        .getByText("Ember's team beat Wisp's team"),
+    ).toBeVisible();
+    await expect(
+      page
+        .locator(`#result-${lobbyId(99)}`)
+        .getByText("Wisp's team beat Ember's team"),
+    ).toBeVisible();
+    await expect(history.getByText(/^You (won|lost)$/)).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "void", exact: true }),
     ).toHaveCount(0);
@@ -224,6 +239,20 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
       (await db.inhouseLobby.findUniqueOrThrow({ where: { id: lobbyId(101) } }))
         .status,
     ).toBe("CANCELLED");
+
+    // Signed in as Ember, who played every game on team 1, each row says how
+    // it went for them.
+    await page.goto("/inhouse/history");
+    await expect(
+      page.locator(`#result-${lobbyId(98)}`).getByText("You won", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.locator(`#result-${lobbyId(99)}`).getByText("You lost", {
+        exact: true,
+      }),
+    ).toBeVisible();
     expect(await db.season.findMany({ orderBy: { id: "asc" } })).toEqual(
       seasonsBefore,
     );

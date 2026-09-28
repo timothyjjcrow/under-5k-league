@@ -10,7 +10,9 @@ import { formatMatchTime } from "@/lib/match-time";
 import {
   INHOUSE_HISTORY_PAGE_SIZE,
   inhouseHistoryPage,
+  inhouseHistorySides,
   inhousePlayedAt,
+  type InhouseHistorySidePlayer,
 } from "@/lib/inhouse-history";
 import { failedLobbyReason } from "@/lib/inhouse-end-reason";
 import { inhouseLobbyCode } from "@/lib/inhouse";
@@ -98,12 +100,56 @@ export default async function InhouseHistoryPage({
   const displayedLobbies = linkedOutsidePage
     ? [expanded!, ...lobbies]
     : lobbies;
+  // Each row names its sides after the two captains and, for a signed-in
+  // player, says whether they won. Only the captains and the viewer's own row
+  // are read (at most three per game), never the full ten.
+  const sideRows = displayedLobbies.length
+    ? await prisma.inhouseLobbyPlayer.findMany({
+        where: {
+          lobbyId: { in: displayedLobbies.map((l) => l.id) },
+          OR: [
+            { isCaptain: true },
+            ...(viewer ? [{ userId: viewer.id }] : []),
+          ],
+        },
+        select: {
+          lobbyId: true,
+          userId: true,
+          team: true,
+          isCaptain: true,
+          user: { select: { name: true } },
+        },
+      })
+    : [];
+  const sidesByLobby = new Map<string, InhouseHistorySidePlayer[]>();
+  for (const row of sideRows) {
+    const list = sidesByLobby.get(row.lobbyId) ?? [];
+    list.push({
+      userId: row.userId,
+      team: row.team,
+      isCaptain: row.isCaptain,
+      name: row.user.name,
+    });
+    sidesByLobby.set(row.lobbyId, list);
+  }
   const rows = displayedLobbies.map((l) => {
     const players = parseInhouseBox(l.boxScore);
     const radiantWin = l.winnerTeam != null && l.winnerTeam === l.radiantTeam;
     const mvpId = players.length ? gameMvp(players, radiantWin) : null;
     const mvp = mvpId ? players.find((p) => p.userId === mvpId) : null;
-    return { lobby: l, players, radiantWin, mvp, playedAt: inhousePlayedAt(l) };
+    const sides = inhouseHistorySides(
+      sidesByLobby.get(l.id) ?? [],
+      l.winnerTeam,
+      viewer?.id ?? null,
+    );
+    return {
+      lobby: l,
+      players,
+      radiantWin,
+      mvp,
+      sides,
+      playedAt: inhousePlayedAt(l),
+    };
   });
   const first = total === 0 ? 0 : skip + 1;
   const last = skip + lobbies.length;
@@ -169,7 +215,9 @@ export default async function InhouseHistoryPage({
                 aria-label="Completed inhouse games"
                 className="divide-y divide-line"
               >
-                {rows.map(({ lobby, players, radiantWin, mvp, playedAt }) => {
+                {rows.map((row) => {
+                  const { lobby, players, radiantWin, mvp, sides, playedAt } =
+                    row;
                   const isExpanded = lobby.id === expanded?.id;
                   const duration = lobby.durationSecs;
                   const durationLabel =
@@ -212,6 +260,17 @@ export default async function InhouseHistoryPage({
                                 {lobby.direScore ?? "—"}
                               </span>
                             </span>
+                            {sides.viewer ? (
+                              <Badge
+                                tone={
+                                  sides.viewer === "won" ? "accent" : "neutral"
+                                }
+                              >
+                                {sides.viewer === "won"
+                                  ? "You won"
+                                  : "You lost"}
+                              </Badge>
+                            ) : null}
                             <Badge tone={radiantWin ? "success" : "danger"}>
                               {radiantWin ? "Radiant" : "Dire"} victory
                             </Badge>
@@ -228,6 +287,12 @@ export default async function InhouseHistoryPage({
                               ) : null}
                             </span>
                           </div>
+                          {sides.winnerCaptain && sides.loserCaptain ? (
+                            <p className="mt-2 break-words text-sm">
+                              {sides.winnerCaptain}&apos;s team beat{" "}
+                              {sides.loserCaptain}&apos;s team
+                            </p>
+                          ) : null}
                           {mvp?.userId ? (
                             <div className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-muted">
                               <span className="text-accent">MVP</span>
