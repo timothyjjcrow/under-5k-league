@@ -2010,10 +2010,16 @@ already in the `Setting` table.
   bookings, season) once and `page.tsx` hands it and the viewer to each card
   file beside it; the draft status, both rosters and the OUT check-ins are
   request-cached reads there (React `cache()`), so streamed cards share one
-  query each. No card re-reads the match, season, draft or viewer, and
-  `match-page-guards.test.ts` pins that. That test reads every file in the
-  folder (`folderSourceFiles`, since a glob can't spell `[id]`), so a rule
-  holds wherever its card moves inside the folder.
+  query each. No card in the folder re-reads the match, season, draft or
+  viewer, and `match-page-guards.test.ts` pins that. That test reads every
+  file in the folder (`folderSourceFiles`, since a glob can't spell `[id]`),
+  so a rule holds wherever its card moves inside the folder. Two admin-only
+  cards the page renders live in `src/components`: `AdminMatchTools` takes
+  the season from the page's match and the draft status from the same
+  cached `getSeasonDraftStatus` (pinned by a second guard) but reads its own
+  /admin shapes of the rosters, standin pool, bookings and named OUT
+  check-ins; `GameIdentityEditor` re-checks the admin through
+  `getSessionUser`, which is `cache()`d, so that check costs no extra read.
   The season lobby bot's panel (off unless `DOTA_SEASON_LOBBY_BOT_ENABLED`)
   has two render sites on purpose, never both for one viewer: the captains'
   copy, with Create/Start, inside the result card in Captain tools, and

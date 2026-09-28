@@ -19,6 +19,7 @@ import {
 } from "@/lib/league-lifecycle";
 import { MATCH_ANCHOR, adminMatchRowId } from "@/lib/match-anchors";
 import { formatMatchTime } from "@/lib/match-time";
+import { getSeasonDraftStatus } from "@/lib/queries";
 import { type AutoCheck, autoCheckCopy, autoCheckStatus } from "@/lib/result-sync";
 import {
   type StandinBooking,
@@ -872,6 +873,12 @@ export function StandinMatchBlock({
  *
  * Active season only: /admin manages the active season, and every action
  * below refuses an archived one.
+ *
+ * The season comes with the page's match (load.ts reads it once) and the
+ * draft status from the request-cached getSeasonDraftStatus that load.ts's
+ * loadDraftStatus wraps, so the card re-reads neither. Its other reads are
+ * its own: the /admin shapes of both rosters, the standin pool and bookings,
+ * the named OUT check-ins and the open reschedule.
  */
 export async function AdminMatchTools({
   match,
@@ -883,6 +890,13 @@ export async function AdminMatchTools({
     week: number;
     scheduleRevision: number;
     standins: StandinBlockAssignment[];
+    season: {
+      isActive: boolean;
+      status: string;
+      teamSize: number;
+      championTeamId: string | null;
+      dotaLeagueId: string | null;
+    };
   };
   /** The fixture's round, e.g. "Week 3" or "Semifinal". */
   label: string;
@@ -890,23 +904,11 @@ export async function AdminMatchTools({
    *  tools, whose import form this card then points at instead of repeating. */
   viewerHasCaptainTools?: boolean;
 }) {
-  const [season, draft, fixtures, teams, pool, bookingRows, outRsvps, pending] =
+  const season = { ...match.season, id: match.seasonId };
+  if (!season.isActive) return null;
+  const [draftStatus, fixtures, teams, pool, bookingRows, outRsvps, pending] =
     await Promise.all([
-      prisma.season.findUnique({
-        where: { id: match.seasonId },
-        select: {
-          id: true,
-          isActive: true,
-          status: true,
-          teamSize: true,
-          championTeamId: true,
-          dotaLeagueId: true,
-        },
-      }),
-      prisma.draft.findUnique({
-        where: { seasonId: match.seasonId },
-        select: { status: true },
-      }),
+      getSeasonDraftStatus(match.seasonId),
       // The season's fixtures decide whether a later round already depends
       // on this result (matchCorrectionContext), exactly as on /admin.
       prisma.match.findMany({
@@ -973,7 +975,6 @@ export async function AdminMatchTools({
         },
       }),
     ]);
-  if (!season?.isActive) return null;
   const bookings: StandinBooking[] = bookingRows.map((b) => ({
     standinUserId: b.standinUserId,
     matchId: b.matchId,
@@ -983,7 +984,6 @@ export async function AdminMatchTools({
     scheduledAt: b.match.scheduledAt,
     week: b.match.week,
   }));
-  const draftStatus = draft?.status ?? null;
   const correction = matchCorrectionContext(match, fixtures);
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   // The same gate as the captain's card and the service: open from the end of

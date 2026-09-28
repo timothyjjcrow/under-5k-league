@@ -370,4 +370,17 @@ describe("match page shared reads", () => {
       /export function loadDraftStatus\([^)]*\) \{\s*return getSeasonDraftStatus\(/,
     );
   });
+
+  it("gives the admin card from src/components the page's season and draft reads", () => {
+    // AdminMatchTools lives outside this folder, so the scan above misses it.
+    // It takes the season from the page's match and the draft status from the
+    // same request-cached read load.ts wraps, instead of querying both again.
+    const tools = stripLineComments(
+      sourceFile("src/components/admin-match-tools.tsx").text,
+    );
+    expect(tools).not.toMatch(/prisma\.(season|draft)\.|prisma\.match\.findUnique/);
+    const card = tools.slice(tools.indexOf("export async function AdminMatchTools("));
+    expect(card).toContain("const season = { ...match.season, id: match.seasonId };");
+    expect(card).toContain("getSeasonDraftStatus(match.seasonId),");
+  });
 });
