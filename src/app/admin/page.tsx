@@ -5186,7 +5186,7 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
                   after an expression across a source-line break — the same
                   bug the couldn't-check line documents below. */}
               {
-                " — pings to them land nowhere. If a player insists they're in the server, search the @handle in the member list: they likely linked a different account than the one they use, and the fix is re-linking on their profile."
+                " — pings to them land nowhere. If a player insists they're in the server, search the @handle in the member list: they likely linked a different account than the one they use, and the fix is re-linking from their My account page."
               }
             </p>
           ) : null}
