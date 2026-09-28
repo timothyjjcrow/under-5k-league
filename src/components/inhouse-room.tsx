@@ -181,7 +181,7 @@ export function InhouseRoom({
   // responses cannot forget a spot or slow an active deadline.
   const hasStakeRef = useRef(false);
   // One-tap join from a Discord ping (?join=1). Fires at most ONCE per page
-  // load — queue membership has teeth (a filled lobby drags you into a 45s
+  // load — queue membership has teeth (a filled lobby drags you into a timed
   // ready check whose failure drops you from the queue), so an accidental
   // re-enqueue on a re-render would be a real cost, not a cosmetic one.
   const autoJoinedRef = useRef(false);
@@ -219,7 +219,7 @@ export function InhouseRoom({
   // from a Discord ping auto-joins programmatically (?join=1), and someone who
   // queued on a previous page load and reloaded has touched nothing at all. So
   // the first tap ANYWHERE on the page primes it — otherwise "match found",
-  // the alert gating a 45-second ACCEPT window, is computed correctly and
+  // the alert gating a timed ACCEPT window, is computed correctly and
   // played into a suspended context. The draft room has had this since it
   // shipped; this room did not.
   useEffect(() => {
@@ -559,7 +559,7 @@ export function InhouseRoom({
           // player reloaded. The abort lands in the catch, which toasts and
           // releases them. Per-action, not one ceiling: `detect`/`record` go
           // to OpenDota and legitimately take ~25s, while ACCEPT must never
-          // sit disabled through its own 45s ready check.
+          // sit disabled through its own ready check.
           signal: AbortSignal.timeout(
             (INHOUSE_SCAN_ACTIONS as readonly string[]).includes(
               String(body.action),

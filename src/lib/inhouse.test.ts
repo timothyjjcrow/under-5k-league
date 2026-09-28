@@ -393,7 +393,7 @@ describe("autoJoinDecision", () => {
   });
 
   it("refuses to touch the queue for someone already IN the lobby", () => {
-    // The teeth: queue membership can drag you into a 45-second ready check.
+    // The teeth: queue membership can drag you into a timed ready check.
     // Never do that to someone from a link they may have tapped by accident.
     expect(autoJoinDecision(me({ inLobby: true }))).toBe("already-in");
   });
@@ -438,7 +438,7 @@ describe("inhouseAlerts", () => {
   });
 
   it("rings for a hidden tab that first SEES the lobby already past the check", () => {
-    // The keyed-on-prevStatus-null rule. A hidden tab polls on the 45s
+    // The keyed-on-prevStatus-null rule. A hidden tab polls on the slow
     // keepalive, so its first sight of the lobby can be CAPTAIN_VOTE or
     // DRAFTING — and that player still needs the bell. Exactly once, though:
     // "vote-opened" requires the PREVIOUS status to have been READY_CHECK,
@@ -448,7 +448,7 @@ describe("inhouseAlerts", () => {
 
   it("rings AGAIN when the vote opens after the ready check", () => {
     // Deliberate second bell: a player may have accepted early and tabbed
-    // away, which is precisely what the 45s ACCEPT_SECONDS anticipates.
+    // away, which is precisely what ACCEPT_SECONDS anticipates.
     expect(inhouseAlerts(inCheck, inVote)).toEqual(["vote-opened"]);
   });
 

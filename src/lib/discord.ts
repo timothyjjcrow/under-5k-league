@@ -469,19 +469,31 @@ export function inhouseQueueMessage(
 }
 
 /**
- * Lobby formed — the scarcest event the league produces, on a 45-second clock.
- * Players who linked Discord are mentioned by id so the ping reaches a PHONE;
- * the rest are named as plain text. Queueing thirty seconds ago is the consent
+ * Lobby formed — the scarcest event the league produces, on a short accept
+ * clock. Players who linked Discord are mentioned by id so the ping reaches a
+ * PHONE; the rest are named as plain text. Queueing earlier is the consent
  * here, which is why this needs no opt-in role (don't "fix" that later).
+ *
+ * `acceptEndsAt` is the ready check's own deadline. It renders as Discord
+ * timestamps (`<t:…:T>` and `<t:…:R>`), so every reader sees the cutoff in
+ * their own time zone and a countdown that keeps moving with no edits: a
+ * player coming out of a pub game can tell at a glance whether there is still
+ * time to open the site.
  */
 export function inhouseLobbyMessage(
   players: { name: string; discordId: string | null }[],
   roleId?: string | null,
+  acceptEndsAt?: Date | null,
 ): string {
   const who = players
     .map((p) => (p.discordId ? `<@${p.discordId}>` : name(p.name)))
     .join(", ");
-  return `${rolePrefix(roleId)}🚨 **Inhouse match found!** Accept your game before the clock runs out — <${resolveSiteUrl()}/inhouse>\n${who}`;
+  const epoch = acceptEndsAt ? Math.floor(acceptEndsAt.getTime() / 1000) : null;
+  const deadline =
+    epoch != null
+      ? `Accept your game by <t:${epoch}:T> (<t:${epoch}:R>) or you lose your spot`
+      : "Accept your game before the clock runs out";
+  return `${rolePrefix(roleId)}🚨 **Inhouse match found!** ${deadline} — <${resolveSiteUrl()}/inhouse>\n${who}`;
 }
 
 export function inhouseResultMessage(m: {

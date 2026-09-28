@@ -160,6 +160,8 @@ export async function maybeFormLobby(): Promise<boolean> {
   // Captured in-tx, sent post-commit (draft-sale pattern) — the active-lobby
   // guard means at most one formation, so at most one announcement.
   let lobbyPlayers: { name: string; discordId: string | null }[] = [];
+  // The ready check's deadline, so the ping can say how long players have.
+  let acceptEndsAt: Date | null = null;
   let formed = false;
   try {
     formed = await prisma.$transaction(
@@ -193,6 +195,7 @@ export async function maybeFormLobby(): Promise<boolean> {
             radiantTeam: 1,
           },
         });
+        acceptEndsAt = lobby.acceptEndsAt;
 
         // Snapshot each player's inhouse record onto their lobby row — one history
         // scan per FORMATION instead of one per poll. Frozen is correct: no result
@@ -253,14 +256,17 @@ export async function maybeFormLobby(): Promise<boolean> {
   }
   if (formed && lobbyPlayers.length > 0) {
     const roleId = await getInhousePingRoleId();
-    await sendInhouseDiscordMessage(inhouseLobbyMessage(lobbyPlayers, roleId), {
-      // Only these exact ids may ring anyone — a Steam persona in the same
-      // message still can't ping (see MentionAllowlist).
-      roles: roleId ? [roleId] : [],
-      users: lobbyPlayers
-        .map((p) => p.discordId)
-        .filter((id): id is string => !!id),
-    });
+    await sendInhouseDiscordMessage(
+      inhouseLobbyMessage(lobbyPlayers, roleId, acceptEndsAt),
+      {
+        // Only these exact ids may ring anyone — a Steam persona in the same
+        // message still can't ping (see MentionAllowlist).
+        roles: roleId ? [roleId] : [],
+        users: lobbyPlayers
+          .map((p) => p.discordId)
+          .filter((id): id is string => !!id),
+      },
+    );
   }
   return formed;
 }
@@ -472,8 +478,9 @@ export async function resolveReadyCheck(): Promise<boolean> {
     const expired =
       !!lobby.acceptEndsAt && lobby.acceptEndsAt.getTime() <= Date.now();
     if (!expired) return false;
-    // Timed out with pending players: they ignored a 45s chime + tab flash —
-    // proven AFK, dropped. Accepters go back to the front of the queue.
+    // Timed out with pending players: they ignored the Discord ping, the chime
+    // and the tab flash for the whole accept window — proven AFK, dropped.
+    // Accepters go back to the front of the queue.
     return failReadyCheck(tx, lobby.id, { pendingBackdated: false });
   });
 }

@@ -1,5 +1,5 @@
 import { LEAGUE_CONFIG } from "./league-config";
-import { INHOUSE_STATUS } from "./constants";
+import { INHOUSE, INHOUSE_STATUS } from "./constants";
 import { escapeDiscordText } from "./discord-escape";
 
 // The live inhouse queue board: ONE Discord message the site rewrites in place
@@ -117,8 +117,8 @@ export type BoardRender = { digest: string; embed: BoardEmbed };
  * sequence reads as escalation. Notably EMPTY is steel blue rather than grey:
  * grey is the colour of a disabled button, and this is the state that has to
  * sell the league. READY_CHECK deliberately breaks the gold ramp with the
- * client's own accept green — it is the one state demanding a click inside 45
- * seconds. LIVE red means "broadcast", never Dire: which side is Radiant isn't
+ * client's own accept green — it is the one state demanding a click inside
+ * the short accept window. LIVE red means "broadcast", never Dire: which side is Radiant isn't
  * known until the match imports, so nothing here is ever side-labelled.
  */
 const COLOR = {
@@ -333,7 +333,7 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
           ].join("\n"),
           fields,
           footer: {
-            text: "45 seconds to accept. No-shows are dropped from the queue.",
+            text: `${INHOUSE.ACCEPT_SECONDS} seconds to accept. No-shows are dropped from the queue.`,
           },
         },
       };

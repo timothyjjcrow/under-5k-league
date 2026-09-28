@@ -975,8 +975,9 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `votedMethod`/`votedNomineeId` for the captain vote). One active lobby at a
   time (`INHOUSE_ACTIVE_STATUSES`).
 - **Ready check (Dota-style accept gate)**: a filled lobby opens in
-  `READY_CHECK` with `acceptEndsAt` (`INHOUSE.ACCEPT_SECONDS` = 45 — web
-  players need the chime/tab-title to reach them first). All ten must
+  `READY_CHECK` with `acceptEndsAt` (`INHOUSE.ACCEPT_SECONDS` = 90 — the
+  queue holds a spot for hours, so players may be coming from a pub game via
+  the Discord ping, which carries the deadline as `<t:…:R>`). All ten must
   `acceptMatch` (idempotent claim guarded on BOTH `acceptedAt: null` AND
   `lobby: { status: READY_CHECK }` — the relation filter stops a Postgres
   race where a concurrent decline/expiry cancels the lobby between the read
@@ -1445,7 +1446,7 @@ reached a player who wasn't already looking at it.
   plain escaped text where they didn't. Queueing thirty seconds ago IS the
   consent — don't "fix" this with an opt-out later. This is the payoff for
   OAuth linking: `discordId` stops being a cosmetic ✓. A formed lobby is the
-  scarcest thing the league produces and `ACCEPT_SECONDS` is 45, so one
+  scarcest thing the league produces and `ACCEPT_SECONDS` is 90, so one
   tabbed-away player burns a lobby that already cleared the hard part.
 - **`INHOUSE.QUEUE_PING_AT` (4), was `LOBBY_SIZE - 2` (8).** Eight is a
   threshold the queue essentially never reaches unaided: the first person to

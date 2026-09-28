@@ -217,7 +217,7 @@ export function inhouseLobbyCode(lobbyId: string): string {
  * What the `?join=1` deep link (every Discord ping carries one) should do once
  * the first state payload lands.
  *
- * Queue membership has teeth — a filled queue drags you into a 45-second ready
+ * Queue membership has teeth — a filled queue drags you into a timed ready
  * check whose failure DROPS you — so the room fires this at most once per page
  * load and scrubs the param. A live lobby is deliberately NOT a refusal: only
  * one lobby exists at a time, so a new joiner simply queues for the next game,

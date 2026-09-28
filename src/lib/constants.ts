@@ -154,9 +154,8 @@ export const ROOM_ACTION_TIMEOUT_MS = 15_000;
  *
  * Deliberately NOT applied to every action. Sizing one ceiling to the slowest
  * action would punish the most time-critical one: a hung ACCEPT would sit
- * disabled for the WHOLE 45-second ready check, i.e. exactly as broken as
- * having no deadline at all. Slow paths get slack; second-sensitive ones get
- * released fast.
+ * disabled for half of the ready check. Slow paths get slack;
+ * second-sensitive ones get released fast.
  */
 export const INHOUSE_SCAN_ACTION_TIMEOUT_MS = 45_000;
 /** The inhouse actions that legitimately go to OpenDota (see above). */
@@ -265,13 +264,16 @@ export const INHOUSE = {
   // it. Membership does not depend on these browser timers. It must also
   // be shorter than BOTH action windows: a lobby can form just after a queued
   // player's poll, and a long keepalive could otherwise consume the entire
-  // 45s accept window (and skip the 25s captain vote altogether). 10s leaves time
+  // accept window (and skip the 25s captain vote altogether). 10s leaves time
   // to notice and act when the browser allows background execution.
   POLL_KEEPALIVE_MS: 10000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
-  // Generous vs. the client's ~10s: web players may be in another tab — the
-  // chime + "(!)" tab title have to reach them first.
-  ACCEPT_SECONDS: 45,
+  // The queue holds a spot for hours with the tab closed, so the tenth join
+  // can land while the others are in a pub game or away from the desk: they
+  // have to see the Discord ping (which carries this deadline), open the site
+  // and press Accept. 45s was too tight for that, and a failed check wastes a
+  // lobby that took a long time to fill; no-shows are still dropped.
+  ACCEPT_SECONDS: 90,
   // Seconds players get to vote on how captains are chosen once everyone accepts.
   VOTE_SECONDS: 25,
   // Seconds a captain has to pick before the draft auto-picks the top player.

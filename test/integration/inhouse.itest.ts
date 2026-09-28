@@ -1274,6 +1274,14 @@ describe("inhouse — discord announcements", () => {
     expect(lobbyPings[0][0]).toContain("IH0");
     expect(lobbyPings[0][0]).toContain("IH9");
     expect(lobbyPings[0][0]).toContain("/inhouse");
+    // The ping carries this lobby's own accept deadline as a live countdown.
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    expect(lobby.acceptEndsAt).not.toBeNull();
+    const epoch = Math.floor(lobby.acceptEndsAt!.getTime() / 1000);
+    expect(lobbyPings[0][0]).toContain(`<t:${epoch}:R>`);
+    expect(
+      lobby.acceptEndsAt!.getTime() - lobby.createdAt.getTime(),
+    ).toBeGreaterThanOrEqual(INHOUSE.ACCEPT_SECONDS * 1000 - 1000);
   });
 
   it("pings the milestone once — leave/rejoin churn can't spam it", async () => {

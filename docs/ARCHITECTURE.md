@@ -463,7 +463,7 @@ completion, and the real no-active-season offseason.
    `[joinedAt, userId]` order, snapshots `joinedAt` as each player's immutable
    `queuedAt` plus their W/L record, and Discord-mentions all ten by
    `<@discordId>`. The state payload uses the same total queue order.
-3. **Ready check** — 45s; all ten must `acceptMatch` (claim guarded on both
+3. **Ready check** — 90s; all ten must `acceptMatch` (claim guarded on both
    `acceptedAt: null` and the lobby still being in READY_CHECK). Decline or
    expiry fails the check. A decline drops the decliner, keeps accepters at the
    front, and backdates still-pending players so they must reconfirm; expiry
