@@ -85,6 +85,8 @@ function QueueControls({
             <label htmlFor={mmrInputId} className="text-sm text-muted">
               MMR
             </label>
+            {/* w-32: at w-24 the padding and the number spinner left
+                "e.g. 3200" cut to "e.g. 32". */}
             <input
               id={mmrInputId}
               type="number"
@@ -95,7 +97,7 @@ function QueueControls({
               placeholder="e.g. 3200"
               onChange={(e) => setMmr(Number(e.target.value))}
               title="Seeds captain selection and the balance meter."
-              className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
+              className="h-11 w-32 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
             />
             <button
               type="button"
