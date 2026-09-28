@@ -93,18 +93,23 @@ export async function saveTeamIdentity(input: {
         // Authorization lives in this WHERE and nowhere else: the captaincy
         // can move (transferCaptaincy) between the page render and this write,
         // and the outgoing captain must not rename a team that is no longer
-        // theirs. Admins edit any team in the season.
-        const changed = await tx.team.updateMany({
-          where: {
-            id: input.teamId,
-            seasonId: team.seasonId,
-            ...(input.editor.isAdmin ? {} : { captainId: input.editor.userId }),
-          },
-          data: {
-            name,
-            ...(logo ? { logoUrl: logo.logoUrl } : {}),
-          },
-        });
+        // theirs. Admins edit any team in the season. The two writes are
+        // spelled out (not one WHERE with a conditional spread) so the
+        // mutation guard can see and gate the captain's claim.
+        const data = { name, ...(logo ? { logoUrl: logo.logoUrl } : {}) };
+        const changed = input.editor.isAdmin
+          ? await tx.team.updateMany({
+              where: { id: input.teamId, seasonId: team.seasonId },
+              data,
+            })
+          : await tx.team.updateMany({
+              where: {
+                id: input.teamId,
+                seasonId: team.seasonId,
+                captainId: input.editor.userId,
+              },
+              data,
+            });
         // The first write, so nothing is committed yet: refusing is safe.
         if (changed.count === 0) throw new TeamIdentityRefused(NOT_ALLOWED);
         const nameChanged = name !== team.name;

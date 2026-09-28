@@ -32,6 +32,8 @@ import { getSessionUser, requireAdmin, requireUser } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";
 import { editTeamIdentity } from "@/app/actions/teams";
 import { addCaptain, renameTeam } from "@/app/actions/admin";
+import { saveTeamIdentity } from "@/lib/team-identity-service";
+import { teamNameKey } from "@/lib/team-identity";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
@@ -40,6 +42,7 @@ import {
   makePlayer,
   makeSeason,
   makeUser,
+  raceAll,
   resetDb,
   sessionFor,
 } from "./factories";
@@ -438,6 +441,44 @@ describe("renameTeam — the admin override on /admin", () => {
     );
     expect(res?.error).toMatch(/Discord image links stop working/);
     expect((await teamRow(home.team.id)).logoUrl).toBeNull();
+  });
+});
+
+describe("saveTeamIdentity — two captains racing to one name", () => {
+  // The uniqueness check reads the OTHER teams and writes this one, so two
+  // renames to the same name are a write-skew pair: only the Serializable
+  // transaction stops both committing. Staging one rename first proves
+  // nothing (the read-time check catches it), so this races them.
+  // `npm run test:pg` is what runs it concurrently; SQLite runs it in turn.
+  it("gives the name to exactly one of them", async () => {
+    for (let round = 0; round < 5; round += 1) {
+      await resetDb();
+      const { home, away } = await league();
+      const name = "Radiant Raccoons";
+      const results = await raceAll([
+        () =>
+          saveTeamIdentity({
+            editor: { userId: home.user.id, isAdmin: false },
+            teamId: home.team.id,
+            name,
+          }),
+        () =>
+          saveTeamIdentity({
+            editor: { userId: away.user.id, isAdmin: false },
+            teamId: away.team.id,
+            name: "  radiant RACCOONS ",
+          }),
+      ]);
+      const names = [
+        (await teamRow(home.team.id)).name,
+        (await teamRow(away.team.id)).name,
+      ];
+      expect(
+        names.filter((saved) => teamNameKey(saved) === teamNameKey(name)),
+        `round ${round}: ${names.join(" / ")}`,
+      ).toHaveLength(1);
+      expect(results.filter((result) => result.ok)).toHaveLength(1);
+    }
   });
 });
 

@@ -318,6 +318,7 @@ const FILES = [
   "src/lib/inhouse-announcement-outbox.ts",
   "src/lib/league-announcement-outbox.ts",
   "src/lib/side-game-claims.ts",
+  "src/lib/team-identity-service.ts",
   "src/lib/users.ts",
 ];
 
