@@ -62,6 +62,7 @@ import {
   type TeamAvailability,
 } from "@/lib/availability";
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { adminSeasonCards } from "@/lib/admin-sections";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { AUTO_SYNC } from "@/lib/constants";
 import { CheckinBanner } from "@/components/checkin-banner";
@@ -902,7 +903,16 @@ export default async function SchedulePage() {
                       See the teams →
                     </Link>
                   ) : null,
-                  viewer?.role === "ADMIN" ? (
+                  // Only where /admin renders the Schedule & results card:
+                  // before the auction ends there is no card to land on.
+                  viewer?.role === "ADMIN" &&
+                  adminSeasonCards({
+                    seasonStatus: season.status,
+                    draftStatus: draft?.status,
+                    matches,
+                    openBookings: 0,
+                    archivedPostseasonGames: 0,
+                  }).schedule ? (
                     <Link
                       key="admin"
                       href="/admin#adm-schedule"

@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { REPO_ROOT } from "../../test/support/source-files";
 import {
   adminSeasonCards,
   coverProblemMatchIds,
@@ -160,5 +163,23 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
       clashes: [{ first: matches[3], second: matches[4] }],
     });
     expect([...ids].sort()).toEqual(["clash1", "clash2", "dropped", "out"]);
+  });
+});
+
+// A link from another page to /admin#adm-schedule must only render where
+// /admin renders that card, or it lands at the top of the page with no
+// matching section (the /schedule empty state showed it during signups).
+describe("links to the Schedule & results card", () => {
+  it("/schedule's empty state asks adminSeasonCards before linking", () => {
+    const page = readFileSync(
+      path.join(REPO_ROOT, "src/app/schedule/page.tsx"),
+      "utf8",
+    );
+    const at = page.indexOf("Open schedule controls");
+    expect(at).toBeGreaterThan(0);
+    const before = page.slice(Math.max(0, at - 900), at);
+    expect(before).toMatch(
+      /viewer\?\.role === "ADMIN" &&\s*adminSeasonCards\(\{[\s\S]*?\}\)\.schedule \?/,
+    );
   });
 });
