@@ -188,6 +188,10 @@ other settled decisions, and is the list kept current:
    fail loudly when a glob finds too few files, so moved strings and props stay
    in view. The other reasons stand; single-file guards that pin one page's
    wiring still fail loudly when their target moves.
+
+   *Update 2026-09-28:* #1 and #3 were done: the admin actions are split by
+   job and the home page per phase (see [DECISIONS.md](DECISIONS.md),
+   "Closed since"). #2 still stands.
 4. **Split `getInhouseState`'s view assembly out of `inhouse-service.ts`** —
    no claims live in it (verified), but the assembly reads block-scoped state
    threaded through the resolver chain; extraction forces restructuring a

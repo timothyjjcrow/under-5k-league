@@ -69,7 +69,6 @@ the current shape, not tidiness.
 
 | Date | Rejected | Reason | Revisit when |
 | --- | --- | --- | --- |
-| 2026-07-30 | Splitting `src/app/actions/admin.ts` by domain. **Reversed 2026-09-28:** split by job into `admin-season.ts`, `admin-captains-draft.ts`, `admin-roster.ts`, `admin-schedule-results.ts` and `admin-discord.ts` (shared helpers in the non-server-action `admin-shared.ts`), once it had grown to 61 actions and 38 ratchet claims and the baseline could carry moved claim ids through `renames`. | It is thin wrappers over services; a split moves protected ratchet claims between files (a full re-baseline) and changes no behaviour. The source-guard reason given in July no longer holds: the guards glob their areas since 2026-09. | It blocks real work. |
 | 2026-07-30 | Splitting `src/app/admin/page.tsx` into card components. | Already structured for its size (jump bar, anchors, disclosures). The July source-guard reason no longer holds. | It blocks real work. |
 | 2026-07-30 | Moving `getInhouseState`'s view assembly out of `inhouse-service.ts`. | No claims live there, but the assembly reads state threaded through the resolver chain; moving it means restructuring a 450-line function for looks. | It blocks real work. |
 | 2026-07-30 | Domain subfolders for `src/lib`. | A pure rename, and ratchet claim ids embed file paths. | Claim ids stop embedding paths. |
@@ -88,6 +87,7 @@ Deferrals that have been done. Don't cite them as open; some older notes in
 
 | Deferred | What | How it was closed |
 | --- | --- | --- |
+| 2026-07-30 | Splitting `src/app/actions/admin.ts` by domain (rejected in July). | Done 2026-09-28, once the file had grown to 61 actions and 38 ratchet claims and the baseline could carry moved claim ids through `renames`. It is split by job into `admin-season.ts`, `admin-captains-draft.ts`, `admin-roster.ts`, `admin-schedule-results.ts` and `admin-discord.ts`, with shared helpers in the non-server-action `admin-shared.ts`. |
 | 2026-07-30 | Splitting `src/app/page.tsx` per phase (rejected in July). | Done 2026-09-28: at 3,600 lines the file made every home change harder to review. `page.tsx` loads the data and picks the phase; the shared hero and one view file per phase live in `src/components/home/`, with `SeasonViewSkeleton` beside `SeasonView`, and the home source guards read the folder through `homePageSource()`. |
 | 2026-07-30 | `nominatePlayer`'s claim pinning the nominator's turn. | Its claim re-asserts `nominatorTeamId` and `nominationEndsAt` (2026-08-01). |
 | 2026-08-01 | Captain setup actions (add, remove, transfer, randomize order, draft settings) checked the draft status only before their transaction, so a concurrent Start draft could slip in. | Each re-reads the season and draft inside a Serializable transaction. |

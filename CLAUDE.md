@@ -3001,10 +3001,11 @@ ask it made twice. What that turned into:
 
 - `src/app/page.tsx` loads the data and picks the phase; the shared hero
   (`hero.tsx`) and one view file per phase (offseason, signups, draft,
-  season, complete, each with a builder for its hero slots) live in
-  `src/components/home/`. Source guards read all of it through
-  `homePageSource()` (`test/support/source-files.ts`). Matches are fetched
-  ONCE in `Home()` (mid-season+ phases) and passed down; the scenario report
+  season, complete) live in `src/components/home/`. Each season phase's
+  file has a builder for its hero slots; `offseason-view` draws its own
+  hero. Source guards read all of it through `homePageSource()`
+  (`test/support/source-files.ts`). Matches are fetched ONCE in `Home()`
+  (mid-season+ phases) and passed down; the scenario report
   is computed once in `SeasonView` and shared by the standings clinch marks,
   the This-week stakes chips, and the your-team one-liner.
 - Hero meta per phase: signups progress, "Week X of Y + teams + games on
