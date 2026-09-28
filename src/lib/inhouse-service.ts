@@ -1622,13 +1622,91 @@ async function findInhouseGame(
   return { result: best, unreachable };
 }
 
+/**
+ * One result lookup for a lobby being played, shared by the scheduled scan
+ * and the manual "Check now" so the two can never look in different places.
+ *
+ * When the lobby bot launched the game, the bot's match id comes first: one
+ * OpenDota match lookup instead of ten recent-match lists, validated exactly
+ * like a pasted id (checkMatchForLobby). The history scan stays the fallback —
+ * for games hosted without the bot, a bot id that isn't this lobby's game, and
+ * a bot game OpenDota still lacks DETECT_BOT_MATCH_WAIT_MINUTES after the
+ * detect clock (`clockMs`) started. Before that, a bot game OpenDota hasn't
+ * published is `botGamePending`: the history scan can't find an unpublished
+ * game either, so it isn't spent.
+ */
+async function lookUpLobbyGame(
+  lobby: { id: string; radiantTeam: number; createdAt: Date },
+  players: (LobbyPlayerFull & { isCaptain: boolean })[],
+  clockMs: number,
+  nowMs: number,
+  options: OpenDotaFetchOptions = {},
+): Promise<{
+  found: BuiltResult | null;
+  deadlineReached: boolean;
+  /** The history scan couldn't reach enough of OpenDota to decide. */
+  unreachable: boolean;
+  botGamePending: boolean;
+}> {
+  let found: BuiltResult | null = null;
+  let scanHistories = true;
+  let botGamePending = false;
+  // The bot read never throws: no bot, an unreachable one, or a game it didn't
+  // host all come back without a match id, and the history scan runs as ever.
+  const botMatchId = botReportedMatchId(
+    await inhouseBotGameStatus(
+      { id: lobby.id, radiantTeam: lobby.radiantTeam, players },
+      options,
+    ),
+  );
+  if (botMatchId) {
+    const od = await fetchOpenDotaMatch(botMatchId, options);
+    if (!canStartOpenDotaFetch(options) || openDotaBudgetExpired(options)) {
+      return {
+        found: null,
+        deadlineReached: true,
+        unreachable: false,
+        botGamePending: false,
+      };
+    }
+    if (od) {
+      // Never recorded on the bot's word alone: the same floor and roster
+      // check as a pasted id. A game that fails them isn't this lobby's, so
+      // look through the players' histories instead.
+      const checked = checkMatchForLobby(od, lobby.createdAt, players);
+      if (checked.ok) found = checked.result;
+    } else {
+      // Not on OpenDota yet — the game is still running or still publishing.
+      // One lookup per interval until then, not the ten-player scan.
+      scanHistories =
+        nowMs - clockMs >= INHOUSE.DETECT_BOT_MATCH_WAIT_MINUTES * 60_000;
+      botGamePending = !scanHistories;
+    }
+  }
+  if (found || !scanHistories) {
+    return { found, deadlineReached: false, unreachable: false, botGamePending };
+  }
+  const scanned = await findInhouseGame(
+    players,
+    Math.floor(lobby.createdAt.getTime() / 1000),
+    options,
+  );
+  return {
+    found: scanned.result,
+    deadlineReached: scanned.deadlineReached === true,
+    unreachable: scanned.unreachable,
+    botGamePending: false,
+  };
+}
+
 // Both manual result paths run from READY as well as IN_PROGRESS: a lobby is
 // being played from the moment teams lock, whether or not anyone pressed Start.
 const NO_GAME_TO_RECORD = "There's no game to record right now";
 
 /**
- * On-demand: look up the result on OpenDota by scanning the players' recent
- * games. Needs the game finished + public match data enabled.
+ * On-demand "Check now": the same lookup as the scheduled scan
+ * (lookUpLobbyGame) — the lobby bot's match id when the bot launched the
+ * game, otherwise the players' recent games, which needs public match data.
  */
 export async function autoDetectResult(
   viewer: SessionUser,
@@ -1670,18 +1748,32 @@ export async function autoDetectResult(
       error: "Just checked — give it a few seconds and try again",
     };
   }
-  const { result: found, unreachable } = await findInhouseGame(
+  // The press's claim stamps detectedAt, which holds the scheduled scan off
+  // for an interval, so the press does the scan's whole job — bot id first.
+  const now = Date.now();
+  const clockMs =
+    inhouseDetectWindow({
+      status: lobby.status,
+      createdAtMs: lobby.createdAt.getTime(),
+      startedAtMs: lobby.startedAt?.getTime() ?? null,
+    })?.clockMs ?? lobby.createdAt.getTime();
+  const { found, unreachable, botGamePending } = await lookUpLobbyGame(
+    lobby,
     lobby.players,
-    Math.floor(lobby.createdAt.getTime() / 1000),
+    clockMs,
+    now,
   );
   if (!found) {
     // Don't blame players' privacy settings when OpenDota itself was the
-    // problem — the fixes are completely different.
+    // problem, or when the bot hosted the game and knows its id — the fixes
+    // are completely different.
     return {
       ok: false,
-      error: unreachable
-        ? "OpenDota didn't respond (down or rate-limited) — try again in a minute, or paste the match ID."
-        : `Couldn't find the game on OpenDota yet — make sure it's finished, the ${INHOUSE.LOBBY_TICKET} ticket was used, and players have 'Expose Public Match Data' on. You can also paste the match ID.`,
+      error: botGamePending
+        ? "The bot's game isn't on OpenDota yet. It usually shows up a few minutes after the game ends, and the result records itself then."
+        : unreachable
+          ? "OpenDota didn't respond (down or rate-limited) — try again in a minute, or paste the match ID."
+          : `Couldn't find the game on OpenDota yet — make sure it's finished, the ${INHOUSE.LOBBY_TICKET} ticket was used, and players have 'Expose Public Match Data' on. You can also paste the match ID.`,
     };
   }
   if (!(await applyResult(lobby.id, found))) {
@@ -1800,11 +1892,8 @@ export async function recordMatch(
  * inhouseDetectWindow picks, so ten players who go straight into Dota without
  * pressing the optional Start are still recorded.
  *
- * When the lobby bot launched the game, the bot's match id comes first: one
- * OpenDota match lookup instead of ten recent-match lists, validated exactly
- * like a pasted id (checkMatchForLobby). The history scan stays the fallback —
- * for games hosted without the bot, a bot id that isn't this lobby's game, and
- * a bot game OpenDota still lacks after DETECT_BOT_MATCH_WAIT_MINUTES.
+ * The lookup itself (the lobby bot's match id first, then the players'
+ * histories) is lookUpLobbyGame, shared with the manual "Check now".
  */
 export function maybeAutoDetectResult(): Promise<boolean>;
 export function maybeAutoDetectResult(
@@ -1892,47 +1981,13 @@ export async function maybeAutoDetectResult(
   // An empty roster means a rival moved the lobby or the claim on first.
   if (players.length === 0) return finish(false);
 
-  let found: BuiltResult | null = null;
-  let deadlineReached = false;
-  let scanHistories = true;
-  // The bot read never throws: no bot, an unreachable one, or a game it didn't
-  // host all come back without a match id, and the history scan runs as ever.
-  const botMatchId = botReportedMatchId(
-    await inhouseBotGameStatus(
-      { id: lobby.id, radiantTeam: lobby.radiantTeam, players },
-      fetchOptions,
-    ),
+  const { found, deadlineReached } = await lookUpLobbyGame(
+    lobby,
+    players,
+    detectWindow.clockMs,
+    now,
+    fetchOptions,
   );
-  if (botMatchId) {
-    const od = await fetchOpenDotaMatch(botMatchId, fetchOptions);
-    if (
-      !canStartOpenDotaFetch(fetchOptions) ||
-      openDotaBudgetExpired(fetchOptions)
-    ) {
-      deadlineReached = true;
-    } else if (od) {
-      // Never recorded on the bot's word alone: the same floor and roster
-      // check as a pasted id. A game that fails them isn't this lobby's, so
-      // look through the players' histories instead.
-      const checked = checkMatchForLobby(od, lobby.createdAt, players);
-      if (checked.ok) found = checked.result;
-    } else {
-      // Not on OpenDota yet — the game is still running or still publishing.
-      // One lookup per interval until then, not the ten-player scan.
-      scanHistories =
-        now - detectWindow.clockMs >=
-        INHOUSE.DETECT_BOT_MATCH_WAIT_MINUTES * 60_000;
-    }
-  }
-  if (!found && !deadlineReached && scanHistories) {
-    const scanned = await findInhouseGame(
-      players,
-      Math.floor(lobby.createdAt.getTime() / 1000),
-      fetchOptions,
-    );
-    found = scanned.result;
-    deadlineReached = scanned.deadlineReached === true;
-  }
   if (deadlineReached) {
     // The attempt did not finish, so it must not buy a full backoff interval.
     // Restore only the exact claim this invocation stamped; a newer poll or an

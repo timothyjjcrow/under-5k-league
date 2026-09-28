@@ -3,8 +3,11 @@ import { prisma } from "@/lib/prisma";
 import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { maybeAutoDetectResult } from "@/lib/inhouse-service";
-import { makeUser } from "./factories";
+import {
+  autoDetectResult,
+  maybeAutoDetectResult,
+} from "@/lib/inhouse-service";
+import { makeUser, sessionFor } from "./factories";
 
 // When the lobby bot hosted the game, the result scan asks the bot for the
 // match id it saw and looks up that ONE match — validated exactly like a
@@ -87,6 +90,7 @@ async function readyLobby(minutes = INHOUSE.DETECT_READY_MIN_MINUTES + 30) {
   const accounts = users.map((u) => effectiveDotaAccountId(u)!);
   return {
     lobby,
+    users,
     team1: accounts.slice(0, INHOUSE.TEAM_SIZE),
     team2: accounts.slice(INHOUSE.TEAM_SIZE),
   };
@@ -297,5 +301,76 @@ describe("inhouse — recording a bot-hosted game from the bot's match id", () =
     expect(mockMatch).not.toHaveBeenCalledWith("7300000007", {});
     expect(mockRecent).toHaveBeenCalledTimes(INHOUSE.LOBBY_SIZE);
     expect(await statusOf(lobby.id)).toBe(INHOUSE_STATUS.READY);
+  });
+});
+
+describe("inhouse — \"Check now\" on a bot-hosted game", () => {
+  it("records it from the bot's match id, like the scheduled scan", async () => {
+    const { lobby, users, team1, team2 } = await readyLobby();
+    stubBot({ state: "started", matchId: "7300000011" });
+    mockMatch.mockResolvedValue(
+      playedGame({
+        matchId: "7300000011",
+        radiant: team1,
+        dire: team2,
+        startTime: seconds(lobby.createdAt) + 600,
+      }),
+    );
+
+    expect(await autoDetectResult(sessionFor(users[3]))).toEqual({ ok: true });
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.dotaMatchId).toBe("7300000011");
+    // One lookup for the bot's id; not ten recent-match lists.
+    expect(mockMatch).toHaveBeenCalledExactlyOnceWith("7300000011", {});
+    expect(mockRecent).not.toHaveBeenCalled();
+    expect(botCalls).toHaveLength(1);
+    expect(JSON.parse(String(botCalls[0].init.body)).action).toBe("status");
+  });
+
+  it("says the bot's game isn't published yet instead of blaming privacy settings", async () => {
+    const { lobby, users } = await readyLobby();
+    stubBot({ state: "started", matchId: "7300000012" });
+
+    const res = await autoDetectResult(sessionFor(users[0]));
+    expect(res.ok).toBe(false);
+    const error = res.ok ? "" : res.error;
+    expect(error).toMatch(/bot's game isn't on OpenDota yet/);
+    expect(error).not.toMatch(/Expose Public Match Data/);
+    // The history scan can't find an unpublished game either, so it isn't
+    // spent — the same rule as the scheduled scan.
+    expect(mockMatch).toHaveBeenCalledExactlyOnceWith("7300000012", {});
+    expect(mockRecent).not.toHaveBeenCalled();
+    expect(await statusOf(lobby.id)).toBe(INHOUSE_STATUS.READY);
+  });
+
+  it("falls back to the players' histories when the bot's id isn't this game", async () => {
+    const { lobby, users, team1, team2 } = await readyLobby();
+    stubBot({ state: "started", matchId: "7300000013" });
+    mockRecent.mockResolvedValue([7300000014]);
+    mockMatch.mockImplementation(async (id: string) =>
+      id === "7300000013"
+        ? playedGame({
+            matchId: "7300000013",
+            radiant: [11, 12, 13, 14, 15],
+            dire: [21, 22, 23, 24, 25],
+            startTime: seconds(lobby.createdAt) + 600,
+          })
+        : playedGame({
+            matchId: "7300000014",
+            radiant: team1,
+            dire: team2,
+            startTime: seconds(lobby.createdAt) + 600,
+          }),
+    );
+
+    expect(await autoDetectResult(sessionFor(users[0]))).toEqual({ ok: true });
+    expect(mockRecent).toHaveBeenCalledTimes(INHOUSE.LOBBY_SIZE);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(done.dotaMatchId).toBe("7300000014");
   });
 });
