@@ -537,7 +537,8 @@ declares the same runtime line used by every CI job.
    test the PostgreSQL suite never loads; CI then skips the four mutation
    shards, and `release:both` accepts that skip only when the trusted
    production classification also says false (a classifier without the field
-   counts as true). CI's test job still checks the claim inventory with
+   counts as true), or when an earlier run already covers the candidate (see
+   below). CI's test job still checks the claim inventory with
    `node scripts/mutation-guard.mjs --static`, `mutation-nightly.yml`
    re-verifies every protected claim on `main` at 07:00 UTC, and each shard
    runs a claim's recorded killer test file before falling back to the whole
@@ -563,12 +564,34 @@ declares the same runtime line used by every CI job.
    to decide whether its PostgreSQL and mutation jobs can be reused or skipped.
    That optimization is not production release authorization. If the
    canonical-production delta is strict, every strict gate must have passed for
-   the candidate even when the event-based CI comparison was narrower. The
-   same holds for the mutation shards whenever that delta has
-   `needs_mutation: true`; re-run CI with `force_strict` if the event delta
-   skipped them. Missing
+   the candidate even when the event-based CI comparison was narrower. Missing
    canonical deployment metadata or an unfetchable/non-ancestor production SHA
    blocks the fast release path.
+
+   The mutation shards follow the same rule whenever that delta has
+   `needs_mutation: true`. CI can still have skipped them: when production lags
+   `main` by an unpromoted commit that reaches the ratchet, a later page-only
+   push skips the shards on its own delta. `release:both` then accepts the four
+   passing shards of the newest CI run (a push or a forced run) or nightly
+   verify on an earlier `main` commit, as long as every changed region's
+   trusted classifier calls the delta from that commit to the candidate
+   mutation-neutral; the report records the run it used. If no earlier run
+   covers it, the release stops and says so. To recover:
+
+   1. In GitHub Actions, run the **CI** workflow on `main` with
+      `force_strict` ticked.
+   2. Wait for that run to finish green.
+   3. Run the **Prepare both leagues** workflow by hand. A dispatched CI run
+      does not start it (it follows push runs only), and a manual run, like a
+      local `npm run release:both`, uses the newest passing CI run for the
+      commit, which is the forced one.
+
+   CI cancels an older run on `main` when a newer push lands, so a hotfix
+   pushed while the previous commit's shards are still running usually finds
+   nothing to reuse until the next nightly verify has passed. Until production
+   runs a build that sets `needs_mutation` per path, production's classifier
+   still sets it from the lane (true for every `app` change), so preparing any
+   page-only push fails and needs this recovery until that build is promoted.
 
    In production, the database-attestation portion of `npm run build:vercel` is
    a read-only, fail-fast sequence:

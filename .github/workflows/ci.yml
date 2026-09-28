@@ -328,9 +328,12 @@ jobs:
   # false: every changed file is a page, component, asset, document or a
   # browser/unit test that the PostgreSQL suite never loads. release:both
   # accepts that skip only when its own trusted production classification
-  # agrees, the test job's `--static` step still checks the claim inventory,
-  # and mutation-nightly.yml verifies the whole baseline on main every night
-  # regardless. Keep its steps in step with these.
+  # agrees, or when these shards (or the nightly's) passed on an earlier main
+  # commit and that classification calls the rest of the delta
+  # mutation-neutral. The test job's `--static` step still checks the claim
+  # inventory, and mutation-nightly.yml verifies the whole baseline on main
+  # every night regardless. Keep its steps in step with these, and keep the
+  # job names: release:both reads them from this workflow's runs.
   mutation:
     name: mutation guard ${{ matrix.shard }}/4
     needs: classify

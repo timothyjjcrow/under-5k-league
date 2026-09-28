@@ -4,6 +4,8 @@ name: Nightly mutation verify
 # the ratchet when the release classifier reports needs_mutation=false, and
 # the release gate accepts that skip only on the trusted classification; this
 # run is what still re-mutates every protected claim at least once a day.
+# release:both also accepts this run's four passing shards for a later main
+# commit whose delta from this one is mutation-neutral, so keep the job name.
 # 07:00 UTC is midnight Pacific (11 PM in winter) and 9 AM Berlin (8 AM in
 # winter), outside both leagues' match nights. It never runs on pull requests,
 # and it is its own workflow so it can neither cancel nor be cancelled by push

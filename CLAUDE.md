@@ -114,8 +114,11 @@ passes, so the order changes and the rule does not.
 CI skips the shards when the trusted classifier reports `needs_mutation: false`
 (only pages/components, assets, docs, or tests the Postgres suite never loads
 changed), `release:both` accepts that skip only on the trusted production
-classification, the test job's `node scripts/mutation-guard.mjs --static` still
-checks the claim inventory without Postgres, and
+classification (or on an earlier `main` commit's passing shards when that
+classifier calls the rest of the delta mutation-neutral; README has the
+recovery when there are none), the test job's
+`node scripts/mutation-guard.mjs --static` still checks the claim inventory
+without Postgres, and
 `.github/workflows/mutation-nightly.yml` verifies the whole baseline on main at
 07:00 UTC.
 

@@ -196,7 +196,11 @@ Complete every field selected by an impact flag before changing that subsystem.
    candidate SHA. `ui-only` may narrowly skip PostgreSQL and mutation jobs;
    `app` runs standard application CI; `strict` runs every CI gate. In any
    lane the mutation shards may be skipped only when the trusted
-   classification reports `needs_mutation: false`. Only
+   classification reports `needs_mutation: false`, or when `release:both`
+   finds the four shards passing on an earlier `main` commit whose delta to the
+   candidate every changed region's trusted classifier calls mutation-neutral.
+   When it finds none, follow the recovery in the README's "Hosting and release
+   setup" (a forced CI run on `main`, then Prepare both leagues by hand). Only
    allowlisted documentation/test paths are neutral companions; sensitive-path
    tests and runbook/policy changes remain strict, and a neutral-only delta does
    not earn a fast lane. GitHub's event-base classifier is only a CI

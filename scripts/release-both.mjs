@@ -48,6 +48,11 @@ export function requiredCiGates(classifications) {
   };
 }
 
+// The four mutation shard job names: CI's, or the nightly verify's with its
+// "nightly " prefix (.github/workflows/mutation-nightly.yml).
+const mutationShards = (prefix = "") => [1, 2, 3, 4].map((n) => `${prefix}mutation guard ${n}/4`);
+const passed = (jobs, name) => jobs.some((job) => job.name === name && job.conclusion === "success" && job.status === "completed");
+
 export function requireSuccessfulCi(run, jobs, sha, gates) {
   if (typeof gates?.postgres !== "boolean" || typeof gates?.mutation !== "boolean")
     throw new Error("CI gate selection must say whether the PostgreSQL and mutation jobs are required");
@@ -55,11 +60,78 @@ export function requireSuccessfulCi(run, jobs, sha, gates) {
     throw new Error("A successful completed CI run for the exact release commit is required");
   const required = ["classify release impact", "audit, lint, types, build, tests", "playwright e2e (us)", "playwright e2e (eu)"];
   if (gates.postgres) required.push("integration on postgres");
-  if (gates.mutation) required.push(...[1, 2, 3, 4].map((n) => `mutation guard ${n}/4`));
+  if (gates.mutation) required.push(...mutationShards());
   for (const name of required) {
-    if (!jobs.some((job) => job.name === name && job.conclusion === "success" && job.status === "completed"))
-      throw new Error(`Required CI job did not pass: ${name}`);
+    if (!passed(jobs, name)) throw new Error(`Required CI job did not pass: ${name}`);
   }
+}
+
+// CI decides whether to run the mutation shards from the PUSH's own delta, the
+// release from each region's production commit. When production lags main by
+// an unpromoted commit that reaches the ratchet, a later page-only push skips
+// the shards in CI although the release needs them. Its ratchet verdict is
+// still known if an EARLIER main commit passed all four shards and every
+// changed region's trusted classifier calls the rest of the way to the
+// candidate mutation-neutral: that is the same claim CI relies on to skip, so
+// nothing the ratchet reads changed since the shards passed.
+//
+// Only a run on main that tested its own head commit counts: a CI push run, a
+// CI run dispatched on main, or the nightly verify. A pull-request run tests
+// a merge commit rather than its head, so it never counts.
+const COVERAGE_EVENTS = new Set(["push", "workflow_dispatch", "schedule"]);
+export const MUTATION_COVERAGE_WORKFLOWS = [
+  { workflow: "ci.yml", shardPrefix: "" },
+  { workflow: "mutation-nightly.yml", shardPrefix: "nightly " },
+];
+
+// True when the exact commit's CI run did not run the mutation shards at all
+// (CI skipped them on needs_mutation=false; a skipped matrix job may not be
+// expanded into shard names). A shard that ran is that commit's own verdict,
+// and nothing may stand in for it.
+export function mutationShardsSkipped(jobs) {
+  const names = new Set(mutationShards());
+  return jobs.filter((job) => names.has(job.name)).every((job) => job.conclusion === "skipped");
+}
+
+// The newest listed run that proves the ratchet for `sha` (see above), or
+// null. `runs` carry the `workflow` and `shardPrefix` of their listing;
+// `neutral(base)` runs every changed region's trusted classifier from `base`
+// to `sha` (it also refuses a base that is not an ancestor) and `jobsFor(run)`
+// lists a run's jobs. A failure while checking a run only rules that run out.
+export async function findMutationCoverage(sha, runs, { neutral, jobsFor }) {
+  const settle = async (check) => { try { return await check(); } catch { return undefined; } };
+  const verdicts = new Map();
+  const newest = [...runs].sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0));
+  for (const run of newest) {
+    if (!SHA.test(run.head_sha ?? "") || run.head_sha === sha || !/^\d+$/.test(String(run.id))) continue;
+    if (run.status !== "completed" || run.conclusion !== "success" || run.head_branch !== "main") continue;
+    if (!COVERAGE_EVENTS.has(run.event) || run.head_repository?.full_name !== RELEASE_REPOSITORY) continue;
+    if (!verdicts.has(run.head_sha)) verdicts.set(run.head_sha, await settle(() => neutral(run.head_sha)));
+    if (verdicts.get(run.head_sha) !== true) continue;
+    const jobs = await settle(() => jobsFor(run));
+    if (!Array.isArray(jobs) || !mutationShards(run.shardPrefix).every((name) => passed(jobs, name))) continue;
+    return { id: run.id, url: run.html_url, sha: run.head_sha, workflow: run.workflow };
+  }
+  return null;
+}
+
+// The CI check a release runs: requireSuccessfulCi on the exact commit's run,
+// where mutation shards that run skipped may be covered by findCoverage().
+// Returns the covering run, or null when none was needed.
+export async function requireReleaseCi(run, jobs, sha, gates, findCoverage) {
+  if (gates?.mutation !== true || !mutationShardsSkipped(jobs)) {
+    requireSuccessfulCi(run, jobs, sha, gates);
+    return null;
+  }
+  requireSuccessfulCi(run, jobs, sha, { ...gates, mutation: false });
+  const coverage = await findCoverage();
+  if (!coverage)
+    throw new Error(
+      "This release needs the mutation ratchet, but CI skipped it for this commit and no passing ratchet run on an " +
+        "earlier main commit covers the change. Run the CI workflow on main with force_strict, wait for it to pass, " +
+        "then run Prepare both leagues again (README, Hosting and release setup).",
+    );
+  return coverage;
 }
 
 export function scheduledPasses(logs, since) {
@@ -158,13 +230,35 @@ export async function runRelease(argv = process.argv.slice(2)) {
       if (!(await probe(target, url, pathname)).includes("GGD2L"))
         throw new Error(`${target.region}: public page smoke check failed`);
   };
+  const trustedClassifier = (target) => path.join(temporary, `${target.region}-trusted-classifier.mjs`);
+  const coverageRuns = async () => {
+    const runs = [];
+    for (const { workflow, shardPrefix } of MUTATION_COVERAGE_WORKFLOWS) {
+      try {
+        const listed = JSON.parse(await command("gh", ["api", `repos/${RELEASE_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&status=success&per_page=30`]));
+        for (const run of listed.workflow_runs ?? []) runs.push({ ...run, workflow, shardPrefix });
+      } catch {
+        // A workflow that cannot be listed offers no coverage; the release
+        // then needs the exact commit's own shards, as it always did.
+      }
+    }
+    return runs;
+  };
+  const mutationNeutralFrom = async (base) => {
+    for (const target of LEAGUE_TARGETS) {
+      if (report.classifications[target.region].lane === "unchanged") continue;
+      const classification = JSON.parse(await command(process.execPath, [trustedClassifier(target), "--base", base, "--head", sha, "--format", "json"], { cwd }));
+      if (classification.needs_mutation !== false) return false;
+    }
+    return true;
+  };
   const worktrees = [];
   try {
     for (const target of LEAGUE_TARGETS) {
       report.bases[target.region] = await readLive(target);
       const base = report.bases[target.region].sha;
       if (base === sha) { report.classifications[target.region] = { lane: "unchanged", needs_db_release: false, needs_scheduler_pause: false }; continue; }
-      const classifier = path.join(temporary, `${target.region}-trusted-classifier.mjs`);
+      const classifier = trustedClassifier(target);
       await writeFile(classifier, await command("git", ["show", `${base}:scripts/classify-release.mjs`], { cwd }));
       report.classifications[target.region] = JSON.parse(await command(process.execPath, [classifier, "--base", base, "--head", sha, "--format", "json"], { cwd }));
     }
@@ -182,8 +276,12 @@ export async function runRelease(argv = process.argv.slice(2)) {
     const ciRun = JSON.parse(await command("gh", ["api", `repos/${RELEASE_REPOSITORY}/actions/runs/${ciRunId}`]));
     const ciJobs = JSON.parse(await command("gh", ["api", `repos/${RELEASE_REPOSITORY}/actions/runs/${ciRunId}/jobs?per_page=100`]));
     const gates = requiredCiGates(Object.values(report.classifications));
-    requireSuccessfulCi(ciRun, ciJobs.jobs, sha, gates);
-    report.ci = { id: ciRunId, url: ciRun.html_url, sha, conclusion: "success", gates };
+    const mutationCoverage = await requireReleaseCi(ciRun, ciJobs.jobs, sha, gates, async () =>
+      findMutationCoverage(sha, await coverageRuns(), {
+        neutral: mutationNeutralFrom,
+        jobsFor: async (run) => JSON.parse(await command("gh", ["api", `repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/jobs?per_page=100`])).jobs ?? [],
+      }));
+    report.ci = { id: ciRunId, url: ciRun.html_url, sha, conclusion: "success", gates, ...(mutationCoverage ? { mutationCoverage } : {}) };
     report.status = "planned"; await save();
     if (!options["--apply"] && !options["--preview-only"] && !options["--stage-only"] && !options["--promote-from"]) return report;
     const maintenance = options["--maintenance-file"] ? JSON.parse(await readFile(options["--maintenance-file"], "utf8")) : undefined;
