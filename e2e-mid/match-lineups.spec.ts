@@ -145,6 +145,10 @@ test("players check in and captains bring in standins without any lineup confirm
     await page.reload();
     await expect(page.getByRole("heading", { name: "Game 1", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "✓ Ready for the next game", exact: true })).toHaveCount(1);
+    // The readiness prompt sits under the scoreboard, above the finished box score.
+    const readyTop = (await page.locator("#match-live-checkin").boundingBox())!.y;
+    const gameTop = (await page.getByRole("heading", { name: "Game 1", exact: true }).boundingBox())!.y;
+    expect(readyTop).toBeLessThan(gameTop);
     await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(f.users[f.teamSize * 2].id);
     await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
     await page.getByRole("button", { name: "Assign standin", exact: true }).click();

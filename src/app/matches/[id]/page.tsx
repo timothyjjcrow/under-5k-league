@@ -500,6 +500,15 @@ export default async function MatchDetailPage({
         ) : null}
       </Card>
 
+      {/* Between games, being ready for the next one is the only thing a
+          player has to do here, so it sits right under the scoreboard, not
+          after every box score. It renders only for players on either side. */}
+      {match.status === "LIVE" && match.season.isActive ? (
+        <Suspense fallback={null}>
+          <LiveSeriesCheckin matchId={match.id} />
+        </Suspense>
+      ) : null}
+
       {/* A jump bar earns its space only with three places to go; with one
           or two it just points at what is already on screen. Never pinned
           here: a pinned bar sat over the box scores. */}
@@ -652,11 +661,6 @@ export default async function MatchDetailPage({
         <p className="text-sm text-muted">
           Result wrong? Send an admin this page and the Dota match ID.
         </p>
-      ) : null}
-      {match.status === "LIVE" && match.season.isActive ? (
-        <Suspense fallback={null}>
-          <LiveSeriesCheckin matchId={match.id} />
-        </Suspense>
       ) : null}
       {showCaptainTools ? (
         <section
