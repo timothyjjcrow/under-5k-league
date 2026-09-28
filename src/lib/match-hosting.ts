@@ -110,3 +110,25 @@ export function leagueResultCopy(opts: { live: boolean }): {
     recovery: `If a lobby used the wrong ticket, we look through the players' own recent matches ${fallbackHours} ${fallbackHours === 1 ? "hour" : "hours"} after kickoff. ${sooner}`,
   };
 }
+
+/**
+ * The last sentence of the match page's "Waiting for the result" strip, shown
+ * once kickoff has passed with no game recorded. Only a ticketed season can
+ * say results usually arrive by themselves: without a ticket a private lobby
+ * may never reach OpenDota (NO_TICKET_RESULT_NOTE), so the strip must not
+ * promise it, and a captain adds the result from this page. A captain is
+ * pointed at their own tools; everyone else is told who can fix it.
+ */
+export function waitingForResultNote(opts: {
+  hasLeagueTicket: boolean;
+  viewerIsCaptain: boolean;
+}): string {
+  if (opts.hasLeagueTicket) {
+    return opts.viewerIsCaptain
+      ? "Results usually appear here on their own; if one doesn't, add it in Captain tools below."
+      : "Results usually appear here on their own; if one doesn't, a captain can add it from this page.";
+  }
+  return opts.viewerIsCaptain
+    ? "This season has no league ticket, so add the result in Captain tools below."
+    : "This season has no league ticket, so a captain adds the result from this page.";
+}

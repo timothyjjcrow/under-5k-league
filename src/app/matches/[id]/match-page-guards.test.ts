@@ -115,6 +115,15 @@ describe("match page result card", () => {
       /foldImport \? \(\s*<details>[\s\S]*?Result didn&apos;t show up\?[\s\S]*?<MatchImportControls/,
     );
   });
+
+  it("promises results by themselves in the waiting strip only with a ticket", () => {
+    // Without a ticket the captain's section says the result may not appear
+    // on its own; the strip above it must not say the opposite.
+    expect(PAGE).toMatch(
+      /waitingForResultNote\(\{\s*hasLeagueTicket: !!match\.season\.dotaLeagueId,\s*viewerIsCaptain: showCaptainTools,/,
+    );
+    expect(PAGE).not.toContain("usually appear here on their own");
+  });
 });
 
 

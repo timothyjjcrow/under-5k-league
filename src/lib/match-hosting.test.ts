@@ -6,6 +6,7 @@ import {
   NO_TICKET_REPORT_SUBTITLE,
   NO_TICKET_RESULT_NOTE,
   seriesLobbyRule,
+  waitingForResultNote,
 } from "./match-hosting";
 import { createLeagueConfig } from "./league-config";
 import { AUTO_SYNC, LEAGUE_GAME_MODE } from "./constants";
@@ -112,6 +113,35 @@ describe("leagueResultCopy", () => {
       // The buttons' real names (MatchImportControls).
       expect(recovery).toContain("Auto-fetch games");
       expect(recovery).toContain("Dota match ID");
+    }
+  });
+});
+
+describe("waitingForResultNote", () => {
+  it("says results arrive on their own only with a league ticket", () => {
+    for (const viewerIsCaptain of [true, false]) {
+      expect(
+        waitingForResultNote({ hasLeagueTicket: true, viewerIsCaptain }),
+      ).toMatch(/usually appear here on their own/);
+      const ticketless = waitingForResultNote({
+        hasLeagueTicket: false,
+        viewerIsCaptain,
+      });
+      // The captain's own section says the result "may not appear on its
+      // own" without a ticket; the strip must never claim the opposite.
+      expect(ticketless).not.toMatch(/on (its|their) own/);
+      expect(ticketless).toMatch(/no league ticket/);
+    }
+  });
+
+  it("points a captain at their tools and tells everyone else who can", () => {
+    for (const hasLeagueTicket of [true, false]) {
+      expect(
+        waitingForResultNote({ hasLeagueTicket, viewerIsCaptain: true }),
+      ).toMatch(/Captain tools below\.$/);
+      expect(
+        waitingForResultNote({ hasLeagueTicket, viewerIsCaptain: false }),
+      ).toMatch(/a captain \S.* from this page\.$/);
     }
   });
 });

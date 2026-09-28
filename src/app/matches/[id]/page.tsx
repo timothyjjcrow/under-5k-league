@@ -27,6 +27,7 @@ import {
   leagueResultCopy,
   NO_TICKET_REPORT_SUBTITLE,
   NO_TICKET_RESULT_NOTE,
+  waitingForResultNote,
 } from "@/lib/match-hosting";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
@@ -620,9 +621,10 @@ export default async function MatchDetailPage({
           has passed and no game is recorded yet.
           {!matchResultsOpen(match.season.status, match.phase)
             ? null
-            : showCaptainTools
-              ? " Results usually appear here on their own; if one doesn't, add it in Captain tools below."
-              : " Results usually appear here on their own; if one doesn't, a captain can add it from this page."}
+            : ` ${waitingForResultNote({
+                hasLeagueTicket: !!match.season.dotaLeagueId,
+                viewerIsCaptain: showCaptainTools,
+              })}`}
         </div>
       ) : null}
 
