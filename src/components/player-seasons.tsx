@@ -47,10 +47,13 @@ export function PlayerSeasons({
                 key={row.key}
                 className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3 text-sm"
               >
+                {/* A fixed column from sm, so the teams line up, wide
+                    enough that "Season 10 — Winter" stays on one line. On a
+                    phone it takes the name's width (the row wraps instead). */}
                 <Link
                   href={`/seasons/${row.seasonId}`}
                   className={cn(
-                    "w-24 shrink-0 text-muted hover:text-info",
+                    "min-w-24 max-w-full shrink-0 text-muted hover:text-info sm:w-40",
                     TAP_SAFE,
                   )}
                 >

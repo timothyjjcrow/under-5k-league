@@ -182,7 +182,11 @@ export default async function InhouseHistoryPage({
     <div className="space-y-6">
       <PageTitle
         title="Inhouse history"
-        subtitle={`${total} games. Every score, roster, and result.`}
+        subtitle={
+          total > 0
+            ? `${total} game${total === 1 ? "" : "s"}. Every score, roster, and result.`
+            : "Every finished game's score, roster, and result."
+        }
         action={
           <Link href="/inhouse" className={buttonClasses("accent", "md")}>
             ← Back to the room
@@ -195,10 +199,12 @@ export default async function InhouseHistoryPage({
         <CardHeader
           title="Completed games"
           headingLevel={2}
+          // Empty, the state below says so; a subtitle saying it again
+          // made three "no games" lines in a row.
           subtitle={
             total > 0
               ? `${first}–${last} of ${total}, newest first${linkedOutsidePage ? " · linked game shown above" : ""}`
-              : "No completed games yet"
+              : undefined
           }
         />
         <CardBody className="p-0">

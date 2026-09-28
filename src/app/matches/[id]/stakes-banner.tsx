@@ -68,7 +68,7 @@ export async function StakesBanner({
       <CardHeader
         title="Tonight's stakes"
         headingLevel={2}
-        subtitle="How each feasible result changes playoff qualification"
+        subtitle="What each possible result means for the playoffs"
       />
       <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {sides.map((s) => {

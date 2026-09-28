@@ -92,7 +92,7 @@ function QueueControls({
               max={12000}
               inputMode="numeric"
               value={mmr || ""}
-              placeholder="0"
+              placeholder="e.g. 3200"
               onChange={(e) => setMmr(Number(e.target.value))}
               title="Seeds captain selection and the balance meter."
               className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
