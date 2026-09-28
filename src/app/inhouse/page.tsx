@@ -95,11 +95,21 @@ export default async function InhousePage({
             // who the setup guide is actually for.
             select: { rankTier: true, fhUnavailable: true },
           }),
+          // Any completed game at all? Decides whether the room's "game
+          // plan" walkthrough starts open for this viewer.
+          prisma.inhouseLobby.findFirst({
+            where: {
+              status: INHOUSE_STATUS.COMPLETED,
+              players: { some: { userId: user.id } },
+            },
+            select: { id: true },
+          }),
         ])
       : null,
     prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.COMPLETED } }),
   ]);
-  const [lastReg, dbUser] = viewerRows ?? [null, null];
+  const [lastReg, dbUser, playedLobby] = viewerRows ?? [null, null, null];
+  const firstGame = user != null && playedLobby == null;
   // Before the first completed game the ladder and results would only be
   // empty cards (and the section nav would jump between them), so the page is
   // the room plus one line until then.
@@ -161,7 +171,11 @@ export default async function InhousePage({
           className="scroll-mt-28"
           aria-label="Live inhouse room"
         >
-          <InhouseRoom signupMmr={signupMmr} mmrHint={mmrHint} />
+          <InhouseRoom
+            signupMmr={signupMmr}
+            mmrHint={mmrHint}
+            firstGame={firstGame}
+          />
           {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
         </section>
 
@@ -628,9 +642,17 @@ function YourStanding({
 }) {
   if (!meId) return null;
   const me = rows.find((r) => r.userId === meId);
-  // No completed game yet: the one place on the page addressed to this viewer
-  // tells them how to get onto the board instead of saying nothing.
-  if (!me) return <FirstGameStrip />;
+  // No completed game yet. The walkthrough lives in ONE place, the room's
+  // "game plan" fold (open by default for this viewer); a second copy here
+  // kept saying "join the queue" to players already mid-draft.
+  if (!me) {
+    return (
+      <p className="border-b border-line bg-accent/5 px-4 py-3 text-sm text-muted sm:px-5">
+        You&apos;re not on the ladder yet. Your Elo starts at 1000 after your
+        first game, and you get a rank after {PROVISIONAL_GAMES} games.
+      </p>
+    );
+  }
   // Rank only counts among established players — provisionals are unranked.
   const { ranked } = rankInhouse(rows);
   const idx = ranked.findIndex((r) => r.userId === meId);
@@ -698,52 +720,6 @@ function YourStanding({
           provisional · {toRank} more {toRank === 1 ? "game" : "games"} to rank
         </Badge>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * For a signed-in player with no completed inhouse yet. The room above already
- * explains the current phase; this is the whole path in one glance, because a
- * first-timer can't see what "queue" leads to until they are ten minutes in.
- */
-function FirstGameStrip() {
-  const steps: React.ReactNode[] = [
-    <>
-      <a href="#live-room" className={textLink()}>
-        Join the queue
-      </a>{" "}
-      above
-    </>,
-    "Accept when ten players are in",
-    "Vote on captains, then get drafted",
-    <>
-      Play in Dota with the league ticket (
-      <a href="#opendota-setup" className={textLink()}>
-        setup help
-      </a>
-      )
-    </>,
-  ];
-  return (
-    <div className="border-b border-line bg-accent/5 px-4 py-3.5 sm:px-5">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-accent/90">
-        Your first game
-      </div>
-      <ol className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-        {steps.map((step, i) => (
-          <li key={i} className="flex min-w-0 items-baseline gap-2">
-            <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-accent/40 bg-accent/10 text-[11px] font-semibold text-accent">
-              {i + 1}
-            </span>
-            <span className="min-w-0">{step}</span>
-          </li>
-        ))}
-      </ol>
-      <p className="mt-2.5 text-xs text-muted">
-        Your Elo starts at 1000 and you get a rank after {PROVISIONAL_GAMES}{" "}
-        games.
-      </p>
     </div>
   );
 }

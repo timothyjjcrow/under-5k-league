@@ -150,6 +150,7 @@ export function InhouseRoom({
   pollMs = 1500,
   signupMmr = 0,
   mmrHint = null,
+  firstGame = false,
 }: {
   pollMs?: number;
   /**
@@ -160,6 +161,11 @@ export function InhouseRoom({
   signupMmr?: number;
   /** Server-computed medal→MMR window note for the queue join panel. */
   mmrHint?: string | null;
+  /**
+   * Signed in with no completed inhouse yet: the queue's "game plan" fold
+   * starts open, because it is the page's one walkthrough of what a game is.
+   */
+  firstGame?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
@@ -910,6 +916,7 @@ export function InhouseRoom({
             setMmr={setMmr}
             mmrHint={mmrHint}
             signupMmr={signupMmr}
+            firstGame={firstGame}
             act={act}
             nextGame
           />
@@ -936,6 +943,7 @@ export function InhouseRoom({
             setMmr={setMmr}
             mmrHint={mmrHint}
             signupMmr={signupMmr}
+            firstGame={firstGame}
             act={act}
           />
         ) : lobby.status === "READY_CHECK" ? (
@@ -1216,6 +1224,7 @@ function QueueView({
   setMmr,
   mmrHint,
   signupMmr,
+  firstGame,
   act,
   nextGame = false,
 }: {
@@ -1225,6 +1234,7 @@ function QueueView({
   setMmr: (n: number) => void;
   mmrHint: string | null;
   signupMmr: number;
+  firstGame: boolean;
   act: (body: Record<string, unknown>) => void;
   /** The visible queue will not form until the active lobby closes. */
   nextGame?: boolean;
@@ -1465,41 +1475,58 @@ function QueueView({
         Tab switching keeps your spot · queue clears after{" "}
         {INHOUSE.QUEUE_IDLE_HOURS}h without lobby activity
       </p>
-      <details className="group rounded-xl border border-line bg-surface/60">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
-          <span>
-            New to inhouse?{" "}
-            <span className="font-medium text-fg">The game plan</span>
-          </span>
-          <span
-            aria-hidden
-            className="transition-transform group-open:rotate-180"
-          >
-            ⌄
-          </span>
-        </summary>
-        <ol className="grid gap-4 border-t border-line p-4 text-xs text-muted sm:grid-cols-2 lg:grid-cols-4">
-          <li>
-            <strong className="mb-1 block text-fg">01 · Queue & accept</strong>
-            {lobbySize} players fill the room. Accept within{" "}
-            {INHOUSE.ACCEPT_SECONDS}s or lose your spot.
-          </li>
-          <li>
-            <strong className="mb-1 block text-fg">02 · Choose captains</strong>
-            Elect players, use highest MMR, or pick by inhouse record.
-          </li>
-          <li>
-            <strong className="mb-1 block text-fg">03 · Draft your side</strong>
-            Captains pick Radiant and Dire in a snake draft: one pick, then
-            pairs.
-          </li>
-          <li>
-            <strong className="mb-1 block text-fg">04 · Play & climb</strong>
-            Host the Dota lobby, join your team in Discord, and let results
-            update your Elo.
-          </li>
-        </ol>
-      </details>
+      {/* The page's ONE walkthrough of a game (the ladder card no longer
+          repeats it). Open by default for a signed-in first-timer; gone once
+          the viewer is queued, where "queue up" is advice they have already
+          taken and the room itself explains each next step. */}
+      {me.inQueue ? null : (
+        <details
+          open={firstGame}
+          className="group rounded-xl border border-line bg-surface/60"
+        >
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
+            <span>
+              New to inhouse?{" "}
+              <span className="font-medium text-fg">The game plan</span>
+            </span>
+            <span
+              aria-hidden
+              className="transition-transform group-open:rotate-180"
+            >
+              ⌄
+            </span>
+          </summary>
+          <ol className="grid gap-4 border-t border-line p-4 text-xs text-muted sm:grid-cols-2 lg:grid-cols-4">
+            <li>
+              <strong className="mb-1 block text-fg">
+                01 · Queue & accept
+              </strong>
+              {lobbySize} players fill the room. Accept within{" "}
+              {INHOUSE.ACCEPT_SECONDS}s or lose your spot.
+            </li>
+            <li>
+              <strong className="mb-1 block text-fg">
+                02 · Choose captains
+              </strong>
+              Elect players, use highest MMR, or pick by inhouse record.
+            </li>
+            <li>
+              <strong className="mb-1 block text-fg">
+                03 · Draft your side
+              </strong>
+              Captains pick Radiant and Dire in a snake draft: one pick, then
+              pairs.
+            </li>
+            <li>
+              <strong className="mb-1 block text-fg">
+                04 · Play & climb
+              </strong>
+              Host the Dota lobby, join your team in Discord, and let results
+              update your Elo.
+            </li>
+          </ol>
+        </details>
+      )}
     </div>
   );
 }
