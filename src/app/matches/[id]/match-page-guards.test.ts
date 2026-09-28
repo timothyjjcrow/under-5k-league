@@ -70,3 +70,19 @@ describe("match page captain tools order and anchors", () => {
   });
 });
 
+describe("match page captain contact", () => {
+  it("shows Discord handles only through the shared contact policy", () => {
+    // Two chips: the Matchup card's captain line and Captain tools'
+    // "Opposing captain" line. Each is gated by canViewLeagueContact.
+    expect(PAGE.match(/<DiscordTag\b/g)).toHaveLength(2);
+    expect(PAGE).toMatch(
+      /const captainContact = \(captainId: string\) =>\s*canViewLeagueContact\(/,
+    );
+    expect(PAGE).toContain(
+      "captainRow?.user.discordName && captainContact(captainId)",
+    );
+    expect(PAGE).toMatch(/showContact=\{canViewLeagueContact\(\s*viewer,/);
+    expect(PAGE).toMatch(/\{showContact \? \(\s*captain\.discordName \? \(\s*<DiscordTag/);
+  });
+});
+

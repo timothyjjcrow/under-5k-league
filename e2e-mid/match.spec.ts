@@ -143,6 +143,11 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.getByRole("heading", { name: "Reschedule", exact: true }),
   ).toBeVisible();
+  // The other captain, one tap from their profile (and their Discord handle
+  // when they have one on file).
+  await expect(
+    page.getByText("Opposing captain:", { exact: true }),
+  ).toBeVisible();
   await captainJump.click();
   await expect(page).toHaveURL(/#match-report$/);
   await expect(page.locator("#match-report")).toBeInViewport();

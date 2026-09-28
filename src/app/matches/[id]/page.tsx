@@ -14,7 +14,12 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { matchMetadata } from "@/lib/link-preview-metadata";
-import { AUTO_SYNC, LEAGUE_GAME_MODE, MATCH_STATUS } from "@/lib/constants";
+import {
+  AUTO_SYNC,
+  LEAGUE_GAME_MODE,
+  MATCH_STATUS,
+  REGISTRATION_STATUS,
+} from "@/lib/constants";
 import {
   howToHostParts,
   NO_TICKET_REPORT_SUBTITLE,
@@ -33,7 +38,11 @@ import { SectionNav } from "@/components/section-nav";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
 import { matchNightRoster } from "@/lib/availability";
-import { canViewNamedMatchAvailability } from "@/lib/visibility";
+import {
+  canViewLeagueContact,
+  canViewNamedMatchAvailability,
+} from "@/lib/visibility";
+import { DiscordTag } from "@/components/discord-tag";
 import {
   matchCheckinOpen,
   matchLogisticsOpen,
@@ -749,6 +758,22 @@ export default async function MatchDetailPage({
             </h2>
             <Badge className="ml-auto">Your match</Badge>
           </div>
+          <OpposingCaptain
+            captainId={
+              match.homeTeam.captainId === viewer!.id
+                ? match.awayTeam.captainId
+                : match.homeTeam.captainId
+            }
+            showContact={canViewLeagueContact(
+              viewer,
+              match.homeTeam.captainId === viewer!.id
+                ? match.awayTeam.captainId
+                : match.homeTeam.captainId,
+              // A captain of this match in the active season: agreeing the
+              // lobby and any new time with the other captain is their job.
+              isCaptain,
+            )}
+          />
           {/* These components keep their own write-time capability gates,
               including locked reporting and stranded-proposal cleanup. The
               cards that may need an answer (a proposed time, a player who
@@ -905,6 +930,47 @@ async function CaptainTodos({
   );
 }
 
+/**
+ * "Opposing captain: <name> <copyable Discord handle>" at the top of Captain
+ * tools. Captains agree lobby times, hosting and reschedules with each other,
+ * and the handle used to be a team page or profile away.
+ */
+async function OpposingCaptain({
+  captainId,
+  showContact,
+}: {
+  captainId: string;
+  /** canViewLeagueContact's answer for this viewer and captain. */
+  showContact: boolean;
+}) {
+  const captain = await prisma.user.findUnique({
+    where: { id: captainId },
+    select: { id: true, name: true, discordName: true, discordId: true },
+  });
+  if (!captain) return null;
+  return (
+    <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+      <span>Opposing captain:</span>
+      <PlayerLink
+        userId={captain.id}
+        className="font-medium text-fg [overflow-wrap:anywhere]"
+      >
+        {captain.name}
+      </PlayerLink>
+      {showContact ? (
+        captain.discordName ? (
+          <DiscordTag
+            name={captain.discordName}
+            verified={!!captain.discordId}
+          />
+        ) : (
+          <span className="text-xs">(no Discord on file)</span>
+        )
+      ) : null}
+    </p>
+  );
+}
+
 // Pre-match scouting: rosters, recent form, prior meetings, and who's
 // confirmed for match night — shown until the first game is recorded.
 async function MatchPreview({
@@ -977,23 +1043,48 @@ async function MatchPreview({
   // Mirror setAvailability's decisive capability gate: an RSVP is about one
   // published, upcoming match night. LIVE readiness is its own banner
   // (LiveSeriesCheckin), including after the first game's import.
-  const [previewSeason, previewDraft, myPrediction] = await Promise.all([
-    prisma.season.findUnique({
-      where: { id: match.seasonId },
-      select: { isActive: true, status: true },
-    }),
-    prisma.draft.findUnique({
-      where: { seasonId: match.seasonId },
-      select: { status: true },
-    }),
-    // Signed-in only: the Matchup card's pick tray (pickemControlFor below).
-    viewer
-      ? prisma.prediction.findUnique({
-          where: { matchId_userId: { matchId: match.id, userId: viewer.id } },
-          select: { pickedTeamId: true },
-        })
-      : Promise.resolve(null),
-  ]);
+  const [previewSeason, previewDraft, myPrediction, viewerRegistration] =
+    await Promise.all([
+      prisma.season.findUnique({
+        where: { id: match.seasonId },
+        select: { isActive: true, status: true },
+      }),
+      prisma.draft.findUnique({
+        where: { seasonId: match.seasonId },
+        select: { status: true },
+      }),
+      // Signed-in only: the Matchup card's pick tray (pickemControlFor below).
+      viewer
+        ? prisma.prediction.findUnique({
+            where: { matchId_userId: { matchId: match.id, userId: viewer.id } },
+            select: { pickedTeamId: true },
+          })
+        : Promise.resolve(null),
+      // The Matchup card's captain contact chips (canViewLeagueContact below).
+      viewer
+        ? prisma.registration.findUnique({
+            where: {
+              seasonId_userId: { seasonId: match.seasonId, userId: viewer.id },
+            },
+            select: { status: true },
+          })
+        : Promise.resolve(null),
+    ]);
+  // Each captain's Discord handle, for the people allowed league contact:
+  // admins, active registrants (standins included, who need to reach the
+  // captain they cover for) and the two captains of this match.
+  const viewerIsMatchCaptain =
+    !!viewer &&
+    (viewer.id === match.homeTeam.captainId ||
+      viewer.id === match.awayTeam.captainId);
+  const captainContact = (captainId: string) =>
+    canViewLeagueContact(
+      viewer,
+      captainId,
+      !!previewSeason?.isActive &&
+        (viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE ||
+          viewerIsMatchCaptain),
+    );
   const activeNightRoster = new Set(
     [match.homeTeamId, match.awayTeamId].flatMap((teamId) =>
       matchNightRoster(
@@ -1043,8 +1134,18 @@ async function MatchPreview({
     (h) => h.opponentId === match.awayTeamId,
   );
 
-  const side = (teamId: string, name: string, logoUrl: string | null) => {
+  const side = (
+    teamId: string,
+    name: string,
+    logoUrl: string | null,
+    captainId: string,
+  ) => {
     const roster = members.filter((m) => m.teamId === teamId);
+    const captainRow = roster.find((m) => m.userId === captainId);
+    const captain =
+      captainRow?.user.discordName && captainContact(captainId)
+        ? captainRow.user
+        : null;
     const subs = match.standins.filter((s) => s.teamId === teamId);
     const replacedIds = new Set(
       subs.map((s) => s.replaced?.id).filter(Boolean),
@@ -1055,11 +1156,21 @@ async function MatchPreview({
         (m) => m.homeTeamId === teamId || m.awayTeamId === teamId,
       ),
     );
-    return { teamId, name, logoUrl, roster, subs, replacedIds, form };
+    return { teamId, name, logoUrl, roster, subs, replacedIds, form, captain };
   };
   const sides = [
-    side(match.homeTeamId, match.homeTeam.name, match.homeTeam.logoUrl),
-    side(match.awayTeamId, match.awayTeam.name, match.awayTeam.logoUrl),
+    side(
+      match.homeTeamId,
+      match.homeTeam.name,
+      match.homeTeam.logoUrl,
+      match.homeTeam.captainId,
+    ),
+    side(
+      match.awayTeamId,
+      match.awayTeam.name,
+      match.awayTeam.logoUrl,
+      match.awayTeam.captainId,
+    ),
   ];
 
   return (
@@ -1132,6 +1243,17 @@ async function MatchPreview({
                 </Link>
                 {s.form.length > 0 ? <FormStrip form={s.form} /> : null}
               </div>
+              {/* Its own line, not squeezed into the captain's roster row,
+                  which already truncates the name on a phone. */}
+              {s.captain ? (
+                <p className="mb-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                  <span>Captain&apos;s Discord</span>
+                  <DiscordTag
+                    name={s.captain.discordName}
+                    verified={!!s.captain.discordId}
+                  />
+                </p>
+              ) : null}
               <ul className="space-y-1">
                 {s.roster.map((m) => {
                   const reg = regByUser.get(m.userId);
