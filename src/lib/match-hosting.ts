@@ -24,14 +24,20 @@ export const MISSING_LEAGUE_TICKET_WARNING =
   "This season has no Dota league ticket. Valve needs about 15 days to issue one; without it, league games may not reach OpenDota and results can't be imported.";
 
 /**
- * The ticketless season's note under "How to host": why the result may not
- * import by itself, pointing at the Report your result card, whose subtitle
- * (NO_TICKET_REPORT_SUBTITLE) says what to do. Each step is said once. Never
- * "make your match history public" — that is not enough for a private lobby
- * without a ticket.
+ * Why a ticketless season's result may not import by itself. The match page
+ * says it under "How to host" (NO_TICKET_RESULT_NOTE); How it works says it
+ * away from any match. Never "make your match history public" — that is not
+ * enough for a private lobby without a ticket.
  */
-export const NO_TICKET_RESULT_NOTE =
-  "This season has no league ticket yet, so your result may not appear on its own. If it doesn't, add it in Report your result below.";
+export const NO_TICKET_RESULT_LEAD =
+  "This season has no league ticket yet, so your result may not appear on its own.";
+
+/**
+ * The ticketless season's note under "How to host": NO_TICKET_RESULT_LEAD,
+ * pointing at the Report your result card, whose subtitle
+ * (NO_TICKET_REPORT_SUBTITLE) says what to do. Each step is said once.
+ */
+export const NO_TICKET_RESULT_NOTE = `${NO_TICKET_RESULT_LEAD} If it doesn't, add it in Report your result below.`;
 
 /**
  * The Report your result card on a ticketless season: paste the match ID or

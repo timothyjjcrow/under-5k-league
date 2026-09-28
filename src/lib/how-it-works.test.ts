@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import nextConfig from "../../next.config";
+import { readFileSync } from "node:fs";
 import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import {
   eligibilityText,
   howItWorksAction,
+  resultsCopy,
   standinSignupOpen,
 } from "./how-it-works";
+import { NO_TICKET_RESULT_LEAD } from "./match-hosting";
 
 describe("eligibilityText", () => {
   it("states the hard ceiling and the medal rule", () => {
@@ -18,6 +21,45 @@ describe("eligibilityText", () => {
     expect(eligibilityText(4500)).toMatch(
       /Above 4,500 MMR, an admin looks over your signup before the draft\.$/,
     );
+  });
+});
+
+describe("resultsCopy", () => {
+  it("promises self-importing results only on a ticketed season", () => {
+    const { step, faq } = resultsCopy(true);
+    expect(step).toMatch(/by themselves/);
+    expect(faq).toMatch(/Expose Public Match Data/);
+    expect(faq).toMatch(/add it by match ID/);
+  });
+
+  // Europe runs without a ticket: its match page says the result may not
+  // appear on its own and falls back to an admin (match-hosting.ts). This
+  // page must not tell the same players otherwise.
+  it("says what the match page says when the season has no ticket", () => {
+    const { step, faq } = resultsCopy(false);
+    for (const copy of [step, faq]) {
+      expect(copy).not.toMatch(/by themselves|by itself/);
+      expect(copy).not.toMatch(/Expose Public Match Data/);
+    }
+    expect(step).toMatch(/no league ticket/);
+    expect(faq).toContain(NO_TICKET_RESULT_LEAD);
+    expect(faq).toMatch(/match ID/);
+    expect(faq).toMatch(/sends an admin the score/);
+  });
+
+  it("doesn't promise either way between seasons", () => {
+    const { step, faq } = resultsCopy(null);
+    expect(step).not.toMatch(/by themselves|no league ticket/);
+    expect(faq).toMatch(/When the season has a Dota league ticket/);
+    expect(faq).toMatch(/sends an admin the score/);
+  });
+
+  it("is chosen from the active season's league ticket", () => {
+    const page = readFileSync("src/app/how-it-works/page.tsx", "utf8");
+    expect(page).toContain(
+      "resultsCopy(season ? !!season.dotaLeagueId : null)",
+    );
+    expect(page).not.toMatch(/Results come in from Dota by themselves/);
   });
 });
 

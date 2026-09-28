@@ -1,8 +1,44 @@
 // The How it works page's rules, kept pure so they can be tested.
 
 import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
+import { NO_TICKET_RESULT_LEAD } from "./match-hosting";
 import { mmrCeilingPhrase } from "./season-copy";
 import { joinSeasonCta } from "./site-nav";
+
+/**
+ * How results get recorded: the end of the "Weekly matches and playoffs" step
+ * and the answer to "How do our games get recorded?". `hasLeagueTicket` is
+ * whether the active season has a Valve league ticket (`Season.dotaLeagueId`),
+ * or null between seasons, when the next season's ticket isn't known yet.
+ *
+ * Only a ticketed season may say results arrive by themselves. Without a
+ * ticket a private lobby may never reach OpenDota, so this says what the
+ * match page says (match-hosting.ts): the result may not appear on its own,
+ * the captain adds it by match ID, and if nothing finds the game an admin
+ * takes the score. Public match data is only mentioned where it helps: it
+ * can't get a ticketless private lobby onto OpenDota.
+ */
+export function resultsCopy(hasLeagueTicket: boolean | null): {
+  step: string;
+  faq: string;
+} {
+  if (hasLeagueTicket === true) {
+    return {
+      step: "Results come in from Dota by themselves, and the top of the table goes to the playoffs.",
+      faq: "Follow the lobby setup on your match page and turn on Expose Public Match Data in Dota's settings. Results then import from OpenDota; if a game doesn't show up, your captain can add it by match ID.",
+    };
+  }
+  if (hasLeagueTicket === false) {
+    return {
+      step: "This season has no league ticket yet, so captains may need to add results on the match page. The top of the table goes to the playoffs.",
+      faq: `Follow the lobby setup on your match page. ${NO_TICKET_RESULT_LEAD} If it doesn't, your captain adds it on the match page by its Dota match ID, and if the game can't be found, sends an admin the score.`,
+    };
+  }
+  return {
+    step: "Results are recorded from your Dota games, and the top of the table goes to the playoffs.",
+    faq: "Follow the lobby setup on your match page. When the season has a Dota league ticket, results import by themselves. If a game doesn't show up, your captain adds it on the match page by its Dota match ID, and if the game can't be found, sends an admin the score.",
+  };
+}
 
 /**
  * Who can join, in one or two sentences. `softLimit` is the season's review

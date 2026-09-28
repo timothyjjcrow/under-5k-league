@@ -5,7 +5,11 @@ import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
 import { SteamJoin } from "@/components/steam-sign-in";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { eligibilityText, howItWorksAction } from "@/lib/how-it-works";
+import {
+  eligibilityText,
+  howItWorksAction,
+  resultsCopy,
+} from "@/lib/how-it-works";
 import { seasonMatchNightLabel } from "@/lib/match-night";
 import { leaguePitch } from "@/lib/season-copy";
 import {
@@ -24,46 +28,51 @@ const PITCH = leaguePitch();
 
 export const metadata = shareMetadata("How it works", PITCH, "/how-it-works");
 
-const STEPS = [
-  {
-    title: "Sign up",
-    detail:
-      "Sign in with Steam and add your roles and favorite heroes. You don't need a team: everyone signs up on their own.",
-  },
-  {
-    title: "Draft night",
-    detail:
-      "Captains take turns nominating players and bid for them in a live auction. When it ends, you have a team.",
-  },
-  {
-    title: "Weekly matches and playoffs",
-    detail:
-      "Your team plays one series every match night. Results come in from Dota by themselves, and the top of the table goes to the playoffs.",
-  },
-];
+// Whether results can come in by themselves depends on the season's league
+// ticket, so the last step and the recording answer are built per request
+// (resultsCopy).
+function steps(results: string) {
+  return [
+    {
+      title: "Sign up",
+      detail:
+        "Sign in with Steam and add your roles and favorite heroes. You don't need a team: everyone signs up on their own.",
+    },
+    {
+      title: "Draft night",
+      detail:
+        "Captains take turns nominating players and bid for them in a live auction. When it ends, you have a team.",
+    },
+    {
+      title: "Weekly matches and playoffs",
+      detail: `Your team plays one series every match night. ${results}`,
+    },
+  ];
+}
 
-const FAQ = [
-  {
-    question: "Do I need to bring a team?",
-    answer:
-      "No. Everyone signs up on their own and captains build the teams in the draft. Your roles and heroes help them see where you fit.",
-  },
-  {
-    question: "How much time does it take?",
-    answer:
-      "Draft night, then one match night a week for the season. If you'll miss one, press \"Can't make it\" on your match early so your captain can find a standin.",
-  },
-  {
-    question: "How do our games get recorded?",
-    answer:
-      "Follow the lobby setup on your match page and turn on Expose Public Match Data in Dota's settings. Results then import from OpenDota; if a game doesn't show up, your captain can add it by match ID.",
-  },
-  {
-    question: "Can I follow along without playing?",
-    answer:
-      "Yes. Anyone can browse teams, results and player pages. Sign in with Steam to play fantasy and pick'em while they're open.",
-  },
-];
+function faq(recording: string) {
+  return [
+    {
+      question: "Do I need to bring a team?",
+      answer:
+        "No. Everyone signs up on their own and captains build the teams in the draft. Your roles and heroes help them see where you fit.",
+    },
+    {
+      question: "How much time does it take?",
+      answer:
+        "Draft night, then one match night a week for the season. If you'll miss one, press \"Can't make it\" on your match early so your captain can find a standin.",
+    },
+    {
+      question: "How do our games get recorded?",
+      answer: recording,
+    },
+    {
+      question: "Can I follow along without playing?",
+      answer:
+        "Yes. Anyone can browse teams, results and player pages. Sign in with Steam to play fantasy and pick'em while they're open.",
+    },
+  ];
+}
 
 export default async function HowItWorksPage() {
   const [season, user] = await Promise.all([
@@ -95,6 +104,7 @@ export default async function HowItWorksPage() {
       : [],
   ]);
 
+  const results = resultsCopy(season ? !!season.dotaLeagueId : null);
   const action = howItWorksAction({
     phase: season?.status ?? null,
     seasonName: season?.name ?? null,
@@ -129,7 +139,7 @@ export default async function HowItWorksPage() {
           A season in three steps
         </h2>
         <ol className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          {STEPS.map((step, index) => (
+          {steps(results.step).map((step, index) => (
             <li key={step.title} className="min-w-0">
               <Card className="h-full">
                 <CardBody>
@@ -191,7 +201,7 @@ export default async function HowItWorksPage() {
       <Card id="faq" className="mt-6 scroll-mt-24">
         <CardHeader title="Questions" headingLevel={2} />
         <ul className="divide-y divide-line-soft">
-          {FAQ.map((item) => (
+          {faq(results.faq).map((item) => (
             <li key={item.question}>
               <details className="group">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-5 py-3 text-sm font-medium hover:bg-surface-2/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
