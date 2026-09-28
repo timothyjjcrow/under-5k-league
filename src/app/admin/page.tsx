@@ -3100,7 +3100,24 @@ function TiebreakerControls({
         {brackets.groups.map((bracket) => (
           <TiebreakerBracket key={bracket.key} bracket={bracket} teams={data.teams} postseasonStarted={postseasonStarted} admin />
         ))}
-        {tiebreakerMatches.length > 0 ? <h3 className="font-medium">Match controls</h3> : null}
+        {tiebreakerMatches.length > 0 ? (
+          <>
+            <h3 className="font-medium">Match controls</h3>
+            <MatchRowsHelp
+              id="adm-import-help-tiebreaker"
+              seasonStatus={season.status}
+              draftStatus={data.draft?.status ?? null}
+              canImport={
+                matchResultsOpen(season.status, MATCH_PHASE.TIEBREAKER) &&
+                pending.length > 0
+              }
+              hasScheduled={tiebreakerMatches.some(
+                (m) => m.status === MATCH_STATUS.SCHEDULED,
+              )}
+              notes={[resultsLockNote(season.status, MATCH_PHASE.TIEBREAKER)]}
+            />
+          </>
+        ) : null}
         {[...new Set(tiebreakerMatches.map((m) => m.week))].map((week) => {
           const weekMatches = tiebreakerMatches.filter(
             (m) => m.week === week,
@@ -3134,6 +3151,7 @@ function TiebreakerControls({
                       draftStatus={data.draft?.status ?? null}
                       championTeamId={season.championTeamId}
                       correctionBlockedByLaterRound={hasLaterTiebreakerStage(m, tiebreakerMatches)}
+                      importHelpId="adm-import-help-tiebreaker"
                       isSoleLatestPlayoffSeries={false}
                       label={
                         <Link
@@ -3168,7 +3186,12 @@ function ScheduleControls({
   // Only fixtures past kickoff (or live) are missing a result.
   const due = regularSeasonStatus(regularResultsDue(data.matches, nowMs));
   const nextKickoff = nextRegularKickoff(data.matches, nowMs);
-  const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
+  const regularMatches = data.matches.filter((m) => m.phase === "REGULAR");
+  const regularCount = regularMatches.length;
+  const regularResultsOpen = matchResultsOpen(
+    season.status,
+    MATCH_PHASE.REGULAR,
+  );
   const tiebreakerMatches = data.matches.filter(
     (m) => m.phase === "TIEBREAKER",
   );
@@ -3205,7 +3228,14 @@ function ScheduleControls({
         title="Schedule & results"
         subtitle="Generate the round-robin and enter weekly scores."
         action={
-          scheduleGenerationLockedReason ? null : (
+          // The lock reason sits where the control would be, not in a banner
+          // over the card: once any result exists it is true all season.
+          scheduleGenerationLockedReason ? (
+            <p className="max-w-sm text-xs text-muted">
+              {regularCount > 0 ? "Regenerate schedule" : "Generate schedule"}{" "}
+              is unavailable: {scheduleGenerationLockedReason}
+            </p>
+          ) : (
             <ActionForm
               action={generateSchedule}
               hidden={{ expectedActiveSeasonId: season.id }}
@@ -3293,12 +3323,6 @@ function ScheduleControls({
         }
       />
       <CardBody>
-        {scheduleGenerationLockedReason ? (
-          <p className="mb-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-fg">
-            <strong>Schedule generation unavailable.</strong>{" "}
-            {scheduleGenerationLockedReason}
-          </p>
-        ) : null}
         {data.matches.length === 0 ? (
           <p className="text-sm text-muted">
             No fixtures have been generated for this season.
@@ -3341,11 +3365,27 @@ function ScheduleControls({
                           : `✓ All ${status.total} results in — ready to start the playoffs.`}
               </div>
             ) : null}
-            <p className="text-xs text-muted">
-              Enter scores manually, or fetch the real games from Dota
-              (OpenDota). Auto-fetch needs players to have &ldquo;Expose Public
-              Match Data&rdquo; enabled.
-            </p>
+            <MatchRowsHelp
+              id="adm-import-help-regular"
+              seasonStatus={season.status}
+              draftStatus={draftStatus}
+              canImport={
+                regularResultsOpen &&
+                tiebreakerMatches.length === 0 &&
+                status.pending > 0
+              }
+              hasScheduled={regularMatches.some(
+                (m) => m.status === MATCH_STATUS.SCHEDULED,
+              )}
+              notes={[
+                regularCount > 0
+                  ? resultsLockNote(season.status, MATCH_PHASE.REGULAR)
+                  : null,
+                regularResultsOpen && tiebreakerMatches.length > 0
+                  ? "Tiebreaker games depend on the regular-season results. Use Reset tiebreaker week in the Playoffs card before correcting one."
+                  : null,
+              ]}
+            />
             <PendingReschedules seasonId={season.id} teams={data.teams} />
             {(() => {
               const openWeeks = [
@@ -3448,6 +3488,8 @@ function ScheduleControls({
                         correctionBlockedByLaterRound={
                           tiebreakerMatches.length > 0
                         }
+                        laterRoundNote="none"
+                        importHelpId="adm-import-help-regular"
                         isSoleLatestPlayoffSeries={false}
                         label={
                           <Link
@@ -3470,6 +3512,72 @@ function ScheduleControls({
   );
 }
 
+const LATER_ROUND_NOTE =
+  "A series that already advanced a later playoff round is read-only, because changing its winner would strand the teams downstream. Use Reset playoffs under “Fix the bracket” to reseed the full bracket before correcting one.";
+
+/** Why a phase's results can't be corrected right now, or null if they can. */
+function resultsLockNote(seasonStatus: string, phase: string): string | null {
+  if (matchResultsOpen(seasonStatus, phase)) return null;
+  if (phase === MATCH_PHASE.REGULAR)
+    return "Regular-season results are read-only outside the Regular season phase. Move the phase back and reseed before correcting one.";
+  if (phase === MATCH_PHASE.TIEBREAKER)
+    return "Tiebreaker results are read-only once playoffs begin. Return to Regular season before correcting one.";
+  return "Playoff results are read-only unless the season is in Playoffs.";
+}
+
+/**
+ * The help every result row used to repeat, printed ONCE above a card's
+ * match rows. Each row's match-id field points aria-describedby at `id`, so
+ * a screen reader still hears the import hint on every field.
+ */
+function MatchRowsHelp({
+  id,
+  seasonStatus,
+  draftStatus,
+  canImport,
+  hasScheduled,
+  notes = [],
+}: {
+  id: string;
+  seasonStatus: string;
+  draftStatus: string | null;
+  /** Some row below shows the Auto-fetch / Add game controls. */
+  canImport: boolean;
+  /** Some row below is still SCHEDULED, so its kickoff matters. */
+  hasScheduled: boolean;
+  /** Card-wide reasons rows are read-only, said once instead of per row. */
+  notes?: (string | null)[];
+}) {
+  const kickoffOpen = postAuctionWorkOpen(seasonStatus, draftStatus);
+  const kickoffNote = !hasScheduled
+    ? null
+    : kickoffOpen
+      ? "Changing or clearing a kickoff resets that match’s check-ins, cancels its open reschedule proposals, and reopens the week’s Discord reminder."
+      : seasonStatus === SEASON_STATUS.COMPLETE
+        ? "Kickoff times are locked because the completed season is read-only."
+        : seasonStatus === SEASON_STATUS.SIGNUPS ||
+            seasonStatus === SEASON_STATUS.DRAFT
+          ? "Kickoff times can be edited once the auction is complete."
+          : "Kickoff times are locked in the current league phase.";
+  const lines = [...new Set(notes.filter((n): n is string => !!n))];
+  return (
+    <div className="space-y-1 text-xs text-muted">
+      {canImport ? (
+        <p id={id}>
+          Enter a score by hand, or bring in the real games: Auto-fetch games
+          looks them up on OpenDota (players need &ldquo;Expose Public Match
+          Data&rdquo; on), and Add game takes a numeric Dota match ID or an
+          OpenDota/Dotabuff match URL.
+        </p>
+      ) : null}
+      {kickoffNote ? <p>{kickoffNote}</p> : null}
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  );
+}
+
 // One match's result + scheduling + imported-games controls. Used by the
 // week-grouped section of ScheduleControls and the Playoffs card's series.
 function MatchResultRow({
@@ -3484,6 +3592,8 @@ function MatchResultRow({
   championTeamId,
   correctionBlockedByLaterRound,
   isSoleLatestPlayoffSeries,
+  laterRoundNote = "full",
+  importHelpId,
 }: {
   m: AdminData["matches"][number];
   teams: AdminData["teams"];
@@ -3497,6 +3607,15 @@ function MatchResultRow({
   championTeamId: string | null;
   correctionBlockedByLaterRound: boolean;
   isSoleLatestPlayoffSeries: boolean;
+  /**
+   * How much of the "a later round depends on this" explanation the ROW
+   * prints: "full" when it is the only place it appears, "short" when the
+   * card has printed the full version once above, "none" when every row in
+   * the card shares it (the card's note says it for all of them).
+   */
+  laterRoundNote?: "full" | "short" | "none";
+  /** The card's <MatchRowsHelp> id, which the match-id field points at. */
+  importHelpId: string;
 }) {
   const home = teams.find((t) => t.id === m.homeTeamId);
   const away = teams.find((t) => t.id === m.awayTeamId);
@@ -3539,6 +3658,33 @@ function MatchResultRow({
     !(autoCheck.kind === "none" && autoCheck.reason !== "no-kickoff")
       ? autoCheck
       : null;
+  // Only what is true of THIS row. The phase-wide "results are read-only"
+  // reasons are printed once by the card (<MatchRowsHelp>): on a finished
+  // season every regular row used to repeat the same paragraph.
+  const rowNote = correctionBlockedByLaterRound
+    ? laterRoundNote === "none"
+      ? null
+      : laterRoundNote === "short"
+        ? "Read-only: a later round depends on this result."
+        : m.phase === MATCH_PHASE.REGULAR ||
+            m.phase === MATCH_PHASE.TIEBREAKER
+          ? "Tiebreaker fixtures depend on this result. Use Reset tiebreaker week in the Playoffs controls before correcting it."
+          : LATER_ROUND_NOTE
+    : !resultOpen
+      ? m.phase !== MATCH_PHASE.FINAL
+        ? null
+        : crownedGrandFinal
+          ? "This result crowned the champion. Use the grand-final correction below to retract the title and reopen only this series."
+          : conflictingChampionFinal
+            ? "The stored champion conflicts with this completed final. Use the correction below to retract the inconsistent title and reconcile only this series."
+            : unresolvedCompletedFinal
+              ? championTeamId == null
+                ? "This completed grand final has no authoritative champion. Move the season back to Playoffs with the phase control, then reconcile this result; title-retraction controls stay hidden because no title exists."
+                : !championIsFinalParticipant
+                  ? "The recorded champion is not a participant in this completed grand final. Use the dedicated playoff recovery controls to restore a consistent bracket and title; targeted title-retraction controls stay hidden because this final cannot safely retract that team."
+                  : "The bracket does not have one sole authoritative latest final. Use the dedicated playoff recovery controls to restore a single consistent final before targeted title correction is available."
+              : null
+      : `Score derived from ${m.games.length} imported game${m.games.length === 1 ? "" : "s"}. Remove the incorrect game below; the series recomputes automatically.`;
   return (
     <div
       id={`adm-match-${m.id}`}
@@ -3557,30 +3703,9 @@ function MatchResultRow({
               {m.forfeit ? "final · forfeit" : "final"}
             </Badge>
           ) : null}
-          <span className="w-full text-xs text-muted">
-            {correctionBlockedByLaterRound
-              ? m.phase === MATCH_PHASE.REGULAR ||
-                m.phase === MATCH_PHASE.TIEBREAKER
-                ? "Tiebreaker fixtures depend on this result. Use Reset tiebreaker week in the Playoffs controls before correcting it."
-                : "This series already advanced a later playoff round. It is read-only because changing its winner would strand downstream teams; use Reset playoffs under “Fix the bracket” to reseed the full bracket before correcting it."
-              : !resultOpen
-                ? m.phase === MATCH_PHASE.TIEBREAKER
-                  ? "Tiebreaker results are read-only once playoffs begin. Return to Regular season before correcting one."
-                  : m.phase === MATCH_PHASE.REGULAR
-                    ? "Regular-season results are read-only outside the active Regular season phase. Move the phase back and reseed before correcting one."
-                    : crownedGrandFinal
-                      ? "This result crowned the champion. Use the grand-final correction below to retract the title and reopen only this series."
-                      : conflictingChampionFinal
-                        ? "The stored champion conflicts with this completed final. Use the correction below to retract the inconsistent title and reconcile only this series."
-                        : unresolvedCompletedFinal
-                          ? championTeamId == null
-                            ? "This completed grand final has no authoritative champion. Move the season back to Playoffs with the phase control, then reconcile this result; title-retraction controls stay hidden because no title exists."
-                            : !championIsFinalParticipant
-                              ? "The recorded champion is not a participant in this completed grand final. Use the dedicated playoff recovery controls to restore a consistent bracket and title; targeted title-retraction controls stay hidden because this final cannot safely retract that team."
-                              : "The bracket does not have one sole authoritative latest final. Use the dedicated playoff recovery controls to restore a single consistent final before targeted title correction is available."
-                          : "Playoff results are read-only unless the active season is in Playoffs."
-                : `Score derived from ${m.games.length} imported game${m.games.length === 1 ? "" : "s"}. Remove the incorrect game below; the series recomputes automatically.`}
-          </span>
+          {rowNote ? (
+            <span className="w-full text-xs text-muted">{rowNote}</span>
+          ) : null}
         </div>
       ) : (
         <ActionForm
@@ -3740,11 +3865,6 @@ function MatchResultRow({
           <SubmitButton variant="secondary" size="sm">
             {m.scheduledAt ? "Update time" : "Set time"}
           </SubmitButton>
-          <span className="w-full">
-            Changing or clearing kickoff resets player check-ins, cancels open
-            reschedule proposals, and reopens this week&rsquo;s Discord
-            reminder.
-          </span>
         </ActionForm>
       ) : (
         <p className="text-xs text-muted">
@@ -3757,18 +3877,12 @@ function MatchResultRow({
             />
           ) : (
             "not set"
-          )}{" "}
-          ·{" "}
-          {m.status !== MATCH_STATUS.SCHEDULED
-            ? `time editing is unavailable while this match is ${m.status.toLowerCase()}.`
-            : seasonStatus === SEASON_STATUS.COMPLETE
-              ? "kickoff editing is locked because the completed season is read-only."
-              : seasonStatus === SEASON_STATUS.SIGNUPS
-                ? "kickoff editing opens after the auction is complete."
-                : seasonStatus === SEASON_STATUS.DRAFT &&
-                    draftStatus !== DRAFT_STATUS.COMPLETE
-                  ? "kickoff editing opens when the auction is complete."
-                  : "kickoff editing is locked in the current league phase."}
+          )}
+          {/* A finished match needs no reason, and the season-wide ones are
+              printed once by the card. Only a live series says why here. */}
+          {m.status === MATCH_STATUS.LIVE
+            ? " · the time is locked while the series is live."
+            : null}
         </p>
       )}
 
@@ -3819,6 +3933,7 @@ function MatchResultRow({
           matchId={m.id}
           importAction={importGameAction}
           detectAction={autoDetectAction}
+          describedBy={importHelpId}
         />
       ) : m.status === MATCH_STATUS.COMPLETED &&
         (resultCorrectionOpen || championshipFinalCorrection) ? (
@@ -3909,6 +4024,8 @@ function PlayoffSeries({
         m.bracketSlot,
       )}
       isSoleLatestPlayoffSeries={soleLatestPlayoffId === m.id}
+      laterRoundNote="short"
+      importHelpId="adm-import-help-playoffs"
       label={
         <Link href={`/matches/${m.id}`} className={textLink("shrink-0 text-xs")}>
           {roundName(slotRound(m.bracketSlot), totalRounds)}
@@ -3916,8 +4033,22 @@ function PlayoffSeries({
       }
     />
   );
+  const anyLaterRound = decided.some((m) =>
+    hasLaterBracketRound(playoff, m.bracketSlot),
+  );
   return (
     <div className="space-y-2">
+      <MatchRowsHelp
+        id="adm-import-help-playoffs"
+        seasonStatus={season.status}
+        draftStatus={data.draft?.status ?? null}
+        canImport={
+          matchResultsOpen(season.status, MATCH_PHASE.PLAYOFF) &&
+          toPlay.length > 0
+        }
+        hasScheduled={toPlay.some((m) => m.status === MATCH_STATUS.SCHEDULED)}
+        notes={[resultsLockNote(season.status, MATCH_PHASE.PLAYOFF)]}
+      />
       {toPlay.length > 0 ? (
         <section
           aria-labelledby="playoff-series-to-play"
@@ -3943,7 +4074,12 @@ function PlayoffSeries({
               {decided.length}
             </span>
           </summary>
-          <div className="space-y-2 px-3 pb-3">{decided.map(row)}</div>
+          <div className="space-y-2 px-3 pb-3">
+            {anyLaterRound ? (
+              <p className="text-xs text-muted">{LATER_ROUND_NOTE}</p>
+            ) : null}
+            {decided.map(row)}
+          </div>
         </details>
       ) : null}
     </div>
@@ -5392,8 +5528,9 @@ function LeagueControls({ season }: { season: Season }) {
               with your league id.
             </li>
             <li>
-              Click <b>Sync league games</b> to pull results automatically — no
-              manual match ids or players&apos; public data needed.
+              Results from those lobbies sync automatically, with no match IDs
+              or public player data needed. Press <b>Sync league games</b> to
+              check now.
             </li>
           </ol>
         </div>

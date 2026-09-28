@@ -142,6 +142,14 @@ describe("the DangerSubmit mechanism itself", () => {
     expect(seasons).toMatch(/cannot restore the database/i);
   });
 
+  it("stops phones capitalising or autocorrecting the typed token", () => {
+    // The match is exact, so "under 5K league" auto-capitalised to "Under 5K
+    // league" (or a name autocorrected to a dictionary word) fails silently.
+    const input = danger.slice(danger.indexOf('name="confirmationName"'));
+    expect(input.slice(0, 800)).toContain('autoCapitalize="off"');
+    expect(input.slice(0, 800)).toContain('autoCorrect="off"');
+  });
+
   it("refuses to let Enter complete the action from the token field", () => {
     expect(danger).toContain('if (e.key === "Enter") e.preventDefault()');
   });
