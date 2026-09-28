@@ -105,3 +105,94 @@ export function seriesOutcome(
     ? { result: "W", label: `Won ${score}${ruled}` }
     : { result: "L", label: `Lost ${score}${ruled}` };
 }
+
+/**
+ * The other side of a league match from the team the player played for. When
+ * their line carries no team (an unattributed box score), both teams are
+ * named, since either could have been the opponent.
+ */
+export function seriesOpponent(
+  match: {
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeam: { name: string };
+    awayTeam: { name: string };
+  },
+  teamId: string | null | undefined,
+): string {
+  if (teamId === match.homeTeamId) return match.awayTeam.name;
+  if (teamId === match.awayTeamId) return match.homeTeam.name;
+  return `${match.homeTeam.name} / ${match.awayTeam.name}`;
+}
+
+/**
+ * The mean of the values a game actually recorded, rounded, or null when none
+ * did. Older imports lack the economy fields (net worth, GPM, last hits), so a
+ * missing value is left out rather than averaged in as zero.
+ */
+export function recordedAverage(
+  values: readonly (number | null | undefined)[],
+): number | null {
+  const recorded = values.filter((v): v is number => v != null);
+  if (recorded.length === 0) return null;
+  return Math.round(recorded.reduce((sum, v) => sum + v, 0) / recorded.length);
+}
+
+type HistorySeriesLike = {
+  match: { seasonId: string; season: { name: string } };
+};
+
+type SeasonHistoryGroup<T> = {
+  seasonId: string;
+  seasonName: string;
+  series: T[];
+};
+
+export type SeasonHistoryView<T> = {
+  groups: SeasonHistoryGroup<T>[];
+  multiSeason: boolean;
+  /** The `?season=` group, when it names a season they played in. */
+  selected: SeasonHistoryGroup<T> | undefined;
+  /** The series the list shows: one season's, or every season's in order. */
+  visible: T[];
+  countBySeason: ReadonlyMap<string, number>;
+  /** A header per season only when the list mixes seasons. */
+  showSeasonHeaders: boolean;
+};
+
+/**
+ * The profile's match history split by season. Series arrive latest first and
+ * keep that order; a season stays one group even when a game with no start
+ * time sorts out of order. `selectedSeasonId` is the `?season=` filter: an
+ * unknown id falls back to every season rather than showing a misleading
+ * empty history, so a link copied from an old profile stays useful after a
+ * season is removed.
+ */
+export function seasonHistoryView<T extends HistorySeriesLike>(
+  series: readonly T[],
+  selectedSeasonId: string | undefined,
+): SeasonHistoryView<T> {
+  const groups: SeasonHistoryGroup<T>[] = [];
+  for (const entry of series) {
+    const group = groups.find((g) => g.seasonId === entry.match.seasonId);
+    if (group) group.series.push(entry);
+    else
+      groups.push({
+        seasonId: entry.match.seasonId,
+        seasonName: entry.match.season.name,
+        series: [entry],
+      });
+  }
+  const multiSeason = groups.length > 1;
+  const selected = selectedSeasonId
+    ? groups.find((group) => group.seasonId === selectedSeasonId)
+    : undefined;
+  return {
+    groups,
+    multiSeason,
+    selected,
+    visible: selected ? selected.series : groups.flatMap((g) => g.series),
+    countBySeason: new Map(groups.map((g) => [g.seasonId, g.series.length])),
+    showSeasonHeaders: multiSeason && !selected,
+  };
+}

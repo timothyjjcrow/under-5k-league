@@ -11,6 +11,10 @@ const playerProfile = readFileSync(
   path.resolve(process.cwd(), "src/app/players/[id]/page.tsx"),
   "utf8",
 );
+const profileHeader = readFileSync(
+  path.resolve(process.cwd(), "src/components/profile-header.tsx"),
+  "utf8",
+);
 const scrimPage = readFileSync(
   path.resolve(process.cwd(), "src/app/scrims/[id]/page.tsx"),
   "utf8",
@@ -56,14 +60,20 @@ describe("player-directory contact visibility wiring", () => {
   });
 
   it("keeps profile contact and the private-match-data flag behind the shared policy", () => {
+    // The page decides with the shared policy and hands the answer to the
+    // header, which renders the members-only tokens behind it.
     expect(playerProfile).toContain(
       "const canSeeLeagueContact = canViewLeagueContact(",
     );
     expect(playerProfile).toMatch(
+      /<ProfileHeader[\s\S]*?canSeeLeagueContact=\{canSeeLeagueContact\}/,
+    );
+    expect(profileHeader).toMatch(
       /canSeeLeagueContact && user\.fhUnavailable === true/,
     );
-    expect(playerProfile).toMatch(
+    expect(profileHeader).toMatch(
       /canSeeLeagueContact \? \(\s*<DiscordTag/,
     );
+    expect(profileHeader).toMatch(/canSeeLeagueContact && !user\.discordName/);
   });
 });
