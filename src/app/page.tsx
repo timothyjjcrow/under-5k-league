@@ -149,7 +149,11 @@ import {
   getDefendingChampion,
   type DefendingChampion,
 } from "@/lib/official-champion";
-import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
+import {
+  SteamSignInButton,
+  SteamSignInLink,
+  SteamSignInNote,
+} from "@/components/steam-sign-in";
 
 const PHASE_ORDER = [
   "SIGNUPS",
@@ -277,18 +281,28 @@ export default async function Home() {
     !isActiveReg &&
     !isRemovedReg &&
     !isRostered;
-  // Signed out, the button goes straight to Steam and carries the sign-in
-  // note, which /login would otherwise have shown.
-  const standinRegistration = (variant: "primary" | "secondary") =>
-    user ? (
-      <Link href="/me" className={buttonClasses(variant, "lg")}>
-        Register as a standin <LinkArrow />
-      </Link>
-    ) : (
-      <SteamSignInButton next="/me" variant={variant}>
-        Sign in to stand in <LinkArrow />
-      </SteamSignInButton>
-    );
+  // Signed in without a team: the standin signup is on /me.
+  const standinRegistration = (variant: "primary" | "secondary") => (
+    <Link href="/me" className={buttonClasses(variant, "lg")}>
+      Register as a standin <LinkArrow />
+    </Link>
+  );
+  // Signed out from the draft on, the button just signs in and comes back
+  // here: it used to read "Sign in to stand in", which told rostered players
+  // opening a Discord link signed out to sign up as standins. Newcomers get
+  // the standin route as a line under it. Both go straight to Steam, so the
+  // sign-in note rides along (/login would otherwise have shown it).
+  const signInButton = (variant: "primary" | "secondary") => (
+    <SteamSignInButton next="/" variant={variant}>
+      Sign in with Steam <LinkArrow />
+    </SteamSignInButton>
+  );
+  const newcomerStandinLine = (
+    <p className="w-full text-sm text-muted">
+      New here?{" "}
+      <SteamSignInLink next="/me">Sign in to join as a standin</SteamSignInLink>
+    </p>
+  );
   const steamNote = user ? null : <SteamSignInNote />;
   let heroAction: ReactNode = null;
   // Draft night during Signups: from shortly before the scheduled time until
@@ -399,10 +413,15 @@ export default async function Home() {
         ) : null}
         {teamLine}
         {standinRegistrationOpen ? (
-          <>
-            {standinRegistration("secondary")}
-            {steamNote}
-          </>
+          user ? (
+            standinRegistration("secondary")
+          ) : (
+            <>
+              {signInButton("secondary")}
+              {newcomerStandinLine}
+              {steamNote}
+            </>
+          )
         ) : null}
       </>
     );
@@ -410,13 +429,40 @@ export default async function Home() {
     // Someone without a team mid-season can still play tonight: the inhouse
     // queue has no season gate, and it was otherwise the last thing on the
     // page, below the news.
-    heroAction = (
+    const inhouse = (
+      <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
+        Play an inhouse <LinkArrow />
+      </Link>
+    );
+    heroAction = !user ? (
+      <>
+        {signInButton("primary")}
+        {inhouse}
+        {newcomerStandinLine}
+        {steamNote}
+      </>
+    ) : season.status === "PLAYOFFS" ? (
+      // Two or three matches are left, so the standin signup has almost no
+      // use: the playoffs lead, and the signup is a line.
+      <>
+        <Link
+          href="/schedule#playoff-bracket"
+          className={buttonClasses("primary", "lg")}
+        >
+          Follow the playoffs <LinkArrow />
+        </Link>
+        {inhouse}
+        <p className="w-full text-sm text-muted">
+          Want to play?{" "}
+          <Link href="/me" className={textLink()}>
+            Register as a standin
+          </Link>
+        </p>
+      </>
+    ) : (
       <>
         {standinRegistration("primary")}
-        <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
-          Play an inhouse <LinkArrow />
-        </Link>
-        {steamNote}
+        {inhouse}
       </>
     );
   }

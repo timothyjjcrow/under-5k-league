@@ -45,17 +45,27 @@ test("the header chip links the live series from any page, on phones too", async
   assertNoErrors();
 });
 
-test("signed-out newcomers can find the mid-season standin signup", async ({
+test("signed-out visitors sign in first, with the standin signup as a line", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/");
 
-  const cta = page.getByRole("link", { name: "Sign in to stand in" });
+  // The main button just signs in and comes back here: rostered players open
+  // Discord links signed out, and must not be told to sign up as standins.
+  const main = page.locator("#main");
+  const signIn = main.getByRole("link", {
+    name: "Sign in with Steam",
+    exact: true,
+  });
+  await expect(signIn).toBeVisible();
+  // Dev login is on in e2e, so these go through /login; with only Steam they
+  // go straight to Steam, and the note beside them says what is shared.
+  await expect(signIn).toHaveAttribute("href", "/login");
+  const cta = main.getByRole("link", { name: "Sign in to join as a standin" });
   await expect(cta).toBeVisible();
-  // Dev login is on in e2e, so this goes through /login; with only Steam it
-  // goes straight to Steam, and the note beside it says what is shared.
   await expect(cta).toHaveAttribute("href", "/login?next=/me");
+  await expect(main.getByRole("link", { name: "Sign in to stand in" })).toHaveCount(0);
   await expect(
     page.getByText(/so we never see your password or email\.$/),
   ).toBeVisible();

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import {
   ShieldCheckIcon,
   buttonClasses,
+  textLink,
   type ButtonSize,
   type ButtonVariant,
 } from "./ui";
@@ -35,6 +36,27 @@ export function SteamSignInButton({
       rel="nofollow"
       className={buttonClasses(variant, size, className)}
     >
+      {children}
+    </a>
+  );
+}
+
+/**
+ * The same sign-in as an inline text link, for a secondary line under a
+ * main button ("New here? Sign in to join as a standin"). A plain <a> for
+ * the same reason as the button.
+ */
+export function SteamSignInLink({
+  next,
+  className,
+  children,
+}: {
+  next: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <a href={steamSignInHref(next)} rel="nofollow" className={textLink(className)}>
       {children}
     </a>
   );
