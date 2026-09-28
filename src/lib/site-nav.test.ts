@@ -194,9 +194,11 @@ describe("site navigation", () => {
     ).toEqual(["Play", "League"]);
   });
 
-  // The statistics tab bar and Home's tiles link Leaders and Hero meta too;
-  // a surface with its own rule promoted boards the menus had hidden (the
-  // tab bar during a new season's signups, Home before the first game).
+  // The statistics tab bar links Leaders and Hero meta too; a surface with
+  // its own rule promoted boards the menus had hidden (the tab bar during a
+  // new season's signups). Home's Leaders and Hero meta tiles, which only
+  // repeated the menus, are gone; its one Leaders link is the weekly honors
+  // line, which needs official honors and so a game on record.
   it("lists Leaders and Hero meta by one shared rule on every surface", () => {
     for (const s of allStates()) {
       expect(exploreHrefs(s).includes("/leaders")).toBe(seasonStatsListed(s));
@@ -205,8 +207,8 @@ describe("site navigation", () => {
     const statsNav = readFileSync(path.join(root, "components/stats-nav.tsx"), "utf8");
     expect(statsNav).toMatch(/seasonStatsListed\(\{ phase: season\?\.status \?\? null, hasGames \}\)/);
     const home = readFileSync(path.join(root, "app/page.tsx"), "utf8");
-    expect(home).toMatch(/const showSeasonStats = seasonStatsListed\(/);
-    expect(home).toMatch(/\{showSeasonStats \? \(\s*<>\s*<SideGameLink\s+href="\/leaders"/);
+    expect(home).not.toMatch(/<SideGameLink\s+href="\/(leaders|meta)"/);
+    expect(home).not.toMatch(/href="\/meta"/);
   });
 
   it("offers Fantasy while picks are open, then only to managers who entered", () => {
@@ -670,6 +672,16 @@ describe("navigation surfaces", () => {
       /\{showFantasy \? \(\s*<SideGameLink\s+href="\/fantasy"/,
     );
     expect(home.match(/href="\/fantasy"/g)).toHaveLength(1);
+  });
+
+  // Home's side-game tiles offer only what is live: Pick'em used to sit there
+  // all season as "See the oracle board" with nothing to pick.
+  it("offers Pick'em on Home only while a fixture is open for picks", () => {
+    const home = source("src/app/page.tsx");
+    expect(home).toMatch(
+      /\{pickemOpen > 0 \? \(\s*<SideGameLink\s+href="\/pickem"/,
+    );
+    expect(home.match(/href="\/pickem"/g)).toHaveLength(1);
   });
 
   // Phones had a ☰ menu, the tab bar's sheet and the footer listing the same

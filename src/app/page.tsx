@@ -11,8 +11,7 @@ import {
   getViewerFantasyEntered,
   type SeasonSnapshot,
 } from "@/lib/queries";
-import { fantasyListed, seasonStatsListed } from "@/lib/site-nav";
-import { getPublicLeagueContent } from "@/lib/public-navigation";
+import { fantasyListed } from "@/lib/site-nav";
 import { prisma } from "@/lib/prisma";
 import {
   computeStandings,
@@ -816,8 +815,8 @@ function SeasonViewSkeleton({
           <CardSkeleton key={i} rows={3} className="min-w-0" />
         ))}
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, i) => (
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
+        {Array.from({ length: 2 }).map((_, i) => (
           <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
         ))}
       </div>
@@ -2299,14 +2298,6 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
 
 // ---------- REGULAR SEASON / PLAYOFFS ----------
 
-/** The side-game band's desktop columns: one per tile (2 to 5). */
-const SIDE_GAME_COLUMNS: Record<number, string> = {
-  2: "lg:grid-cols-2",
-  3: "lg:grid-cols-3",
-  4: "lg:grid-cols-4",
-  5: "lg:grid-cols-5",
-};
-
 async function SeasonView({
   snapshot,
   userId,
@@ -2448,41 +2439,31 @@ async function SeasonView({
         : false,
   });
 
-  // Leaders and Hero meta get tiles when the menus list them (site-nav.ts):
-  // before the league's first game both open onto empty boards. The content
-  // flags are the layout's shared snapshot, so this costs no query.
-  const showSeasonStats = seasonStatsListed({
-    phase: season.status,
-    hasGames: (await getPublicLeagueContent(null)).hasGames,
-  });
-  const sideGameCount = 2 + (showFantasy ? 1 : 0) + (showSeasonStats ? 2 : 0);
-
-  // The side-game band renders BELOW the table now. It used to sit above both
+  // The side-game band renders BELOW the table. It used to sit above both
   // the standings and This-week, so the secondary loop (pick'em, fantasy) got
   // the first full-width band on the page while the primary one — your match,
   // your team, the table — started below it.
+  //
+  // It only offers what is live: Pick'em while a fixture is open for picks,
+  // Fantasy by the menus' rule, and Inhouse always (it runs any night). The
+  // Leaders and Hero meta tiles are gone: they repeated the menus. auto-fit,
+  // because the count runs from one to three.
   const sideGames = (
-    <div
-      className={cn(
-        "grid grid-cols-1 gap-3",
-        sideGameCount === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
-        SIDE_GAME_COLUMNS[sideGameCount],
-      )}
-    >
-      <SideGameLink
-        href="/pickem"
-        icon="🔮"
-        title="Pick'em"
-        hint={
-          pickemOpen > 0
-            ? userId
+    <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
+      {pickemOpen > 0 ? (
+        <SideGameLink
+          href="/pickem"
+          icon="🔮"
+          title="Pick'em"
+          hint={
+            userId
               ? picksMissing > 0
                 ? `${picksMissing} pick${picksMissing === 1 ? "" : "s"} to make — call it`
                 : "All picks in — oracle board"
               : `${pickemOpen} ${pickemOpen === 1 ? "match" : "matches"} open — call it`
-            : "See the oracle board"
-        }
-      />
+          }
+        />
+      ) : null}
       {showFantasy ? (
         <SideGameLink
           href="/fantasy"
@@ -2497,22 +2478,6 @@ async function SeasonView({
         title="Inhouse"
         hint="Pick-up 5v5s, any night"
       />
-      {showSeasonStats ? (
-        <>
-          <SideGameLink
-            href="/leaders"
-            icon="🥇"
-            title="Leaders"
-            hint="Stat boards & weekly honors"
-          />
-          <SideGameLink
-            href="/meta"
-            icon="🧪"
-            title="Hero meta"
-            hint="What the league picks & wins with"
-          />
-        </>
-      ) : null}
     </div>
   );
 
@@ -3307,7 +3272,7 @@ function SideGameLink({
         <span className="block text-sm font-medium group-hover:text-info">
           {title}
         </span>
-        <span className="block truncate text-xs text-muted">{hint}</span>
+        <span className="block text-xs text-muted">{hint}</span>
       </span>
     </Link>
   );
