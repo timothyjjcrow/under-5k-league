@@ -175,8 +175,11 @@ export async function setAvailability(
   // An IN after an ANNOUNCED OUT closes the loop: the same captain hears the
   // player can make it after all, so they stop hunting for cover. It answers
   // the OUT ping's own throttle row (claimThrottleAnswer), so an OUT nobody
-  // announced gets no answer, and a player flipping back and forth buzzes the
-  // captain at most once more per window.
+  // announced gets no answer. Answering deletes that row on purpose: a
+  // captain just told "no need for cover" must hear a fresh OUT. So a player
+  // flipping back and forth buzzes the captain at most three times per window
+  // (OUT, "after all", OUT again), where the plain OUT throttle allowed one;
+  // the answer's own throttle stops the fourth (availability.itest.ts pins it).
   try {
     const fixture = {
       playerName: user.name,

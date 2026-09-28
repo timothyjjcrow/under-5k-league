@@ -1693,7 +1693,12 @@ reached a player who wasn't already looking at it.
   `prior?.status !== "OUT"` misses OUT→IN→OUT while a player decides. That was
   a duplicate line in a channel; now that the message mentions the captain it's
   a repeat phone buzz, so `setAvailability` also claims
-  `outPing:<matchId>:<userId>` via `claimThrottle`.
+  `outPing:<matchId>:<userId>` via `claimThrottle`. An IN after an announced
+  OUT posts "can make it after all" through `claimThrottleAnswer`, which
+  DELETES that row so a later OUT is news again (the captain was just told no
+  cover is needed). A flip-flopping player therefore buzzes the captain at
+  most three times per window (OUT, after all, OUT), not once; the answer's
+  own `outBackPing` throttle stops the rest. Pinned in availability.itest.ts.
 - **Unlinking Discord strips the inhouse ping role** (`unlinkDiscord` reads the
   snowflake BEFORE clearing it, then best-effort `setPingRole(…, false)`).
   Leaving it behind was the worst outcome that action had: the player keeps
