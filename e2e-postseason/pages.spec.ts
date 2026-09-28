@@ -362,6 +362,18 @@ test("complete-season public pages agree on the champion and recap", async ({
   await expect(
     page.getByRole("img", { name: "Champion crowned" }),
   ).toBeVisible();
+  // One champion block (the card; the hero names no team) and one way to
+  // the season's page, from the hero.
+  const main = page.locator("#main");
+  const hero = main
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { level: 1 }) });
+  await expect(hero).toContainText("That's a wrap");
+  await expect(hero).not.toContainText(champion);
+  await expect(
+    main.getByRole("link", { name: "Relive the season", exact: true }),
+  ).toHaveAttribute("href", /^\/seasons\/[^/?#]+$/);
+  await expect(main.getByRole("link", { name: /Season recap/ })).toHaveCount(0);
 
   await page.goto("/schedule");
   await expect(

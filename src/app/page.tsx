@@ -594,26 +594,10 @@ export default async function Home() {
       </>
     );
   } else if (season.status === "COMPLETE") {
-    const champion = snapshot.teams.find(
-      (team) => team.id === championPresentation.championTeamId,
-    );
-    heroMeta = champion ? (
-      <span className="flex items-center gap-2">
-        <TeamCrest
-          name={champion.name}
-          seed={champion.id}
-          logoUrl={champion.logoUrl}
-          size={26}
-          className="rounded-md ring-2 ring-amber-400/50"
-        />
-        <span className="font-display text-lg font-semibold">
-          {champion.name}
-        </span>
-        <Badge tone="accent">
-          <span aria-hidden="true">🏆</span> Champions
-        </Badge>
-      </span>
-    ) : null;
+    // The champion card directly below is the page's one champion block (it
+    // also carries the final's score and the "needs review" state), so the
+    // hero names no team. Its button is the page's one way to the season's
+    // page, where the recap lives; /recap redirects there too.
     heroAction = (
       <Link
         href={`/seasons/${season.id}`}
@@ -704,10 +688,13 @@ export default async function Home() {
         hero
       )}
       {/* Signed up but unreachable — the one cohort every Discord notification
-          in the app silently skips. Renders nothing for everyone else, and is
-          phase-independent on purpose: a player who signs up during SIGNUPS and
-          links nothing is still unreachable in week 4. */}
-      {user ? (
+          in the app silently skips. Renders nothing for everyone else, and runs
+          through every phase that still has games on purpose: a player who
+          signs up during SIGNUPS and links nothing is still unreachable in
+          week 4. Once the season is complete nobody needs to reach them for
+          it ("your captain has no way to reach you" was false by then), and
+          signing up for the next season asks again. */}
+      {user && season.status !== "COMPLETE" ? (
         <Suspense fallback={null}>
           <DiscordSetupPrompt userId={user.id} seasonId={season.id} />
         </Suspense>
@@ -3476,18 +3463,15 @@ async function CompleteView({
               title={champion ? "The season lives on" : "Season record"}
             />
             <CardBody className="space-y-3 text-sm">
+              {/* No season-page button here: the hero's "Relive the season" is
+                  the page's one way there (it used to have a twin, "Season
+                  recap", going to the same place). */}
               <p className="text-muted">
                 {champion
-                  ? "Relive it — awards and superlatives, the stat boards, and the records this season may have etched into league history."
+                  ? "Its stat lines stay on the leaderboards, any record it set is in the record book, and every season is kept in the history."
                   : "Results remain available while administrators repair the championship state. No team is presented as champion until the grand final is authoritative."}
               </p>
               <div className="flex flex-wrap gap-2">
-                <Link
-                  href={`/seasons/${season.id}`}
-                  className={buttonClasses("accent")}
-                >
-                  <span aria-hidden="true">🏆</span> Season recap <LinkArrow />
-                </Link>
                 <Link href="/leaders" className={buttonClasses("secondary")}>
                   Leaderboards
                 </Link>
