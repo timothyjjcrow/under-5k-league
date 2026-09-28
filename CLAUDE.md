@@ -858,7 +858,7 @@ the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
   games) via pure `topBy` (`player-stats.ts`); rate boards use an adaptive
   min-games floor. No wins or win-rate board on purpose (they ranked the
   team's record), no per-board search (the viewer's row is pinned).
-- **Dashboard** (`src/app/page.tsx`) shows a compact playoff bracket during
+- **Dashboard** (`src/app/page.tsx` + `src/components/home/`) shows a compact playoff bracket during
   PLAYOFFS and a champion/final-standings recap on COMPLETE. Bracket
   round-grouping is pure `slotRound` / `groupPlayoffRounds` (`schedule.ts`,
   tested), shared with `/schedule`.
@@ -1892,7 +1892,7 @@ already in the `Setting` table.
   summary math in `src/lib/availability.ts` (`teamAvailability`, tested).
 - Players RSVP via the shared `<CheckinBanner>`
   (`src/components/checkin-banner.tsx`) rendered on the dashboard
-  (`MyNextMatch` in `page.tsx`), `/schedule`, and unplayed `/matches/[id]`
+  (`MyNextMatch`, `src/components/home/my-next-match.tsx`), `/schedule`, and unplayed `/matches/[id]`
   pages (`setAvailability` action — rostered players and assigned standins
   only, no completed matches). Schedule match rows show per-team ✓/✗ counts
   while a match is unplayed.
@@ -2207,7 +2207,7 @@ one becomes a hole.** The dashboard's `lg:grid-cols-3` with the standings alone
 in a `col-span-2` and four cards in the 1/3 rail measured a **728 × 790px void**
 in the lower-left — the single worst thing on the site, and invisible in code
 review because both halves are individually correct. Two replacements, both in
-`src/app/page.tsx`, and neither is optional decoration:
+the home views (`src/components/home/`), and neither is optional decoration:
 
 - **A band whose card count is KNOWN** gets an explicit grid whose spans adapt.
   The same trap applies to a short card beside a tall one: the standings used
@@ -2932,7 +2932,7 @@ ask it made twice. What that turned into:
   acts. Copy is `DRAFT_PASSED_LABEL` (`season-copy.ts`) because THREE surfaces
   print that date — and the third, added in the same change that fixed the
   first two, was written without a chip at all. `dashboard-guards.test.ts`
-  parses page.tsx and fails on a draft-night `<Countdown>` with no
+  parses every `.tsx` in src and fails on a draft-night `<Countdown>` with no
   `passedLabel`; verified by deleting one.
 - **Decide "has passed" on the CLIENT.** The boundary is 3h wide and a parked
   tab crosses it with no re-render, so a server-computed chip would contradict
@@ -2962,8 +2962,12 @@ ask it made twice. What that turned into:
 
 ## Dashboard (done)
 
-- `src/app/page.tsx` renders per phase. Matches are fetched ONCE in `Home()`
-  (mid-season+ phases) and passed down; the scenario report is computed once
+- `src/app/page.tsx` loads the data and picks the phase; the shared hero
+  (`hero.tsx`) and one view file per phase (offseason, signups, draft,
+  season, complete, each with a builder for its hero slots) live in
+  `src/components/home/`. Source guards read all of it through
+  `homePageSource()` (`test/support/source-files.ts`). Matches are fetched
+  ONCE in `Home()` (mid-season+ phases) and passed down; the scenario report is computed once
   in `SeasonView` and shared by the standings clinch marks, the This-week
   stakes chips, and the your-team one-liner.
 - Hero meta per phase: signups progress, "Week X of Y + teams + games on

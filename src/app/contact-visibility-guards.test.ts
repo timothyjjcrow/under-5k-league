@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { sourceFiles } from "../../test/support/source-files";
+import { homePageSource, sourceFiles } from "../../test/support/source-files";
 
 const playersPage = readFileSync(
   path.resolve(process.cwd(), "src/app/players/page.tsx"),
@@ -19,10 +19,7 @@ const scrimPage = readFileSync(
   path.resolve(process.cwd(), "src/app/scrims/[id]/page.tsx"),
   "utf8",
 );
-const homePage = readFileSync(
-  path.resolve(process.cwd(), "src/app/page.tsx"),
-  "utf8",
-);
+const homePage = homePageSource();
 
 describe("player-directory contact visibility wiring", () => {
   it("does not equate any signed-in account with directory contact access", () => {
