@@ -3106,87 +3106,89 @@ async function ThisWeek({
                 <div className="my-4 flex-1 space-y-3">
                   {[m.homeTeamId, m.awayTeamId].map((teamId) => {
                     const c = checkins(m.id, teamId);
+                    const scenario = report?.teams.get(teamId);
+                    // The outlook sits UNDER the row, not inside the name's
+                    // column: in there the ~110px Win/Draw/Loss block made the
+                    // crest and check-in count centre on the whole block,
+                    // beside "Win Qualify" instead of the team name.
+                    const outlook =
+                      scenario && scenario.nextMatchId === m.id ? scenario : null;
                     return (
-                      <div
-                        key={teamId}
-                        className="flex min-w-0 items-center gap-2"
-                      >
-                        <TeamCrest
-                          name={teamName.get(teamId) ?? "?"}
-                          seed={teamId}
-                          logoUrl={teamLogoUrl.get(teamId)}
-                          size={34}
-                          className="shrink-0 rounded-lg"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="font-semibold leading-snug [overflow-wrap:anywhere]">
+                      <div key={teamId} className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <TeamCrest
+                            name={teamName.get(teamId) ?? "?"}
+                            seed={teamId}
+                            logoUrl={teamLogoUrl.get(teamId)}
+                            size={34}
+                            className="shrink-0 rounded-lg"
+                          />
+                          <p className="min-w-0 flex-1 font-semibold leading-snug [overflow-wrap:anywhere]">
                             {teamName.get(teamId) ?? "?"}
                           </p>
-                          {(() => {
-                            const scenario = report?.teams.get(teamId);
-                            if (!scenario || scenario.nextMatchId !== m.id) return null;
-                            return (
-                              <div className="mt-1">
-                                <PlayoffOutlook scenario={scenario} teamNames={teamName} matchId={m.id} compact />
-                              </div>
-                            );
-                          })()}
-                        </div>
-                        {c ? (
-                          <span
-                            role="img"
-                            aria-label={
-                              c.short
-                                ? `${c.confirmed} of ${c.size} checked in — ${c.short} seat(s) unfilled`
-                                : `${c.confirmed} of ${c.size} checked in`
-                            }
-                            className={cn(
-                              "shrink-0 text-xs tabular-nums",
-                              c.confirmed === c.size
-                                ? "text-success"
-                                : c.short
-                                  ? "text-danger"
-                                  : "text-muted",
-                            )}
-                            title={
-                              c.short
-                                ? `${c.confirmed} of ${c.size} checked in — ${c.short} roster seat(s) unfilled`
-                                : `${c.confirmed} of ${c.size} checked in`
-                            }
-                          >
+                          {c ? (
                             <span
-                              aria-hidden
-                              className="flex flex-col items-end gap-1"
+                              role="img"
+                              aria-label={
+                                c.short
+                                  ? `${c.confirmed} of ${c.size} checked in — ${c.short} seat(s) unfilled`
+                                  : `${c.confirmed} of ${c.size} checked in`
+                              }
+                              className={cn(
+                                "shrink-0 text-xs tabular-nums",
+                                c.confirmed === c.size
+                                  ? "text-success"
+                                  : c.short
+                                    ? "text-danger"
+                                    : "text-muted",
+                              )}
+                              title={
+                                c.short
+                                  ? `${c.confirmed} of ${c.size} checked in — ${c.short} roster seat(s) unfilled`
+                                  : `${c.confirmed} of ${c.size} checked in`
+                              }
                             >
-                              <span className="flex gap-0.5">
-                                {Array.from(
-                                  { length: Math.min(c.size, 10) },
-                                  (_, index) => (
-                                    <i
-                                      key={index}
-                                      className={cn(
-                                        "h-1.5 w-1.5 rounded-full",
-                                        index < c.confirmed
-                                          ? "bg-success"
-                                          : "bg-line",
-                                      )}
-                                    />
-                                  ),
-                                )}
-                              </span>
-                              <span>
-                                {c.confirmed}/{c.size}
+                              <span
+                                aria-hidden
+                                className="flex flex-col items-end gap-1"
+                              >
+                                <span className="flex gap-0.5">
+                                  {Array.from(
+                                    { length: Math.min(c.size, 10) },
+                                    (_, index) => (
+                                      <i
+                                        key={index}
+                                        className={cn(
+                                          "h-1.5 w-1.5 rounded-full",
+                                          index < c.confirmed
+                                            ? "bg-success"
+                                            : "bg-line",
+                                        )}
+                                      />
+                                    ),
+                                  )}
+                                </span>
+                                <span>
+                                  {c.confirmed}/{c.size}
+                                </span>
                               </span>
                             </span>
-                          </span>
-                        ) : null}
-                        {m.status === "LIVE" ? (
-                          <span
-                            aria-hidden
-                            className="ml-1 font-display text-3xl tabular-nums text-fg"
-                          >
-                            {teamId === m.homeTeamId ? m.homeScore : m.awayScore}
-                          </span>
+                          ) : null}
+                          {m.status === "LIVE" ? (
+                            <span
+                              aria-hidden
+                              className="ml-1 font-display text-3xl tabular-nums text-fg"
+                            >
+                              {teamId === m.homeTeamId ? m.homeScore : m.awayScore}
+                            </span>
+                          ) : null}
+                        </div>
+                        {outlook ? (
+                          // Indented by the crest (34px) plus the gap, so it
+                          // lines up under the team name.
+                          <div className="mt-1 pl-[2.625rem]">
+                            <PlayoffOutlook scenario={outlook} teamNames={teamName} matchId={m.id} compact />
+                          </div>
                         ) : null}
                       </div>
                     );
