@@ -91,8 +91,9 @@ export default async function SeasonsPage() {
             </p>
             <p className="text-sm text-muted">
               {activeSeason.name} is currently active. To avoid silently
-              cancelling a live league, first use Season handoff to archive a
-              completed season or explicitly cancel an unfinished one. Then
+              cancelling a live league, first archive it under Season handoff:
+              “Archive without opening the next season” once it is complete,
+              or “Need to cancel this unfinished season?” if it is not. Then
               return here to resume an archived season.
             </p>
             <Link

@@ -52,6 +52,7 @@ import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
   AUTO_SYNC,
+  DISCORD_INVITE_URL,
   HARD_MMR_CEILING,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -349,9 +350,28 @@ export default async function MePage({
 
       <section id="profile-signup" className="scroll-mt-24">
       {!season ? (
+        // Between seasons: a cancelled season, or an admin reactivating an old
+        // one. Say where the next signup window will be announced. The Discord
+        // card further down carries the join and link buttons, so this card
+        // doesn't add a second one.
         <Card>
-          <CardBody className="text-center text-muted">
-            There is no active season to sign up for right now.
+          <CardBody className="space-y-2 text-center text-muted">
+            <p>No season is open for signups right now.</p>
+            {DISCORD_INVITE_URL ? (
+              <p>
+                The next season&apos;s signups are announced in the league
+                Discord. Join it or link your account in the Discord card
+                below.
+              </p>
+            ) : (
+              <p>
+                The next season&apos;s signups are announced in{" "}
+                <Link href="/news" className={textLink()}>
+                  League news
+                </Link>
+                .
+              </p>
+            )}
           </CardBody>
         </Card>
       ) : (

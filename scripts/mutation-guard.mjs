@@ -217,6 +217,11 @@ const EQUIVALENT = new Set([
   "src/app/actions/admin.ts::setMatchTime::scheduledAt+status#1",
   "src/app/actions/admin.ts::setDraftSettings::isActive+status+updatedAt#1",
   "src/app/actions/admin.ts::setDraftNight::isActive+status#1",
+  // changeCaptain re-reads the Team, Season and Draft inside its SERIALIZABLE
+  // transaction before this write (seam test in change-captain.itest.ts), so a
+  // rival Start draft or captain change either fails those fresh checks or
+  // forces a serialization failure. The WHERE is defense in depth.
+  "src/app/actions/admin.ts::changeCaptain::captainId+season#1",
   // transferCaptaincy's Team captain predicate has the same same-row
   // SERIALIZABLE protection. Its first flag write merely writes false over
   // already-false members (the count is discarded and TeamMember has no
@@ -341,6 +346,7 @@ const FILES = [
   "src/lib/side-game-claims.ts",
   "src/lib/team-identity-service.ts",
   "src/lib/users.ts",
+  "src/lib/player-data-refresh.ts",
 ];
 
 /** Every guarded claim in one source file, plus its source text. */

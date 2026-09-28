@@ -16,22 +16,42 @@ import {
  */
 
 export type SignupFlag = {
-  key: "mmr-off-medal" | "blank-signup" | "no-mmr";
+  key: "over-soft-limit" | "mmr-off-medal" | "blank-signup" | "no-mmr";
   label: string;
   detail: string;
   /** Badge tone: "accent" = worth a look before the draft; "neutral" = context. */
   tone: "accent" | "neutral";
 };
 
-export function signupFlags(reg: {
-  mmr: number;
-  roles: string;
-  favoriteHeroes: string;
-  statement: string;
-  captainNote: string;
-  rankTier: number | null | undefined;
-}): SignupFlag[] {
+export function signupFlags(
+  reg: {
+    mmr: number;
+    roles: string;
+    favoriteHeroes: string;
+    statement: string;
+    captainNote: string;
+    rankTier: number | null | undefined;
+  },
+  /** Season.maxMmr, the SOFT limit (0 or absent = none). */
+  opts: { maxMmr?: number } = {},
+): SignupFlag[] {
   const flags: SignupFlag[] = [];
+  // The soft limit is a REVIEW threshold, never a block: players over it
+  // join the pool like anyone else (registration.ts), and reviewing them is
+  // the admin's job. This flag is the tool for that review, so its words
+  // must never suggest the signup was refused or is on hold.
+  const maxMmr = opts.maxMmr ?? 0;
+  if (maxMmr > 0 && reg.mmr > maxMmr) {
+    flags.push({
+      key: "over-soft-limit",
+      label: "over soft limit",
+      tone: "accent",
+      detail:
+        `Signed up at ${reg.mmr} MMR, above this season's soft limit of ${maxMmr}. ` +
+        "They are in the pool like everyone else; the limit only marks who to " +
+        "review before the draft.",
+    });
+  }
   // Advisory only, same contract as setRegistrationMmr's heads-up: the medal
   // window comes from the same clampMmrToRank the signup path used, so this
   // can only flag values that arrived via an admin override or a medal that
@@ -82,6 +102,21 @@ export function signupFlags(reg: {
     });
   }
   return flags;
+}
+
+/**
+ * Does this signup belong in the admin's "Needs review" view? Anything worth
+ * a look before the draft (an accent flag: over the soft limit, MMR ≠ medal,
+ * a blank signup) or no linked Discord account, which leaves captains and
+ * the league's pings with no way to reach them. Live server membership is
+ * deliberately NOT an input: it streams in from Discord after the page
+ * paints, and the list must not wait on it.
+ */
+export function signupNeedsReview(
+  flags: readonly SignupFlag[],
+  discordLinked: boolean,
+): boolean {
+  return !discordLinked || flags.some((f) => f.tone === "accent");
 }
 
 export type MembershipChipView = {

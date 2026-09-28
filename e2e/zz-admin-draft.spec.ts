@@ -44,26 +44,30 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   ).toBeVisible();
 
   // Promote exactly OUR two players to captains (Cap One first → they get
-  // draft order 0 and the opening nomination). Rows are divs in the
-  // "Eligible players" scroller.
+  // draft order 0 and the opening nomination). Rows are the items of the
+  // "Eligible players" list.
   await page
-    .locator(".max-h-80 div.rounded-lg", { hasText: "Cap One" })
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Cap One" })
     .getByRole("button", { name: "make captain" })
     .click();
   await expect(
     page.getByRole("heading", { name: /Captains \(1\)/ }),
   ).toBeVisible();
   await page
-    .locator(".max-h-80 div.rounded-lg", { hasText: "Cap Two" })
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Cap Two" })
     .getByRole("button", { name: "make captain" })
     .click();
   await expect(
     page.getByRole("heading", { name: /Captains \(2\)/ }),
   ).toBeVisible();
 
-  // Move the season into DRAFT without starting the auction: /draft must be
-  // a live waiting room for players, not a static dead end.
-  await page.getByRole("button", { name: "Draft", exact: true }).click();
+  // Close signups moves the season into DRAFT without starting the auction:
+  // /draft must be a live waiting room for players, not a static dead end.
+  await page.getByRole("button", { name: "Close signups", exact: true }).click();
   // The header nav gains "Teams" only once the season is in DRAFT — a
   // reliable signal that the phase move committed before we proceed.
   await expect(

@@ -18,6 +18,7 @@ import { prisma } from "./prisma";
 import {
   recoverablePostseasonBracket,
   seasonPhasePolicy,
+  type SeasonPhasePolicyInput,
 } from "./season-phase-policy";
 
 // Admin controls the draft room renders itself, so an admin running draft
@@ -112,13 +113,15 @@ export async function loadStartDraftPreflight(season: {
  * finished auction (the room shows it only once its poll sees COMPLETE,
  * which can happen after this page rendered), so the draft status is taken
  * as COMPLETE here; setSeasonPhase re-checks the real state when pressed.
- * Null outside the Draft phase or when the policy would refuse the move.
+ * `needsSchedule` when the only thing in the way is the missing schedule
+ * (the Regular season waits for fixtures). Null outside the Draft phase or
+ * when the policy would refuse the move for any other reason.
  */
 export async function loadRegularSeasonStep(season: {
   id: string;
   status: string;
   championTeamId: string | null;
-}): Promise<{ confirmation: string } | null> {
+}): Promise<{ confirmation: string } | { needsSchedule: true } | null> {
   if (season.status !== SEASON_STATUS.DRAFT) return null;
   const matches = await prisma.match.findMany({
     where: { seasonId: season.id },
@@ -132,16 +135,28 @@ export async function loadRegularSeasonStep(season: {
   const postseason = matches.filter(
     (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
   );
-  const policy = seasonPhasePolicy({
+  const input: SeasonPhasePolicyInput = {
     current: season.status,
     target: SEASON_STATUS.REGULAR_SEASON,
     draftStatus: DRAFT_STATUS.COMPLETE,
     matchCount: matches.length,
+    regularMatchCount: matches.filter((m) => m.phase === MATCH_PHASE.REGULAR)
+      .length,
     hasPlayedResult: matches.some((m) => m.status === MATCH_STATUS.COMPLETED),
     hasImportedGame: matches.some((m) => m._count.games > 0),
     postseasonMatchCount: postseason.length,
     postseasonBracketReady: recoverablePostseasonBracket(postseason),
     hasChampion: season.championTeamId != null,
-  });
-  return policy.available ? { confirmation: policy.confirmation } : null;
+  };
+  const policy = seasonPhasePolicy(input);
+  if (policy.available) return { confirmation: policy.confirmation };
+  // The usual first sight of a finished auction has no fixtures yet: point
+  // the admin at the schedule rather than leaving the room with no step.
+  if (
+    input.regularMatchCount === 0 &&
+    seasonPhasePolicy({ ...input, regularMatchCount: 1 }).available
+  ) {
+    return { needsSchedule: true };
+  }
+  return null;
 }

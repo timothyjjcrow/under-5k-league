@@ -1,6 +1,22 @@
 import { listPage } from "@/lib/list-page";
-import { matchAttention } from "@/lib/admin-attention";
-import { Suspense } from "react";
+import { webAnalyticsUrl } from "@/lib/web-analytics";
+import {
+  adminSeasonCards,
+  coverProblemMatchIds,
+  matchCoverIssues,
+  openBookingCount,
+} from "@/lib/admin-sections";
+import {
+  adminAttention,
+  attentionTitle,
+  matchAttention,
+  outStandins,
+  shortTeams,
+  rosterPingsLive,
+  standinClashes,
+  unlinkedRoster,
+} from "@/lib/admin-attention";
+import { cache, Suspense } from "react";
 import { SectionNav, SectionReady } from "@/components/section-nav";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
@@ -18,28 +34,39 @@ import {
   REGISTRATION_TYPE,
   SEASON_PHASE_ORDER,
   SEASON_STATUS,
+  type SeasonStatus,
 } from "@/lib/constants";
-import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
+import {
+  AUTO_CHECK_BACKED_OFF_SCANS,
+  type AutoCheck,
+  autoCheckCopy,
+  autoCheckStatus,
+} from "@/lib/result-sync";
 import { ImportProgress } from "@/components/import-progress";
 import { DatabaseHealth } from "@/components/database-health";
 import { HistoryCoverage } from "@/components/history-coverage";
-import { standinConflict } from "@/lib/standin";
+import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
+import {
+  carriedSeasonSettings,
+  carriedSettingsLine,
+  nextSeasonName,
+  type CarriedSeasonSettings,
+} from "@/lib/season-handoff";
 import {
   createSeason,
   archiveCompletedSeasonAction,
   archiveIncompleteSeasonAction,
   setSeasonPhase,
   addCaptain,
+  changeCaptain,
+  refreshPlayerData,
   removeCaptain,
   randomizeDraftOrder,
   generateSchedule,
   startPlayoffs,
   returnToRegularSeasonAction,
   setWeekNight,
-  syncPlayerRanks,
-  syncAllRanks,
-  syncSteamProfiles,
   setMaxMmr,
   setMatchSchedule,
   renameSeason,
@@ -48,7 +75,6 @@ import {
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
-  enrichGamesAction,
   setDiscordWebhook,
   clearDiscordWebhook,
   testDiscordWebhook,
@@ -91,8 +117,9 @@ import {
   createNewsPost,
   deleteNewsPost,
   toggleNewsPin,
+  updateNewsPost,
 } from "@/app/actions/news";
-import { NEWS_LIMITS } from "@/lib/news";
+import { NEWS_LIMITS, newsDiscordCopy, type NewsDiscordCopy } from "@/lib/news";
 import { formatMatchTime } from "@/lib/match-time";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -108,13 +135,22 @@ import {
   SETTING_KEYS,
 } from "@/lib/settings";
 import { HONORS_STALE_PREFIX } from "@/lib/announcement-marker";
-import { adminNextStep } from "@/lib/admin-next-step";
+import {
+  adminNextStep,
+  phaseAdvance,
+  type AdminNextStep,
+} from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
 import { getAutomationGateDecision } from "@/lib/automation-gate";
 import {
+  AUTOMATION_BACKLOG_STUCK_MS,
+  automationAttention,
   automationHealthView,
+  automationQuiet,
+  type AutomationBacklog,
   type AutomationHealthRecord,
+  type AutomationHealthView,
 } from "@/lib/automation-health";
 import {
   LEAGUE_ANNOUNCEMENT_STATUS,
@@ -146,7 +182,12 @@ import {
   type GuildMembership,
   type PingHealth,
 } from "@/lib/discord-roles";
-import { membershipChipView, signupFlags } from "@/lib/signup-readiness";
+import {
+  membershipChipView,
+  signupFlags,
+  signupNeedsReview,
+} from "@/lib/signup-readiness";
+import { AdminSignupReview } from "@/components/admin-signup-review";
 import {
   DRAFT_READINESS,
   draftReadiness,
@@ -157,13 +198,22 @@ import {
   roundName,
   slotRound,
   groupPlayoffRounds,
+  hasLaterBracketRound,
+  matchRoundLabel,
+  playoffTotalRounds,
 } from "@/lib/schedule";
+import {
+  matchNightSide,
+  matchNightSlate,
+  nightSideLabel,
+} from "@/lib/admin-match-night";
 import { fixturesMatchNightLabel } from "@/lib/match-night";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { playoffSetupRevision } from "@/lib/playoff-command";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   matchCorrectionContext,
+  matchResultsOpen,
   postAuctionWorkOpen,
 } from "@/lib/league-lifecycle";
 import {
@@ -186,22 +236,29 @@ import {
   draftSetupLockedMessage,
   draftRosterCounts,
   draftSetupOpen,
+  seatFitSentence,
   startDraftCheck,
   startDraftConfirm,
 } from "@/lib/draft-setup";
 import {
   MATCH_SCHEDULE,
-  SOFT_MMR_LIMIT,
   HARD_MMR_CEILING,
 } from "@/lib/constants";
 import {
+  nextRegularKickoff,
+  regularResultsDue,
   regularSeasonStatus,
   pendingResultsMessage,
+  weekList,
 } from "@/lib/schedule-status";
 import {
+  AutoCheckLine,
+  LATER_ROUND_NOTE,
   MatchResultRow,
+  MatchRowsHelp,
   StandinMatchBlock,
   adminStandinPoolWhere,
+  resultsLockNote,
 } from "@/components/admin-match-tools";
 import { RevealHashTarget } from "@/components/reveal-hash-target";
 import {
@@ -220,6 +277,7 @@ import { missingCaptainsConfirmLine } from "@/lib/draft-presence";
 import { readCaptainPresence } from "@/lib/draft-presence-service";
 import { AdminPlayerRankEditor } from "@/components/admin-player-rank-editor";
 import { TeamIdentityForm } from "@/components/team-identity-form";
+import { isGeneratedTeamNameFor } from "@/lib/team-identity";
 import {
   Avatar,
   Badge,
@@ -280,6 +338,27 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     season ? loadSeasonAdminData(season.id) : null,
     season ? loadLeagueDeliveryHealth().catch(() => null) : null,
   ]);
+  // Async server component: it renders once per request, so Date.now() has
+  // no re-render to be inconsistent across. "Outstanding" means past kickoff.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const nextStep =
+    season && data ? adminNextStepFor(season, data, nowMs) : null;
+  const tonight =
+    season && data ? matchNightSlate(season.status, data.matches, nowMs) : [];
+  // DB-only and shared with the streamed runner card below.
+  const automationLines = season && data ? await loadAutomationAttention() : [];
+  const cards =
+    season && data
+      ? adminSeasonCards({
+          seasonStatus: season.status,
+          draftStatus: data.draft?.status,
+          matches: data.matches,
+          openBookings: openBookingCount(data.assignments, data.matches),
+          archivedPostseasonGames:
+            data.playoffArchive.length + data.tiebreakerArchive.length,
+        })
+      : null;
   const showTiebreakers = data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
@@ -293,21 +372,113 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           data.teams.map((team) => team.id),
         )
       : null;
+  // The season a new one follows: the active one, or from the offseason the
+  // most recent (createSeason carries its settings the same way).
   const newSeasonDefaults =
     season ??
     (await prisma.season.findFirst({
       where: { isActive: false },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     }));
 
-  const setupControls = season && data ? <>
+  const setupControls = season && data && nextStep ? <>
           <AdminAnchor id="adm-season">
-            <SeasonControls season={season} data={data} />
+            <SeasonControls season={season} data={data} nextStep={nextStep} />
           </AdminAnchor>
           <AdminAnchor id="adm-captains">
             <CaptainControls season={season} data={data} />
           </AdminAnchor>
   </> : null;
+  // Between seasons the job left on this page is opening the next one, so
+  // its card leads, right under the title: once a champion is crowned, and
+  // in the offseason. A crowned season's own cards can no longer change much,
+  // so they fold into one "<season> record" section instead of standing
+  // between the admin and the handoff. A Complete season WITHOUT a valid
+  // champion is a recovery state: its cards stay open and the locked handoff
+  // stays last.
+  const handoffFirst = !season || handoffReadiness?.ready === true;
+  const seasonRecord = season && data && handoffReadiness?.ready ? season : null;
+  const championName = handoffReadiness?.ready
+    ? (data?.teams.find((team) => team.id === handoffReadiness.championTeamId)
+        ?.name ?? null)
+    : null;
+  const importQuery = await searchParams;
+  // Chasing Discord links is a weekly people task, so it sits beside the
+  // signups (before the draft) or the rosters (after it), not inside the
+  // collapsed Discord settings. Streamed: its membership sweep calls Discord.
+  const reachCard = season ? (
+    <AdminAnchor id="adm-reach">
+      <Suspense fallback={<CardSkeleton rows={3} />}>
+        <DiscordReachCard
+          seasonId={season.id}
+          rosterUnlinked={data ? unlinkedRosterFor(season, data) : null}
+        />
+      </Suspense>
+    </AdminAnchor>
+  ) : null;
+  const syncCards = season ? (
+    <AdminAnchor id="adm-sync">
+      <AutoSyncHealth season={season} />
+      <Suspense fallback={<CardSkeleton rows={3} />}>
+        <ImportProgress seasonId={season.id} page={importQuery.importPage} query={importQuery} />
+        <DatabaseHealth />
+      </Suspense>
+    </AdminAnchor>
+  ) : null;
+
+  const jumpItems: { id: string; label: string }[] = [
+    ...(handoffFirst
+      ? [
+          {
+            id: "adm-new-season",
+            label: season ? "Season handoff" : "Open a new season",
+          },
+        ]
+      : []),
+    ...(season && data && seasonRecord
+      ? [
+          { id: "adm-attention", label: "Needs attention" },
+          { id: "adm-record", label: "Season record" },
+          { id: "adm-league", label: "League id" },
+        ]
+      : season && data
+      ? [
+          ...(tonight.length > 0
+            ? [{ id: "adm-tonight", label: "Tonight" }]
+            : []),
+          { id: "adm-attention", label: "Needs attention" },
+          ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
+          ...(cards?.schedule
+            ? [{ id: "adm-schedule", label: "Schedule & results" }]
+            : []),
+          ...(cards?.playoffs ? [{ id: "adm-playoffs", label: "Playoffs" }] : []),
+          ...(rosterMovesVisible(season, data)
+            ? [{ id: "adm-roster", label: "Roster moves" }]
+            : []),
+          ...(cards?.standins
+            ? [{ id: "adm-standins", label: "Standins" }]
+            : []),
+          { id: "adm-reach", label: "Discord reach" },
+          ...(autoSyncVisible(season)
+            ? [{ id: "adm-sync", label: "Auto-sync" }]
+            : []),
+          { id: "adm-season", label: "Phase" },
+          { id: "adm-captains", label: "Captains & draft" },
+          { id: "adm-league", label: "League id" },
+        ]
+      : []),
+    { id: "adm-automation", label: "Automation" },
+    { id: "adm-history", label: "Historical records" },
+    // Season-independent: inhouse alerts and the queue board are most
+    // important in the offseason, when inhouse is the live mode.
+    { id: "adm-discord", label: "Discord" },
+    { id: "adm-activity", label: "Activity" },
+    { id: "adm-news", label: "News" },
+    { id: "adm-security", label: "Security" },
+    ...(handoffFirst
+      ? []
+      : [{ id: "adm-new-season", label: "Season handoff" }]),
+  ];
 
   return (
     <div className="space-y-8">
@@ -316,82 +487,135 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         subtitle="Run the league — create seasons, pick captains, run the draft, enter results."
       />
 
-      <AdminJump
-        items={[
-          ...(season && data
-            ? [
-                { id: "adm-attention", label: "Needs attention" },
-                ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
-                { id: "adm-schedule", label: "Schedule & results" },
-                { id: "adm-playoffs", label: "Playoffs" },
-                ...(rosterMovesVisible(season, data)
-                  ? [{ id: "adm-roster", label: "Roster moves" }]
-                  : []),
-                { id: "adm-standins", label: "Standins" },
-                ...(autoSyncVisible(season)
-                  ? [{ id: "adm-sync", label: "Auto-sync" }]
-                  : []),
-                { id: "adm-season", label: "Phase" },
-                { id: "adm-captains", label: "Captains & draft" },
-                { id: "adm-league", label: "League id" },
-              ]
-            : []),
-          { id: "adm-automation", label: "Automation" },
-          { id: "adm-history", label: "Historical records" },
-          // Season-independent: inhouse alerts and the queue board are most
-          // important in the offseason, when inhouse is the live mode.
-          { id: "adm-discord", label: "Discord" },
-          { id: "adm-activity", label: "Activity" },
-          { id: "adm-traffic", label: "Traffic" },
-          { id: "adm-news", label: "News" },
-          { id: "adm-security", label: "Security" },
-          { id: "adm-new-season", label: "Season handoff" },
-        ]}
-      />
+      {nextStep ? <NextStepBanner nextStep={nextStep} /> : null}
 
-      {season && data ? (
+      <AdminJump items={jumpItems} />
+
+      {handoffFirst ? (
+        <OpenNextSeason
+          season={season}
+          previous={newSeasonDefaults}
+          championName={championName}
+        />
+      ) : null}
+
+      {season && data && seasonRecord ? (
         <>
-          <AdminAttention season={season} data={data} delivery={delivery} />
+          <AdminAttention
+            season={season}
+            data={data}
+            delivery={delivery}
+            automation={automationLines}
+            jumpItems={jumpItems}
+          />
           {/* The match page's "Open this match in the admin panel" link lands
-              on a result row, often inside a folded week. */}
+              on a result row, often inside a folded week or the folded season
+              record. */}
+          <RevealHashTarget prefix={ADMIN_MATCH_ROW_PREFIX} />
+          <AdminSection
+            id="adm-record"
+            title={`${seasonRecord.name} record`}
+            subtitle="Schedule and results, playoffs, standins, phase and draft settings for the finished season. Correct the grand final or reset the playoffs here."
+            headingLevel={2}
+          >
+            <div className="space-y-6 p-3 sm:p-4">
+              {showTiebreakers ? (
+                <AdminAnchor id="adm-tiebreakers">
+                  <TiebreakerControls season={season} data={data} nowMs={nowMs} />
+                </AdminAnchor>
+              ) : null}
+              {cards?.schedule ? (
+                <AdminAnchor id="adm-schedule">
+                  <ScheduleControls
+                    season={season}
+                    data={data}
+                    nowMs={nowMs}
+                  />
+                </AdminAnchor>
+              ) : null}
+              {cards?.playoffs ? (
+                <AdminAnchor id="adm-playoffs">
+                  <PlayoffControls season={season} data={data} nowMs={nowMs} />
+                </AdminAnchor>
+              ) : null}
+              <AdminAnchor id="adm-roster">
+                <RosterMoves season={season} data={data} />
+              </AdminAnchor>
+              {cards?.standins ? (
+                <AdminAnchor id="adm-standins">
+                  <StandinControls season={season} data={data} />
+                </AdminAnchor>
+              ) : null}
+              {setupControls}
+            </div>
+          </AdminSection>
+          {syncCards}
+          <LeagueControls season={season} />
+        </>
+      ) : season && data ? (
+        <>
+          {tonight.length > 0 ? (
+            <TonightMatches
+              season={season}
+              data={data}
+              slate={tonight}
+              nowMs={nowMs}
+            />
+          ) : null}
+          <AdminAttention
+            season={season}
+            data={data}
+            delivery={delivery}
+            automation={automationLines}
+            jumpItems={jumpItems}
+          />
+          {/* The match page's "Open this match in the admin panel" link lands
+              on a result row, often inside a folded week or the folded season
+              record. */}
           <RevealHashTarget prefix={ADMIN_MATCH_ROW_PREFIX} />
           {showTiebreakers ? (
             <AdminAnchor id="adm-tiebreakers">
-              <TiebreakerControls season={season} data={data} />
+              <TiebreakerControls season={season} data={data} nowMs={nowMs} />
             </AdminAnchor>
           ) : null}
-          {season.status === "SIGNUPS" || season.status === "DRAFT" ? setupControls : null}
-          <AdminAnchor id="adm-schedule">
-            <ScheduleControls season={season} data={data} />
-          </AdminAnchor>
-          <AdminAnchor id="adm-playoffs">
-            <PlayoffControls season={season} data={data} />
-          </AdminAnchor>
+          {season.status === "SIGNUPS" || season.status === "DRAFT" ? (
+            <>
+              {setupControls}
+              {reachCard}
+            </>
+          ) : null}
+          {/* Each card only where it has work or data (adminSeasonCards):
+              the same answer the jump bar above was built from. */}
+          {cards?.schedule ? (
+            <AdminAnchor id="adm-schedule">
+              <ScheduleControls
+                season={season}
+                data={data}
+                nowMs={nowMs}
+              />
+            </AdminAnchor>
+          ) : null}
+          {cards?.playoffs ? (
+            <AdminAnchor id="adm-playoffs">
+              <PlayoffControls season={season} data={data} nowMs={nowMs} />
+            </AdminAnchor>
+          ) : null}
           <AdminAnchor id="adm-roster">
             <RosterMoves season={season} data={data} />
           </AdminAnchor>
-          <AdminAnchor id="adm-standins">
-            <StandinControls season={season} data={data} />
-          </AdminAnchor>
-          <AdminAnchor id="adm-sync">
-            <AutoSyncHealth season={season} />
-            <Suspense fallback={<CardSkeleton rows={3} />}>
-              <ImportProgress seasonId={season.id} page={(await searchParams).importPage} query={await searchParams} />
-              <DatabaseHealth />
-            </Suspense>
-          </AdminAnchor>
+          {cards?.standins ? (
+            <AdminAnchor id="adm-standins">
+              <StandinControls season={season} data={data} />
+            </AdminAnchor>
+          ) : null}
+          {season.status !== "SIGNUPS" && season.status !== "DRAFT"
+            ? reachCard
+            : null}
+          {syncCards}
           {season.status !== "SIGNUPS" && season.status !== "DRAFT" ? setupControls : null}
           <LeagueControls season={season} />
         </>
-      ) : (
-        <Card>
-          <CardBody className="text-muted">
-            {newSeasonDefaults
-              ? "The league is in the offseason. Archived seasons remain public; open the next season below when signups should begin."
-              : "No active season yet. Configure the first one below to open signups."}
-          </CardBody>
-        </Card>
-      )}
+      ) : null}
 
       <AdminAnchor id="adm-history">
         <Suspense fallback={<CardSkeleton rows={3} />}>
@@ -410,12 +634,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       </AdminAnchor>
 
       {/* Evergreen because its inhouse channel, ping role and live board do
-          not belong to a season. With no active season the reach funnel is
-          simply empty, while every inhouse control remains usable. Streamed:
-          Discord health has bounded network calls and must never hold up the
-          rest of the admin page. */}
+          not belong to a season; every inhouse control stays usable in the
+          offseason. Streamed: Discord health has bounded network calls and
+          must never hold up the rest of the admin page. */}
       <Suspense fallback={<CardSkeleton rows={6} />}>
-        <DiscordSection seasonId={season?.id ?? null} />
+        <DiscordSection />
       </Suspense>
 
       <div>
@@ -428,59 +651,170 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
       <SecurityControls />
 
-      <AdminSection
-        id="adm-traffic"
-        title="Website traffic"
-        subtitle="Visitors, page views, popular pages, and referral sources."
-      >
-        <CardBody className="space-y-3 text-sm text-muted">
-          <p>
-            Open Web Analytics and select the last 30 days to review public-page
-            traffic. Collection begins after analytics is enabled and the tracker
-            is deployed; earlier visits cannot be reconstructed.
-          </p>
-          <p>
-            Admin, account, and sign-in pages are excluded. Background game-room
-            updates are not page views. Use page views when estimating advertising
-            revenue, and allow a full month for a useful baseline.
-          </p>
-          <a
-            href="https://vercel.com/timothyjjcrows-projects/under-4.5k-league/analytics"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={buttonClasses("secondary")}
-          >
-            Open Vercel Web Analytics ↗
-          </a>
-          <p className="text-xs">Requires access to the league’s Vercel project.</p>
-        </CardBody>
-      </AdminSection>
+      {season && handoffReadiness && !handoffReadiness.ready ? (
+        <AdminSection
+          id="adm-new-season"
+          title="Season handoff"
+          subtitle="The normal handoff unlocks after an authoritative champion is crowned."
+        >
+          <CardBody className="space-y-3">
+            <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
+              <div className="font-medium text-fg">Handoff locked</div>
+              <p className="mt-1 text-muted">{handoffReadiness.reason}</p>
+              <p className="mt-1 text-muted">
+                No data has to be discarded to continue the league. Use the
+                phase, result, or playoff recovery controls above first.
+              </p>
+            </div>
+            {season.status !== SEASON_STATUS.COMPLETE ? (
+              <details className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm">
+                <summary className="cursor-pointer font-medium text-danger">
+                  Need to cancel this unfinished season?
+                </summary>
+                <p className="mt-2 text-muted">
+                  This is separate from a normal handoff. It closes every
+                  active-season signup, draft, match, sync, and reminder
+                  workflow immediately. Saved teams, signups, matches, and
+                  games remain in History, and an admin can reactivate the
+                  season later. If an auction is live, its lot and bids are
+                  preserved with both clocks paused for an admin to review.
+                </p>
+                <ActionForm
+                  action={archiveIncompleteSeasonAction}
+                  hidden={{
+                    expectedActiveSeasonId: season.id,
+                    expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+                  }}
+                  className="mt-3"
+                >
+                  <SubmitButton
+                    variant="danger"
+                    confirm={`Cancel and archive unfinished ${season.name}? Active league workflows stop immediately. Nothing is deleted; a live auction is paused, and reactivation remains available from Season history after you enter the offseason.`}
+                  >
+                    Cancel season and enter offseason
+                  </SubmitButton>
+                </ActionForm>
+              </details>
+            ) : null}
+          </CardBody>
+        </AdminSection>
+      ) : null}
 
-      <AdminSection
-        id="adm-new-season"
+      {/* One outbound link, so a footer line rather than a card. Each league
+          is its own Vercel project; the link follows this deployment's region. */}
+      <p className="border-t border-line-soft pt-4 text-xs text-muted">
+        Website traffic:{" "}
+        <a
+          href={webAnalyticsUrl(LEAGUE_CONFIG.region)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={textLink()}
+        >
+          open {LEAGUE_CONFIG.name} in Vercel Web Analytics ↗
+        </a>{" "}
+        (needs access to the league&rsquo;s Vercel project; admin, account and
+        sign-in pages aren&rsquo;t counted).
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The season handoff once a champion is crowned, and the new-season form in
+ * the offseason: the first card on the page in both states. One titled form
+ * with the one button. Archiving without opening the next season is no longer
+ * a peer choice: staying in Season complete keeps the champion and bracket on
+ * the home page, while the offseason turns them into empty pages. It stays
+ * reachable, folded, because reactivating an older season needs no active
+ * season.
+ */
+function OpenNextSeason({
+  season,
+  previous,
+  championName,
+}: {
+  /** The crowned active season; null in the offseason. */
+  season: Season | null;
+  /** The season the new one follows (carried settings); null for the first. */
+  previous: CarriedSeasonSettings & { name: string } | null;
+  championName: string | null;
+}) {
+  const nextName = nextSeasonName(previous?.name ?? null);
+  return (
+    <Card id="adm-new-season" tone="feature" className="scroll-mt-40">
+      <CardHeader
+        headingLevel={2}
         title={season ? "Season handoff" : "Open a new season"}
         subtitle={
-          !season
-            ? "Configure the league and open signups."
-            : handoffReadiness?.ready
-              ? "Preserve the completed season, then choose an offseason or open fresh signups."
-              : "The normal handoff unlocks after an authoritative champion is crowned."
+          season
+            ? `${championName ? `${championName} won ${season.name}. ` : ""}The league stays in Complete, with the champion on the home page, until you open the next season.`
+            : previous
+              ? "The league is in the offseason. Archived seasons remain public; open the next season when signups should begin."
+              : "No active season yet. Open the first one to start signups."
         }
-        defaultOpen={!season || handoffReadiness?.ready === true}
-      >
-        <CardBody className="space-y-5">
-          {season && handoffReadiness?.ready ? (
-            <div className="rounded-lg border border-line bg-surface-2/40 p-4">
-              <div className="font-medium text-fg">Enter the offseason</div>
-              <p className="mt-1 text-sm text-muted">
-                Archive {season.name} without opening the next signup window.
-                Results, champion, rosters, recaps, and records stay public
-                under Season history. You can open the next season here later.
+      />
+      <CardBody className="space-y-5">
+        <ActionForm
+          action={createSeason}
+          className="space-y-3 [overflow-wrap:anywhere]"
+          hidden={{ expectedActiveSeasonId: season?.id ?? "" }}
+        >
+          <h3 className="text-base font-semibold text-fg">
+            {nextName ? `Open ${nextName} signups` : "Open the next season's signups"}
+          </h3>
+          <p className="text-sm text-muted">
+            {season
+              ? `Players see the new season on the home page with signups open. ${season.name} moves to Season history with its champion, results and rosters.`
+              : "Players see the new season on the home page with signups open."}
+          </p>
+          <Field label="New season name" htmlFor="newSeasonName">
+            <input
+              id="newSeasonName"
+              name="name"
+              required
+              maxLength={60}
+              defaultValue={nextName}
+              placeholder="Season 1"
+              className={cn(inputCls, "sm:max-w-sm")}
+            />
+          </Field>
+          <p className="text-sm text-muted">
+            {previous ? `Carried over from ${previous.name}: ` : "Starts with: "}
+            <span className="text-fg">
+              {carriedSettingsLine(carriedSeasonSettings(previous))}
+            </span>
+            . You can change any of them once the season is open.
+          </p>
+          <SubmitButton
+            variant="accent"
+            confirm={
+              season
+                ? `Archive completed ${season.name} and open a new signup season? All history remains available.`
+                : "Open this season's signup window now?"
+            }
+          >
+            Open signups
+          </SubmitButton>
+        </ActionForm>
+        {season ? (
+          <details className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm">
+            <summary className="flex min-h-11 cursor-pointer items-center font-medium text-fg">
+              Archive without opening the next season
+            </summary>
+            <div className="space-y-3 pb-2">
+              <p className="text-muted">
+                Use this only to reactivate an older season from Season
+                history, which needs the league to have no active season.
+                Archiving takes the league out of Complete: the home page swaps
+                the champion for an offseason notice, and nobody can sign up
+                until you open the next season here. Results, the champion,
+                rosters and records stay public under Season history. For a
+                long break, stay in Complete and pin a League news post
+                instead.
               </p>
               <ActionForm
                 action={archiveCompletedSeasonAction}
                 hidden={{ expectedActiveSeasonId: season.id }}
-                className="mt-3"
               >
                 <SubmitButton
                   variant="secondary"
@@ -490,146 +824,10 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                 </SubmitButton>
               </ActionForm>
             </div>
-          ) : season && handoffReadiness && !handoffReadiness.ready ? (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
-                <div className="font-medium text-fg">Handoff locked</div>
-                <p className="mt-1 text-muted">{handoffReadiness.reason}</p>
-                <p className="mt-1 text-muted">
-                  No data has to be discarded to continue the league. Use the
-                  phase, result, or playoff recovery controls above first.
-                </p>
-              </div>
-              {season.status !== SEASON_STATUS.COMPLETE ? (
-                <details className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm">
-                  <summary className="cursor-pointer font-medium text-danger">
-                    Need to cancel this unfinished season?
-                  </summary>
-                  <p className="mt-2 text-muted">
-                    This is separate from a normal handoff. It closes every
-                    active-season signup, draft, match, sync, and reminder
-                    workflow immediately. Saved teams, signups, matches, and
-                    games remain in History, and an admin can reactivate the
-                    season later. If an auction is live, its lot and bids are
-                    preserved with both clocks paused for an admin to review.
-                  </p>
-                  <ActionForm
-                    action={archiveIncompleteSeasonAction}
-                    hidden={{
-                      expectedActiveSeasonId: season.id,
-                      expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-                    }}
-                    className="mt-3"
-                  >
-                    <SubmitButton
-                      variant="danger"
-                      confirm={`Cancel and archive unfinished ${season.name}? Active league workflows stop immediately. Nothing is deleted; a live auction is paused, and reactivation remains available from Season history after you enter the offseason.`}
-                    >
-                      Cancel season and enter offseason
-                    </SubmitButton>
-                  </ActionForm>
-                </details>
-              ) : null}
-            </div>
-          ) : null}
-
-          {!season || handoffReadiness?.ready ? (
-            <ActionForm
-              action={createSeason}
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
-              hidden={{ expectedActiveSeasonId: season?.id ?? "" }}
-            >
-              <Field label="Season name" htmlFor="name">
-                <input
-                  id="name"
-                  name="name"
-                  required
-                  maxLength={60}
-                  placeholder="Season 1"
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Team size" htmlFor="teamSize">
-                <input
-                  id="teamSize"
-                  name="teamSize"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.teamSize ?? 5}
-                  min={2}
-                  max={10}
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Min teams to start" htmlFor="minTeams">
-                <input
-                  id="minTeams"
-                  name="minTeams"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.minTeams ?? 4}
-                  min={2}
-                  max={32}
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Draft budget ($)" htmlFor="draftBudget">
-                <input
-                  id="draftBudget"
-                  name="draftBudget"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.draftBudget ?? 100}
-                  min={10}
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Soft MMR limit (0 = none)" htmlFor="maxMmr">
-                <input
-                  id="maxMmr"
-                  name="maxMmr"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.maxMmr ?? SOFT_MMR_LIMIT}
-                  min={0}
-                  max={HARD_MMR_CEILING}
-                  className={inputCls}
-                />
-              </Field>
-              <Field
-                label="Budget MMR weighting % (0 = flat)"
-                htmlFor="budgetMmrWeight"
-              >
-                <input
-                  id="budgetMmrWeight"
-                  name="budgetMmrWeight"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.budgetMmrWeight ?? 20}
-                  min={0}
-                  max={50}
-                  className={inputCls}
-                />
-              </Field>
-              <div className="sm:col-span-2 lg:col-span-4">
-                <p className="mb-3 text-sm text-muted">
-                  {season
-                    ? `This archives ${season.name} and immediately opens signups for the new season.`
-                    : newSeasonDefaults
-                      ? `There is no active season. Values are prefilled from ${newSeasonDefaults.name}; review them before opening signups.`
-                      : "There is no active season. Creating one immediately opens its signup phase."}
-                </p>
-                <SubmitButton
-                  variant="accent"
-                  confirm={
-                    season
-                      ? `Archive completed ${season.name} and open a new signup season? All history remains available.`
-                      : "Open this season's signup window now?"
-                  }
-                >
-                  {season ? "Create next season" : "Create season"}
-                </SubmitButton>
-              </div>
-            </ActionForm>
-          ) : null}
-        </CardBody>
-      </AdminSection>
-    </div>
+          </details>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }
 
@@ -652,13 +850,18 @@ function AdminSection({
   subtitle,
   children,
   defaultOpen = false,
+  headingLevel = 3,
 }: {
-  id: string;
+  /** Omit when a wrapping AdminAnchor already carries the section's id. */
+  id?: string;
   title: string;
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  /** 2 for a section that stands in for top-level cards (the season record). */
+  headingLevel?: 2 | 3;
 }) {
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
     <details
       id={id}
@@ -671,9 +874,9 @@ function AdminSection({
         {/* Set like CardHeader's title and subtitle, so a folded section and
             an open card read as the same kind of heading. */}
         <div className="min-w-0">
-          <h3 className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
+          <Heading className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
             {title}
-          </h3>
+          </Heading>
           {subtitle ? (
             <p className="mt-1.5 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
               {subtitle}
@@ -713,9 +916,22 @@ function AdminAnchor({
  * reachable however far down the page an admin has scrolled. On a phone it
  * scrolls away with the page like every section bar (see SectionNav): pinned,
  * it cost a fifth of the screen on top of the header and the tab bar.
+ *
+ * A jump opens the section and, inside it, only a folded AdminSection
+ * (`data-section-jump`). Every other disclosure in a card (Fix the phase,
+ * Fix the bracket, Assign any match, a news Edit form, the handoff's archive
+ * option) stays as the page rendered it, so a jump to a card never unfolds
+ * its danger controls or an edit form.
  */
 function AdminJump({ items }: { items: { id: string; label: string }[] }) {
-  return <SectionNav items={items} label="Admin sections" sticky />;
+  return (
+    <SectionNav
+      items={items}
+      label="Admin sections"
+      sticky
+      openNested="marked"
+    />
+  );
 }
 
 /**
@@ -887,7 +1103,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // this number and then points at that card ("names them"); counting only
   // data.players (type PLAYER) made the two disagree whenever an unlinked
   // standin existed. DB-only, so the blocking path stays Discord-free.
-  const [rsvps, picks, covers, proposals, unlinkedDiscord] = await Promise.all([
+  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview] = await Promise.all([
     prisma.matchAvailability.count({ where: regularWhere }),
     prisma.prediction.count({ where: regularWhere }),
     prisma.standinAssignment.count({ where: regularWhere }),
@@ -900,6 +1116,10 @@ async function loadSeasonAdminData(seasonId: string) {
         status: REGISTRATION_STATUS.ACTIVE,
         user: { discordId: null },
       },
+    }),
+    // Imports the automatic sync could not place on its own (Auto-sync card).
+    prisma.importCandidate.count({
+      where: { seasonId, status: "NEEDS_REVIEW" },
     }),
   ]);
   return {
@@ -915,6 +1135,7 @@ async function loadSeasonAdminData(seasonId: string) {
     tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
     collateral: { rsvps, picks, covers, proposals },
     unlinkedDiscord,
+    importsNeedingReview,
     captainsInRoom,
   };
 }
@@ -922,104 +1143,325 @@ async function loadSeasonAdminData(seasonId: string) {
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
 type Season = NonNullable<Awaited<ReturnType<typeof getActiveSeason>>>;
 
+/**
+ * Match night at the top of the page: each of tonight's fixtures with its
+ * state, check-ins, standins and next automatic result check, and a jump to
+ * its full result controls further down ("Result controls"). The fixture
+ * name opens the public match page (rosters, check-ins, games), which has no
+ * admin controls of its own.
+ */
+function TonightMatches({
+  season,
+  data,
+  slate,
+  nowMs,
+}: {
+  season: Season;
+  data: AdminData;
+  slate: AdminData["matches"];
+  nowMs: number;
+}) {
+  const totalRounds = playoffTotalRounds(data.matches);
+  const names = new Map(data.teams.map((team) => [team.id, team.name]));
+  const rosters = new Map(
+    data.teams.map((team) => [
+      team.id,
+      team.members.map((member) => member.userId),
+    ]),
+  );
+  return (
+    <AdminAnchor id="adm-tonight">
+      <Card>
+        <CardHeader
+          headingLevel={2}
+          title="Tonight"
+          subtitle="Fixtures kicking off soon, being played, or still waiting on a result."
+        />
+        <CardBody>
+          <ul className="space-y-2">
+            {slate.map((m) => {
+              const home = m.homeTeamId ? names.get(m.homeTeamId) : undefined;
+              const away = m.awayTeamId ? names.get(m.awayTeamId) : undefined;
+              const open = m.status !== MATCH_STATUS.COMPLETED;
+              const check = autoCheckStatus(m, season, nowMs);
+              const sides =
+                open && m.homeTeamId && m.awayTeamId
+                  ? ([
+                      [home, m.homeTeamId],
+                      [away, m.awayTeamId],
+                    ] as const).map(([name, teamId]) => ({
+                      name: name ?? "?",
+                      label: nightSideLabel(
+                        matchNightSide(
+                          rosters.get(teamId) ?? [],
+                          teamId,
+                          m.standins,
+                          m.availability,
+                          season.teamSize,
+                        ),
+                      ),
+                    }))
+                  : [];
+              return (
+                <li
+                  key={m.id}
+                  data-testid="admin-tonight-match"
+                  className="space-y-1 rounded-lg border border-line p-3 text-sm"
+                >
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-xs text-muted">
+                      {matchRoundLabel(m, totalRounds, { bestOf: true })}
+                    </span>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className={textLink(
+                        "min-w-0 flex-1 basis-48 font-medium [overflow-wrap:anywhere]",
+                      )}
+                    >
+                      {home ?? "TBD"} vs {away ?? "TBD"}
+                    </Link>
+                    {m.status === MATCH_STATUS.LIVE ? (
+                      <Badge tone="accent">
+                        Live · {m.homeScore}–{m.awayScore}
+                      </Badge>
+                    ) : m.status === MATCH_STATUS.COMPLETED ? (
+                      <Badge tone="success">
+                        Final · {m.homeScore}–{m.awayScore}
+                        {m.forfeit ? " · forfeit" : ""}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {m.scheduledAt ? (
+                    <p className="text-xs text-muted">
+                      Kickoff{" "}
+                      <LocalTime
+                        ts={m.scheduledAt.getTime()}
+                        variant="short"
+                        initial={formatMatchTime(m.scheduledAt, "short")}
+                      />
+                    </p>
+                  ) : null}
+                  {sides.map((side, index) => (
+                    <p
+                      key={index}
+                      className="text-xs text-muted [overflow-wrap:anywhere]"
+                    >
+                      {side.name}: {side.label}
+                    </p>
+                  ))}
+                  {check ? <AutoCheckLine check={check} /> : null}
+                  {open ? (
+                    <a
+                      href={`#adm-match-${m.id}`}
+                      className={textLink("inline-block text-xs")}
+                    >
+                      Result controls ↓
+                    </a>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </CardBody>
+      </Card>
+    </AdminAnchor>
+  );
+}
+
+/** The auction has finished (or the season has moved past it): rosters are real. */
+function draftRostersReady(season: Season, data: AdminData): boolean {
+  return (
+    data.draft?.status === DRAFT_STATUS.COMPLETE ||
+    season.status === SEASON_STATUS.REGULAR_SEASON ||
+    season.status === SEASON_STATUS.PLAYOFFS ||
+    season.status === SEASON_STATUS.COMPLETE
+  );
+}
+
+/**
+ * The unlinked players and booked standins match-night pings are for, or null
+ * while pings still go to signups (or the season is over). Needs attention
+ * counts this list and the Discord reach card names it.
+ */
+function unlinkedRosterFor(season: Season, data: AdminData): string[] | null {
+  if (!rosterPingsLive(season.status, draftRostersReady(season, data)))
+    return null;
+  const openIds = new Set(
+    data.matches
+      .filter((match) => match.status !== MATCH_STATUS.COMPLETED)
+      .map((match) => match.id),
+  );
+  return unlinkedRoster(data.teams, data.assignments, openIds);
+}
+
+/**
+ * Every problem on the page as one list, each line linking to the control
+ * that fixes it: season-wide alarms first, then the matches to review. All of
+ * it is read from the database; the Discord line is the DB count of unlinked
+ * players, and the membership details stream into the Discord reach card.
+ */
 function AdminAttention({
   season,
   data,
   delivery,
+  automation,
+  jumpItems,
 }: {
   season: Season;
   data: AdminData;
+  /** League post delivery: a stuck backlog or a paused webhook is a line
+   *  here (leagueDeliveryAttention), linking to the Discord card. */
   delivery: LeagueDeliveryHealth | null;
+  automation: string[];
+  jumpItems: { id: string; label: string }[];
 }) {
-  const attention = matchAttention(data.matches);
-  const deliveryLines = delivery ? leagueDeliveryAttention(delivery) : [];
   const names = new Map(data.teams.map((team) => [team.id, team.name]));
+  const fixture = (match: AdminData["matches"][number]) =>
+    `${names.get(match.homeTeamId ?? "") ?? "TBD"} vs ${names.get(match.awayTeamId ?? "") ?? "TBD"}`;
+  const openMatches = data.matches.filter(
+    (match) => match.status !== MATCH_STATUS.COMPLETED,
+  );
+  const openIds = new Set(openMatches.map((match) => match.id));
+  const matchById = new Map(data.matches.map((match) => [match.id, match]));
+  const standinName = new Map(
+    data.assignments.map((booking) => [
+      booking.standinUserId,
+      booking.standin.name,
+    ]),
+  );
+  const deliveryItems = (delivery ? leagueDeliveryAttention(delivery) : []).map(
+    (text, index) => ({ key: `delivery-${index}`, text, href: "#adm-discord" }),
+  );
+  const items = [
+    ...deliveryItems,
+    ...adminAttention({
+    seasonStatus: season.status,
+    draftComplete: draftRostersReady(season, data),
+    automation,
+    importsNeedingReview: data.importsNeedingReview,
+    shortTeams: shortTeams(data.teams, season.teamSize).map(
+      ({ team, missing }) => ({ name: team.name, missing }),
+    ),
+    standinClashes: standinClashes(data.assignments, data.matches).map(
+      (clash) => ({
+        standin: standinName.get(clash.standinUserId) ?? "A standin",
+        first: fixture(clash.first),
+        second: fixture(clash.second),
+      }),
+    ),
+    outStandins: outStandins(data.assignments, data.outRsvps, openIds).map(
+      (out) => ({
+        standin: standinName.get(out.userId) ?? "A standin",
+        fixture: fixture(matchById.get(out.matchId)!),
+      }),
+    ),
+    championIssue: resolveChampionPresentation(season, data.matches).issue,
+    unlinkedSignups: data.unlinkedDiscord,
+    unlinkedRostered: unlinkedRosterFor(season, data)?.length ?? 0,
+    }),
+  ];
+  const matches = matchAttention(data.matches, data.teams);
+  // A section folded into the season record, or not shown this phase, has no
+  // jump target; its line still reads, just without a link.
+  const sectionLabel = new Map(jumpItems.map((item) => [`#${item.id}`, item.label]));
+  const standinsLabel = sectionLabel.get("#adm-standins");
   return (
     <Card id="adm-attention" className="scroll-mt-40">
       <CardHeader
         headingLevel={2}
-        title={`${season.name} — ${attention.length || deliveryLines.length ? "needs attention" : "nothing to review"}`}
-        subtitle={`${PHASE_LABEL[season.status]} · Match-night checklist. Each match opens its Admin tools on the match page, where you can fix it.`}
+        title={attentionTitle(season.name, items.length + matches.length)}
       />
-      <CardBody className="space-y-4">
-        {deliveryLines.length ? (
-          <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm">
-            <ul className="space-y-1">
-              {deliveryLines.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-            <p className="mt-2">
-              <a href="#adm-discord" className={textLink()}>
-                Open Discord notifications →
-              </a>
-            </p>
-          </div>
+      <CardBody className="space-y-3">
+        {items.length > 0 ? (
+          <ul className="space-y-2">
+            {items.map((item) => {
+              const label = sectionLabel.get(item.href);
+              return (
+                <li
+                  key={item.key}
+                  className="rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm"
+                >
+                  {item.text}
+                  {label ? (
+                    <>
+                      {" "}
+                      <a href={item.href} className={textLink()}>
+                        {label} →
+                      </a>
+                    </>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
         ) : null}
-        {attention.length ? (
-          <details open={attention.length <= 5}>
+        {matches.length > 0 ? (
+          <details open={matches.length <= 5}>
             <summary className="min-h-11 cursor-pointer text-sm font-medium">
-              {attention.length} match{attention.length === 1 ? "" : "es"} to
-              review — show details
+              {matches.length} match{matches.length === 1 ? "" : "es"} to
+              review
             </summary>
             <ul className="space-y-2">
-              {attention.map((item) => {
-                const match = data.matches.find(
-                  (candidate) => candidate.id === item.id,
-                )!;
-                return (
-                  <li
-                    key={item.id}
-                    className="rounded-lg border border-line p-3 text-sm"
-                  >
+              {matches.map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded-lg border border-line p-3 text-sm"
+                >
+                  {/* The fixture opens the match page's Admin tools, where
+                      it can be fixed; its row in Schedule & results or
+                      Playoffs here holds the same controls. */}
+                  <span className="flex flex-wrap items-baseline gap-x-3 gap-y-2">
                     <Link
                       href={matchAnchorPath(item.id, MATCH_ANCHOR.admin)}
                       className={textLink()}
                     >
-                      {names.get(match.homeTeamId ?? "") ?? "TBD"} vs{" "}
-                      {names.get(match.awayTeamId ?? "") ?? "TBD"}
+                      {fixture(matchById.get(item.id)!)}
                     </Link>
-                    <p className="mt-1 text-muted">
-                      {item.reasons.join(" · ")}
-                    </p>
-                  </li>
-                );
-              })}
+                    <a href={`#adm-match-${item.id}`} className={textLink("text-xs")}>
+                      Result controls ↓
+                    </a>
+                  </span>
+                  <p className="mt-1 text-muted">
+                    {item.reasons.join(" · ")}
+                    {item.uncovered > 0 && standinsLabel ? (
+                      <>
+                        {" "}
+                        <a href="#adm-standins" className={textLink()}>
+                          {standinsLabel} →
+                        </a>
+                      </>
+                    ) : null}
+                  </p>
+                </li>
+              ))}
             </ul>
           </details>
-        ) : (
-          <p className="text-sm text-muted">
-            No missing kickoffs, outstanding reschedules, uncovered declared
-            absences, or long-running results to review.
-          </p>
-        )}
-        <div className="flex flex-wrap gap-3 text-sm">
+        ) : null}
+        <p className="text-xs">
           <Link
             href={`/admin/data-quality?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
+            className={textLink()}
           >
-            Inspect imported-game quality →
+            Check imported-game quality →
           </Link>
-          <Link
-            href="/admin/activity"
-            className={buttonClasses("secondary", "sm")}
-          >
-            Search admin history →
-          </Link>
-        </div>
-        <p className="text-xs text-muted">
-          Use Automation, Auto-sync, and Discord in the section navigation for
-          last-run status, retry timing, and existing recovery controls. This
-          overview does not trigger retries.
         </p>
       </CardBody>
     </Card>
   );
 }
 
-function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
-  const configLocked = !draftSetupOpen(season.status, data.draft?.status);
+/**
+ * The admin page's "what do I do next?" line, from the pure, tested
+ * adminNextStep. Built once per render: the banner under the page title and
+ * the phase card both read it.
+ */
+function adminNextStepFor(
+  season: Season,
+  data: AdminData,
+  nowMs: number,
+): AdminNextStep {
   const cap = capacityInfo(season, data.players.length);
+  const nextKickoff = nextRegularKickoff(data.matches, nowMs);
   const regular = data.matches.filter((m) => m.phase === "REGULAR");
   const playoff = data.matches.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
@@ -1028,16 +1470,26 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
     season,
     data.matches,
   );
-  const nextStep = adminNextStep({
+  return adminNextStep({
     seasonStatus: season.status,
     draftStatus: data.draft?.status ?? null,
     playerCount: data.players.length,
     minPlayers: cap.minPlayers,
     teamCount: data.teams.length,
     regularMatchCount: regular.length,
-    scheduledRegularCount: regular.filter((m) => m.scheduledAt).length,
+    untimedRegularCount: regular.filter(
+      (m) =>
+        m.status !== MATCH_STATUS.COMPLETED &&
+        m.status !== MATCH_STATUS.LIVE &&
+        !m.scheduledAt,
+    ).length,
     pendingRegularResults: regular.filter((m) => m.status !== "COMPLETED")
       .length,
+    outstandingRegularResults: regularResultsDue(data.matches, nowMs).length,
+    nextKickoff: nextKickoff && {
+      week: nextKickoff.week,
+      label: formatLeagueTime(nextKickoff.at),
+    },
     pendingTiebreakerResults: data.matches.filter(
       (m) => m.phase === "TIEBREAKER" && m.status !== "COMPLETED",
     ).length,
@@ -1056,10 +1508,117 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
     ),
     hasLeagueTicket: !!season.dotaLeagueId,
   });
+}
+
+/**
+ * THE ROADMAP, pinned under the page title. Several league transitions are
+ * silent and fail quietly: the auction finishing does NOT advance the phase,
+ * a schedule with no kickoff times disables auto-sync, reminders and pick'em
+ * locks, and nothing else prompts "start the playoffs" or "record the final".
+ * This line is the page's answer to "what do I do next?" in EVERY phase. It
+ * used to sit inside the phase card, about 7,000px down a phone mid-season.
+ */
+function NextStepBanner({ nextStep }: { nextStep: AdminNextStep }) {
+  return (
+    <section aria-label="Next step" className="space-y-2">
+      <p
+        className={cn(
+          "rounded-lg border px-3 py-2 text-sm",
+          nextStep.tone === "action"
+            ? "border-accent/30 bg-accent/10 text-fg"
+            : nextStep.tone === "warning"
+              ? "border-danger/40 bg-danger/10 text-fg"
+              : nextStep.tone === "done"
+                ? "border-success/40 bg-success/10 text-fg"
+                : "border-line bg-surface-2/40 text-muted",
+        )}
+      >
+        <b className="text-fg">{nextStep.title}</b>
+        {nextStep.detail ? <> {nextStep.detail}</> : null}
+        {nextStep.jump ? (
+          <>
+            {" "}
+            <a href={nextStep.jump.href} className={textLink("whitespace-nowrap")}>
+              {nextStep.jump.label} →
+            </a>
+          </>
+        ) : null}
+      </p>
+      {/* A standing condition, not this phase's step: Valve needs about 15
+          days to issue a ticket, so this shows from the first signup rather
+          than surfacing when week 1 is already lost. The link opens the
+          collapsed league-id section (the jump bar reveals it on hash). */}
+      {nextStep.ticketWarning ? (
+        <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
+          {nextStep.ticketWarning}{" "}
+          <a href="#adm-league" className={textLink()}>
+            Set the league id →
+          </a>
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function SeasonControls({
+  season,
+  data,
+  nextStep,
+}: {
+  season: Season;
+  data: AdminData;
+  nextStep: AdminNextStep;
+}) {
+  const configLocked = !draftSetupOpen(season.status, data.draft?.status);
+  const cap = capacityInfo(season, data.players.length);
+  const playoff = data.matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
+  const championPresentation = resolveChampionPresentation(
+    season,
+    data.matches,
+  );
   const hasPlayedResult = data.matches.some(
     (match) => match.status === MATCH_STATUS.COMPLETED,
   );
   const hasImportedGame = data.matches.some((match) => match.games.length > 0);
+  // seasonPhasePolicy is the only authority on what a phase button may do;
+  // this card only decides where each move is shown.
+  const moves = SEASON_PHASE_ORDER.filter((phase) => phase !== season.status).map(
+    (phase) => ({
+      phase,
+      state: seasonPhasePolicy({
+        current: season.status,
+        target: phase,
+        draftStatus: data.draft?.status,
+        matchCount: data.matches.length,
+        regularMatchCount: data.matches.filter(
+          (match) => match.phase === MATCH_PHASE.REGULAR,
+        ).length,
+        hasPlayedResult,
+        hasImportedGame,
+        postseasonMatchCount: playoff.length,
+        postseasonBracketReady: recoverablePostseasonBracket(playoff),
+        hasChampion: season.championTeamId != null,
+      }),
+    }),
+  );
+  const advance = phaseAdvance(season.status);
+  const advanceState = advance
+    ? moves.find((move) => move.phase === advance.target)?.state ?? null
+    : null;
+  const fixMoves = moves.filter((move) => move.phase !== advance?.target);
+  // Reopening signups before the auction is routine, not a repair. Any other
+  // move the policy allows means the page found a phase to put right, so the
+  // disclosure opens itself.
+  const reopenSignups = (phase: string) =>
+    season.status === SEASON_STATUS.DRAFT && phase === SEASON_STATUS.SIGNUPS;
+  const fixNeeded = fixMoves.some(
+    (move) => move.state.available && !reopenSignups(move.phase),
+  );
+  const currentIndex = SEASON_PHASE_ORDER.indexOf(season.status as SeasonStatus);
+  // The next step points here exactly when this button is the thing to do.
+  const advanceIsNextStep = nextStep.jump?.href === "#adm-season";
   // What /me and /schedule print as the match night once fixtures have times.
   const fixturesNight = fixturesMatchNightLabel(data.matches);
   return (
@@ -1067,335 +1626,412 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
       <CardHeader
         headingLevel={2}
         title={`${season.name} — phase control`}
-        subtitle="Advance one safe stage at a time. Data-changing transitions use the dedicated controls in their section."
+        subtitle="Move the league on one stage at a time. Stages that change other league data start from their own controls."
         action={<Badge tone="accent">{PHASE_LABEL[season.status]}</Badge>}
       />
       <CardBody className="space-y-5">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Players" value={data.players.length} />
-          <Stat
-            label="To start"
-            value={cap.minPlayers}
-            hint={cap.canDraft ? "reached" : `${cap.needed} more`}
-          />
+        {/* The signup counters only mean something while signups can still
+            change the draft; once it has run, the league is teams and
+            fixtures. */}
+        <div
+          className={cn(
+            "grid grid-cols-2 gap-3",
+            configLocked ? "" : "sm:grid-cols-4",
+          )}
+        >
+          {configLocked ? null : (
+            <>
+              <Stat label="Players" value={data.players.length} />
+              <Stat
+                label="To start"
+                value={cap.minPlayers}
+                hint={cap.canDraft ? "reached" : `${cap.needed} more`}
+              />
+            </>
+          )}
           <Stat label="Teams" value={data.teams.length} />
           <Stat label="Matches" value={data.matches.length} />
         </div>
 
-        <div className="flex flex-wrap items-start gap-3">
-          {SEASON_PHASE_ORDER.map((phase) => {
-            const state = seasonPhasePolicy({
-              current: season.status,
-              target: phase,
-              draftStatus: data.draft?.status,
-              matchCount: data.matches.length,
-              hasPlayedResult,
-              hasImportedGame,
-              postseasonMatchCount: playoff.length,
-              postseasonBracketReady: recoverablePostseasonBracket(playoff),
-              hasChampion: season.championTeamId != null,
-            });
-            const reasonId = `phase-${phase.toLowerCase()}-reason`;
-            return (
-              <div key={phase} className="max-w-52">
-                {state.available ? (
-                  <ActionForm
-                    action={setSeasonPhase}
-                    hidden={{ expectedActiveSeasonId: season.id }}
-                  >
-                    <input type="hidden" name="phase" value={phase} />
-                    <SubmitButton
-                      variant="secondary"
-                      size="sm"
-                      confirm={state.confirmation}
-                    >
-                      {state.recovery ? "Recover " : ""}
-                      {PHASE_LABEL[phase]}
-                    </SubmitButton>
-                  </ActionForm>
-                ) : (
-                  <span title={state.reason}>
-                    <Button
-                      type="button"
-                      variant={
-                        season.status === phase ? "primary" : "secondary"
-                      }
-                      size="sm"
-                      disabled
-                      aria-describedby={reasonId}
-                    >
-                      {PHASE_LABEL[phase]}
-                    </Button>
-                  </span>
+        {/* Read-only: where the league is. Moving it is the one button below. */}
+        <ol
+          aria-label="Season phases"
+          className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-xs"
+        >
+          {SEASON_PHASE_ORDER.map((phase, index) => (
+            <li
+              key={phase}
+              aria-current={phase === season.status ? "step" : undefined}
+              className="flex items-center gap-1.5"
+            >
+              {index > 0 ? (
+                <span aria-hidden="true" className="text-muted">
+                  →
+                </span>
+              ) : null}
+              <span
+                className={cn(
+                  "rounded-full border px-2.5 py-1",
+                  phase === season.status
+                    ? "border-accent/60 bg-accent/15 font-semibold text-fg"
+                    : index < currentIndex
+                      ? "border-line text-muted"
+                      : "border-dashed border-line text-muted",
                 )}
-                {!state.available ? (
-                  <span
-                    id={reasonId}
-                    className="mt-1 block text-[11px] leading-snug text-muted"
-                  >
-                    {state.reason}
-                  </span>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-        <p className="text-xs text-muted">
-          These buttons never start or abort an auction, seed or remove a
-          playoff bracket, or crown a champion. Use Start draft, Abort draft,
-          Start playoffs, Return to regular season, and the result controls for
-          those operations so related league data changes together.
-        </p>
-        {season.status === SEASON_STATUS.COMPLETE &&
-        championPresentation.championTeamId ? (
+              >
+                {PHASE_LABEL[phase]}
+                <span className="sr-only">
+                  {phase === season.status
+                    ? " (current)"
+                    : index < currentIndex
+                      ? " (done)"
+                      : ""}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ol>
+
+        <div className="space-y-1.5">
+          {advance && advanceState ? (
+            advanceState.available ? (
+              <ActionForm
+                action={setSeasonPhase}
+                hidden={{ expectedActiveSeasonId: season.id }}
+              >
+                <input type="hidden" name="phase" value={advance.target} />
+                <SubmitButton
+                  variant={advanceIsNextStep ? "primary" : "secondary"}
+                  confirm={advanceState.confirmation}
+                >
+                  {advance.label}
+                </SubmitButton>
+              </ActionForm>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled
+                  aria-describedby="phase-advance-reason"
+                >
+                  {advance.label}
+                </Button>
+                <p id="phase-advance-reason" className="text-xs text-muted">
+                  {advanceState.reason}
+                </p>
+              </>
+            )
+          ) : null}
           <p className="text-xs text-muted">
-            A crowned season is locked against generic phase reversal. Correct
-            the grand final in Schedule &amp; results, reset the bracket, or use
-            Return to regular season in the Playoffs card; each recovery clears
-            the champion and affected postseason state atomically.
+            {advance
+              ? advance.hint
+              : season.status === SEASON_STATUS.REGULAR_SEASON
+                ? "The playoffs start from Start playoffs in the Playoffs card, which seeds the bracket and moves the season into Playoffs in one step."
+                : season.status === SEASON_STATUS.PLAYOFFS
+                  ? "Complete is set automatically when the grand final crowns a champion."
+                  : "The season is finished. The next one opens from Season handoff."}
           </p>
-        ) : season.status === SEASON_STATUS.COMPLETE &&
-          season.championTeamId ? (
-          <p className="text-xs text-danger">
-            The stored champion does not agree with one authoritative completed
-            grand final. Generic phase reversal remains locked; use the targeted
-            final correction when that team is a finalist, or the dedicated
-            playoff recovery controls below.
-          </p>
-        ) : season.status === SEASON_STATUS.PLAYOFFS ? (
-          <p className="text-xs text-muted">
-            Complete is automatic when the grand final crowns a champion. To
-            edit regular-season results, use Return to regular season below so
-            stale seeds cannot survive the phase change.
-          </p>
-        ) : null}
-        {/* THE ROADMAP. Several league transitions are silent and fail quietly
-            — the auction finishing does NOT advance the phase, a schedule with
-            no kickoff times disables auto-sync/reminders/pick'em locks for the
-            season, nothing prompts "start the playoffs" or "record the final",
-            and COMPLETE used to be a dead end whose only exit was inside a
-            collapsed section at the bottom of the page. This banner is the
-            page's answer to "what do I do next?" in EVERY phase; the logic is
-            pure and tested in src/lib/admin-next-step.ts. */}
-        <div
-          className={cn(
-            "rounded-lg border px-3 py-2 text-sm",
-            nextStep.tone === "action"
-              ? "border-accent/30 bg-accent/10 text-fg"
-              : nextStep.tone === "warning"
-                ? "border-danger/40 bg-danger/10 text-fg"
-                : nextStep.tone === "done"
-                  ? "border-success/40 bg-success/10 text-fg"
-                  : "border-line bg-surface-2/40 text-muted",
-          )}
-        >
-          <b className="text-fg">{nextStep.title}</b>
-          {nextStep.detail ? <> {nextStep.detail}</> : null}
         </div>
-        {/* A standing condition, not this phase's step: Valve needs about 15
-            days to issue a ticket, so this shows from the first signup rather
-            than surfacing when week 1 is already lost. The link opens the
-            collapsed league-id section (the jump bar reveals it on hash). */}
-        {nextStep.ticketWarning ? (
-          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
-            {nextStep.ticketWarning}{" "}
-            <a href="#adm-league" className={textLink()}>
-              Set the league id →
-            </a>
-          </p>
-        ) : null}
-        <ActionForm
-          action={renameSeason}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+
+        <details
+          open={fixNeeded}
+          className="rounded-lg border border-line px-3 py-1 text-sm"
         >
-          <label htmlFor="seasonName" className="text-muted">
-            Season name
-          </label>
-          <input
-            id="seasonName"
-            name="name"
-            type="text"
-            maxLength={60}
-            defaultValue={season.name}
-            className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save name
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            the big title on the home page
-          </span>
-        </ActionForm>
-        <ActionForm
-          action={setMaxMmr}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+          <summary className="flex min-h-11 cursor-pointer items-center font-medium">
+            Fix the phase
+          </summary>
+          <div className="space-y-3 pb-3">
+            <p className="text-xs text-muted">
+              Only for putting the league back in the right phase after a
+              mistake. These buttons never start or abort an auction, seed or
+              remove a playoff bracket, or crown a champion. Use Start draft,
+              Abort draft, Start playoffs, Return to regular season and the
+              result controls for those, so related league data changes
+              together.
+            </p>
+            <div className="flex flex-wrap items-start gap-3">
+              {fixMoves.map(({ phase, state }) => {
+                const reasonId = `phase-${phase.toLowerCase()}-reason`;
+                const label = reopenSignups(phase)
+                  ? "Reopen signups"
+                  : `${state.recovery ? "Recover " : ""}${PHASE_LABEL[phase]}`;
+                return (
+                  <div key={phase} className="max-w-52">
+                    {state.available ? (
+                      <ActionForm
+                        action={setSeasonPhase}
+                        hidden={{ expectedActiveSeasonId: season.id }}
+                      >
+                        <input type="hidden" name="phase" value={phase} />
+                        <SubmitButton
+                          variant="secondary"
+                          size="sm"
+                          confirm={state.confirmation}
+                        >
+                          {label}
+                        </SubmitButton>
+                      </ActionForm>
+                    ) : (
+                      <>
+                        <span title={state.reason}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled
+                            aria-describedby={reasonId}
+                          >
+                            {label}
+                          </Button>
+                        </span>
+                        <span
+                          id={reasonId}
+                          className="mt-1 block text-[11px] leading-snug text-muted"
+                        >
+                          {state.reason}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {season.status === SEASON_STATUS.COMPLETE &&
+            championPresentation.championTeamId ? (
+              <p className="text-xs text-muted">
+                A crowned season is locked against generic phase reversal.
+                Correct the grand final, or use Reset playoffs or Return to
+                regular season under &ldquo;Fix the bracket&rdquo;, all in the
+                Playoffs card; each recovery clears the champion and affected
+                postseason state atomically.
+              </p>
+            ) : season.status === SEASON_STATUS.COMPLETE &&
+              season.championTeamId ? (
+              <p className="text-xs text-danger">
+                The stored champion does not agree with one authoritative
+                completed grand final. Generic phase reversal remains locked;
+                use the targeted final correction when that team is a finalist,
+                or &ldquo;Fix the bracket&rdquo; in the Playoffs card.
+              </p>
+            ) : season.status === SEASON_STATUS.PLAYOFFS ? (
+              <p className="text-xs text-muted">
+                To edit regular-season results, use Return to regular season
+                under &ldquo;Fix the bracket&rdquo; in the Playoffs card so
+                stale seeds cannot survive the phase change.
+              </p>
+            ) : null}
+          </div>
+        </details>
+        {/* Set once at the start and rarely touched after (the US log shows
+            none of these used past setup), so they fold away instead of
+            standing between the phase controls and the rest of the page. */}
+        <details
+          id="adm-season-settings"
+          className="rounded-lg border border-line px-3 py-1 text-sm"
         >
-          <label htmlFor="seasonMaxMmr" className="text-muted">
-            Soft MMR limit
-          </label>
-          <input
-            id="seasonMaxMmr"
-            name="maxMmr"
-            type="number"
-            min={0}
-            max={HARD_MMR_CEILING}
-            defaultValue={season.maxMmr}
-            className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save limit
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            {season.maxMmr > 0
-              ? `soft limit — signups over ${season.maxMmr} MMR still join the pool; review them here before the draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
-              : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
-          </span>
-        </ActionForm>
-        {/* Editable until the auction starts. These used to be write-once at
-            Create season, so changing your mind about team size or budget meant
-            creating a NEW season and orphaning every signup so far. */}
-        <ActionForm
-          action={setDraftSettings}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-end gap-2 border-t border-line pt-3 text-sm"
-        >
-          <Field label="Team size" htmlFor="cfgTeamSize">
-            <input
-              id="cfgTeamSize"
-              name="teamSize"
-              type="number"
-              min={2}
-              max={10}
-              defaultValue={season.teamSize}
-              className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <Field label="Min teams" htmlFor="cfgMinTeams">
-            <input
-              id="cfgMinTeams"
-              name="minTeams"
-              type="number"
-              min={2}
-              max={32}
-              defaultValue={season.minTeams}
-              className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <Field label="Draft budget ($)" htmlFor="cfgBudget">
-            <input
-              id="cfgBudget"
-              name="draftBudget"
-              type="number"
-              min={10}
-              defaultValue={season.draftBudget}
-              className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <Field label="Budget MMR weight %" htmlFor="cfgWeight">
-            <input
-              id="cfgWeight"
-              name="budgetMmrWeight"
-              type="number"
-              min={0}
-              max={50}
-              defaultValue={season.budgetMmrWeight}
-              className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-            />
-          </Field>
-          <SubmitButton variant="secondary" size="sm" disabled={configLocked}>
-            Save draft settings
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            {configLocked
-              ? draftSetupLockedMessage(season.status, data.draft?.status)
-              : "applied when the draft starts"}
-          </span>
-        </ActionForm>
-        <ActionForm
-          action={setMatchSchedule}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
-        >
-          <label htmlFor="matchSchedule" className="text-muted">
-            Match night
-          </label>
-          <input
-            id="matchSchedule"
-            name="matchSchedule"
-            type="text"
-            maxLength={80}
-            defaultValue={season.matchSchedule ?? ""}
-            placeholder={MATCH_SCHEDULE.label}
-            className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save schedule
-          </SubmitButton>
-          <span className="text-xs text-muted">
-            {/* Once fixtures have kickoffs, pages print the night most of
-                them use (a single moved week doesn't change it). */}
-            {fixturesNight
-              ? `players now see the night most fixtures use: ${fixturesNight}`
-              : `shown before signup${season.matchSchedule ? "" : " · using default"}`}
-          </span>
-        </ActionForm>
-        <ActionForm
-          action={setSeriesLengths}
-          hidden={{
-            expectedActiveSeasonId: season.id,
-            expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-          }}
-          className="flex flex-wrap items-end gap-3 border-t border-line pt-3 text-sm"
-        >
-          <SeriesField
-            label="Regular season"
-            name="regularBestOf"
-            value={season.regularBestOf}
-            options={[1, 2, 3]}
-          />
-          <SeriesField
-            label="Playoffs"
-            name="playoffBestOf"
-            value={season.playoffBestOf}
-            options={[1, 3, 5, 7]}
-          />
-          <SeriesField
-            label="Grand final"
-            name="finalBestOf"
-            value={season.finalBestOf}
-            options={[1, 3, 5, 7]}
-          />
-          <SubmitButton variant="secondary" size="sm">
-            Save series lengths
-          </SubmitButton>
-          {/* These are copied onto each Match row when it is CREATED, so they
-              are read-once per phase, not live. Saving after the fact still
-              writes the Season and re-renders with the new value — a perfect
-              false confirmation — while every existing fixture keeps its old
-              length. Say which ones are already locked in rather than letting
-              an admin "fix" a Bo1 into a Bo3 that never happens. */}
-          <span className="text-xs text-muted">
-            games per match — copied onto each fixture when it is created, so
-            these only affect matches made from now on.
-            {data.matches.some((m) => m.phase === "REGULAR")
-              ? " The regular-season schedule already exists: change its length per match, or regenerate."
-              : ""}
-          </span>
-        </ActionForm>
+          <summary className="flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2 font-medium">
+            Season settings
+            <span className="text-xs font-normal text-muted">
+              name, soft MMR limit, draft settings, match night, series
+              lengths
+            </span>
+          </summary>
+          <div className="space-y-3 pb-3">
+            <ActionForm
+              action={renameSeason}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+            >
+              <label htmlFor="seasonName" className="text-muted">
+                Season name
+              </label>
+              <input
+                id="seasonName"
+                name="name"
+                type="text"
+                maxLength={60}
+                defaultValue={season.name}
+                className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save name
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                the big title on the home page
+              </span>
+            </ActionForm>
+            <ActionForm
+              action={setMaxMmr}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+            >
+              <label htmlFor="seasonMaxMmr" className="text-muted">
+                Soft MMR limit
+              </label>
+              <input
+                id="seasonMaxMmr"
+                name="maxMmr"
+                type="number"
+                min={0}
+                max={HARD_MMR_CEILING}
+                defaultValue={season.maxMmr}
+                className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save limit
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                {season.maxMmr > 0
+                  ? `soft limit: signups over ${season.maxMmr} MMR still join the pool, flagged “over soft limit” under Needs review on Captains & draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
+                  : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
+              </span>
+            </ActionForm>
+            {/* Editable until the auction starts. These used to be write-once at
+                Create season, so changing your mind about team size or budget meant
+                creating a NEW season and orphaning every signup so far. */}
+            <ActionForm
+              action={setDraftSettings}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-end gap-2 border-t border-line pt-3 text-sm"
+            >
+              <Field label="Team size" htmlFor="cfgTeamSize">
+                <input
+                  id="cfgTeamSize"
+                  name="teamSize"
+                  type="number"
+                  min={2}
+                  max={10}
+                  defaultValue={season.teamSize}
+                  className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Min teams" htmlFor="cfgMinTeams">
+                <input
+                  id="cfgMinTeams"
+                  name="minTeams"
+                  type="number"
+                  min={2}
+                  max={32}
+                  defaultValue={season.minTeams}
+                  className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Draft budget ($)" htmlFor="cfgBudget">
+                <input
+                  id="cfgBudget"
+                  name="draftBudget"
+                  type="number"
+                  min={10}
+                  defaultValue={season.draftBudget}
+                  className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Budget MMR weight %" htmlFor="cfgWeight">
+                <input
+                  id="cfgWeight"
+                  name="budgetMmrWeight"
+                  type="number"
+                  min={0}
+                  max={50}
+                  defaultValue={season.budgetMmrWeight}
+                  className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <SubmitButton variant="secondary" size="sm" disabled={configLocked}>
+                Save draft settings
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                {configLocked
+                  ? draftSetupLockedMessage(season.status, data.draft?.status)
+                  : "applied when the draft starts"}
+              </span>
+            </ActionForm>
+            <ActionForm
+              action={setMatchSchedule}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"
+            >
+              <label htmlFor="matchSchedule" className="text-muted">
+                Match night
+              </label>
+              <input
+                id="matchSchedule"
+                name="matchSchedule"
+                type="text"
+                maxLength={80}
+                defaultValue={season.matchSchedule ?? ""}
+                placeholder={MATCH_SCHEDULE.label}
+                className="h-9 w-80 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save schedule
+              </SubmitButton>
+              <span className="text-xs text-muted">
+                {/* Once fixtures have kickoffs, pages print the night most of
+                    them use (a single moved week doesn't change it). */}
+                {fixturesNight
+                  ? `players now see the night most fixtures use: ${fixturesNight}`
+                  : `shown before signup${season.matchSchedule ? "" : " · using default"}`}
+              </span>
+            </ActionForm>
+            <ActionForm
+              action={setSeriesLengths}
+              hidden={{
+                expectedActiveSeasonId: season.id,
+                expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+              }}
+              className="flex flex-wrap items-end gap-3 border-t border-line pt-3 text-sm"
+            >
+              <SeriesField
+                label="Regular season"
+                name="regularBestOf"
+                value={season.regularBestOf}
+                options={[1, 2, 3]}
+              />
+              <SeriesField
+                label="Playoffs"
+                name="playoffBestOf"
+                value={season.playoffBestOf}
+                options={[1, 3, 5, 7]}
+              />
+              <SeriesField
+                label="Grand final"
+                name="finalBestOf"
+                value={season.finalBestOf}
+                options={[1, 3, 5, 7]}
+              />
+              <SubmitButton variant="secondary" size="sm">
+                Save series lengths
+              </SubmitButton>
+              {/* These are copied onto each Match row when it is CREATED, so they
+                  are read-once per phase, not live. Saving after the fact still
+                  writes the Season and re-renders with the new value — a perfect
+                  false confirmation — while every existing fixture keeps its old
+                  length. Say which ones are already locked in rather than letting
+                  an admin "fix" a Bo1 into a Bo3 that never happens. */}
+              <span className="text-xs text-muted">
+                games per match — copied onto each fixture when it is created, so
+                these only affect matches made from now on.
+                {data.matches.some((m) => m.phase === "REGULAR")
+                  ? " The regular-season schedule already exists: change its length per match, or regenerate."
+                  : ""}
+              </span>
+            </ActionForm>
+          </div>
+        </details>
       </CardBody>
     </Card>
   );
@@ -1459,6 +2095,9 @@ function CaptainControls({
   const confirmationCounts = draftReadinessCounts(
     data.players,
     season.draftRevision,
+  );
+  const readyConfirmation = data.players.filter(
+    (p) => draftReadiness(p, season.draftRevision) === DRAFT_READINESS.READY,
   );
   const awaitingConfirmation = data.players.filter(
     (p) => draftReadiness(p, season.draftRevision) === DRAFT_READINESS.AWAITING,
@@ -1528,7 +2167,6 @@ function CaptainControls({
     boughtCount,
   });
   const rosterAlreadyBuilt = boughtCount > 0;
-  const openSeats = seats.openSeats;
   const startConfirm = startDraftConfirm({
     captainCount,
     minTeams: season.minTeams,
@@ -1562,36 +2200,21 @@ function CaptainControls({
         }
         action={
           /* flex-wrap like every other row in this file: this header holds up to
-             six controls (sync ranks/avatars, randomize, start, pause/resume,
-             undo, abort) and without wrapping they pushed /admin past a phone —
-             caught by the mobile tripwire on CI, whose fonts are a few px wider
-             than macOS's, so it read as a 7px page scroll. */
+             six controls (refresh player data, randomize, start,
+             pause/resume, undo, abort) and without wrapping they pushed /admin
+             past a phone — caught by the mobile tripwire on CI, whose fonts
+             are a few px wider than macOS's, so it read as a 7px page scroll. */
           <div className="flex flex-wrap justify-end gap-2">
-            {/* Off while the auction is live or paused: both rewrite the
-                medals, names and avatars captains are reading in the room. */}
+            {/* Off while the auction is live or paused: it rewrites the
+                medals, names and avatars captains are reading in the room.
+                The automation worker refreshes the same data hourly; this is
+                for right before a draft. */}
             {profileSyncAllowed(data.draft?.status) ? (
-              <>
-                <ActionForm action={syncPlayerRanks}>
-                  {/* Pulls medals AND the pub-scouting snapshots the player
-                      pool renders (recent W/L, games, last-played) — one
-                      button, one OpenDota pass. */}
-                  <SubmitButton variant="secondary" size="sm">
-                    Sync ranks &amp; stats
-                  </SubmitButton>
-                </ActionForm>
-                <ActionForm action={syncSteamProfiles}>
-                  <SubmitButton
-                    variant="secondary"
-                    size="sm"
-                    /* It refreshes the Steam persona too, not just the
-                       picture — a rename shows up across the whole site after
-                       this. */
-                    confirm="Refresh every player's Steam name and avatar?"
-                  >
-                    Sync names &amp; avatars
-                  </SubmitButton>
-                </ActionForm>
-              </>
+              <ActionForm action={refreshPlayerData}>
+                <SubmitButton variant="secondary" size="sm">
+                  Refresh player data now
+                </SubmitButton>
+              </ActionForm>
             ) : null}
             {setupOpen ? (
               <>
@@ -1771,14 +2394,22 @@ function CaptainControls({
           (setupOpen || nonCaptains.length > 0) && "md:grid-cols-2",
         )}
       >
+        {/* ONE pre-draft box, the only place the card describes roster fit,
+            draft night and confirmations. There used to be three: this list,
+            a loose "N undrafted players for N roster seats" line computed a
+            different way (it counted already-rostered players), and a
+            confirmations box with a wall of every unconfirmed name, plus a
+            readiness chip on every row. They could disagree with each other,
+            and the pool sentence here is the same one the Start-draft confirm
+            prints (seatFitSentence). */}
         {setupOpen ? (
           <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 md:col-span-2">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
+              <div className="min-w-0">
                 <h3 className="text-sm font-medium text-fg">Draft preflight</h3>
                 <p className="mt-0.5 text-xs text-muted">
-                  Required items block Start; schedule, target size, seat fit
-                  and confirmations are explicit operator warnings.
+                  Captains, the pool and an existing roster can block Start.
+                  Everything else here is a warning.
                 </p>
               </div>
               <Badge tone={canStart ? "success" : "accent"}>
@@ -1789,46 +2420,126 @@ function CaptainControls({
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
                 <b className="text-fg">Captains:</b> {captainCount} designated
                 {captainCount < 2
-                  ? " — at least 2 are required"
+                  ? ", at least 2 are required"
                   : captainCount < season.minTeams
-                    ? ` — below the ${season.minTeams}-team target (allowed with confirmation)`
-                    : ` — ${season.minTeams}-team target met`}
+                    ? `, below the ${season.minTeams}-team target (allowed)`
+                    : `, ${season.minTeams}-team target met`}
+                {season.budgetMmrWeight > 0 && captainCount >= 2
+                  ? `. Budgets are MMR-weighted (±${season.budgetMmrWeight}%), so lower-MMR captains get more to spend.`
+                  : null}
               </li>
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
-                <b className="text-fg">Player pool:</b> {poolCount} draftable
-                for {openSeats} open seats
+                <b className="text-fg">Player pool:</b>{" "}
                 {poolCount === 0
-                  ? " — at least 1 is required"
-                  : seats.shortfall > 0
-                    ? ` — ${seats.shortfall} will stay unfilled`
-                    : seats.overflow > 0
-                      ? ` — ${seats.overflow} will remain free agents`
-                      : " — exact fit"}
+                  ? "no undrafted players yet, at least 1 is required"
+                  : captainCount < 2
+                    ? `${poolCount} draftable so far; the seat fit shows once there are 2 captains`
+                    : seatFitSentence(seats, season.teamSize)}
               </li>
-              <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
-                <b className="text-fg">Draft night:</b>{" "}
-                {season.draftAt
-                  ? "scheduled — players can review and confirm it"
-                  : "not scheduled — allowed, but players cannot confirm a time"}
+              <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
+                <ActionForm
+                  action={setDraftNight}
+                  hidden={{ expectedActiveSeasonId: season.id }}
+                  className="flex flex-wrap items-end gap-2"
+                >
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <label htmlFor="draftAt" className="text-xs text-muted">
+                      <b className="text-fg">Draft night</b> (optional):
+                      shown with countdowns on the dashboard, /me and the draft
+                      room, and announced to Discord
+                    </label>
+                    <LocalDatetimeField
+                      id="draftAt"
+                      name="draftAt"
+                      tsName="draftAtTs"
+                      defaultTs={season.draftAt?.getTime()}
+                      timeZone={LEAGUE_CONFIG.timeZone}
+                      className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+                    />
+                  </div>
+                  <SubmitButton variant="secondary" size="sm">
+                    {season.draftAt ? "Update draft night" : "Set draft night"}
+                  </SubmitButton>
+                  {/* League time, like the box beside it: the admin's own
+                      clock is what hid a mis-entered night before. */}
+                  {season.draftAt ? (
+                    <span className="text-xs text-muted">
+                      Currently {formatLeagueTime(season.draftAt)}
+                    </span>
+                  ) : null}
+                </ActionForm>
               </li>
-              <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
-                <b className="text-fg">Commitments:</b>{" "}
-                {season.draftAt
-                  ? `${confirmationCounts.ready}/${confirmationCounts.total} ready · ${confirmationCounts.awaiting} awaiting${confirmationCounts.stale ? ` · ${confirmationCounts.stale} need reconfirmation` : ""}`
-                  : "available after a draft night is scheduled"}
-                {" — advisory"}
+              <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <b className="text-fg">Confirmations:</b>
+                  {season.draftAt ? (
+                    <>
+                      <Badge
+                        tone={
+                          confirmationCounts.ready === confirmationCounts.total &&
+                          confirmationCounts.total > 0
+                            ? "success"
+                            : "accent"
+                        }
+                      >
+                        {confirmationCounts.ready}/{confirmationCounts.total} ready
+                      </Badge>
+                      <span>
+                        {confirmationCounts.awaiting} awaiting
+                        {confirmationCounts.stale
+                          ? `, ${confirmationCounts.stale} must reconfirm`
+                          : ""}
+                        . A warning only; the draft can start without them.
+                      </span>
+                    </>
+                  ) : (
+                    <span>none yet. Players are asked to confirm once a draft night is set.</span>
+                  )}
+                </div>
+                {season.draftAt && confirmationCounts.total > 0 ? (
+                  <details id="adm-draft-confirmations" className="mt-1.5">
+                    <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                      Show who
+                    </summary>
+                    <div className="mt-1.5 space-y-1">
+                      {(
+                        [
+                          ["Ready", readyConfirmation, "text-success"],
+                          ["Waiting on", awaitingConfirmation, "text-fg"],
+                          ["Must reconfirm", staleConfirmation, "text-accent"],
+                        ] as const
+                      ).map(([label, regs, tone]) =>
+                        regs.length > 0 ? (
+                          <div key={label} className="min-w-0 break-words">
+                            <span className={cn("font-medium", tone)}>
+                              {label} ({regs.length}):
+                            </span>{" "}
+                            <ul aria-label={label} className="inline">
+                              {regs.map((p, i) => (
+                                <li key={p.id} className="inline">
+                                  {p.user.name}
+                                  {i < regs.length - 1 ? ", " : ""}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null,
+                      )}
+                    </div>
+                  </details>
+                ) : null}
               </li>
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
                 <b className="text-fg">Existing roster:</b>{" "}
                 {rosterAlreadyBuilt
-                  ? `${boughtCount} non-captain member${boughtCount === 1 ? " is" : "s are"} already assigned — Start is blocked to protect later-season roster data`
-                  : "captain-only teams — ready for a fresh auction"}
+                  ? `${boughtCount} non-captain member${boughtCount === 1 ? " is" : "s are"} already assigned, so Start is blocked to protect later-season roster data`
+                  : "captain-only teams, ready for a fresh auction"}
               </li>
               {/* Beside draft night on purpose: that is when week 1 gets its
                   date, and the ticket has to be applied for ~15 days before. */}
               {!season.dotaLeagueId ? (
                 <li className="rounded-md border border-danger/40 px-3 py-2 text-muted sm:col-span-2">
-                  <b className="text-fg">League ticket:</b> not set — Valve
+                  <b className="text-fg">League ticket:</b> not set. Valve
                   needs about 15 days to issue one; without it, league games
                   may not reach OpenDota.{" "}
                   <a href="#adm-league" className={textLink()}>
@@ -1843,95 +2554,6 @@ function CaptainControls({
               </p>
             ) : null}
           </div>
-        ) : null}
-        {setupOpen ? (
-          <ActionForm
-            action={setDraftNight}
-            hidden={{ expectedActiveSeasonId: season.id }}
-            className="flex flex-wrap items-end gap-2 md:col-span-2"
-          >
-            <div className="flex flex-col gap-1">
-              <label htmlFor="draftAt" className="text-xs text-muted">
-                Draft night — shown with countdowns on the dashboard, /me and
-                the draft room; announced to Discord
-              </label>
-              <LocalDatetimeField
-                id="draftAt"
-                name="draftAt"
-                tsName="draftAtTs"
-                defaultTs={season.draftAt?.getTime()}
-                timeZone={LEAGUE_CONFIG.timeZone}
-                className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-              />
-            </div>
-            <SubmitButton variant="secondary" size="sm">
-              {season.draftAt ? "Update draft night" : "Set draft night"}
-            </SubmitButton>
-            {/* League time, like the box beside it — the admin's own clock
-                is what hid a mis-entered night before. */}
-            {season.draftAt ? (
-              <span className="text-xs text-muted">
-                Currently {formatLeagueTime(season.draftAt)}
-              </span>
-            ) : null}
-          </ActionForm>
-        ) : null}
-        {season.draftAt && setupOpen ? (
-          <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 md:col-span-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-medium text-fg">
-                  Draft confirmations
-                </h3>
-                <p className="mt-0.5 text-xs text-muted">
-                  Player acknowledgements are advisory—the draft can still be
-                  started if someone has not responded.
-                </p>
-              </div>
-              <Badge
-                tone={
-                  confirmationCounts.ready === confirmationCounts.total &&
-                  confirmationCounts.total > 0
-                    ? "success"
-                    : "accent"
-                }
-              >
-                {confirmationCounts.ready}/{confirmationCounts.total} ready
-              </Badge>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2 text-xs">
-              <Badge tone="success">{confirmationCounts.ready} ready</Badge>
-              <Badge>{confirmationCounts.awaiting} awaiting</Badge>
-              {confirmationCounts.stale > 0 ? (
-                <Badge tone="accent">
-                  {confirmationCounts.stale} need reconfirmation
-                </Badge>
-              ) : null}
-            </div>
-            {awaitingConfirmation.length > 0 ? (
-              <p className="mt-2 text-xs text-muted">
-                <span className="font-medium text-fg">Waiting on:</span>{" "}
-                {awaitingConfirmation.map((p) => p.user.name).join(", ")}
-              </p>
-            ) : null}
-            {staleConfirmation.length > 0 ? (
-              <p className="mt-1 text-xs text-muted">
-                <span className="font-medium text-accent">Must reconfirm:</span>{" "}
-                {staleConfirmation.map((p) => p.user.name).join(", ")}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        {setupOpen && data.teams.length >= 2 ? (
-          <p className="text-xs text-muted md:col-span-2">
-            {(() => {
-              const seats = data.teams.length * (season.teamSize - 1);
-              const pool = nonCaptains.length;
-              return pool >= seats
-                ? `${pool} undrafted players for ${seats} roster seats — the pool covers every team.`
-                : `⚠️ Only ${pool} undrafted players for ${seats} roster seats — ${seats - pool} seat(s) will go unfilled (standins can cover match nights).`;
-            })()}
-          </p>
         ) : null}
         <div>
           <h3 className="mb-2 text-sm font-medium text-muted">
@@ -1966,8 +2588,11 @@ function CaptainControls({
                     key={t.id}
                     className="rounded-lg border border-line px-3 py-2 text-sm"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="flex min-w-0 items-center gap-2">
+                    {/* Wraps on a phone: the name keeps a real width
+                        (basis-48) and the budget + remove drop to their own
+                        line, instead of squeezing the team name to 0px. */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
                         <span className="w-5 shrink-0 text-center text-xs text-muted">
                           {t.draftOrder + 1}
                         </span>
@@ -1986,10 +2611,12 @@ function CaptainControls({
                         />
                         <Link
                           href={`/teams/${t.id}`}
-                          className="min-w-0 truncate hover:text-info hover:underline"
+                          className="min-w-12 truncate hover:text-info hover:underline"
                         >
                           {t.name}
                         </Link>
+                      </span>
+                      <span className="ml-auto flex shrink-0 items-center gap-2">
                         <Badge tone="accent" className="shrink-0">
                           $
                           {setupOpen
@@ -1997,58 +2624,63 @@ function CaptainControls({
                             : t.budget}
                           {setupOpen ? " projected" : null}
                         </Badge>
-                      </span>
-                      {setupOpen ? (
-                        <ActionForm
-                          action={removeCaptain}
-                          hidden={{
-                            teamId: t.id,
-                            expectedActiveSeasonId: season.id,
-                          }}
-                        >
-                          {/* This deletes the team AND, if any fixture exists,
-                              every match in the SEASON — taking all check-ins,
-                              pick'em picks, standin bookings and open proposals
-                              with it by cascade. It is the twin of Regenerate
-                              schedule and needs the same barrier; it was a bare
-                              `remove` link 12px from "✎ Rename team". */}
-                          <DangerSubmit
-                            token={t.name}
-                            className="shrink-0"
-                            title={`Remove ${t.captain.name} as captain and delete ${t.name}?`}
-                            consequences={[
-                              `${t.name} and its ${t.members.length} roster place(s) are deleted.`,
-                              ...(regularCount > 0
-                                ? [
-                                    `All ${regularCount} fixture(s) in the season are cleared — not just this team's — because the round robin no longer fits.`,
-                                  ]
-                                : []),
-                              ...(regularCount > 0 && collateral.rsvps
-                                ? [
-                                    `${collateral.rsvps} check-in(s) go with them.`,
-                                  ]
-                                : []),
-                              ...(regularCount > 0 && collateral.picks
-                                ? [
-                                    `${collateral.picks} pick'em pick(s) go with them.`,
-                                  ]
-                                : []),
-                              ...(regularCount > 0 && collateral.covers
-                                ? [
-                                    `${collateral.covers} standin booking(s) go with them.`,
-                                  ]
-                                : []),
-                            ]}
-                            recovery={
-                              regularCount > 0
-                                ? "Regenerate the schedule once the captains are final. The check-ins, picks and bookings cannot be restored."
-                                : "No schedule exists yet, so nothing else is affected."
-                            }
+                        {setupOpen ? (
+                          <ActionForm
+                            action={removeCaptain}
+                            hidden={{
+                              teamId: t.id,
+                              expectedActiveSeasonId: season.id,
+                            }}
                           >
-                            remove
-                          </DangerSubmit>
-                        </ActionForm>
-                      ) : null}
+                            {/* Once any fixture exists this deletes the team AND
+                                every match in the SEASON — taking all check-ins,
+                                pick'em picks, standin bookings and open proposals
+                                with it by cascade. It is the twin of Regenerate
+                                schedule and needs the same barrier; it was a bare
+                                `remove` link 12px from "✎ Rename team". With no
+                                schedule only the team goes, which a plain confirm
+                                covers (and Change captain keeps the team). */}
+                            {regularCount === 0 ? (
+                              <SubmitButton
+                                variant="ghost"
+                                size="sm"
+                                className="shrink-0 text-danger-soft hover:underline"
+                                confirm={`Remove ${t.captain.name} as captain and delete ${t.name}? Its name and logo go with it. To keep the team and hand it to someone else, use Change captain instead.`}
+                              >
+                                remove
+                              </SubmitButton>
+                            ) : (
+                            <DangerSubmit
+                              token={t.name}
+                              className="shrink-0"
+                              title={`Remove ${t.captain.name} as captain and delete ${t.name}?`}
+                              consequences={[
+                                `${t.name} and its ${t.members.length} roster place(s) are deleted.`,
+                                `All ${regularCount} fixture(s) in the season are cleared — not just this team's — because the round robin no longer fits.`,
+                                ...(collateral.rsvps
+                                  ? [
+                                      `${collateral.rsvps} check-in(s) go with them.`,
+                                    ]
+                                  : []),
+                                ...(collateral.picks
+                                  ? [
+                                      `${collateral.picks} pick'em pick(s) go with them.`,
+                                    ]
+                                  : []),
+                                ...(collateral.covers
+                                  ? [
+                                      `${collateral.covers} standin booking(s) go with them.`,
+                                    ]
+                                  : []),
+                              ]}
+                              recovery="Regenerate the schedule once the captains are final. The check-ins, picks and bookings cannot be restored."
+                            >
+                              remove
+                            </DangerSubmit>
+                            )}
+                          </ActionForm>
+                        ) : null}
+                      </span>
                     </div>
                     {unverifiedMmrByTeam.has(t.id) ? (
                       /* Its own line, not beside the budget badge: that row
@@ -2062,14 +2694,6 @@ function CaptainControls({
                           {unverifiedMmrByTeam.get(t.id)!.reason}
                         </span>
                       </p>
-                    ) : null}
-                    {captainReg.get(t.captainId) && setupOpen ? (
-                      <div className="mt-1.5">
-                        <DraftReadinessBadge
-                          reg={captainReg.get(t.captainId)!}
-                          season={season}
-                        />
-                      </div>
                     ) : null}
                     {season.status !== SEASON_STATUS.COMPLETE ? (
                       <details className="mt-1.5">
@@ -2087,6 +2711,54 @@ function CaptainControls({
                             note="Captains can also change this themselves on their team page."
                           />
                         </div>
+                      </details>
+                    ) : null}
+                    {/* Before the draft a team is its captain alone, so handing it
+                        to another signup keeps the team row: name, logo and
+                        draft-order slot. The outgoing captain goes back to the
+                        pool. Nothing is deleted, so a plain confirm. */}
+                    {setupOpen && nonCaptains.length > 0 ? (
+                      <details className="mt-1.5">
+                        <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                          ⇄ Change captain
+                        </summary>
+                        <ActionForm
+                          action={changeCaptain}
+                          className="mt-1.5 flex flex-wrap items-center gap-2"
+                          hidden={{
+                            teamId: t.id,
+                            expectedActiveSeasonId: season.id,
+                            expectedCaptainUserId: t.captainId,
+                          }}
+                        >
+                          <select
+                            name="newCaptainUserId"
+                            required
+                            defaultValue=""
+                            aria-label={`New captain for ${t.name}`}
+                            className={selectCls}
+                          >
+                            <option value="" disabled>
+                              New captain…
+                            </option>
+                            {nonCaptains.map((p) => (
+                              <option key={p.userId} value={p.userId}>
+                                {p.user.name}
+                              </option>
+                            ))}
+                          </select>
+                          <SubmitButton
+                            variant="secondary"
+                            size="sm"
+                            confirm={`Hand ${t.name} to the selected player? ${t.captain.name} goes back to the player pool. The team keeps its logo and draft-order slot${isGeneratedTeamNameFor(t.name, t.captain.name) ? ", and its name follows the new captain" : ", and its name"}.`}
+                          >
+                            Change captain
+                          </SubmitButton>
+                        </ActionForm>
+                        <p className="mt-1 text-xs text-muted">
+                          Keeps the team, unlike remove. {t.captain.name} stays
+                          signed up and can be drafted.
+                        </p>
                       </details>
                     ) : null}
                     {season.status !== SEASON_STATUS.COMPLETE && captainReg.get(t.captainId) ? (
@@ -2270,12 +2942,6 @@ function CaptainControls({
               Team withdrawal locked: {teamWithdrawalLocked}
             </p>
           ) : null}
-          {setupOpen && data.teams.length >= 2 && season.budgetMmrWeight > 0 ? (
-            <p className="mt-2 text-xs text-muted">
-              Budgets are MMR-weighted (±{season.budgetMmrWeight}%): lower-MMR
-              captains get more to spend.
-            </p>
-          ) : null}
           {draftLive ? (
             <Link
               href="/draft"
@@ -2298,136 +2964,153 @@ function CaptainControls({
           <h3 className="mb-2 text-sm font-medium text-muted">
             {setupOpen ? "Eligible players" : "Active player signups"}
           </h3>
-          <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1 has-[details[open]]:max-h-[70vh]">
-            {nonCaptains.length === 0 ? (
-              <p className="text-sm text-muted">
-                {setupOpen
-                  ? "No other active full-player signups. At least one undrafted player is required to start."
-                  : "No other active full-player signups."}
-              </p>
-            ) : (
-              nonCaptains.map((p) => (
-                <div
-                  key={p.id}
-                  className="rounded-lg border border-line px-3 py-1.5 text-sm"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <Avatar
-                        name={p.user.name}
-                        src={p.user.avatar}
-                        size={22}
-                      />
-                      <PlayerLink
-                        userId={p.userId}
-                        className="min-w-0 truncate"
-                      >
-                        {p.user.name}
-                      </PlayerLink>
-                      {/* Medal beside the claimed number: the pair is what
-                          makes an inflated claim scannable, and the flag
-                          below states the window when they disagree. */}
-                      <RankMedal
-                        rankTier={p.user.rankTier}
-                        size={18}
-                        className="shrink-0"
-                      />
-                      <span className="shrink-0 text-xs text-muted">
-                        {p.mmr}
-                      </span>
-                      {p.wantsCaptain ? (
-                        <Badge tone="accent" className="shrink-0">
-                          wants C
-                        </Badge>
-                      ) : null}
-                      {p.user.fhUnavailable === true ? (
-                        <Badge
-                          tone="danger"
+          {/* One scroll surface on a phone: the page. The list only gets its
+              own scroller from md up, where it sits beside the captains.
+              Each row wraps like the captain rows: the name keeps a real
+              width and the actions drop below it on a phone, and the
+              "wants C" / "private data" badges ride in the chip line, where
+              they used to overlap "make captain". */}
+          {nonCaptains.length === 0 ? (
+            <p className="text-sm text-muted">
+              {setupOpen
+                ? "No other active full-player signups. At least one undrafted player is required to start."
+                : "No other active full-player signups."}
+            </p>
+          ) : (
+            // "Needs review" narrows this to the signups worth a look before
+            // the draft. The soft MMR limit is a review threshold, not a
+            // block, and this is the review tool it points at.
+            <AdminSignupReview
+              label={setupOpen ? "Eligible players" : "Active player signups"}
+              listClassName="space-y-1.5 md:max-h-[32rem] md:overflow-y-auto md:pr-1 md:has-[details[open]]:max-h-[70vh]"
+              rowClassName="rounded-lg border border-line px-3 py-1.5 text-sm"
+              rows={nonCaptains.map((p) => ({
+                key: p.id,
+                needsReview: signupNeedsReview(
+                  regSignupFlags(p, season.maxMmr),
+                  !!p.user.discordId,
+                ),
+                node: (
+                  <>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
+                        <Avatar
+                          name={p.user.name}
+                          src={p.user.avatar}
+                          size={22}
+                        />
+                        <PlayerLink
+                          userId={p.userId}
+                          className="min-w-12 truncate"
+                        >
+                          {p.user.name}
+                        </PlayerLink>
+                        {/* Medal beside the claimed number: the pair is what
+                            makes an inflated claim scannable, and the flag
+                            below states the window when they disagree. */}
+                        <RankMedal
+                          rankTier={p.user.rankTier}
+                          size={18}
                           className="shrink-0"
-                          title="OpenDota reports their match data as private — automatic result import can't see this player's games"
-                        >
-                          private data
-                        </Badge>
-                      ) : null}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-3">
-                      {setupOpen ? (
-                        <ActionForm
-                          action={addCaptain}
-                          hidden={{
-                            userId: p.userId,
-                            expectedActiveSeasonId: season.id,
-                          }}
-                        >
-                          {/* Confirmed because the UNDO is expensive, not the
-                              action: removing a captain again deletes the
-                              team and, once fixtures exist, the season's whole
-                              schedule. Also a real SubmitButton now, so it has
-                              a pending state and can't be double-submitted. */}
-                          <SubmitButton
-                            variant="ghost"
-                            size="sm"
-                            className="text-xs text-accent hover:underline"
-                            confirm={`Make ${p.user.name} a captain? They get a team, and the only way back is removing that team — which also clears the schedule once one exists.`}
+                        />
+                        <span className="shrink-0 text-xs text-muted">
+                          {p.mmr}
+                        </span>
+                      </span>
+                      <span className="ml-auto flex shrink-0 items-center gap-3">
+                        {setupOpen ? (
+                          <ActionForm
+                            action={addCaptain}
+                            hidden={{
+                              userId: p.userId,
+                              expectedActiveSeasonId: season.id,
+                            }}
                           >
-                            make captain
-                          </SubmitButton>
-                        </ActionForm>
-                      ) : null}
-                      {/* NOT phase-gated. This used to render only during
-                          SIGNUPS and was the action's only control anywhere, so
-                          from the moment the draft started an admin could not
-                          remove a signup at all — while the action itself has no
-                          phase gate and carries an explicit "player is on the
-                          block" guard, i.e. it was written to be used mid-draft.
-                          A player who ghosts after signing up stayed in the
-                          auction pool (where the stall resolver can sell them),
-                          and afterwards in the free-agent and standin dropdowns
-                          for the rest of the season. `withdrawGateError` is the
-                          real gate — it refuses a captain, a rostered player, a
-                          standin who still owes cover, and a non-ACTIVE row. */}
-                      {season.status !== SEASON_STATUS.COMPLETE ? (
-                        <ActionForm
-                          action={withdrawSignup}
-                          hidden={{ registrationId: p.id }}
-                        >
-                          <SubmitButton
-                            variant="ghost"
-                            size="sm"
-                            className="text-danger-soft hover:underline"
-                            confirm={
-                              season.status === "SIGNUPS"
-                                ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
-                                : `Remove ${p.user.name}'s signup? They leave the draft pool and the free-agent and standin lists. Rostered players must be released first — you can reinstate them below.`
-                            }
+                            {/* Confirmed because an undo can be expensive:
+                                removing a captain again deletes the team and,
+                                once fixtures exist, the season's whole
+                                schedule. Change captain is the cheap way back.
+                                Also a real SubmitButton, so it has a pending
+                                state and can't be double-submitted. */}
+                            <SubmitButton
+                              variant="ghost"
+                              size="sm"
+                              className="text-xs text-accent hover:underline"
+                              confirm={`Make ${p.user.name} a captain? They get their own team. Change captain can hand that team to someone else later; removing the team also clears the schedule once one exists.`}
+                            >
+                              make captain
+                            </SubmitButton>
+                          </ActionForm>
+                        ) : null}
+                        {/* NOT phase-gated. This used to render only during
+                            SIGNUPS and was the action's only control anywhere, so
+                            from the moment the draft started an admin could not
+                            remove a signup at all — while the action itself has no
+                            phase gate and carries an explicit "player is on the
+                            block" guard, i.e. it was written to be used mid-draft.
+                            A player who ghosts after signing up stayed in the
+                            auction pool (where the stall resolver can sell them),
+                            and afterwards in the free-agent and standin dropdowns
+                            for the rest of the season. `withdrawGateError` is the
+                            real gate — it refuses a captain, a rostered player, a
+                            standin who still owes cover, and a non-ACTIVE row. */}
+                        {season.status !== SEASON_STATUS.COMPLETE ? (
+                          <ActionForm
+                            action={withdrawSignup}
+                            hidden={{ registrationId: p.id }}
                           >
-                            remove
-                          </SubmitButton>
-                        </ActionForm>
-                      ) : null}
-                    </span>
-                  </div>
-                  <SignupRowMeta
-                    reg={p}
-                    sweep={membershipSweep}
-                    season={season}
-                    showDraftReadiness={setupOpen}
-                  />
-                  {season.status !== SEASON_STATUS.COMPLETE ? (
-                    <AdminPlayerRankEditor
-                      key={`${p.id}:${p.mmr}:${p.user.rankTier}:${p.user.rankTierManual}`}
-                      registrationId={p.id}
-                      name={p.user.name}
-                      mmr={p.mmr}
-                      rankTier={p.user.rankTier}
-                      rankTierManual={p.user.rankTierManual}
-                      mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
+                            <SubmitButton
+                              variant="ghost"
+                              size="sm"
+                              className="text-danger-soft hover:underline"
+                              confirm={
+                                season.status === "SIGNUPS"
+                                  ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
+                                  : `Remove ${p.user.name}'s signup? They leave the draft pool and the free-agent and standin lists. Rostered players must be released first — you can reinstate them below.`
+                              }
+                            >
+                              remove
+                            </SubmitButton>
+                          </ActionForm>
+                        ) : null}
+                      </span>
+                    </div>
+                    <SignupRowMeta
+                      reg={p}
+                      sweep={membershipSweep}
+                      maxMmr={season.maxMmr}
+                      leading={
+                        <>
+                          {p.wantsCaptain ? (
+                            <Badge tone="accent">wants C</Badge>
+                          ) : null}
+                          {p.user.fhUnavailable === true ? (
+                            <Badge
+                              tone="danger"
+                              title="OpenDota reports their match data as private — automatic result import can't see this player's games"
+                            >
+                              private data
+                            </Badge>
+                          ) : null}
+                        </>
+                      }
                     />
-                  ) : null}
-                </div>
-              ))
-            )}
-          </div>
+                    {season.status !== SEASON_STATUS.COMPLETE ? (
+                      <AdminPlayerRankEditor
+                        key={`${p.id}:${p.mmr}:${p.user.rankTier}:${p.user.rankTierManual}`}
+                        registrationId={p.id}
+                        name={p.user.name}
+                        mmr={p.mmr}
+                        rankTier={p.user.rankTier}
+                        rankTierManual={p.user.rankTierManual}
+                        mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
+                      />
+                    ) : null}
+                  </>
+                ),
+              }))}
+            />
+          )}
           {/* Registered STANDINs get the same moderation as players. Standin
               signups stay open through PLAYOFFS, and
               until this list existed the remove/MMR controls rendered only
@@ -2445,14 +3128,17 @@ function CaptainControls({
                 <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
                   Registered standins ({standinRegs.length})
                 </h4>
-                <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
+                <ul
+                  aria-label="Registered standins"
+                  className="space-y-1.5 md:max-h-80 md:overflow-y-auto md:pr-1"
+                >
                   {standinRegs.map((s) => (
-                    <div
+                    <li
                       key={s.id}
                       className="rounded-lg border border-line px-3 py-1.5 text-sm"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
                           <Avatar
                             name={s.user.name}
                             src={s.user.avatar}
@@ -2460,7 +3146,7 @@ function CaptainControls({
                           />
                           <PlayerLink
                             userId={s.userId}
-                            className="min-w-0 truncate"
+                            className="min-w-12 truncate"
                           >
                             {s.user.name}
                           </PlayerLink>
@@ -2477,6 +3163,7 @@ function CaptainControls({
                           <ActionForm
                             action={withdrawSignup}
                             hidden={{ registrationId: s.id }}
+                            className="ml-auto shrink-0"
                           >
                             <SubmitButton
                               variant="ghost"
@@ -2492,7 +3179,7 @@ function CaptainControls({
                       <SignupRowMeta
                         reg={s}
                         sweep={membershipSweep}
-                        season={season}
+                        maxMmr={season.maxMmr}
                       />
                       {season.status !== SEASON_STATUS.COMPLETE ? (
                         <AdminPlayerRankEditor
@@ -2504,9 +3191,9 @@ function CaptainControls({
                           rankTierManual={s.user.rankTierManual}
                         />
                       ) : null}
-                    </div>
+                    </li>
                   ))}
-                </div>
+                </ul>
               </div>
             );
           })()}
@@ -2547,7 +3234,15 @@ function CaptainControls({
   );
 }
 
-function TiebreakerControls({ season, data }: { season: Season; data: AdminData }) {
+function TiebreakerControls({
+  season,
+  data,
+  nowMs,
+}: {
+  season: Season;
+  data: AdminData;
+  nowMs: number;
+}) {
   const projection = projectPlayoffField(data.teams, data.matches);
   const brackets = buildTiebreakerBrackets({ projection, teams: data.teams, matches: data.matches });
   const tiebreakerMatches = data.matches.filter((match) => match.phase === MATCH_PHASE.TIEBREAKER);
@@ -2597,7 +3292,24 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
         {brackets.groups.map((bracket) => (
           <TiebreakerBracket key={bracket.key} bracket={bracket} teams={data.teams} postseasonStarted={postseasonStarted} admin />
         ))}
-        {tiebreakerMatches.length > 0 ? <h3 className="font-medium">Match controls</h3> : null}
+        {tiebreakerMatches.length > 0 ? (
+          <>
+            <h3 className="font-medium">Match controls</h3>
+            <MatchRowsHelp
+              id="adm-import-help-tiebreaker"
+              seasonStatus={season.status}
+              draftStatus={data.draft?.status ?? null}
+              canImport={
+                matchResultsOpen(season.status, MATCH_PHASE.TIEBREAKER) &&
+                pending.length > 0
+              }
+              hasScheduled={tiebreakerMatches.some(
+                (m) => m.status === MATCH_STATUS.SCHEDULED,
+              )}
+              notes={[resultsLockNote(season.status, MATCH_PHASE.TIEBREAKER)]}
+            />
+          </>
+        ) : null}
         {[...new Set(tiebreakerMatches.map((m) => m.week))].map((week) => {
           const weekMatches = tiebreakerMatches.filter(
             (m) => m.week === week,
@@ -2627,9 +3339,12 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
                       teams={data.teams}
                       expectedActiveSeasonId={season.id}
                       seasonStatus={season.status}
+                      leagueId={season.dotaLeagueId}
+                      nowMs={nowMs}
                       draftStatus={data.draft?.status ?? null}
                       championTeamId={season.championTeamId}
                       {...matchCorrectionContext(m, data.matches)}
+                      importHelpId="adm-import-help-tiebreaker"
                       label={
                         <Link
                           href={`/matches/${m.id}`}
@@ -2653,12 +3368,25 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
 function ScheduleControls({
   season,
   data,
+  nowMs,
 }: {
   season: Season;
   data: AdminData;
+  nowMs: number;
 }) {
   const status = regularSeasonStatus(data.matches);
-  const regularCount = data.matches.filter((m) => m.phase === "REGULAR").length;
+  // Only fixtures past kickoff (or live) are missing a result.
+  const due = regularSeasonStatus(regularResultsDue(data.matches, nowMs));
+  const nextKickoff = nextRegularKickoff(data.matches, nowMs);
+  const regularMatches = data.matches.filter((m) => m.phase === "REGULAR");
+  const regularCount = regularMatches.length;
+  const regularResultsOpen = matchResultsOpen(
+    season.status,
+    MATCH_PHASE.REGULAR,
+  );
+  const tiebreakerMatches = data.matches.filter(
+    (m) => m.phase === "TIEBREAKER",
+  );
   const playoffField = projectPlayoffField(data.teams, data.matches);
   const collateral = data.collateral;
   const draftStatus = data.draft?.status ?? null;
@@ -2692,7 +3420,14 @@ function ScheduleControls({
         title="Schedule & results"
         subtitle="Generate the round-robin and enter weekly scores."
         action={
-          scheduleGenerationLockedReason ? null : (
+          // The lock reason sits where the control would be, not in a banner
+          // over the card: once any result exists it is true all season.
+          scheduleGenerationLockedReason ? (
+            <p className="max-w-sm text-xs text-muted">
+              {regularCount > 0 ? "Regenerate schedule" : "Generate schedule"}{" "}
+              is unavailable: {scheduleGenerationLockedReason}
+            </p>
+          ) : (
             <ActionForm
               action={generateSchedule}
               hidden={{ expectedActiveSeasonId: season.id }}
@@ -2701,14 +3436,17 @@ function ScheduleControls({
               <label
                 htmlFor="firstNight"
                 className="text-xs text-muted"
-                title="Week 1 plays at this time on the league's clock; each later week (and playoff round) is +7 days at the same time. Leave empty for no times."
+                title="Week 1 plays at this time on the league's clock; each later week (and playoff round) is +7 days at the same time."
               >
                 First match night
               </label>
+              {/* Required: a fixture with no kickoff gets no check-in, no
+                  reminder, no automatic results and no pick'em lock. */}
               <LocalDatetimeField
                 id="firstNight"
                 name="firstNight"
                 tsName="firstNightTs"
+                required
                 defaultTs={season.firstMatchNight?.getTime()}
                 timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
@@ -2777,12 +3515,6 @@ function ScheduleControls({
         }
       />
       <CardBody>
-        {scheduleGenerationLockedReason ? (
-          <p className="mb-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-fg">
-            <strong>Schedule generation unavailable.</strong>{" "}
-            {scheduleGenerationLockedReason}
-          </p>
-        ) : null}
         {data.matches.length === 0 ? (
           <p className="text-sm text-muted">
             No fixtures have been generated for this season.
@@ -2792,9 +3524,11 @@ function ScheduleControls({
             {status.total > 0 ? (
               <div
                 className={`rounded-lg border px-3 py-2 text-sm ${
-                  status.pending > 0
+                  due.pending > 0
                     ? "border-accent/40 bg-accent/10"
-                    : "border-success/40 bg-success/10 text-success"
+                    : status.pending > 0
+                      ? "border-line bg-surface-2/30"
+                      : "border-success/40 bg-success/10 text-success"
                 }`}
               >
                 {/* `status` counts REGULAR matches only, so once the last one
@@ -2802,23 +3536,48 @@ function ScheduleControls({
                     to "start the playoffs" all through the postseason and next
                     to a crowned champion, pointing at a button that by then says
                     RESET and deletes the whole bracket. Branch on the phase. */}
-                {status.pending > 0
-                  ? `⏳ ${pendingResultsMessage(status)} Enter them to keep standings & seeding correct.`
-                  : season.status === SEASON_STATUS.PLAYOFFS
-                    ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores below.`
-                    : season.status === SEASON_STATUS.COMPLETE
-                      ? `✓ Season complete — all ${status.total} regular-season results recorded.`
-                      : playoffField.seedingDeadHeatTeamIds.length > 0 ||
-                          playoffField.tiebreakers.error
-                        ? `All ${status.total} regular-season results in — finish the bracket in Tiebreakers above before starting playoffs.`
-                        : `✓ All ${status.total} results in — ready to start the playoffs.`}
+                {/* Only fixtures past kickoff are missing a result; on day
+                    one every fixture is still to play, and "15 matches still
+                    need results, enter them" asked for scores nobody had. */}
+                {due.pending > 0
+                  ? `⏳ ${pendingResultsMessage(due)} Enter them to keep standings & seeding correct.`
+                  : status.pending > 0
+                    ? `${status.pending} regular-season fixture${status.pending === 1 ? "" : "s"} still to play${
+                        nextKickoff
+                          ? `. Week ${nextKickoff.week} kicks off ${formatLeagueTime(nextKickoff.at)}`
+                          : ""
+                      }. Results are due from kickoff.`
+                    : season.status === SEASON_STATUS.PLAYOFFS
+                      ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores in the Playoffs card.`
+                      : season.status === SEASON_STATUS.COMPLETE
+                        ? `✓ Season complete — all ${status.total} regular-season results recorded.`
+                        : playoffField.seedingDeadHeatTeamIds.length > 0 ||
+                            playoffField.tiebreakers.error
+                          ? `All ${status.total} regular-season results in — finish the bracket in Tiebreakers above before starting playoffs.`
+                          : `✓ All ${status.total} results in — ready to start the playoffs.`}
               </div>
             ) : null}
-            <p className="text-xs text-muted">
-              Enter scores manually, or fetch the real games from Dota
-              (OpenDota). Auto-fetch needs players to have &ldquo;Expose Public
-              Match Data&rdquo; enabled.
-            </p>
+            <MatchRowsHelp
+              id="adm-import-help-regular"
+              seasonStatus={season.status}
+              draftStatus={draftStatus}
+              canImport={
+                regularResultsOpen &&
+                tiebreakerMatches.length === 0 &&
+                status.pending > 0
+              }
+              hasScheduled={regularMatches.some(
+                (m) => m.status === MATCH_STATUS.SCHEDULED,
+              )}
+              notes={[
+                regularCount > 0
+                  ? resultsLockNote(season.status, MATCH_PHASE.REGULAR)
+                  : null,
+                regularResultsOpen && tiebreakerMatches.length > 0
+                  ? "Tiebreaker games depend on the regular-season results. Use Reset tiebreaker week in the Playoffs card before correcting one."
+                  : null,
+              ]}
+            />
             <PendingReschedules seasonId={season.id} teams={data.teams} />
             {(() => {
               const openWeeks = [
@@ -2915,9 +3674,13 @@ function ScheduleControls({
                         teams={data.teams}
                         expectedActiveSeasonId={season.id}
                         seasonStatus={season.status}
+                        leagueId={season.dotaLeagueId}
+                        nowMs={nowMs}
                         draftStatus={data.draft?.status ?? null}
                         championTeamId={season.championTeamId}
                         {...matchCorrectionContext(m, data.matches)}
+                        laterRoundNote="none"
+                        importHelpId="adm-import-help-regular"
                         label={
                           <Link
                             href={`/matches/${m.id}`}
@@ -2932,55 +3695,6 @@ function ScheduleControls({
                 </details>
               );
             })}
-            {/* Playoffs in their own section, labeled by round so the admin
-                entering a bracket-advancing result can tell the final from a
-                semifinal. */}
-            {(() => {
-              const playoff = data.matches.filter(
-                (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
-              );
-              if (playoff.length === 0) return null;
-              const { totalRounds } = groupPlayoffRounds(playoff);
-              const pending = playoff.filter(
-                (m) => m.status !== "COMPLETED",
-              ).length;
-              return (
-                <details
-                  open={pending > 0}
-                  className="rounded-lg border border-accent/40"
-                >
-                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
-                    Playoffs
-                    <span className="ml-2 text-xs font-normal text-muted">
-                      {playoff.length - pending}/{playoff.length} entered
-                    </span>
-                  </summary>
-                  <div className="space-y-2 px-3 pb-3">
-                    {playoff.map((m) => (
-                      <MatchResultRow
-                        key={m.id}
-                        id={adminMatchRowId(m.id)}
-                        m={m}
-                        teams={data.teams}
-                        expectedActiveSeasonId={season.id}
-                        seasonStatus={season.status}
-                        draftStatus={data.draft?.status ?? null}
-                        championTeamId={season.championTeamId}
-                        {...matchCorrectionContext(m, data.matches)}
-                        label={
-                          <Link
-                            href={`/matches/${m.id}`}
-                            className={textLink("shrink-0 text-xs")}
-                          >
-                            {roundName(slotRound(m.bracketSlot), totalRounds)}
-                          </Link>
-                        }
-                      />
-                    ))}
-                  </div>
-                </details>
-              );
-            })()}
           </div>
         )}
       </CardBody>
@@ -2988,12 +3702,112 @@ function ScheduleControls({
   );
 }
 
-function PlayoffControls({
+/**
+ * The bracket's series with their result controls, in the Playoffs card:
+ * the series still to play first, then the decided ones folded away (open
+ * once nothing is left to play, so the grand-final correction is in view).
+ * They used to sit at the bottom of Schedule & results, so on match night
+ * the Playoffs card held only its two reset buttons.
+ */
+function PlayoffSeries({
   season,
   data,
+  playoff,
+  nowMs,
 }: {
   season: Season;
   data: AdminData;
+  playoff: AdminData["matches"];
+  nowMs: number;
+}) {
+  const { totalRounds } = groupPlayoffRounds(playoff);
+  const toPlay = playoff.filter((m) => m.status !== MATCH_STATUS.COMPLETED);
+  const decided = playoff.filter((m) => m.status === MATCH_STATUS.COMPLETED);
+  // Labelled by round so the admin entering a bracket-advancing result can
+  // tell the final from a semifinal.
+  const row = (m: AdminData["matches"][number]) => (
+    <MatchResultRow
+      key={m.id}
+      id={adminMatchRowId(m.id)}
+      m={m}
+      teams={data.teams}
+      expectedActiveSeasonId={season.id}
+      seasonStatus={season.status}
+      leagueId={season.dotaLeagueId}
+      nowMs={nowMs}
+      draftStatus={data.draft?.status ?? null}
+      championTeamId={season.championTeamId}
+      {...matchCorrectionContext(m, data.matches)}
+      laterRoundNote="short"
+      importHelpId="adm-import-help-playoffs"
+      label={
+        <Link href={`/matches/${m.id}`} className={textLink("shrink-0 text-xs")}>
+          {roundName(slotRound(m.bracketSlot), totalRounds)}
+        </Link>
+      }
+    />
+  );
+  const anyLaterRound = decided.some((m) =>
+    hasLaterBracketRound(playoff, m.bracketSlot),
+  );
+  return (
+    <div className="space-y-2">
+      <MatchRowsHelp
+        id="adm-import-help-playoffs"
+        seasonStatus={season.status}
+        draftStatus={data.draft?.status ?? null}
+        canImport={
+          matchResultsOpen(season.status, MATCH_PHASE.PLAYOFF) &&
+          toPlay.length > 0
+        }
+        hasScheduled={toPlay.some((m) => m.status === MATCH_STATUS.SCHEDULED)}
+        notes={[resultsLockNote(season.status, MATCH_PHASE.PLAYOFF)]}
+      />
+      {toPlay.length > 0 ? (
+        <section
+          aria-labelledby="playoff-series-to-play"
+          className="space-y-2 rounded-lg border border-accent/40 p-3"
+        >
+          <h3 id="playoff-series-to-play" className="text-sm font-medium">
+            Series to play
+            <span className="ml-2 text-xs font-normal text-muted">
+              {decided.length}/{playoff.length} entered
+            </span>
+          </h3>
+          {toPlay.map(row)}
+        </section>
+      ) : null}
+      {decided.length > 0 ? (
+        <details
+          open={toPlay.length === 0}
+          className="rounded-lg border border-line"
+        >
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+            Decided series
+            <span className="ml-2 text-xs font-normal text-muted">
+              {decided.length}
+            </span>
+          </summary>
+          <div className="space-y-2 px-3 pb-3">
+            {anyLaterRound ? (
+              <p className="text-xs text-muted">{LATER_ROUND_NOTE}</p>
+            ) : null}
+            {decided.map(row)}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function PlayoffControls({
+  season,
+  data,
+  nowMs,
+}: {
+  season: Season;
+  data: AdminData;
+  nowMs: number;
 }) {
   const playoffMatches = data.matches.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
@@ -3081,48 +3895,17 @@ function PlayoffControls({
       <CardHeader
         headingLevel={2}
         title="Playoffs"
-        subtitle="Seed the top teams into a single-elimination bracket."
+        subtitle="Seed the top teams into a single-elimination bracket, then enter each series here."
         action={
           /* START and RESET are the same action, and used to be the same
              button in the same pixel of the card header — so muscle memory
              aimed at "Start playoffs" hits "Reset playoffs" once a bracket
-             exists. They are now different controls: Start stays an ordinary
-             button, Reset is type-to-confirm, because it deletes the whole
-             postseason and the playoff RSVPs, standin bookings and pick'em
-             picks are not archived by anything. */
-          playoffMatches.length > 0 ? (
-            <ActionForm
-              action={startPlayoffs}
-              hidden={{ ...commandClaim, intent: "reset" }}
-            >
-              <DangerSubmit
-                token={season.name}
-                disabled={resetPlayoffsLockedReason != null}
-                title="Reset the playoff bracket?"
-                consequences={[
-                  `All ${playoffMatches.length} playoff match(es) are deleted and reseeded from the current standings.`,
-                  ...(playoffGameCount
-                    ? [
-                        `Their ${playoffGameCount} imported game(s) go too — postseason box scores, MVPs, fantasy points and record-book entries with them.`,
-                      ]
-                    : []),
-                  "Playoff check-ins, standin bookings and pick'em picks on those matches are deleted and are NOT archived.",
-                  ...(season.status === SEASON_STATUS.COMPLETE
-                    ? [
-                        "The stored champion record is cleared and the season reopens into Playoffs.",
-                      ]
-                    : []),
-                ]}
-                recovery={
-                  playoffGameCount
-                    ? "The OpenDota match IDs of the deleted games are archived in this card, so their box scores can be re-imported one at a time."
-                    : "The bracket itself reseeds from the standings, so nothing is lost if no games have been imported yet."
-                }
-              >
-                Reset playoffs
-              </DangerSubmit>
-            </ActionForm>
-          ) : (
+             exists. They are different controls: Start stays an ordinary
+             button up here, and Reset lives in "Fix the bracket" below as a
+             type-to-confirm, because it deletes the whole postseason and the
+             playoff RSVPs, standin bookings and pick'em picks are not
+             archived by anything. */
+          playoffMatches.length > 0 ? null : (
             <ActionForm
               action={startPlayoffs}
               hidden={{ ...commandClaim, intent: "start" }}
@@ -3152,14 +3935,9 @@ function PlayoffControls({
             {storedChampion
               ? `${storedChampion.name} is stored as champion, but that record does not match one authoritative completed grand-final winner.`
               : "No authoritative champion is stored for this completed season."}{" "}
-            Reconcile the final with the targeted result controls above, or use
-            the bracket recovery controls here; public pages do not attribute
-            the title while this conflict exists.
-          </div>
-        ) : null}
-        {playoffMatches.length > 0 && resetPlayoffsLockedReason ? (
-          <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs text-muted">
-            Reset playoffs is unavailable: {resetPlayoffsLockedReason}
+            Reconcile the final with its result controls below, or use
+            &ldquo;Fix the bracket&rdquo;; public pages do not attribute the
+            title while this conflict exists.
           </div>
         ) : null}
         {/* Outstanding results get the red line below, which also names the
@@ -3172,15 +3950,40 @@ function PlayoffControls({
           </div>
         ) : null}
         {status.pending > 0 && playoffMatches.length === 0 ? (
-          <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
-            ⚠ {status.pending} regular-season result
-            {status.pending === 1 ? "" : "s"} still needed — the playoffs are
-            locked until every match is entered (week
-            {status.pendingWeeks.length === 1 ? "" : "s"}{" "}
-            {status.pendingWeeks.join(", ")}).
-          </div>
+          regularResultsDue(data.matches, nowMs).length > 0 ? (
+            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+              ⚠ {status.pending} regular-season result
+              {status.pending === 1 ? "" : "s"} still needed — the playoffs are
+              locked until every match is entered (
+              {weekList(status.pendingWeeks)}).
+            </div>
+          ) : (
+            // Nothing is overdue: these fixtures just haven't been played, so
+            // a red warning on day one would be crying wolf.
+            <p className="text-xs text-muted">
+              The playoffs unlock once every regular-season result is in (
+              {status.pending} fixture{status.pending === 1 ? "" : "s"} still
+              to play).
+            </p>
+          )
         ) : null}
-        {(unresolvedTeams.length > 0 ||
+        {/* Every team reads as "tied" at zero matches, so gating this on
+            unresolved ties alone printed the whole tiebreaker rulebook from
+            signups on. The rules matter once the regular season is over;
+            before that, one line says ties are provisional. */}
+        {unresolvedTeams.length > 0 &&
+        !status.allComplete &&
+        status.completed > 0 &&
+        tiebreakerMatches.length === 0 &&
+        !playoffField.tiebreakers.error &&
+        playoffMatches.length === 0 ? (
+          <p className="text-xs text-muted">
+            Ties on the table are provisional until the regular season ends.
+            Any tie that still decides qualification or seeding then needs a
+            tiebreaker week, set up here.
+          </p>
+        ) : null}
+        {((unresolvedTeams.length > 0 && status.allComplete) ||
           tiebreakerMatches.length > 0 ||
           playoffField.tiebreakers.error) &&
         playoffMatches.length === 0 ? (
@@ -3316,48 +4119,117 @@ function PlayoffControls({
             <p className="text-muted">
               {season.status === SEASON_STATUS.COMPLETE
                 ? champion
-                  ? `Postseason complete. The bracket and ${champion.name}'s title are preserved here; use the targeted grand-final correction above for a final-series error, or the destructive recovery controls below for an earlier-round or seeding error.`
-                  : "The season is marked Complete, but no authoritative champion is available. Use the phase or playoff recovery controls to reconcile the final before publishing a title."
-                : `${playoffMatches.length} playoff match(es) created. Enter scores in “Schedule & results” above — the bracket advances and crowns the champion automatically.`}
+                  ? `Postseason complete. The bracket and ${champion.name}'s title are preserved here; use the grand-final correction below for a final-series error, or “Fix the bracket” for an earlier-round or seeding error.`
+                  : "The season is marked Complete, but no authoritative champion is available. Use the phase control or “Fix the bracket” to reconcile the final before publishing a title."
+                : `${playoffMatches.length} playoff match(es) created. Enter each series' score below; the bracket advances and crowns the champion automatically.`}
             </p>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/30 px-3 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="font-medium">Need to correct the table?</div>
+            <PlayoffSeries
+              season={season}
+              data={data}
+              playoff={playoffMatches}
+              nowMs={nowMs}
+            />
+            {/* Both repairs remove postseason data, so they sit folded away
+                from the series an admin works through on match night, each
+                still behind typing the season name. */}
+            <details
+              open={
+                season.status === SEASON_STATUS.COMPLETE &&
+                championPresentation.issue != null
+              }
+              className="rounded-lg border border-line px-3 py-1"
+            >
+              <summary className="flex min-h-11 cursor-pointer items-center font-medium">
+                Fix the bracket
+              </summary>
+              <div className="space-y-3 pb-3">
                 <p className="text-xs text-muted">
-                  Return to Regular season removes this postseason first, so a
-                  corrected result can never coexist with stale seeds or a stale
-                  champion.
+                  Only for a seeding mistake, a wrong result in an earlier
+                  round, or a regular-season result that needs correcting. Both
+                  remove playoff data, and each asks you to type the season
+                  name first.
                 </p>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/30 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">Reseed the bracket?</div>
+                    <p className="text-xs text-muted">
+                      {resetPlayoffsLockedReason
+                        ? `Reset playoffs is unavailable: ${resetPlayoffsLockedReason}`
+                        : "Reset playoffs deletes every playoff series and seeds a fresh bracket from the current standings."}
+                    </p>
+                  </div>
+                  <ActionForm
+                    action={startPlayoffs}
+                    hidden={{ ...commandClaim, intent: "reset" }}
+                  >
+                    <DangerSubmit
+                      token={season.name}
+                      disabled={resetPlayoffsLockedReason != null}
+                      title="Reset the playoff bracket?"
+                      consequences={[
+                        `All ${playoffMatches.length} playoff match(es) are deleted and reseeded from the current standings.`,
+                        ...(playoffGameCount
+                          ? [
+                              `Their ${playoffGameCount} imported game(s) go too — postseason box scores, MVPs, fantasy points and record-book entries with them.`,
+                            ]
+                          : []),
+                        "Playoff check-ins, standin bookings and pick'em picks on those matches are deleted and are NOT archived.",
+                        ...(season.status === SEASON_STATUS.COMPLETE
+                          ? [
+                              "The stored champion record is cleared and the season reopens into Playoffs.",
+                            ]
+                          : []),
+                      ]}
+                      recovery={
+                        playoffGameCount
+                          ? "The OpenDota match IDs of the deleted games are archived in this card, so their box scores can be re-imported one at a time."
+                          : "The bracket itself reseeds from the standings, so nothing is lost if no games have been imported yet."
+                      }
+                    >
+                      Reset playoffs
+                    </DangerSubmit>
+                  </ActionForm>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/30 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">Need to correct the table?</div>
+                    <p className="text-xs text-muted">
+                      Return to Regular season removes this postseason first, so
+                      a corrected result can never coexist with stale seeds or a
+                      stale champion.
+                    </p>
+                  </div>
+                  <ActionForm
+                    action={returnToRegularSeasonAction}
+                    hidden={commandClaim}
+                  >
+                    <DangerSubmit
+                      token={season.name}
+                      title="Return to the regular season?"
+                      consequences={[
+                        `All ${playoffMatches.length} playoff match(es) are removed; earlier regular-season matches and standings remain.`,
+                        ...(playoffGameCount
+                          ? [
+                              `${playoffGameCount} imported playoff game(s), their box scores, fantasy points and record entries are removed.`,
+                            ]
+                          : []),
+                        "Playoff check-ins, standin bookings, reschedule requests and pick'em picks are removed.",
+                        ...(season.championTeamId
+                          ? ["The stored champion record is cleared."]
+                          : []),
+                      ]}
+                      recovery={
+                        playoffGameCount
+                          ? "Deleted OpenDota match IDs are archived here for re-import after the corrected bracket is seeded."
+                          : "After correcting regular results, Start playoffs creates a fresh bracket from the authoritative table."
+                      }
+                    >
+                      Return to regular season
+                    </DangerSubmit>
+                  </ActionForm>
+                </div>
               </div>
-              <ActionForm
-                action={returnToRegularSeasonAction}
-                hidden={commandClaim}
-              >
-                <DangerSubmit
-                  token={season.name}
-                  title="Return to the regular season?"
-                  consequences={[
-                    `All ${playoffMatches.length} playoff match(es) are removed; earlier regular-season matches and standings remain.`,
-                    ...(playoffGameCount
-                      ? [
-                          `${playoffGameCount} imported playoff game(s), their box scores, fantasy points and record entries are removed.`,
-                        ]
-                      : []),
-                    "Playoff check-ins, standin bookings, reschedule requests and pick'em picks are removed.",
-                    ...(season.championTeamId
-                      ? ["The stored champion record is cleared."]
-                      : []),
-                  ]}
-                  recovery={
-                    playoffGameCount
-                      ? "Deleted OpenDota match IDs are archived here for re-import after the corrected bracket is seeded."
-                      : "After correcting regular results, Start playoffs creates a fresh bracket from the authoritative table."
-                  }
-                >
-                  Return to regular season
-                </DangerSubmit>
-              </ActionForm>
-            </div>
+            </details>
           </div>
         ) : (
           <p className="text-muted">
@@ -3393,8 +4265,8 @@ function PlayoffControls({
             </summary>
             <p className="mt-2 text-xs text-muted">
               Paste these into the &ldquo;Match ID or URL&rdquo; box on the
-              matching fixture in Schedule &amp; results and press &ldquo;Add
-              game&rdquo; to restore its box score.
+              matching series in this card and press &ldquo;Add game&rdquo; to
+              restore its box score.
             </p>
             <ul className="mt-2 space-y-1 text-xs">
               {data.playoffArchive.map((g) => (
@@ -3409,7 +4281,8 @@ function PlayoffControls({
         <p className="text-xs text-muted">
           New tiebreakers use BO1 knockouts, up to three games per team. Existing brackets keep their published format.
           Series lengths for the regular
-          season, playoffs and final are set in the phase-control panel above.
+          season, playoffs and final are under Season settings on the phase
+          control card.
         </p>
       </CardBody>
     </Card>
@@ -3444,47 +4317,42 @@ function StandinControls({
   // check already approved — and the only report was a transient toast that
   // could land on a captain with no power to fix the other team's booking.
   // This is the durable, admin-owned surface.
-  const upcomingById = new Map(upcoming.map((m) => [m.id, m]));
-  const coverByStandin = new Map<
-    string,
-    { name: string; matches: (typeof upcoming)[number][] }
-  >();
-  for (const a of data.assignments) {
-    const m = upcomingById.get(a.matchId);
-    if (!m) continue;
-    const cur = coverByStandin.get(a.standinUserId) ?? {
-      name: a.standin.name,
-      matches: [],
-    };
-    cur.matches.push(m);
-    coverByStandin.set(a.standinUserId, cur);
-  }
-  const clashLines: string[] = [];
-  for (const {
-    name: standinName,
-    matches: covered,
-  } of coverByStandin.values()) {
-    for (let i = 0; i < covered.length; i++) {
-      for (let j = i + 1; j < covered.length; j++) {
-        if (standinConflict(covered[i], covered[j])) {
-          const label = (m: (typeof covered)[number]) =>
-            `${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"} (wk ${m.week})`;
-          clashLines.push(
-            `${standinName} covers both ${label(covered[i])} and ${label(covered[j])} the same night — remove one below`,
-          );
-        }
-      }
-    }
-  }
+  const standinName = new Map(
+    data.assignments.map((a) => [a.standinUserId, a.standin.name]),
+  );
+  const clashes = standinClashes(data.assignments, data.matches);
+  const clashLines = clashes.map(({ standinUserId, first, second }) => {
+    const label = (m: (typeof upcoming)[number]) =>
+      `${teamName.get(m.homeTeamId ?? "") ?? "?"} vs ${teamName.get(m.awayTeamId ?? "") ?? "?"} (wk ${m.week})`;
+    return `${standinName.get(standinUserId) ?? "A standin"} covers both ${label(first)} and ${label(second)} the same night — remove one below`;
+  });
+  // The card opens on the exceptions only. Captains book nearly all cover
+  // themselves from the match page, so a full assign form for every open
+  // match made this one of the longest cards on /admin for the rare night
+  // the admin steps in. Everything else, including the any-team override,
+  // is one click away under "Assign any match".
+  const problemIds = coverProblemMatchIds({
+    matches: upcoming,
+    teams: data.teams,
+    bookings: data.assignments,
+    outRsvps: data.outRsvps,
+    clashes,
+  });
+  const problems = upcoming.filter((m) => problemIds.has(m.id));
+  // Outside the assign window only matches with a booking have anything to
+  // show (removal); an empty block there is noise.
+  const rest = upcoming.filter(
+    (m) => !problemIds.has(m.id) && (assignOpen || byMatch.has(m.id)),
+  );
   // Standins are assigned for the imminent night — group by week and only
   // expand the earliest open one so the current night isn't a scroll away.
-  const regularUpcoming = upcoming.filter(
+  const regularRest = rest.filter(
     (m) => m.phase === "REGULAR" || m.phase === "TIEBREAKER",
   );
-  const playoffUpcoming = upcoming.filter(
+  const playoffRest = rest.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
   );
-  const weeks = [...new Set(regularUpcoming.map((m) => m.week))].sort(
+  const weeks = [...new Set(regularRest.map((m) => m.week))].sort(
     (a, b) => a - b,
   );
   // Round names need the full bracket depth — deriving it from only the
@@ -3493,13 +4361,34 @@ function StandinControls({
   const { totalRounds } = groupPlayoffRounds(
     data.matches.filter((m) => m.phase === "PLAYOFF" || m.phase === "FINAL"),
   );
+  const matchLabel = (m: (typeof upcoming)[number]) => (
+    <Link href={`/matches/${m.id}`} className={textLink()}>
+      {m.phase === "PLAYOFF" || m.phase === "FINAL"
+        ? roundName(slotRound(m.bracketSlot), totalRounds)
+        : `${m.phase === "TIEBREAKER" ? "Tiebreaker week" : "Week"} ${m.week}`}
+    </Link>
+  );
+  const block = (m: (typeof upcoming)[number]) => (
+    <StandinMatchBlock
+      key={m.id}
+      m={m}
+      teams={data.teams}
+      pool={data.standins}
+      outRsvps={data.outRsvps}
+      assignments={byMatch.get(m.id) ?? []}
+      teamName={teamName}
+      teamSize={season.teamSize}
+      assignOpen={assignOpen}
+      label={matchLabel(m)}
+    />
+  );
 
   return (
     <Card>
       <CardHeader
         headingLevel={2}
         title="Standin assignments"
-        subtitle="Slot a standin in for a player who can't make a match."
+        subtitle="Captains book their own standins from the match page. This card shows cover problems and lets you book for any team."
       />
       <CardBody className="space-y-3">
         {clashLines.length > 0 ? (
@@ -3535,81 +4424,70 @@ function StandinControls({
           <p className="text-sm text-muted">No upcoming matches to fill.</p>
         ) : (
           <>
-            {weeks.map((wk) => {
-              const wkMatches = regularUpcoming.filter((m) => m.week === wk);
-              return (
-                <details
-                  key={`w${wk}`}
-                  open={wk === weeks[0]}
-                  className="rounded-lg border border-line"
-                >
-                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
-                    {wkMatches[0]?.phase === "TIEBREAKER"
-                      ? "Tiebreaker week · "
-                      : ""}
-                    Week {wk}
-                    <span className="ml-2 text-xs font-normal text-muted">
-                      {wkMatches.length} match
-                      {wkMatches.length === 1 ? "" : "es"}
-                    </span>
-                  </summary>
-                  <div className="space-y-3 px-3 pb-3">
-                    {wkMatches.map((m) => (
-                      <StandinMatchBlock
-                        key={m.id}
-                        m={m}
-                        teams={data.teams}
-                        pool={data.standins}
-                        outRsvps={data.outRsvps}
-                        assignments={byMatch.get(m.id) ?? []}
-                        teamName={teamName}
-                        teamSize={season.teamSize}
-                        assignOpen={assignOpen}
-                        label={
-                          <Link
-                            href={`/matches/${m.id}`}
-                            className={textLink()}
-                          >
-                            Week {m.week}
-                          </Link>
-                        }
-                      />
-                    ))}
-                  </div>
-                </details>
-              );
-            })}
-            {playoffUpcoming.length > 0 ? (
-              <details
-                open={weeks.length === 0}
-                className="rounded-lg border border-accent/40"
-              >
-                <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
-                  Playoffs
+            {problems.length > 0 ? (
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium">
+                  Cover problems ({problems.length})
+                </h3>
+                {problems.map(block)}
+              </div>
+            ) : (
+              <p className="text-sm text-muted">
+                Nothing needs cover right now.
+              </p>
+            )}
+            {rest.length > 0 ? (
+              <details className="rounded-lg border border-line">
+                <summary className="min-h-11 cursor-pointer px-3 py-2.5 text-sm font-medium">
+                  {assignOpen ? "Assign any match" : "Other bookings"}
                   <span className="ml-2 text-xs font-normal text-muted">
-                    {playoffUpcoming.length} match
-                    {playoffUpcoming.length === 1 ? "" : "es"}
+                    {rest.length} {problems.length > 0 ? "other " : ""}
+                    {assignOpen ? "open " : ""}
+                    match{rest.length === 1 ? "" : "es"}
                   </span>
                 </summary>
                 <div className="space-y-3 px-3 pb-3">
-                  {playoffUpcoming.map((m) => (
-                    <StandinMatchBlock
-                      key={m.id}
-                      m={m}
-                      teams={data.teams}
-                      pool={data.standins}
-                      outRsvps={data.outRsvps}
-                      assignments={byMatch.get(m.id) ?? []}
-                      teamName={teamName}
-                      teamSize={season.teamSize}
-                      assignOpen={assignOpen}
-                      label={
-                        <Link href={`/matches/${m.id}`} className={textLink()}>
-                          {roundName(slotRound(m.bracketSlot), totalRounds)}
-                        </Link>
-                      }
-                    />
-                  ))}
+                  {weeks.map((wk) => {
+                    const wkMatches = regularRest.filter((m) => m.week === wk);
+                    return (
+                      <details
+                        key={`w${wk}`}
+                        open={wk === weeks[0]}
+                        className="rounded-lg border border-line"
+                      >
+                        <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                          {wkMatches[0]?.phase === "TIEBREAKER"
+                            ? "Tiebreaker week · "
+                            : ""}
+                          Week {wk}
+                          <span className="ml-2 text-xs font-normal text-muted">
+                            {wkMatches.length} match
+                            {wkMatches.length === 1 ? "" : "es"}
+                          </span>
+                        </summary>
+                        <div className="space-y-3 px-3 pb-3">
+                          {wkMatches.map(block)}
+                        </div>
+                      </details>
+                    );
+                  })}
+                  {playoffRest.length > 0 ? (
+                    <details
+                      open={weeks.length === 0}
+                      className="rounded-lg border border-accent/40"
+                    >
+                      <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                        Playoffs
+                        <span className="ml-2 text-xs font-normal text-muted">
+                          {playoffRest.length} match
+                          {playoffRest.length === 1 ? "" : "es"}
+                        </span>
+                      </summary>
+                      <div className="space-y-3 px-3 pb-3">
+                        {playoffRest.map(block)}
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
               </details>
             ) : null}
@@ -3638,30 +4516,49 @@ function AutomationTimestamp({
   );
 }
 
+type AutomationSnapshot = {
+  now: number;
+  /** undefined = the runner row could not be read; null = it never ran. */
+  state: AutomationHealthRecord | null | undefined;
+  backlog: AutomationBacklog | undefined;
+  idleWindow: { nextWakeAtMs: number; hardWakeAtMs: number } | undefined;
+};
+
 /**
- * Production-wide runner health. This is separate from AutoSyncHealth below:
- * that card explains per-match scan/backoff state during playable phases,
- * while this one answers whether the single scheduled worker is alive and
- * safe to recover in every phase (including offseason and no season).
+ * The runner row, the Discord delivery backlog and the gate's idle window,
+ * read once per request: the runner card and Needs attention share it. DB
+ * only (the gate snapshot is cached), and it never throws — a readiness
+ * incident reads as "unavailable" instead of taking the admin page down.
  */
-async function AutomationRunnerHealth() {
-  let state: AutomationHealthRecord | null | undefined;
-  let backlog:
-    | {
-        league: number;
-        inhouse: number;
-        markerRetries: number;
-      }
-    | undefined;
-  let idleWindow:
-    | { nextWakeAtMs: number; hardWakeAtMs: number }
-    | undefined;
-  // Async SERVER component: one value per request. The React purity rule is
-  // aimed at client re-renders, not a server health snapshot.
-  // eslint-disable-next-line react-hooks/purity
+const loadAutomationSnapshot = cache(async (): Promise<AutomationSnapshot> => {
   const now = Date.now();
+  const stuckBefore = new Date(now - AUTOMATION_BACKLOG_STUCK_MS);
+  const queuedLeague = {
+    status: {
+      in: [
+        LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+        LEAGUE_ANNOUNCEMENT_STATUS.SENDING,
+      ],
+    },
+  };
+  const queuedInhouse = {
+    status: {
+      in: [
+        INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
+        INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
+      ],
+    },
+  };
   try {
-    const [runner, league, inhouse, markerRetries, gate] = await Promise.all([
+    const [
+      runner,
+      league,
+      inhouse,
+      stuckLeague,
+      stuckInhouse,
+      markerRetries,
+      gate,
+    ] = await Promise.all([
       prisma.automationRunState.findUnique({
         where: { key: AUTOMATION_RUN_KEY },
         select: {
@@ -3678,25 +4575,13 @@ async function AutomationRunnerHealth() {
           lastSummary: true,
         },
       }),
+      prisma.leagueAnnouncement.count({ where: queuedLeague }),
+      prisma.inhouseAnnouncement.count({ where: queuedInhouse }),
       prisma.leagueAnnouncement.count({
-        where: {
-          status: {
-            in: [
-              LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
-              LEAGUE_ANNOUNCEMENT_STATUS.SENDING,
-            ],
-          },
-        },
+        where: { ...queuedLeague, createdAt: { lt: stuckBefore } },
       }),
       prisma.inhouseAnnouncement.count({
-        where: {
-          status: {
-            in: [
-              INHOUSE_ANNOUNCEMENT_STATUS.PENDING,
-              INHOUSE_ANNOUNCEMENT_STATUS.SENDING,
-            ],
-          },
-        },
+        where: { ...queuedInhouse, createdAt: { lt: stuckBefore } },
       }),
       prisma.setting.count({
         where: {
@@ -3711,48 +4596,100 @@ async function AutomationRunnerHealth() {
       }),
       getAutomationGateDecision(now).catch(() => ({ run: true }) as const),
     ]);
-    state = runner;
-    backlog = { league, inhouse, markerRetries };
-    if (!gate.run) {
-      idleWindow = {
-        nextWakeAtMs: Math.min(
-          gate.snapshot.nextWakeAtMs,
-          gate.snapshot.hardWakeAtMs,
-        ),
-        hardWakeAtMs: gate.snapshot.hardWakeAtMs,
-      };
-    }
+    return {
+      now,
+      state: runner,
+      backlog: {
+        league,
+        inhouse,
+        markerRetries,
+        stuck: stuckLeague + stuckInhouse,
+      },
+      idleWindow: gate.run
+        ? undefined
+        : {
+            nextWakeAtMs: Math.min(
+              gate.snapshot.nextWakeAtMs,
+              gate.snapshot.hardWakeAtMs,
+            ),
+            hardWakeAtMs: gate.snapshot.hardWakeAtMs,
+          },
+    };
   } catch {
-    // The admin panel remains usable during a migration/readiness incident.
     // `undefined` is intentionally distinct from a missing (never-run) row.
-    state = undefined;
-    backlog = undefined;
+    return { now, state: undefined, backlog: undefined, idleWindow: undefined };
   }
+});
 
+async function loadAutomationAttention(): Promise<string[]> {
+  const { now, state, backlog, idleWindow } = await loadAutomationSnapshot();
+  return automationAttention(
+    automationHealthView(state, now, idleWindow),
+    backlog,
+  );
+}
+
+/**
+ * Production-wide runner health. This is separate from AutoSyncHealth below:
+ * that card explains per-match scan/backoff state during playable phases,
+ * while this one answers whether the single scheduled worker is alive and
+ * safe to recover in every phase (including offseason and no season).
+ *
+ * Healthy, it folds to one line; the details stay one click away, and any
+ * problem also raises a line in Needs attention.
+ */
+async function AutomationRunnerHealth() {
+  const { now, state, backlog, idleWindow } = await loadAutomationSnapshot();
   const health = automationHealthView(state, now, idleWindow);
-  const emptyTime = state === undefined ? "Unavailable" : "Never";
+  const lastRun = state?.lastSuccessAt ?? state?.lastFinishedAt ?? null;
+  if (automationQuiet(health, backlog)) {
+    return (
+      <AdminSection
+        title="Automation runner"
+        subtitle={
+          <>
+            {health.kind === "RUNNING" ? "Healthy · running now" : "Healthy"}
+            {lastRun ? (
+              <>
+                {" · last run "}
+                <AutomationTimestamp value={lastRun} emptyLabel="Never" />
+              </>
+            ) : null}
+          </>
+        }
+      >
+        <CardBody>
+          <AutomationRunnerDetails
+            health={health}
+            state={state}
+            backlog={backlog}
+          />
+        </CardBody>
+      </AdminSection>
+    );
+  }
   const badgeTone =
-    health.kind === "HEALTHY"
-      ? "success"
-      : health.kind === "RUNNING"
-        ? "accent"
-        : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
-          ? "danger"
+    health.kind === "RUNNING"
+      ? "accent"
+      : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
+        ? "danger"
+        : health.kind === "HEALTHY"
+          ? "success"
           : "neutral";
   const calloutClass =
-    health.kind === "HEALTHY"
-      ? "border-success/30 bg-success/10"
-      : health.kind === "RUNNING"
-        ? "border-accent/30 bg-accent/10"
-        : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
-          ? "border-danger/30 bg-danger/10"
+    health.kind === "RUNNING"
+      ? "border-accent/30 bg-accent/10"
+      : health.kind === "DEGRADED" || health.kind === "UNAVAILABLE"
+        ? "border-danger/30 bg-danger/10"
+        : health.kind === "HEALTHY"
+          ? "border-success/30 bg-success/10"
           : "border-line bg-surface-2/40";
 
   return (
     <Card>
       <CardHeader
         title="Automation runner"
-        subtitle="Database-owned maintenance for result imports and league background work, available in every league phase."
+        subtitle="The scheduled worker behind result imports, reminders and Discord posts, in every league phase."
         action={<Badge tone={badgeTone}>{health.label}</Badge>}
       />
       <CardBody className="space-y-5">
@@ -3760,134 +4697,159 @@ async function AutomationRunnerHealth() {
           <div className="font-medium text-fg">{health.headline}</div>
           <p className="mt-1 text-sm text-muted">{health.description}</p>
         </div>
+        <AutomationRunnerDetails
+          health={health}
+          state={state}
+          backlog={backlog}
+        />
+      </CardBody>
+    </Card>
+  );
+}
 
-        <StatStrip>
-          <StatCell
-            label="Last attempt"
-            value={
-              <AutomationTimestamp
-                value={state?.lastAttemptAt}
-                emptyLabel={emptyTime}
-              />
-            }
-          />
-          <StatCell
-            label="Last success"
-            value={
-              <AutomationTimestamp
-                value={state?.lastSuccessAt}
-                emptyLabel={emptyTime}
-              />
-            }
-          />
-          <StatCell label="Source" value={health.sourceLabel} />
-          <StatCell label="Duration" value={health.durationLabel} />
-          <StatCell
-            label="Failure streak"
-            value={health.consecutiveFailures}
-            tone={health.consecutiveFailures > 0 ? "accent" : "muted"}
-          />
-        </StatStrip>
+function AutomationRunnerDetails({
+  health,
+  state,
+  backlog,
+}: {
+  health: AutomationHealthView;
+  state: AutomationHealthRecord | null | undefined;
+  backlog: AutomationBacklog | undefined;
+}) {
+  const emptyTime = state === undefined ? "Unavailable" : "Never";
+  return (
+    <div className="space-y-5">
+      <StatStrip>
+        <StatCell
+          label="Last attempt"
+          value={
+            <AutomationTimestamp
+              value={state?.lastAttemptAt}
+              emptyLabel={emptyTime}
+            />
+          }
+        />
+        <StatCell
+          label="Last success"
+          value={
+            <AutomationTimestamp
+              value={state?.lastSuccessAt}
+              emptyLabel={emptyTime}
+            />
+          }
+        />
+        <StatCell label="Source" value={health.sourceLabel} />
+        <StatCell label="Duration" value={health.durationLabel} />
+        <StatCell
+          label="Failure streak"
+          value={health.consecutiveFailures}
+          tone={health.consecutiveFailures > 0 ? "accent" : "muted"}
+        />
+      </StatStrip>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-lg border border-line bg-surface-2/30 p-4">
-            <h4 className="font-medium text-fg">Lease and work signals</h4>
-            {health.signals.length > 0 ? (
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
-                {health.signals.map((signal) => (
-                  <li key={signal}>{signal}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-muted">
-                No persisted lease, deferred-work, or failure signal is
-                recorded.
-              </p>
-            )}
-            {health.leaseExpiresAt ? (
-              <p className="mt-2 text-xs text-muted">
-                Lease {health.leaseActive ? "expires" : "expired"} at{" "}
-                <AutomationTimestamp
-                  value={health.leaseExpiresAt}
-                  emptyLabel="Not recorded"
-                />
-                .
-              </p>
-            ) : null}
-          </div>
-
-          <div className="rounded-lg border border-line bg-surface-2/30 p-4">
-            <h4 className="font-medium text-fg">Expected cadence</h4>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-lg border border-line bg-surface-2/30 p-4">
+          <h4 className="font-medium text-fg">Latest run</h4>
+          {health.signals.length > 0 ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+              {health.signals.map((signal) => (
+                <li key={signal}>{signal}</li>
+              ))}
+            </ul>
+          ) : (
             <p className="mt-2 text-sm text-muted">
-              Production checks the schedule every minute. When work is due it
-              runs the database-owned maintenance pass; when caught up it can
-              sleep until the next known deadline, with a hard reconciliation
-              roughly once per hour.
+              No failure or unfinished work is recorded.
             </p>
+          )}
+          {health.leaseExpiresAt ? (
             <p className="mt-2 text-xs text-muted">
-              A manual pass uses the same owner-and-token lease as cron. It can
-              recover an expired run, but it cannot force, overlap, or clear an
-              active owner.
+              {health.leaseActive
+                ? "The current run's lock expires "
+                : "The last run's lock expired "}
+              <AutomationTimestamp
+                value={health.leaseExpiresAt}
+                emptyLabel="Not recorded"
+              />
+              .
             </p>
-          </div>
+          ) : null}
         </div>
 
         <div className="rounded-lg border border-line bg-surface-2/30 p-4">
-          <h4 className="font-medium text-fg">Durable delivery backlog</h4>
-          {backlog ? (
-            backlog.league + backlog.inhouse + backlog.markerRetries > 0 ? (
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
-                <li>{backlog.league} league-channel message(s) pending</li>
-                <li>{backlog.inhouse} inhouse message(s) pending</li>
-                <li>
-                  {backlog.markerRetries} result, champion, reminder, or honors
-                  marker(s) awaiting retry
-                </li>
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-muted">
-                No league, inhouse, or marker retry is waiting for delivery.
-              </p>
-            )
-          ) : (
-            <p className="mt-2 text-sm text-danger">
-              Backlog state is unavailable until database readiness is restored.
-            </p>
-          )}
+          <h4 className="font-medium text-fg">How often it runs</h4>
+          <p className="mt-2 text-sm text-muted">
+            Production checks every minute. When work is due it runs a pass;
+            when everything is caught up it can wait for the next known
+            deadline, and it always reconciles about once an hour.
+          </p>
           <p className="mt-2 text-xs text-muted">
-            Pending work survives a process restart and drains in order. A
-            growing count means Discord or the scheduled runner needs attention.
+            A manual run takes the same lock as the scheduled one: it can take
+            over a run that stopped, but never one that is still going.
           </p>
         </div>
+      </div>
 
-        <div
-          className="flex flex-wrap items-start justify-between gap-4 border-t border-line pt-4"
-          role="group"
-          aria-labelledby="automation-manual-run-title"
-        >
-          <div className="min-w-0 flex-1 basis-64">
-            <div
-              id="automation-manual-run-title"
-              className="font-medium text-fg"
-            >
-              Manual recovery
-            </div>
-            <p className="mt-1 text-sm text-muted">
-              {health.disabledReason ??
-                "Run a bounded pass now. If cron acquires the lease first, this request exits without starting duplicate work."}
-            </p>
+      <div className="rounded-lg border border-line bg-surface-2/30 p-4">
+        <h4 className="font-medium text-fg">Discord posts waiting to send</h4>
+        {backlog ? (
+          backlog.league + backlog.inhouse + backlog.markerRetries > 0 ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+              <li>{backlog.league} league-channel post(s) queued</li>
+              <li>{backlog.inhouse} inhouse post(s) queued</li>
+              {backlog.stuck > 0 ? (
+                <li className="text-danger">
+                  {backlog.stuck} of those queued over{" "}
+                  {AUTOMATION_BACKLOG_STUCK_MS / 60_000} minutes ago
+                </li>
+              ) : null}
+              <li>
+                {backlog.markerRetries} announcement(s) waiting to be sent
+                again after a failed send or a result correction
+              </li>
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-muted">Nothing is waiting.</p>
+          )
+        ) : (
+          <p className="mt-2 text-sm text-danger">
+            Can&apos;t read the queue until the database is reachable again.
+          </p>
+        )}
+        <p className="mt-2 text-xs text-muted">
+          Queued posts survive a restart and go out in order, usually within a
+          minute or two. Posts waiting longer than{" "}
+          {AUTOMATION_BACKLOG_STUCK_MS / 60_000} minutes mean Discord or the
+          scheduler needs attention.
+        </p>
+      </div>
+
+      <div
+        className="flex flex-wrap items-start justify-between gap-4 border-t border-line pt-4"
+        role="group"
+        aria-labelledby="automation-manual-run-title"
+      >
+        <div className="min-w-0 flex-1 basis-64">
+          <div
+            id="automation-manual-run-title"
+            className="font-medium text-fg"
+          >
+            Manual recovery
           </div>
-          <ActionForm action={runMaintenanceNow}>
-            <SubmitButton
-              variant={health.kind === "DEGRADED" ? "accent" : "secondary"}
-              disabled={!health.canRunNow}
-            >
-              Run maintenance now
-            </SubmitButton>
-          </ActionForm>
+          <p className="mt-1 text-sm text-muted">
+            {health.disabledReason ??
+              "Run a bounded pass now. If the scheduled run starts first, this request stops without doing the work twice."}
+          </p>
         </div>
-      </CardBody>
-    </Card>
+        <ActionForm action={runMaintenanceNow}>
+          <SubmitButton
+            variant={health.kind === "DEGRADED" ? "accent" : "secondary"}
+            disabled={!health.canRunNow}
+          >
+            Run maintenance now
+          </SubmitButton>
+        </ActionForm>
+      </div>
+    </div>
   );
 }
 
@@ -3975,17 +4937,9 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         ) : (
           <ul className="space-y-2">
             {inWindow.map((m) => {
-              const next = nextAutoSyncAt(m.autoSyncedAt, m.autoSyncAttempts);
-              const backedOff = m.autoSyncAttempts >= 3;
-              const fallbackAt = m.scheduledAt
-                ? new Date(leagueFallbackOpensAt(m.scheduledAt.getTime()))
-                : null;
-              const waitingForFallback =
-                season.dotaLeagueId &&
-                m.status !== "LIVE" &&
-                !m.autoSyncedAt &&
-                fallbackAt != null &&
-                fallbackAt.getTime() > now;
+              const check = autoCheckStatus(m, season, now);
+              const backedOff =
+                m.autoSyncAttempts >= AUTO_CHECK_BACKED_OFF_SCANS;
               return (
                 <li
                   key={m.id}
@@ -4003,48 +4957,22 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                       {m.homeScore}–{m.awayScore}
                     </Badge>
                   ) : null}
-                  <span className="text-xs text-muted">
-                    {m.autoSyncedAt ? (
-                      <>
-                        player accounts scanned{" "}
-                        <LocalTime
-                          ts={m.autoSyncedAt.getTime()}
-                          variant="short"
-                          initial={formatMatchTime(m.autoSyncedAt, "short")}
-                        />
-                        {" · "}
-                        {m.autoSyncAttempts} empty scan
-                        {m.autoSyncAttempts === 1 ? "" : "s"}
-                        {" · next "}
-                        {next && next.getTime() > now ? (
-                          <LocalTime
-                            ts={next.getTime()}
-                            variant="short"
-                            initial={formatMatchTime(next, "short")}
-                          />
-                        ) : (
-                          "on the next ping"
-                        )}
-                      </>
-                    ) : waitingForFallback ? (
-                      <>
-                        waiting for league feed · player-account recovery starts{" "}
-                        <LocalTime
-                          ts={fallbackAt!.getTime()}
-                          variant="short"
-                          initial={formatMatchTime(fallbackAt!, "short")}
-                        />
-                      </>
-                    ) : season.dotaLeagueId ? (
-                      m.status === "LIVE" ? (
-                        "waiting for the next lobby · player-account recovery is ready"
-                      ) : (
-                        "waiting for league feed · player-account recovery is ready"
-                      )
-                    ) : (
-                      "not scanned yet — next ping picks it up"
-                    )}
-                  </span>
+                  {m.autoSyncedAt ? (
+                    <span className="text-xs text-muted">
+                      player accounts scanned{" "}
+                      <LocalTime
+                        ts={m.autoSyncedAt.getTime()}
+                        variant="short"
+                        initial={formatMatchTime(m.autoSyncedAt, "short")}
+                      />
+                      {" · "}
+                      {m.autoSyncAttempts} empty scan
+                      {m.autoSyncAttempts === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                  {check ? (
+                    <AutoCheckLine check={check} className="w-full" />
+                  ) : null}
                   {backedOff ? (
                     <Badge tone="danger">
                       player recovery backed off — check account links or import
@@ -4178,37 +5106,25 @@ function LeagueControls({ season }: { season: Season }) {
               with your league id.
             </li>
             <li>
-              Click <b>Sync league games</b> to pull results automatically — no
-              manual match ids or players&apos; public data needed.
+              Results from those lobbies sync automatically, with no match IDs
+              or public player data needed. Press <b>Sync league games</b> to
+              check now.
             </li>
           </ol>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-          <p className="min-w-[14rem] flex-1 text-xs text-muted">
-            <span className="font-medium text-fg">Report-card backfill:</span>{" "}
-            games imported before hero report cards existed are missing their
-            percentile benchmarks — re-fetch them from OpenDota in small
-            batches.
-          </p>
-          <ActionForm action={enrichGamesAction}>
-            <SubmitButton variant="secondary" size="sm">
-              Enrich stored games
-            </SubmitButton>
-          </ActionForm>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-          <p className="min-w-[14rem] flex-1 text-xs text-muted">
-            <span className="font-medium text-fg">Medal backfill:</span> fetch
-            ranked medals for every account that doesn&apos;t have one yet —
-            including people who signed in but never joined a season. Skips
-            accounts that already have a medal; safe to run again.
-          </p>
-          <ActionForm action={syncAllRanks}>
-            <SubmitButton variant="secondary" size="sm">
-              Sync all medals
-            </SubmitButton>
-          </ActionForm>
-        </div>
+        <p className="rounded-lg border border-line bg-surface-2/40 p-3 text-xs text-muted">
+          <span className="font-medium text-fg">Player data refreshes itself:</span>{" "}
+          about once an hour the automation worker updates Steam names and
+          avatars, the medals and scouting stats of the few players checked
+          longest ago, and adds report-card stats to a few games imported
+          before report cards existed. It pauses when OpenDota refuses a
+          request and while an auction is live. To refresh right away, use
+          the Refresh player data now button in{" "}
+          <a href="#adm-captains" className={textLink()}>
+            Captains &amp; draft
+          </a>
+          .
+        </p>
       </CardBody>
     </AdminSection>
   );
@@ -4245,12 +5161,10 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   // withdrew), and signFreeAgent refuses them — offering them here parks a
   // player on a dead roster one mis-click away. Releasing their players stays
   // available below; that's the legitimate post-withdrawal cleanup.
-  const shortTeams = preStart
+  const short = preStart
     ? []
-    : data.teams.filter(
-        (t) => !t.withdrawn && t.members.length < season.teamSize,
-      );
-  const canSign = !preStart && freeAgents.length > 0 && shortTeams.length > 0;
+    : shortTeams(data.teams, season.teamSize).map(({ team }) => team);
+  const canSign = !preStart && freeAgents.length > 0 && short.length > 0;
   const releasable = preStart
     ? []
     : data.teams.flatMap((t) =>
@@ -4290,14 +5204,14 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
             where nobody is available to fix it. Everywhere else the league
             reports a 4-of-5 side as fully staffed, so this line is the admin's
             only warning before match night. */}
-        {shortTeams.length > 0 ? (
+        {short.length > 0 ? (
           <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
             <b>
-              {shortTeams.length} team
-              {shortTeams.length === 1 ? " is" : "s are"} short of{" "}
+              {short.length} team
+              {short.length === 1 ? " is" : "s are"} short of{" "}
               {season.teamSize}:
             </b>{" "}
-            {shortTeams
+            {short
               .map((t) => `${t.name} (${t.members.length})`)
               .join(", ")}
             .{" "}
@@ -4338,7 +5252,7 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               <option value="" disabled>
                 Team…
               </option>
-              {shortTeams.map((t) => (
+              {short.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name} ({t.members.length}/{season.teamSize})
                 </option>
@@ -4441,47 +5355,18 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   );
 }
 
-function DraftReadinessBadge({
-  reg,
-  season,
-}: {
-  reg: AdminData["players"][number];
-  season: Season;
-}) {
-  if (!season.draftAt || reg.type !== REGISTRATION_TYPE.PLAYER) return null;
-  const state = draftReadiness(reg, season.draftRevision);
-  if (state === DRAFT_READINESS.READY) {
-    return (
-      <Badge
-        tone="success"
-        title={
-          reg.draftConfirmedAt
-            ? `Confirmed ${formatMatchTime(reg.draftConfirmedAt, "full")} for the current draft schedule.`
-            : "Confirmed for the current draft schedule."
-        }
-      >
-        ready ✓
-      </Badge>
-    );
-  }
-  if (state === DRAFT_READINESS.STALE) {
-    return (
-      <Badge
-        tone="accent"
-        title={
-          reg.draftConfirmedFor
-            ? `They confirmed ${formatMatchTime(reg.draftConfirmedFor, "full")}, but the draft schedule changed.`
-            : "They confirmed an earlier draft schedule and need to review the new time."
-        }
-      >
-        reconfirm
-      </Badge>
-    );
-  }
-  return (
-    <Badge title="They have not yet acknowledged the current draft time.">
-      awaiting draft confirmation
-    </Badge>
+/** signupFlags for one registration row (the chips and the review filter). */
+function regSignupFlags(reg: AdminData["players"][number], maxMmr: number) {
+  return signupFlags(
+    {
+      mmr: reg.mmr,
+      roles: reg.roles,
+      favoriteHeroes: reg.favoriteHeroes,
+      statement: reg.statement,
+      captainNote: reg.captainNote,
+      rankTier: reg.user.rankTier,
+    },
+    { maxMmr },
   );
 }
 
@@ -4501,27 +5386,20 @@ function DraftReadinessBadge({
 function SignupRowMeta({
   reg,
   sweep,
-  season,
-  showDraftReadiness = false,
+  maxMmr,
+  leading,
 }: {
   reg: AdminData["players"][number];
   sweep: Promise<Map<string, GuildMembership>> | null;
-  season: Season;
-  showDraftReadiness?: boolean;
+  /** Season.maxMmr: the soft limit the "over soft limit" flag reads. */
+  maxMmr: number;
+  /** Row-specific badges shown first in the chip line. */
+  leading?: React.ReactNode;
 }) {
-  const flags = signupFlags({
-    mmr: reg.mmr,
-    roles: reg.roles,
-    favoriteHeroes: reg.favoriteHeroes,
-    statement: reg.statement,
-    captainNote: reg.captainNote,
-    rankTier: reg.user.rankTier,
-  });
+  const flags = regSignupFlags(reg, maxMmr);
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-      {showDraftReadiness ? (
-        <DraftReadinessBadge reg={reg} season={season} />
-      ) : null}
+      {leading}
       {reg.user.discordId ? (
         <>
           {/* Verified ✓ = proven OWNERSHIP of the handle (the OAuth link) —
@@ -4600,6 +5478,40 @@ async function MembershipChip({
 }
 
 /**
+ * Who league announcements and pings can reach, who they can't, and one post
+ * that chases the rest. Only the webhooks and bot setup stay in the collapsed
+ * Discord notifications section.
+ */
+async function DiscordReachCard({
+  seasonId,
+  rosterUnlinked,
+}: {
+  seasonId: string;
+  /** Once rosters are set: who Needs attention counts (unlinkedRosterFor). */
+  rosterUnlinked: string[] | null;
+}) {
+  const reach = await getDiscordReachFunnel(seasonId);
+  return (
+    <Card>
+      <CardHeader
+        headingLevel={2}
+        title="Discord reach"
+        subtitle="Who league mentions and pings reach, and who to chase."
+      />
+      <CardBody>
+        {reach.registered === 0 ? (
+          <p className="text-sm text-muted">
+            Nobody has signed up for this season yet.
+          </p>
+        ) : (
+          <DiscordReachLine reach={reach} rosterUnlinked={rosterUnlinked} />
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
  * The denominator under every notification the league sends. Personal
  * mentions, the un-RSVP'd ping and the opt-in role all silently skip anyone
  * who never linked Discord — so this is the number that says whether that
@@ -4611,8 +5523,13 @@ async function MembershipChip({
  * chasing them BEFORE the draft is the whole point of the funnel, because
  * after it they're on rosters that need to schedule with them.
  */
-function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
-  if (reach.registered === 0) return null;
+function DiscordReachLine({
+  reach,
+  rosterUnlinked,
+}: {
+  reach: DiscordReachFunnel;
+  rosterUnlinked: string[] | null;
+}) {
   const pct = Math.round((reach.linked / reach.registered) * 100);
   // Below half, the useful next move is chasing links rather than building
   // more notification machinery — so say so rather than just showing a number.
@@ -4636,7 +5553,7 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
     reach.registered - reach.linked > 0 ||
     (g !== null && (g.missing > 0 || g.pending > 0));
   return (
-    <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2">
+    <div>
       <p className="text-sm">
         <b>
           {reach.linked} of {reach.registered}
@@ -4649,9 +5566,21 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
           ? "Mentions and pings reach only these players — everyone else is named as plain text and never notified. Worth chasing links before adding more notifications."
           : "Everyone else is still named in announcements, just not notified."}
       </p>
+      {/* After the draft, match-night pings go to rosters and booked cover.
+          These are the people Needs attention counts; the full list below
+          also holds idle standins and undrafted signups. */}
+      {rosterUnlinked && rosterUnlinked.length > 0 ? (
+        <p className="mt-1 text-xs">
+          <span className="font-medium">
+            On a roster or booked as cover, not linked ({rosterUnlinked.length}):
+          </span>{" "}
+          {capped(rosterUnlinked)}
+        </p>
+      ) : null}
       {reach.unlinkedNames.length > 0 ? (
         <p className="mt-1 text-xs text-muted">
-          Not linked: {capped(reach.unlinkedNames)}
+          {rosterUnlinked ? "Everyone not linked" : "Not linked"}:{" "}
+          {capped(reach.unlinkedNames)}
         </p>
       ) : null}
       {g ? (
@@ -4702,10 +5631,10 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
                   (rendering "1— Discord"), and the copy must not promise a fix
                   it can't deliver — "reload" is a no-op inside the 30s memo
                   window, and a wrong guild id or kicked bot answers this way
-                  FOREVER; the checklist above is what names the broken piece. */}
+                  FOREVER; the bot checklist is what names the broken piece. */}
               Couldn&apos;t check {g.unknown}
               {
-                " — Discord didn't answer. A hiccup clears itself within a minute; if this persists, the bot checklist above says which piece is broken."
+                " — Discord didn't answer. A hiccup clears itself within a minute; if this persists, the bot checklist under Discord notifications says which piece is broken."
               }
             </p>
           ) : null}
@@ -4884,15 +5813,14 @@ function PingHealthLines({
  * Loads everything the Discord card needs. Its own component so the page can
  * put it behind <Suspense> — see the render site for why that matters.
  */
-async function DiscordSection({ seasonId }: { seasonId: string | null }) {
+async function DiscordSection() {
   // Never hand the raw webhook URL to the client — it's a bearer credential.
   // Resolve it server-side only to derive a boolean + a masked fingerprint.
   const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
   const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
-  const [board, pingHealth, discordReach, delivery] = await Promise.all([
+  const [board, pingHealth, delivery] = await Promise.all([
     getInhouseBoardStatus(),
     getPingHealth(),
-    getDiscordReachFunnel(seasonId),
     loadLeagueDeliveryHealth().catch(() => null),
   ]);
   return (
@@ -4907,7 +5835,6 @@ async function DiscordSection({ seasonId }: { seasonId: string | null }) {
       }}
       board={board}
       pingHealth={pingHealth}
-      discordReach={discordReach}
       mutationsAllowed={discordMutationsAllowed()}
     />
   );
@@ -4989,14 +5916,12 @@ function DiscordControls({
   delivery,
   board,
   pingHealth,
-  discordReach,
   mutationsAllowed,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
   delivery: LeagueDeliveryHealth | null;
   board: InhouseBoardStatus;
   pingHealth: PingHealth;
-  discordReach: DiscordReachFunnel;
   mutationsAllowed: boolean;
 }) {
   const { configured, masked, envManaged } = status;
@@ -5271,7 +6196,6 @@ function DiscordControls({
             health={pingHealth}
             mutationsAllowed={mutationsAllowed}
           />
-          <DiscordReachLine reach={discordReach} />
 
           <p className="text-xs text-muted">
             {board.pingRoleId ? (
@@ -5444,6 +6368,7 @@ type NewsPostRow = {
   pinned: boolean;
   createdAt: Date;
   author: { name: string } | null;
+  discord: NewsDiscordCopy;
 };
 
 /**
@@ -5453,12 +6378,14 @@ type NewsPostRow = {
  * Discord card — it is a diagnostic, and must never delay the controls above it.
  */
 async function AdminActivity() {
-  const rows = await recentAdminActions(40);
+  // A preview only: the full log, with search, lives at /admin/activity, so
+  // a 40-row copy here was the same list twice.
+  const rows = await recentAdminActions(5);
   return (
     <AdminSection
       id="adm-activity"
       title="Recent admin activity"
-      subtitle="Who changed what, newest first — the record of destructive actions."
+      subtitle="The last five changes, newest first. The full log is searchable on its own page."
     >
       <CardBody className="space-y-3">
         {rows.length === 0 ? (
@@ -5486,7 +6413,7 @@ async function AdminActivity() {
           </ul>
         )}
         <Link href="/admin/activity" className={textLink()}>
-          Search and browse all recorded activity →
+          All admin activity →
         </Link>
       </CardBody>
     </AdminSection>
@@ -5535,9 +6462,21 @@ async function AdminNews({
     skip: (page - 1) * 20,
     take: 21,
   });
+  // Async server component: rendered once per request, so Date.now() has no
+  // re-render to disagree with.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  // The stored Discord message id never goes to the client; the card only
+  // needs to know which state the copy is in.
+  const posts: NewsPostRow[] = results
+    .slice(0, 20)
+    .map(({ discordMessageId, ...post }) => ({
+      ...post,
+      discord: newsDiscordCopy(discordMessageId, nowMs),
+    }));
   return (
     <div className="space-y-3">
-      <NewsControls posts={results.slice(0, 20)} />
+      <NewsControls posts={posts} />
       {/* Only with somewhere to go: an empty nav still took space-y's gap. */}
       {page > 1 || results.length > 20 ? (
         <nav aria-label="Admin news pages" className="flex gap-3 text-sm">
@@ -5568,7 +6507,7 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
     <AdminSection
       id="adm-news"
       title="League news"
-      subtitle="Announcements shown on the dashboard and /news — also posted to Discord."
+      subtitle="Announcements shown on the dashboard and /news, and in Discord when you tick it."
     >
       <CardBody className="space-y-4">
         <ActionForm action={createNewsPost} className="space-y-3">
@@ -5601,6 +6540,7 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
               .gif URL) instead. Direct image/GIF/MP4 URLs also work.
             </p>
           </Field>
+          <NewsDiscordChoices idSuffix="new" postByDefault />
           <SubmitButton variant="accent">Post announcement</SubmitButton>
         </ActionForm>
 
@@ -5623,6 +6563,7 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
                       initial={formatMatchTime(p.createdAt, "short")}
                     />
                     {p.author ? ` · ${p.author.name}` : ""}
+                    {` · ${newsDiscordLabel(p.discord)}`}
                   </span>
                 </span>
                 <ActionForm action={toggleNewsPin} className="inline">
@@ -5641,17 +6582,138 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
                   <SubmitButton
                     variant="secondary"
                     size="sm"
-                    confirm={`Delete "${p.title}"? This can't be undone.`}
+                    confirm={`Delete "${p.title}"? This can't be undone.${
+                      p.discord.state === "posted"
+                        ? " Its Discord copy is removed too."
+                        : ""
+                    }`}
                   >
                     Delete
                   </SubmitButton>
                 </ActionForm>
+                {/* Keyed on the text so a saved edit remounts the form with
+                    the new text as its defaults (and folds it shut). */}
+                <details
+                  key={`${p.title}\u0000${p.body}`}
+                  className="basis-full"
+                >
+                  <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                    ✎ Edit
+                  </summary>
+                  <ActionForm
+                    action={updateNewsPost}
+                    className="mt-2 space-y-3"
+                    hidden={{ postId: p.id }}
+                  >
+                    <Field label="Title" htmlFor={`newsTitle-${p.id}`}>
+                      <input
+                        id={`newsTitle-${p.id}`}
+                        name="title"
+                        required
+                        maxLength={NEWS_LIMITS.TITLE_MAX}
+                        defaultValue={p.title}
+                        className={inputCls}
+                      />
+                    </Field>
+                    <Field label="Post" htmlFor={`newsBody-${p.id}`}>
+                      <textarea
+                        id={`newsBody-${p.id}`}
+                        name="body"
+                        required
+                        rows={4}
+                        maxLength={NEWS_LIMITS.BODY_MAX}
+                        defaultValue={p.body}
+                        className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
+                      />
+                    </Field>
+                    {p.discord.state === "posted" ? (
+                      <p className="text-xs text-muted">
+                        Saving also updates the Discord copy. Edits never ping
+                        anyone.
+                      </p>
+                    ) : p.discord.state === "posting" &&
+                      !p.discord.interrupted ? (
+                      <p className="text-xs text-muted">
+                        A post to Discord is in progress.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-muted">
+                          {p.discord.state === "posting"
+                            ? "An earlier post to Discord was interrupted. Check the channel before posting it again."
+                            : "This post has no Discord copy the site can update. Posts from before edits existed may still be in the channel."}
+                        </p>
+                        <NewsDiscordChoices idSuffix={p.id} />
+                      </>
+                    )}
+                    <SubmitButton variant="secondary" size="sm">
+                      Save changes
+                    </SubmitButton>
+                  </ActionForm>
+                </details>
               </li>
             ))}
           </ul>
         )}
       </CardBody>
     </AdminSection>
+  );
+}
+
+/** One line on each admin news row: where the post's Discord copy stands. */
+function newsDiscordLabel(copy: NewsDiscordCopy): string {
+  if (copy.state === "posted") return "on Discord";
+  if (copy.state === "posting") {
+    return copy.interrupted ? "Discord post interrupted" : "posting to Discord";
+  }
+  return "not on Discord";
+}
+
+/**
+ * The two Discord choices on a news form. @everyone is never ticked for the
+ * admin: it notifies every member of the server, so it has to be a choice.
+ */
+function NewsDiscordChoices({
+  idSuffix,
+  postByDefault = false,
+}: {
+  idSuffix: string;
+  postByDefault?: boolean;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+        <label
+          htmlFor={`newsDiscord-${idSuffix}`}
+          className="inline-flex items-center gap-2"
+        >
+          <input
+            id={`newsDiscord-${idSuffix}`}
+            type="checkbox"
+            name="postToDiscord"
+            defaultChecked={postByDefault}
+            className="h-4 w-4 accent-[var(--color-brand)]"
+          />
+          Also post to Discord
+        </label>
+        <label
+          htmlFor={`newsEveryone-${idSuffix}`}
+          className="inline-flex items-center gap-2"
+        >
+          <input
+            id={`newsEveryone-${idSuffix}`}
+            type="checkbox"
+            name="pingEveryone"
+            className="h-4 w-4 accent-[var(--color-brand)]"
+          />
+          Ping @everyone
+        </label>
+      </div>
+      <p className="text-xs text-muted">
+        @everyone notifies every member of the server, so keep it for news
+        everyone has to see. It only applies when the post goes to Discord.
+      </p>
+    </div>
   );
 }
 

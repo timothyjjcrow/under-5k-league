@@ -1,5 +1,5 @@
 import { captainNameRun } from "./captain-mmr";
-import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { DRAFT_STATUS, SEASON_STATUS, type SeasonStatus } from "./constants";
 import { MISSING_LEAGUE_TICKET_WARNING } from "./match-hosting";
 
 /**
@@ -7,8 +7,9 @@ import { MISSING_LEAGUE_TICKET_WARNING } from "./match-hosting";
  *
  * The panel had exactly ONE next-step banner — draft-complete → Regular season —
  * added because that transition is silent and everything it gates (auto result
- * sync, match-night check-in, the weekly Discord reminder, the Schedule/Leaders
- * nav) fails QUIETLY when it is missed. But that is not the only silent
+ * sync, result reporting, the weekly Discord reminder, the Leaders nav) fails
+ * QUIETLY when it is missed. The schedule comes first: the Regular season
+ * waits for fixtures, so that step names both, in order. But that is not the only silent
  * transition, it is just the first one anyone got burned by:
  *
  * - A generated schedule with no kickoff times disables auto-sync, week
@@ -17,13 +18,16 @@ import { MISSING_LEAGUE_TICKET_WARNING } from "./match-hosting";
  * - Nothing whatsoever prompts "start the playoffs" once the last regular
  *   result lands, or "record the final" when the bracket is one match from a
  *   champion.
- * - COMPLETE is a dead end: the control that starts next season is inside a
- *   collapsed <details> at the bottom of the page.
+ * - COMPLETE was a dead end: the control that starts next season sat inside a
+ *   collapsed <details> at the bottom of the page. It now leads the page.
  * - A season parked in COMPLETE with an unfinished bracket will never crown
  *   anyone, and every playoff result saves with a success toast regardless.
  *
  * Pure and tested so the wording of each step is checkable without rendering a
- * 3,200-line page. The panel renders exactly what this returns.
+ * 3,200-line page. The panel renders exactly what this returns, directly under
+ * its title: the line used to sit inside the phase card, some 7,000px down a
+ * phone mid-season, so the page's own answer to "what now?" was the last thing
+ * an admin reached.
  */
 export type AdminPhaseInput = {
   seasonStatus: string;
@@ -34,9 +38,21 @@ export type AdminPhaseInput = {
   minPlayers: number;
   teamCount: number;
   regularMatchCount: number;
-  /** Regular matches carrying a kickoff time. */
-  scheduledRegularCount: number;
+  /**
+   * Unplayed regular fixtures (not live) with no kickoff time. Each one gets
+   * no check-in, reminder, automatic result import or pick'em lock, so the
+   * warning stays up until the last one has a time, not just the first.
+   */
+  untimedRegularCount: number;
+  /** Every unplayed regular fixture, future ones included. */
   pendingRegularResults: number;
+  /**
+   * Unplayed regular fixtures that are live or past kickoff: the results
+   * actually due. Optional; without it every unplayed fixture counts.
+   */
+  outstandingRegularResults?: number;
+  /** The next regular kickoff, already written on the league's clock. */
+  nextKickoff?: { week: number; label: string } | null;
   pendingTiebreakerResults?: number;
   /** Already-created tiebreaker fixtures, including completed games. */
   existingTiebreakerCount?: number;
@@ -49,7 +65,7 @@ export type AdminPhaseInput = {
    * ACTIVE player signups whose user never linked Discord. Optional and
    * DB-derived on purpose — this banner renders on the panel's blocking path,
    * so it can never afford a Discord API call; the full in-server funnel
-   * lives on the streamed Discord notifications card. Linking is the step the
+   * lives on the streamed Discord reach card. Linking is the step the
    * league can see for free, and it is also the step that makes the one-click
    * auto-join happen.
    */
@@ -69,12 +85,22 @@ export type AdminPhaseInput = {
   hasLeagueTicket?: boolean;
 };
 
+/** Where the step's control lives: an in-page card anchor or a page. */
+export type NextStepJump = { href: string; label: string };
+
 export type AdminNextStep = {
   /** Imperative headline — the one thing to do now. */
   title: string;
   /** What it unlocks, or what stays broken until it happens. */
   detail: string;
   tone: "action" | "waiting" | "warning" | "done";
+  /**
+   * The card that holds the control the step names. The line renders at the
+   * top of the page, away from every control, so it carries the way there.
+   * Each `#adm-` anchor must also be in the page's jump bar, which is what
+   * opens a folded section on arrival (the admin copy guard checks both).
+   */
+  jump?: NextStepJump;
   /**
    * Set while the season has no league ticket and is still running. Its own
    * field rather than part of `detail` because it is a standing condition, not
@@ -92,7 +118,7 @@ export type AdminNextStep = {
 function discordChaseNote(i: AdminPhaseInput): string {
   const unlinked = i.unlinkedDiscordCount ?? 0;
   if (unlinked === 0) return "";
-  return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord notifications card names them).`;
+  return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord reach card names them).`;
 }
 
 /**
@@ -107,6 +133,56 @@ function captainMmrNote(i: AdminPhaseInput): string {
   return ` Also: ${captainNameRun(names)} ${names.length === 1 ? "has" : "have"} unverified MMR that sets draft budgets. Check ${names.length === 1 ? "it" : "each"} with Edit medal & MMR on the Captains & draft card first; a medal that matches the MMR marks it verified.`;
 }
 
+const JUMP = {
+  captains: { href: "#adm-captains", label: "Go to Captains & draft" },
+  draftRoom: { href: "/draft", label: "Open the draft room" },
+  schedule: { href: "#adm-schedule", label: "Go to Schedule & results" },
+  phase: { href: "#adm-season", label: "Go to phase control" },
+  playoffs: { href: "#adm-playoffs", label: "Go to Playoffs" },
+  tiebreakers: { href: "#adm-tiebreakers", label: "Go to Tiebreakers" },
+} as const satisfies Record<string, NextStepJump>;
+
+/** The phase card's forward button into the Regular season. The draft room
+ * offers the same move under the same name once the auction is finished. */
+export const START_REGULAR_SEASON = "Start the Regular season";
+
+export type PhaseAdvance = {
+  target: SeasonStatus;
+  /** What the button does, not the phase it lands in. */
+  label: string;
+  /** One line under the button. */
+  hint: string;
+};
+
+/**
+ * The phase card's one forward button, named by what it does. Only two
+ * forward moves are plain phase changes. The others belong to commands that
+ * change related data in the same step (Start draft runs the auction, Start
+ * playoffs seeds the bracket, the grand final crowns the champion), so those
+ * buttons live in their own cards and this returns null.
+ *
+ * The phase card used to show five buttons named after phases. "Draft" read
+ * as "run the draft" but only closed signups, and "Regular season" gave no
+ * hint that it switched on sync, reminders and a Discord post.
+ */
+export function phaseAdvance(seasonStatus: string): PhaseAdvance | null {
+  if (seasonStatus === SEASON_STATUS.SIGNUPS) {
+    return {
+      target: SEASON_STATUS.DRAFT,
+      label: "Close signups",
+      hint: "Opens the draft room for players to wait in, without starting the auction. Start draft closes signups too, so you only need this to open the room early.",
+    };
+  }
+  if (seasonStatus === SEASON_STATUS.DRAFT) {
+    return {
+      target: SEASON_STATUS.REGULAR_SEASON,
+      label: START_REGULAR_SEASON,
+      hint: "Turns on automatic result sync, result reporting and the weekly Discord reminder, and posts week 1's fixtures to Discord.",
+    };
+  }
+  return null;
+}
+
 /** Phases in which a missing league ticket still costs results. */
 const TICKET_PHASES: ReadonlySet<string> = new Set([
   SEASON_STATUS.SIGNUPS,
@@ -114,6 +190,28 @@ const TICKET_PHASES: ReadonlySet<string> = new Set([
   SEASON_STATUS.REGULAR_SEASON,
   SEASON_STATUS.PLAYOFFS,
 ]);
+
+function resultCount(n: number): string {
+  return `${n} result${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * Fixtures with no kickoff: the step names how many are left, and still
+ * mentions results that are due, since this step outranks that one.
+ */
+function untimedStep(count: number, outstanding = 0): AdminNextStep {
+  const fixtures = count === 1 ? "1 fixture still has" : `${count} fixtures still have`;
+  const due =
+    outstanding > 0
+      ? ` Also: ${resultCount(outstanding)} past kickoff ${outstanding === 1 ? "is" : "are"} still missing.`
+      : "";
+  return {
+    title: "Next step: give every fixture a kickoff time.",
+    detail: `${fixtures} no kickoff time, so ${count === 1 ? "it gets" : "they get"} no check-in, no weekly Discord reminder, no automatic result import and no pick'em lock. Set each week's time with “Move a match night”, or, before any result is in, regenerate the schedule with a first match night.${due}`,
+    tone: "warning",
+    jump: JUMP.schedule,
+  };
+}
 
 export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
   const step = phaseStep(i);
@@ -130,8 +228,10 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     minPlayers,
     teamCount,
     regularMatchCount,
-    scheduledRegularCount,
+    untimedRegularCount,
     pendingRegularResults,
+    outstandingRegularResults = pendingRegularResults,
+    nextKickoff = null,
     pendingTiebreakerResults = 0,
     existingTiebreakerCount = 0,
     unresolvedPlayoffTieCount = 0,
@@ -152,8 +252,9 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: "Next step: designate captains.",
         detail:
-          "Enough players have signed up. Use “make captain” in the Eligible players list below — each captain becomes a team.",
+          "Enough players have signed up. Use “make captain” in the Eligible players list on the Captains & draft card. Each captain becomes a team.",
         tone: "action",
+        jump: JUMP.captains,
       };
     }
     return {
@@ -163,6 +264,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         captainMmrNote(i) +
         discordChaseNote(i),
       tone: "action",
+      jump: JUMP.captains,
     };
   }
 
@@ -173,22 +275,36 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         detail:
           "Open the draft room to follow it. Pause parks the clocks if a dispute needs settling; Undo last sale reverts the most recent purchase.",
         tone: "waiting",
+        jump: JUMP.draftRoom,
       };
     }
     if (draftStatus === DRAFT_STATUS.PAUSED) {
       return {
         title: "The auction is PAUSED — nothing can sell.",
         detail:
-          "Clocks are parked and every captain is waiting. Press Resume when the dispute is settled.",
+          "Clocks are parked and every captain is waiting. Press Resume on the Captains & draft card when the dispute is settled.",
         tone: "warning",
+        jump: JUMP.captains,
       };
     }
     if (draftStatus === DRAFT_STATUS.COMPLETE) {
+      // Two steps in a fixed order: the Regular season refuses to start
+      // without fixtures, and its Discord post lists week 1.
+      if (regularMatchCount === 0) {
+        return {
+          title:
+            "Next step: generate the schedule (with a first match night), then start the Regular season.",
+          detail: `The auction is finished. Generate the round robin in Schedule & results; players can check in as soon as fixtures have match nights. Then use “${START_REGULAR_SEASON}” in phase control: it switches on automatic result sync and the weekly Discord reminder and posts week 1's fixtures to Discord.`,
+          tone: "action",
+          jump: JUMP.schedule,
+        };
+      }
+      if (untimedRegularCount > 0) return untimedStep(untimedRegularCount);
       return {
-        title: "Next step: move the season to Regular season.",
-        detail:
-          "The auction is finished, but until you do, automatic result sync, match-night check-in, the weekly Discord reminder and the Schedule/Leaders nav links all stay switched off.",
+        title: "Next step: start the Regular season.",
+        detail: `The schedule is ready. Until you press “${START_REGULAR_SEASON}” in phase control, automatic result sync, the weekly Discord reminder and result reporting stay off, and Discord hasn't been told the season has started.`,
         tone: "action",
+        jump: JUMP.phase,
       };
     }
     return {
@@ -202,6 +318,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         captainMmrNote(i) +
         discordChaseNote(i),
       tone: "action",
+      jump: JUMP.captains,
     };
   }
 
@@ -212,22 +329,33 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         detail:
           "There are no fixtures yet, so there is nothing for players to check in to and nothing for results to attach to.",
         tone: "action",
+        jump: JUMP.schedule,
       };
     }
-    if (scheduledRegularCount === 0) {
+    if (untimedRegularCount > 0) {
+      return untimedStep(untimedRegularCount, outstandingRegularResults);
+    }
+    // Outstanding means past kickoff: a fixture weeks away is still to play,
+    // and calling it a missing result read as "enter scores for games nobody
+    // has played" and buried the ones that are really missing.
+    if (outstandingRegularResults > 0) {
       return {
-        title: "Next step: set the match nights.",
+        title: `Season running: ${resultCount(outstandingRegularResults)} outstanding.`,
         detail:
-          "No fixture has a kickoff time, so automatic result sync never scans, no weekly Discord reminder goes out, and pick'em never locks. Use “Move a match night”, or regenerate with a first match night.",
-        tone: "warning",
+          "These fixtures are live or past kickoff. Results import themselves from OpenDota; enter any that can't be found by hand in Schedule & results.",
+        tone: "waiting",
+        jump: JUMP.schedule,
       };
     }
     if (pendingRegularResults > 0) {
+      const toPlay = `${pendingRegularResults} fixture${pendingRegularResults === 1 ? "" : "s"} still to play.`;
       return {
-        title: `Season running — ${pendingRegularResults} result(s) outstanding.`,
-        detail:
-          "Results import themselves from OpenDota; enter any that can't be found by hand in Schedule & results.",
+        title: nextKickoff
+          ? `Season running. Week ${nextKickoff.week} kicks off ${nextKickoff.label}.`
+          : "Season running.",
+        detail: `${toPlay} Nothing to enter before kickoff: results import themselves from OpenDota after each match.`,
         tone: "waiting",
+        jump: JUMP.schedule,
       };
     }
     if (pendingTiebreakerResults > 0) {
@@ -236,6 +364,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         detail:
           "Enter the current game in Tiebreakers. For three-team ties, each confirmed result creates the next required game automatically. Keep the season in Regular season until every required tie is resolved.",
         tone: "waiting",
+        jump: JUMP.tiebreakers,
       };
     }
     if (unresolvedPlayoffTieCount > 0) {
@@ -245,6 +374,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
           detail:
             "Review Tiebreakers, then use “Create next tiebreaker match” in the Playoffs controls, or schedule the next round if one is required. Keep the season in Regular season until every required tie is resolved.",
           tone: "action",
+          jump: JUMP.playoffs,
         };
       }
       return {
@@ -252,6 +382,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         detail:
           "Teams remain tied for playoff qualification or seeding. Schedule the tiebreaker week before starting the playoffs.",
         tone: "action",
+        jump: JUMP.playoffs,
       };
     }
     return {
@@ -259,6 +390,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       detail:
         "Every regular-season result is in. Starting the playoffs seeds the bracket from the standings and moves the season to the Playoffs phase.",
       tone: "action",
+      jump: JUMP.playoffs,
     };
   }
 
@@ -267,23 +399,26 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: "Next step: seed the bracket.",
         detail:
-          "The season is in the Playoffs phase but no bracket exists. Move it back to Regular season, verify the final standings, then use Start playoffs to seed the bracket and enter Playoffs atomically.",
+          "The season is in the Playoffs phase but no bracket exists. Move it back to Regular season with “Fix the phase” in phase control, verify the final standings, then use Start playoffs to seed the bracket and enter Playoffs atomically.",
         tone: "warning",
+        jump: JUMP.phase,
       };
     }
     if (unfinishedPlayoffCount > 0) {
       return {
         title: `Playoffs underway — ${unfinishedPlayoffCount} bracket match(es) left.`,
         detail:
-          "Each result advances the bracket automatically, and the final crowns the champion and completes the season. Keep the season in Playoffs until then.",
+          "Results import themselves; enter any that can't be found in the Playoffs card. Each result advances the bracket, and the final crowns the champion and completes the season. Keep the season in Playoffs until then.",
         tone: "waiting",
+        jump: JUMP.playoffs,
       };
     }
     return {
       title: "The bracket is finished but no champion is recorded.",
       detail:
-        "Result sync normally reconciles this automatically. Reload once; if it remains, inspect the grand final in Schedule & results and correct or reopen that result without resetting earlier rounds.",
+        "Result sync normally reconciles this automatically. Reload once; if it remains, inspect the grand final in the Playoffs card and correct or reopen that result without resetting earlier rounds.",
       tone: "warning",
+      jump: JUMP.playoffs,
     };
   }
 
@@ -293,17 +428,18 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         title: "Complete is missing its champion.",
         detail:
           playoffMatchCount === 0
-            ? "No postseason fixtures exist. Move the season to Regular season, verify the final standings, then use Start playoffs to seed a bracket; a raw phase change cannot safely invent one."
+            ? "No postseason fixtures exist. Move the season to Regular season with “Fix the phase” in phase control, verify the final standings, then use Start playoffs to seed a bracket; a raw phase change cannot safely invent one."
             : unfinishedPlayoffCount > 0
-              ? "This is a legacy close-out state. Move the season back to Playoffs and finish the remaining bracket; new phase controls no longer create Complete without a champion."
-              : "This is a recovery state, not a finished season. Move back to Playoffs and inspect the grand final so result reconciliation can crown the authoritative winner.",
+              ? "This is a legacy close-out state. Move the season back to Playoffs with “Fix the phase” in phase control and finish the remaining bracket; new phase controls no longer create Complete without a champion."
+              : "This is a recovery state, not a finished season. Move back to Playoffs with “Fix the phase” in phase control and inspect the grand final so result reconciliation can crown the authoritative winner.",
         tone: "warning",
+        jump: JUMP.phase,
       };
     }
     return {
-      title: "Season complete. Choose the league's next state.",
+      title: "Season complete. Open the next season when you're ready.",
       detail:
-        "Open “Season handoff” below. You can archive this season and enter an offseason, or preserve it while immediately opening signups for the next season. Results, rosters, and the champion are kept under History either way.",
+        "Use “Season handoff” at the top of this page. Until then the league stays in Complete, with the champion and bracket on the home page, and inhouse keeps running. The finished season's results, rosters and champion stay under Season history after the handoff.",
       tone: "done",
     };
   }

@@ -157,21 +157,33 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   ).toHaveCount(0);
   await joinerContext.close();
 
+  // Who has confirmed lives behind the preflight's "Show who" toggle (one
+  // count, not a chip on every row).
+  const showWho = async () => {
+    await page
+      .locator("#adm-draft-confirmations")
+      .evaluate((el) => ((el as HTMLDetailsElement).open = true));
+  };
   await page.reload();
+  await showWho();
   for (const who of [name, joinerName]) {
-    const row = page.locator(".max-h-80 div.rounded-lg", { hasText: who }).first();
-    await expect(row.getByText("ready ✓", { exact: true })).toBeVisible();
+    await expect(
+      page
+        .getByRole("list", { name: "Ready", exact: true })
+        .getByText(who, { exact: false }),
+    ).toBeVisible();
   }
 
   // Moving the date must invalidate the old acknowledgement rather than
   // leaving a misleading permanent ready flag.
   await page.getByLabel(/Draft night/).fill("2026-08-15T19:00");
   await page.getByRole("button", { name: "Update draft night" }).click();
+  await expect(page.getByText("Must reconfirm (", { exact: false })).toBeAttached();
+  await showWho();
   await expect(
     page
-      .locator(".max-h-80 div.rounded-lg", { hasText: name })
-      .first()
-      .getByText("reconfirm", { exact: true }),
+      .getByRole("list", { name: "Must reconfirm", exact: true })
+      .getByText(name, { exact: false }),
   ).toBeVisible();
 
   await playerPage.reload();
@@ -190,9 +202,10 @@ test("typed confirmation actually removes a designated captain", async ({
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
   );
 
-  const dendiRow = page.locator(".max-h-80 div.rounded-lg", {
-    hasText: "Dendi",
-  });
+  const dendiRow = page
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Dendi" });
   await dendiRow.getByRole("button", { name: "make captain" }).click();
   await expect(
     page.getByRole("heading", { name: "Captains (1)" }),

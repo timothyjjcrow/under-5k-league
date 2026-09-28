@@ -30,6 +30,11 @@ export type AutomationWorker = (options: {
   signal: AbortSignal;
 }) => Promise<AutomationWorkerOutcome>;
 
+/** Result sync, finishing with the hourly player data refresh that only the
+ *  scheduled worker runs. */
+const scheduledWorker: AutomationWorker = (options) =>
+  runResultSync({ ...options, refreshPlayerData: true });
+
 export type AutomationLease = {
   kind: "acquired";
   token: string;
@@ -100,6 +105,7 @@ const SAFE_WORKER_CODES = new Set([
   "NOTIFICATION_RETRY_FAILED",
   "LEAGUE_NOTIFICATION_DELIVERY_FAILED",
   "CURSOR_READ_FAILED",
+  "PLAYER_DATA_REFRESH_FAILED",
   "LEAGUE_BUDGET_EXHAUSTED",
   "INHOUSE_BUDGET_EXHAUSTED",
   "DRAFT_BUDGET_EXHAUSTED",
@@ -385,7 +391,7 @@ export async function runAutomation(
   if (options.signal?.aborted) abortFromCaller();
   else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
 
-  const worker: AutomationWorker = options.worker ?? runResultSync;
+  const worker: AutomationWorker = options.worker ?? scheduledWorker;
   try {
     const outcome = await worker({ deadlineMs, signal: controller.signal });
     const finishedAtMs = clock();

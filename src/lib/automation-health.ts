@@ -30,8 +30,17 @@ export type AutomationHealthKind =
   | "HEALTHY"
   | "DEGRADED";
 
+/** Why a DEGRADED view is degraded; null for every other kind. */
+export type AutomationProblem =
+  | "LEASE_EXPIRED"
+  | "FAILED"
+  | "INCOMPLETE"
+  | "OVERDUE"
+  | "UNKNOWN_STATUS";
+
 export type AutomationHealthView = {
   kind: AutomationHealthKind;
+  problem: AutomationProblem | null;
   label: string;
   headline: string;
   description: string;
@@ -90,6 +99,7 @@ const OPERATOR_CODES = new Set([
   "NOTIFICATION_RETRY_FAILED",
   "LEAGUE_NOTIFICATION_DELIVERY_FAILED",
   "CURSOR_READ_FAILED",
+  "PLAYER_DATA_REFRESH_FAILED",
   "LEAGUE_BUDGET_EXHAUSTED",
   "INHOUSE_BUDGET_EXHAUSTED",
   "DRAFT_BUDGET_EXHAUSTED",
@@ -267,6 +277,7 @@ function baseView(
 ): AutomationHealthView {
   return {
     kind,
+    problem: null,
     label,
     headline,
     description,
@@ -395,6 +406,7 @@ export function automationHealthView(
         "The lease is no longer active. The next scheduled or manual run can recover it without bypassing ownership.",
       ),
       ...shared,
+      problem: "LEASE_EXPIRED",
       leaseExpired: true,
       signals,
       canRunNow: true,
@@ -459,7 +471,101 @@ export function automationHealthView(
       failureDescription,
     ),
     ...shared,
+    problem:
+      state.lastStatus === "FAILED"
+        ? "FAILED"
+        : state.lastStatus === "DEGRADED"
+          ? "INCOMPLETE"
+          : state.lastStatus === "SUCCEEDED"
+            ? completionOverdue
+              ? "OVERDUE"
+              : "INCOMPLETE"
+            : "UNKNOWN_STATUS",
     signals,
     canRunNow: true,
   };
+}
+
+/** Discord posts still queued this long after they were created are stuck. */
+export const AUTOMATION_BACKLOG_STUCK_MS = 10 * 60_000;
+
+export type AutomationBacklog = {
+  /** League-channel posts queued or sending. */
+  league: number;
+  /** Inhouse posts queued or sending. */
+  inhouse: number;
+  /** Announcements whose send failed, or honors corrections, awaiting retry. */
+  markerRetries: number;
+  /** League and inhouse posts still unsent AUTOMATION_BACKLOG_STUCK_MS after being queued. */
+  stuck: number;
+};
+
+/**
+ * True when the runner card can fold to one line: the worker is healthy or
+ * mid-run with a clean history, and nothing is stuck waiting to send. An
+ * unreadable backlog is never quiet.
+ */
+export function automationQuiet(
+  view: AutomationHealthView,
+  backlog: AutomationBacklog | undefined,
+): boolean {
+  return (
+    (view.kind === "HEALTHY" || view.kind === "RUNNING") &&
+    view.consecutiveFailures === 0 &&
+    backlog !== undefined &&
+    backlog.stuck === 0 &&
+    backlog.markerRetries === 0
+  );
+}
+
+/**
+ * The worker's lines for /admin's Needs attention card, in plain words: what
+ * is wrong and what it delays. Empty while automation is healthy and nothing
+ * is stuck. A backlog that is merely queued (it drains within a pass or two)
+ * is not a problem; one stuck for ten minutes, or a failed send, is.
+ */
+export function automationAttention(
+  view: AutomationHealthView,
+  backlog: AutomationBacklog | undefined,
+): string[] {
+  const lines: string[] = [];
+  const late = "so results, reminders and Discord posts may be late";
+  const streak =
+    view.consecutiveFailures > 1
+      ? ` (${view.consecutiveFailures} runs in a row)`
+      : "";
+  if (view.kind === "UNAVAILABLE") {
+    lines.push(
+      "Automation status can't be read. Check that the database is reachable.",
+    );
+  } else if (view.kind === "NEVER") {
+    lines.push(
+      "Automation has never run, so results, reminders and Discord posts aren't automatic yet. Check that the scheduler is set up.",
+    );
+  } else if (view.kind === "DEGRADED") {
+    lines.push(
+      view.problem === "LEASE_EXPIRED"
+        ? "Automation's last run stopped before it finished. The next scheduled run picks it up; if it doesn't, press Run maintenance now."
+        : view.problem === "FAILED"
+          ? `Automation's last run failed${streak}, ${late}.`
+          : view.problem === "OVERDUE"
+            ? "Automation hasn't finished a run in over four minutes. Check that the scheduler is still running."
+            : view.problem === "UNKNOWN_STATUS"
+              ? "Automation saved a status this page doesn't recognise. Open the runner card for details."
+              : `Automation's last run left work unfinished${streak}, ${late}.`,
+    );
+  }
+  if (backlog) {
+    if (backlog.stuck > 0) {
+      lines.push(
+        `${backlog.stuck} Discord post${backlog.stuck === 1 ? " has" : "s have"} waited over ${AUTOMATION_BACKLOG_STUCK_MS / 60_000} minutes to send.`,
+      );
+    }
+    if (backlog.markerRetries > 0) {
+      lines.push(
+        `${backlog.markerRetries} Discord announcement${backlog.markerRetries === 1 ? " is" : "s are"} waiting to be sent again after a failed send or a result correction.`,
+      );
+    }
+  }
+  return lines;
 }

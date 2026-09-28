@@ -23,14 +23,19 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { logAdminAction, recentAdminActions } from "@/lib/admin-log";
 import {
+  assignStandin,
   generateSchedule,
   recordResult,
   removeCaptain,
+  removeGame,
+  removeStandin,
+  setMatchTime,
   setWeekNight,
 } from "@/app/actions/admin";
 import { SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import {
+  addGameToMatch,
   generateRegularSchedule,
   makeSeason,
   makeTeam,
@@ -114,7 +119,11 @@ describe("destructive actions leave a trail", () => {
 
     await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({
+        firstNight: "2026-10-07T20:00",
+        firstNightTs: String(Date.now() + 7 * 864e5),
+        expectedActiveSeasonId: season.id,
+      }),
     );
 
     const [row] = await recentAdminActions(1);
@@ -217,5 +226,104 @@ describe("the activity card's copy is honest about results and week moves", () =
     // The server-TZ rule: counts only, no formatted datetime.
     expect(row.summary).not.toMatch(/\d{1,2}:\d{2}/);
     expect(row.seasonId).toBe(season.id);
+  });
+});
+
+describe("log lines name the fixture, never an internal id", () => {
+  // The log has no foreign keys on purpose (a row must outlive what it
+  // describes), so "kickoff for match cm9…" could never be read back. The
+  // names are written in at the time instead.
+  async function namedSchedule() {
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    await makeTeam(season.id, "Alpha", 1);
+    await makeTeam(season.id, "Bravo", 2);
+    const [match] = await generateRegularSchedule(season.id);
+    const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
+    const name = (id: string) => teams.find((t) => t.id === id)!.name;
+    return {
+      season,
+      match,
+      label: `Week 1: ${name(match.homeTeamId)} vs ${name(match.awayTeamId)}`,
+    };
+  }
+
+  it("setMatchTime", async () => {
+    const { season, match, label } = await namedSchedule();
+    const when = new Date(Date.now() + 3 * 864e5);
+    const res = await setMatchTime(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        matchId: match.id,
+        scheduledAt: when.toISOString(),
+        scheduledAtTs: String(when.getTime()),
+      }),
+    );
+    expect(res).not.toHaveProperty("error");
+
+    const [row] = await recentAdminActions(1);
+    expect(row.action).toBe("setMatchTime");
+    expect(row.summary).toContain(`Set the kickoff for ${label}`);
+    expect(row.summary).not.toContain(match.id);
+  });
+
+  it("assignStandin and removeStandin", async () => {
+    const { season, match, label } = await namedSchedule();
+    const home = await prisma.team.findUniqueOrThrow({
+      where: { id: match.homeTeamId },
+    });
+    const covered = await makeUser("Covered Carl");
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: home.id, userId: covered.id, price: 1 },
+    });
+    const sub = await makeUser("Standin Sam");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: sub.id,
+        type: "STANDIN",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+
+    const assigned = await assignStandin(
+      empty,
+      fd({ matchId: match.id, standinUserId: sub.id, replacingUserId: covered.id }),
+    );
+    expect(assigned).not.toHaveProperty("error");
+    const [assignRow] = await recentAdminActions(1);
+    expect(assignRow.action).toBe("assignStandin");
+    expect(assignRow.summary).toBe(
+      `Assigned Standin Sam to cover Covered Carl for ${home.name} in ${label}`,
+    );
+
+    const assignment = await prisma.standinAssignment.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+    const removed = await removeStandin(
+      empty,
+      fd({ assignmentId: assignment.id }),
+    );
+    expect(removed).not.toHaveProperty("error");
+    const [removeRow] = await recentAdminActions(1);
+    expect(removeRow.action).toBe("removeStandin");
+    expect(removeRow.summary).toBe(
+      `Removed Standin Sam's cover for ${home.name} in ${label}`,
+    );
+    expect(removeRow.summary).not.toContain(assignment.id);
+  });
+
+  it("removeGame", async () => {
+    const { match, label } = await namedSchedule();
+    const game = await addGameToMatch(match.id, "888001", match.homeTeamId);
+
+    const res = await removeGame(empty, fd({ gameId: game.id }));
+    expect(res?.error).toBeUndefined();
+
+    const [row] = await recentAdminActions(1);
+    expect(row.action).toBe("removeGame");
+    expect(row.summary).toContain(`Removed Dota game 888001 from ${label}`);
+    expect(row.summary).not.toContain(match.id);
   });
 });

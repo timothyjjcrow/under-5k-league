@@ -152,8 +152,10 @@ test("a tied playoff place requires a BO1 weekend before the bracket starts", as
   await expectFinalTracker(page, [winnerName], [loserName]);
   await page.goto("/admin#playoffs");
   await start.click();
+  // Once seeded, the card's repairs (Reset playoffs among them) fold into
+  // "Fix the bracket" under the series.
   await expect(
-    page.getByRole("button", { name: "Reset playoffs", exact: true }),
+    page.locator("#playoffs summary", { hasText: "Fix the bracket" }),
   ).toBeVisible();
   await page.goto("/schedule#playoff-bracket");
   await expect(
@@ -395,7 +397,7 @@ for (const resetFinal of [false, true]) {
     await expectFinalTracker(page, [firstPlace, secondPlace], [thirdPlace]);
     await page.goto("/admin#playoffs");
     await start.click();
-    await expect(page.getByRole("button", { name: "Reset playoffs", exact: true })).toBeVisible();
+    await expect(page.locator("#playoffs summary", { hasText: "Fix the bracket" })).toBeVisible();
     await page.goto("/schedule#playoff-bracket");
     await expect(matchDetails).toContainText(`${totalGames} of ${totalGames} series complete`);
     await expect(matchDetails).not.toContainText("Week 7");

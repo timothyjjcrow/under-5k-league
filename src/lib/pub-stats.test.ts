@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  pickStaleAccounts,
   PUB_QUIET_DAYS,
   PUB_STATS_REFRESH_MS,
   parsePubStats,
@@ -210,5 +211,59 @@ describe("poolPubRecord", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("pickStaleAccounts", () => {
+  const now = Date.UTC(2026, 8, 1);
+  const day = 86_400_000;
+  const at = (daysAgo: number) => new Date(now - daysAgo * day);
+  const pick = (
+    rows: { id: string; pubStatsAt: Date | null }[],
+    extra: Partial<{ signupIds: Set<string>; lastFailedId: string | null; limit: number }> = {},
+  ) =>
+    pickStaleAccounts(rows, {
+      signupIds: extra.signupIds ?? new Set(),
+      lastFailedId: extra.lastFailedId ?? null,
+      nowMs: now,
+      limit: extra.limit ?? 10,
+    }).map((u) => u.id);
+
+  it("skips fresh snapshots and orders never-checked, then oldest, then id", () => {
+    expect(
+      pick([
+        { id: "fresh", pubStatsAt: at(1) },
+        { id: "old", pubStatsAt: at(30) },
+        { id: "older", pubStatsAt: at(90) },
+        { id: "b-never", pubStatsAt: null },
+        { id: "a-never", pubStatsAt: null },
+      ]),
+    ).toEqual(["a-never", "b-never", "older", "old"]);
+  });
+
+  it("puts this season's signups first and caps the pass", () => {
+    expect(
+      pick(
+        [
+          { id: "outsider", pubStatsAt: null },
+          { id: "signup", pubStatsAt: at(10) },
+          { id: "other", pubStatsAt: null },
+        ],
+        { signupIds: new Set(["signup"]), limit: 2 },
+      ),
+    ).toEqual(["signup", "other"]);
+  });
+
+  it("tries last time's failed account last, and lists nobody twice", () => {
+    expect(
+      pick(
+        [
+          { id: "stuck", pubStatsAt: null },
+          { id: "next", pubStatsAt: at(20) },
+          { id: "stuck", pubStatsAt: null },
+        ],
+        { signupIds: new Set(["stuck"]), lastFailedId: "stuck" },
+      ),
+    ).toEqual(["next", "stuck"]);
   });
 });

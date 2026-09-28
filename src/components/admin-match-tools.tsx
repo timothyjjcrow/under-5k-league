@@ -2,7 +2,6 @@ import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import {
-  DRAFT_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
   REGISTRATION_STATUS,
@@ -10,14 +9,17 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { matchCoverIssues } from "@/lib/admin-sections";
 import {
   matchCorrectionContext,
   matchLogisticsOpen,
   matchResultsOpen,
+  postAuctionWorkOpen,
   standinAssignmentOpen,
 } from "@/lib/league-lifecycle";
 import { MATCH_ANCHOR, adminMatchRowId } from "@/lib/match-anchors";
 import { formatMatchTime } from "@/lib/match-time";
+import { type AutoCheck, autoCheckCopy, autoCheckStatus } from "@/lib/result-sync";
 import { seatValue } from "@/lib/standin";
 import {
   parseSingleTiebreakerSlot,
@@ -67,6 +69,9 @@ export type AdminResultRowMatch = {
   homeScore: number;
   awayScore: number;
   scheduledAt: Date | null;
+  /** The automatic result check's clock (autoCheckStatus). */
+  autoSyncedAt: Date | null;
+  autoSyncAttempts: number;
   games: {
     id: string;
     dotaMatchId: string;
@@ -83,6 +88,7 @@ type StandinBlockTeam = {
 
 type StandinBlockAssignment = {
   id: string;
+  matchId: string;
   teamId: string;
   standinUserId: string;
   replacingUserId: string | null;
@@ -120,6 +126,105 @@ export function adminStandinPoolWhere(
 const selectCls =
   "h-9 min-w-0 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60";
 
+/**
+ * When the scheduled worker next looks for this match's games, or why it
+ * won't, so an admin can tell "it's coming in 3 minutes" from "it will never
+ * run" before pressing Auto-fetch games.
+ */
+export function AutoCheckLine({
+  check,
+  className = "",
+}: {
+  check: AutoCheck;
+  className?: string;
+}) {
+  const copy = autoCheckCopy(check);
+  return (
+    <p
+      data-testid="auto-check"
+      className={`text-xs ${copy.problem ? "text-danger" : "text-muted"} ${className}`}
+    >
+      {copy.lead}
+      {copy.at != null ? (
+        <LocalTime
+          ts={copy.at}
+          variant="short"
+          initial={formatMatchTime(new Date(copy.at), "short")}
+        />
+      ) : null}
+      {copy.tail}
+    </p>
+  );
+}
+
+/** Why a decided playoff series is read-only, said once where a card lists
+ *  several (the rows then print the short form). */
+export const LATER_ROUND_NOTE =
+  "A series that already advanced a later playoff round is read-only, because changing its winner would strand the teams downstream. Use Reset playoffs under “Fix the bracket” to reseed the full bracket before correcting one.";
+
+/** Why a phase's results can't be corrected right now, or null if they can. */
+export function resultsLockNote(seasonStatus: string, phase: string): string | null {
+  if (matchResultsOpen(seasonStatus, phase)) return null;
+  if (phase === MATCH_PHASE.REGULAR)
+    return "Regular-season results are read-only outside the Regular season phase. Move the phase back and reseed before correcting one.";
+  if (phase === MATCH_PHASE.TIEBREAKER)
+    return "Tiebreaker results are read-only once playoffs begin. Return to Regular season before correcting one.";
+  return "Playoff results are read-only unless the season is in Playoffs.";
+}
+
+/**
+ * The help every result row used to repeat, printed ONCE above a card's
+ * match rows. Each row's match-id field points aria-describedby at `id`, so
+ * a screen reader still hears the import hint on every field.
+ */
+export function MatchRowsHelp({
+  id,
+  seasonStatus,
+  draftStatus,
+  canImport,
+  hasScheduled,
+  notes = [],
+}: {
+  id: string;
+  seasonStatus: string;
+  draftStatus: string | null;
+  /** Some row below shows the Auto-fetch / Add game controls. */
+  canImport: boolean;
+  /** Some row below is still SCHEDULED, so its kickoff matters. */
+  hasScheduled: boolean;
+  /** Card-wide reasons rows are read-only, said once instead of per row. */
+  notes?: (string | null)[];
+}) {
+  const kickoffOpen = postAuctionWorkOpen(seasonStatus, draftStatus);
+  const kickoffNote = !hasScheduled
+    ? null
+    : kickoffOpen
+      ? "Changing or clearing a kickoff resets that match’s check-ins, cancels its open reschedule proposals, and reopens the week’s Discord reminder."
+      : seasonStatus === SEASON_STATUS.COMPLETE
+        ? "Kickoff times are locked because the completed season is read-only."
+        : seasonStatus === SEASON_STATUS.SIGNUPS ||
+            seasonStatus === SEASON_STATUS.DRAFT
+          ? "Kickoff times can be edited once the auction is complete."
+          : "Kickoff times are locked in the current league phase.";
+  const lines = [...new Set(notes.filter((n): n is string => !!n))];
+  return (
+    <div className="space-y-1 text-xs text-muted">
+      {canImport ? (
+        <p id={id}>
+          Enter a score by hand, or bring in the real games: Auto-fetch games
+          looks them up on OpenDota (players need &ldquo;Expose Public Match
+          Data&rdquo; on), and Add game takes a numeric Dota match ID or an
+          OpenDota/Dotabuff match URL.
+        </p>
+      ) : null}
+      {kickoffNote ? <p>{kickoffNote}</p> : null}
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  );
+}
+
 // One match's result + scheduling + imported-games controls. /admin renders
 // one per fixture (Schedule & results, Tiebreakers); the match page renders
 // the same row inside its Admin tools card.
@@ -129,10 +234,14 @@ export function MatchResultRow({
   label,
   expectedActiveSeasonId,
   seasonStatus,
+  leagueId,
+  nowMs,
   draftStatus,
   championTeamId,
   correctionBlockedByLaterRound,
   isSoleLatestPlayoffSeries,
+  laterRoundNote = "full",
+  importHelpId,
   id,
   idPrefix = "",
   captainImportOnPage = false,
@@ -142,10 +251,22 @@ export function MatchResultRow({
   label: React.ReactNode;
   expectedActiveSeasonId: string;
   seasonStatus: string;
+  /** The season's Valve league id: its feed runs before player-account scans. */
+  leagueId: string | null;
+  nowMs: number;
   draftStatus: string | null;
   championTeamId: string | null;
   correctionBlockedByLaterRound: boolean;
   isSoleLatestPlayoffSeries: boolean;
+  /**
+   * How much of the "a later round depends on this" explanation the ROW
+   * prints: "full" when it is the only place it appears, "short" when the
+   * card has printed the full version once above, "none" when every row in
+   * the card shares it (the card's note says it for all of them).
+   */
+  laterRoundNote?: "full" | "short" | "none";
+  /** The card's <MatchRowsHelp> id, which the match-id field points at. */
+  importHelpId?: string;
   /** The row's anchor on /admin (adminMatchRowId), so a link can land on it. */
   id?: string;
   /** Prefixes the row's input ids where another copy of a control may share
@@ -185,6 +306,45 @@ export function MatchResultRow({
   const canCorrectImported =
     resultCorrectionOpen || championshipFinalCorrection;
   const logisticsOpen = matchLogisticsOpen(seasonStatus, draftStatus, m.status);
+  // Phase-wide reasons ("until the Regular season starts") would repeat on
+  // every row of a freshly generated schedule; only per-match ones show here.
+  const autoCheck = autoCheckStatus(
+    m,
+    { status: seasonStatus, dotaLeagueId: leagueId },
+    nowMs,
+  );
+  const rowAutoCheck =
+    autoCheck &&
+    !(autoCheck.kind === "none" && autoCheck.reason !== "no-kickoff")
+      ? autoCheck
+      : null;
+  // Only what is true of THIS row. The phase-wide "results are read-only"
+  // reasons are printed once by the card (<MatchRowsHelp>): on a finished
+  // season every regular row used to repeat the same paragraph.
+  const rowNote = correctionBlockedByLaterRound
+    ? laterRoundNote === "none"
+      ? null
+      : laterRoundNote === "short"
+        ? "Read-only: a later round depends on this result."
+        : m.phase === MATCH_PHASE.REGULAR ||
+            m.phase === MATCH_PHASE.TIEBREAKER
+          ? "Tiebreaker fixtures depend on this result. Use Reset tiebreaker week in the Playoffs controls before correcting it."
+          : LATER_ROUND_NOTE
+    : !resultOpen
+      ? m.phase !== MATCH_PHASE.FINAL
+        ? null
+        : crownedGrandFinal
+          ? "This result crowned the champion. Use the grand-final correction below to retract the title and reopen only this series."
+          : conflictingChampionFinal
+            ? "The stored champion conflicts with this completed final. Use the correction below to retract the inconsistent title and reconcile only this series."
+            : unresolvedCompletedFinal
+              ? championTeamId == null
+                ? "This completed grand final has no authoritative champion. Move the season back to Playoffs with the phase control, then reconcile this result; title-retraction controls stay hidden because no title exists."
+                : !championIsFinalParticipant
+                  ? "The recorded champion is not a participant in this completed grand final. Use the dedicated playoff recovery controls to restore a consistent bracket and title; targeted title-retraction controls stay hidden because this final cannot safely retract that team."
+                  : "The bracket does not have one sole authoritative latest final. Use the dedicated playoff recovery controls to restore a single consistent final before targeted title correction is available."
+              : null
+      : `Score derived from ${m.games.length} imported game${m.games.length === 1 ? "" : "s"}. Remove the incorrect game below; the series recomputes automatically.`;
   return (
     <div
       id={id}
@@ -206,30 +366,9 @@ export function MatchResultRow({
               {m.forfeit ? "final · forfeit" : "final"}
             </Badge>
           ) : null}
-          <span className="w-full text-xs text-muted">
-            {correctionBlockedByLaterRound
-              ? m.phase === MATCH_PHASE.REGULAR ||
-                m.phase === MATCH_PHASE.TIEBREAKER
-                ? "Tiebreaker fixtures depend on this result. Use Reset tiebreaker week in the Playoffs controls before correcting it."
-                : "This series already advanced a later playoff round. It is read-only because changing its winner would strand downstream teams; use Reset playoffs to reseed the full bracket before correcting it."
-              : !resultOpen
-                ? m.phase === MATCH_PHASE.TIEBREAKER
-                  ? "Tiebreaker results are read-only once playoffs begin. Return to Regular season before correcting one."
-                  : m.phase === MATCH_PHASE.REGULAR
-                    ? "Regular-season results are read-only outside the active Regular season phase. Move the phase back and reseed before correcting one."
-                    : crownedGrandFinal
-                      ? "This result crowned the champion. Use the grand-final correction below to retract the title and reopen only this series."
-                      : conflictingChampionFinal
-                        ? "The stored champion conflicts with this completed final. Use the correction below to retract the inconsistent title and reconcile only this series."
-                        : unresolvedCompletedFinal
-                          ? championTeamId == null
-                            ? "This completed grand final has no authoritative champion. Move the season back to Playoffs with the phase control, then reconcile this result; title-retraction controls stay hidden because no title exists."
-                            : !championIsFinalParticipant
-                              ? "The recorded champion is not a participant in this completed grand final. Use the dedicated playoff recovery controls to restore a consistent bracket and title; targeted title-retraction controls stay hidden because this final cannot safely retract that team."
-                              : "The bracket does not have one sole authoritative latest final. Use the dedicated playoff recovery controls to restore a single consistent final before targeted title correction is available."
-                          : "Playoff results are read-only unless the active season is in Playoffs."
-                : `Score derived from ${m.games.length} imported game${m.games.length === 1 ? "" : "s"}. Remove the incorrect game below; the series recomputes automatically.`}
-          </span>
+          {rowNote ? (
+            <span className="w-full text-xs text-muted">{rowNote}</span>
+          ) : null}
         </div>
       ) : (
         <ActionForm
@@ -389,11 +528,6 @@ export function MatchResultRow({
           <SubmitButton variant="secondary" size="sm">
             {m.scheduledAt ? "Update time" : "Set time"}
           </SubmitButton>
-          <span className="w-full">
-            Changing or clearing kickoff resets player check-ins, cancels open
-            reschedule proposals, and reopens this week&rsquo;s Discord
-            reminder.
-          </span>
         </ActionForm>
       ) : (
         <p className="text-xs text-muted">
@@ -406,18 +540,12 @@ export function MatchResultRow({
             />
           ) : (
             "not set"
-          )}{" "}
-          ·{" "}
-          {m.status !== MATCH_STATUS.SCHEDULED
-            ? `time editing is unavailable while this match is ${m.status.toLowerCase()}.`
-            : seasonStatus === SEASON_STATUS.COMPLETE
-              ? "kickoff editing is locked because the completed season is read-only."
-              : seasonStatus === SEASON_STATUS.SIGNUPS
-                ? "kickoff editing opens after the auction is complete."
-                : seasonStatus === SEASON_STATUS.DRAFT &&
-                    draftStatus !== DRAFT_STATUS.COMPLETE
-                  ? "kickoff editing opens when the auction is complete."
-                  : "kickoff editing is locked in the current league phase."}
+          )}
+          {/* A finished match needs no reason, and the season-wide ones are
+              printed once by the card. Only a live series says why here. */}
+          {m.status === MATCH_STATUS.LIVE
+            ? " · the time is locked while the series is live."
+            : null}
         </p>
       )}
 
@@ -461,6 +589,8 @@ export function MatchResultRow({
         </ul>
       ) : null}
 
+      {rowAutoCheck ? <AutoCheckLine check={rowAutoCheck} /> : null}
+
       {resultCorrectionOpen &&
       m.status !== MATCH_STATUS.COMPLETED &&
       captainImportOnPage ? (
@@ -478,6 +608,7 @@ export function MatchResultRow({
           importAction={importGameAction}
           detectAction={autoDetectAction}
           idPrefix={idPrefix}
+          describedBy={importHelpId}
         />
       ) : m.status === MATCH_STATUS.COMPLETED &&
         (resultCorrectionOpen || championshipFinalCorrection) ? (
@@ -549,28 +680,12 @@ export function StandinMatchBlock({
         {label}: {home?.name ?? "?"} vs {away?.name ?? "?"}
       </div>
       {(() => {
-        // Only current roster members can need cover — a released
-        // player's (or unassigned standin's) stale OUT row would
-        // otherwise raise an alert no assignment can ever clear.
-        const rosterIds = new Set(
-          [home, away].flatMap((t) => t?.members.map((mm) => mm.userId) ?? []),
-        );
-        const out = outRsvps.filter(
-          (r) => r.matchId === m.id && rosterIds.has(r.userId),
-        );
-        const covered = new Set(
-          asg.map((a) => a.replacingUserId).filter(Boolean),
-        );
-        const needing = out.filter((r) => !covered.has(r.userId));
-        // The OTHER direction: an assigned STANDIN who has declared OUT. The
-        // roster filter above deliberately excludes them, so the seat read as
-        // covered while the cover had quit — the one state this card exists
-        // to catch that it couldn't see. Distinct copy because the fix path
-        // differs (remove/replace, not add).
-        const assignedIds = new Set(asg.map((a) => a.standinUserId));
-        const standinOut = outRsvps.filter(
-          (r) => r.matchId === m.id && assignedIds.has(r.userId),
-        );
+        // Only current roster members can need cover, and the OTHER
+        // direction, an assigned STANDIN who has declared OUT, gets distinct
+        // copy because the fix differs (remove/replace, not add). The same
+        // matchCoverIssues decides which matches open /admin's card at the top.
+        const { uncovered: needing, standinsOut: standinOut } =
+          matchCoverIssues(m, teams, asg, outRsvps);
         return (
           <>
             {needing.length > 0 ? (
@@ -742,6 +857,7 @@ export async function AdminMatchTools({
           status: true,
           teamSize: true,
           championTeamId: true,
+          dotaLeagueId: true,
         },
       }),
       prisma.draft.findUnique({
@@ -806,6 +922,18 @@ export async function AdminMatchTools({
   const showStandins =
     match.status !== MATCH_STATUS.COMPLETED &&
     (assignOpen || match.standins.length > 0);
+  // A server component renders once per request; the auto-check line is a
+  // snapshot, like the same line on /admin.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const importHelpId = `admin-import-help-${match.id}`;
+  // The row's import controls render exactly when this is true, so the help
+  // they point at is printed only for them.
+  const rowImports =
+    matchResultsOpen(season.status, match.phase) &&
+    !correction.correctionBlockedByLaterRound &&
+    match.status !== MATCH_STATUS.COMPLETED &&
+    !viewerHasCaptainTools;
   return (
     <Card className="overflow-hidden">
       <AutoOpenDetails
@@ -830,11 +958,22 @@ export async function AdminMatchTools({
           </span>
         </summary>
         <div className="space-y-3 border-t border-line-soft px-4 py-4 sm:px-5">
+          <MatchRowsHelp
+            id={importHelpId}
+            seasonStatus={season.status}
+            draftStatus={draftStatus}
+            canImport={rowImports}
+            hasScheduled={match.status === MATCH_STATUS.SCHEDULED}
+            notes={[resultsLockNote(season.status, match.phase)]}
+          />
           <MatchResultRow
             m={match}
             teams={teams}
             expectedActiveSeasonId={season.id}
             seasonStatus={season.status}
+            leagueId={season.dotaLeagueId}
+            nowMs={nowMs}
+            importHelpId={importHelpId}
             draftStatus={draftStatus}
             championTeamId={season.championTeamId}
             correctionBlockedByLaterRound={

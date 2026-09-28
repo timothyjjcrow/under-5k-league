@@ -152,15 +152,16 @@ describe("captainMmrWarning", () => {
         cap("d", 0),
       ]),
     );
-    // Leading space: it is appended to the base confirm sentence.
-    expect(line.startsWith(" ")).toBe(true);
+    // Its own line: it is appended to the Start-draft confirm.
+    expect(line.startsWith("\nCaptain MMR sets budgets but isn't verified: ")).toBe(true);
     expect(line).toContain(
       "Cap b (no medal), Cap c (outside the Legend 3 range), Cap d (no MMR on file)",
     );
     expect(line).not.toContain("Cap a");
     expect(line).toContain("Edit medal & MMR");
     // Warn-and-name, never a block.
-    expect(line).toContain("Starting anyway is allowed.");
+    expect(line).toContain("or start anyway");
+    expect(line.split("\n")).toHaveLength(2);
   });
 
   it("caps the names so a confirm stays a dialog", () => {

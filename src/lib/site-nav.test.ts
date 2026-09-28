@@ -163,7 +163,6 @@ describe("site navigation", () => {
       const listed = everyHref(s);
       for (const href of [
         "/",
-        "/players",
         "/inhouse",
         "/scrims",
         "/news",
@@ -171,6 +170,17 @@ describe("site navigation", () => {
       ]) {
         expect(listed, href).toContain(href);
       }
+    }
+  });
+
+  // Between seasons (a cancelled season, or reactivating an old one) there
+  // is no player pool and /players only says so. A finished season rests in
+  // Complete, where the pool is still listed.
+  it("lists Players whenever a season is active, and not between seasons", () => {
+    for (const s of allStates()) {
+      expect(everyHref(s).includes("/players"), String(s.phase)).toBe(
+        s.phase !== null,
+      );
     }
   });
 
@@ -246,7 +256,7 @@ describe("site navigation", () => {
   });
 
   it("follows the season's own chapters in the primary row", () => {
-    expect(hrefs(seasonNav(state(null)))).toEqual(["/", "/players", "/inhouse"]);
+    expect(hrefs(seasonNav(state(null)))).toEqual(["/", "/inhouse"]);
     expect(hrefs(seasonNav(state(SEASON_STATUS.SIGNUPS)))).toEqual([
       "/",
       "/players",
@@ -582,6 +592,12 @@ describe("phone tab bar and its sheet", () => {
         expect(hrefs(phoneDock(items, null, cta).tabs)).toContain("/inhouse");
       }
     }
+  });
+
+  it("leaves the team slot empty between seasons rather than list no pool", () => {
+    const between = phoneDock(seasonNav(state(null, null, FULL)), null);
+    expect(hrefs(between.tabs)).toEqual(["/", "/inhouse"]);
+    expect(between.sheet).toEqual([]);
   });
 
   it("keeps the season's current focus and the viewer's team one tap away", () => {

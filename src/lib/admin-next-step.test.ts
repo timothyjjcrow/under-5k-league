@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { adminNextStep, type AdminPhaseInput } from "./admin-next-step";
-import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import {
+  adminNextStep,
+  phaseAdvance,
+  START_REGULAR_SEASON,
+  type AdminPhaseInput,
+} from "./admin-next-step";
+import { DRAFT_STATUS, SEASON_PHASE_ORDER, SEASON_STATUS } from "./constants";
 
 const base: AdminPhaseInput = {
   seasonStatus: SEASON_STATUS.SIGNUPS,
@@ -9,7 +14,7 @@ const base: AdminPhaseInput = {
   minPlayers: 10,
   teamCount: 0,
   regularMatchCount: 0,
-  scheduledRegularCount: 0,
+  untimedRegularCount: 0,
   pendingRegularResults: 0,
   playoffMatchCount: 0,
   unfinishedPlayoffCount: 0,
@@ -167,13 +172,35 @@ describe("adminNextStep — draft", () => {
     expect(s.title).toMatch(/PAUSED/);
   });
 
-  it("keeps the draft-complete banner that everything else was modelled on", () => {
+  it("sends a finished auction to the schedule first, then names the season start", () => {
+    // The Regular season waits for fixtures, so the step names both moves
+    // in order and links to the schedule card.
     const s = at({
       seasonStatus: SEASON_STATUS.DRAFT,
       draftStatus: DRAFT_STATUS.COMPLETE,
     });
-    expect(s.title).toMatch(/Regular season/);
+    expect(s.title).toBe(
+      "Next step: generate the schedule (with a first match night), then start the Regular season.",
+    );
+    expect(s.jump?.href).toBe("#adm-schedule");
+    expect(s.detail).toContain(`“${START_REGULAR_SEASON}”`);
     expect(s.detail).toMatch(/result sync/i);
+    expect(s.detail).toMatch(/week 1/);
+  });
+
+  it("points at the phase button once the schedule exists", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.DRAFT,
+      draftStatus: DRAFT_STATUS.COMPLETE,
+      regularMatchCount: 6,
+      pendingRegularResults: 6,
+    });
+    expect(s.title).toBe("Next step: start the Regular season.");
+    expect(s.jump?.href).toBe("#adm-season");
+    expect(s.detail).toContain(`“${START_REGULAR_SEASON}”`);
+    // Check-in already works in Draft once fixtures have match nights, so
+    // the step must not claim it waits for the season.
+    expect(s.detail).not.toMatch(/check-in/i);
   });
 });
 
@@ -182,7 +209,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 2,
     });
     expect(result.title).toMatch(/schedule a tiebreaker week/i);
@@ -194,7 +220,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 2,
       pendingTiebreakerResults: 1,
     });
@@ -208,7 +233,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 3,
       existingTiebreakerCount: 1,
       pendingTiebreakerResults: 0,
@@ -224,7 +248,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 3,
       existingTiebreakerCount: 4,
       pendingTiebreakerResults: 1,
@@ -237,7 +260,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       existingTiebreakerCount: 4,
       unresolvedPlayoffTieCount: 0,
       pendingTiebreakerResults: 0,
@@ -252,35 +274,103 @@ describe("adminNextStep — regular season", () => {
     );
   });
 
-  // A schedule with no kickoff times silently disables auto-sync, the weekly
-  // reminder and pick'em locks for the whole season — the toast that said so is
-  // long gone by the time it matters.
+  // A fixture with no kickoff time gets no auto-sync, weekly reminder,
+  // check-in or pick'em lock — the toast that said so is long gone by the
+  // time it matters.
   it("warns when no fixture has a kickoff time", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 0,
+      untimedRegularCount: 15,
+      pendingRegularResults: 15,
     });
     expect(s.tone).toBe("warning");
-    expect(s.detail).toMatch(/pick'em never locks/i);
+    expect(s.title).toBe("Next step: give every fixture a kickoff time.");
+    expect(s.detail).toMatch(/^15 fixtures still have no kickoff time/);
+    expect(s.detail).toMatch(/no pick'em lock/i);
+    expect(s.jump?.href).toBe("#adm-schedule");
+  });
+
+  // Timing week 1 alone used to clear the warning while weeks 2-5 still read
+  // "Time TBC".
+  it("keeps warning until the last fixture has a time", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      untimedRegularCount: 1,
+      pendingRegularResults: 15,
+    });
+    expect(s.tone).toBe("warning");
+    expect(s.detail).toMatch(/^1 fixture still has no kickoff time, so it gets/);
+  });
+
+  it("warns before the season starts too, while fixtures lack a time", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.DRAFT,
+      draftStatus: DRAFT_STATUS.COMPLETE,
+      regularMatchCount: 6,
+      untimedRegularCount: 4,
+      pendingRegularResults: 6,
+    });
+    expect(s.title).toBe("Next step: give every fixture a kickoff time.");
+    expect(s.jump?.href).toBe("#adm-schedule");
   });
 
   it("reports outstanding results without nagging for an action", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       pendingRegularResults: 3,
     });
     expect(s.tone).toBe("waiting");
-    expect(s.title).toContain("3 result(s)");
+    expect(s.title).toBe("Season running: 3 results outstanding.");
+  });
+
+  // Day one used to read "15 result(s) outstanding" for fixtures weeks away.
+  it("calls only past-kickoff fixtures outstanding", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      pendingRegularResults: 12,
+      outstandingRegularResults: 1,
+      nextKickoff: { week: 2, label: "Wed 14 Oct, 20:00 CEST" },
+    });
+    expect(s.title).toBe("Season running: 1 result outstanding.");
+    expect(s.detail).toMatch(/live or past kickoff/);
+  });
+
+  it("names the next kickoff while every unplayed fixture is still to come", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      pendingRegularResults: 15,
+      outstandingRegularResults: 0,
+      nextKickoff: { week: 1, label: "Wed 7 Oct, 20:00 CEST" },
+    });
+    expect(s.title).toBe(
+      "Season running. Week 1 kicks off Wed 7 Oct, 20:00 CEST.",
+    );
+    expect(s.detail).toMatch(/^15 fixtures still to play\. Nothing to enter before kickoff/);
+    expect(s.title).not.toMatch(/outstanding/);
+    expect(s.tone).toBe("waiting");
+  });
+
+  it("keeps the due results in view behind the missing-kickoff warning", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      untimedRegularCount: 6,
+      pendingRegularResults: 12,
+      outstandingRegularResults: 2,
+    });
+    expect(s.title).toMatch(/kickoff time/);
+    expect(s.detail).toMatch(/Also: 2 results past kickoff are still missing\.$/);
   });
 
   it("prompts the playoffs once every result is in — nothing else ever does", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       pendingRegularResults: 0,
     });
     expect(s.title).toMatch(/Start playoffs/);
@@ -352,17 +442,21 @@ describe("adminNextStep — playoffs and completion", () => {
     expect(s.detail).not.toMatch(/back to Playoffs/i);
   });
 
-  it("offers a deliberate offseason or next season after a valid finish", () => {
+  // The league rests in Season complete between seasons; the offseason is
+  // only for a cancelled season or reactivating an old one, so the next step
+  // no longer offers it as a peer of opening signups.
+  it("points at opening the next season after a valid finish", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.COMPLETE,
       hasChampion: true,
     });
-    expect(s.title).toMatch(/choose the league's next state/i);
-    // Name the control EXACTLY as the page labels it.
-    expect(s.detail).toContain("Season handoff");
-    expect(s.detail).toContain("offseason");
-    // Archiving sounds destructive; say plainly that nothing is lost.
-    expect(s.detail).toMatch(/kept/i);
+    expect(s.tone).toBe("done");
+    expect(s.title).toMatch(/open the next season/i);
+    // Name the control EXACTLY as the page labels it, where it now is.
+    expect(s.detail).toContain("“Season handoff” at the top of this page");
+    expect(s.detail).not.toMatch(/offseason/i);
+    // Handing off sounds destructive; say plainly that nothing is lost.
+    expect(s.detail).toMatch(/stay under Season history/i);
   });
 });
 
@@ -437,5 +531,90 @@ describe("adminNextStep — league ticket", () => {
       ticketless({ seasonStatus: SEASON_STATUS.COMPLETE, hasChampion: true })
         .ticketWarning,
     ).toBeUndefined();
+  });
+});
+
+// The line renders under the page title, away from the controls it names, so
+// every step that asks for something links to the card that holds it.
+describe("adminNextStep — links to the control", () => {
+  it("points each action at the card that holds its control", () => {
+    expect(at({ playerCount: 10, minPlayers: 10 }).jump?.href).toBe(
+      "#adm-captains",
+    );
+    expect(
+      at({ playerCount: 10, minPlayers: 10, teamCount: 4 }).jump?.href,
+    ).toBe("#adm-captains");
+    expect(
+      at({ seasonStatus: SEASON_STATUS.DRAFT, draftStatus: DRAFT_STATUS.IN_PROGRESS })
+        .jump?.href,
+    ).toBe("/draft");
+    expect(at({ seasonStatus: SEASON_STATUS.REGULAR_SEASON }).jump?.href).toBe(
+      "#adm-schedule",
+    );
+    expect(
+      at({
+        seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+        regularMatchCount: 15,
+      }).jump?.href,
+    ).toBe("#adm-playoffs");
+    expect(at({ seasonStatus: SEASON_STATUS.PLAYOFFS }).jump?.href).toBe(
+      "#adm-season",
+    );
+    // Playoff series and their result controls live in the Playoffs card.
+    for (const unfinishedPlayoffCount of [0, 2]) {
+      expect(
+        at({
+          seasonStatus: SEASON_STATUS.PLAYOFFS,
+          playoffMatchCount: 3,
+          unfinishedPlayoffCount,
+        }).jump?.href,
+      ).toBe("#adm-playoffs");
+    }
+  });
+
+  it("links nothing while there is nothing to do", () => {
+    expect(at({ playerCount: 2, minPlayers: 10 }).jump).toBeUndefined();
+    expect(
+      at({ seasonStatus: SEASON_STATUS.COMPLETE, hasChampion: true }).jump,
+    ).toBeUndefined();
+  });
+});
+
+describe("phaseAdvance — the phase card's one forward button", () => {
+  it("names the two plain phase moves by what they do", () => {
+    expect(phaseAdvance(SEASON_STATUS.SIGNUPS)).toMatchObject({
+      target: SEASON_STATUS.DRAFT,
+      label: "Close signups",
+    });
+    expect(phaseAdvance(SEASON_STATUS.DRAFT)).toMatchObject({
+      target: SEASON_STATUS.REGULAR_SEASON,
+      label: START_REGULAR_SEASON,
+    });
+  });
+
+  it("says Close signups does not start the auction", () => {
+    expect(phaseAdvance(SEASON_STATUS.SIGNUPS)?.hint).toMatch(
+      /without starting the auction/,
+    );
+  });
+
+  it("leaves the moves that change other data to their own commands", () => {
+    for (const status of [
+      SEASON_STATUS.REGULAR_SEASON,
+      SEASON_STATUS.PLAYOFFS,
+      SEASON_STATUS.COMPLETE,
+    ]) {
+      expect(phaseAdvance(status)).toBeNull();
+    }
+  });
+
+  it("only ever moves one stage forward", () => {
+    for (const status of SEASON_PHASE_ORDER) {
+      const advance = phaseAdvance(status);
+      if (!advance) continue;
+      expect(SEASON_PHASE_ORDER.indexOf(advance.target)).toBe(
+        SEASON_PHASE_ORDER.indexOf(status) + 1,
+      );
+    }
   });
 });

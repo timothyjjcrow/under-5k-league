@@ -1016,6 +1016,54 @@ describe("enrichStoredGames", () => {
       .toMatchObject({ value: expect.any(String) });
   });
 
+  it("marks a game OpenDota no longer has as done, so it isn't fetched again", async () => {
+    const game = await legacyGame("9004");
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (_id, _o, report) => {
+      if (report) report.missing = true;
+      return null;
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({
+      enriched: 0,
+      failed: 1,
+      remaining: 0,
+    });
+    const [line] = JSON.parse(
+      (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
+    );
+    // The done marker and nothing else: attribution and stats as they were.
+    expect(line).toEqual({ ...LEGACY_LINE, benchmarks: null });
+
+    vi.mocked(fetchOpenDotaMatch).mockClear();
+    expect(await enrichStoredGames()).toMatchObject({ failed: 0, remaining: 0 });
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+  });
+
+  it("a missing game doesn't stop a stopOnFailure batch; a refusal does", async () => {
+    // Queue order is fetchedAt, oldest first.
+    for (const [i, id] of ["9005", "9006", "9007"].entries()) {
+      const game = await legacyGame(id);
+      await prisma.game.update({
+        where: { id: game.id },
+        data: { fetchedAt: new Date(Date.now() - (10 - i) * 60_000) },
+      });
+    }
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id, _o, report) => {
+      if (id === "9005" && report) report.missing = true;
+      return null;
+    });
+
+    const res = await enrichStoredGames(3, { stopOnFailure: true });
+
+    // 9005 is marked done and the batch carries on to 9006, which OpenDota
+    // refuses: that ends the batch before 9007.
+    expect(res).toMatchObject({ failed: 2, remaining: 2, stoppedOnFailure: true });
+    expect(vi.mocked(fetchOpenDotaMatch).mock.calls.map(([id]) => id)).toEqual([
+      "9005",
+      "9006",
+    ]);
+  });
+
   it("preserves an identity correction committed during the provider lookup", async () => {
     const game = await legacyGame("9006");
     const corrected = JSON.stringify([{ ...LEGACY_LINE, userId: "corrected-user", teamId: "corrected-team" }]);

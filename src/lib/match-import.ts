@@ -1684,6 +1684,20 @@ export type EnrichResult = {
   enriched: number;
   failed: number;
   remaining: number;
+  /** stopOnFailure ended the batch at a game OpenDota didn't return. */
+  stoppedOnFailure?: boolean;
+};
+
+export type EnrichOptions = OpenDotaFetchOptions & {
+  /** Time left that a game needs before it is started (unattended runs). */
+  minStartMs?: number;
+  /**
+   * Stop at the first game OpenDota refuses (a rate limit, an outage or a
+   * timeout) instead of spending the rest of the batch on it. The automatic
+   * refresh sets this so it backs off rather than piling on. A game OpenDota
+   * no longer has (404) doesn't stop the batch: it is marked done.
+   */
+  stopOnFailure?: boolean;
 };
 
 /**
@@ -1693,10 +1707,15 @@ export type EnrichResult = {
  * stored JSON — attribution (userId/teamId) and recorded results are never
  * touched. Every processed line gains a `benchmarks` key (null when OpenDota
  * has none), which is also the "already enriched" marker, so runs are
- * idempotent. Bounded per run so one click can't burn the API budget; run
- * again to continue where it left off.
+ * idempotent. A game OpenDota answers 404 for gets the same marker with no
+ * new fields: asking again can't add stats, and left unmarked it would be
+ * fetched, and fail, on every hourly pass forever. Bounded per run so one
+ * click can't burn the API budget; run again to continue where it left off.
  */
-export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
+export async function enrichStoredGames(
+  limit = 12,
+  options: EnrichOptions = {},
+): Promise<EnrichResult> {
   // The `"benchmarks":` key only ever appears as a line's own field — a
   // player whose persona name is literally `benchmarks` serializes with a
   // comma after it, so the colon keeps the marker probe honest.
@@ -1712,9 +1731,10 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
 
   let enriched = 0;
   let failed = 0;
-  // A failed game keeps its stored JSON but moves to the back of the
-  // fetchedAt-ordered queue — otherwise a dozen permanently-unfetchable games
-  // at the head would starve every later run of this bounded batch.
+  // A game OpenDota refused (or whose JSON is malformed) keeps its stored
+  // JSON but moves to the back of the fetchedAt-ordered queue, so a few bad
+  // games at the head can't starve every later run of this bounded batch.
+  // Games OpenDota no longer has leave the queue instead (see below).
   const writeIfUnchanged = (
     game: { id: string; players: string },
     data: { players?: string; fetchedAt?: Date },
@@ -1734,7 +1754,9 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   });
   const requeue = (game: { id: string; players: string }) =>
     writeIfUnchanged(game, { fetchedAt: new Date() });
+  let stoppedOnFailure = false;
   for (const game of batch) {
+    if (!canStartOpenDotaFetch(options, options.minStartMs)) break;
     let lines: PlayerStat[];
     try {
       const parsed = JSON.parse(game.players);
@@ -1746,10 +1768,27 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
       continue;
     }
 
-    const od = await fetchOpenDotaMatch(game.dotaMatchId);
+    const report = { missing: false };
+    const od = await fetchOpenDotaMatch(game.dotaMatchId, options, report);
     if (!od) {
       failed++;
+      if (report.missing) {
+        // OpenDota has no such match any more, so no later run can add
+        // stats either. Mark every line done (benchmarks: null, nothing
+        // else added) so the game leaves the queue. Not a refusal: the
+        // batch, and the hourly refresh, carry on.
+        await writeIfUnchanged(game, {
+          players: JSON.stringify(
+            lines.map((line) => ({ ...line, benchmarks: null })),
+          ),
+        });
+        continue;
+      }
       await requeue(game);
+      if (options.stopOnFailure) {
+        stoppedOnFailure = true;
+        break;
+      }
       continue;
     }
 
@@ -1790,6 +1829,7 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
     enriched,
     failed,
     remaining: await prisma.game.count({ where: unenriched }),
+    ...(stoppedOnFailure ? { stoppedOnFailure } : {}),
   };
 }
 

@@ -422,7 +422,14 @@ export function SiteHeader({
         aria-label="Quick navigation"
         className="mobile-dock fixed inset-x-0 bottom-0 z-40 border-t border-line bg-bg/95 px-3 pt-1.5 shadow-[0_-8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl lg:hidden"
       >
-        <div className="mx-auto grid max-w-lg grid-cols-4 gap-1">
+        {/* Between seasons there is no team or player tab (see phoneDock), so
+            the bar has one column fewer rather than an empty slot. */}
+        <div
+          className={cn(
+            "mx-auto grid max-w-lg gap-1",
+            dock.tabs.length < 3 ? "grid-cols-3" : "grid-cols-4",
+          )}
+        >
           {dock.tabs.map((item) => {
             const active =
               isActive(pathname, item.href, myTeamHref) ||

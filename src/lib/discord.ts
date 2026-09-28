@@ -297,8 +297,42 @@ export function draftCompleteAnnouncement(
   };
 }
 
-export function regularSeasonStartedMessage(seasonName: string): string {
-  return `⚔️ **The ${name(seasonName)} regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
+/** The most opening fixtures the season-start post lists one per line. */
+const OPENING_FIXTURES_SHOWN = 12;
+
+/**
+ * The season-start post. The Regular season can only start once fixtures
+ * exist, so the post carries the opening week: who plays whom and when, and
+ * who has the bye. Without it no player heard their week-1 opponent or
+ * kickoff until the reminder a day before.
+ */
+export function regularSeasonStartedMessage(
+  seasonName: string,
+  opening?: {
+    week: number;
+    fixtures: { home: string; away: string; whenMs: number | null }[];
+    byes: string[];
+  },
+): string {
+  const head = `⚔️ **The ${name(seasonName)} regular season is live.**`;
+  const link = `<${resolveSiteUrl()}/schedule>`;
+  if (!opening || opening.fixtures.length === 0) {
+    return `${head} Check the schedule, match times, and availability for opening week: ${link}`;
+  }
+  const shown = opening.fixtures.slice(0, OPENING_FIXTURES_SHOWN);
+  const lines = shown.map((f) => {
+    const when =
+      f.whenMs != null && Number.isFinite(f.whenMs)
+        ? ` — <t:${Math.floor(f.whenMs / 1000)}:F>`
+        : "";
+    return `• ${name(f.home)} vs ${name(f.away)}${when}`;
+  });
+  const more = opening.fixtures.length - shown.length;
+  if (more > 0) lines.push(`• and ${more} more on the schedule`);
+  const byes = opening.byes.length
+    ? `\nBye: ${opening.byes.map((team) => name(team)).join(", ")}`
+    : "";
+  return `${head} Week ${opening.week}:\n${lines.join("\n")}${byes}\nCheck in for your match and see the full schedule: ${link}`;
 }
 
 export function draftPausedMessage(seasonName: string): string {
@@ -1708,6 +1742,14 @@ export async function postWebhookMessage(
   url: string,
   payload: WebhookPayload,
 ): Promise<{ id: string } | null> {
+  return postKeepingId(url, payload, NO_MENTIONS);
+}
+
+async function postKeepingId(
+  url: string,
+  payload: WebhookPayload,
+  allowedMentions: { parse: string[] },
+): Promise<{ id: string } | null> {
   const target = runtimeWebhookUrl(url);
   if (!target) return null;
   if (!discordMutationsAllowed()) return null;
@@ -1715,7 +1757,7 @@ export async function postWebhookMessage(
     const res = await fetch(`${webhookApiUrl(target)}?wait=true`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...payload, allowed_mentions: NO_MENTIONS }),
+      body: JSON.stringify({ ...payload, allowed_mentions: allowedMentions }),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
@@ -1783,23 +1825,120 @@ export async function patchWebhookMessage(
   }
 }
 
-/** Remove a message this webhook sent (admin "Remove board"). Best-effort. */
-export async function deleteWebhookMessage(
+/**
+ * How a webhook message DELETE went. "gone" is Discord's 404: this webhook
+ * has no such message. That is either a message already deleted in the
+ * channel or one a DIFFERENT webhook sent (message routes are scoped to the
+ * webhook that sent them), so it is not proof the message is off the channel.
+ */
+type WebhookDeleteResult = "deleted" | "gone" | "failed";
+
+async function deleteWebhookMessageResult(
   url: string,
   messageId: string,
-): Promise<boolean> {
+): Promise<WebhookDeleteResult> {
   const target = runtimeWebhookUrl(url);
-  if (!target) return false;
-  if (!discordMutationsAllowed()) return false;
+  if (!target) return "failed";
+  if (!discordMutationsAllowed()) return "failed";
   try {
     const res = await fetch(
       `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
       { method: "DELETE", signal: AbortSignal.timeout(2500) },
     );
-    return res.ok || res.status === 404; // already gone is a success
+    if (res.ok) return "deleted";
+    return res.status === 404 ? "gone" : "failed";
   } catch {
-    return false;
+    return "failed";
   }
+}
+
+/** Remove a message this webhook sent (admin "Remove board"). Best-effort. */
+export async function deleteWebhookMessage(
+  url: string,
+  messageId: string,
+): Promise<boolean> {
+  // Already gone counts as success here: the board stores the id of the
+  // webhook that posted it and never deletes a stranded board through this
+  // route (see inhouse-board-service), so its 404 really is "deleted".
+  return (await deleteWebhookMessageResult(url, messageId)) !== "failed";
+}
+
+/** How a news post's trip to Discord went. */
+export type NewsDiscordPost =
+  | { ok: true; id: string }
+  | { ok: false; reason: "no-webhook" | "failed" };
+
+/**
+ * Post a league news announcement to the league channel and keep its message
+ * id, so an edit can rewrite this copy and a delete can remove it. News goes
+ * straight to the webhook rather than through the announcement queue because
+ * the queue's sender cannot hand back an id; the admin sees the outcome in the
+ * toast and can post again from the edit form.
+ *
+ * `pingEveryone` is the admin's explicit tick on the form. Only then does the
+ * message open with @everyone and only then does `allowed_mentions` let it
+ * ping; every other news post parses no mentions at all, like the rest of the
+ * league's announcements.
+ */
+export async function postNewsToDiscord(
+  content: string,
+  pingEveryone: boolean,
+): Promise<NewsDiscordPost> {
+  const body = pingEveryone ? `@everyone\n${content}` : content;
+  if (!isValidDiscordContent(body)) return { ok: false, reason: "failed" };
+  let url: string | null;
+  try {
+    url = await getWebhookUrl();
+  } catch {
+    return { ok: false, reason: "failed" };
+  }
+  if (!url) return { ok: false, reason: "no-webhook" };
+  const sent = await postKeepingId(
+    url,
+    { content: body },
+    pingEveryone ? { parse: ["everyone"] } : NO_MENTIONS,
+  );
+  return sent ? { ok: true, id: sent.id } : { ok: false, reason: "failed" };
+}
+
+/**
+ * Rewrite a news post's Discord copy after an edit. The edit never pings: the
+ * PATCH parses no mentions, so an @everyone the original carried is not
+ * re-sent (Discord rebuilds mentions on every edit). "gone" means the copy was
+ * deleted in the channel or the webhook changed.
+ */
+export async function editNewsOnDiscord(
+  messageId: string,
+  content: string,
+): Promise<WebhookEditResult | "no-webhook"> {
+  let url: string | null;
+  try {
+    url = await getWebhookUrl();
+  } catch {
+    return "failed";
+  }
+  if (!url) return "no-webhook";
+  return patchWebhookMessage(url, messageId, { content });
+}
+
+/**
+ * Remove a deleted news post's Discord copy through the CURRENT league
+ * webhook. "deleted" is the only confirmed removal. "gone" (a 404) means the
+ * copy was already deleted in the channel OR was sent by a webhook that has
+ * since been replaced, which cannot delete it; "failed" covers no webhook
+ * and every other error. Both leave the copy possibly still up.
+ */
+export async function deleteNewsFromDiscord(
+  messageId: string,
+): Promise<WebhookDeleteResult> {
+  let url: string | null;
+  try {
+    url = await getWebhookUrl();
+  } catch {
+    return "failed";
+  }
+  if (!url) return "failed";
+  return deleteWebhookMessageResult(url, messageId);
 }
 
 export type DiscordSendOptions = {

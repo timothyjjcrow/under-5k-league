@@ -21,10 +21,9 @@ import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "./tiebreaker-fo
 import { singleEliminationPlan } from "./single-elimination";
 import {
   autoSyncClosesAt,
-  autoSyncIntervalSeconds,
   autoSyncOpensAt,
   leagueFallbackOpensAt,
-  minutesSinceAutoSyncOpen,
+  nextRosterScanAt,
 } from "./result-sync";
 import {
   ANNOUNCE_FAILED_PREFIX,
@@ -236,33 +235,6 @@ function nextThrottleAt(
 ): number {
   const stampedAt = settingTimestamp(settings, key);
   return stampedAt === null ? 0 : stampedAt + intervalMs + 1;
-}
-
-function nextMatchScanAt(
-  scheduledAt: number,
-  autoSyncedAt: number,
-  attempts: number,
-  nowMs: number,
-): number {
-  const graceEndsAt =
-    autoSyncOpensAt(scheduledAt) + AUTO_SYNC.BACKOFF_GRACE_MINUTES * 60_000;
-  if (nowMs < graceEndsAt) {
-    const youngAt =
-      autoSyncedAt + autoSyncIntervalSeconds(attempts, 0) * 1_000 + 1;
-    // At graceEndsAt the service switches to its full backoff. If the young
-    // deadline has not become strictly claimable before that discontinuity,
-    // sleeping to it would wake the worker only to discover a longer delay.
-    if (youngAt < graceEndsAt) return youngAt;
-  }
-  return (
-    autoSyncedAt +
-    autoSyncIntervalSeconds(
-      attempts,
-      minutesSinceAutoSyncOpen(scheduledAt, Math.max(nowMs, graceEndsAt)),
-    ) *
-      1_000 +
-    1
-  );
 }
 
 function addCandidate(
@@ -638,7 +610,7 @@ export function computeAutomationGateSnapshot(
       const matchThrottle =
         syncedAt === null
           ? 0
-          : nextMatchScanAt(
+          : nextRosterScanAt(
               scheduledAt,
               syncedAt,
               match.autoSyncAttempts,

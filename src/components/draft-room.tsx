@@ -1248,8 +1248,8 @@ export function DraftRoom({
                 Next step: start the Regular season.
               </span>{" "}
               <span className="text-muted">
-                Until you do, automatic result sync, match-night check-in and
-                the weekly Discord reminder stay off.
+                Until you do, automatic result sync and the weekly Discord
+                reminder stay off.
               </span>
             </p>
             {adminFinish}

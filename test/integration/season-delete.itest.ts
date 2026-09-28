@@ -345,6 +345,115 @@ describe("createSeason", () => {
     // Season N's children are untouched by the archival.
   });
 
+  // Series lengths and the league id used to reset silently to Bo2/Bo3/Bo5
+  // and no league id at every handoff, while the draft settings carried.
+  it("carries every league setting from the closed season, whatever the form posts", async () => {
+    const oldSeason = await completedSeason("Customised Complete");
+    await prisma.season.update({
+      where: { id: oldSeason.id },
+      data: {
+        teamSize: 6,
+        minTeams: 5,
+        draftBudget: 250,
+        budgetMmrWeight: 0,
+        maxMmr: 4200,
+        regularBestOf: 3,
+        playoffBestOf: 5,
+        finalBestOf: 7,
+        dotaLeagueId: "17654",
+      },
+    });
+
+    const res = await createSeason(
+      {},
+      fd({
+        name: "Season Carried",
+        // A stale tab still posting the old form's fields changes nothing.
+        teamSize: "2",
+        draftBudget: "10",
+        expectedActiveSeasonId: oldSeason.id,
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(
+      await prisma.season.findFirstOrThrow({ where: { isActive: true } }),
+    ).toMatchObject({
+      name: "Season Carried",
+      status: "SIGNUPS",
+      teamSize: 6,
+      minTeams: 5,
+      draftBudget: 250,
+      budgetMmrWeight: 0,
+      maxMmr: 4200,
+      regularBestOf: 3,
+      playoffBestOf: 5,
+      finalBestOf: 7,
+      dotaLeagueId: "17654",
+    });
+  });
+
+  it("carries from the most recent season when opening out of the offseason", async () => {
+    await prisma.season.create({
+      data: {
+        name: "Older Archive",
+        isActive: false,
+        status: "COMPLETE",
+        regularBestOf: 1,
+        dotaLeagueId: "111",
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      },
+    });
+    await prisma.season.create({
+      data: {
+        name: "Latest Archive",
+        isActive: false,
+        status: "REGULAR_SEASON",
+        teamSize: 4,
+        regularBestOf: 3,
+        dotaLeagueId: "222",
+        createdAt: new Date("2025-06-01T00:00:00Z"),
+      },
+    });
+
+    const res = await createSeason(
+      {},
+      fd({ name: "After The Break", expectedActiveSeasonId: "" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(
+      await prisma.season.findFirstOrThrow({ where: { isActive: true } }),
+    ).toMatchObject({
+      name: "After The Break",
+      teamSize: 4,
+      regularBestOf: 3,
+      dotaLeagueId: "222",
+    });
+  });
+
+  it("opens a league's first season on the defaults", async () => {
+    const res = await createSeason(
+      {},
+      fd({ name: "Season 1", expectedActiveSeasonId: "" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(
+      await prisma.season.findFirstOrThrow({ where: { isActive: true } }),
+    ).toMatchObject({
+      teamSize: 5,
+      minTeams: 4,
+      draftBudget: 100,
+      budgetMmrWeight: 20,
+      maxMmr: 4500,
+      regularBestOf: 2,
+      playoffBestOf: 3,
+      finalBestOf: 5,
+      dotaLeagueId: null,
+    });
+  });
+
   it("refuses a replayed create form instead of archiving the season it just made", async () => {
     const oldSeason = await completedSeason();
     const fields = {

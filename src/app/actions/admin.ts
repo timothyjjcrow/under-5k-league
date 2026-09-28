@@ -53,6 +53,10 @@ import {
 } from "@/lib/league-lifecycle";
 import { parseSeatTarget, pendingCoverWhere } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
+import {
+  CARRIED_SEASON_SELECT,
+  carriedSeasonSettings,
+} from "@/lib/season-handoff";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
 import {
   captainTransferOpen,
@@ -89,18 +93,17 @@ import {
   enrichStoredGames,
   rememberImportSkip,
 } from "@/lib/match-import";
-import {
-  parseMatchId,
-  parseLeagueId,
-  fetchPubStats,
-  fetchRankTier,
-} from "@/lib/dota";
+import { parseMatchId, parseLeagueId, fetchRankTier } from "@/lib/dota";
 import {
   dotaAccountLinkSnapshot,
   effectiveDotaAccountId,
 } from "@/lib/dota-account";
-import { pubStatsFresh } from "@/lib/pub-stats";
-import { fetchSteamProfiles } from "@/lib/steam";
+import {
+  MANUAL_REFRESH_BUDGET_MS,
+  refreshSteamProfiles,
+  syncRanksFor,
+} from "@/lib/player-data-refresh";
+import { profileSyncAllowed } from "@/lib/draft-admin";
 import { bool, clampInt, localDate, str } from "@/lib/form";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import {
@@ -139,7 +142,8 @@ import {
 import { reachabilityNote } from "@/lib/discord-roles";
 import { mentionsOf } from "@/lib/discord-mentions";
 import { announceSignupsOpenOnce } from "@/lib/signups-open-announcement";
-import { logAdminAction } from "@/lib/admin-log";
+import { fixtureLogName, logAdminAction } from "@/lib/admin-log";
+import { fixtureLogLabel } from "@/lib/admin-log-copy";
 import { productionDeleteBackupError } from "@/lib/backup-receipt.mjs";
 import {
   createInhouseBoard,
@@ -187,6 +191,7 @@ import {
   carriedTeamIdentityNote,
   uniqueDefaultTeamName,
   teamIdentitySummary,
+  teamNameAfterCaptainChange,
 } from "@/lib/team-identity";
 import {
   describeScrimConflict,
@@ -394,11 +399,10 @@ export async function createSeason(
   // first request changes the active id, so the stale second request cannot
   // archive the season it just created and open another copy.
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
-  const teamSize = clampInt(formData, "teamSize", 5, 2, 10);
-  const minTeams = clampInt(formData, "minTeams", 4, 2, 32);
-  const draftBudget = clampInt(formData, "draftBudget", 100, 10, 100000);
-  const budgetMmrWeight = clampInt(formData, "budgetMmrWeight", 20, 0, 50);
-  const maxMmr = clampInt(formData, "maxMmr", 0, 0, HARD_MMR_CEILING);
+  // Every other setting is CARRIED from the season before (read inside the
+  // transaction below), never posted: the handoff form states them in one
+  // line and the new season's phase card changes them. Series lengths and the
+  // league id used to reset silently to the defaults here.
 
   // SERIALIZABLE, matching the same zero-or-one-active invariant enforced by
   // offseason-only `reactivateSeason` (season.ts). Production's partial unique
@@ -423,6 +427,16 @@ export async function createSeason(
         if ((active?.id ?? "") !== expectedActiveSeasonId) {
           throw new ActiveSeasonChangedError();
         }
+        // The season this one follows, whose settings it carries: the one
+        // being closed, or from the offseason the most recent archived season
+        // (the same row the handoff form described).
+        const previous =
+          active ??
+          (await tx.season.findFirst({
+            where: { isActive: false },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            select: CARRIED_SEASON_SELECT,
+          }));
         if (active) {
           const [matches, teams] = await Promise.all([
             tx.match.findMany({
@@ -458,11 +472,7 @@ export async function createSeason(
         const created = await tx.season.create({
           data: {
             name,
-            teamSize,
-            minTeams,
-            draftBudget,
-            budgetMmrWeight,
-            maxMmr,
+            ...carriedSeasonSettings(previous),
             status: SEASON_STATUS.SIGNUPS,
             isActive: true,
           },
@@ -848,6 +858,57 @@ export async function reactivateSeasonAction(
   };
 }
 
+/**
+ * The opening week as the season-start post lists it: the first week's
+ * fixtures in kickoff order, and the teams with a bye. Read after the phase
+ * commits, for the announcement only.
+ */
+async function seasonOpeningSlate(seasonId: string) {
+  const [fixtures, teams] = await Promise.all([
+    prisma.match.findMany({
+      where: { seasonId, phase: MATCH_PHASE.REGULAR },
+      orderBy: [{ week: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: {
+        week: true,
+        scheduledAt: true,
+        homeTeamId: true,
+        awayTeamId: true,
+        homeTeam: { select: { name: true } },
+        awayTeam: { select: { name: true } },
+      },
+    }),
+    prisma.team.findMany({
+      where: { seasonId, withdrawn: false },
+      orderBy: { draftOrder: "asc" },
+      select: { id: true, name: true },
+    }),
+  ]);
+  if (fixtures.length === 0) return undefined;
+  const week = fixtures[0].week;
+  const opening = fixtures
+    .filter((fixture) => fixture.week === week)
+    .map((fixture, index) => ({ fixture, index }))
+    // Kickoff order, untimed last, creation order within a kickoff.
+    .sort(
+      (a, b) =>
+        (a.fixture.scheduledAt?.getTime() ?? Infinity) -
+          (b.fixture.scheduledAt?.getTime() ?? Infinity) || a.index - b.index,
+    )
+    .map(({ fixture }) => fixture);
+  const playing = new Set(
+    opening.flatMap((fixture) => [fixture.homeTeamId, fixture.awayTeamId]),
+  );
+  return {
+    week,
+    fixtures: opening.map((fixture) => ({
+      home: fixture.homeTeam.name,
+      away: fixture.awayTeam.name,
+      whenMs: fixture.scheduledAt?.getTime() ?? null,
+    })),
+    byes: teams.filter((team) => !playing.has(team.id)).map((team) => team.name),
+  };
+}
+
 /** Apply a policy-approved, non-destructive phase handoff or recovery. */
 export async function setSeasonPhase(
   _prev: ActionResult,
@@ -872,30 +933,40 @@ export async function setSeasonPhase(
   if (season.status === target) {
     return { error: `The season is already in ${PHASE_LABELS[target]}` };
   }
-  const [draft, matchCount, playedResults, importedGames, postseasonMatches] =
-    await Promise.all([
-      prisma.draft.findUnique({
-        where: { seasonId: season.id },
-        select: { status: true },
-      }),
-      prisma.match.count({ where: { seasonId: season.id } }),
-      prisma.match.count({
-        where: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
-      }),
-      prisma.game.count({ where: { match: { seasonId: season.id } } }),
-      prisma.match.findMany({
-        where: {
-          seasonId: season.id,
-          phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
-        },
-        select: { phase: true, bracketSlot: true },
-      }),
-    ]);
+  const [
+    draft,
+    matchCount,
+    regularMatchCount,
+    playedResults,
+    importedGames,
+    postseasonMatches,
+  ] = await Promise.all([
+    prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    }),
+    prisma.match.count({ where: { seasonId: season.id } }),
+    prisma.match.count({
+      where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
+    }),
+    prisma.match.count({
+      where: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
+    }),
+    prisma.game.count({ where: { match: { seasonId: season.id } } }),
+    prisma.match.findMany({
+      where: {
+        seasonId: season.id,
+        phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+      },
+      select: { phase: true, bracketSlot: true },
+    }),
+  ]);
   const transition = seasonPhasePolicy({
     current: season.status,
     target,
     draftStatus: draft?.status,
     matchCount,
+    regularMatchCount,
     hasPlayedResult: playedResults > 0,
     hasImportedGame: importedGames > 0,
     postseasonMatchCount: postseasonMatches.length,
@@ -916,6 +987,7 @@ export async function setSeasonPhase(
           currentSeason,
           currentDraft,
           currentMatchCount,
+          currentRegularCount,
           playedNow,
           gamesNow,
           postseasonNow,
@@ -926,6 +998,9 @@ export async function setSeasonPhase(
             select: { status: true },
           }),
           tx.match.count({ where: { seasonId: season.id } }),
+          tx.match.count({
+            where: { seasonId: season.id, phase: MATCH_PHASE.REGULAR },
+          }),
           tx.match.count({
             where: {
               seasonId: season.id,
@@ -955,6 +1030,7 @@ export async function setSeasonPhase(
           target,
           draftStatus: currentDraft?.status,
           matchCount: currentMatchCount,
+          regularMatchCount: currentRegularCount,
           hasPlayedResult: playedNow > 0,
           hasImportedGame: gamesNow > 0,
           postseasonMatchCount: postseasonNow.length,
@@ -1004,8 +1080,10 @@ export async function setSeasonPhase(
     season.status === SEASON_STATUS.DRAFT &&
     target === SEASON_STATUS.REGULAR_SEASON
   ) {
+    // The phase has committed; a failed read only costs the post its list.
+    const opening = await seasonOpeningSlate(season.id).catch(() => undefined);
     const sent = await sendDiscordMessage(
-      regularSeasonStartedMessage(season.name),
+      regularSeasonStartedMessage(season.name, opening),
     );
     if (!sent) {
       notificationWarning =
@@ -1443,6 +1521,293 @@ export async function removeCaptain(
     message: removed.fixtures
       ? `${removed.captainName} is no longer a captain — the schedule was cleared, regenerate it once captains are final`
       : `${removed.captainName} is no longer a captain`,
+  };
+}
+
+/**
+ * Before the draft, hand a team to a different signup without deleting it.
+ *
+ * Remove captain + make captain used to be the only way, and it threw away the
+ * team row: its name, logo and draft-order slot, with a fresh "<name>'s Team"
+ * in their place. This keeps the team and swaps only who captains it. The
+ * outgoing captain drops back into the player pool as an ordinary signup (a
+ * pre-draft roster is the captain alone), and the incoming one takes the
+ * captain's roster seat at $0, exactly as addCaptain would have seated them.
+ *
+ * Same lock as the rest of captain setup (draftSetupOpen), judged again at
+ * the WRITE: the Team claim re-asserts the captain it read, that the season is
+ * still active in SIGNUPS/DRAFT, and that the auction has not started. A Start
+ * draft racing this click therefore sees either the old captain or the new
+ * one, never a team whose captain changed after the auction began.
+ */
+export async function changeCaptain(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
+  try {
+    actor = await requireAdmin();
+  } catch {
+    return { error: "Not authorized" };
+  }
+  const teamId = str(formData, "teamId");
+  const newCaptainUserId = str(formData, "newCaptainUserId").trim();
+  const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
+  const expectedCaptainUserId = str(formData, "expectedCaptainUserId").trim();
+  const season = await getActiveSeason();
+  if (!season) return { error: "No active season" };
+  if (!expectedActiveSeasonId || expectedActiveSeasonId !== season.id) {
+    return {
+      error:
+        "The active season changed while this page was open — reload before changing a captain.",
+    };
+  }
+  if (!expectedCaptainUserId) {
+    return { error: "Reload the team before changing its captain." };
+  }
+  if (!newCaptainUserId) return { error: "Pick the new captain." };
+
+  // Seam: the rival is a Start draft (or another admin's captain change)
+  // committing between this click and the transaction below.
+  await raceHook("admin.changeCaptain.beforeTx");
+  let changed: {
+    teamName: string;
+    renamedFrom: string | null;
+    incomingName: string;
+    outgoingName: string;
+    incomingDiscordId: string | null;
+  };
+  try {
+    changed = await prisma.$transaction(
+      async (tx) => {
+        const [
+          currentSeason,
+          draft,
+          team,
+          incomingUser,
+          incomingReg,
+          incomingSeat,
+          outgoingCover,
+          otherTeams,
+        ] = await Promise.all([
+          tx.season.findUnique({ where: { id: expectedActiveSeasonId } }),
+          tx.draft.findUnique({
+            where: { seasonId: expectedActiveSeasonId },
+            select: { status: true },
+          }),
+          tx.team.findUnique({
+            where: { id: teamId },
+            include: { members: true, captain: true },
+          }),
+          tx.user.findUnique({ where: { id: newCaptainUserId } }),
+          tx.registration.findUnique({
+            where: {
+              seasonId_userId: {
+                seasonId: expectedActiveSeasonId,
+                userId: newCaptainUserId,
+              },
+            },
+          }),
+          // Captains hold a roster seat, so one lookup answers both "already
+          // captains a team" and "already on a roster".
+          tx.teamMember.findUnique({
+            where: {
+              seasonId_userId: {
+                seasonId: expectedActiveSeasonId,
+                userId: newCaptainUserId,
+              },
+            },
+          }),
+          // Cover booked for the outgoing captain would point at someone no
+          // longer on the team (withdrawGateError's refuse-don't-cancel rule).
+          tx.standinAssignment.count({
+            where: {
+              replacingUserId: expectedCaptainUserId,
+              teamId,
+              match: {
+                seasonId: expectedActiveSeasonId,
+                status: { not: MATCH_STATUS.COMPLETED },
+              },
+            },
+          }),
+          tx.team.findMany({
+            where: { seasonId: expectedActiveSeasonId, id: { not: teamId } },
+            select: { name: true },
+          }),
+        ]);
+        if (!currentSeason?.isActive) throw new ActiveSeasonChangedError();
+        if (!draftSetupOpen(currentSeason.status, draft?.status)) {
+          throw new DraftSetupLockedError(
+            draftSetupLockedMessage(currentSeason.status, draft?.status),
+          );
+        }
+        if (!team || team.seasonId !== currentSeason.id) {
+          throw new CaptainStateChangedError("Unknown team");
+        }
+        if (team.captainId !== expectedCaptainUserId) {
+          throw new CaptainStateChangedError(
+            `${team.name}'s captain already changed — reload and try again.`,
+          );
+        }
+        if (team.captainId === newCaptainUserId) {
+          throw new CaptainStateChangedError(
+            `${team.captain.name} already captains ${team.name}`,
+          );
+        }
+        if (team.members.some((m) => !m.isCaptain)) {
+          throw new CaptainStateChangedError(
+            `${team.name} already has players on its roster`,
+          );
+        }
+        const outgoing = team.members.find(
+          (m) => m.userId === expectedCaptainUserId && m.isCaptain,
+        );
+        if (!outgoing) {
+          throw new CaptainStateChangedError(
+            "The current captain's roster spot is missing — reload and try again.",
+          );
+        }
+        if (!incomingUser) throw new CaptainStateChangedError("Unknown player");
+        if (
+          !incomingReg ||
+          incomingReg.status !== REGISTRATION_STATUS.ACTIVE ||
+          incomingReg.type !== REGISTRATION_TYPE.PLAYER
+        ) {
+          throw new CaptainStateChangedError(
+            `${incomingUser.name} isn't an active player signup this season`,
+          );
+        }
+        if (incomingSeat) {
+          throw new CaptainStateChangedError(
+            `${incomingUser.name} already captains a team`,
+          );
+        }
+        if (outgoingCover > 0) {
+          throw new CaptainStateChangedError(
+            `${team.captain.name} has standin cover booked on an unplayed match — remove that booking first.`,
+          );
+        }
+
+        const teamName = teamNameAfterCaptainChange(
+          team.name,
+          team.captain.name,
+          incomingUser.name,
+          otherTeams.map((other) => other.name),
+        );
+        // THE claim: the captain this request judged, and the setup window it
+        // judged it in, re-asserted at the write. Losing it throws, so nothing
+        // below commits.
+        const claimed = await tx.team.updateMany({
+          where: {
+            id: team.id,
+            seasonId: currentSeason.id,
+            captainId: expectedCaptainUserId,
+            season: {
+              isActive: true,
+              status: { in: [SEASON_STATUS.SIGNUPS, SEASON_STATUS.DRAFT] },
+              OR: [
+                { draft: { is: null } },
+                { draft: { is: { status: DRAFT_STATUS.NOT_STARTED } } },
+              ],
+            },
+          },
+          data: { captainId: incomingUser.id, name: teamName },
+        });
+        if (claimed.count === 0) throw new CaptainStateChangedError();
+
+        const historyAt = new Date();
+        await closeRosterTenure(
+          tx,
+          outgoing,
+          "PRE_DRAFT_CAPTAIN_CHANGED",
+          actor.id,
+          historyAt,
+        );
+        const vacated = await tx.teamMember.deleteMany({
+          where: {
+            id: outgoing.id,
+            teamId: team.id,
+            userId: expectedCaptainUserId,
+            isCaptain: true,
+          },
+        });
+        if (vacated.count === 0) throw new CaptainStateChangedError();
+        const seat = await tx.teamMember.create({
+          data: {
+            seasonId: currentSeason.id,
+            teamId: team.id,
+            userId: incomingUser.id,
+            isCaptain: true,
+            price: 0,
+          },
+        });
+        await captureRosterTenure(
+          tx,
+          seat,
+          {
+            kind: "CAPTAIN_DESIGNATION",
+            mmr: incomingReg.mmr || null,
+            roles: incomingReg.roles,
+            actorId: actor.id,
+          },
+          historyAt,
+        );
+        return {
+          teamName,
+          renamedFrom: teamName === team.name ? null : team.name,
+          incomingName: incomingUser.name,
+          outgoingName: team.captain.name,
+          incomingDiscordId: incomingUser.discordId,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (error) {
+    if (error instanceof DraftSetupLockedError) return { error: error.message };
+    if (error instanceof CaptainStateChangedError) {
+      return {
+        error:
+          error.message ||
+          "That team or captain just changed — reload and try again.",
+      };
+    }
+    if (
+      error instanceof ActiveSeasonChangedError ||
+      isSerializationConflict(error)
+    ) {
+      return {
+        error:
+          "The season, draft, or captain list just changed — reload and try again.",
+      };
+    }
+    if (isUniqueViolation(error)) {
+      return {
+        error:
+          "That player was just made a captain elsewhere — reload and try again.",
+      };
+    }
+    throw error;
+  }
+  await logAdminAction({
+    action: "changeCaptain",
+    summary:
+      `Changed the captain of "${changed.teamName}" from ${changed.outgoingName} to ${changed.incomingName}` +
+      (changed.renamedFrom ? ` (renamed from "${changed.renamedFrom}")` : ""),
+    seasonId: season.id,
+  });
+  await sendDiscordMessage(
+    captainAssignedMessage(
+      changed.incomingName,
+      changed.teamName,
+      changed.incomingDiscordId,
+    ),
+    mentionsOf([changed.incomingDiscordId]),
+  );
+  refresh();
+  return {
+    message: `${changed.incomingName} now captains ${changed.teamName}${
+      changed.renamedFrom ? ` (renamed from ${changed.renamedFrom})` : ""
+    }. ${changed.outgoingName} is back in the player pool.`,
   };
 }
 
@@ -2018,7 +2383,7 @@ export async function reinstateSignup(
   }
   refresh();
   // Advisory only, never a gate (the operator's-call stance): the flag flow
-  // is one-way — syncPlayerRanks names over-ceiling signups in ITS toast and
+  // is one-way — refreshPlayerData names over-ceiling signups in ITS toast and
   // nothing warned when the same admin later reinstated one.
   const warn = medalProvesIneligible(reg.user.rankTier)
     ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`
@@ -2961,10 +3326,18 @@ export async function generateSchedule(
     };
   }
 
-  // Optional first-match-night: week 1 plays then, each later week +7 days.
-  const firstNightRaw = str(formData, "firstNight").trim();
+  // Week 1 plays at the first match night, each later week +7 days on the
+  // league's clock. It is required: a fixture with no kickoff gets no
+  // check-in, no weekly reminder, no automatic result import and no pick'em
+  // lock, and filling times in afterwards took one form per week.
+  if (!str(formData, "firstNight").trim()) {
+    return {
+      error:
+        "Set the first match night. Week 1 plays then and each later week a week after, so every fixture has a kickoff for check-in, reminders and automatic results.",
+    };
+  }
   const firstNight = localDate(formData, "firstNight", "firstNightTs");
-  if (firstNightRaw && !firstNight) {
+  if (!firstNight) {
     return { error: "Invalid first match night" };
   }
 
@@ -3076,25 +3449,21 @@ export async function generateSchedule(
             homeTeamId: pairing.home,
             awayTeamId: pairing.away,
             bestOf: currentSeason.regularBestOf,
-            scheduledAt: firstNight
-              ? matchNightForWeek(firstNight, i + 1)
-              : null,
+            scheduledAt: matchNightForWeek(firstNight, i + 1),
           })),
         );
 
         // A generated schedule is just as authoritative as a manual retime.
-        // Check every dated fixture before replacing the old schedule so an
+        // Check every fixture before replacing the old schedule so an
         // already-booked SCHEDULED/LIVE scrim cannot be hidden underneath a
         // new official kickoff. Both this path and scrim claiming are
         // Serializable, so a concurrent claim/generate race has one loser.
         for (const row of rows) {
-          const scrimClash = row.scheduledAt
-            ? await findConfirmedScrimConflict(tx, {
-                seasonId: currentSeason.id,
-                teamIds: [row.homeTeamId, row.awayTeamId],
-                scheduledAt: row.scheduledAt,
-              })
-            : null;
+          const scrimClash = await findConfirmedScrimConflict(tx, {
+            seasonId: currentSeason.id,
+            teamIds: [row.homeTeamId, row.awayTeamId],
+            scheduledAt: row.scheduledAt,
+          });
           if (scrimClash) {
             throw new ScrimScheduleConflictError(scrimClash);
           }
@@ -3278,16 +3647,9 @@ export async function generateSchedule(
       : null,
   ].filter(Boolean);
   return {
-    // A blank first night isn't just "no times shown": unscheduled matches are
-    // never auto-scanned, get no week reminder, and never lock pick'em. Say so
-    // rather than letting the league discover it in week 2.
     message: `Schedule generated · ${outcome.rows} matches over ${outcome.weeks} week(s)${
       doubleRound ? " (double round robin)" : ""
-    }${
-      firstNight
-        ? ` · week 1: ${formatLeagueTime(firstNight)}, then weekly`
-        : " · no kickoff times set, so auto-sync, reminders and pick'em locks stay off until you set them"
-    }${
+    } · week 1: ${formatLeagueTime(firstNight)}, then weekly${
       collateral.length
         ? ` · the old fixtures were replaced, clearing ${collateral.join(", ")}`
         : ""
@@ -5000,10 +5362,7 @@ export async function assignStandin(
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
   await sendDiscordMessage(res.announcement, res.mentions);
-  await logAdminAction({
-    action: "assignStandin",
-    summary: `${res.message} (match ${str(formData, "matchId")})`,
-  });
+  await logAdminAction({ action: "assignStandin", summary: res.summary });
   refresh();
   // If the announcement structurally can't reach them (unlinked, not in the
   // server, stuck behind the rules screen), the person arranging the cover
@@ -5032,10 +5391,7 @@ export async function removeStandin(
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
-  await logAdminAction({
-    action: "removeStandin",
-    summary: `${res.message} (assignment ${str(formData, "assignmentId")})`,
-  });
+  await logAdminAction({ action: "removeStandin", summary: res.summary });
   refresh();
   return { message: res.message };
 }
@@ -5060,7 +5416,7 @@ export async function importGameAction(
   if (!res.ok) return { error: res.error };
   await logAdminAction({
     action: "importGameAction",
-    summary: `Imported Dota match ${dotaMatchId} into match ${matchId}`,
+    summary: `Imported Dota match ${dotaMatchId} into ${await fixtureLogName(matchId)}`,
   });
   refreshGames();
   return { ok: true, message: "Game imported" };
@@ -5098,7 +5454,7 @@ export async function autoDetectAction(
   if (res.imported > 0) {
     await logAdminAction({
       action: "autoDetectAction",
-      summary: `Auto-detected ${res.imported} game(s) for match ${matchId} after scanning ${res.scanned} player(s)`,
+      summary: `Auto-detected ${res.imported} game(s) for ${await fixtureLogName(matchId)} after scanning ${res.scanned} player(s)`,
     });
   }
   return {
@@ -5383,11 +5739,21 @@ export async function removeGame(
               championTeamId: true,
             },
           },
+          homeTeam: { select: { name: true } },
+          awayTeam: { select: { name: true } },
         },
       },
     },
   });
   if (!game) return { error: "That game is already gone" };
+  // Names, not ids: the log has no foreign keys and must read on its own.
+  const fixtureName = fixtureLogLabel({
+    phase: game.match.phase,
+    week: game.match.week,
+    bracketSlot: game.match.bracketSlot,
+    homeName: game.match.homeTeam.name,
+    awayName: game.match.awayTeam.name,
+  });
   const correctingCrownedFinal =
     game.match.phase === MATCH_PHASE.FINAL &&
     game.match.status === MATCH_STATUS.COMPLETED &&
@@ -5621,7 +5987,7 @@ export async function removeGame(
             actorName: admin.name,
             action: "removeGame",
             seasonId: match.seasonId,
-            summary: `Removed Dota game ${fresh.dotaMatchId} from fixture ${match.id} (week ${match.week}); score ${match.homeScore}-${match.awayScore} → ${projection.homeScore}-${projection.awayScore}`.slice(0, 500),
+            summary: `Removed Dota game ${fresh.dotaMatchId} from ${fixtureName}; score ${match.homeScore}-${match.awayScore} → ${projection.homeScore}-${projection.awayScore}`.slice(0, 500),
           },
         });
         await stampResultChange(tx);
@@ -6264,7 +6630,7 @@ export async function setMatchTime(
   if (!outcome.changed) return { message: "Kickoff time unchanged" };
   await logAdminAction({
     action: "setMatchTime",
-    summary: `${scheduledAt ? "Set" : "Cleared"} kickoff for match ${matchId} — cleared ${outcome.rsvps} check-in(s) and cancelled ${outcome.proposals} open reschedule proposal(s)`,
+    summary: `${scheduledAt ? "Set" : "Cleared"} the kickoff for ${await fixtureLogName(matchId)} — cleared ${outcome.rsvps} check-in(s) and cancelled ${outcome.proposals} open reschedule proposal(s)`,
     seasonId: outcome.seasonId,
   });
   refresh();
@@ -6295,183 +6661,6 @@ export async function setMatchTime(
   };
 }
 
-/** Fetch every active player's ranked medal from OpenDota (a draft resource). */
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Fetch + store ranked medals for a set of users. Non-destructive: retries once
- * on a failed/rate-limited call, and only ever writes a real medal — never
- * overwrites a stored one with a null (whether the null is "couldn't reach
- * OpenDota" or "OpenDota returned no rank"), so a rate-limited run can't wipe
- * everyone's rank. Shared by the registrant sync and the all-accounts backfill.
- */
-/** Per-account outcome, kept small so a batch can tally without re-fetching.
- *  `rank` keys the outage detection + toast counts (unchanged semantics);
- *  `pubSynced` counts the scouting snapshots stored alongside. */
-type RankSyncOutcome = {
-  rank: "ranked" | "ok-no-rank" | "unreachable";
-  pubSynced: boolean;
-};
-
-/** Sync one account's medal (+ fh_unavailable) — and, when `withPub`, its
- *  pub-scouting snapshot — retrying whichever call missed once. */
-async function syncOneRank(
-  u: {
-    id: string;
-    dotaAccountIdV2: number | null;
-    legacyDotaAccountId: number | null;
-  },
-  acc: number,
-  withPub: boolean,
-): Promise<RankSyncOutcome> {
-  // A bulk sync easily trips OpenDota's free rate limit (HTTP 429) or an 8s
-  // timeout — a brief back-off + one retry usually clears it.
-  const noPub = { ok: false as const, stats: null };
-  let [result, pub] = await Promise.all([
-    fetchRankTier(acc),
-    withPub ? fetchPubStats(acc) : Promise.resolve(noPub),
-  ]);
-  if (!result.ok || (withPub && !pub.ok)) {
-    await sleep(700);
-    [result, pub] = await Promise.all([
-      result.ok ? Promise.resolve(result) : fetchRankTier(acc),
-      withPub && !pub.ok ? fetchPubStats(acc) : Promise.resolve(pub),
-    ]);
-  }
-  // Store what OpenDota definitely said: a real medal, the public-match-data
-  // flag (fh_unavailable) auto-import depends on, and/or the scouting
-  // snapshot. A failed half never blocks the half that answered, and neither
-  // failure ever wipes stored data.
-  const data: {
-    fhUnavailable?: boolean;
-    pubStats?: string;
-    pubStatsAt?: Date;
-  } = {};
-  if (result.ok) {
-    if (result.fhUnavailable !== null)
-      data.fhUnavailable = result.fhUnavailable;
-  }
-  if (pub.ok) {
-    data.pubStats = JSON.stringify(pub.stats);
-    data.pubStatsAt = new Date();
-  }
-  if (result.ok && result.rankTier != null) {
-    // Admin corrections survive every automatic refresh, including one that
-    // was already in flight when the correction was saved.
-    await prisma.user.updateMany({
-      where: { id: u.id, ...dotaAccountLinkSnapshot(u), rankTierManual: false },
-      data: { rankTier: result.rankTier },
-    });
-  }
-  if (Object.keys(data).length > 0) {
-    // The WHERE re-asserts the account these figures describe (read-time
-    // precondition in the write): a player relinking a different Dota account
-    // mid-sweep must not get the old account's data stamped onto the new
-    // link. count 0 = they relinked; drop the result — next sweep re-reads.
-    await prisma.user.updateMany({
-      where: { id: u.id, ...dotaAccountLinkSnapshot(u) },
-      data,
-    });
-  }
-  if (!result.ok) return { rank: "unreachable", pubSynced: pub.ok };
-  return {
-    rank: result.rankTier != null ? "ranked" : "ok-no-rank",
-    pubSynced: pub.ok,
-  };
-}
-
-// Serverless functions have a wall-clock ceiling (`maxDuration` on the admin
-// page). One OpenDota timeout is 8s and the retry doubles it, so a serial loop
-// over a full roster during an OpenDota outage blows the budget and the request
-// dies with no response — the button spins "Working…" forever. Guards: run a
-// few accounts at once, stop starting work past a time budget, and bail
-// immediately if the very first batch is entirely unreachable (a strong
-// "OpenDota is down" signal) instead of hitting an 8s timeout for every id.
-const RANK_SYNC_CONCURRENCY = 4;
-const RANK_SYNC_BUDGET_MS = 45_000;
-// The scouting snapshot costs TWO extra OpenDota calls per account, and the
-// free tier's bucket is ~60/min — a 31-account sweep at 3 calls each would
-// burn its own tail into 429s and could even read as a false outage. So each
-// press syncs medals for EVERYONE but refreshes pub snapshots only for the
-// stalest accounts up to this cap (fresh ones are skipped outright), keeping
-// a full press under the bucket; repeated presses converge on full coverage
-// and the toast says how many are still waiting.
-const PUB_SYNC_MAX_PER_RUN = 12;
-
-type RankSyncResult = {
-  ranked: number;
-  unreachable: number;
-  skipped: number;
-  outage: boolean;
-  /** Pub-scouting snapshots stored (rides the same loop as the medals). */
-  stats: number;
-  /** Stale snapshots deferred to a later press by PUB_SYNC_MAX_PER_RUN. */
-  deferred: number;
-};
-
-async function syncRanksFor(
-  users: {
-    id: string;
-    dotaAccountIdV2: number | null;
-    legacyDotaAccountId: number | null;
-    steamId: string;
-    pubStatsAt: Date | null;
-  }[],
-): Promise<RankSyncResult> {
-  const targets = users
-    .map((u) => ({ u, acc: effectiveDotaAccountId(u) }))
-    .filter((t): t is { u: (typeof users)[number]; acc: number } => !!t.acc);
-
-  // Which accounts get the two extra pub calls this run — see
-  // PUB_SYNC_MAX_PER_RUN. Missing/stale snapshots only, stalest first.
-  const nowMs = Date.now();
-  const staleCandidates = targets
-    .filter(({ u }) => !pubStatsFresh(u.pubStatsAt, nowMs))
-    .sort(
-      (a, b) =>
-        (a.u.pubStatsAt?.getTime() ?? 0) - (b.u.pubStatsAt?.getTime() ?? 0),
-    );
-  const pubTargets = new Set(
-    staleCandidates.slice(0, PUB_SYNC_MAX_PER_RUN).map((t) => t.u.id),
-  );
-  const deferred = staleCandidates.length - pubTargets.size;
-
-  let ranked = 0;
-  let unreachable = 0;
-  let skipped = 0;
-  let outage = false;
-  let stats = 0;
-  const startedAt = Date.now();
-
-  for (let i = 0; i < targets.length; i += RANK_SYNC_CONCURRENCY) {
-    if (Date.now() - startedAt > RANK_SYNC_BUDGET_MS) {
-      skipped = targets.length - i;
-      break;
-    }
-    const batch = targets.slice(i, i + RANK_SYNC_CONCURRENCY);
-    const outcomes = await Promise.all(
-      batch.map(({ u, acc }) => syncOneRank(u, acc, pubTargets.has(u.id))),
-    );
-    for (const o of outcomes) {
-      if (o.rank === "unreachable") unreachable++;
-      else if (o.rank === "ranked") ranked++;
-      if (o.pubSynced) stats++;
-    }
-    // Whole first batch unreachable ⇒ OpenDota is down; don't burn the budget
-    // (and the admin's patience) hitting an 8s timeout for every remaining id.
-    if (
-      i === 0 &&
-      batch.length >= 3 &&
-      outcomes.every((o) => o.rank === "unreachable")
-    ) {
-      outage = true;
-      skipped = targets.length - batch.length;
-      break;
-    }
-  }
-  return { ranked, unreachable, skipped, outage, stats, deferred };
-}
-
 const OPENDOTA_OUTAGE_MSG =
   "OpenDota isn't responding right now — no medals were changed. Try again in a few minutes.";
 
@@ -6487,7 +6676,20 @@ function skippedTail(skipped: number): string {
   return skipped ? ` · ${skipped} skipped (time limit — run again)` : "";
 }
 
-export async function syncPlayerRanks(
+/** Older stored games given report-card stats per press (1 OpenDota call
+ *  each). The automatic refresh keeps working through the rest. */
+const MANUAL_ENRICH_GAMES = 3;
+/** Time one game fetch needs before it is started. */
+const MANUAL_ENRICH_START_MS = 13_000;
+
+/**
+ * "Refresh player data now": the on-demand version of the automation
+ * worker's hourly refresh, for right before a draft. Every active signup's
+ * medal (and the private-match-data flag), the stalest few scouting
+ * snapshots, every Steam name and avatar, and a few older games' report-card
+ * stats, within one time budget.
+ */
+export async function refreshPlayerData(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
@@ -6497,15 +6699,53 @@ export async function syncPlayerRanks(
     return { error: "Not authorized" };
   }
   const season = await getActiveSeason();
-  if (!season) return { error: "No active season" };
+  const draft = season
+    ? await prisma.draft.findUnique({
+        where: { seasonId: season.id },
+        select: { status: true },
+      })
+    : null;
+  // Captains are reading these medals and names in the auction room.
+  if (!profileSyncAllowed(draft?.status)) {
+    return {
+      error:
+        "The auction is live or paused, so player data stays as it is until the draft finishes.",
+    };
+  }
+  const deadlineMs = Date.now() + MANUAL_REFRESH_BUDGET_MS;
 
-  const regs = await prisma.registration.findMany({
-    where: { seasonId: season.id, status: "ACTIVE" },
-    include: { user: true },
-  });
+  const steam = await refreshSteamProfiles(deadlineMs);
+  // Persona names are part of the pinned board digest.
+  if (steam.updated > 0) updateTag(AUTOMATION_GATE_TAG);
+
+  const regs = season
+    ? await prisma.registration.findMany({
+        where: { seasonId: season.id, status: "ACTIVE" },
+        include: { user: true },
+      })
+    : [];
   const { ranked, unreachable, skipped, outage, stats, deferred } =
-    await syncRanksFor(regs.map((r) => r.user));
-  if (outage) return { error: OPENDOTA_OUTAGE_MSG };
+    await syncRanksFor(
+      regs.map((r) => r.user),
+      deadlineMs,
+    );
+  const steamPart = steam.updated
+    ? ` · ${steam.updated} Steam name${steam.updated === 1 ? "" : "s"} or avatar${steam.updated === 1 ? "" : "s"} updated`
+    : "";
+  if (outage) {
+    if (steam.updated) refresh();
+    return { error: `${OPENDOTA_OUTAGE_MSG}${steamPart}` };
+  }
+
+  // Only start on stored games while OpenDota is answering and time is left.
+  const enrich =
+    unreachable === 0 && deadlineMs - Date.now() >= MANUAL_ENRICH_START_MS
+      ? await enrichStoredGames(MANUAL_ENRICH_GAMES, {
+          deadlineMs,
+          minStartMs: MANUAL_ENRICH_START_MS,
+          stopOnFailure: true,
+        })
+      : null;
 
   // A medal learned AFTER signup can prove someone ineligible, and nothing else
   // ever re-checks: registrationGate only runs on submit, and a stored MMR is
@@ -6516,10 +6756,12 @@ export async function syncPlayerRanks(
   // who plays is the operator's call (withdraw/reinstate, or setRegistrationMmr).
   // Re-read rather than reusing `regs`: that snapshot predates the sync, so its
   // user.rankTier is exactly the null we just filled in.
-  const flagged = await prisma.registration.findMany({
-    where: { seasonId: season.id, status: "ACTIVE" },
-    include: { user: { select: { name: true, rankTier: true } } },
-  });
+  const flagged = season
+    ? await prisma.registration.findMany({
+        where: { seasonId: season.id, status: "ACTIVE" },
+        include: { user: { select: { name: true, rankTier: true } } },
+      })
+    : [];
   const overCeiling = flagged.filter((r) =>
     medalProvesIneligible(r.user.rankTier),
   );
@@ -6535,42 +6777,22 @@ export async function syncPlayerRanks(
         )}${overCeiling.length > 5 ? `, +${overCeiling.length - 5} more` : ""} — review before the draft.`
     : "";
 
+  const gamesPart =
+    enrich && (enrich.enriched > 0 || enrich.remaining > 0)
+      ? ` · ${enrich.enriched} older game${enrich.enriched === 1 ? "" : "s"} given report-card stats${enrich.remaining ? ` (${enrich.remaining} to go)` : ""}`
+      : "";
+  const summary = `${regs.length} signup${regs.length === 1 ? "" : "s"} checked · ${ranked} ranked${stats > 0 ? ` · ${stats} scouting profile${stats === 1 ? "" : "s"}` : ""}${deferred > 0 ? ` (${deferred} more in the hourly refresh)` : ""}${steamPart}${gamesPart}`;
+  await logAdminAction({
+    action: "refreshPlayerData",
+    summary: `Refreshed player data: ${summary}`,
+    seasonId: season?.id ?? null,
+  });
   refresh();
+  if (enrich && enrich.enriched > 0) refreshGames();
   return {
-    message: `Synced ${regs.length} players · ${ranked} ranked${stats > 0 ? ` · ${stats} scouting profile${stats === 1 ? "" : "s"}` : ""}${deferred > 0 ? ` (${deferred} more next run)` : ""}${unreachableTail(unreachable)}${skippedTail(skipped)}${warning}`,
+    message: `Refreshed player data · ${summary}${unreachableTail(unreachable)}${skippedTail(skipped)}${warning}`,
   };
 }
-
-/**
- * Backfill medals for EVERY account that doesn't have one yet — including people
- * who logged in but never signed up (the registrant sync above skips them).
- * Only targets null-medal accounts, so it makes no wasted API calls and never
- * touches a medal that's already set; login fills in new accounts going forward.
- */
-export async function syncAllRanks(
-  _prev: ActionResult,
-  _fd: FormData,
-): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
-  const users = await prisma.user.findMany({ where: { rankTier: null, rankTierManual: false } });
-  if (users.length === 0) {
-    return { message: "Every account already has a medal" };
-  }
-  const { ranked, unreachable, skipped, outage } = await syncRanksFor(users);
-  if (outage) return { error: OPENDOTA_OUTAGE_MSG };
-  refresh();
-  return {
-    message: `Checked ${users.length} account(s) without a medal · ${ranked} now ranked${unreachableTail(unreachable)}${skippedTail(skipped)}`,
-  };
-}
-
-// (syncAllRanks deliberately reports medals only — its filter is null-medal
-// accounts, so its purpose stays "medal backfill"; the scouting snapshots it
-// happens to refresh along the way are a free side effect.)
 
 /**
  * Break-glass: invalidate EVERY signed-in session (advances the session epoch).
@@ -7335,61 +7557,6 @@ export async function syncLeagueAction(
   return {
     message: `League sync · imported ${res.imported} of ${res.scanned} league games`,
   };
-}
-
-/** Backfill report-card stats (benchmarks, XPM…) onto older imported games. */
-export async function enrichGamesAction(
-  _prev: ActionResult,
-  _fd: FormData,
-): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
-  const res = await enrichStoredGames();
-  if (res.enriched === 0 && res.remaining === 0) {
-    return { message: "Every stored game already has report-card data" };
-  }
-  refreshGames();
-  return {
-    message: `Enriched ${res.enriched} game(s)${
-      res.failed ? ` · ${res.failed} not on OpenDota right now` : ""
-    }${res.remaining ? ` · ${res.remaining} to go — run again` : ""}`,
-  };
-}
-
-/** Refresh every user's Steam persona name + avatar (batched). */
-export async function syncSteamProfiles(
-  _prev: ActionResult,
-  _fd: FormData,
-): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
-  const users = await prisma.user.findMany();
-  const profiles = await fetchSteamProfiles(users.map((u) => u.steamId));
-  let updated = 0;
-  try {
-    for (const u of users) {
-      const p = profiles.get(u.steamId);
-      if (!p) continue;
-      await prisma.user.update({
-        where: { id: u.id },
-        data: { name: p.name, avatar: p.avatar, profileUrl: p.profileUrl },
-      });
-      updated++;
-    }
-  } finally {
-    // Persona names are part of the pinned board digest. Preserve partial
-    // progress if a later profile update fails without issuing one cache
-    // operation per user on a successful batch.
-    if (updated > 0) updateTag(AUTOMATION_GATE_TAG);
-  }
-  refresh();
-  return { message: `Updated ${updated} of ${users.length} Steam profiles` };
 }
 
 /** Set (or clear) the draft night — announced with countdowns during signups. */

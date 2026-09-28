@@ -1,3 +1,4 @@
+import { fixtureLogLabel } from "./admin-log-copy";
 import { isPlayoffPhase } from "./league-lifecycle";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
@@ -37,6 +38,11 @@ export type StandinServiceResult =
   | {
       ok: true;
       message: string;
+      /**
+       * One line for the admin activity log, with the names spelled out: the
+       * log has no foreign keys, so an id written there can never be read back.
+       */
+      summary: string;
       announcement: string;
       /** Who the announcement is FOR — the action passes it to the send. */
       mentions?: MentionAllowlist;
@@ -542,6 +548,13 @@ export async function assignStandinGuarded(opts: {
         ? " — heads up: already-imported games keep their original attribution"
         : "") +
       (mmrNote ? ` — ${mmrNote}` : ""),
+    summary: `Assigned ${standinUser?.name ?? "a standin"} to cover ${
+      replacedName ?? "an open seat"
+    } for ${coverTeamName} in ${fixtureLogLabel({
+      ...match,
+      homeName: match.homeTeam.name,
+      awayName: match.awayTeam.name,
+    })}${mmrNote ? ` — ${mmrNote}` : ""}`,
     // Being assigned is the single most action-demanding event a standin can
     // get — the action layer posts this so they hear about it without
     // happening to visit the site. Which is why it MENTIONS them: a plain
@@ -679,6 +692,13 @@ export async function removeStandinGuarded(opts: {
   return {
     ok: true,
     message: "Standin assignment removed",
+    summary: `Removed ${assignment.standin.name}'s cover for ${team.name} in ${fixtureLogLabel(
+      {
+        ...assignment.match,
+        homeName: assignment.match.homeTeam.name,
+        awayName: assignment.match.awayTeam.name,
+      },
+    )}`,
     // They were told to show up; they need to hear that they no longer are.
     // An admin's removal also reaches the captain, whose seat is open again.
     mentions: mentionsOf([

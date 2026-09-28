@@ -5,6 +5,7 @@ import {
 } from "@/lib/draft-room-admin";
 import { prisma } from "@/lib/prisma";
 import {
+  generateRegularSchedule,
   makeCaptain,
   makePlayer,
   makeSeason,
@@ -44,14 +45,15 @@ describe("loadStartDraftPreflight", () => {
     expect(preflight).toEqual({
       canStart: true,
       blocker: null,
-      confirm:
-        "Start the draft with 2 captains? That is fewer than this season's 3-team target." +
-        " 3 players for 4 open seats — 1 seat will go unfilled (standins cover them). Removing a captain would tighten it." +
-        " Captains are locked once the auction begins — the way back is Abort draft, which returns every drafted player and refund and keeps the captains, but is refused once any result has been recorded." +
-        " Draft confirmations: 1 of 5 ready; 4 awaiting. This is a warning only and does not block the draft." +
-        " Unverified captain MMR sets draft budgets: Cap A (no medal), Cap B (no medal)." +
-        " Cancel and check each with Edit medal & MMR first; a medal that matches the MMR marks it verified." +
-        " Starting anyway is allowed.",
+      confirm: [
+        "Start the draft with 2 captains?",
+        "",
+        "Pool: 1 seat stays empty (3 players for 4 seats); standins cover them.",
+        "Teams: 2, below this season's 3-team target.",
+        "Confirmations: 1 of 5 ready, 4 awaiting. A warning only; it doesn't block the draft.",
+        "Undo: captains lock when the auction starts. Abort draft returns every player and refund and keeps the captains, until a result is recorded.",
+        "Captain MMR sets budgets but isn't verified: Cap A (no medal), Cap B (no medal). Check with Edit medal & MMR first, or start anyway.",
+      ].join("\n"),
     });
   });
 
@@ -86,9 +88,23 @@ describe("loadStartDraftPreflight", () => {
 describe("loadRegularSeasonStep", () => {
   it("offers the Regular season phase button's confirm in the Draft phase", async () => {
     const season = await makeSeason({ status: "DRAFT" });
+    await makeTeam(season.id, "Home", 0);
+    await makeTeam(season.id, "Away", 1);
+    await generateRegularSchedule(season.id);
     expect(await loadRegularSeasonStep(season)).toEqual({
       confirmation:
-        "Start the Regular season? League navigation and match tools update immediately, and Discord receives a league-start announcement.",
+        "Start the Regular season? Automatic result sync and the weekly Discord reminder switch on, captains can report results, and Discord gets a season-start post listing week 1's fixtures.",
+    });
+  });
+
+  // The Regular season waits for fixtures, so until the schedule is
+  // generated the finished room points the admin at it instead.
+  it("points at the schedule until it exists", async () => {
+    const season = await makeSeason({ status: "DRAFT" });
+    await makeTeam(season.id, "Home", 0);
+    await makeTeam(season.id, "Away", 1);
+    expect(await loadRegularSeasonStep(season)).toEqual({
+      needsSchedule: true,
     });
   });
 

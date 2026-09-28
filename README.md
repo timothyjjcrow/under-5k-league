@@ -243,10 +243,12 @@ already collected.
 
 Players' **ranked medals** come from the same source (OpenDota `rank_tier`). The
 Dota account is derived from each player's verified Steam sign-in; players can
-refresh their own medal, or an admin can populate everyone's at once with the
-**Sync ranks & stats** button before the draft (it also pulls
-each player's pub-scouting snapshot — recent-games win rate, most-played
-heroes, last played — which the player pool and profiles render).
+refresh their own medal. The automation worker also refreshes a few of the
+stalest accounts about once an hour (medal, Steam name and avatar, and each
+player's pub-scouting snapshot — recent-games win rate, most-played heroes,
+last played — which the player pool and profiles render), and an admin can
+refresh every signup at once with **Refresh player data now** before the
+draft.
 
 ## Scripts
 
@@ -365,8 +367,9 @@ supports interactive activation:
 npx vercel project web-analytics enable under-4.5k-league --scope timothyjjcrows-projects
 ```
 
-Open **Admin → Traffic → Open Vercel Web Analytics** (Vercel project access is
-required). Review page views, visitors, top pages, countries, and referrers over
+Use the **Website traffic** link at the foot of /admin (Vercel project access
+is required). It opens the analytics of the deployment you are on:
+`under-4.5k-league` for the US league, `ggd2l-europe` for Europe. Review page views, visitors, top pages, countries, and referrers over
 30 days. Historical untracked visits cannot be backfilled. Ad blockers can
 undercount visitors; server/API request totals are not page views.
 

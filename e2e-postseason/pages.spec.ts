@@ -242,6 +242,12 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
   await expect(
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
+  // Mid-playoffs the phase card has no forward button (Complete is automatic),
+  // and every other phase move sits in the folded "Fix the phase" section,
+  // which stays shut because nothing needs fixing.
+  const fixPhase = page.locator("summary", { hasText: "Fix the phase" });
+  await expect(fixPhase.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await fixPhase.click();
   await expect(
     page.getByRole("button", { name: "Playoffs", exact: true }),
   ).toBeDisabled();
@@ -257,17 +263,31 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
       .first(),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Reset playoffs", exact: true }),
-  ).toBeEnabled();
-  await expect(
     page.getByRole("button", { name: "Regenerate schedule", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByText(/A regular-season result or imported game already exists/i),
   ).toBeVisible();
+  // The Playoffs card lists the series still to play; the decided ones and
+  // the two bracket repairs are folded away beneath them.
+  const playoffs = page.locator("#playoffs");
   await expect(
-    page.getByText(/already advanced a later playoff round/i).first(),
+    playoffs.getByRole("heading", { name: /Series to play/ }),
   ).toBeVisible();
+  const decided = playoffs.locator("summary", { hasText: "Decided series" });
+  await expect(decided.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await decided.click();
+  await expect(
+    playoffs.getByText(/already advanced a later playoff round/i).first(),
+  ).toBeVisible();
+  const fixBracket = playoffs.locator("summary", {
+    hasText: "Fix the bracket",
+  });
+  await expect(fixBracket.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await fixBracket.click();
+  await expect(
+    page.getByRole("button", { name: "Reset playoffs", exact: true }),
+  ).toBeEnabled();
   await expect(
     page.getByRole("button", {
       name: "Return to regular season",
@@ -275,7 +295,7 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
     }),
   ).toBeEnabled();
   await expect(
-    page.getByRole("button", { name: "Create next season" }),
+    page.getByRole("button", { name: "Open signups" }),
   ).toHaveCount(0);
   await page.locator("#adm-new-season > summary").click();
   await expect(page.getByText("Handoff locked", { exact: true })).toBeVisible();
@@ -583,12 +603,30 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin",
   );
 
+  // Once the champion is crowned, the handoff leads the page: one form to
+  // open the next season, prefilled and stating what carries over.
   await expect(
-    page.getByText("Season handoff", { exact: true }).first(),
+    page.getByRole("heading", { name: "Season handoff", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Open Season 10 signups" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("New season name")).toHaveValue("Season 10");
+  await expect(
+    page.getByText(/Carried over from Season 9 \(fixture\):/),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open signups" })).toBeVisible();
+  // The finished season's own cards fold into one record section.
+  await expect(
+    page.getByRole("heading", { name: "Season 9 (fixture) record" }),
+  ).toBeVisible();
+  await expect(page.locator("#adm-record")).not.toHaveAttribute("open", "");
+  // Archiving without opening the next season is folded away, for
+  // reactivating an older season.
   await expect(
     page.getByRole("button", { name: "Archive and enter offseason" }),
-  ).toBeVisible();
+  ).toBeHidden();
+  await page.getByText("Archive without opening the next season").click();
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByRole("button", { name: "Archive and enter offseason" })
@@ -674,9 +712,9 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.getByRole("heading", { name: "Open a new season" }),
   ).toBeVisible();
-  await page.getByLabel("Season name").fill("Season 10 (audit)");
+  await page.getByLabel("New season name").fill("Season 10 (audit)");
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Create season" }).click();
+  await page.getByRole("button", { name: "Open signups" }).click();
   await expect(page.getByText(/Created Season 10 \(audit\)/)).toBeVisible();
   await expect(
     page.getByText(/Season 10 \(audit\) — phase control/),
