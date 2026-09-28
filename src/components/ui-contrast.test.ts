@@ -142,3 +142,29 @@ describe("danger text on raised controls", () => {
     );
   });
 });
+
+describe("Card header rules", () => {
+  const tones = classMap("cardTones");
+  // CardHeader's own `border-b border-<token>`, and the override a tone may
+  // put on its first child (the header, when the card has one).
+  const headerRule = /border-b border-([a-z0-9-]+)/.exec(
+    ui.slice(ui.indexOf("export function CardHeader")),
+  )![1];
+  const ruleOn = (classes: string) =>
+    /\[&>:first-child\]:border-([a-z0-9-]+)/.exec(classes)?.[1] ?? headerRule;
+
+  it("finds every tone it guards", () => {
+    expect([...tones.keys()].sort()).toEqual(["default", "feature", "quiet"]);
+  });
+
+  // The default card's rule is 1.28:1 on its surface: a hairline, but a
+  // visible one. On the feature tone the same token measured 1.01:1.
+  for (const [tone, classes] of tones) {
+    it(`${tone} keeps the header rule visible on its background`, () => {
+      const bg = colourOf(classes, "bg")!;
+      const fill = over(hex(bg.name), hex("bg"), bg.alpha);
+      const contrast = ratio(hex(ruleOn(classes)), fill);
+      expect(contrast, `${tone}: ${contrast.toFixed(2)}:1`).toBeGreaterThanOrEqual(1.2);
+    });
+  }
+});

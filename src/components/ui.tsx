@@ -73,9 +73,12 @@ const cardTones = {
   default: "border-line bg-surface shadow-sm shadow-black/10",
   /**
    * The one card on a page that the viewer is meant to act on. Used sparingly —
-   * if two cards on a screen are `feature`, neither is.
+   * if two cards on a screen are `feature`, neither is. Its CardHeader rule
+   * steps up to `line`: the header's default `line-soft` is all but the same
+   * colour as surface-3, so the rule vanished and left an unexplained gap
+   * between the subtitle and the body.
    */
-  feature: "border-accent/40 bg-surface-3 shadow-sm shadow-black/15",
+  feature: "border-accent/40 bg-surface-3 shadow-sm shadow-black/15 [&>:first-child]:border-line",
   /** Context that should recede: archives, reference copy, empty-ish sections. */
   quiet: "border-line-soft bg-surface/50",
 } as const;
