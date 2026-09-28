@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   draftPhasePresentation,
+  leagueEligibilityLine,
+  leaguePitch,
   matchNightText,
   phaseSubtitle,
   seasonPhaseLabel,
@@ -187,5 +189,29 @@ describe("matchNightText", () => {
     for (const unset of [null, undefined, "", "   ", ".", " . "]) {
       expect(matchNightText(unset)).toBeNull();
     }
+  });
+});
+
+describe("the league pitch for new visitors", () => {
+  it("names the league and says what a season is", () => {
+    expect(leaguePitch("GGD2L")).toBe(
+      "GGD2L is an amateur Dota 2 league: captains draft players in a live auction, then teams play weekly matches and playoffs.",
+    );
+    expect(leaguePitch("GGD2L Europe")).toMatch(/^GGD2L Europe is an amateur/);
+  });
+
+  it("states the hard MMR limit and the announced match night", () => {
+    expect(leagueEligibilityLine("Sundays at 6:00 PM Pacific time")).toBe(
+      "Open to players up to 5,000 MMR · Match night: Sundays at 6:00 PM Pacific time",
+    );
+    expect(leagueEligibilityLine("Wednesdays at 20:00 Berlin time")).toBe(
+      "Open to players up to 5,000 MMR · Match night: Wednesdays at 20:00 Berlin time",
+    );
+  });
+
+  it("says the match night is still to come rather than inventing one", () => {
+    expect(leagueEligibilityLine(null)).toBe(
+      "Open to players up to 5,000 MMR · Match night to be announced",
+    );
   });
 });

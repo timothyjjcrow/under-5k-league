@@ -109,12 +109,15 @@ import {
   DRAFT_PASSED_LABEL,
   HISTORY_PHASE_LABEL,
   draftPhasePresentation,
+  leagueEligibilityLine,
+  leaguePitch,
   phaseSubtitle,
   seasonPhaseLabel,
   seasonPhaseTone,
 } from "@/lib/season-copy";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
+import { announcedMatchNight } from "@/lib/match-night";
 import { firstMedia } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
 import {
@@ -186,6 +189,11 @@ export default async function Home() {
                 : `${latestSeason.name} was archived before completion during the ${PHASE_STEP[latestSeason.status] ?? HISTORY_PHASE_LABEL[latestSeason.status] ?? latestSeason.status} phase. Browse its saved state or play an inhouse while administrators organize what comes next.`
               : "There isn't an active season yet. Explore how the league works or play an inhouse while the first season is organized."
           }
+          pitch={
+            user ? undefined : (
+              <LeaguePitch matchNight={announcedMatchNight(null, [])} />
+            )
+          }
         />
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href="/inhouse" className={buttonClasses("accent")}>
@@ -228,6 +236,7 @@ export default async function Home() {
 
   const { season } = snapshot;
   const draftPresentation = draftPhasePresentation(snapshot.draftStatus);
+  const signedOutSignups = !user && season.status === "SIGNUPS";
 
   // Primary call-to-action, surfaced right in the hero during signups.
   const isActiveReg = snapshot.myReg?.status === "ACTIVE";
@@ -558,11 +567,23 @@ export default async function Home() {
         phaseLabel={seasonPhaseLabel(season.status, snapshot.draftStatus)}
         active={season.status === "DRAFT" ? draftPresentation.live : undefined}
         title={season.name}
-        subtitle={phaseSubtitle(season.status, {
-          canDraft: snapshot.capacity.canDraft,
-          draftStatus: snapshot.draftStatus,
-          hasChampion: championPresentation.championTeamId != null,
-        })}
+        subtitle={
+          signedOutSignups
+            ? ""
+            : phaseSubtitle(season.status, {
+                canDraft: snapshot.capacity.canDraft,
+                draftStatus: snapshot.draftStatus,
+                hasChampion: championPresentation.championTeamId != null,
+              })
+        }
+        pitch={
+          signedOutSignups ? (
+            // It takes the phase sentence's place: the badge, the counts and
+            // the Steam button already say signups are open and what is
+            // missing, and a newcomer first needs to know what this is.
+            <LeaguePitch matchNight={announcedMatchNight(season, [])} />
+          ) : undefined
+        }
         action={heroAction}
         meta={heroMeta}
         aside={heroAside}
@@ -1005,6 +1026,7 @@ function Hero({
   active,
   title,
   subtitle,
+  pitch,
   action,
   meta,
   aside,
@@ -1014,7 +1036,10 @@ function Hero({
   phaseLabel?: string;
   active?: boolean;
   title: string;
+  /** The phase in one sentence; "" renders nothing. */
   subtitle: string;
+  /** What the league is, for a signed-out visitor (see LeaguePitch). */
+  pitch?: ReactNode;
   action?: ReactNode;
   meta?: ReactNode;
   aside?: ReactNode;
@@ -1094,9 +1119,10 @@ function Hero({
           <h1 className="mt-3 font-display text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl">
             {title}
           </h1>
-          {!leagueDashboard ? (
+          {!leagueDashboard && subtitle ? (
             <p className="mt-2 max-w-xl text-muted sm:text-lg">{subtitle}</p>
           ) : null}
+          {!leagueDashboard ? pitch : null}
           {leagueDashboard && action ? (
             <div className="mt-5 flex flex-wrap gap-2 [&>a]:min-h-11 [&>a]:px-4 [&>a]:py-2 [&>a]:text-sm">
               {action}
@@ -1273,6 +1299,23 @@ async function InhouseStrip() {
 }
 
 // ---------- SIGNUPS ----------
+
+/**
+ * The league in one sentence plus who can join and when games are, for a
+ * signed-out visitor on Home (signups and the offseason). Nothing else above
+ * the fold said what the league is. No step strip: the hero's season
+ * timeline already shows the steps.
+ */
+function LeaguePitch({ matchNight }: { matchNight: string | null }) {
+  return (
+    <>
+      <p className="mt-2 max-w-xl text-muted sm:text-lg">{leaguePitch()}</p>
+      <p className="mt-2 max-w-xl text-sm text-muted">
+        {leagueEligibilityLine(matchNight)}
+      </p>
+    </>
+  );
+}
 
 /**
  * The hero's control slot for a player who has already signed up.
@@ -1462,7 +1505,8 @@ function SignupsView({
 
   return (
     <div className="space-y-6">
-      <ScheduleCallout label={season.matchSchedule} />
+      {/* Signed out, the hero's pitch already names the match night. */}
+      {loggedIn ? <ScheduleCallout label={season.matchSchedule} /> : null}
       {/* The viewer's own signup, as a status line. Joining is the hero's
           button (a second "Sign in with Steam to join" sat a screen below
           it), and a removed signup is the hero's "Signup removed" button. */}

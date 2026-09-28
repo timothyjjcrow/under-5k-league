@@ -8,6 +8,12 @@ test("home shows the signups phase for the seeded season", async ({ page }) => {
     page.locator("#main").getByText("Signups open", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(/more to reach the player minimum/)).toBeVisible();
+  // Signed out, the hero says what the league is and who can join.
+  const main = page.locator("#main");
+  await expect(main.getByText(/is an amateur Dota 2 league/)).toBeVisible();
+  await expect(
+    main.getByText(/^Open to players up to 5,000 MMR · Match night/),
+  ).toBeVisible();
 });
 
 test("a new player can sign in and join the season", async ({ page }) => {
