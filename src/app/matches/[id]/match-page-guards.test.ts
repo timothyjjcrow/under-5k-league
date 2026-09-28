@@ -235,6 +235,15 @@ describe("match page admin tools", () => {
     expect(ADMIN).toContain("where: adminStandinPoolWhere(seasonId),");
   });
 
+  it("locks a live series' standin instead of offering a remove that fails", () => {
+    // removeStandinGuarded refuses every removal once a game is imported, for
+    // the admin path too. Same note as the captain's card.
+    expect(TOOLS).toContain("const seriesStarted = m.games.length > 0;");
+    expect(TOOLS).toMatch(
+      /\{seriesStarted \? \([\s\S]*?Locked: series already started[\s\S]*?\) : \(\s*<ActionForm action=\{removeStandin\}>/,
+    );
+  });
+
   it("points every Needs attention item at the match page's admin tools", () => {
     expect(ADMIN).toContain(
       "href={matchAnchorPath(item.id, MATCH_ANCHOR.admin)}",

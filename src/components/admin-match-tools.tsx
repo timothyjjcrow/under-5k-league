@@ -488,7 +488,10 @@ export function StandinMatchBlock({
   teamSize,
   assignOpen,
 }: {
-  m: { id: string; homeTeamId: string; awayTeamId: string };
+  /** `games` decides the lock: once one is imported, removeStandinGuarded
+   *  refuses every removal (it would strip the standin from the rest of the
+   *  series), so the block says so instead of offering "remove". */
+  m: { id: string; homeTeamId: string; awayTeamId: string; games: unknown[] };
   teams: StandinBlockTeam[];
   /** Who can cover: adminStandinPoolWhere's registrations, MMR first. */
   pool: { userId: string; mmr: number; user: { name: string } }[];
@@ -505,6 +508,7 @@ export function StandinMatchBlock({
   const home = teams.find((t) => t.id === m.homeTeamId);
   const away = teams.find((t) => t.id === m.awayTeamId);
   const asg = assignments;
+  const seriesStarted = m.games.length > 0;
   // A player already covered can't be covered again (the service refuses a
   // second cover for one seat), so don't offer them — the captain-facing card
   // has always filtered these and the admin one didn't.
@@ -564,7 +568,10 @@ export function StandinMatchBlock({
               <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
                 ✗ Assigned standin{" "}
                 <b>{standinOut.map((r) => r.user.name).join(", ")}</b> has
-                declared OUT — remove that assignment and arrange other cover.
+                declared OUT —{" "}
+                {seriesStarted
+                  ? "the series has started, so the booking stays; the remaining games record whoever actually plays."
+                  : "remove that assignment and arrange other cover."}
               </div>
             ) : null}
           </>
@@ -585,17 +592,25 @@ export function StandinMatchBlock({
                   : `${a.standin.name} filling an open seat`}{" "}
                 · {teamName.get(a.teamId)}
               </span>
-              <ActionForm action={removeStandin}>
-                <input type="hidden" name="assignmentId" value={a.id} />
-                <SubmitButton
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-danger-soft hover:underline"
-                  confirm={`Remove ${a.standin.name} from this match? They are told to stand down in Discord — if this was a mis-click they will have been pinged twice for nothing.`}
-                >
-                  remove
-                </SubmitButton>
-              </ActionForm>
+              {seriesStarted ? (
+                // The same note as the captain's card: removal mid-series is
+                // refused by the service, so offer no button that can only fail.
+                <span className="shrink-0 text-xs text-muted">
+                  Locked: series already started
+                </span>
+              ) : (
+                <ActionForm action={removeStandin}>
+                  <input type="hidden" name="assignmentId" value={a.id} />
+                  <SubmitButton
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-danger-soft hover:underline"
+                    confirm={`Remove ${a.standin.name} from this match? They are told to stand down in Discord — if this was a mis-click they will have been pinged twice for nothing.`}
+                  >
+                    remove
+                  </SubmitButton>
+                </ActionForm>
+              )}
             </li>
           ))}
         </ul>
