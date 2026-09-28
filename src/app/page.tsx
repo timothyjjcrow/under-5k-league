@@ -72,7 +72,6 @@ import {
   LinkArrow,
   LinkifiedText,
   PlayerLink,
-  Progress,
   RankBadge,
   RoleBadges,
   ScheduleCallout,
@@ -120,6 +119,7 @@ import { formatMatchTime } from "@/lib/match-time";
 import { announcedMatchNight } from "@/lib/match-night";
 import { firstMedia } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
+import { rosterOrder } from "@/lib/team-roster";
 import {
   DRAFT_READINESS,
   draftReadiness,
@@ -1827,252 +1827,145 @@ function SignupChip({
 
 // ---------- DRAFT ----------
 
-// A read-only glance at the live auction so the dashboard tells the story
-// without opening the draft room: who's on the block, what's left in the
-// pool, and the latest sales. Never resolves clocks — that stays in /draft.
-// Live and paused auctions only: once the draft is complete there is nothing
-// to watch, and the hero's "Review the draft results" link and the rosters
-// below already cover it.
-async function DraftPulse({ seasonId }: { seasonId: string }) {
-  const draft = await prisma.draft.findUnique({ where: { seasonId } });
-  if (
-    !draft ||
-    (draft.status !== DRAFT_STATUS.IN_PROGRESS &&
-      draft.status !== DRAFT_STATUS.PAUSED)
-  ) {
-    return null;
-  }
-
-  const rostered = await prisma.teamMember.findMany({
-    where: { seasonId },
-    select: { userId: true },
-  });
-  const [poolLeft, sales, nominated, leadingTeam, nominatorTeam] =
-    await Promise.all([
-      prisma.registration.count({
-        where: {
-          seasonId,
-          status: "ACTIVE",
-          type: "PLAYER",
-          userId: { notIn: rostered.map((m) => m.userId) },
-        },
-      }),
-      prisma.teamMember.findMany({
-        where: { seasonId, isCaptain: false },
-        orderBy: { createdAt: "desc" },
-        take: 3,
-        include: { user: true, team: true },
-      }),
-      draft.nominatedUserId
-        ? prisma.user.findUnique({ where: { id: draft.nominatedUserId } })
-        : null,
-      draft.currentBidTeamId
-        ? prisma.team.findUnique({ where: { id: draft.currentBidTeamId } })
-        : null,
-      draft.nominatorTeamId
-        ? prisma.team.findUnique({
-            where: { id: draft.nominatorTeamId },
-            select: { name: true },
-          })
-        : null,
-    ]);
-
-  return (
-    <Card>
-      <CardHeader
-        headingLevel={2}
-        title="Live from the draft room"
-        action={
-          <Link href="/draft" className={buttonClasses("accent", "sm")}>
-            Watch live <LinkArrow />
-          </Link>
-        }
-      />
-      <CardBody className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
-        <div className="min-w-0">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            On the block
-          </div>
-          {nominated ? (
-            <div className="mt-2 flex items-center gap-2.5">
-              <Avatar name={nominated.name} src={nominated.avatar} size={34} />
-              <div className="min-w-0">
-                <PlayerLink
-                  userId={nominated.id}
-                  className="block truncate font-medium"
-                >
-                  {nominated.name}
-                </PlayerLink>
-                <div className="truncate text-xs text-muted">
-                  ${draft.currentBid}
-                  {leadingTeam
-                    ? ` — ${leadingTeam.name} leads`
-                    : " opening bid"}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-muted">
-              {draft.status === DRAFT_STATUS.PAUSED
-                ? "The draft is paused."
-                : nominatorTeam
-                  ? `${nominatorTeam.name} is on the clock to nominate.`
-                  : "Waiting on the next nomination…"}
-            </p>
-          )}
-        </div>
-        <Stat label="Players left in pool" value={poolLeft} />
-        <div className="min-w-0">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            Latest sales
-          </div>
-          {sales.length > 0 ? (
-            <ul className="mt-2 space-y-1 text-sm">
-              {sales.map((s) => (
-                <li
-                  key={s.id}
-                  className="flex items-center justify-between gap-2"
-                >
-                  <PlayerLink userId={s.userId} className="min-w-6 truncate">
-                    {s.user.name}
-                  </PlayerLink>
-                  {/* Price always shows; only the free-text team name gives
-                      way — a shrink-0 span here crushed the player link and
-                      bled past the card on phones. */}
-                  <span className="flex min-w-0 items-center gap-1 text-xs text-muted">
-                    <span className="shrink-0">${s.price} ·</span>
-                    <span className="min-w-0 max-w-[10rem] truncate">
-                      {s.team.name}
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2 text-sm text-muted">No sales yet.</p>
-          )}
-        </div>
-      </CardBody>
-    </Card>
-  );
-}
-
+/**
+ * Everything below the hero in the Draft phase: while the auction runs, one
+ * line pointing at the draft room, then every roster as one compact table.
+ *
+ * Home used to show the lot on the block, the pool count and the latest
+ * sales, read once when the page loaded. The auction moves every few seconds
+ * and this page never refreshes, so the lot was stale almost at once; the
+ * draft room is the live view. The rosters were six tall cards of "Empty
+ * slot" rows (about 390px each on a phone), with the $0 captain listed last.
+ */
 function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
-  const { teams, season } = snapshot;
+  const { teams, season, draftStatus } = snapshot;
   // Budgets are real only once the auction starts: Start replaces every
   // team's placeholder with its MMR-weighted budget from the final captain
-  // pool. Before that the cards showed the same flat "$100 left" for everyone,
-  // a figure no captain would actually get.
-  const budgetsSet = !draftSetupOpen(season.status, snapshot.draftStatus);
+  // pool. Before that every team showed the same flat figure, one no captain
+  // would actually get.
+  const budgetsSet = !draftSetupOpen(season.status, draftStatus);
+  const running =
+    draftStatus === DRAFT_STATUS.IN_PROGRESS ||
+    draftStatus === DRAFT_STATUS.PAUSED;
   return (
     <div className="space-y-6">
-      <Suspense fallback={null}>
-        <DraftPulse seasonId={season.id} />
-      </Suspense>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {teams.map((t) => {
-          const spent = t.members.reduce((sum, m) => sum + m.price, 0);
-          const startingBudget = t.budget + spent;
-          return (
-            <Card key={t.id} interactive>
-              <CardHeader
-                headingLevel={2}
-                title={
-                  <Link
-                    href={`/teams/${t.id}`}
-                    className="flex items-center gap-2 hover:text-info"
-                  >
-                    <TeamCrest
-                      name={t.name}
-                      seed={t.id}
-                      logoUrl={t.logoUrl}
-                      size={24}
-                      className="rounded-md"
-                    />
-                    {t.name}
-                  </Link>
-                }
-                subtitle={
-                  <span>
-                    Captain:{" "}
-                    <PlayerLink userId={t.captainId} className="text-muted">
-                      {t.captain.name}
-                    </PlayerLink>
-                  </span>
-                }
-                action={
-                  budgetsSet ? (
-                    <Badge tone="accent">${t.budget} left</Badge>
-                  ) : undefined
-                }
+      {running ? (
+        <Link
+          href="/draft"
+          className="group flex items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm transition-colors hover:border-muted/60"
+        >
+          <span className="flex min-w-0 items-center gap-2.5">
+            {draftStatus === DRAFT_STATUS.IN_PROGRESS ? (
+              <span
+                aria-hidden
+                className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
               />
-              <CardBody className="space-y-4">
+            ) : null}
+            <span className="font-medium">
+              {draftStatus === DRAFT_STATUS.PAUSED
+                ? "The draft is paused"
+                : "The draft is live"}
+            </span>
+          </span>
+          <span className="shrink-0 font-medium text-accent group-hover:underline">
+            Watch <LinkArrow />
+          </span>
+        </Link>
+      ) : null}
+      <Card className="overflow-hidden">
+        <CardHeader
+          headingLevel={2}
+          title="Rosters"
+          subtitle={`${teams.length} ${teams.length === 1 ? "team" : "teams"} · ${season.teamSize} players each`}
+        />
+        <CardBody className="p-0">
+          <table className="w-full table-fixed text-sm">
+            <caption className="sr-only">
+              {budgetsSet
+                ? "Each team's players, captain first, with seats filled and budget left"
+                : "Each team's captain and seats filled"}
+            </caption>
+            <colgroup>
+              <col />
+              <col className="w-16" />
+              {budgetsSet ? <col className="w-20 sm:w-24" /> : null}
+            </colgroup>
+            <thead className="text-xs text-muted">
+              <tr className="border-b border-line">
+                <th scope="col" className="px-4 py-2 text-left font-medium">
+                  Team
+                </th>
+                <th scope="col" className="px-2 py-2 text-right font-medium">
+                  Seats
+                </th>
                 {budgetsSet ? (
-                  <div>
-                    <div className="mb-1.5 flex items-center justify-between text-xs text-muted">
-                      <span>
-                        Spent ${spent} of ${startingBudget}
-                      </span>
-                      <span>
-                        {t.members.length}/{season.teamSize} roster
-                      </span>
-                    </div>
-                    <Progress
-                      value={spent}
-                      max={startingBudget}
-                      label={`${t.name} draft budget spent`}
-                    />
-                  </div>
+                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                    Budget left
+                  </th>
                 ) : null}
-                <RosterList members={t.members} teamSize={season.teamSize} />
-              </CardBody>
-            </Card>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function RosterList({
-  members,
-  teamSize,
-}: {
-  members: SeasonSnapshot["teams"][number]["members"];
-  teamSize: number;
-}) {
-  const slots = Array.from({ length: teamSize });
-  return (
-    <ul className="space-y-1.5">
-      {slots.map((_, i) => {
-        const m = members[i];
-        return (
-          <li
-            key={i}
-            className="flex items-center justify-between rounded-md border border-line/60 px-2.5 py-1.5 text-sm"
-          >
-            {m ? (
-              <>
-                <span className="flex items-center gap-2">
-                  <Avatar name={m.user.name} src={m.user.avatar} size={22} />
-                  <PlayerLink userId={m.userId}>{m.user.name}</PlayerLink>
-                  {m.isCaptain ? (
-                    <Badge tone="accent" className="ml-1">
-                      C
-                    </Badge>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line-soft">
+              {teams.map((t) => (
+                <tr key={t.id} className="align-top">
+                  <th
+                    scope="row"
+                    className="min-w-0 px-4 py-3 text-left font-normal"
+                  >
+                    <Link
+                      href={`/teams/${t.id}`}
+                      className="flex min-w-0 items-center gap-2 font-semibold hover:text-info"
+                    >
+                      <TeamCrest
+                        name={t.name}
+                        seed={t.id}
+                        logoUrl={t.logoUrl}
+                        size={22}
+                        className="shrink-0 rounded"
+                      />
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        {t.name}
+                      </span>
+                    </Link>
+                    {/* leading-7: two wrapped lines of tap-safe links must not
+                        overlap each other. */}
+                    <p className="mt-1 leading-7 text-muted [overflow-wrap:anywhere]">
+                      {rosterOrder(t.members).map((m, i) => (
+                        <Fragment key={m.id}>
+                          {i > 0 ? ", " : null}
+                          <PlayerLink userId={m.userId} className="text-fg">
+                            {m.user.name}
+                          </PlayerLink>
+                          {m.isCaptain ? (
+                            <span
+                              title="Captain"
+                              className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-accent/40 bg-accent/15 px-1 align-middle text-[11px] font-semibold text-accent"
+                            >
+                              <span aria-hidden>C</span>
+                              <span className="sr-only">captain</span>
+                            </span>
+                          ) : budgetsSet ? (
+                            <span className="text-xs"> ${m.price}</span>
+                          ) : null}
+                        </Fragment>
+                      ))}
+                    </p>
+                  </th>
+                  <td className="px-2 py-3 text-right tabular-nums">
+                    {t.members.length}/{season.teamSize}
+                  </td>
+                  {budgetsSet ? (
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      ${t.budget}
+                    </td>
                   ) : null}
-                </span>
-                <span className="text-muted">
-                  {m.isCaptain ? "—" : `$${m.price}`}
-                </span>
-              </>
-            ) : (
-              <span className="text-muted">Empty slot</span>
-            )}
-          </li>
-        );
-      })}
-    </ul>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardBody>
+      </Card>
+    </div>
   );
 }
 

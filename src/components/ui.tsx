@@ -572,37 +572,6 @@ export function TeamCrest({
   );
 }
 
-// ---------- Progress ----------
-
-export function Progress({
-  value,
-  max,
-  label,
-  className,
-}: {
-  value: number;
-  max: number;
-  label: string;
-  className?: string;
-}) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={Math.max(0, max)}
-      aria-valuenow={Math.max(0, Math.min(value, max))}
-      className={cn("h-2.5 w-full rounded-full bg-surface-2", className)}
-    >
-      <div
-        className="bar-fill h-full rounded-full bg-brand transition-all"
-        style={{ width: `${pct}%` }}
-      />
-    </div>
-  );
-}
-
 // ---------- Skeleton ----------
 
 /** A shimmering placeholder block for loading states. */
