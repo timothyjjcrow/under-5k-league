@@ -1272,31 +1272,3 @@ export function ShieldCheckIcon({
     </svg>
   );
 }
-
-/**
- * Reassurance for players wary of "Sign in with Steam". This copy is also the
- * collection notice: login creates the durable Steam identity and immediately
- * performs the documented public OpenDota enrichment.
- */
-export function SteamSafetyNote({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border border-line bg-surface-2/40 p-4 text-left",
-        className,
-      )}
-    >
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <ShieldCheckIcon size={18} className="text-success" />
-        Why Steam sign-in?
-      </div>
-      <p className="mt-2 text-xs leading-relaxed text-muted">
-        Steam verifies your <b className="font-medium text-fg">SteamID64</b>.
-        This creates or updates your league profile with your public name,
-        avatar, and profile link; we derive your Dota account and use OpenDota
-        for your medal and public match activity. You sign in on Steam&apos;s
-        own site, so we never receive your Steam password or email.
-      </p>
-    </div>
-  );
-}

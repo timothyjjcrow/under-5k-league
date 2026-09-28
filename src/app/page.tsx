@@ -8,7 +8,7 @@ import { getSeasonGameLeaders } from "@/lib/cached-queries";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
-import { draftNightSoon } from "@/lib/draft-setup";
+import { draftNightSoon, draftSetupOpen } from "@/lib/draft-setup";
 import {
   getSeasonMatches,
   getSeasonSnapshot,
@@ -78,16 +78,16 @@ import {
   ScheduleCallout,
   Skeleton,
   Stat,
-  SteamSafetyNote,
   TeamCrest,
   buttonClasses,
   textLink,
 } from "@/components/ui";
-import { averageMmr, mmrDistribution, roleCoverage } from "@/lib/pool-stats";
+import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import { DiscordSetupPrompt } from "@/components/discord-setup";
 import {
   AUTO_SYNC,
+  DISCORD_INVITE_URL,
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
@@ -117,7 +117,11 @@ import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
 import { firstMedia } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
-import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
+import {
+  DRAFT_READINESS,
+  draftReadiness,
+  type DraftReadiness,
+} from "@/lib/draft-readiness";
 import {
   resolveChampionPresentation,
   type ChampionPresentation,
@@ -383,11 +387,19 @@ export default async function Home() {
           />
         )}
         {season.draftAt ? (
-          <span className="flex items-center text-sm text-muted">
-            🗓️ Draft{" "}
-            {/* passedLabel, because this chip is the ONLY thing here carrying a
-                date. Without it a slipped draft night rendered a bare
-                "🗓️ Draft" — a label with nothing after it — since the countdown
+          // The page's one printing of the draft date: the signup card below
+          // used to repeat it with a second countdown.
+          <span className="text-sm text-muted">
+            <span aria-hidden>🗓️</span> Draft{" "}
+            <strong className="font-medium text-fg">
+              <LocalTime
+                ts={season.draftAt.getTime()}
+                variant="short"
+                initial={formatMatchTime(season.draftAt, "short")}
+              />
+            </strong>
+            {/* passedLabel, because this chip owns the date it prints. Without
+                it a slipped draft night read as a plan, since the countdown
                 goes quiet 3h past. The season being in SIGNUPS is what makes
                 the state reachable at all: the phase does not advance itself. */}
             <Countdown
@@ -538,9 +550,7 @@ export default async function Home() {
         <PinnedNotices />
       </Suspense>
       {season.status === "SIGNUPS" && (
-        <Suspense fallback={<CardSkeleton rows={4} />}>
-          <SignupsView snapshot={snapshot} loggedIn={!!user} />
-        </Suspense>
+        <SignupsView snapshot={snapshot} loggedIn={!!user} />
       )}
       {season.status === "DRAFT" && <DraftPhaseView snapshot={snapshot} />}
       {(season.status === "REGULAR_SEASON" || season.status === "PLAYOFFS") && (
@@ -1233,27 +1243,21 @@ async function InhouseStrip() {
  * width without an `aside`, so a branch that returns null here would leave a
  * 23rem hole (the rule `MyNextMatch`'s no-match branch exists for).
  *
- * The ask is the whole point, so it states the CURRENT one rather than a fixed
- * slogan: short of the minimum that's what still blocks the draft, past it
- * (where the league sits for most of signup week, since minTeams is a floor)
- * it's the next whole team.
+ * The ask is the whole point: fill the rest of the league. The numbers behind
+ * it (how many signed up, how many more make the next team) sit in the hero's
+ * own counts right beside this panel, so it names the ask without restating
+ * them.
  */
 function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
-  const { capacity, playerCount } = snapshot;
-  const short = !capacity.canDraft;
-  const n = short ? capacity.needed : capacity.toNextTeam;
+  const { capacity, season } = snapshot;
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/70 p-4 backdrop-blur-sm sm:p-5">
       <p className="font-display text-lg font-semibold">You&apos;re in</p>
       <p className="mt-1 text-sm text-muted">
-        {playerCount} signed up.{" "}
-        <strong className="text-fg">
-          {n} more {n === 1 ? "player" : "players"}
-        </strong>{" "}
-        {short
-          ? `and the draft can run.`
-          : `makes it ${capacity.teamsFormable + 1} full teams.`}{" "}
-        Know anyone who&apos;d fit?
+        Know anyone who&apos;d fit?{" "}
+        {capacity.canDraft
+          ? `Signups stay open, and every ${season.teamSize} more players makes another team.`
+          : "The draft can run once the player minimum is met."}
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <InviteLink />
@@ -1264,405 +1268,284 @@ function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
       <p className="mt-2 text-xs text-muted">
         Copies this season&apos;s link — it unfurls with the details in Discord.
       </p>
-      {/* No draft-night line here. It was the page's THIRD printing of that
-          date — the hero's own chip sits directly above this panel and the
-          signup card repeats it in full below, which on a phone stacked two
-          identical countdowns 400px apart. This panel does one job: the ask,
-          and the control to act on it. */}
+      {/* No draft-night line here: the hero's own chip prints the date, and a
+          second countdown beside it is the repeat this page has been cut
+          back from. This panel does one job: the ask, and the control to act
+          on it. */}
     </div>
   );
 }
 
-async function SignupsView({
+/**
+ * What the draft-night confirmation says about the viewer, as one plain status
+ * line. A badge and a link used to say "Confirm draft night" twice here, and
+ * the link only opened the top of /me.
+ */
+function draftReadinessStatus(readiness: DraftReadiness): string {
+  switch (readiness) {
+    case DRAFT_READINESS.READY:
+      return "Draft night confirmed ✓";
+    case DRAFT_READINESS.STALE:
+      return "Draft time changed — not confirmed yet";
+    default:
+      return "Draft night not confirmed yet";
+  }
+}
+
+/**
+ * Everything below the hero during signups. The counts, the minimum and the
+ * draft date live in the hero ONCE: this view used to restate them in a signup
+ * card heading, a progress sentence and four stat tiles (whose figures are
+ * /players' own strip), so "37 signed up" printed three times and "3 more for
+ * another team" three ways. What is left here is what the hero can't carry:
+ * the viewer's own signup, and who is in.
+ */
+function SignupsView({
   snapshot,
   loggedIn,
 }: {
   snapshot: SeasonSnapshot;
   loggedIn: boolean;
 }) {
-  const { season, playerCount, standinCount, capacity, myReg } = snapshot;
+  const { season, capacity, myReg } = snapshot;
   const isActivePlayer = myReg?.status === "ACTIVE" && myReg.type === "PLAYER";
   const isStandin = myReg?.status === "ACTIVE" && myReg.type === "STANDIN";
   const isRemoved = myReg?.status === REGISTRATION_STATUS.REMOVED;
   const myDraftReadiness =
-    isActivePlayer && season.draftAt
+    isActivePlayer &&
+    season.draftAt &&
+    draftSetupOpen(season.status, snapshot.draftStatus)
       ? draftReadiness(myReg, season.draftRevision)
       : null;
-
-  // Teams need captains as much as they need players — surface how many
-  // have volunteered so the "can we actually draft?" picture is complete.
-  const captainVolunteers = await prisma.registration.count({
-    where: {
-      seasonId: season.id,
-      status: "ACTIVE",
-      type: "PLAYER",
-      wantsCaptain: true,
-    },
-  });
 
   return (
     <div className="space-y-6">
       <ScheduleCallout label={season.matchSchedule} />
-      <Card>
-        <CardBody className="space-y-5">
-          {/* `minTeams` is the FLOOR the draft needs, never a cap: nothing
-              refuses a signup past it (registrationGate checks the MMR ceiling
-              and the SIGNUPS phase, nothing else) and startDraft forms one team
-              per captain, so the 31st player on a 6-team season just becomes a
-              7th team. This headline used to read "31 / 30 players to start"
-              over a progress bar pegged at 100% — a fraction above 1, which is
-              the universal shape of "sold out", shown to exactly the person
-              deciding whether to bother signing up. Past the minimum it counts
-              UP instead, and the bar retargets on the next whole team. */}
-          {/* A real <h2>, not a styled span: this card is what the page exists
-              for, and the whole outline was h1 "Season 7" then straight to the
-              h3s of "Pool composition" and "Who's in" — so heading navigation
-              skipped the signup card and the count entirely. No visual change;
-              the line already looked and read like the card's title. */}
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
-            <h2 className="min-w-0 font-medium">
-              {capacity.canDraft
-                ? `${playerCount} player${playerCount === 1 ? "" : "s"} signed up`
-                : `${playerCount} / ${capacity.minPlayers} player minimum`}
-              <span className="font-normal text-muted">
-                {" "}
-                · teams of {season.teamSize}
-                {season.maxMmr > 0 ? ` · ${season.maxMmr} MMR soft limit` : ""}
-              </span>
-            </h2>
-            <span className="shrink-0 text-muted">
-              {capacity.canDraft
-                ? "Player minimum met — still open"
-                : `${capacity.needed} more needed`}
-            </span>
-          </div>
-          {season.draftAt ? (
-            <p className="text-sm text-muted">
-              🗓️ Draft night:{" "}
-              <strong className="text-fg">
-                <LocalTime
-                  ts={season.draftAt.getTime()}
-                  variant="full"
-                  initial={formatMatchTime(season.draftAt, "full")}
-                />
-              </strong>
-              {/* This line PRINTS the date, so it owns saying the date has
-                  gone. Before, a slipped draft night read "🗓️ Draft night:
-                  Sun, Jul 26" with no chip — a past date rendered as a plan. */}
-              <Countdown
-                targetMs={season.draftAt.getTime()}
-                eventLabel="Draft"
-                passedLabel={DRAFT_PASSED_LABEL}
-              />
-            </p>
-          ) : null}
-          {capacity.canDraft ? (
-            <div className="space-y-2">
-              {/* Scaled to the next whole team, so the bar keeps meaning
-                  something instead of sitting full for the rest of signups —
-                  and so its EMPTY slice is exactly the players still needed,
-                  narrowing from a team's worth down to one. Not
-                  leftover/teamSize: that renders empty at an exact multiple,
-                  which is the healthiest the league gets. */}
-              <Progress
-                value={playerCount}
-                max={capacity.nextTeamTarget}
-                label="Player signup capacity"
-              />
-              <p className="text-sm text-muted">
-                The {season.minTeams}-team minimum is covered — signups stay
-                open, and every {season.teamSize} more players is another team.{" "}
-                <strong className="text-fg">{capacity.toNextTeam} more</strong>{" "}
-                would make it {capacity.teamsFormable + 1} full teams.
-              </p>
-            </div>
-          ) : (
-            <Progress
-              value={playerCount}
-              max={capacity.minPlayers}
-              label="Players needed to run the league"
-            />
-          )}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat label="Players" value={playerCount} />
-            <Stat label="Standins" value={standinCount} />
-            <Stat
-              label="Full teams possible"
-              value={capacity.teamsFormable}
-              hint={
-                capacity.canDraft
-                  ? `minimum ${season.minTeams}`
-                  : `of ${season.minTeams} needed`
-              }
-            />
-            <Stat
-              label="Captain volunteers"
-              value={captainVolunteers}
-              /* One captain per TEAM, and the team count grows with the pool —
-                 pinning this hint to minTeams told a 37-player season it needed
-                 6 captains when seating everyone takes 7. */
-              hint={`need ${Math.max(season.minTeams, capacity.teamsFormable)}`}
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            {!loggedIn ? (
-              // The Why Steam sign-in? note below is this button's notice.
-              <SteamSignInButton next="/me">
-                Sign in with Steam to join
-              </SteamSignInButton>
-            ) : isActivePlayer ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge
-                  tone={
-                    myDraftReadiness === DRAFT_READINESS.STALE
-                      ? "danger"
-                      : myDraftReadiness === DRAFT_READINESS.AWAITING
-                        ? "accent"
-                        : "success"
-                  }
-                >
-                  {myDraftReadiness === DRAFT_READINESS.READY
-                    ? "Draft night confirmed"
-                    : myDraftReadiness === DRAFT_READINESS.STALE
-                      ? "Draft confirmation expired"
-                      : myDraftReadiness === DRAFT_READINESS.AWAITING
-                        ? "Confirm draft night"
-                        : "You’re signed up to play"}
-                </Badge>
-                <Link href="/me" className={buttonClasses("secondary")}>
-                  {myDraftReadiness === DRAFT_READINESS.STALE ? (
-                    <>
-                      Reconfirm draft night <LinkArrow />
-                    </>
-                  ) : myDraftReadiness === DRAFT_READINESS.AWAITING ? (
-                    <>
-                      Confirm draft night <LinkArrow />
-                    </>
-                  ) : (
-                    "Review your signup"
-                  )}
-                </Link>
-              </div>
-            ) : isStandin ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge tone="info">You&apos;re registered as a standin</Badge>
-                <Link href="/me" className={buttonClasses("secondary")}>
-                  Switch to full player
-                </Link>
-              </div>
-            ) : isRemoved ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge tone="danger">Your signup was removed</Badge>
-                <Link href="/me" className={buttonClasses("secondary")}>
-                  See status and next steps
-                </Link>
-              </div>
-            ) : (
-              <Link href="/me" className={buttonClasses("primary", "lg")}>
-                Join the season <LinkArrow />
-              </Link>
-            )}
-            {/* One Discord CTA in <main> at a time. A signed-up player who
-                hasn't linked already gets <DiscordSetupPrompt> above, which
-                sequences the SAME invite as "1. Join the server" and a link
-                step after it — so this button competed with its own
-                instructions, three identical discord.gg links on one screen
-                (the footer has the third). Registered viewers are exactly the
-                cohort that prompt covers; everyone else still needs this. */}
-            {!isActivePlayer && !isStandin && !isRemoved ? (
-              <DiscordButton size="lg" />
-            ) : null}
-          </div>
-
-          {!loggedIn ? <SteamSafetyNote /> : null}
-        </CardBody>
-      </Card>
-
-      {/* Captains are designated DURING signups and `getSeasonSnapshot`
-          already fetches them for every dashboard render — the page just threw
-          them away until now, so a season with six captains picked said
-          nothing about it. Who is captaining is one of the few things a
-          prospect can weigh before committing a season of Wednesdays. */}
-      {snapshot.teams.length > 0 ? (
+      {/* The viewer's own signup, as a status line. Joining is the hero's
+          button (a second "Sign in with Steam to join" sat a screen below
+          it), and a removed signup is the hero's "Signup removed" button. */}
+      {isActivePlayer || isStandin ? (
         <Card>
           <CardHeader
             headingLevel={2}
-            title="Captains so far"
-            subtitle={`${snapshot.teams.length} team${snapshot.teams.length === 1 ? "" : "s"} lined up — more captains can still be named before the draft`}
+            className="border-b-0"
+            title={
+              isStandin
+                ? "You’re registered as a standin"
+                : "You’re signed up to play"
+            }
+            subtitle={
+              <>
+                Teams of {season.teamSize}
+                {season.maxMmr > 0 ? ` · ${season.maxMmr} MMR soft limit` : ""}
+                {myDraftReadiness
+                  ? ` · ${draftReadinessStatus(myDraftReadiness)}`
+                  : ""}
+              </>
+            }
+            action={
+              <Link
+                href={
+                  myDraftReadiness && myDraftReadiness !== DRAFT_READINESS.READY
+                    ? "/me#draft-commitment"
+                    : "/me"
+                }
+                className={buttonClasses("secondary")}
+              >
+                {isStandin ? "Switch to full player" : "Review your signup"}
+              </Link>
+            }
           />
-          <CardBody>
-            <div className="flex flex-wrap gap-2">
-              {snapshot.teams.map((t) => (
-                <PlayerLink
-                  key={t.id}
-                  userId={t.captain.id}
-                  className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
-                >
-                  <Avatar
-                    name={t.captain.name}
-                    src={t.captain.avatar}
-                    size={26}
-                  />
-                  <span className="text-sm">{t.captain.name}</span>
-                  <RankBadge rankTier={t.captain.rankTier} />
-                </PlayerLink>
-              ))}
-            </div>
-          </CardBody>
         </Card>
       ) : null}
+      {/* One Discord CTA in <main> at a time. A signed-up player who hasn't
+          linked gets <DiscordSetupPrompt> above, which sequences the SAME
+          invite as "1. Join the server" and a link step after it, so this
+          row is for everyone that prompt can't cover. */}
+      {!isActivePlayer && !isStandin && !isRemoved && DISCORD_INVITE_URL ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm">
+          <p className="min-w-[min(14rem,100%)] flex-1 text-muted">
+            {loggedIn
+              ? "Questions before you join? Ask in the league Discord."
+              : "Questions before you sign up? Ask in the league Discord."}
+          </p>
+          <DiscordButton />
+        </div>
+      ) : null}
 
-      <Suspense fallback={null}>
-        <PoolComposition seasonId={season.id} />
-      </Suspense>
-
-      <Card>
-        <CardHeader
-          headingLevel={2}
-          title="Who's in"
-          /* Named the count: the chip list is capped at 12, so a 30-player
-             season silently hid 18 people behind a "View all →" that gave no
-             reason to click. */
-          subtitle={
-            playerCount > 12
-              ? `Latest 12 of ${playerCount} players`
-              : "Latest players to sign up"
-          }
-          action={
-            <Link href="/players" className={textLink("text-sm")}>
-              View all <LinkArrow />
-            </Link>
-          }
+      <Suspense fallback={<CardSkeleton rows={2} />}>
+        <WhoIsIn
+          seasonId={season.id}
+          playerCount={snapshot.playerCount}
+          teamsNeeded={Math.max(season.minTeams, capacity.teamsFormable)}
+          captains={snapshot.teams.map((team) => team.captain)}
         />
-        <CardBody>
-          <Suspense fallback={<Skeleton className="h-8 w-full" />}>
-            <RecentSignups seasonId={season.id} />
-          </Suspense>
-        </CardBody>
-      </Card>
+      </Suspense>
     </div>
   );
 }
 
-async function RecentSignups({ seasonId }: { seasonId: string }) {
-  const regs = await prisma.registration.findMany({
-    where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-    // Only the fields the chips render — this list serializes into the page.
-    include: {
-      user: { select: { id: true, name: true, avatar: true, rankTier: true } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: 12,
-  });
-  if (regs.length === 0) {
-    return (
-      <EmptyState
-        title="No signups yet"
-        description="Be the first to join this season."
-      />
-    );
-  }
-  return (
-    <div className="flex flex-wrap gap-2">
-      {regs.map((r) => (
-        <PlayerLink
-          key={r.id}
-          userId={r.userId}
-          className="flex items-center gap-2 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-3 hover:border-muted/60 hover:no-underline"
-        >
-          <Avatar name={r.user.name} src={r.user.avatar} size={26} />
-          <span className="text-sm">{r.user.name}</span>
-          <RankBadge rankTier={r.user.rankTier} />
-          <RoleBadges roles={r.roles} />
-          {r.mmr > 0 ? (
-            <span className="text-xs text-muted">{r.mmr}</span>
-          ) : null}
-        </PlayerLink>
-      ))}
-    </div>
-  );
-}
+type SignupChipPlayer = {
+  userId: string;
+  name: string;
+  avatar: string | null;
+  rankTier: number | null;
+  roles: string;
+  mmr: number;
+};
 
-async function PoolComposition({ seasonId }: { seasonId: string }) {
-  const regs = await prisma.registration.findMany({
-    where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-    select: { roles: true, mmr: true },
-  });
-  if (regs.length === 0) return null;
+/** The latest signups shown beside the captains, however many captains. */
+const WHO_IS_IN_LATEST = 12;
 
-  const roles = roleCoverage(regs);
-  const dist = mmrDistribution(regs);
-  const avg = averageMmr(regs);
-  const maxRole = Math.max(1, ...roles.map((r) => r.count));
-  const maxBucket = Math.max(1, ...dist.map((b) => b.count));
+/**
+ * "Who's in": the captains first (they used to have a card of their own,
+ * "Captains so far", repeating half this list), then the latest signups, and
+ * one line on the positions the pool is short of. That line replaces a whole
+ * card of role and MMR bars whose buckets were mostly empty; /players keeps
+ * the scouting detail.
+ */
+async function WhoIsIn({
+  seasonId,
+  playerCount,
+  teamsNeeded,
+  captains,
+}: {
+  seasonId: string;
+  playerCount: number;
+  teamsNeeded: number;
+  captains: SeasonSnapshot["teams"][number]["captain"][];
+}) {
+  const captainIds = captains.map((captain) => captain.id);
+  const [pool, latest] = await Promise.all([
+    prisma.registration.findMany({
+      where: { seasonId, status: "ACTIVE", type: "PLAYER" },
+      select: { userId: true, roles: true, mmr: true },
+    }),
+    prisma.registration.findMany({
+      where: {
+        seasonId,
+        status: "ACTIVE",
+        type: "PLAYER",
+        userId: { notIn: captainIds },
+      },
+      // Only the fields the chips render — this list serializes into the page.
+      select: {
+        userId: true,
+        roles: true,
+        mmr: true,
+        user: { select: { name: true, avatar: true, rankTier: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: WHO_IS_IN_LATEST,
+    }),
+  ]);
+  const signupOf = new Map(pool.map((reg) => [reg.userId, reg]));
+  // A captain is in the pool through their own signup; one without an active
+  // player signup isn't "in" as a player, so the chip would be a claim the
+  // count beside it doesn't make.
+  const captainChips: SignupChipPlayer[] = captains.flatMap((captain) => {
+    const reg = signupOf.get(captain.id);
+    return reg
+      ? [
+          {
+            userId: captain.id,
+            name: captain.name,
+            avatar: captain.avatar,
+            rankTier: captain.rankTier,
+            roles: reg.roles,
+            mmr: reg.mmr,
+          },
+        ]
+      : [];
+  });
+  const latestChips: SignupChipPlayer[] = latest.map((reg) => ({
+    userId: reg.userId,
+    name: reg.user.name,
+    avatar: reg.user.avatar,
+    rankTier: reg.user.rankTier,
+    roles: reg.roles,
+    mmr: reg.mmr,
+  }));
+  const shown = captainChips.length + latestChips.length;
+  const shortage = shortRolesLine(roleCoverage(pool), teamsNeeded, pool.length);
 
   return (
     <Card>
       <CardHeader
         headingLevel={2}
-        title="Pool composition"
-        subtitle={`Role coverage & MMR spread · avg ${avg} MMR`}
+        title="Who's in"
+        /* Names the cap: the list stops at the latest few, so a 30-player
+           season silently hid 18 people behind a "View all →" that gave no
+           reason to click. */
+        subtitle={
+          captainChips.length > 0
+            ? `Captains first, then the latest signups${shown < playerCount ? ` · ${shown} of ${playerCount} players` : ""}`
+            : shown < playerCount
+              ? `Latest ${shown} of ${playerCount} players`
+              : "Latest players to sign up"
+        }
+        action={
+          <Link href="/players" className={textLink("text-sm")}>
+            View all <LinkArrow />
+          </Link>
+        }
       />
-      <CardBody className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
-        <div className="space-y-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            Preferred roles
-          </div>
-          {roles.map((r) => (
-            <StatBar
-              key={r.key}
-              label={r.label}
-              count={r.count}
-              max={maxRole}
-              tone="brand"
-            />
-          ))}
-        </div>
-        <div className="space-y-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">
-            MMR distribution
-          </div>
-          {dist.map((b) => (
-            <StatBar
-              key={b.label}
-              label={b.label}
-              count={b.count}
-              max={maxBucket}
-              tone="accent"
-            />
-          ))}
-        </div>
+      <CardBody className="space-y-3">
+        {shown === 0 ? (
+          <EmptyState
+            title="No signups yet"
+            description="Be the first to join this season."
+          />
+        ) : (
+          <>
+            {shortage ? <p className="text-sm text-muted">{shortage}</p> : null}
+            {/* Compact on phones: name, captain mark and MMR only, so the
+                chips wrap two to a row instead of stacking twelve tall rows
+                of medals and bare role digits. */}
+            <div className="flex flex-wrap gap-2">
+              {captainChips.map((player) => (
+                <SignupChip key={player.userId} player={player} captain />
+              ))}
+              {latestChips.map((player) => (
+                <SignupChip key={player.userId} player={player} />
+              ))}
+            </div>
+          </>
+        )}
       </CardBody>
     </Card>
   );
 }
 
-function StatBar({
-  label,
-  count,
-  max,
-  tone,
+function SignupChip({
+  player,
+  captain = false,
 }: {
-  label: string;
-  count: number;
-  max: number;
-  tone: "brand" | "accent";
+  player: SignupChipPlayer;
+  captain?: boolean;
 }) {
-  const pct = max > 0 ? Math.round((count / max) * 100) : 0;
   return (
-    <div className="flex items-center gap-3 text-sm">
-      <span className="w-24 shrink-0 truncate text-muted" title={label}>
-        {label}
-      </span>
-      <div className="h-2.5 flex-1 rounded-full bg-surface-2">
-        <div
-          className={`bar-fill h-full rounded-full ${tone === "brand" ? "bg-brand" : "bg-accent"}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="w-6 shrink-0 text-right tabular-nums">{count}</span>
-    </div>
+    <PlayerLink
+      userId={player.userId}
+      className="flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-2.5 hover:border-muted/60 hover:no-underline sm:gap-2 sm:pr-3"
+    >
+      <Avatar name={player.name} src={player.avatar} size={22} />
+      <span className="min-w-0 truncate text-sm">{player.name}</span>
+      {captain ? (
+        <span
+          title="Captain"
+          className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded border border-accent/40 bg-accent/15 px-1 text-[11px] font-semibold text-accent"
+        >
+          <span aria-hidden>C</span>
+          <span className="sr-only">captain</span>
+        </span>
+      ) : null}
+      <RankBadge rankTier={player.rankTier} className="hidden sm:inline-flex" />
+      <RoleBadges roles={player.roles} className="hidden sm:inline-flex" />
+      {player.mmr > 0 ? (
+        <span className="shrink-0 text-xs text-muted">{player.mmr} MMR</span>
+      ) : null}
+    </PlayerLink>
   );
 }
 

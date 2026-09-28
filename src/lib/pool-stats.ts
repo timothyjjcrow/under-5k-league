@@ -1,5 +1,5 @@
-// Pure aggregates over the signup pool: role coverage + MMR distribution.
-// DB-free so it's unit-testable and cheap to reuse.
+// Pure aggregates over the signup pool: role coverage, the positions in short
+// supply, and the average MMR. DB-free so it's unit-testable and cheap to reuse.
 import { DOTA_ROLES, parseRoles } from "./roles";
 
 export type RoleCount = {
@@ -25,38 +25,41 @@ export function roleCoverage(players: { roles: string }[]): RoleCount[] {
   }));
 }
 
-export type MmrBucket = {
-  label: string;
-  min: number;
-  max: number;
-  count: number;
-};
-
-const BUCKETS: { label: string; min: number; max: number }[] = [
-  { label: "0–1k", min: 0, max: 999 },
-  { label: "1–2k", min: 1000, max: 1999 },
-  { label: "2–3k", min: 2000, max: 2999 },
-  { label: "3–4k", min: 3000, max: 3999 },
-  { label: "4–4.5k", min: 4000, max: 4499 },
-  { label: "4.5k+", min: 4500, max: Number.POSITIVE_INFINITY },
-];
-
-/** Count players into fixed 1k-wide MMR buckets (0 = unknown, excluded). */
-export function mmrDistribution(players: { mmr: number }[]): MmrBucket[] {
-  // MMR 0 means "unknown" (blank signup), not a very low MMR — bucketing it
-  // would paint unranked players as the bottom of the pool.
-  const known = players.filter((p) => p.mmr > 0);
-  return BUCKETS.map((b) => ({
-    label: b.label,
-    min: b.min,
-    max: b.max,
-    count: known.filter((p) => p.mmr >= b.min && p.mmr <= b.max).length,
-  }));
-}
-
 /** Mean of KNOWN MMRs (0 = unknown, excluded), rounded; 0 when none known. */
 export function averageMmr(players: { mmr: number }[]): number {
   const known = players.filter((p) => p.mmr > 0);
   if (known.length === 0) return 0;
   return Math.round(known.reduce((sum, p) => sum + p.mmr, 0) / known.length);
+}
+
+/**
+ * One line naming the positions too few signups list to give every team one,
+ * fewest first; null when there is nothing specific to say.
+ *
+ * Home's signup view used to draw a whole card of role and MMR bars (empty
+ * buckets included) to make this one point. Roles are preferences and a player
+ * may list several, so this is a recruiting hint ("we need supports"), not a
+ * draft forecast. When EVERY position is short the pool is simply small, and
+ * the hero's own count already says how many more players the league needs,
+ * so the line stays quiet then too.
+ */
+export function shortRolesLine(
+  coverage: readonly RoleCount[],
+  teams: number,
+  playerCount: number,
+): string | null {
+  if (teams <= 0 || playerCount <= 0) return null;
+  const scarce = coverage
+    .filter((role) => role.count < teams)
+    .sort((a, b) => a.count - b.count || a.key.localeCompare(b.key));
+  if (scarce.length === 0 || scarce.length === coverage.length) return null;
+  const list = (items: string[]) =>
+    items.length === 1
+      ? items[0]
+      : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  const names = list(scarce.map((role) => role.label));
+  const counts = list(scarce.map((role) => String(role.count)));
+  return `Short on ${names}: ${counts} of ${playerCount} players list ${
+    scarce.length === 1 ? "it" : "them"
+  }, and ${teams} teams need one each.`;
 }

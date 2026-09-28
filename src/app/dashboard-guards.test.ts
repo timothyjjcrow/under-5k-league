@@ -36,9 +36,9 @@ describe("dashboard draft-night countdowns", () => {
   it("finds the countdowns it is supposed to be guarding", () => {
     // If the element is ever renamed or the props move to a wrapper, this test
     // would pass by finding nothing at all — which is how a guard rots into
-    // decoration. Five draft-night countdowns exist today (two on the
-    // dashboard, one on /me, one in the draft waiting room, one on a team
-    // page before its fixtures exist); lower this only when one is
+    // decoration. Four draft-night countdowns exist today (the dashboard
+    // hero's draft chip, one on /me, one in the draft waiting room, one on a
+    // team page before its fixtures exist); lower this only when one is
     // deliberately removed.
     expect(countdowns.length).toBeGreaterThan(0);
     expect(
