@@ -142,13 +142,36 @@ async function assertFitsLeagueCalendar(
     throw new UserFacingError(
       `That is within four hours of ${clash.homeName} vs ${clash.awayName} (${clash.label}) — pick another time`,
     );
-  if (match.phase !== MATCH_PHASE.REGULAR) return;
+  const deadline = await loadRescheduleDeadline(
+    tx,
+    match,
+    firstMatchNight,
+    Date.now(),
+  );
+  if (deadline && proposedTime.getTime() >= deadline.getTime())
+    throw new UserFacingError(
+      "Regular-season matches must be played before the playoffs start — pick an earlier time, or ask an admin",
+    );
+}
+
+/**
+ * The instant a regular-season match must move to BEFORE (exclusive), or null
+ * when there is no limit. One read for both the propose/accept check above
+ * and the match page's form hint, so the two can't disagree.
+ */
+export async function loadRescheduleDeadline(
+  db: Pick<Prisma.TransactionClient, "match">,
+  match: { seasonId: string; phase: string },
+  firstMatchNight: Date | null,
+  nowMs: number,
+): Promise<Date | null> {
+  if (match.phase !== MATCH_PHASE.REGULAR) return null;
   const [lastRegular, firstPostseason] = await Promise.all([
-    tx.match.aggregate({
+    db.match.aggregate({
       where: { seasonId: match.seasonId, phase: MATCH_PHASE.REGULAR },
       _max: { week: true },
     }),
-    tx.match.findFirst({
+    db.match.findFirst({
       where: {
         seasonId: match.seasonId,
         phase: { not: MATCH_PHASE.REGULAR },
@@ -158,17 +181,13 @@ async function assertFitsLeagueCalendar(
       select: { scheduledAt: true },
     }),
   ]);
-  const deadline = rescheduleDeadline({
+  return rescheduleDeadline({
     phase: match.phase,
     firstMatchNight,
     lastRegularWeek: lastRegular._max.week ?? 0,
     earliestPostseasonKickoffMs: firstPostseason?.scheduledAt?.getTime() ?? null,
-    nowMs: Date.now(),
+    nowMs,
   });
-  if (deadline && proposedTime.getTime() >= deadline.getTime())
-    throw new UserFacingError(
-      "Regular-season matches must be played before the playoffs start — pick an earlier time, or ask an admin",
-    );
 }
 
 /** Create (or supersede) the match's open proposal. Captains only. */

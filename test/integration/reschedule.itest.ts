@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   cancelReschedule,
+  loadRescheduleDeadline,
   proposeReschedule,
   respondReschedule,
 } from "@/lib/reschedule-service";
@@ -929,6 +930,41 @@ describe("reschedule league-calendar rules (integration)", () => {
     const inTime = new Date(playoffNight.getTime() - 24 * HOUR);
     await proposeReschedule(b.captainId, ab.id, inTime);
     expect(await pendingFor(ab.id)).not.toBeNull();
+  });
+
+  it("gives the match page's form the same deadline the proposal check enforces", async () => {
+    const { season, a, b, ab } = await setupThreeTeams(ORIGINAL_NIGHT);
+    const deadline = await loadRescheduleDeadline(
+      prisma,
+      ab,
+      season.firstMatchNight,
+      Date.now(),
+    );
+    expect(deadline).not.toBeNull();
+    // The planned playoff night: one week after the last regular week (an
+    // hour's slack for a daylight-saving change on the league's clock).
+    expect(
+      Math.abs(deadline!.getTime() - (ORIGINAL_NIGHT.getTime() + 2 * WEEK)),
+    ).toBeLessThanOrEqual(HOUR);
+    await expect(
+      proposeReschedule(a.captainId, ab.id, deadline!),
+    ).rejects.toThrow(/before the playoffs start/);
+    // The form's latest allowed entry is a minute earlier, and it is accepted.
+    await proposeReschedule(
+      b.captainId,
+      ab.id,
+      new Date(deadline!.getTime() - 60_000),
+    );
+    expect(await pendingFor(ab.id)).not.toBeNull();
+    // Playoff series have no such limit.
+    expect(
+      await loadRescheduleDeadline(
+        prisma,
+        { seasonId: season.id, phase: MATCH_PHASE.PLAYOFF },
+        season.firstMatchNight,
+        Date.now(),
+      ),
+    ).toBeNull();
   });
 
   it("uses a playoff kickoff already on the calendar as the limit", async () => {

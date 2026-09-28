@@ -86,3 +86,17 @@ describe("match page captain contact", () => {
   });
 });
 
+describe("match page reschedule form", () => {
+  it("starts on the current kickoff and stays inside the enforced window", () => {
+    // The deadline is the service's own read, so the hint can't disagree.
+    expect(PAGE).toMatch(/await loadRescheduleDeadline\(\s*prisma,\s*match,/);
+    expect(PAGE).toContain("defaultTs={match.scheduledAt?.getTime() ?? null}");
+    expect(PAGE).toContain("minTs={nowMs}");
+    // datetime-local's max is inclusive; the server refuses the deadline itself.
+    expect(PAGE).toContain(
+      "maxTs={deadline ? deadline.getTime() - 60_000 : null}",
+    );
+    expect(PAGE).toContain("describedBy={hintId}");
+  });
+});
+
