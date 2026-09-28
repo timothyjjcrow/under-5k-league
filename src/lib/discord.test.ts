@@ -33,6 +33,7 @@ import {
   draftScheduledMessage,
   draftReminderAnnouncement,
   captainAssignedMessage,
+  captainRemovedMessage,
   playerAwayMessage,
   playerBackInMessage,
   playerOutMessage,
@@ -547,6 +548,38 @@ describe("draft scheduling", () => {
     expect(fallback).toContain("**Den\\*di**");
     expect(fallback).toContain("Team \\[A\\]");
     expect(fallback).toContain("/me");
+  });
+
+  it("tells the channel a replaced captain no longer captains the team", () => {
+    const msg = captainAssignedMessage("New", "Team [A]", "123456789012345678", {
+      name: "Old *One*",
+      discordId: null,
+    });
+    expect(msg).toContain(
+      "<@123456789012345678>, **you now captain Team \\[A\\].** **Old \\*One\\*** is no longer captain and stays on the roster as a player.",
+    );
+    expect(
+      captainAssignedMessage("New", "T", null, {
+        name: "Old",
+        discordId: "223456789012345678",
+      }),
+    ).toContain("<@223456789012345678> is no longer captain");
+    // No previous captain: the designation post is unchanged.
+    expect(captainAssignedMessage("New", "T", "1")).not.toContain("no longer");
+  });
+
+  it("tells a removed captain they no longer captain the team", () => {
+    const linked = captainRemovedMessage(
+      { name: "Zai", discordId: "123456789012345678" },
+      "Zai's [Team]",
+    );
+    expect(linked).toContain(
+      "🧭 <@123456789012345678> is no longer captain of **Zai's \\[Team\\]**",
+    );
+    expect(linked).toMatch(/player pool: <[^>]+\/me>$/);
+    expect(
+      captainRemovedMessage({ name: "Un*linked", discordId: null }, "T"),
+    ).toContain("🧭 **Un\\*linked** is no longer captain of **T**");
   });
 
   it("signupMessage appends draft night only when one is set", () => {
@@ -1733,6 +1766,8 @@ describe("no message unfurls a link preview", () => {
         unconfirmed: [{ name: "B", discordId: null }],
       }).content,
       captainAssignedMessage("A", "T", "123"),
+      captainAssignedMessage("A", "T", "123", { name: "B", discordId: null }),
+      captainRemovedMessage({ name: "A", discordId: null }, "T"),
       draftStartedAnnouncement({ seasonName: "S1", captains: [] }).content,
       draftCompleteAnnouncement({
         seasonName: "S1",
@@ -1925,6 +1960,8 @@ describe("no player-supplied name can inject markdown", () => {
 
   const messages = () => [
     signupMessage(EVIL, 3, { teamSize: 5, minTeams: 2 }),
+    captainAssignedMessage(EVIL, EVIL, null, { name: EVIL, discordId: null }),
+    captainRemovedMessage({ name: EVIL, discordId: null }, EVIL),
     signupsOpenMessage(EVIL, EVIL),
     draftCompleteAnnouncement({
       seasonName: "S1",

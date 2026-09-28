@@ -126,9 +126,33 @@ export function captainAssignedMessage(
   captainName: string,
   teamName: string,
   discordId?: string | null,
+  /** The captain being replaced (transferCaptaincy): the same post tells the
+   *  channel, and them, that they no longer captain the team. */
+  previousCaptain?: DraftReminderPerson | null,
 ): string {
   const captain = discordId ? `<@${discordId}>` : `**${name(captainName)}**`;
-  return `🧭 ${captain}, **you now captain ${name(teamName)}.** Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
+  const handover = previousCaptain
+    ? ` ${captainLabel(previousCaptain)} is no longer captain and stays on the roster as a player.`
+    : "";
+  return `🧭 ${captain}, **you now captain ${name(teamName)}.**${handover} Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
+}
+
+/**
+ * A captain's team was removed before the draft (removeCaptain). The ping
+ * that made them captain would otherwise stand uncorrected in the channel.
+ * Their signup is untouched, so they go into the player pool.
+ */
+export function captainRemovedMessage(
+  captain: DraftReminderPerson,
+  teamName: string,
+): string {
+  return `🧭 ${captainLabel(captain)} is no longer captain of **${name(teamName)}**: the team was removed before the draft. Their signup stays, so they go into the player pool: <${resolveSiteUrl()}/me>`;
+}
+
+/** `<@id>` for a linked captain, their bold escaped name otherwise. */
+function captainLabel(p: DraftReminderPerson): string {
+  const id = mentionableId(p);
+  return id ? `<@${id}>` : `**${name(p.name)}**`;
 }
 
 export type DraftStartedInput = {

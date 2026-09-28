@@ -122,6 +122,7 @@ import {
   draftRescheduledMessage,
   draftScheduledMessage,
   captainAssignedMessage,
+  captainRemovedMessage,
   webhookIdOf,
   getInhouseWebhookUrl,
   getInhouseAlertWebhookUrl,
@@ -1254,6 +1255,7 @@ export async function removeCaptain(
   await raceHook("admin.removeCaptain.beforeTx");
   let removed: {
     captainName: string;
+    captainDiscordId: string | null;
     teamName: string;
     fixtures: number;
   };
@@ -1357,6 +1359,7 @@ export async function removeCaptain(
         );
         return {
           captainName: team.captain.name,
+          captainDiscordId: team.captain.discordId,
           teamName: team.name,
           fixtures,
         };
@@ -1398,6 +1401,14 @@ export async function removeCaptain(
         : ""),
     seasonId: season.id,
   });
+  // addCaptain pinged them "you now captain X"; correct that in the channel.
+  await sendDiscordMessage(
+    captainRemovedMessage(
+      { name: removed.captainName, discordId: removed.captainDiscordId },
+      removed.teamName,
+    ),
+    mentionsOf([removed.captainDiscordId]),
+  );
   refresh();
   return {
     message: removed.fixtures
@@ -1456,6 +1467,7 @@ export async function transferCaptaincy(
     incomingName: string;
     outgoingName: string;
     incomingDiscordId: string | null;
+    outgoingDiscordId: string | null;
   };
   try {
     transferred = await prisma.$transaction(
@@ -1590,6 +1602,7 @@ export async function transferCaptaincy(
           incomingName: incoming.user.name,
           outgoingName: team.captain.name,
           incomingDiscordId: incoming.user.discordId,
+          outgoingDiscordId: team.captain.discordId,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -1632,8 +1645,11 @@ export async function transferCaptaincy(
       transferred.incomingName,
       transferred.teamName,
       transferred.incomingDiscordId,
+      { name: transferred.outgoingName, discordId: transferred.outgoingDiscordId },
     ),
-    mentionsOf([transferred.incomingDiscordId]),
+    // Both captains: the outgoing one was told "you now captain X" once, and
+    // this post is what says that no longer holds.
+    mentionsOf([transferred.incomingDiscordId, transferred.outgoingDiscordId]),
   );
   refresh();
   return {
