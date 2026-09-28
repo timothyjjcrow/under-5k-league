@@ -65,7 +65,8 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
 
 ## Getting started
 
-Requires Node ≥ 20.18.
+Requires Node.js 22.x (`nvm use` reads `.nvmrc`). Local SQLite backups use
+`node:sqlite`, which needs 22.16 or newer.
 
 ```bash
 npm install

@@ -1,16 +1,16 @@
-# LD2L Architecture
+# GGD2L Architecture
 
 A structural map of the codebase for developers adding features. This document
-describes what exists and where; `CLAUDE.md` is the companion file of working
-notes, concurrency doctrine, and hard-won gotchas — read both, but this one
-first. Facts here are anchored to source paths; when this document and the code
-disagree, the code wins and this file should be fixed.
+describes what exists and where; `CLAUDE.md` holds the working rules and
+`docs/features/` the per-area notes and the reasons behind them — read those
+too, but this one first. Facts here are anchored to source paths; when this
+document and the code disagree, the code wins and this file should be fixed.
 
 ---
 
 ## 1. What this is
 
-LD2L ("GGD2L") is an amateur Dota 2 league site: players sign in with Steam,
+GGD2L is an amateur Dota 2 league site: players sign in with Steam,
 register for a season, get bought onto teams in a live auction draft, and play
 a weekly round-robin into single-elimination playoffs until a champion is
 crowned. It is a Next.js 16 App Router app (React 19, TypeScript, Tailwind v4)
