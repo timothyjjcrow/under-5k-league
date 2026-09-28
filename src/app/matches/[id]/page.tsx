@@ -573,9 +573,11 @@ export default async function MatchDetailPage({
         <div className="rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-muted">
           <strong className="text-fg">Waiting for the result.</strong> Kickoff
           has passed and no game is recorded yet.
-          {matchResultsOpen(match.season.status, match.phase)
-            ? " Results usually appear here on their own; if one doesn't, a captain can add it from this page."
-            : null}
+          {!matchResultsOpen(match.season.status, match.phase)
+            ? null
+            : showCaptainTools
+              ? " Results usually appear here on their own; if one doesn't, add it in Captain tools below."
+              : " Results usually appear here on their own; if one doesn't, a captain can add it from this page."}
         </div>
       ) : null}
 
