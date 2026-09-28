@@ -2588,9 +2588,12 @@ function CaptainControls({
                     key={t.id}
                     className="rounded-lg border border-line px-3 py-2 text-sm"
                   >
-                    {/* Wraps on a phone: the name keeps a real width
-                        (basis-48) and the budget + remove drop to their own
-                        line, instead of squeezing the team name to 0px. */}
+                    {/* Wraps on a phone: the budget + remove drop to their
+                        own line once the name's basis-48 can't fit beside
+                        them, and the name itself wraps rather than truncates,
+                        because the order number, avatar and crest take ~90px
+                        of that basis (a long name read "The Couriers of
+                        Catastrophe Wi…" at 390px). */}
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
                         <span className="w-5 shrink-0 text-center text-xs text-muted">
@@ -2611,7 +2614,7 @@ function CaptainControls({
                         />
                         <Link
                           href={`/teams/${t.id}`}
-                          className="min-w-12 truncate hover:text-info hover:underline"
+                          className="min-w-12 [overflow-wrap:anywhere] hover:text-info hover:underline"
                         >
                           {t.name}
                         </Link>
