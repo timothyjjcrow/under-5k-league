@@ -61,9 +61,9 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     page.getByRole("heading", { name: /Captains \(2\)/ }),
   ).toBeVisible();
 
-  // Move the season into DRAFT without starting the auction: /draft must be
-  // a live waiting room for players, not a static dead end.
-  await page.getByRole("button", { name: "Draft", exact: true }).click();
+  // Close signups moves the season into DRAFT without starting the auction:
+  // /draft must be a live waiting room for players, not a static dead end.
+  await page.getByRole("button", { name: "Close signups", exact: true }).click();
   // The header nav gains "Teams" only once the season is in DRAFT — a
   // reliable signal that the phase move committed before we proceed.
   await expect(

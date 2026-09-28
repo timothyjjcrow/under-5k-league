@@ -88,6 +88,8 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Start playoffs", rendered: "Start playoffs" },
   { quoted: "Reset playoffs", rendered: "Reset playoffs" },
   { quoted: "Move a match night", rendered: "Move a match night" },
+  // The next step sends recovery work to the phase card's disclosure.
+  { quoted: "Fix the phase", rendered: "Fix the phase" },
   // withdrawTeam's toast points released standin-pool candidates here.
   { quoted: "Roster moves", rendered: "Roster moves" },
   // releasePlayer's quitter note points at the signup remove control's card.
@@ -239,8 +241,31 @@ describe("admin copy names only controls that exist", () => {
     }
   });
 
+  // The next-step line sits under the page title, far from every control, so
+  // each step links to the card it names. Same rule as the page's own links:
+  // the anchor must exist and be in the jump bar, or the hash lands on a shut
+  // section or nowhere.
+  it("every next-step link lands on a section the jump bar can open", () => {
+    const page = read("src/app/admin/page.tsx");
+    const nextStep = read("src/lib/admin-next-step.ts");
+    const targets = [
+      ...new Set(
+        [...nextStep.matchAll(/href: "#(adm-[a-z-]+)"/g)].map((m) => m[1]),
+      ),
+    ];
+    expect(targets).toContain("adm-schedule");
+    for (const id of targets) {
+      expect(page.includes(`id="${id}"`), `no element renders id="${id}"`).toBe(true);
+      expect(
+        page.includes(`id: "${id}"`),
+        `#${id} is linked from the next step but missing from the jump bar`,
+      ).toBe(true);
+    }
+    expect(page).toContain("href={nextStep.jump.href}");
+  });
+
   // The missing-ticket warning is only worth anything if the page wires it.
-  it("the phase card renders the missing-ticket warning from the next step", () => {
+  it("the page renders the missing-ticket warning from the next step", () => {
     const page = read("src/app/admin/page.tsx");
     expect(page).toContain("hasLeagueTicket: !!season.dotaLeagueId");
     expect(page).toContain("nextStep.ticketWarning");

@@ -18,6 +18,7 @@ import {
   REGISTRATION_TYPE,
   SEASON_PHASE_ORDER,
   SEASON_STATUS,
+  type SeasonStatus,
 } from "@/lib/constants";
 import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
 import { ImportProgress } from "@/components/import-progress";
@@ -121,7 +122,11 @@ import {
   SETTING_KEYS,
 } from "@/lib/settings";
 import { HONORS_STALE_PREFIX } from "@/lib/announcement-marker";
-import { adminNextStep } from "@/lib/admin-next-step";
+import {
+  adminNextStep,
+  phaseAdvance,
+  type AdminNextStep,
+} from "@/lib/admin-next-step";
 import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
 import { getAutomationGateDecision } from "@/lib/automation-gate";
@@ -269,6 +274,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const season = await getActiveSeason();
 
   const data = season ? await loadSeasonAdminData(season.id) : null;
+  const nextStep = season && data ? adminNextStepFor(season, data) : null;
   const showTiebreakers = data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
@@ -291,9 +297,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     }));
 
-  const setupControls = season && data ? <>
+  const setupControls = season && data && nextStep ? <>
           <AdminAnchor id="adm-season">
-            <SeasonControls season={season} data={data} />
+            <SeasonControls season={season} data={data} nextStep={nextStep} />
           </AdminAnchor>
           <AdminAnchor id="adm-captains">
             <CaptainControls season={season} data={data} />
@@ -329,6 +335,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         title="Admin"
         subtitle="Run the league — create seasons, pick captains, run the draft, enter results."
       />
+
+      {nextStep ? <NextStepBanner nextStep={nextStep} /> : null}
 
       <AdminJump
         items={[
@@ -1053,8 +1061,12 @@ function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
   );
 }
 
-function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
-  const configLocked = !draftSetupOpen(season.status, data.draft?.status);
+/**
+ * The admin page's "what do I do next?" line, from the pure, tested
+ * adminNextStep. Built once per render: the banner under the page title and
+ * the phase card both read it.
+ */
+function adminNextStepFor(season: Season, data: AdminData): AdminNextStep {
   const cap = capacityInfo(season, data.players.length);
   const regular = data.matches.filter((m) => m.phase === "REGULAR");
   const playoff = data.matches.filter(
@@ -1064,7 +1076,7 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
     season,
     data.matches,
   );
-  const nextStep = adminNextStep({
+  return adminNextStep({
     seasonStatus: season.status,
     draftStatus: data.draft?.status ?? null,
     playerCount: data.players.length,
@@ -1092,10 +1104,114 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
     ),
     hasLeagueTicket: !!season.dotaLeagueId,
   });
+}
+
+/**
+ * THE ROADMAP, pinned under the page title. Several league transitions are
+ * silent and fail quietly: the auction finishing does NOT advance the phase,
+ * a schedule with no kickoff times disables auto-sync, reminders and pick'em
+ * locks, and nothing else prompts "start the playoffs" or "record the final".
+ * This line is the page's answer to "what do I do next?" in EVERY phase. It
+ * used to sit inside the phase card, about 7,000px down a phone mid-season.
+ */
+function NextStepBanner({ nextStep }: { nextStep: AdminNextStep }) {
+  return (
+    <section aria-label="Next step" className="space-y-2">
+      <p
+        className={cn(
+          "rounded-lg border px-3 py-2 text-sm",
+          nextStep.tone === "action"
+            ? "border-accent/30 bg-accent/10 text-fg"
+            : nextStep.tone === "warning"
+              ? "border-danger/40 bg-danger/10 text-fg"
+              : nextStep.tone === "done"
+                ? "border-success/40 bg-success/10 text-fg"
+                : "border-line bg-surface-2/40 text-muted",
+        )}
+      >
+        <b className="text-fg">{nextStep.title}</b>
+        {nextStep.detail ? <> {nextStep.detail}</> : null}
+        {nextStep.jump ? (
+          <>
+            {" "}
+            <a href={nextStep.jump.href} className={textLink("whitespace-nowrap")}>
+              {nextStep.jump.label} →
+            </a>
+          </>
+        ) : null}
+      </p>
+      {/* A standing condition, not this phase's step: Valve needs about 15
+          days to issue a ticket, so this shows from the first signup rather
+          than surfacing when week 1 is already lost. The link opens the
+          collapsed league-id section (the jump bar reveals it on hash). */}
+      {nextStep.ticketWarning ? (
+        <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
+          {nextStep.ticketWarning}{" "}
+          <a href="#adm-league" className={textLink()}>
+            Set the league id →
+          </a>
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function SeasonControls({
+  season,
+  data,
+  nextStep,
+}: {
+  season: Season;
+  data: AdminData;
+  nextStep: AdminNextStep;
+}) {
+  const configLocked = !draftSetupOpen(season.status, data.draft?.status);
+  const cap = capacityInfo(season, data.players.length);
+  const playoff = data.matches.filter(
+    (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
+  );
+  const championPresentation = resolveChampionPresentation(
+    season,
+    data.matches,
+  );
   const hasPlayedResult = data.matches.some(
     (match) => match.status === MATCH_STATUS.COMPLETED,
   );
   const hasImportedGame = data.matches.some((match) => match.games.length > 0);
+  // seasonPhasePolicy is the only authority on what a phase button may do;
+  // this card only decides where each move is shown.
+  const moves = SEASON_PHASE_ORDER.filter((phase) => phase !== season.status).map(
+    (phase) => ({
+      phase,
+      state: seasonPhasePolicy({
+        current: season.status,
+        target: phase,
+        draftStatus: data.draft?.status,
+        matchCount: data.matches.length,
+        hasPlayedResult,
+        hasImportedGame,
+        postseasonMatchCount: playoff.length,
+        postseasonBracketReady: recoverablePostseasonBracket(playoff),
+        hasChampion: season.championTeamId != null,
+      }),
+    }),
+  );
+  const advance = phaseAdvance(season.status);
+  const advanceState = advance
+    ? moves.find((move) => move.phase === advance.target)?.state ?? null
+    : null;
+  const fixMoves = moves.filter((move) => move.phase !== advance?.target);
+  // Reopening signups before the auction is routine, not a repair. Any other
+  // move the policy allows means the page found a phase to put right, so the
+  // disclosure opens itself.
+  const reopenSignups = (phase: string) =>
+    season.status === SEASON_STATUS.DRAFT && phase === SEASON_STATUS.SIGNUPS;
+  const fixNeeded = fixMoves.some(
+    (move) => move.state.available && !reopenSignups(move.phase),
+  );
+  const currentIndex = SEASON_PHASE_ORDER.indexOf(season.status as SeasonStatus);
+  // The next step points here exactly when this button is the thing to do.
+  const advanceIsNextStep = nextStep.jump?.href === "#adm-season";
   // What /me and /schedule print as the match night once fixtures have times.
   const fixturesNight = fixturesMatchNightLabel(data.matches);
   return (
@@ -1103,7 +1219,7 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
       <CardHeader
         headingLevel={2}
         title={`${season.name} — phase control`}
-        subtitle="Advance one safe stage at a time. Data-changing transitions use the dedicated controls in their section."
+        subtitle="Move the league on one stage at a time. Stages that change other league data start from their own controls."
         action={<Badge tone="accent">{PHASE_LABEL[season.status]}</Badge>}
       />
       <CardBody className="space-y-5">
@@ -1118,128 +1234,176 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
           <Stat label="Matches" value={data.matches.length} />
         </div>
 
-        <div className="flex flex-wrap items-start gap-3">
-          {SEASON_PHASE_ORDER.map((phase) => {
-            const state = seasonPhasePolicy({
-              current: season.status,
-              target: phase,
-              draftStatus: data.draft?.status,
-              matchCount: data.matches.length,
-              hasPlayedResult,
-              hasImportedGame,
-              postseasonMatchCount: playoff.length,
-              postseasonBracketReady: recoverablePostseasonBracket(playoff),
-              hasChampion: season.championTeamId != null,
-            });
-            const reasonId = `phase-${phase.toLowerCase()}-reason`;
-            return (
-              <div key={phase} className="max-w-52">
-                {state.available ? (
-                  <ActionForm
-                    action={setSeasonPhase}
-                    hidden={{ expectedActiveSeasonId: season.id }}
-                  >
-                    <input type="hidden" name="phase" value={phase} />
-                    <SubmitButton
-                      variant="secondary"
-                      size="sm"
-                      confirm={state.confirmation}
-                    >
-                      {state.recovery ? "Recover " : ""}
-                      {PHASE_LABEL[phase]}
-                    </SubmitButton>
-                  </ActionForm>
-                ) : (
-                  <span title={state.reason}>
-                    <Button
-                      type="button"
-                      variant={
-                        season.status === phase ? "primary" : "secondary"
-                      }
-                      size="sm"
-                      disabled
-                      aria-describedby={reasonId}
-                    >
-                      {PHASE_LABEL[phase]}
-                    </Button>
-                  </span>
-                )}
-                {!state.available ? (
-                  <span
-                    id={reasonId}
-                    className="mt-1 block text-[11px] leading-snug text-muted"
-                  >
-                    {state.reason}
-                  </span>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-        <p className="text-xs text-muted">
-          These buttons never start or abort an auction, seed or remove a
-          playoff bracket, or crown a champion. Use Start draft, Abort draft,
-          Start playoffs, Return to regular season, and the result controls for
-          those operations so related league data changes together.
-        </p>
-        {season.status === SEASON_STATUS.COMPLETE &&
-        championPresentation.championTeamId ? (
-          <p className="text-xs text-muted">
-            A crowned season is locked against generic phase reversal. Correct
-            the grand final in Schedule &amp; results, reset the bracket, or use
-            Return to regular season in the Playoffs card; each recovery clears
-            the champion and affected postseason state atomically.
-          </p>
-        ) : season.status === SEASON_STATUS.COMPLETE &&
-          season.championTeamId ? (
-          <p className="text-xs text-danger">
-            The stored champion does not agree with one authoritative completed
-            grand final. Generic phase reversal remains locked; use the targeted
-            final correction when that team is a finalist, or the dedicated
-            playoff recovery controls below.
-          </p>
-        ) : season.status === SEASON_STATUS.PLAYOFFS ? (
-          <p className="text-xs text-muted">
-            Complete is automatic when the grand final crowns a champion. To
-            edit regular-season results, use Return to regular season below so
-            stale seeds cannot survive the phase change.
-          </p>
-        ) : null}
-        {/* THE ROADMAP. Several league transitions are silent and fail quietly
-            — the auction finishing does NOT advance the phase, a schedule with
-            no kickoff times disables auto-sync/reminders/pick'em locks for the
-            season, nothing prompts "start the playoffs" or "record the final",
-            and COMPLETE used to be a dead end whose only exit was inside a
-            collapsed section at the bottom of the page. This banner is the
-            page's answer to "what do I do next?" in EVERY phase; the logic is
-            pure and tested in src/lib/admin-next-step.ts. */}
-        <div
-          className={cn(
-            "rounded-lg border px-3 py-2 text-sm",
-            nextStep.tone === "action"
-              ? "border-accent/30 bg-accent/10 text-fg"
-              : nextStep.tone === "warning"
-                ? "border-danger/40 bg-danger/10 text-fg"
-                : nextStep.tone === "done"
-                  ? "border-success/40 bg-success/10 text-fg"
-                  : "border-line bg-surface-2/40 text-muted",
-          )}
+        {/* Read-only: where the league is. Moving it is the one button below. */}
+        <ol
+          aria-label="Season phases"
+          className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-xs"
         >
-          <b className="text-fg">{nextStep.title}</b>
-          {nextStep.detail ? <> {nextStep.detail}</> : null}
-        </div>
-        {/* A standing condition, not this phase's step: Valve needs about 15
-            days to issue a ticket, so this shows from the first signup rather
-            than surfacing when week 1 is already lost. The link opens the
-            collapsed league-id section (the jump bar reveals it on hash). */}
-        {nextStep.ticketWarning ? (
-          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
-            {nextStep.ticketWarning}{" "}
-            <a href="#adm-league" className={textLink()}>
-              Set the league id →
-            </a>
+          {SEASON_PHASE_ORDER.map((phase, index) => (
+            <li
+              key={phase}
+              aria-current={phase === season.status ? "step" : undefined}
+              className="flex items-center gap-1.5"
+            >
+              {index > 0 ? (
+                <span aria-hidden="true" className="text-muted">
+                  →
+                </span>
+              ) : null}
+              <span
+                className={cn(
+                  "rounded-full border px-2.5 py-1",
+                  phase === season.status
+                    ? "border-accent/60 bg-accent/15 font-semibold text-fg"
+                    : index < currentIndex
+                      ? "border-line text-muted"
+                      : "border-dashed border-line text-muted",
+                )}
+              >
+                {PHASE_LABEL[phase]}
+                <span className="sr-only">
+                  {phase === season.status
+                    ? " (current)"
+                    : index < currentIndex
+                      ? " (done)"
+                      : ""}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ol>
+
+        <div className="space-y-1.5">
+          {advance && advanceState ? (
+            advanceState.available ? (
+              <ActionForm
+                action={setSeasonPhase}
+                hidden={{ expectedActiveSeasonId: season.id }}
+              >
+                <input type="hidden" name="phase" value={advance.target} />
+                <SubmitButton
+                  variant={advanceIsNextStep ? "primary" : "secondary"}
+                  confirm={advanceState.confirmation}
+                >
+                  {advance.label}
+                </SubmitButton>
+              </ActionForm>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled
+                  aria-describedby="phase-advance-reason"
+                >
+                  {advance.label}
+                </Button>
+                <p id="phase-advance-reason" className="text-xs text-muted">
+                  {advanceState.reason}
+                </p>
+              </>
+            )
+          ) : null}
+          <p className="text-xs text-muted">
+            {advance
+              ? advance.hint
+              : season.status === SEASON_STATUS.REGULAR_SEASON
+                ? "The playoffs start from Start playoffs in the Playoffs card, which seeds the bracket and moves the season into Playoffs in one step."
+                : season.status === SEASON_STATUS.PLAYOFFS
+                  ? "Complete is set automatically when the grand final crowns a champion."
+                  : "The season is finished. The next one opens from Season handoff."}
           </p>
-        ) : null}
+        </div>
+
+        <details
+          open={fixNeeded}
+          className="rounded-lg border border-line px-3 py-1 text-sm"
+        >
+          <summary className="flex min-h-11 cursor-pointer items-center font-medium">
+            Fix the phase
+          </summary>
+          <div className="space-y-3 pb-3">
+            <p className="text-xs text-muted">
+              Only for putting the league back in the right phase after a
+              mistake. These buttons never start or abort an auction, seed or
+              remove a playoff bracket, or crown a champion. Use Start draft,
+              Abort draft, Start playoffs, Return to regular season and the
+              result controls for those, so related league data changes
+              together.
+            </p>
+            <div className="flex flex-wrap items-start gap-3">
+              {fixMoves.map(({ phase, state }) => {
+                const reasonId = `phase-${phase.toLowerCase()}-reason`;
+                const label = reopenSignups(phase)
+                  ? "Reopen signups"
+                  : `${state.recovery ? "Recover " : ""}${PHASE_LABEL[phase]}`;
+                return (
+                  <div key={phase} className="max-w-52">
+                    {state.available ? (
+                      <ActionForm
+                        action={setSeasonPhase}
+                        hidden={{ expectedActiveSeasonId: season.id }}
+                      >
+                        <input type="hidden" name="phase" value={phase} />
+                        <SubmitButton
+                          variant="secondary"
+                          size="sm"
+                          confirm={state.confirmation}
+                        >
+                          {label}
+                        </SubmitButton>
+                      </ActionForm>
+                    ) : (
+                      <>
+                        <span title={state.reason}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled
+                            aria-describedby={reasonId}
+                          >
+                            {label}
+                          </Button>
+                        </span>
+                        <span
+                          id={reasonId}
+                          className="mt-1 block text-[11px] leading-snug text-muted"
+                        >
+                          {state.reason}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {season.status === SEASON_STATUS.COMPLETE &&
+            championPresentation.championTeamId ? (
+              <p className="text-xs text-muted">
+                A crowned season is locked against generic phase reversal.
+                Correct the grand final in Schedule &amp; results, reset the
+                bracket, or use Return to regular season in the Playoffs card;
+                each recovery clears the champion and affected postseason state
+                atomically.
+              </p>
+            ) : season.status === SEASON_STATUS.COMPLETE &&
+              season.championTeamId ? (
+              <p className="text-xs text-danger">
+                The stored champion does not agree with one authoritative
+                completed grand final. Generic phase reversal remains locked;
+                use the targeted final correction when that team is a finalist,
+                or the dedicated playoff recovery controls below.
+              </p>
+            ) : season.status === SEASON_STATUS.PLAYOFFS ? (
+              <p className="text-xs text-muted">
+                To edit regular-season results, use Return to regular season in
+                the Playoffs card so stale seeds cannot survive the phase
+                change.
+              </p>
+            ) : null}
+          </div>
+        </details>
         <ActionForm
           action={renameSeason}
           hidden={{

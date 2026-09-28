@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { adminNextStep, type AdminPhaseInput } from "./admin-next-step";
-import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import {
+  adminNextStep,
+  phaseAdvance,
+  START_REGULAR_SEASON,
+  type AdminPhaseInput,
+} from "./admin-next-step";
+import { DRAFT_STATUS, SEASON_PHASE_ORDER, SEASON_STATUS } from "./constants";
 
 const base: AdminPhaseInput = {
   seasonStatus: SEASON_STATUS.SIGNUPS,
@@ -441,5 +446,81 @@ describe("adminNextStep — league ticket", () => {
       ticketless({ seasonStatus: SEASON_STATUS.COMPLETE, hasChampion: true })
         .ticketWarning,
     ).toBeUndefined();
+  });
+});
+
+// The line renders under the page title, away from the controls it names, so
+// every step that asks for something links to the card that holds it.
+describe("adminNextStep — links to the control", () => {
+  it("points each action at the card that holds its control", () => {
+    expect(at({ playerCount: 10, minPlayers: 10 }).jump?.href).toBe(
+      "#adm-captains",
+    );
+    expect(
+      at({ playerCount: 10, minPlayers: 10, teamCount: 4 }).jump?.href,
+    ).toBe("#adm-captains");
+    expect(
+      at({ seasonStatus: SEASON_STATUS.DRAFT, draftStatus: DRAFT_STATUS.IN_PROGRESS })
+        .jump?.href,
+    ).toBe("/draft");
+    expect(at({ seasonStatus: SEASON_STATUS.REGULAR_SEASON }).jump?.href).toBe(
+      "#adm-schedule",
+    );
+    expect(
+      at({
+        seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+        regularMatchCount: 15,
+        scheduledRegularCount: 15,
+      }).jump?.href,
+    ).toBe("#adm-playoffs");
+    expect(at({ seasonStatus: SEASON_STATUS.PLAYOFFS }).jump?.href).toBe(
+      "#adm-season",
+    );
+  });
+
+  it("links nothing while there is nothing to do", () => {
+    expect(at({ playerCount: 2, minPlayers: 10 }).jump).toBeUndefined();
+    expect(
+      at({ seasonStatus: SEASON_STATUS.COMPLETE, hasChampion: true }).jump,
+    ).toBeUndefined();
+  });
+});
+
+describe("phaseAdvance — the phase card's one forward button", () => {
+  it("names the two plain phase moves by what they do", () => {
+    expect(phaseAdvance(SEASON_STATUS.SIGNUPS)).toMatchObject({
+      target: SEASON_STATUS.DRAFT,
+      label: "Close signups",
+    });
+    expect(phaseAdvance(SEASON_STATUS.DRAFT)).toMatchObject({
+      target: SEASON_STATUS.REGULAR_SEASON,
+      label: START_REGULAR_SEASON,
+    });
+  });
+
+  it("says Close signups does not start the auction", () => {
+    expect(phaseAdvance(SEASON_STATUS.SIGNUPS)?.hint).toMatch(
+      /without starting the auction/,
+    );
+  });
+
+  it("leaves the moves that change other data to their own commands", () => {
+    for (const status of [
+      SEASON_STATUS.REGULAR_SEASON,
+      SEASON_STATUS.PLAYOFFS,
+      SEASON_STATUS.COMPLETE,
+    ]) {
+      expect(phaseAdvance(status)).toBeNull();
+    }
+  });
+
+  it("only ever moves one stage forward", () => {
+    for (const status of SEASON_PHASE_ORDER) {
+      const advance = phaseAdvance(status);
+      if (!advance) continue;
+      expect(SEASON_PHASE_ORDER.indexOf(advance.target)).toBe(
+        SEASON_PHASE_ORDER.indexOf(status) + 1,
+      );
+    }
   });
 });

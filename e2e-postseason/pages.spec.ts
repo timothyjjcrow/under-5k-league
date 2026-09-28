@@ -183,6 +183,12 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
   await expect(
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
+  // Mid-playoffs the phase card has no forward button (Complete is automatic),
+  // and every other phase move sits in the folded "Fix the phase" section,
+  // which stays shut because nothing needs fixing.
+  const fixPhase = page.locator("summary", { hasText: "Fix the phase" });
+  await expect(fixPhase.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await fixPhase.click();
   await expect(
     page.getByRole("button", { name: "Playoffs", exact: true }),
   ).toBeDisabled();
