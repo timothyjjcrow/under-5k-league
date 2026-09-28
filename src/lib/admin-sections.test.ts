@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { adminSeasonCards, openBookingCount } from "./admin-sections";
+import {
+  adminSeasonCards,
+  coverProblemMatchIds,
+  matchCoverIssues,
+  openBookingCount,
+} from "./admin-sections";
 
 const base = {
   draftStatus: null,
@@ -84,5 +89,76 @@ describe("openBookingCount", () => {
         matches,
       ),
     ).toBe(2);
+  });
+});
+
+describe("matchCoverIssues and coverProblemMatchIds", () => {
+  const teams = [
+    { id: "a", members: [{ userId: "a1" }, { userId: "a2" }] },
+    { id: "b", members: [{ userId: "b1" }, { userId: "b2" }] },
+    { id: "c", members: [{ userId: "c1" }] },
+  ];
+  const match = (id: string, home: string, away: string, status = "SCHEDULED") => ({
+    id,
+    homeTeamId: home,
+    awayTeamId: away,
+    status,
+  });
+
+  it("finds a roster player out with no cover, and drops them once covered", () => {
+    const m = match("m1", "a", "b");
+    const out = [{ matchId: "m1", userId: "a1" }];
+    expect(matchCoverIssues(m, teams, [], out).uncovered).toEqual(out);
+    const covered = [{ matchId: "m1", standinUserId: "s1", replacingUserId: "a1" }];
+    expect(matchCoverIssues(m, teams, covered, out).uncovered).toEqual([]);
+  });
+
+  it("ignores an out from someone no longer on either roster", () => {
+    const issues = matchCoverIssues(
+      match("m1", "a", "b"),
+      teams,
+      [],
+      [{ matchId: "m1", userId: "c1" }],
+    );
+    expect(issues).toEqual({ uncovered: [], standinsOut: [] });
+  });
+
+  it("reports a booked standin who dropped out, and only on that match", () => {
+    const bookings = [{ matchId: "m1", standinUserId: "s1", replacingUserId: null }];
+    const out = [
+      { matchId: "m1", userId: "s1" },
+      { matchId: "m2", userId: "s1" },
+    ];
+    expect(matchCoverIssues(match("m1", "a", "b"), teams, bookings, out).standinsOut).toEqual([
+      out[0],
+    ]);
+    expect(matchCoverIssues(match("m2", "a", "c"), teams, bookings, out).standinsOut).toEqual([]);
+  });
+
+  it("opens the card on uncovered outs, dropped standins and same-night clashes only", () => {
+    const matches = [
+      match("quiet", "a", "b"),
+      match("out", "a", "c"),
+      match("dropped", "b", "c"),
+      match("clash1", "a", "b"),
+      match("clash2", "b", "c"),
+      match("played", "a", "b", "COMPLETED"),
+    ];
+    const ids = coverProblemMatchIds({
+      matches,
+      teams,
+      bookings: [
+        { matchId: "dropped", standinUserId: "s1", replacingUserId: "b1" },
+        { matchId: "clash1", standinUserId: "s2", replacingUserId: "a2" },
+        { matchId: "clash2", standinUserId: "s2", replacingUserId: "c1" },
+      ],
+      outRsvps: [
+        { matchId: "out", userId: "a1" },
+        { matchId: "dropped", userId: "s1" },
+        { matchId: "played", userId: "a1" },
+      ],
+      clashes: [{ first: matches[3], second: matches[4] }],
+    });
+    expect([...ids].sort()).toEqual(["clash1", "clash2", "dropped", "out"]);
   });
 });

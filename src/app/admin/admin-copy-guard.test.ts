@@ -191,6 +191,24 @@ describe("admin copy names only controls that exist", () => {
     expect(page.match(/maxMmr=\{season\.maxMmr\}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
+  // The Standins card opens on cover problems only, but the admin's any-team
+  // booking (the one path for a match whose captains aren't around; the
+  // match page gives a non-captain admin no standin card) must stay one
+  // click away: every other open match's assign form lives under this
+  // disclosure, and both lists render through the same StandinMatchBlock.
+  it("the any-team standin booking stays reachable from the Standins card", () => {
+    const page = read("src/app/admin/page.tsx");
+    const card = page.slice(
+      page.indexOf("function StandinControls("),
+      page.indexOf("function AutomationTimestamp("),
+    );
+    expect(card).toContain('"Assign any match"');
+    expect(card).toContain("{problems.map(block)}");
+    expect(card).toContain("{wkMatches.map(block)}");
+    expect(card).toContain("{playoffRest.map(block)}");
+    expect(card).toContain("action={assignStandin}");
+  });
+
   // The REFERENCED_CONTROLS check once read the quoting copy too, and
   // admin-next-step.ts QUOTES "the Discord reach card", so that entry
   // satisfied itself (verified by mutation). It now reads rendering files

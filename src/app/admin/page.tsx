@@ -1,6 +1,11 @@
 import { listPage } from "@/lib/list-page";
 import { webAnalyticsUrl } from "@/lib/web-analytics";
-import { adminSeasonCards, openBookingCount } from "@/lib/admin-sections";
+import {
+  adminSeasonCards,
+  coverProblemMatchIds,
+  matchCoverIssues,
+  openBookingCount,
+} from "@/lib/admin-sections";
 import {
   adminAttention,
   attentionTitle,
@@ -4671,22 +4676,39 @@ function StandinControls({
   const standinName = new Map(
     data.assignments.map((a) => [a.standinUserId, a.standin.name]),
   );
-  const clashLines = standinClashes(data.assignments, data.matches).map(
-    ({ standinUserId, first, second }) => {
-      const label = (m: (typeof upcoming)[number]) =>
-        `${teamName.get(m.homeTeamId ?? "") ?? "?"} vs ${teamName.get(m.awayTeamId ?? "") ?? "?"} (wk ${m.week})`;
-      return `${standinName.get(standinUserId) ?? "A standin"} covers both ${label(first)} and ${label(second)} the same night — remove one below`;
-    },
+  const clashes = standinClashes(data.assignments, data.matches);
+  const clashLines = clashes.map(({ standinUserId, first, second }) => {
+    const label = (m: (typeof upcoming)[number]) =>
+      `${teamName.get(m.homeTeamId ?? "") ?? "?"} vs ${teamName.get(m.awayTeamId ?? "") ?? "?"} (wk ${m.week})`;
+    return `${standinName.get(standinUserId) ?? "A standin"} covers both ${label(first)} and ${label(second)} the same night — remove one below`;
+  });
+  // The card opens on the exceptions only. Captains book nearly all cover
+  // themselves from the match page, so a full assign form for every open
+  // match made this one of the longest cards on /admin for the rare night
+  // the admin steps in. Everything else, including the any-team override,
+  // is one click away under "Assign any match".
+  const problemIds = coverProblemMatchIds({
+    matches: upcoming,
+    teams: data.teams,
+    bookings: data.assignments,
+    outRsvps: data.outRsvps,
+    clashes,
+  });
+  const problems = upcoming.filter((m) => problemIds.has(m.id));
+  // Outside the assign window only matches with a booking have anything to
+  // show (removal); an empty block there is noise.
+  const rest = upcoming.filter(
+    (m) => !problemIds.has(m.id) && (assignOpen || byMatch.has(m.id)),
   );
   // Standins are assigned for the imminent night — group by week and only
   // expand the earliest open one so the current night isn't a scroll away.
-  const regularUpcoming = upcoming.filter(
+  const regularRest = rest.filter(
     (m) => m.phase === "REGULAR" || m.phase === "TIEBREAKER",
   );
-  const playoffUpcoming = upcoming.filter(
+  const playoffRest = rest.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
   );
-  const weeks = [...new Set(regularUpcoming.map((m) => m.week))].sort(
+  const weeks = [...new Set(regularRest.map((m) => m.week))].sort(
     (a, b) => a - b,
   );
   // Round names need the full bracket depth — deriving it from only the
@@ -4695,13 +4717,32 @@ function StandinControls({
   const { totalRounds } = groupPlayoffRounds(
     data.matches.filter((m) => m.phase === "PLAYOFF" || m.phase === "FINAL"),
   );
+  const matchLabel = (m: (typeof upcoming)[number]) => (
+    <Link href={`/matches/${m.id}`} className={textLink()}>
+      {m.phase === "PLAYOFF" || m.phase === "FINAL"
+        ? roundName(slotRound(m.bracketSlot), totalRounds)
+        : `${m.phase === "TIEBREAKER" ? "Tiebreaker week" : "Week"} ${m.week}`}
+    </Link>
+  );
+  const block = (m: (typeof upcoming)[number]) => (
+    <StandinMatchBlock
+      key={m.id}
+      m={m}
+      data={data}
+      assignments={byMatch.get(m.id) ?? []}
+      teamName={teamName}
+      teamSize={season.teamSize}
+      assignOpen={assignOpen}
+      label={matchLabel(m)}
+    />
+  );
 
   return (
     <Card>
       <CardHeader
         headingLevel={2}
         title="Standin assignments"
-        subtitle="Slot a standin in for a player who can't make a match."
+        subtitle="Captains book their own standins from the match page. This card shows cover problems and lets you book for any team."
       />
       <CardBody className="space-y-3">
         {clashLines.length > 0 ? (
@@ -4737,77 +4778,70 @@ function StandinControls({
           <p className="text-sm text-muted">No upcoming matches to fill.</p>
         ) : (
           <>
-            {weeks.map((wk) => {
-              const wkMatches = regularUpcoming.filter((m) => m.week === wk);
-              return (
-                <details
-                  key={`w${wk}`}
-                  open={wk === weeks[0]}
-                  className="rounded-lg border border-line"
-                >
-                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
-                    {wkMatches[0]?.phase === "TIEBREAKER"
-                      ? "Tiebreaker week · "
-                      : ""}
-                    Week {wk}
-                    <span className="ml-2 text-xs font-normal text-muted">
-                      {wkMatches.length} match
-                      {wkMatches.length === 1 ? "" : "es"}
-                    </span>
-                  </summary>
-                  <div className="space-y-3 px-3 pb-3">
-                    {wkMatches.map((m) => (
-                      <StandinMatchBlock
-                        key={m.id}
-                        m={m}
-                        data={data}
-                        assignments={byMatch.get(m.id) ?? []}
-                        teamName={teamName}
-                        teamSize={season.teamSize}
-                        assignOpen={assignOpen}
-                        label={
-                          <Link
-                            href={`/matches/${m.id}`}
-                            className={textLink()}
-                          >
-                            Week {m.week}
-                          </Link>
-                        }
-                      />
-                    ))}
-                  </div>
-                </details>
-              );
-            })}
-            {playoffUpcoming.length > 0 ? (
-              <details
-                open={weeks.length === 0}
-                className="rounded-lg border border-accent/40"
-              >
-                <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
-                  Playoffs
+            {problems.length > 0 ? (
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium">
+                  Cover problems ({problems.length})
+                </h3>
+                {problems.map(block)}
+              </div>
+            ) : (
+              <p className="text-sm text-muted">
+                Nothing needs cover right now.
+              </p>
+            )}
+            {rest.length > 0 ? (
+              <details className="rounded-lg border border-line">
+                <summary className="min-h-11 cursor-pointer px-3 py-2.5 text-sm font-medium">
+                  {assignOpen ? "Assign any match" : "Other bookings"}
                   <span className="ml-2 text-xs font-normal text-muted">
-                    {playoffUpcoming.length} match
-                    {playoffUpcoming.length === 1 ? "" : "es"}
+                    {rest.length} {problems.length > 0 ? "other " : ""}
+                    {assignOpen ? "open " : ""}
+                    match{rest.length === 1 ? "" : "es"}
                   </span>
                 </summary>
                 <div className="space-y-3 px-3 pb-3">
-                  {playoffUpcoming.map((m) => (
-                    <StandinMatchBlock
-                      key={m.id}
-                      m={m}
-                      data={data}
-                      assignments={byMatch.get(m.id) ?? []}
-                      teamName={teamName}
-                      teamSize={season.teamSize}
-                      assignOpen={assignOpen}
-                      label={
-                        <Link href={`/matches/${m.id}`} className={textLink()}>
-                          {roundName(slotRound(m.bracketSlot), totalRounds)}
-                        </Link>
-                      }
-                    />
-                  ))}
+                  {weeks.map((wk) => {
+                    const wkMatches = regularRest.filter((m) => m.week === wk);
+                    return (
+                      <details
+                        key={`w${wk}`}
+                        open={wk === weeks[0]}
+                        className="rounded-lg border border-line"
+                      >
+                        <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                          {wkMatches[0]?.phase === "TIEBREAKER"
+                            ? "Tiebreaker week · "
+                            : ""}
+                          Week {wk}
+                          <span className="ml-2 text-xs font-normal text-muted">
+                            {wkMatches.length} match
+                            {wkMatches.length === 1 ? "" : "es"}
+                          </span>
+                        </summary>
+                        <div className="space-y-3 px-3 pb-3">
+                          {wkMatches.map(block)}
+                        </div>
+                      </details>
+                    );
+                  })}
+                  {playoffRest.length > 0 ? (
+                    <details
+                      open={weeks.length === 0}
+                      className="rounded-lg border border-accent/40"
+                    >
+                      <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+                        Playoffs
+                        <span className="ml-2 text-xs font-normal text-muted">
+                          {playoffRest.length} match
+                          {playoffRest.length === 1 ? "" : "es"}
+                        </span>
+                      </summary>
+                      <div className="space-y-3 px-3 pb-3">
+                        {playoffRest.map(block)}
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
               </details>
             ) : null}
@@ -4866,28 +4900,12 @@ function StandinMatchBlock({
         {label}: {home?.name ?? "?"} vs {away?.name ?? "?"}
       </div>
       {(() => {
-        // Only current roster members can need cover — a released
-        // player's (or unassigned standin's) stale OUT row would
-        // otherwise raise an alert no assignment can ever clear.
-        const rosterIds = new Set(
-          [home, away].flatMap((t) => t?.members.map((mm) => mm.userId) ?? []),
-        );
-        const out = data.outRsvps.filter(
-          (r) => r.matchId === m.id && rosterIds.has(r.userId),
-        );
-        const covered = new Set(
-          asg.map((a) => a.replacingUserId).filter(Boolean),
-        );
-        const needing = out.filter((r) => !covered.has(r.userId));
-        // The OTHER direction: an assigned STANDIN who has declared OUT. The
-        // roster filter above deliberately excludes them, so the seat read as
-        // covered while the cover had quit — the one state this card exists
-        // to catch that it couldn't see. Distinct copy because the fix path
-        // differs (remove/replace, not add).
-        const assignedIds = new Set(asg.map((a) => a.standinUserId));
-        const standinOut = data.outRsvps.filter(
-          (r) => r.matchId === m.id && assignedIds.has(r.userId),
-        );
+        // Only current roster members can need cover, and the OTHER
+        // direction, an assigned STANDIN who has declared OUT, gets distinct
+        // copy because the fix differs (remove/replace, not add). The same
+        // matchCoverIssues decides which matches open the card at the top.
+        const { uncovered: needing, standinsOut: standinOut } =
+          matchCoverIssues(m, data.teams, asg, data.outRsvps);
         return (
           <>
             {needing.length > 0 ? (
