@@ -20,7 +20,12 @@ import {
   SEASON_STATUS,
   type SeasonStatus,
 } from "@/lib/constants";
-import { leagueFallbackOpensAt, nextAutoSyncAt } from "@/lib/result-sync";
+import {
+  AUTO_CHECK_BACKED_OFF_SCANS,
+  type AutoCheck,
+  autoCheckCopy,
+  autoCheckStatus,
+} from "@/lib/result-sync";
 import { ImportProgress } from "@/components/import-progress";
 import { DatabaseHealth } from "@/components/database-health";
 import { HistoryCoverage } from "@/components/history-coverage";
@@ -414,7 +419,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             <div className="space-y-6 p-3 sm:p-4">
               {showTiebreakers ? (
                 <AdminAnchor id="adm-tiebreakers">
-                  <TiebreakerControls season={season} data={data} />
+                  <TiebreakerControls season={season} data={data} nowMs={nowMs} />
                 </AdminAnchor>
               ) : null}
               <AdminAnchor id="adm-schedule">
@@ -425,7 +430,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                 />
               </AdminAnchor>
               <AdminAnchor id="adm-playoffs">
-                <PlayoffControls season={season} data={data} />
+                <PlayoffControls season={season} data={data} nowMs={nowMs} />
               </AdminAnchor>
               <AdminAnchor id="adm-roster">
                 <RosterMoves season={season} data={data} />
@@ -444,7 +449,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <AdminAttention season={season} data={data} />
           {showTiebreakers ? (
             <AdminAnchor id="adm-tiebreakers">
-              <TiebreakerControls season={season} data={data} />
+              <TiebreakerControls season={season} data={data} nowMs={nowMs} />
             </AdminAnchor>
           ) : null}
           {season.status === "SIGNUPS" || season.status === "DRAFT" ? setupControls : null}
@@ -456,7 +461,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             />
           </AdminAnchor>
           <AdminAnchor id="adm-playoffs">
-            <PlayoffControls season={season} data={data} />
+            <PlayoffControls season={season} data={data} nowMs={nowMs} />
           </AdminAnchor>
           <AdminAnchor id="adm-roster">
             <RosterMoves season={season} data={data} />
@@ -2780,7 +2785,15 @@ function CaptainControls({
   );
 }
 
-function TiebreakerControls({ season, data }: { season: Season; data: AdminData }) {
+function TiebreakerControls({
+  season,
+  data,
+  nowMs,
+}: {
+  season: Season;
+  data: AdminData;
+  nowMs: number;
+}) {
   const projection = projectPlayoffField(data.teams, data.matches);
   const brackets = buildTiebreakerBrackets({ projection, teams: data.teams, matches: data.matches });
   const tiebreakerMatches = data.matches.filter((match) => match.phase === MATCH_PHASE.TIEBREAKER);
@@ -2859,6 +2872,8 @@ function TiebreakerControls({ season, data }: { season: Season; data: AdminData 
                       teams={data.teams}
                       expectedActiveSeasonId={season.id}
                       seasonStatus={season.status}
+                      leagueId={season.dotaLeagueId}
+                      nowMs={nowMs}
                       draftStatus={data.draft?.status ?? null}
                       championTeamId={season.championTeamId}
                       correctionBlockedByLaterRound={hasLaterTiebreakerStage(m, tiebreakerMatches)}
@@ -3169,6 +3184,8 @@ function ScheduleControls({
                         teams={data.teams}
                         expectedActiveSeasonId={season.id}
                         seasonStatus={season.status}
+                        leagueId={season.dotaLeagueId}
+                        nowMs={nowMs}
                         draftStatus={data.draft?.status ?? null}
                         championTeamId={season.championTeamId}
                         correctionBlockedByLaterRound={
@@ -3204,6 +3221,8 @@ function MatchResultRow({
   label,
   expectedActiveSeasonId,
   seasonStatus,
+  leagueId,
+  nowMs,
   draftStatus,
   championTeamId,
   correctionBlockedByLaterRound,
@@ -3214,6 +3233,9 @@ function MatchResultRow({
   label: React.ReactNode;
   expectedActiveSeasonId: string;
   seasonStatus: string;
+  /** The season's Valve league id: its feed runs before player-account scans. */
+  leagueId: string | null;
+  nowMs: number;
   draftStatus: string | null;
   championTeamId: string | null;
   correctionBlockedByLaterRound: boolean;
@@ -3248,6 +3270,18 @@ function MatchResultRow({
   const canCorrectImported =
     resultCorrectionOpen || championshipFinalCorrection;
   const logisticsOpen = matchLogisticsOpen(seasonStatus, draftStatus, m.status);
+  // Phase-wide reasons ("until the Regular season starts") would repeat on
+  // every row of a freshly generated schedule; only per-match ones show here.
+  const autoCheck = autoCheckStatus(
+    m,
+    { status: seasonStatus, dotaLeagueId: leagueId },
+    nowMs,
+  );
+  const rowAutoCheck =
+    autoCheck &&
+    !(autoCheck.kind === "none" && autoCheck.reason !== "no-kickoff")
+      ? autoCheck
+      : null;
   return (
     <div className="space-y-2 rounded-lg border border-line p-3">
       {!resultCorrectionOpen || importedFinal ? (
@@ -3518,6 +3552,8 @@ function MatchResultRow({
         </ul>
       ) : null}
 
+      {rowAutoCheck ? <AutoCheckLine check={rowAutoCheck} /> : null}
+
       {resultCorrectionOpen && m.status !== MATCH_STATUS.COMPLETED ? (
         <MatchImportControls
           matchId={m.id}
@@ -3536,6 +3572,37 @@ function MatchResultRow({
 }
 
 /**
+ * When the scheduled worker next looks for this match's games, or why it
+ * won't, so an admin can tell "it's coming in 3 minutes" from "it will never
+ * run" before pressing Auto-fetch games.
+ */
+function AutoCheckLine({
+  check,
+  className = "",
+}: {
+  check: AutoCheck;
+  className?: string;
+}) {
+  const copy = autoCheckCopy(check);
+  return (
+    <p
+      data-testid="auto-check"
+      className={`text-xs ${copy.problem ? "text-danger" : "text-muted"} ${className}`}
+    >
+      {copy.lead}
+      {copy.at != null ? (
+        <LocalTime
+          ts={copy.at}
+          variant="short"
+          initial={formatMatchTime(new Date(copy.at), "short")}
+        />
+      ) : null}
+      {copy.tail}
+    </p>
+  );
+}
+
+/**
  * The bracket's series with their result controls, in the Playoffs card:
  * the series still to play first, then the decided ones folded away (open
  * once nothing is left to play, so the grand-final correction is in view).
@@ -3546,10 +3613,12 @@ function PlayoffSeries({
   season,
   data,
   playoff,
+  nowMs,
 }: {
   season: Season;
   data: AdminData;
   playoff: AdminData["matches"];
+  nowMs: number;
 }) {
   const { totalRounds } = groupPlayoffRounds(playoff);
   const latestRound = Math.max(
@@ -3571,6 +3640,8 @@ function PlayoffSeries({
       teams={data.teams}
       expectedActiveSeasonId={season.id}
       seasonStatus={season.status}
+      leagueId={season.dotaLeagueId}
+      nowMs={nowMs}
       draftStatus={data.draft?.status ?? null}
       championTeamId={season.championTeamId}
       correctionBlockedByLaterRound={hasLaterBracketRound(
@@ -3622,9 +3693,11 @@ function PlayoffSeries({
 function PlayoffControls({
   season,
   data,
+  nowMs,
 }: {
   season: Season;
   data: AdminData;
+  nowMs: number;
 }) {
   const playoffMatches = data.matches.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
@@ -3919,6 +3992,7 @@ function PlayoffControls({
               season={season}
               data={data}
               playoff={playoffMatches}
+              nowMs={nowMs}
             />
             {/* Both repairs remove postseason data, so they sit folded away
                 from the series an admin works through on match night, each
@@ -4828,17 +4902,9 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         ) : (
           <ul className="space-y-2">
             {inWindow.map((m) => {
-              const next = nextAutoSyncAt(m.autoSyncedAt, m.autoSyncAttempts);
-              const backedOff = m.autoSyncAttempts >= 3;
-              const fallbackAt = m.scheduledAt
-                ? new Date(leagueFallbackOpensAt(m.scheduledAt.getTime()))
-                : null;
-              const waitingForFallback =
-                season.dotaLeagueId &&
-                m.status !== "LIVE" &&
-                !m.autoSyncedAt &&
-                fallbackAt != null &&
-                fallbackAt.getTime() > now;
+              const check = autoCheckStatus(m, season, now);
+              const backedOff =
+                m.autoSyncAttempts >= AUTO_CHECK_BACKED_OFF_SCANS;
               return (
                 <li
                   key={m.id}
@@ -4856,48 +4922,22 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                       {m.homeScore}–{m.awayScore}
                     </Badge>
                   ) : null}
-                  <span className="text-xs text-muted">
-                    {m.autoSyncedAt ? (
-                      <>
-                        player accounts scanned{" "}
-                        <LocalTime
-                          ts={m.autoSyncedAt.getTime()}
-                          variant="short"
-                          initial={formatMatchTime(m.autoSyncedAt, "short")}
-                        />
-                        {" · "}
-                        {m.autoSyncAttempts} empty scan
-                        {m.autoSyncAttempts === 1 ? "" : "s"}
-                        {" · next "}
-                        {next && next.getTime() > now ? (
-                          <LocalTime
-                            ts={next.getTime()}
-                            variant="short"
-                            initial={formatMatchTime(next, "short")}
-                          />
-                        ) : (
-                          "on the next ping"
-                        )}
-                      </>
-                    ) : waitingForFallback ? (
-                      <>
-                        waiting for league feed · player-account recovery starts{" "}
-                        <LocalTime
-                          ts={fallbackAt!.getTime()}
-                          variant="short"
-                          initial={formatMatchTime(fallbackAt!, "short")}
-                        />
-                      </>
-                    ) : season.dotaLeagueId ? (
-                      m.status === "LIVE" ? (
-                        "waiting for the next lobby · player-account recovery is ready"
-                      ) : (
-                        "waiting for league feed · player-account recovery is ready"
-                      )
-                    ) : (
-                      "not scanned yet — next ping picks it up"
-                    )}
-                  </span>
+                  {m.autoSyncedAt ? (
+                    <span className="text-xs text-muted">
+                      player accounts scanned{" "}
+                      <LocalTime
+                        ts={m.autoSyncedAt.getTime()}
+                        variant="short"
+                        initial={formatMatchTime(m.autoSyncedAt, "short")}
+                      />
+                      {" · "}
+                      {m.autoSyncAttempts} empty scan
+                      {m.autoSyncAttempts === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                  {check ? (
+                    <AutoCheckLine check={check} className="w-full" />
+                  ) : null}
                   {backedOff ? (
                     <Badge tone="danger">
                       player recovery backed off — check account links or import
