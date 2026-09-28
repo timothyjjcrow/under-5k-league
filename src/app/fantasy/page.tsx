@@ -20,6 +20,7 @@ import {
   ownershipByPlayer,
   type FantasyImpact,
 } from "@/lib/fantasy";
+import { fantasyWindowTiles } from "@/lib/fantasy-tiles";
 import { FANTASY } from "@/lib/constants";
 import { saveFantasyRoster } from "@/app/actions/fantasy";
 import { ActionForm } from "@/components/action-form";
@@ -327,6 +328,31 @@ export default async function FantasyPage({
       };
     });
 
+  // The pool and cap tiles describe the pick window; after the lock they
+  // report the season instead (fantasyWindowTiles).
+  const windowTiles = fantasyWindowTiles({
+    locked,
+    poolSize: members.length,
+    cap,
+    mine:
+      locked && myStandingIndex >= 0
+        ? {
+            rank: myStandingIndex + 1,
+            points: standings[myStandingIndex].points,
+          }
+        : null,
+    leader: standings[0]
+      ? {
+          name: managerName.get(standings[0].managerId) ?? "?",
+          points: standings[0].points,
+        }
+      : null,
+    topPlayer: topScorers[0]
+      ? { name: topScorers[0].name, points: topScorers[0].value }
+      : null,
+    playersScored: playerPoints.size,
+  });
+
   return (
     <div className="space-y-7">
       <PageTitle
@@ -355,8 +381,9 @@ export default async function FantasyPage({
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Entries</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{rosters.length}</div><p className="mt-1 text-xs text-muted">{locked ? "Locked fantasy fives" : "Saved fantasy fives"}</p></CardBody></Card>
         <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Games scored</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{scoredGameCount}</div><p className="mt-1 text-xs text-muted">Complete imported games</p></CardBody></Card>
-        <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Draft pool</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{members.length}</div><p className="mt-1 text-xs text-muted">Players to choose from</p></CardBody></Card>
-        <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">{locked && myStandingIndex >= 0 ? "Your rank" : "Salary cap"}</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{locked && myStandingIndex >= 0 ? `#${myStandingIndex + 1}` : cap > 0 ? cap.toLocaleString() : "Open"}</div><p className="mt-1 text-xs text-muted">{locked && myStandingIndex >= 0 ? `${standings[myStandingIndex].points} points` : cap > 0 ? "MMR across five players" : "No ratings available"}</p></CardBody></Card>
+        {windowTiles.map((tile) => (
+          <Card key={tile.label}><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">{tile.label}</div><div className="mt-1 truncate font-display text-2xl font-semibold tabular-nums">{tile.value}</div><p className="mt-1 text-xs text-muted [overflow-wrap:anywhere]">{tile.hint}</p></CardBody></Card>
+        ))}
       </div>
 
       {locked && standings.length > 0 ? (
