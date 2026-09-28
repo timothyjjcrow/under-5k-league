@@ -1106,6 +1106,8 @@ describe("discordReachWarning — the Start-draft confirm line", () => {
         },
       }),
     );
+    // Its own line of the Start-draft confirm.
+    expect(line.startsWith("\nDiscord: of 10 signed-up players, ")).toBe(true);
     expect(line).toContain("2 are not in the Discord server (Alice, Bob)");
     expect(line).toContain("1 hasn't accepted the server rules (Percy)");
     expect(line).toContain("2 never linked Discord at all");

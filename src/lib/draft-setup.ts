@@ -175,11 +175,42 @@ export function startDraftCheck(o: {
   return { seats, canStart: seats.canStart && !rosterAlreadyBuilt, blocker };
 }
 
+const plural = (n: number, one: string, many: string) =>
+  `${n} ${n === 1 ? one : many}`;
+
+/**
+ * How the pool fits the seats, in one sentence that always names which of
+ * the three shapes applies: an exact fit, seats left empty (standins cover
+ * them), or extra players who become free agents. Signups are uncapped, so
+ * this is where the count gets settled. The preflight on /admin and the
+ * Start-draft confirm both print THIS sentence, so they can't describe the
+ * same pool two different ways.
+ */
+export function seatFitSentence(
+  seats: { openSeats: number; poolCount: number },
+  teamSize: number,
+): string {
+  const { openSeats, poolCount } = seats;
+  const fit = `${plural(poolCount, "player", "players")} for ${plural(openSeats, "seat", "seats")}`;
+  if (openSeats === poolCount) return `exact fit, ${fit}`;
+  if (openSeats > poolCount) {
+    return `${plural(openSeats - poolCount, "seat stays", "seats stay")} empty (${fit}); standins cover them`;
+  }
+  return `${plural(poolCount - openSeats, "extra player becomes a free agent", "extra players become free agents")} (${fit}); another captain adds ${Math.max(0, teamSize - 1)} seats`;
+}
+
 /**
  * The Start-draft confirm, before the Discord reachability line (appended by
  * StartDraftControl once its lookup resolves). House rule: a consequential
  * confirm states the real numbers BEFORE the click. Shared by /admin and the
  * draft room so an admin starting from either place reads the same warning.
+ *
+ * ONE SHORT LINE PER RISK. It used to be a single paragraph with the Discord
+ * and MMR warnings run on after it, which is the kind of dialog that gets
+ * clicked through. The pool line always names which of the three shapes
+ * applies (exact fit, empty seats, extra free agents): signups are uncapped
+ * and this is the moment the count is settled. Every appended warning starts
+ * its own line ("\n…") the same way.
  *
  * Starting is NOT a one-way door: abortDraft writes the draft back to
  * NOT_STARTED, drops the season to Signups, refunds every purchase and keeps
@@ -201,28 +232,20 @@ export function startDraftConfirm(o: {
   /** captainMmrWarning(...) for the captains, "" when there is none. */
   mmrWarning: string;
 }): string {
-  const { openSeats, poolCount } = o.seats;
-  const seatNote =
-    openSeats === poolCount
-      ? ` The pool fits exactly: ${poolCount} players for ${openSeats} open seats.`
-      : openSeats > poolCount
-        ? ` ${poolCount} players for ${openSeats} open seats — ${openSeats - poolCount} seat${openSeats - poolCount === 1 ? "" : "s"} will go unfilled (standins cover them). Removing a captain would tighten it.`
-        : ` ${poolCount} players for only ${openSeats} open seats — ${poolCount - openSeats} player${poolCount - openSeats === 1 ? "" : "s"} will go undrafted. Adding a captain opens ${o.teamSize - 1} more seats.`;
   const c = o.confirmations;
-  return (
-    `Start the draft with ${o.captainCount} captain${o.captainCount === 1 ? "" : "s"}?` +
-    (o.captainCount < o.minTeams
-      ? ` That is fewer than this season's ${o.minTeams}-team target.`
-      : "") +
-    seatNote +
-    " Captains are locked once the auction begins — the way back is Abort draft," +
-    " which returns every drafted player and refund and keeps the captains, but" +
-    " is refused once any result has been recorded." +
-    (o.draftScheduled
-      ? ` Draft confirmations: ${c.ready} of ${c.total} ready; ${c.awaiting} awaiting${c.stale ? `; ${c.stale} must reconfirm` : ""}. This is a warning only and does not block the draft.`
-      : " No draft night is scheduled, so players have not been asked to confirm one.") +
-    o.mmrWarning
-  );
+  const lines = [
+    `Start the draft with ${plural(o.captainCount, "captain", "captains")}?`,
+    "",
+    `Pool: ${seatFitSentence(o.seats, o.teamSize)}.`,
+    ...(o.captainCount < o.minTeams
+      ? [`Teams: ${o.captainCount}, below this season's ${o.minTeams}-team target.`]
+      : []),
+    o.draftScheduled
+      ? `Confirmations: ${c.ready} of ${c.total} ready, ${c.awaiting} awaiting${c.stale ? `, ${c.stale} must reconfirm` : ""}. A warning only; it doesn't block the draft.`
+      : "Confirmations: none yet, because no draft night is set.",
+    "Undo: captains lock when the auction starts. Abort draft returns every player and refund and keeps the captains, until a result is recorded.",
+  ];
+  return lines.join("\n") + o.mmrWarning;
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   draftNightSoon,
   draftSetupOpen,
   startDraftCheck,
+  seatFitSentence,
   startDraftConfirm,
 } from "./draft-setup";
 
@@ -192,6 +193,23 @@ describe("startDraftCheck", () => {
   });
 });
 
+describe("seatFitSentence", () => {
+  it("names the shape: exact fit, empty seats or extra free agents", () => {
+    expect(seatFitSentence({ openSeats: 4, poolCount: 4 }, 5)).toBe(
+      "exact fit, 4 players for 4 seats",
+    );
+    expect(seatFitSentence({ openSeats: 8, poolCount: 6 }, 5)).toBe(
+      "2 seats stay empty (6 players for 8 seats); standins cover them",
+    );
+    expect(seatFitSentence({ openSeats: 28, poolCount: 30 }, 5)).toBe(
+      "2 extra players become free agents (30 players for 28 seats); another captain adds 4 seats",
+    );
+    expect(seatFitSentence({ openSeats: 1, poolCount: 1 }, 2)).toBe(
+      "exact fit, 1 player for 1 seat",
+    );
+  });
+});
+
 describe("startDraftConfirm", () => {
   const base = {
     captainCount: 2,
@@ -202,37 +220,49 @@ describe("startDraftConfirm", () => {
     mmrWarning: "",
   };
 
-  it("states the team count, seat fit, the way back and confirmations", () => {
+  it("puts each risk on its own short line", () => {
     expect(
       startDraftConfirm({
         ...base,
         seats: { openSeats: 8, poolCount: 5 },
       }),
     ).toBe(
-      "Start the draft with 2 captains? That is fewer than this season's 4-team target." +
-        " 5 players for 8 open seats — 3 seats will go unfilled (standins cover them). Removing a captain would tighten it." +
-        " Captains are locked once the auction begins — the way back is Abort draft, which returns every drafted player and refund and keeps the captains, but is refused once any result has been recorded." +
-        " Draft confirmations: 5 of 9 ready; 3 awaiting; 1 must reconfirm. This is a warning only and does not block the draft.",
+      [
+        "Start the draft with 2 captains?",
+        "",
+        "Pool: 3 seats stay empty (5 players for 8 seats); standins cover them.",
+        "Teams: 2, below this season's 4-team target.",
+        "Confirmations: 5 of 9 ready, 3 awaiting, 1 must reconfirm. A warning only; it doesn't block the draft.",
+        "Undo: captains lock when the auction starts. Abort draft returns every player and refund and keeps the captains, until a result is recorded.",
+      ].join("\n"),
     );
   });
 
-  it("covers an exact fit, an overflow and an unscheduled draft", () => {
-    const exact = startDraftConfirm({
+  it("always names which of the three pool shapes applies", () => {
+    const pool = (openSeats: number, poolCount: number) =>
+      startDraftConfirm({ ...base, seats: { openSeats, poolCount } })
+        .split("\n")
+        .find((line) => line.startsWith("Pool: "));
+    expect(pool(8, 8)).toBe("Pool: exact fit, 8 players for 8 seats.");
+    expect(pool(8, 7)).toBe(
+      "Pool: 1 seat stays empty (7 players for 8 seats); standins cover them.",
+    );
+    expect(pool(8, 9)).toBe(
+      "Pool: 1 extra player becomes a free agent (9 players for 8 seats); another captain adds 4 seats.",
+    );
+    expect(pool(8, 11)).toContain("3 extra players become free agents");
+  });
+
+  it("drops the team line at the target and explains an unscheduled draft", () => {
+    const text = startDraftConfirm({
       ...base,
       minTeams: 2,
       seats: { openSeats: 8, poolCount: 8 },
       draftScheduled: false,
     });
-    expect(exact).toContain(
-      "Start the draft with 2 captains? The pool fits exactly: 8 players for 8 open seats.",
-    );
-    expect(exact).toContain(
-      " No draft night is scheduled, so players have not been asked to confirm one.",
-    );
-    expect(
-      startDraftConfirm({ ...base, seats: { openSeats: 8, poolCount: 9 } }),
-    ).toContain(
-      " 9 players for only 8 open seats — 1 player will go undrafted. Adding a captain opens 4 more seats.",
+    expect(text).not.toContain("Teams:");
+    expect(text).toContain(
+      "\nConfirmations: none yet, because no draft night is set.",
     );
   });
 
@@ -240,9 +270,11 @@ describe("startDraftConfirm", () => {
     const text = startDraftConfirm({
       ...base,
       seats: { openSeats: 8, poolCount: 8 },
-      mmrWarning: " Unverified captain MMR sets draft budgets: A (no medal).",
+      mmrWarning: "\nCaptain MMR sets budgets but isn't verified: A (no medal).",
     });
-    expect(text.endsWith(" Unverified captain MMR sets draft budgets: A (no medal).")).toBe(true);
+    expect(
+      text.endsWith("\nCaptain MMR sets budgets but isn't verified: A (no medal)."),
+    ).toBe(true);
   });
 });
 

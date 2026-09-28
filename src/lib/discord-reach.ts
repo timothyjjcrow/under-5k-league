@@ -97,7 +97,8 @@ export function discordReachWarning(reach: DiscordReachFunnel): string {
     parts.push(`${unlinked} never linked Discord at all`);
   }
   if (parts.length === 0) return "";
-  return ` Reachability: of ${reach.registered} signed-up players, ${parts.join("; ")} — captains may not be able to reach them for scheduling.`;
+  // Its own line of the confirm (see startDraftConfirm).
+  return `\nDiscord: of ${reach.registered} signed-up players, ${parts.join("; ")}. Captains may not be able to reach them.`;
 }
 
 const ZWSP = "​";

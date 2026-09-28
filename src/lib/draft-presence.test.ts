@@ -158,9 +158,9 @@ describe("missingCaptainsConfirmLine", () => {
     expect(missingCaptainsConfirmLine([], "pageLoad")).toBe("");
   });
 
-  it("names the missing captains, as a sentence to append", () => {
+  it("names the missing captains, as a line to append", () => {
     const line = missingCaptainsConfirmLine(["Bob", "Cara"], "now");
-    expect(line.startsWith(" Not in the draft room right now: Bob, Cara.")).toBe(
+    expect(line.startsWith("\nNot in the draft room right now: Bob, Cara.")).toBe(
       true,
     );
     expect(line).toContain("can't bid");
@@ -169,7 +169,7 @@ describe("missingCaptainsConfirmLine", () => {
 
   it("says when /admin's list is only as fresh as the page", () => {
     expect(missingCaptainsConfirmLine(["Bob"], "pageLoad")).toMatch(
-      /^ Not in the draft room when this page loaded: Bob\./,
+      /^\nNot in the draft room when this page loaded: Bob\./,
     );
   });
 });

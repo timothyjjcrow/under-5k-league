@@ -154,10 +154,10 @@ export function captainMmrWarning(
 ): string {
   if (unverified.length === 0) return "";
   const list = captainNameRun(unverified.map((c) => `${c.name} (${c.short})`));
+  // Its own line of the confirm (see startDraftConfirm).
   return (
-    ` Unverified captain MMR sets draft budgets: ${list}.` +
-    " Cancel and check each with Edit medal & MMR first; a medal that matches the MMR marks it verified." +
-    " Starting anyway is allowed."
+    `\nCaptain MMR sets budgets but isn't verified: ${list}.` +
+    " Check with Edit medal & MMR first, or start anyway."
   );
 }
 

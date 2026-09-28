@@ -104,8 +104,9 @@ export function missingCaptainsConfirmLine(
     asOf === "now"
       ? "Not in the draft room right now:"
       : "Not in the draft room when this page loaded:";
+  // Its own line of the confirm (see startDraftConfirm).
   return (
-    ` ${lead} ${away.join(", ")}.` +
-    " A captain who isn't there can't bid, and the draft nominates for them when their clock runs out."
+    `\n${lead} ${away.join(", ")}.` +
+    " They can't bid, and the draft nominates for them when their clock runs out."
   );
 }

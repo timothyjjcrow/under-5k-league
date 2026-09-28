@@ -223,6 +223,7 @@ import {
   draftSetupLockedMessage,
   draftRosterCounts,
   draftSetupOpen,
+  seatFitSentence,
   startDraftCheck,
   startDraftConfirm,
 } from "@/lib/draft-setup";
@@ -2002,6 +2003,9 @@ function CaptainControls({
     data.players,
     season.draftRevision,
   );
+  const readyConfirmation = data.players.filter(
+    (p) => draftReadiness(p, season.draftRevision) === DRAFT_READINESS.READY,
+  );
   const awaitingConfirmation = data.players.filter(
     (p) => draftReadiness(p, season.draftRevision) === DRAFT_READINESS.AWAITING,
   );
@@ -2070,7 +2074,6 @@ function CaptainControls({
     boughtCount,
   });
   const rosterAlreadyBuilt = boughtCount > 0;
-  const openSeats = seats.openSeats;
   const startConfirm = startDraftConfirm({
     captainCount,
     minTeams: season.minTeams,
@@ -2313,14 +2316,22 @@ function CaptainControls({
           (setupOpen || nonCaptains.length > 0) && "md:grid-cols-2",
         )}
       >
+        {/* ONE pre-draft box, the only place the card describes roster fit,
+            draft night and confirmations. There used to be three: this list,
+            a loose "N undrafted players for N roster seats" line computed a
+            different way (it counted already-rostered players), and a
+            confirmations box with a wall of every unconfirmed name, plus a
+            readiness chip on every row. They could disagree with each other,
+            and the pool sentence here is the same one the Start-draft confirm
+            prints (seatFitSentence). */}
         {setupOpen ? (
           <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 md:col-span-2">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
+              <div className="min-w-0">
                 <h3 className="text-sm font-medium text-fg">Draft preflight</h3>
                 <p className="mt-0.5 text-xs text-muted">
-                  Required items block Start; schedule, target size, seat fit
-                  and confirmations are explicit operator warnings.
+                  Captains, the pool and an existing roster can block Start.
+                  Everything else here is a warning.
                 </p>
               </div>
               <Badge tone={canStart ? "success" : "accent"}>
@@ -2331,46 +2342,126 @@ function CaptainControls({
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
                 <b className="text-fg">Captains:</b> {captainCount} designated
                 {captainCount < 2
-                  ? " — at least 2 are required"
+                  ? ", at least 2 are required"
                   : captainCount < season.minTeams
-                    ? ` — below the ${season.minTeams}-team target (allowed with confirmation)`
-                    : ` — ${season.minTeams}-team target met`}
+                    ? `, below the ${season.minTeams}-team target (allowed)`
+                    : `, ${season.minTeams}-team target met`}
+                {season.budgetMmrWeight > 0 && captainCount >= 2
+                  ? `. Budgets are MMR-weighted (±${season.budgetMmrWeight}%), so lower-MMR captains get more to spend.`
+                  : null}
               </li>
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
-                <b className="text-fg">Player pool:</b> {poolCount} draftable
-                for {openSeats} open seats
+                <b className="text-fg">Player pool:</b>{" "}
                 {poolCount === 0
-                  ? " — at least 1 is required"
-                  : seats.shortfall > 0
-                    ? ` — ${seats.shortfall} will stay unfilled`
-                    : seats.overflow > 0
-                      ? ` — ${seats.overflow} will remain free agents`
-                      : " — exact fit"}
+                  ? "no undrafted players yet, at least 1 is required"
+                  : captainCount < 2
+                    ? `${poolCount} draftable so far; the seat fit shows once there are 2 captains`
+                    : seatFitSentence(seats, season.teamSize)}
               </li>
-              <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
-                <b className="text-fg">Draft night:</b>{" "}
-                {season.draftAt
-                  ? "scheduled — players can review and confirm it"
-                  : "not scheduled — allowed, but players cannot confirm a time"}
+              <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
+                <ActionForm
+                  action={setDraftNight}
+                  hidden={{ expectedActiveSeasonId: season.id }}
+                  className="flex flex-wrap items-end gap-2"
+                >
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <label htmlFor="draftAt" className="text-xs text-muted">
+                      <b className="text-fg">Draft night</b> (optional):
+                      shown with countdowns on the dashboard, /me and the draft
+                      room, and announced to Discord
+                    </label>
+                    <LocalDatetimeField
+                      id="draftAt"
+                      name="draftAt"
+                      tsName="draftAtTs"
+                      defaultTs={season.draftAt?.getTime()}
+                      timeZone={LEAGUE_CONFIG.timeZone}
+                      className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+                    />
+                  </div>
+                  <SubmitButton variant="secondary" size="sm">
+                    {season.draftAt ? "Update draft night" : "Set draft night"}
+                  </SubmitButton>
+                  {/* League time, like the box beside it: the admin's own
+                      clock is what hid a mis-entered night before. */}
+                  {season.draftAt ? (
+                    <span className="text-xs text-muted">
+                      Currently {formatLeagueTime(season.draftAt)}
+                    </span>
+                  ) : null}
+                </ActionForm>
               </li>
-              <li className="rounded-md border border-line/70 px-3 py-2 text-muted">
-                <b className="text-fg">Commitments:</b>{" "}
-                {season.draftAt
-                  ? `${confirmationCounts.ready}/${confirmationCounts.total} ready · ${confirmationCounts.awaiting} awaiting${confirmationCounts.stale ? ` · ${confirmationCounts.stale} need reconfirmation` : ""}`
-                  : "available after a draft night is scheduled"}
-                {" — advisory"}
+              <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <b className="text-fg">Confirmations:</b>
+                  {season.draftAt ? (
+                    <>
+                      <Badge
+                        tone={
+                          confirmationCounts.ready === confirmationCounts.total &&
+                          confirmationCounts.total > 0
+                            ? "success"
+                            : "accent"
+                        }
+                      >
+                        {confirmationCounts.ready}/{confirmationCounts.total} ready
+                      </Badge>
+                      <span>
+                        {confirmationCounts.awaiting} awaiting
+                        {confirmationCounts.stale
+                          ? `, ${confirmationCounts.stale} must reconfirm`
+                          : ""}
+                        . A warning only; the draft can start without them.
+                      </span>
+                    </>
+                  ) : (
+                    <span>none yet. Players are asked to confirm once a draft night is set.</span>
+                  )}
+                </div>
+                {season.draftAt && confirmationCounts.total > 0 ? (
+                  <details id="adm-draft-confirmations" className="mt-1.5">
+                    <summary className="cursor-pointer text-xs text-muted hover:text-fg">
+                      Show who
+                    </summary>
+                    <div className="mt-1.5 space-y-1">
+                      {(
+                        [
+                          ["Ready", readyConfirmation, "text-success"],
+                          ["Waiting on", awaitingConfirmation, "text-fg"],
+                          ["Must reconfirm", staleConfirmation, "text-accent"],
+                        ] as const
+                      ).map(([label, regs, tone]) =>
+                        regs.length > 0 ? (
+                          <div key={label} className="min-w-0 break-words">
+                            <span className={cn("font-medium", tone)}>
+                              {label} ({regs.length}):
+                            </span>{" "}
+                            <ul aria-label={label} className="inline">
+                              {regs.map((p, i) => (
+                                <li key={p.id} className="inline">
+                                  {p.user.name}
+                                  {i < regs.length - 1 ? ", " : ""}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null,
+                      )}
+                    </div>
+                  </details>
+                ) : null}
               </li>
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
                 <b className="text-fg">Existing roster:</b>{" "}
                 {rosterAlreadyBuilt
-                  ? `${boughtCount} non-captain member${boughtCount === 1 ? " is" : "s are"} already assigned — Start is blocked to protect later-season roster data`
-                  : "captain-only teams — ready for a fresh auction"}
+                  ? `${boughtCount} non-captain member${boughtCount === 1 ? " is" : "s are"} already assigned, so Start is blocked to protect later-season roster data`
+                  : "captain-only teams, ready for a fresh auction"}
               </li>
               {/* Beside draft night on purpose: that is when week 1 gets its
                   date, and the ticket has to be applied for ~15 days before. */}
               {!season.dotaLeagueId ? (
                 <li className="rounded-md border border-danger/40 px-3 py-2 text-muted sm:col-span-2">
-                  <b className="text-fg">League ticket:</b> not set — Valve
+                  <b className="text-fg">League ticket:</b> not set. Valve
                   needs about 15 days to issue one; without it, league games
                   may not reach OpenDota.{" "}
                   <a href="#adm-league" className={textLink()}>
@@ -2385,95 +2476,6 @@ function CaptainControls({
               </p>
             ) : null}
           </div>
-        ) : null}
-        {setupOpen ? (
-          <ActionForm
-            action={setDraftNight}
-            hidden={{ expectedActiveSeasonId: season.id }}
-            className="flex flex-wrap items-end gap-2 md:col-span-2"
-          >
-            <div className="flex flex-col gap-1">
-              <label htmlFor="draftAt" className="text-xs text-muted">
-                Draft night — shown with countdowns on the dashboard, /me and
-                the draft room; announced to Discord
-              </label>
-              <LocalDatetimeField
-                id="draftAt"
-                name="draftAt"
-                tsName="draftAtTs"
-                defaultTs={season.draftAt?.getTime()}
-                timeZone={LEAGUE_CONFIG.timeZone}
-                className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-              />
-            </div>
-            <SubmitButton variant="secondary" size="sm">
-              {season.draftAt ? "Update draft night" : "Set draft night"}
-            </SubmitButton>
-            {/* League time, like the box beside it — the admin's own clock
-                is what hid a mis-entered night before. */}
-            {season.draftAt ? (
-              <span className="text-xs text-muted">
-                Currently {formatLeagueTime(season.draftAt)}
-              </span>
-            ) : null}
-          </ActionForm>
-        ) : null}
-        {season.draftAt && setupOpen ? (
-          <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 md:col-span-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-medium text-fg">
-                  Draft confirmations
-                </h3>
-                <p className="mt-0.5 text-xs text-muted">
-                  Player acknowledgements are advisory—the draft can still be
-                  started if someone has not responded.
-                </p>
-              </div>
-              <Badge
-                tone={
-                  confirmationCounts.ready === confirmationCounts.total &&
-                  confirmationCounts.total > 0
-                    ? "success"
-                    : "accent"
-                }
-              >
-                {confirmationCounts.ready}/{confirmationCounts.total} ready
-              </Badge>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2 text-xs">
-              <Badge tone="success">{confirmationCounts.ready} ready</Badge>
-              <Badge>{confirmationCounts.awaiting} awaiting</Badge>
-              {confirmationCounts.stale > 0 ? (
-                <Badge tone="accent">
-                  {confirmationCounts.stale} need reconfirmation
-                </Badge>
-              ) : null}
-            </div>
-            {awaitingConfirmation.length > 0 ? (
-              <p className="mt-2 text-xs text-muted">
-                <span className="font-medium text-fg">Waiting on:</span>{" "}
-                {awaitingConfirmation.map((p) => p.user.name).join(", ")}
-              </p>
-            ) : null}
-            {staleConfirmation.length > 0 ? (
-              <p className="mt-1 text-xs text-muted">
-                <span className="font-medium text-accent">Must reconfirm:</span>{" "}
-                {staleConfirmation.map((p) => p.user.name).join(", ")}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        {setupOpen && data.teams.length >= 2 ? (
-          <p className="text-xs text-muted md:col-span-2">
-            {(() => {
-              const seats = data.teams.length * (season.teamSize - 1);
-              const pool = nonCaptains.length;
-              return pool >= seats
-                ? `${pool} undrafted players for ${seats} roster seats — the pool covers every team.`
-                : `⚠️ Only ${pool} undrafted players for ${seats} roster seats — ${seats - pool} seat(s) will go unfilled (standins can cover match nights).`;
-            })()}
-          </p>
         ) : null}
         <div>
           <h3 className="mb-2 text-sm font-medium text-muted">
@@ -2604,14 +2606,6 @@ function CaptainControls({
                           {unverifiedMmrByTeam.get(t.id)!.reason}
                         </span>
                       </p>
-                    ) : null}
-                    {captainReg.get(t.captainId) && setupOpen ? (
-                      <div className="mt-1.5">
-                        <DraftReadinessBadge
-                          reg={captainReg.get(t.captainId)!}
-                          season={season}
-                        />
-                      </div>
                     ) : null}
                     {season.status !== SEASON_STATUS.COMPLETE ? (
                       <details className="mt-1.5">
@@ -2812,12 +2806,6 @@ function CaptainControls({
               Team withdrawal locked: {teamWithdrawalLocked}
             </p>
           ) : null}
-          {setupOpen && data.teams.length >= 2 && season.budgetMmrWeight > 0 ? (
-            <p className="mt-2 text-xs text-muted">
-              Budgets are MMR-weighted (±{season.budgetMmrWeight}%): lower-MMR
-              captains get more to spend.
-            </p>
-          ) : null}
           {draftLive ? (
             <Link
               href="/draft"
@@ -2952,8 +2940,6 @@ function CaptainControls({
                   <SignupRowMeta
                     reg={p}
                     sweep={membershipSweep}
-                    season={season}
-                    showDraftReadiness={setupOpen}
                   />
                   {season.status !== SEASON_STATUS.COMPLETE ? (
                     <AdminPlayerRankEditor
@@ -3034,7 +3020,6 @@ function CaptainControls({
                       <SignupRowMeta
                         reg={s}
                         sweep={membershipSweep}
-                        season={season}
                       />
                       {season.status !== SEASON_STATUS.COMPLETE ? (
                         <AdminPlayerRankEditor
@@ -5864,50 +5849,6 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
   );
 }
 
-function DraftReadinessBadge({
-  reg,
-  season,
-}: {
-  reg: AdminData["players"][number];
-  season: Season;
-}) {
-  if (!season.draftAt || reg.type !== REGISTRATION_TYPE.PLAYER) return null;
-  const state = draftReadiness(reg, season.draftRevision);
-  if (state === DRAFT_READINESS.READY) {
-    return (
-      <Badge
-        tone="success"
-        title={
-          reg.draftConfirmedAt
-            ? `Confirmed ${formatMatchTime(reg.draftConfirmedAt, "full")} for the current draft schedule.`
-            : "Confirmed for the current draft schedule."
-        }
-      >
-        ready ✓
-      </Badge>
-    );
-  }
-  if (state === DRAFT_READINESS.STALE) {
-    return (
-      <Badge
-        tone="accent"
-        title={
-          reg.draftConfirmedFor
-            ? `They confirmed ${formatMatchTime(reg.draftConfirmedFor, "full")}, but the draft schedule changed.`
-            : "They confirmed an earlier draft schedule and need to review the new time."
-        }
-      >
-        reconfirm
-      </Badge>
-    );
-  }
-  return (
-    <Badge title="They have not yet acknowledged the current draft time.">
-      awaiting draft confirmation
-    </Badge>
-  );
-}
-
 /**
  * The readiness line under each row of the signup-moderation lists — the
  * prune pass the panel exists for: is this signup reachable on Discord,
@@ -5924,13 +5865,9 @@ function DraftReadinessBadge({
 function SignupRowMeta({
   reg,
   sweep,
-  season,
-  showDraftReadiness = false,
 }: {
   reg: AdminData["players"][number];
   sweep: Promise<Map<string, GuildMembership>> | null;
-  season: Season;
-  showDraftReadiness?: boolean;
 }) {
   const flags = signupFlags({
     mmr: reg.mmr,
@@ -5942,9 +5879,6 @@ function SignupRowMeta({
   });
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-      {showDraftReadiness ? (
-        <DraftReadinessBadge reg={reg} season={season} />
-      ) : null}
       {reg.user.discordId ? (
         <>
           {/* Verified ✓ = proven OWNERSHIP of the handle (the OAuth link) —
