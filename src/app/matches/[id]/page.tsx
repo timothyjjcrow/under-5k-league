@@ -87,6 +87,10 @@ import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "@/lib/tiebreaker-format";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import {
+  playoffMatchContext,
+  playoffMatchContextText,
+} from "@/lib/playoff-match-context";
 import { teamHueVar } from "@/lib/team-hues";
 import {
   Avatar,
@@ -185,12 +189,16 @@ export default async function MatchDetailPage({
           },
           select: {
             id: true,
+            week: true,
             phase: true,
             bracketSlot: true,
             status: true,
             winnerTeamId: true,
             homeTeamId: true,
             awayTeamId: true,
+            // Names for the playoff context line's next opponent.
+            homeTeam: { select: { name: true } },
+            awayTeam: { select: { name: true } },
           },
         });
   const championPresentation = resolveChampionPresentation(
@@ -200,6 +208,15 @@ export default async function MatchDetailPage({
   const postseasonLabel = matchRoundLabel(
     match,
     groupPlayoffRounds(postseason).totalRounds,
+  );
+  // What this knockout series decides: where the winner goes and that the
+  // loser is out. Tiebreakers keep their own banner.
+  const playoffContext = playoffMatchContext(match, postseason);
+  const bracketTeamName = new Map(
+    postseason.flatMap((m): [string, string][] => [
+      [m.homeTeamId, m.homeTeam.name],
+      [m.awayTeamId, m.awayTeam.name],
+    ]),
   );
   const tiebreakerStage = parseTiebreakerStage(match.bracketSlot)?.stage;
   const viewer = await getSessionUser();
@@ -295,6 +312,33 @@ export default async function MatchDetailPage({
           }</p> : null}
           <Link href={match.season.isActive ? "/schedule#tiebreakers" : `/seasons/${match.seasonId}`} className="inline-block py-1 text-info hover:underline">{match.season.isActive ? "View full tiebreaker bracket" : "View tiebreaker results"} <LinkArrow /></Link>
         </div>
+      ) : null}
+
+      {playoffContext ? (
+        <p className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm [overflow-wrap:anywhere]">
+          {playoffMatchContextText(
+            playoffContext,
+            (teamId) => bracketTeamName.get(teamId) ?? "TBD",
+            LEAGUE_CONFIG.name,
+          )}
+          {playoffContext.kind === "decided" ? (
+            <>
+              {" "}
+              <Link
+                href={
+                  playoffContext.nextMatchId
+                    ? `/matches/${playoffContext.nextMatchId}`
+                    : match.season.isActive
+                      ? "/schedule#playoff-bracket"
+                      : `/seasons/${match.seasonId}`
+                }
+                className={textLink("whitespace-nowrap")}
+              >
+                {playoffContext.nextMatchId ? "Next match" : "Bracket"} <LinkArrow />
+              </Link>
+            </>
+          ) : null}
+        </p>
       ) : null}
 
       <Card className="relative overflow-hidden">

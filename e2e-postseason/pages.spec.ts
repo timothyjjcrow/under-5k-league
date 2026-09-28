@@ -168,6 +168,45 @@ test("mid-playoffs renders the real bracket and supports tracing a run", async (
     await expect(sameTeam.nth(index)).toHaveAttribute("aria-pressed", "true");
   }
 
+  // Each semifinal's page says what the series decides. The finished one
+  // (the only 2–0) names who went through and who is out, and links to the
+  // bracket since the final isn't built yet; the open one names the
+  // finalist waiting for its winner.
+  const decidedSemi = bracket.getByRole("link", {
+    name: /^Playoff match: .+, final at 2 to 0, best of 3/,
+  });
+  await expect(decidedSemi).toHaveCount(1);
+  await decidedSemi.click();
+  await expect(page).toHaveURL(/\/matches\//);
+  const decidedLine = page.locator("#main p", {
+    hasText: "went through to the grand final",
+  });
+  await expect(decidedLine).toContainText(
+    /^.+ went through to the grand final to play the winner of .+ vs .+; .+ was knocked out\./,
+  );
+  await expect(
+    decidedLine.getByRole("link", { name: "Bracket", exact: true }),
+  ).toHaveAttribute("href", "/schedule#playoff-bracket");
+  const finalist = (await decidedLine.textContent())!.split(
+    " went through",
+  )[0];
+
+  await page.goto("/");
+  const openSemi = page
+    .getByRole("region", { name: "Playoff bracket" })
+    .getByRole("link", {
+      name: /^Playoff match: .+, (scheduled for .+|details available), best of 3/,
+    });
+  await expect(openSemi).toHaveCount(1);
+  await openSemi.click();
+  await expect(page).toHaveURL(/\/matches\//);
+  await expect(
+    page.getByText(
+      `The winner goes through to the grand final to play ${finalist}; the loser is knocked out.`,
+      { exact: true },
+    ),
+  ).toBeVisible();
+
   assertNoErrors();
 });
 
