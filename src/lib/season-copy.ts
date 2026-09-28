@@ -25,6 +25,9 @@ export const DRAFT_PASSED_LABEL = "start overdue";
 export type PhaseCopyInput = {
   /** Has the player count reached `minTeams x teamSize`? SIGNUPS only. */
   canDraft?: boolean;
+  /** The viewer already has an active signup. SIGNUPS only: they aren't
+   *  asked to sign up again. */
+  signedUp?: boolean;
   /** The auction's state inside the broader DRAFT season phase. */
   draftStatus?: string | null;
   /** COMPLETE only: whether the authoritative grand final crowned a team. */
@@ -174,8 +177,10 @@ export const ADMIN_PHASE_LABEL: Record<string, string> = {
 export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
   switch (status) {
     case SEASON_STATUS.SIGNUPS:
-      return i.canDraft
-        ? "Enough players have joined to draft — and signups stay open until draft night, so every few more is another team."
+      if (i.canDraft)
+        return "Enough players have joined to draft — and signups stay open until draft night, so every few more is another team.";
+      return i.signedUp
+        ? "The draft begins once enough players have joined."
         : "Sign up now — the draft begins once enough players have joined.";
     case SEASON_STATUS.DRAFT:
       switch (i.draftStatus) {

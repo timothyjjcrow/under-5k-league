@@ -683,6 +683,7 @@ export default async function Home() {
           ? ""
           : phaseSubtitle(season.status, {
               canDraft: snapshot.capacity.canDraft,
+              signedUp: isActiveReg,
               draftStatus: snapshot.draftStatus,
               hasChampion: championPresentation.championTeamId != null,
             })
@@ -1870,8 +1871,9 @@ function LeaguePitch({ matchNight }: { matchNight: string | null }) {
  * of /me, with the real button far below that. It is the same action and
  * button name as /me, whose button stays; the hero's chip gives up the date
  * for this viewer, so the page still prints it once. Everyone else gets the
- * standing ask, filling the rest of the league. The numbers behind that ask
- * sit in the hero's own counts beside this panel, so it is not restated.
+ * standing ask, filling the rest of the league, and its control. The numbers
+ * behind that ask sit in the hero's own counts and phase line beside this
+ * panel, so it states only the ask.
  */
 function SignupsAside({
   snapshot,
@@ -1882,7 +1884,7 @@ function SignupsAside({
   owed: ReturnType<typeof owedDraftConfirmation>;
   captaining: boolean;
 }) {
-  const { capacity, season } = snapshot;
+  const { season } = snapshot;
   const { draftAt } = season;
   const stale = owed === DRAFT_READINESS.STALE;
   return (
@@ -1932,12 +1934,7 @@ function SignupsAside({
       ) : (
         <>
           <p className="font-display text-lg font-semibold">You&apos;re in</p>
-          <p className="mt-1 text-sm text-muted">
-            Know anyone who&apos;d fit?{" "}
-            {capacity.canDraft
-              ? `Signups stay open, and every ${season.teamSize} more players makes another team.`
-              : "The draft can run once the player minimum is met."}
-          </p>
+          <p className="mt-1 text-sm text-muted">Know anyone who&apos;d fit?</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <InviteLink />
             <Link href="/how-it-works" className={textLink("text-sm")}>

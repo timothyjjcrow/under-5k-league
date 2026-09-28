@@ -16,6 +16,16 @@ describe("phaseSubtitle", () => {
     expect(s).toContain("Sign up now");
   });
 
+  // A signed-up player reads this beside their own "You're in" panel.
+  it("doesn't ask a signed-up viewer to sign up again", () => {
+    const s = phaseSubtitle(SEASON_STATUS.SIGNUPS, {
+      canDraft: false,
+      signedUp: true,
+    });
+    expect(s).not.toMatch(/sign up now/i);
+    expect(s).toMatch(/once enough players/i);
+  });
+
   // The hero renders this directly beneath a "Ready to draft" badge. Claiming
   // the draft is still waiting on players, next to a badge saying it isn't, is
   // the same below-the-minimum assumption that had the progress bar reading
@@ -43,10 +53,10 @@ describe("phaseSubtitle", () => {
 
   // canDraft is meaningless outside SIGNUPS; passing it must not leak into
   // another phase's copy.
-  it("ignores canDraft in the other phases", () => {
+  it("ignores canDraft and signedUp in the other phases", () => {
     for (const status of Object.values(SEASON_STATUS)) {
       if (status === SEASON_STATUS.SIGNUPS) continue;
-      expect(phaseSubtitle(status, { canDraft: true })).toBe(
+      expect(phaseSubtitle(status, { canDraft: true, signedUp: true })).toBe(
         phaseSubtitle(status, { canDraft: false }),
       );
     }
