@@ -1,0 +1,23 @@
+import { describe, expect, it } from "vitest";
+import {
+  sourceFile,
+  stripLineComments,
+} from "../../../../test/support/source-files";
+
+/**
+ * Source contracts for the match page's captain tools. The page is a server
+ * component with no render test (no jsdom), so the rules that keep a captain
+ * from pressing a control that can only error are pinned here.
+ */
+const PAGE = stripLineComments(sourceFile("src/app/matches/[id]/page.tsx").text);
+
+describe("match page standins card", () => {
+  it("offers Remove only before the series has a game", () => {
+    // removeStandinGuarded refuses once games are imported, so the button
+    // would only ever open a confirm and then fail.
+    expect(PAGE).toContain("seriesStarted={games.length > 0}");
+    expect(PAGE).toMatch(
+      /a\.teamId !== myTeamId \? null : seriesStarted \? \([\s\S]*?Locked: series already started[\s\S]*?captainRemoveStandin/,
+    );
+  });
+});

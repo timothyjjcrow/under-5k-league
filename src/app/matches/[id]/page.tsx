@@ -737,7 +737,10 @@ export default async function MatchDetailPage({
               <RescheduleSection match={match} />
             </div>
             <div className="min-w-0">
-              <StandinSection match={match} />
+              <StandinSection
+                match={match}
+                seriesStarted={games.length > 0}
+              />
             </div>
           </div>
         </section>
@@ -1915,7 +1918,10 @@ function HowToHost({ parts, note }: { parts: string[]; note: string }) {
 // to your roster + the season's unrostered ACTIVE signups.
 async function StandinSection({
   match,
+  seriesStarted,
 }: {
+  /** A game is imported: removeStandinGuarded refuses every removal now. */
+  seriesStarted: boolean;
   match: {
     id: string;
     seasonId: string;
@@ -2079,7 +2085,14 @@ async function StandinSection({
                   )}
                   <span className="text-muted">· {teamNameOf(a.teamId)}</span>
                 </span>
-                {a.teamId === myTeamId ? (
+                {a.teamId !== myTeamId ? null : seriesStarted ? (
+                  // Removing cover mid-series would drop the standin from the
+                  // remaining games, so the server refuses it. Say so rather
+                  // than offer a button that can only fail.
+                  <span className="ml-auto text-xs text-muted">
+                    Locked: series already started
+                  </span>
+                ) : (
                   <ActionForm
                     action={captainRemoveStandin}
                     hidden={{ assignmentId: a.id }}
@@ -2094,7 +2107,7 @@ async function StandinSection({
                       Remove
                     </SubmitButton>
                   </ActionForm>
-                ) : null}
+                )}
               </li>
             ))}
           </ul>

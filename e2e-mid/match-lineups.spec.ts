@@ -155,6 +155,10 @@ test("players check in and captains bring in standins without any lineup confirm
     await expect.poll(() => db.standinAssignment.count({ where: {
       matchId: f.matchId, teamId: f.homeId, standinUserId: f.users[f.teamSize * 2].id, replacingUserId: f.users[1].id,
     } })).toBe(1);
+    // Game 1 is in, so the server refuses removing that cover: the card says
+    // it is locked instead of offering a Remove that can only fail.
+    await expect(page.getByText("Locked: series already started", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
     await noLineupCard(page);
 
     await login(page, f.users[f.teamSize * 2], path);
