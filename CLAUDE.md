@@ -1576,7 +1576,7 @@ reached a player who wasn't already looking at it.
   signed out, already queued, or already IN the active lobby. A live lobby is
   deliberately not a refusal for an outsider: only one lobby can exist, so the
   join is safely for the next game and cannot pull them into the current
-  45-second ready check. The `act()` call is deferred a tick — setting state
+  90-second ready check (`INHOUSE.ACCEPT_SECONDS`). The `act()` call is deferred a tick — setting state
   synchronously in an effect cascades a render.
 
 - **Self-serve ping opt-in** (`src/lib/discord-roles.ts`, integration-tested
@@ -1832,7 +1832,7 @@ already in the `Setting` table.
   mutation with a `getInhouseState` payload, so without
   `getInhouseState(user, { syncBoard: false })` the player who pressed ACCEPT
   is exactly the request that renders the changed digest, wins the edit claim
-  and blocks on Discord — on the 45s ready check. Measured with a deliberately
+  and blocks on Discord — on the 90s ready check. Measured with a deliberately
   slow Discord: join 75ms, the poll behind it 2.0s. The client's own poll
   (~250ms later via `bumpPollRef`) carries the board instead.
 - 404/401/403 on the PATCH is PERMANENT (`"gone"`): drop the row and stop.
@@ -3176,7 +3176,7 @@ ask it made twice. What that turned into:
   Both rooms flip `pending` on before the mutation and off in its `finally`,
   so a hung action left EVERY control disabled until reload: a captain locked
   out of bidding under a 30s lot clock, a player locked out of ACCEPT during a
-  45s ready check. Three rules, all deliberate: (1) the deadline must clear the
+  90s ready check. Three rules, all deliberate: (1) the deadline must clear the
   worst LEGITIMATE latency, because aborting a mutation proves nothing — the
   server kept going and may have committed — so both rooms' catch branches
   BRANCH ON `TimeoutError` and refuse to claim "that didn't go through"
@@ -3186,7 +3186,7 @@ ask it made twice. What that turned into:
   OpenDota-bound ones (`INHOUSE_SCAN_ACTIONS` = detect/record, ~25s worst case
   — ten 8s recent-match lookups, six 12s match fetches, a 5s Discord send, no
   retries). Sizing everything to the slow path would leave ACCEPT disabled for
-  its entire ready check, i.e. exactly as broken as no deadline. (3)
+  half its 90s ready check, i.e. nearly as broken as no deadline. (3)
   `src/components/room-source-guards.test.ts` parses BOTH room files and
   fails if any `fetch(` lacks a `signal:` — the browser spec can only reach
   the call sites that are on screen, and the regression to catch is a deleted
