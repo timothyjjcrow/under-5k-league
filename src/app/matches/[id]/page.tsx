@@ -842,6 +842,10 @@ async function MatchPreview({
           scheduleRevision={match.scheduleRevision}
           remainingGames={match.status === "LIVE"}
           heading="You're playing in this match"
+          viewerIsCaptain={
+            viewer?.id === match.homeTeam.captainId ||
+            viewer?.id === match.awayTeam.captainId
+          }
           when={
             match.scheduledAt
               ? formatMatchTime(match.scheduledAt, "full")

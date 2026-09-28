@@ -14,8 +14,8 @@ export async function LiveSeriesCheckin({ matchId }: { matchId: string }) {
     where: { id: matchId },
     include: {
       season: { select: { isActive: true, status: true, draft: { select: { status: true } } } },
-      homeTeam: { select: { id: true, withdrawn: true } },
-      awayTeam: { select: { id: true, withdrawn: true } },
+      homeTeam: { select: { id: true, withdrawn: true, captainId: true } },
+      awayTeam: { select: { id: true, withdrawn: true, captainId: true } },
     },
   });
   if (!match || match.status !== "LIVE" || !match.season.isActive) return null;
@@ -35,7 +35,7 @@ export async function LiveSeriesCheckin({ matchId }: { matchId: string }) {
   if (!(await loadSidePlayerIds(prisma, match, ownTeam.id)).has(viewer.id)) return null;
   return (
     <section id="match-live-checkin" aria-label="Ready for the next game" className="scroll-mt-40">
-      <CheckinBanner matchId={match.id} scheduleRevision={match.scheduleRevision} heading="Ready for the next game" remainingGames myRsvp={ownRsvp?.status ?? null} />
+      <CheckinBanner matchId={match.id} scheduleRevision={match.scheduleRevision} heading="Ready for the next game" remainingGames myRsvp={ownRsvp?.status ?? null} viewerIsCaptain={ownTeam.captainId === viewer.id} />
     </section>
   );
 }

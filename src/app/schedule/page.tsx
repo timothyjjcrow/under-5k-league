@@ -758,6 +758,10 @@ export default async function SchedulePage() {
           when={fmtWhen(myNextMatch.scheduledAt)}
           whenTs={myNextMatch.scheduledAt?.getTime()}
           myRsvp={myRsvp}
+          viewerIsCaptain={
+            captainTeamIds.has(myNextMatch.homeTeamId) ||
+            captainTeamIds.has(myNextMatch.awayTeamId)
+          }
           detailsHref={`/matches/${myNextMatch.id}`}
         />
       ) : null}

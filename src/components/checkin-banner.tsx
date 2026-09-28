@@ -18,6 +18,7 @@ export function CheckinBanner({
   when,
   whenTs,
   myRsvp,
+  viewerIsCaptain = false,
   detailsHref,
   variant = "strip",
 }: {
@@ -36,6 +37,8 @@ export function CheckinBanner({
   /** Epoch ms of the scheduled time — drives the live countdown chip. */
   whenTs?: number | null;
   myRsvp: string | null;
+  /** The viewer captains a side in this match: nobody to "let know" above them. */
+  viewerIsCaptain?: boolean;
   detailsHref?: string;
   /**
    * `strip` (the default, and byte-for-byte what /schedule and /matches/[id]
@@ -132,7 +135,9 @@ export function CheckinBanner({
             ? remainingGames ? "You're ready for the remaining games ✓ — change it here if plans shift." : "You're confirmed ✓ — change it here if plans shift."
             : myRsvp === "OUT"
               ? "You're marked unavailable — a standin can be lined up."
-              : "Can you make it? Let your captain know."}
+              : viewerIsCaptain
+                ? "Can you make it? Let your team know."
+                : "Can you make it? Let your captain know."}
         </div>
       </div>
       <div

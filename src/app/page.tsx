@@ -864,6 +864,10 @@ async function MyNextMatch({
         when={fmtWhen(next.scheduledAt)}
         whenTs={next.scheduledAt?.getTime()}
         myRsvp={myRsvp?.status ?? null}
+        viewerIsCaptain={
+          next.homeTeam.captainId === userId ||
+          next.awayTeam.captainId === userId
+        }
         detailsHref={`/matches/${next.id}`}
       />
       {awaitingMyAnswer ? (
