@@ -66,8 +66,10 @@ function reportsExtendedStats(game: RecordGame): boolean {
 }
 
 // One grid for both lists. Phone: record and value on the first line, who
-// and the match link on the second. sm and up: one line per record.
-const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:grid-cols-[11rem_7rem_minmax(0,1fr)_auto]";
+// and the match link on the second. sm and up: one line per record, with the
+// title track wide enough for the longest titles ("Most tower damage",
+// "Most kills in defeat") beside their emoji.
+const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:grid-cols-[13rem_7rem_minmax(0,1fr)_auto]";
 const TITLE = "min-w-0 truncate text-sm font-semibold";
 const VALUE = "text-right font-display text-lg font-bold tabular-nums sm:text-left";
 const WHO = "flex min-w-0 items-center gap-2 text-sm";
@@ -103,7 +105,9 @@ function GameRecordRow({ record, matchup, season }: { record: GameRecord; matchu
       <span className={TITLE}><span aria-hidden="true">{record.emoji} </span>{record.title}</span>
       <span className={VALUE}>{gameValue(record)}</span>
       <span className={`${WHO} text-muted`}>
-        <span className="truncate text-fg">{matchup}</span>
+        {/* The matchup is which game this was: two lines, never a cut-off
+            opponent. */}
+        <span className="line-clamp-2 min-w-0 text-fg [overflow-wrap:anywhere]">{matchup}</span>
         <span className="shrink-0 tabular-nums">· {record.score}</span>
         {season ? <span className="hidden truncate text-xs md:inline">· {season}</span> : null}
       </span>
