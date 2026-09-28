@@ -139,10 +139,11 @@ describe("discord message formatters", () => {
   });
 
 
-  it("announces the start of the Regular season with its schedule", () => {
+  it("announces the start of the regular season with its schedule", () => {
     const msg = regularSeasonStartedMessage("Season *One*");
     expect(msg).toContain("Season \\*One\\*");
-    expect(msg).toMatch(/Regular season is live/i);
+    // Lower case mid-sentence: "The Season 9 regular season is live."
+    expect(msg).toContain("regular season is live.");
     expect(msg).toContain("/schedule");
   });
 
@@ -440,6 +441,11 @@ describe("discord message formatters", () => {
     expect(msg).toContain("**Late Joiner**");
     expect(msg).toContain("**Short Squad**");
     expect(msg).toContain("/teams");
+    // Says whose match nights they are; "their schedule" read as the player's.
+    expect(msg).toContain(
+      "Late Joiner: the **Short Squad** match nights are yours now",
+    );
+    expect(msg).not.toContain("their schedule");
   });
 
   it("announces a release", () => {

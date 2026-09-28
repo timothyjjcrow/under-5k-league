@@ -254,7 +254,7 @@ export function draftCompleteAnnouncement(
 }
 
 export function regularSeasonStartedMessage(seasonName: string): string {
-  return `⚔️ **The ${name(seasonName)} Regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
+  return `⚔️ **The ${name(seasonName)} regular season is live.** Check the schedule, match times, and availability for opening week: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function draftPausedMessage(seasonName: string): string {
@@ -477,7 +477,9 @@ export function freeAgentSignedMessage(
   // Ends by naming the signed player's next move — a signing is a season-long
   // obligation (every remaining match night), so the send mentions them and
   // the copy tells them what being signed asks of them, the standin-assign rule.
-  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>. ${name(playerName)}: their schedule is yours now — check in on your match pages: <${resolveSiteUrl()}/schedule>`;
+  // It names the team rather than saying "their schedule", which read as the
+  // player's own.
+  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>. ${name(playerName)}: the **${name(teamName)}** match nights are yours now — check in on your match pages: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function playerReleasedMessage(
