@@ -3,10 +3,12 @@ import { prisma } from "./prisma";
 import {
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_PLAYING_STATUSES,
   INHOUSE_STATUS,
 } from "./constants";
 import {
   detectIntervalSeconds,
+  inhouseDetectWindow,
   nextPickTeam,
   orderCaptains,
   playersNeeded,
@@ -484,10 +486,13 @@ export async function resolveReadyCheck(): Promise<boolean> {
  * the queue by joinQueue's inActiveLobby guard. The whole feature was down for
  * everyone until an admin happened to visit /inhouse and press Cancel.
  *
- * Both floors (ABANDON_*_HOURS) are deliberately far past any legitimate use:
- * Start can be pressed late — even after the game — and the manual result
- * paths have no time gate, so a group that simply forgot still recovers their
- * game normally. Idempotent and safe under concurrent maintenance calls.
+ * Both floors (ABANDON_*_HOURS) are deliberately far past any legitimate use.
+ * A READY lobby counts as being played (Start is optional), so it is scanned
+ * for its result and gets the same window as a started game, measured from
+ * FORMATION — not `updatedAt`, which each scan's detectedAt claim bumps, so an
+ * updatedAt floor would never fire while the scan keeps looking. The manual
+ * result paths have no time gate inside the window. Idempotent and safe under
+ * concurrent maintenance calls.
  *
  * Unlike cancelLobby this does NOT re-queue anyone: an admin cancels a LIVE
  * lobby whose players are present and want the next game, whereas by
@@ -501,7 +506,7 @@ export async function resolveAbandonedLobby(): Promise<boolean> {
       OR: [
         {
           status: INHOUSE_STATUS.READY,
-          updatedAt: {
+          createdAt: {
             lt: new Date(now - INHOUSE.ABANDON_READY_HOURS * 3_600_000),
           },
         },
@@ -1151,7 +1156,12 @@ export async function leaveQueue(
   return { ok: true };
 }
 
-/** Launch the game once teams are set — whoever hosts the in-client lobby. */
+/**
+ * OPTIONAL: mark the game as started once teams are set. It starts the room's
+ * game clock and shows the game as live on the Discord board; nothing depends
+ * on it any more — the result scan and "Record by match ID" run from READY
+ * too, so a group that goes straight into Dota is recorded all the same.
+ */
 export async function startGame(
   viewer: SessionUser,
 ): Promise<InhouseActionResult> {
@@ -1182,7 +1192,12 @@ export async function startGame(
       },
     });
     if (started.count === 0) {
-      return { ok: false as const, error: "That lobby was just cancelled" };
+      // A READY lobby can now also close on its result, so the rival that won
+      // is not necessarily a cancel.
+      return {
+        ok: false as const,
+        error: "That game just finished or was cancelled",
+      };
     }
     return { ok: true as const };
   });
@@ -1272,8 +1287,8 @@ function buildResult(
   // swing for the player who actually lost, and vice versa — while the result
   // card lists them in the other side's column, because it groups by the
   // game's real `isRadiant`. The PLAYED game is the truth, so we move them
-  // rather than reject the match (rejecting would strand the lobby
-  // IN_PROGRESS and block the single active slot until an admin cancelled).
+  // rather than reject the match (rejecting would strand the lobby in play
+  // and block the single active slot until an admin cancelled).
   // isCaptain is deliberately left alone — who captained the draft is a fact
   // about the draft, not about which side they ended up on.
   const teamFixes: { userId: string; team: number }[] = [];
@@ -1316,11 +1331,11 @@ function buildResult(
 }
 
 /**
- * Write a built result onto the lobby and close it out. Guarded: only an
- * IN_PROGRESS lobby can complete, and only one caller wins the claim — an
- * admin cancel (or a rival record with a different match id) racing the slow
- * OpenDota fetch must never be overwritten, and a CANCELLED lobby must never
- * resurrect as COMPLETED. The claim winner stamps per-player Elo deltas and
+ * Write a built result onto the lobby and close it out. Guarded: only a lobby
+ * being played (READY or IN_PROGRESS — Start is optional) can complete, and
+ * only one caller wins the claim — an admin cancel (or a rival record with a
+ * different match id) racing the slow OpenDota fetch must never be
+ * overwritten, and a CANCELLED lobby must never resurrect as COMPLETED. The claim winner stamps per-player Elo deltas and
  * transactionally queues the Discord announcement. A claimed outbox worker
  * sends it after commit and retries through the site heartbeat.
  */
@@ -1367,7 +1382,7 @@ async function applyResult(lobbyId: string, r: BuiltResult): Promise<boolean> {
 
   const claimed = await prisma.$transaction(async (tx) => {
     const claim = await tx.inhouseLobby.updateMany({
-      where: { id: lobbyId, status: INHOUSE_STATUS.IN_PROGRESS },
+      where: { id: lobbyId, status: { in: INHOUSE_PLAYING_STATUSES } },
       data: {
         status: INHOUSE_STATUS.COMPLETED,
         completedAt,
@@ -1566,6 +1581,10 @@ async function findInhouseGame(
   return { result: best, unreachable };
 }
 
+// Both manual result paths run from READY as well as IN_PROGRESS: a lobby is
+// being played from the moment teams lock, whether or not anyone pressed Start.
+const NO_GAME_TO_RECORD = "There's no game to record right now";
+
 /**
  * On-demand: look up the result on OpenDota by scanning the players' recent
  * games. Needs the game finished + public match data enabled.
@@ -1574,10 +1593,10 @@ export async function autoDetectResult(
   viewer: SessionUser,
 ): Promise<InhouseActionResult> {
   const lobby = await prisma.inhouseLobby.findFirst({
-    where: { status: INHOUSE_STATUS.IN_PROGRESS },
+    where: { status: { in: INHOUSE_PLAYING_STATUSES } },
     include: { players: { include: { user: true } } },
   });
-  if (!lobby) return { ok: false, error: "No game is in progress" };
+  if (!lobby) return { ok: false, error: NO_GAME_TO_RECORD };
   if (
     !lobby.players.some((p) => p.userId === viewer.id) &&
     viewer.role !== "ADMIN"
@@ -1592,7 +1611,7 @@ export async function autoDetectResult(
   const claim = await prisma.inhouseLobby.updateMany({
     where: {
       id: lobby.id,
-      status: INHOUSE_STATUS.IN_PROGRESS,
+      status: { in: INHOUSE_PLAYING_STATUSES },
       OR: [
         { detectedAt: null },
         {
@@ -1644,10 +1663,10 @@ export async function recordMatch(
     return { ok: false, error: "Enter a valid Dota match ID or link" };
 
   const lobby = await prisma.inhouseLobby.findFirst({
-    where: { status: INHOUSE_STATUS.IN_PROGRESS },
+    where: { status: { in: INHOUSE_PLAYING_STATUSES } },
     include: { players: { include: { user: true } } },
   });
-  if (!lobby) return { ok: false, error: "No game is in progress" };
+  if (!lobby) return { ok: false, error: NO_GAME_TO_RECORD };
   if (
     !lobby.players.some((p) => p.userId === viewer.id) &&
     viewer.role !== "ADMIN"
@@ -1718,6 +1737,10 @@ export async function recordMatch(
  * has been going long enough, quietly try OpenDota at most once per interval
  * and close the lobby out if we find it. It claims the attempt atomically so
  * concurrent worker/room recovery calls do not all scan. Idempotent.
+ *
+ * Runs for a lobby being played — READY or IN_PROGRESS — on the clock
+ * inhouseDetectWindow picks, so ten players who go straight into Dota without
+ * pressing the optional Start are still recorded.
  */
 export function maybeAutoDetectResult(): Promise<boolean>;
 export function maybeAutoDetectResult(
@@ -1734,19 +1757,25 @@ export async function maybeAutoDetectResult(
 
   const now = Date.now();
   const lobby = await prisma.inhouseLobby.findFirst({
-    where: { status: INHOUSE_STATUS.IN_PROGRESS },
+    where: { status: { in: INHOUSE_PLAYING_STATUSES } },
     // Most maintenance passes find a fresh game or an existing cooldown. Read
     // only its clocks first; neither case needs the ten player/user records or
     // any of the lobby's stored result JSON.
     select: {
       id: true,
+      status: true,
       createdAt: true,
       startedAt: true,
       detectedAt: true,
     },
   });
-  if (!lobby || !lobby.startedAt) return finish(false);
-  if (now - lobby.startedAt.getTime() < INHOUSE.DETECT_MIN_MINUTES * 60_000) {
+  if (!lobby) return finish(false);
+  const detectWindow = inhouseDetectWindow({
+    status: lobby.status,
+    createdAtMs: lobby.createdAt.getTime(),
+    startedAtMs: lobby.startedAt?.getTime() ?? null,
+  });
+  if (!detectWindow || now < detectWindow.opensAtMs) {
     return finish(false); // too early — the game can't be over yet
   }
 
@@ -1754,13 +1783,15 @@ export async function maybeAutoDetectResult(
   // The interval stretches with the game's age (pure detectIntervalSeconds):
   // a normal game scans every DETECT_INTERVAL_SECONDS, an abandoned lobby
   // nobody cancels decays to one scan per DETECT_INTERVAL_MAX_SECONDS.
-  const interval = detectIntervalSeconds(now - lobby.startedAt.getTime());
+  const interval = detectIntervalSeconds(now - detectWindow.clockMs);
   const cutoff = new Date(now - interval * 1000);
   if (lobby.detectedAt && lobby.detectedAt >= cutoff) return finish(false);
+  // Either playing status may hold the claim: a Start (or the bot's launch)
+  // landing mid-scan moves READY to IN_PROGRESS without ending the game.
   const claim = await prisma.inhouseLobby.updateMany({
     where: {
       id: lobby.id,
-      status: INHOUSE_STATUS.IN_PROGRESS,
+      status: { in: INHOUSE_PLAYING_STATUSES },
       OR: [{ detectedAt: null }, { detectedAt: { lt: cutoff } }],
     },
     data: { detectedAt: new Date(now) },
@@ -1775,7 +1806,7 @@ export async function maybeAutoDetectResult(
     where: {
       lobbyId: lobby.id,
       lobby: {
-        status: INHOUSE_STATUS.IN_PROGRESS,
+        status: { in: INHOUSE_PLAYING_STATUSES },
         detectedAt: new Date(now),
       },
     },
@@ -1805,7 +1836,7 @@ export async function maybeAutoDetectResult(
     await prisma.inhouseLobby.updateMany({
       where: {
         id: lobby.id,
-        status: INHOUSE_STATUS.IN_PROGRESS,
+        status: { in: INHOUSE_PLAYING_STATUSES },
         detectedAt: new Date(now),
       },
       data: { detectedAt: lobby.detectedAt },
@@ -2144,6 +2175,7 @@ export async function getInhouseState(
         pickEndsAt: true,
         radiantTeam: true,
         winnerTeam: true,
+        createdAt: true,
         startedAt: true,
         startedBy: { select: { name: true } },
         players: {
@@ -2194,6 +2226,12 @@ export async function getInhouseState(
     winnerTeam: number | null;
     startedAt: number | null;
     startedByName: string | null;
+    /**
+     * When the automatic OpenDota scan starts looking for this game's result
+     * (epoch ms; null outside READY/IN_PROGRESS) — inhouseDetectWindow, the
+     * same clock maybeAutoDetectResult waits on.
+     */
+    scanOpensAt: number | null;
     onClockCaptain: { userId: string; name: string } | null;
     teams: {
       team: number;
@@ -2296,6 +2334,12 @@ export async function getInhouseState(
       winnerTeam: lobbyRow.winnerTeam,
       startedAt: lobbyRow.startedAt ? lobbyRow.startedAt.getTime() : null,
       startedByName: lobbyRow.startedBy?.name ?? null,
+      scanOpensAt:
+        inhouseDetectWindow({
+          status: lobbyRow.status,
+          createdAtMs: lobbyRow.createdAt.getTime(),
+          startedAtMs: lobbyRow.startedAt?.getTime() ?? null,
+        })?.opensAtMs ?? null,
       onClockCaptain: onClock
         ? { userId: onClock.userId, name: onClock.user.name }
         : null,
@@ -2428,7 +2472,6 @@ export async function getInhouseState(
     pickSeconds: INHOUSE.PICK_SECONDS,
     voteSeconds: INHOUSE.VOTE_SECONDS,
     acceptSeconds: INHOUSE.ACCEPT_SECONDS,
-    detectMinMinutes: INHOUSE.DETECT_MIN_MINUTES,
     lastResult,
     needed: playersNeeded(presentCount),
     queue: queue.map((q) => ({
@@ -2461,8 +2504,10 @@ export async function getInhouseState(
       canStart:
         lobby?.status === INHOUSE_STATUS.READY &&
         (inLobby || viewer?.role === "ADMIN"),
+      // A lobby is being played from the moment teams lock, Start or not.
       canRecord:
-        lobby?.status === INHOUSE_STATUS.IN_PROGRESS &&
+        !!lobby &&
+        INHOUSE_PLAYING_STATUSES.includes(lobby.status as never) &&
         (inLobby || viewer?.role === "ADMIN"),
       canCancel: !!lobby && viewer?.role === "ADMIN",
     },

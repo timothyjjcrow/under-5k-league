@@ -355,7 +355,9 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
               }
             : {
                 head: "## Teams are set.",
-                body: "The Dota lobby is going up now.",
+                // Start is optional, so a game can be played start to finish
+                // in this state — the copy must hold for the whole game.
+                body: "The Dota lobby is going up now. The result imports itself when the game ends.",
               };
       return {
         digest: [

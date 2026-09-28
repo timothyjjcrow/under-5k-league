@@ -1,4 +1,4 @@
-import { INHOUSE } from "./constants";
+import { INHOUSE, INHOUSE_STATUS } from "./constants";
 
 // Pure inhouse-draft rules. All DB effects live in inhouse-service.ts; these
 // functions just encode the "who captains / who picks next" math so they can be
@@ -420,6 +420,47 @@ export function detectIntervalSeconds(elapsedMs: number): number {
     Math.max(INHOUSE.DETECT_INTERVAL_SECONDS, grown),
     INHOUSE.DETECT_INTERVAL_MAX_SECONDS,
   );
+}
+
+/**
+ * The clock automatic result detection runs on, for a lobby being played.
+ *
+ * A lobby counts as played from the moment teams lock (READY): ten people who
+ * go straight into Dota without pressing the optional Start must still get
+ * their game recorded. So there are two clocks:
+ *
+ *   - IN_PROGRESS: from `startedAt` (the Start press, or the bot's launch) —
+ *     the game is known to be running, so the scan opens DETECT_MIN_MINUTES in.
+ *   - READY: from lobby FORMATION. Teams lock a few minutes after that and the
+ *     group still has to host and launch, so DETECT_READY_MIN_MINUTES (longer)
+ *     puts the first scan a few minutes after teams lock.
+ *
+ * `clockMs` also drives the scan's backoff (detectIntervalSeconds). Null for
+ * any phase that is not being played. Shared by the service, the automation
+ * gate's wake-up and the room's "auto-scan is running" note, so the three can
+ * never disagree about when detection starts.
+ */
+export function inhouseDetectWindow(lobby: {
+  status: string;
+  createdAtMs: number;
+  startedAtMs: number | null;
+}): { clockMs: number; opensAtMs: number } | null {
+  if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
+    // Every IN_PROGRESS writer stamps startedAt; formation is the fallback so
+    // an inconsistent row is still scanned rather than stranded.
+    const clockMs = lobby.startedAtMs ?? lobby.createdAtMs;
+    return {
+      clockMs,
+      opensAtMs: clockMs + INHOUSE.DETECT_MIN_MINUTES * 60_000,
+    };
+  }
+  if (lobby.status === INHOUSE_STATUS.READY) {
+    return {
+      clockMs: lobby.createdAtMs,
+      opensAtMs: lobby.createdAtMs + INHOUSE.DETECT_READY_MIN_MINUTES * 60_000,
+    };
+  }
+  return null;
 }
 
 export type MmrBalance = {

@@ -230,6 +230,14 @@ export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.IN_PROGRESS,
 ];
 
+// A lobby counts as being PLAYED from the moment teams lock (READY), whether or
+// not anyone presses the optional Start: the automatic OpenDota scan, the
+// manual "Record by match ID" path and the result claim all accept both.
+export const INHOUSE_PLAYING_STATUSES: InhouseStatus[] = [
+  INHOUSE_STATUS.READY,
+  INHOUSE_STATUS.IN_PROGRESS,
+];
+
 export const INHOUSE = {
   TEAM_SIZE: 5,
   LOBBY_SIZE: 10, // players needed before a lobby forms
@@ -276,9 +284,17 @@ export const INHOUSE = {
   // Auto result detection (OpenDota): don't scan until a game could plausibly be
   // over, and don't scan more than once per interval (there's only ever one
   // active lobby, so this bounds API usage globally). The interval grows with
-  // the game's age — an abandoned IN_PROGRESS lobby nobody cancels must not
-  // scan every 3 minutes forever — up to the cap.
+  // the game's age — an abandoned lobby nobody cancels must not scan every 3
+  // minutes forever — up to the cap.
+  //
+  // Two clocks, one per playing status (inhouseDetectWindow in inhouse.ts):
+  // an IN_PROGRESS game is timed from Start (or the bot's launch), a READY one
+  // from lobby FORMATION. Teams lock a few minutes after formation and the
+  // group still has to host and launch the Dota lobby, so the READY floor is
+  // longer: the first scan lands a few minutes after teams lock, not while
+  // the draft is still running.
   DETECT_MIN_MINUTES: 8,
+  DETECT_READY_MIN_MINUTES: 15,
   DETECT_INTERVAL_SECONDS: 180,
   // Floor between MANUAL "Auto-detect result" presses. Short enough that the
   // button still feels responsive, long enough that ten players spamming it
@@ -303,12 +319,15 @@ export const INHOUSE = {
   // active-lobby slot indefinitely: no new lobby can form, and its own ten
   // players are refused the queue ("You're already in a live inhouse"). Only
   // an admin could recover it. These are the staleness floors for the lazy
-  // resolveAbandonedLobby teardown, deliberately far past any legitimate use:
-  // a group may sit in READY for a long time hosting the in-client lobby and
-  // waiting on a straggler (Start can be pressed late — even after the game,
-  // which is how a forgotten Start is still recoverable), and IN_PROGRESS must
-  // outlast the longest imaginable game plus OpenDota's indexing lag.
-  ABANDON_READY_HOURS: 3,
+  // resolveAbandonedLobby teardown, deliberately far past any legitimate use.
+  //
+  // Both phases are "being played" now (Start is optional), so both get the
+  // same window: the longest imaginable wait for a straggler, plus the game,
+  // plus OpenDota's indexing lag. READY is measured from lobby FORMATION and
+  // IN_PROGRESS from Start — never from `updatedAt`, which every result scan's
+  // `detectedAt` claim bumps, so an updatedAt floor would never fire while the
+  // scan keeps looking.
+  ABANDON_READY_HOURS: 6,
   ABANDON_IN_PROGRESS_HOURS: 6,
   // Discord "queue is filling" ping: fires when a join crosses this many
   // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.

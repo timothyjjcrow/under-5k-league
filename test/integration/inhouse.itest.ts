@@ -564,6 +564,172 @@ describe("inhouse — starting the game", () => {
   });
 });
 
+describe("inhouse — a game nobody pressed Start on", () => {
+  /** Queue → captains → draft, and STOP: teams are locked, nobody presses Start. */
+  async function runToReady(admin: SessionUser) {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+    await driveDraftToReady(admin);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY);
+    return { players, lobby };
+  }
+
+  /** Move formation back so the READY scan window is open. */
+  const formedMinutesAgo = (lobbyId: string, minutes: number) =>
+    prisma.inhouseLobby.update({
+      where: { id: lobbyId },
+      data: { createdAt: new Date(Date.now() - minutes * 60_000) },
+    });
+
+  it("the background scan records it from READY, a few minutes after teams lock", async () => {
+    const admin = sessionFor(await makeUser("AdminNS1", "ADMIN"));
+    const { lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const MATCH_ID = 7100000101;
+    mockRecent.mockResolvedValue([MATCH_ID]);
+
+    // Fresh from the draft: the group is still hosting, so no scan yet.
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(mockRecent).not.toHaveBeenCalled();
+
+    await formedMinutesAgo(lobby.id, INHOUSE.DETECT_READY_MIN_MINUTES + 30);
+    const formed = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: MATCH_ID,
+        team1,
+        team2,
+        radiantWin: false,
+        startTime: Math.floor(formed.createdAt.getTime() / 1000) + 600,
+      }) as never,
+    );
+
+    expect(await maybeAutoDetectResult()).toBe(true);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    // Straight from READY to COMPLETED: Start was never pressed.
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.startedAt).toBeNull();
+    expect(done.winnerTeam).toBe(2);
+    expect(done.dotaMatchId).toBe(String(MATCH_ID));
+    // Elo landed exactly as it does for a started game.
+    expect(Object.keys(JSON.parse(done.eloDeltas))).toHaveLength(
+      INHOUSE.LOBBY_SIZE,
+    );
+  });
+
+  it("keeps the READY scan to the game's own window (never a game from before formation)", async () => {
+    const admin = sessionFor(await makeUser("AdminNS2", "ADMIN"));
+    const { lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    await formedMinutesAgo(lobby.id, INHOUSE.DETECT_READY_MIN_MINUTES + 5);
+    const formed = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    // Yesterday's game between the same ten is the only shared candidate.
+    mockRecent.mockResolvedValue([7100000102]);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100000102,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(formed.createdAt.getTime() / 1000) - 86_400,
+      }) as never,
+    );
+
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.READY);
+  });
+
+  it("a player can record it by match ID, or auto-detect it, without pressing Start", async () => {
+    const admin = sessionFor(await makeUser("AdminNS3", "ADMIN"));
+    const { players, lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+
+    // The room offers the manual result paths on the Set up screen.
+    const view = await getInhouseState(players[4].session, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
+    expect(view.me.canRecord).toBe(true);
+    expect(view.me.canStart).toBe(true);
+    expect(view.lobby?.scanOpensAt).toBe(
+      lobby.createdAt.getTime() + INHOUSE.DETECT_READY_MIN_MINUTES * 60_000,
+    );
+
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100000103,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }) as never,
+    );
+    expect((await recordMatch(players[4].session, "7100000103")).ok).toBe(true);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.winnerTeam).toBe(1);
+
+    // A late Start press after the result landed is told the truth.
+    const late = await startGame(players[0].session);
+    expect(late).toEqual({ ok: false, error: "No lobby is ready to start" });
+  });
+
+  it("the manual auto-detect works from READY too", async () => {
+    const admin = sessionFor(await makeUser("AdminNS4", "ADMIN"));
+    const { players, lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockRecent.mockResolvedValue([7100000104]);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100000104,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 300,
+      }) as never,
+    );
+    expect((await autoDetectResult(players[1].session)).ok).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.COMPLETED);
+  });
+
+  it("an outsider still can't record a READY game", async () => {
+    const admin = sessionFor(await makeUser("AdminNS5", "ADMIN"));
+    await runToReady(admin);
+    const outsider = sessionFor(await makeUser("OutsiderNS5"));
+    expect(await recordMatch(outsider, "7100000105")).toEqual({
+      ok: false,
+      error: "Only players in the game can do that",
+    });
+    expect(mockMatch).not.toHaveBeenCalled();
+  });
+
+  it("with nothing being played, the record paths say so", async () => {
+    const session = sessionFor(await makeUser("NobodyNS6"));
+    expect(await recordMatch(session, "7100000106")).toEqual({
+      ok: false,
+      error: "There's no game to record right now",
+    });
+    expect(await autoDetectResult(session)).toEqual({
+      ok: false,
+      error: "There's no game to record right now",
+    });
+  });
+});
+
 describe("inhouse — finding + recording the game from player IDs", () => {
   it("auto-detects a shared match from players' recent games and scores it", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
@@ -2966,7 +3132,7 @@ describe("inhouse — abandoned lobby teardown", () => {
   /** Backdate the field the abandonment floor is measured from. */
   const age = (
     lobbyId: string,
-    field: "updatedAt" | "startedAt",
+    field: "createdAt" | "startedAt",
     hours: number,
   ) =>
     prisma.inhouseLobby.update({
@@ -3012,7 +3178,16 @@ describe("inhouse — abandoned lobby teardown", () => {
     // …and its players are still locked out of the queue, correctly.
     expect((await joinQueue(players[0].session, 3000)).ok).toBe(false);
 
-    await age(ready.id, "updatedAt", INHOUSE.ABANDON_READY_HOURS + 1);
+    // Past the old three-hour floor but inside the window a game being
+    // played gets: Start is optional, so this may be a game in progress.
+    await age(ready.id, "createdAt", 4);
+    await getInhouseState(null);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ready.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.READY);
+
+    await age(ready.id, "createdAt", INHOUSE.ABANDON_READY_HOURS + 1);
     await getInhouseState(null); // any page view, by anyone, signed out included
 
     expect(
@@ -3027,6 +3202,31 @@ describe("inhouse — abandoned lobby teardown", () => {
       }),
     ).toBe(0);
     expect((await joinQueue(players[0].session, 3000)).ok).toBe(true);
+  });
+
+  it("still scraps a READY lobby the result scan keeps touching", async () => {
+    // Every scan stamps detectedAt, which bumps updatedAt. The floor runs off
+    // formation, so a lobby that is scanned forever is still torn down.
+    const admin = sessionFor(await makeUser("AdminAB5", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4000 - i * 50);
+    await voteAll(players, "MMR");
+    await driveDraftToReady(admin);
+    const ready = await lobbyByStatus(INHOUSE_STATUS.READY);
+    await prisma.inhouseLobby.update({
+      where: { id: ready.id },
+      data: {
+        createdAt: new Date(
+          Date.now() - (INHOUSE.ABANDON_READY_HOURS + 1) * 3_600_000,
+        ),
+        detectedAt: new Date(),
+      },
+    });
+
+    expect(await resolveAbandonedLobby()).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ready.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
   });
 
   it("scraps an IN_PROGRESS lobby whose result never landed", async () => {

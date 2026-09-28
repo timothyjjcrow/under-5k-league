@@ -4,6 +4,7 @@ import {
   avgKnownMmr,
   detectIntervalSeconds,
   inhouseAlerts,
+  inhouseDetectWindow,
   inhouseLobbyCode,
   inhouseTitleFlag,
   mmrBalance,
@@ -21,7 +22,7 @@ import {
   type CaptainCandidate,
   type InhouseAlertSnapshot,
 } from "./inhouse";
-import { INHOUSE } from "./constants";
+import { INHOUSE, INHOUSE_STATUS } from "./constants";
 
 const p = (userId: string, mmr: number, joinedAt: number) => ({
   userId,
@@ -755,5 +756,78 @@ describe("detectIntervalSeconds", () => {
     expect(detectIntervalSeconds(400 * HOUR)).toBe(
       INHOUSE.DETECT_INTERVAL_MAX_SECONDS,
     );
+  });
+});
+
+describe("inhouseDetectWindow", () => {
+  const FORMED = Date.UTC(2026, 8, 20, 18, 0);
+  const MIN = 60_000;
+
+  it("times a started game from Start", () => {
+    const started = FORMED + 20 * MIN;
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        createdAtMs: FORMED,
+        startedAtMs: started,
+      }),
+    ).toEqual({
+      clockMs: started,
+      opensAtMs: started + INHOUSE.DETECT_MIN_MINUTES * MIN,
+    });
+  });
+
+  it("scans a game nobody pressed Start on, timed from formation", () => {
+    // The bug this closes: ten players who go straight into Dota after the
+    // draft used to be invisible to the scan until someone pressed Start.
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.READY,
+        createdAtMs: FORMED,
+        startedAtMs: null,
+      }),
+    ).toEqual({
+      clockMs: FORMED,
+      opensAtMs: FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+    });
+  });
+
+  it("gives a READY lobby longer than a started one: teams still have to host", () => {
+    expect(INHOUSE.DETECT_READY_MIN_MINUTES).toBeGreaterThan(
+      INHOUSE.DETECT_MIN_MINUTES,
+    );
+  });
+
+  it("never lets the abandon floor cut a played lobby's scan short", () => {
+    // A READY lobby is being played now, so it gets the same window as a
+    // started one — and both outlast the moment the scan first opens.
+    expect(INHOUSE.ABANDON_READY_HOURS).toBeGreaterThanOrEqual(
+      INHOUSE.ABANDON_IN_PROGRESS_HOURS,
+    );
+    expect(INHOUSE.ABANDON_READY_HOURS * 60).toBeGreaterThan(
+      INHOUSE.DETECT_READY_MIN_MINUTES,
+    );
+  });
+
+  it("falls back to formation for an IN_PROGRESS row with no start stamp", () => {
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        createdAtMs: FORMED,
+        startedAtMs: null,
+      })?.clockMs,
+    ).toBe(FORMED);
+  });
+
+  it.each([
+    INHOUSE_STATUS.READY_CHECK,
+    INHOUSE_STATUS.CAPTAIN_VOTE,
+    INHOUSE_STATUS.DRAFTING,
+    INHOUSE_STATUS.COMPLETED,
+    INHOUSE_STATUS.CANCELLED,
+  ])("does not scan a %s lobby", (status) => {
+    expect(
+      inhouseDetectWindow({ status, createdAtMs: FORMED, startedAtMs: null }),
+    ).toBeNull();
   });
 });

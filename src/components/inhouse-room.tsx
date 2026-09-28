@@ -925,6 +925,7 @@ export function InhouseRoom({
           key={lobby.id}
           lobby={lobby}
           me={me}
+          serverNow={state.now}
           pending={pending}
           act={act}
         />
@@ -935,7 +936,6 @@ export function InhouseRoom({
           me={me}
           offset={offset}
           serverNow={state.now}
-          detectMinMinutes={state.detectMinMinutes}
           pending={pending}
           act={act}
         />
@@ -2227,11 +2227,14 @@ function TeamColumn({
 function ReadyView({
   lobby,
   me,
+  serverNow,
   pending,
   act,
 }: {
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
+  /** The server clock from the last poll (see scanNote). */
+  serverNow: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
 }) {
@@ -2245,37 +2248,159 @@ function ReadyView({
           Teams are set!
         </h2>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          Join the Dota lobby and your team’s voice channel. Start here once
-          everyone is in.
+          Join the Dota lobby and your team’s voice channel, then play. The
+          result records itself from OpenDota after the game — nobody has to
+          press anything.
         </p>
         {me.canStart ? (
-          <button
-            disabled={pending}
-            onClick={() => {
-              // One unconfirmed tap from any of the ten would start the clock
-              // for everyone — make it deliberate.
-              if (
-                window.confirm(
-                  "Start the game for all ten players? Do this once the in-client lobby is up and everyone's in.",
-                )
-              ) {
-                act({ action: "start" });
-              }
-            }}
-            className={buttonClasses("accent", "lg", "mt-4")}
-          >
-            Start the game →
-          </button>
-        ) : (
-          <p className="mt-3 text-sm text-muted">
-            Waiting for a player to launch the lobby…
-          </p>
-        )}
+          <div className="mt-4">
+            {/* Optional since results record from here too: it only starts
+                the game clock for the room and the Discord board. No confirm
+                — an early tap costs nothing. */}
+            <button
+              disabled={pending}
+              onClick={() => act({ action: "start" })}
+              className={buttonClasses("secondary", "md")}
+            >
+              Start the game clock
+            </button>
+            <p className="mx-auto mt-2 max-w-sm text-xs text-muted">
+              Optional: shows the game as live here and on Discord.
+            </p>
+          </div>
+        ) : null}
+        {me.canRecord ? (
+          <ResultControls
+            folded
+            scanNote={scanNote(lobby.scanOpensAt, serverNow)}
+            pending={pending}
+            act={act}
+          />
+        ) : null}
       </div>
 
       {me.inLobby || me.isAdmin ? <GameSetupCard lobby={lobby} me={me} /> : null}
 
       <MatchupGrid lobby={lobby} />
+    </div>
+  );
+}
+
+/**
+ * The automatic scan's status line, from the server's own scan window
+ * (`lobby.scanOpensAt`, the same clock maybeAutoDetectResult waits on) and the
+ * server clock of the last poll. Poll-driven, not ticking: calling Date.now()
+ * during render makes the render non-idempotent (React may run it twice and
+ * keep either result). It only lags by one poll.
+ */
+function scanNote(scanOpensAt: number | null, serverNow: number) {
+  if (scanOpensAt == null || serverNow >= scanOpensAt) {
+    return {
+      live: true,
+      text: "Auto-scan is running · results appear after the game ends.",
+    };
+  }
+  const minutes = Math.max(1, Math.ceil((scanOpensAt - serverNow) / 60_000));
+  return { live: false, text: `Auto-scan starts in ${minutes} min.` };
+}
+
+/**
+ * The manual result paths: "Auto-detect result" (scan the ten players' recent
+ * games now) and "Record by match ID". The automatic scan normally records the
+ * game with nobody pressing anything — these cover a game it can't see yet.
+ * Shared by the Set up and Play screens, because a lobby is being played from
+ * the moment teams lock whether or not anyone pressed Start. `folded` (Set up)
+ * keeps both behind one disclosure so they don't compete with getting into the
+ * Dota lobby.
+ */
+function ResultControls({
+  folded = false,
+  scanNote: note,
+  pending,
+  act,
+}: {
+  folded?: boolean;
+  scanNote: { live: boolean; text: string };
+  pending: boolean;
+  act: (body: Record<string, unknown>) => void;
+}) {
+  const [matchId, setMatchId] = useState("");
+  const detect = (
+    <div>
+      <button
+        disabled={pending}
+        onClick={() => act({ action: "detect" })}
+        className={buttonClasses(folded ? "secondary" : "accent", "md")}
+      >
+        {pending ? "Fetching from OpenDota…" : "Auto-detect result"}
+      </button>
+      <p className="mx-auto mt-2 max-w-sm text-xs text-muted">{note.text}</p>
+    </div>
+  );
+  const form = (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!pending && matchId.trim())
+          void act({ action: "record", matchId: matchId.trim() });
+      }}
+      className="mt-2 flex flex-wrap items-end justify-center gap-2"
+    >
+      <div className="min-w-0 flex-1">
+        <label
+          htmlFor="inhouse-match-id"
+          className="mb-1 block text-xs text-muted"
+        >
+          Dota match ID
+        </label>
+        <input
+          id="inhouse-match-id"
+          type="text"
+          inputMode="numeric"
+          enterKeyHint="done"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          value={matchId}
+          onChange={(e) => setMatchId(e.target.value)}
+          placeholder="e.g. 7891234567"
+          className="h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+        />
+      </div>
+      <button
+        type="submit"
+        disabled={pending || !matchId.trim()}
+        className={buttonClasses("secondary", "md", "min-h-11")}
+      >
+        Record
+      </button>
+    </form>
+  );
+  const summaryClass =
+    "cursor-pointer rounded py-2 text-center text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
+
+  if (folded) {
+    return (
+      <details className="mx-auto mt-4 max-w-lg border-t border-accent/20 pt-2 text-left">
+        <summary className={summaryClass}>
+          Game over and no result yet? Record it
+        </summary>
+        <div className="mt-2 space-y-3 text-center">
+          {detect}
+          {form}
+        </div>
+      </details>
+    );
+  }
+  return (
+    <div className="mt-4 space-y-3">
+      {detect}
+      <details className="mx-auto max-w-lg border-t border-info/20 pt-2 text-left">
+        <summary className={summaryClass}>
+          Have a match ID? Record it manually
+        </summary>
+        {form}
+      </details>
     </div>
   );
 }
@@ -2353,31 +2478,20 @@ function InProgressView({
   me,
   offset,
   serverNow,
-  detectMinMinutes,
   pending,
   act,
 }: {
   lobby: NonNullable<InhouseState["lobby"]>;
   me: InhouseState["me"];
   offset: number;
-  /** The server clock from the last poll — see the scan-window note below. */
+  /** The server clock from the last poll (see scanNote). */
   serverNow: number;
-  detectMinMinutes: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
 }) {
-  const [matchId, setMatchId] = useState("");
   // Poll-driven (not ticking) — only gates the "auto-scan is live" note, which
   // flips once, minutes in; the visible timer ticks in <ElapsedClock>.
-  // Server clock, not `Date.now() + offset`: calling Date.now() during render
-  // makes the render non-idempotent (React may run it twice and keep either
-  // result). `state.now` is the same figure the offset is derived FROM, so
-  // this is equivalent and, if anything, more honest — the scan window is a
-  // server-side decision. It only lags by one poll, and this flag flips once,
-  // minutes in; the visible timer keeps ticking in <ElapsedClock>.
-  const elapsedMs =
-    lobby.startedAt != null ? serverNow - lobby.startedAt : null;
-  const scanLive = elapsedMs != null && elapsedMs >= detectMinMinutes * 60_000;
+  const note = scanNote(lobby.scanOpensAt, serverNow);
 
   return (
     <div className="space-y-5">
@@ -2398,69 +2512,12 @@ function InProgressView({
           </p>
         ) : null}
         {me.canRecord ? (
-          <div className="mt-4 space-y-3">
-            <div>
-              <button
-                disabled={pending}
-                onClick={() => act({ action: "detect" })}
-                className={buttonClasses("accent", "md")}
-              >
-                {pending ? "Fetching from OpenDota…" : "Auto-detect result"}
-              </button>
-              <p className="mx-auto mt-2 max-w-sm text-xs text-muted">
-                {scanLive
-                  ? "Auto-scan is running · results appear after the game ends."
-                  : `Auto-scan starts ${detectMinMinutes} minutes in.`}
-              </p>
-            </div>
-            <details className="mx-auto max-w-lg border-t border-info/20 pt-2 text-left">
-              <summary className="cursor-pointer rounded py-2 text-center text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-                Have a match ID? Record it manually
-              </summary>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!pending && matchId.trim())
-                    void act({ action: "record", matchId: matchId.trim() });
-                }}
-                className="mt-2 flex flex-wrap items-end justify-center gap-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <label
-                    htmlFor="inhouse-match-id"
-                    className="mb-1 block text-xs text-muted"
-                  >
-                    Dota match ID
-                  </label>
-                  <input
-                    id="inhouse-match-id"
-                    type="text"
-                    inputMode="numeric"
-                    enterKeyHint="done"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    value={matchId}
-                    onChange={(e) => setMatchId(e.target.value)}
-                    placeholder="e.g. 7891234567"
-                    className="h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={pending || !matchId.trim()}
-                  className={buttonClasses("secondary", "md", "min-h-11")}
-                >
-                  Record
-                </button>
-              </form>
-            </details>
-          </div>
+          <ResultControls scanNote={note} pending={pending} act={act} />
         ) : (
           <p className="mt-3 text-sm text-muted">
-            {scanLive
+            {note.live
               ? "The result is pulled from OpenDota automatically once the game ends."
-              : `The result is pulled from OpenDota automatically — auto-scan starts ${detectMinMinutes} minutes in.`}
+              : `The result is pulled from OpenDota automatically. ${note.text}`}
           </p>
         )}
       </div>

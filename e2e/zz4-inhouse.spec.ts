@@ -264,8 +264,14 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
   await page.setViewportSize({ width: 1280, height: 720 });
 
-  // The observer (team 1 captain) starts the game from the UI.
-  await page.getByRole("button", { name: /Start the game/ }).click();
+  // Results record from Set up too, so Start is optional: the screen says the
+  // result records itself and offers the manual paths behind one disclosure.
+  await expect(
+    page.getByText("Game over and no result yet? Record it"),
+  ).toBeVisible();
+
+  // The observer (team 1 captain) starts the game clock from the UI.
+  await page.getByRole("button", { name: "Start the game clock" }).click();
 
   // Live view: pulsing banner, elapsed clock, auto-detect controls, rosters.
   await expect(page.getByText("Game in progress")).toBeVisible();
