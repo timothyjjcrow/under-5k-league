@@ -576,7 +576,8 @@ describe("draft scheduling", () => {
     expect(linked).toContain(
       "🧭 <@123456789012345678> is no longer captain of **Zai's \\[Team\\]**",
     );
-    expect(linked).toMatch(/player pool: <[^>]+\/me>$/);
+    // The link after "player pool" is the pool, not the reader's own /me.
+    expect(linked).toMatch(/player pool: <[^>]+\/players>$/);
     expect(
       captainRemovedMessage({ name: "Un*linked", discordId: null }, "T"),
     ).toContain("🧭 **Un\\*linked** is no longer captain of **T**");

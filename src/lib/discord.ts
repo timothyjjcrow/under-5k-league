@@ -140,13 +140,14 @@ export function captainAssignedMessage(
 /**
  * A captain's team was removed before the draft (removeCaptain). The ping
  * that made them captain would otherwise stand uncorrected in the channel.
- * Their signup is untouched, so they go into the player pool.
+ * Their signup is untouched, so they go into the player pool, and the link
+ * after those words is the pool itself (/players), not the reader's own /me.
  */
 export function captainRemovedMessage(
   captain: DraftReminderPerson,
   teamName: string,
 ): string {
-  return `🧭 ${captainLabel(captain)} is no longer captain of **${name(teamName)}**: the team was removed before the draft. Their signup stays, so they go into the player pool: <${resolveSiteUrl()}/me>`;
+  return `🧭 ${captainLabel(captain)} is no longer captain of **${name(teamName)}**: the team was removed before the draft. Their signup stays, so they go into the player pool: <${resolveSiteUrl()}/players>`;
 }
 
 /** `<@id>` for a linked captain, their bold escaped name otherwise. */
