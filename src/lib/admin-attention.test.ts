@@ -7,7 +7,8 @@ import {
   outStandins,
   shortTeams,
   standinClashes,
-  unlinkedRosterCount,
+  rosterPingsLive,
+  unlinkedRoster,
   type AdminAttentionInput,
 } from "./admin-attention";
 
@@ -188,20 +189,24 @@ describe("shortTeams", () => {
   });
 });
 
-describe("unlinkedRosterCount", () => {
+describe("unlinkedRoster", () => {
   const member = (userId: string, discordId: string | null = null) => ({
     userId,
-    user: { discordId },
+    user: { discordId, name: `Player ${userId}` },
   });
   const booking = (
     matchId: string,
     standinUserId: string,
     discordId: string | null = null,
-  ) => ({ matchId, standinUserId, standin: { discordId } });
+  ) => ({
+    matchId,
+    standinUserId,
+    standin: { discordId, name: `Player ${standinUserId}` },
+  });
 
-  it("counts unlinked players on live teams and standins owed on an open match, once each", () => {
+  it("names unlinked players on live teams and standins owed on an open match, once each", () => {
     expect(
-      unlinkedRosterCount(
+      unlinkedRoster(
         [
           {
             withdrawn: false,
@@ -215,12 +220,23 @@ describe("unlinkedRosterCount", () => {
           booking("open", "s2", "d-s2"),
           // Cover on a played match needs no ping.
           booking("played", "s3"),
-          // A released player now booked as cover counts once.
+          // A released player now booked as cover is named once.
           booking("open", "p1"),
         ],
         new Set(["open"]),
       ),
-    ).toBe(3);
+    ).toEqual(["Player p1", "Player p3", "Player s1"]);
+  });
+});
+
+describe("rosterPingsLive", () => {
+  it("is on from the finished auction until the season is complete", () => {
+    expect(rosterPingsLive("SIGNUPS", false)).toBe(false);
+    expect(rosterPingsLive("DRAFT", false)).toBe(false);
+    expect(rosterPingsLive("DRAFT", true)).toBe(true);
+    expect(rosterPingsLive("REGULAR_SEASON", true)).toBe(true);
+    expect(rosterPingsLive("PLAYOFFS", true)).toBe(true);
+    expect(rosterPingsLive("COMPLETE", true)).toBe(false);
   });
 });
 

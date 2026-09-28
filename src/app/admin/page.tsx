@@ -12,8 +12,9 @@ import {
   matchAttention,
   outStandins,
   shortTeams,
+  rosterPingsLive,
   standinClashes,
-  unlinkedRosterCount,
+  unlinkedRoster,
 } from "@/lib/admin-attention";
 import { cache, Suspense } from "react";
 import { SectionNav, SectionReady } from "@/components/section-nav";
@@ -386,7 +387,10 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const reachCard = season ? (
     <AdminAnchor id="adm-reach">
       <Suspense fallback={<CardSkeleton rows={3} />}>
-        <DiscordReachCard seasonId={season.id} />
+        <DiscordReachCard
+          seasonId={season.id}
+          rosterUnlinked={data ? unlinkedRosterFor(season, data) : null}
+        />
       </Suspense>
     </AdminAnchor>
   ) : null;
@@ -1246,6 +1250,32 @@ function TonightMatches({
   );
 }
 
+/** The auction has finished (or the season has moved past it): rosters are real. */
+function draftRostersReady(season: Season, data: AdminData): boolean {
+  return (
+    data.draft?.status === DRAFT_STATUS.COMPLETE ||
+    season.status === SEASON_STATUS.REGULAR_SEASON ||
+    season.status === SEASON_STATUS.PLAYOFFS ||
+    season.status === SEASON_STATUS.COMPLETE
+  );
+}
+
+/**
+ * The unlinked players and booked standins match-night pings are for, or null
+ * while pings still go to signups (or the season is over). Needs attention
+ * counts this list and the Discord reach card names it.
+ */
+function unlinkedRosterFor(season: Season, data: AdminData): string[] | null {
+  if (!rosterPingsLive(season.status, draftRostersReady(season, data)))
+    return null;
+  const openIds = new Set(
+    data.matches
+      .filter((match) => match.status !== MATCH_STATUS.COMPLETED)
+      .map((match) => match.id),
+  );
+  return unlinkedRoster(data.teams, data.assignments, openIds);
+}
+
 /**
  * Every problem on the page as one list, each line linking to the control
  * that fixes it: season-wide alarms first, then the matches to review. All of
@@ -1277,14 +1307,9 @@ function AdminAttention({
       booking.standin.name,
     ]),
   );
-  const rostersLive =
-    data.draft?.status === DRAFT_STATUS.COMPLETE ||
-    season.status === SEASON_STATUS.REGULAR_SEASON ||
-    season.status === SEASON_STATUS.PLAYOFFS ||
-    season.status === SEASON_STATUS.COMPLETE;
   const items = adminAttention({
     seasonStatus: season.status,
-    draftComplete: rostersLive,
+    draftComplete: draftRostersReady(season, data),
     automation,
     importsNeedingReview: data.importsNeedingReview,
     shortTeams: shortTeams(data.teams, season.teamSize).map(
@@ -1305,7 +1330,7 @@ function AdminAttention({
     ),
     championIssue: resolveChampionPresentation(season, data.matches).issue,
     unlinkedSignups: data.unlinkedDiscord,
-    unlinkedRostered: unlinkedRosterCount(data.teams, data.assignments, openIds),
+    unlinkedRostered: unlinkedRosterFor(season, data)?.length ?? 0,
   });
   const matches = matchAttention(data.matches, data.teams);
   // A section folded into the season record, or not shown this phase, has no
@@ -6074,7 +6099,14 @@ async function MembershipChip({
  * that chases the rest. Only the webhooks and bot setup stay in the collapsed
  * Discord notifications section.
  */
-async function DiscordReachCard({ seasonId }: { seasonId: string }) {
+async function DiscordReachCard({
+  seasonId,
+  rosterUnlinked,
+}: {
+  seasonId: string;
+  /** Once rosters are set: who Needs attention counts (unlinkedRosterFor). */
+  rosterUnlinked: string[] | null;
+}) {
   const reach = await getDiscordReachFunnel(seasonId);
   return (
     <Card>
@@ -6089,7 +6121,7 @@ async function DiscordReachCard({ seasonId }: { seasonId: string }) {
             Nobody has signed up for this season yet.
           </p>
         ) : (
-          <DiscordReachLine reach={reach} />
+          <DiscordReachLine reach={reach} rosterUnlinked={rosterUnlinked} />
         )}
       </CardBody>
     </Card>
@@ -6108,7 +6140,13 @@ async function DiscordReachCard({ seasonId }: { seasonId: string }) {
  * chasing them BEFORE the draft is the whole point of the funnel, because
  * after it they're on rosters that need to schedule with them.
  */
-function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
+function DiscordReachLine({
+  reach,
+  rosterUnlinked,
+}: {
+  reach: DiscordReachFunnel;
+  rosterUnlinked: string[] | null;
+}) {
   const pct = Math.round((reach.linked / reach.registered) * 100);
   // Below half, the useful next move is chasing links rather than building
   // more notification machinery — so say so rather than just showing a number.
@@ -6145,9 +6183,21 @@ function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
           ? "Mentions and pings reach only these players — everyone else is named as plain text and never notified. Worth chasing links before adding more notifications."
           : "Everyone else is still named in announcements, just not notified."}
       </p>
+      {/* After the draft, match-night pings go to rosters and booked cover.
+          These are the people Needs attention counts; the full list below
+          also holds idle standins and undrafted signups. */}
+      {rosterUnlinked && rosterUnlinked.length > 0 ? (
+        <p className="mt-1 text-xs">
+          <span className="font-medium">
+            On a roster or booked as cover, not linked ({rosterUnlinked.length}):
+          </span>{" "}
+          {capped(rosterUnlinked)}
+        </p>
+      ) : null}
       {reach.unlinkedNames.length > 0 ? (
         <p className="mt-1 text-xs text-muted">
-          Not linked: {capped(reach.unlinkedNames)}
+          {rosterUnlinked ? "Everyone not linked" : "Not linked"}:{" "}
+          {capped(reach.unlinkedNames)}
         </p>
       ) : null}
       {g ? (

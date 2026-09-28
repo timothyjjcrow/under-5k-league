@@ -239,8 +239,22 @@ describe("admin copy names only controls that exist", () => {
     );
     expect(controls).not.toContain("DiscordReachLine");
     expect(controls).not.toContain("ChaseCopy");
-    expect(page).toContain("<DiscordReachCard seasonId={season.id} />");
+    expect(page).toContain("<DiscordReachCard\n          seasonId={season.id}");
     expect(page).toContain('<AdminAnchor id="adm-reach">');
+  });
+
+  // Needs attention's Discord line counts the rostered players and booked
+  // standins pings go to, and links here. The card names that same list
+  // (it also lists every other unlinked signup), so the admin can find the
+  // people the count is about.
+  it("the reach card names the people Needs attention counts", () => {
+    const page = read("src/app/admin/page.tsx");
+    expect(page).toContain(
+      "rosterUnlinked={data ? unlinkedRosterFor(season, data) : null}",
+    );
+    expect(page).toContain(
+      "unlinkedRostered: unlinkedRosterFor(season, data)?.length ?? 0",
+    );
   });
 
   // The house rule the Start-draft confirm upgrade exists for: state the real

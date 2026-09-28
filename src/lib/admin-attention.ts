@@ -119,38 +119,59 @@ export function shortTeams<T extends { withdrawn: boolean; members: readonly unk
 }
 
 /**
- * The people match-night pings are for who haven't linked Discord: players on
- * teams still in the season, plus standins booked on an unplayed match. A
- * withdrawn team plays no more fixtures, and a played booking needs no ping.
- * Anyone counted twice (a released player now booked as cover) counts once.
+ * The people match-night pings are for who haven't linked Discord, by name:
+ * players on teams still in the season, then standins booked on an unplayed
+ * match. A withdrawn team plays no more fixtures, and a played booking needs
+ * no ping. Anyone listed twice (a released player now booked as cover) is
+ * listed once. Needs attention counts this list and the Discord reach card
+ * names it, so the two always agree.
  */
-export function unlinkedRosterCount(
+export function unlinkedRoster(
   teams: readonly {
     withdrawn: boolean;
-    members: readonly { userId: string; user: { discordId: string | null } }[];
+    members: readonly {
+      userId: string;
+      user: { discordId: string | null; name: string };
+    }[];
   }[],
   assignments: readonly {
     matchId: string;
     standinUserId: string;
-    standin: { discordId: string | null };
+    standin: { discordId: string | null; name: string };
   }[],
   openMatchIds: ReadonlySet<string>,
-): number {
-  return new Set([
-    ...teams
-      .filter((team) => !team.withdrawn)
-      .flatMap((team) =>
-        team.members
-          .filter((member) => member.user.discordId == null)
-          .map((member) => member.userId),
-      ),
-    ...assignments
-      .filter(
-        (booking) =>
-          openMatchIds.has(booking.matchId) && booking.standin.discordId == null,
-      )
-      .map((booking) => booking.standinUserId),
-  ]).size;
+): string[] {
+  const names = new Map<string, string>();
+  for (const team of teams) {
+    if (team.withdrawn) continue;
+    for (const member of team.members) {
+      if (member.user.discordId == null) names.set(member.userId, member.user.name);
+    }
+  }
+  for (const booking of assignments) {
+    if (openMatchIds.has(booking.matchId) && booking.standin.discordId == null) {
+      if (!names.has(booking.standinUserId))
+        names.set(booking.standinUserId, booking.standin.name);
+    }
+  }
+  return [...names.values()];
+}
+
+/**
+ * Whether match-night pings go to rosters: the auction has finished and the
+ * season still has games to play. Before that, pings reach signups; once the
+ * season is complete, nobody needs chasing.
+ */
+export function rosterPingsLive(
+  seasonStatus: string,
+  draftComplete: boolean,
+): boolean {
+  return (
+    draftComplete &&
+    (seasonStatus === SEASON_STATUS.DRAFT ||
+      seasonStatus === SEASON_STATUS.REGULAR_SEASON ||
+      seasonStatus === SEASON_STATUS.PLAYOFFS)
+  );
 }
 
 /** One Needs attention line and the /admin section that fixes it. */
@@ -194,11 +215,7 @@ export function adminAttention(input: AdminAttentionInput): AttentionItem[] {
       href: "#adm-sync",
     });
   }
-  const rostersLive =
-    input.draftComplete &&
-    (input.seasonStatus === SEASON_STATUS.DRAFT ||
-      input.seasonStatus === SEASON_STATUS.REGULAR_SEASON ||
-      input.seasonStatus === SEASON_STATUS.PLAYOFFS);
+  const rostersLive = rosterPingsLive(input.seasonStatus, input.draftComplete);
   if (rostersLive) {
     input.shortTeams.forEach((team, index) => {
       items.push({
