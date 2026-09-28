@@ -415,6 +415,16 @@ export async function createSeason(
         if ((active?.id ?? "") !== expectedActiveSeasonId) {
           throw new ActiveSeasonChangedError();
         }
+        // The season this one follows, whose settings it carries: the one
+        // being closed, or from the offseason the most recent archived season
+        // (the same row the handoff form described).
+        const previous =
+          active ??
+          (await tx.season.findFirst({
+            where: { isActive: false },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            select: CARRIED_SEASON_SELECT,
+          }));
         if (active) {
           const [matches, teams] = await Promise.all([
             tx.match.findMany({
@@ -443,14 +453,6 @@ export async function createSeason(
             throw new SeasonArchiveBlockedError(readiness.reason);
           }
         }
-        // The season this one follows: the one being closed, or from the
-        // offseason the most recent season (the same row the form described).
-        const previous =
-          active ??
-          (await tx.season.findFirst({
-            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-            select: CARRIED_SEASON_SELECT,
-          }));
         await tx.season.updateMany({
           where: { isActive: true },
           data: { isActive: false },
