@@ -28,7 +28,11 @@ function revealSection(id: string, focus: boolean) {
     if (parent instanceof HTMLDetailsElement) parent.open = true;
     parent = parent.parentElement;
   }
-  const nested = target.querySelector("details");
+  // A secondary disclosure inside a card (data-jump-stays-closed) is not
+  // the destination: jumping to the card leaves it shut.
+  const nested = target.querySelector<HTMLDetailsElement>(
+    "details:not([data-jump-stays-closed])",
+  );
   if (nested) nested.open = true;
   if (focus) {
     const heading =

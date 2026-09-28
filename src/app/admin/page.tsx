@@ -640,7 +640,10 @@ function OpenNextSeason({
           </SubmitButton>
         </ActionForm>
         {season ? (
-          <details className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm">
+          <details
+            data-jump-stays-closed
+            className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm"
+          >
             <summary className="flex min-h-11 cursor-pointer items-center font-medium text-fg">
               Archive without opening the next season
             </summary>
