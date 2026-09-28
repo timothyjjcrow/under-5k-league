@@ -807,7 +807,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 - **Every state transition is a guarded claim (2026-07 hardening — keep it
   that way)**: `applyResult` first claims
-  `updateMany({id, status: IN_PROGRESS})` with team fixes (a cancel racing the
+  `updateMany({id, status: in [READY, IN_PROGRESS]})` with team fixes (a
+  lobby is played from team lock; Start is optional; a cancel racing the
   seconds-long OpenDota fetch must never be overwritten), then, after the Elo
   calculation, claims the same COMPLETED + `dotaMatchId` result again to stamp
   `eloDeltas` (a void that landed first makes that claim lose). No network call
@@ -853,11 +854,12 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `syncInhouse` reaches it whenever there is active/queued work. The latter is
   what reaches a lobby nobody is polling, which is how one gets abandoned. Its write guard-claims the
   status it read, so a late Start or a landed result always wins. Floors are
-  deliberately generous (`ABANDON_READY_HOURS` 3, `ABANDON_IN_PROGRESS_HOURS`
-  6 off `startedAt`): Start can be pressed after the game and the manual
-  result paths have no time gate, so a group that simply forgot still records
-  normally. It does NOT re-queue anyone — unlike `cancelLobby`, whose players
-  are present and want the next game, nobody has touched this one for hours.
+  deliberately generous (`ABANDON_READY_HOURS` 6 off lobby FORMATION,
+  `ABANDON_IN_PROGRESS_HOURS` 6 off `startedAt`; never `updatedAt`, which each
+  scan's `detectedAt` claim bumps): results record from READY too, so Start is
+  optional, and the manual result paths have no time gate inside the window.
+  It does NOT re-queue anyone — unlike `cancelLobby`, whose players are
+  present and want the next game, nobody has touched this one for hours.
 - **Every CANCELLED write stores `InhouseLobby.endReason`** (pure builders in
   `src/lib/inhouse-end-reason.ts`): declined by X, X and Y didn't accept, an
   admin cancel (with the phase), no result after N hours, result voided (with
@@ -898,7 +900,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   the escape hatch when most players have public match data off. buildResult
   refuses 0-duration games. Auto-scan cadence: pure `detectIntervalSeconds`
   grows the `detectedAt` claim interval with game age (base 180s → cap 1800s)
-  so an abandoned IN_PROGRESS lobby scans at a trickle, not forever at rate.
+  so an abandoned READY/IN_PROGRESS lobby scans at a trickle, not forever at
+  rate.
 - **Discord result publication**: `inhouseResultMessage` (score, duration, MVP
   via the league's `gameMvp`, OpenDota link) is attempted by the guarded exact-
   result finalization above. A successful void always attempts a correction.
@@ -1077,7 +1080,9 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `recordMatch` (paste a match ID) and `autoDetectResult` — `findInhouseGame`
   scans the 10 players' recent matches in parallel, finds the shared game, and
   takes the most recent one that started after the lobby formed. Auto-detect also
-  runs on poll (`maybeAutoDetectResult`, gated by `DETECT_MIN_MINUTES`, throttled
+  runs on poll (`maybeAutoDetectResult`, gated by `inhouseDetectWindow`:
+  `DETECT_MIN_MINUTES` after Start, `DETECT_READY_MIN_MINUTES` after formation
+  for a READY lobby nobody started; throttled
   via an atomic `detectedAt` claim — one active lobby, so API usage is bounded).
   Needs players' "Expose Public Match Data" on. The page renders the box score as
   a `GameResultCard` (hero icons via `heroById`/`HeroIcon`, names, KDA, winner).
@@ -1094,7 +1099,7 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `summarizeInhouse` history scan — do that after and the Elo lands on the
   wrong five. `isCaptain` is deliberately untouched (who captained is a fact
   about the draft). We move players rather than reject the game: rejecting
-  strands the lobby IN_PROGRESS and blocks the single active slot.
+  strands the lobby in play and blocks the single active slot.
 - **`findInhouseGame`'s `unreachable` flag is not "every fetch failed"**. A
   candidate needs 4 of the 10 recent-match lists to name it, so once enough
   lookups 429 that the survivors can't reach the threshold, detection is
