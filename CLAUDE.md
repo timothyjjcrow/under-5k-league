@@ -105,6 +105,16 @@ evidence: verify still deletes the guard at its new home and needs a test to
 fail, the static check refuses any entry that isn't an actual move, and the next
 full `--discover` folds the entries into the lists. A moved EQUIVALENT also
 needs its id renamed in the guard's `EQUIVALENT` list, reason and all.
+A full `--discover` also writes `killers` (per protected claim, the test file
+that failed first); verify runs that file alone with `--bail` and falls back to
+the whole suite only if it passes, so the order changes and the rule does not.
+CI skips the shards when the trusted classifier reports `needs_mutation: false`
+(only pages/components, assets, docs, or tests the Postgres suite never loads
+changed), `release:both` accepts that skip only on the trusted production
+classification, the test job's `node scripts/mutation-guard.mjs --static` still
+checks the claim inventory without Postgres, and
+`.github/workflows/mutation-nightly.yml` verifies the whole baseline on main at
+07:00 UTC.
 
 The current 2026-08-03 baseline has 105 live claims: 65 protected, 40 reviewed
 equivalents, and 0 unprotected. Targeted probes use
@@ -3089,7 +3099,8 @@ uses `prisma db push` and has no data-loss override.
   allowlisted docs/tests are neutral companions; sensitive-path tests/docs stay
   strict, and neutral-only changes do not create a fast lane. UI/app releases
   need no release-only backup or scheduler pause. Strict always means full CI
-  and review, while `needs_db_release` and `needs_scheduler_pause` select
+  and review (the mutation shards alone follow `needs_mutation`, see the
+  ratchet paragraph), while `needs_db_release` and `needs_scheduler_pause` select
   recovery, propagation, and lease-drain procedures. GitHub's event-base use
   of the classifier is only a conservative job-selection optimization and
   never substitutes for the canonical production-to-candidate release

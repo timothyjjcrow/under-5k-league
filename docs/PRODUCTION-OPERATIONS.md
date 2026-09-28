@@ -194,7 +194,9 @@ Complete every field selected by an impact flag before changing that subsystem.
 
 2. Require the CI gates selected by the classifier to pass for the exact
    candidate SHA. `ui-only` may narrowly skip PostgreSQL and mutation jobs;
-   `app` runs standard application CI; `strict` runs every CI gate. Only
+   `app` runs standard application CI; `strict` runs every CI gate. In any
+   lane the mutation shards may be skipped only when the trusted
+   classification reports `needs_mutation: false`. Only
    allowlisted documentation/test paths are neutral companions; sensitive-path
    tests and runbook/policy changes remain strict, and a neutral-only delta does
    not earn a fast lane. GitHub's event-base classifier is only a CI

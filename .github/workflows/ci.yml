@@ -129,6 +129,11 @@ jobs:
         run: npx tsc --noEmit
       - name: Shared release, regional provisioning and script tool guards
         run: npm run test:release && npm run test:provisioning && npm run test:scripts
+      # Every claim-bearing source is in the guard's FILES list and every live
+      # claim is classified in the baseline. Needs no database, and runs here
+      # because the mutation shards skip themselves when needs_mutation=false.
+      - name: Mutation ratchet inventory
+        run: node scripts/mutation-guard.mjs --static
       - name: Validate European scheduler artifacts
         run: npm run scheduler:europe:check && npm run scheduler:europe:check:paused
       - name: Validate active scheduler artifact
@@ -305,7 +310,10 @@ jobs:
   # deleted — a happy-path test passes just as well against a blind write. So:
   # delete each protected guard in turn and require the suite to fail.
   #
-  # Every mutant costs a full suite run, so this grows LINEARLY with coverage.
+  # Every mutant costs a suite run, so this grows LINEARLY with coverage. A
+  # claim whose baseline `killers` entry names the test file that killed it
+  # runs that file first and the whole suite only if it passes, which keeps
+  # the rule (protected only if some test fails) at a fraction of the time.
   # The committed closed inventory is the ratchet; the shards are a disjoint,
   # complete partition of that inventory, so coverage per push is
   # unchanged; only the wall clock moves. Raise `shard` if it creeps up again.
@@ -315,6 +323,14 @@ jobs:
   # reports a cancellation, never a surviving mutant, so it only blocks a
   # release. Changing the shard count also means updating the job names that
   # scripts/release-both.mjs requires.
+  #
+  # The job skips itself when the trusted classifier reports needs_mutation
+  # false: every changed file is a page, component, asset, document or a
+  # browser/unit test that the PostgreSQL suite never loads. release:both
+  # accepts that skip only when its own trusted production classification
+  # agrees, the test job's `--static` step still checks the claim inventory,
+  # and mutation-nightly.yml verifies the whole baseline on main every night
+  # regardless. Keep its steps in step with these.
   mutation:
     name: mutation guard ${{ matrix.shard }}/4
     needs: classify

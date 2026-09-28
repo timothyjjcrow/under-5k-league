@@ -35,11 +35,27 @@ async function command(file, args, options = {}) {
   }
 }
 
-export function requireSuccessfulCi(run, jobs, sha, strict) {
+// The CI gates a release needs beyond the ones every release needs, from each
+// changed region's TRUSTED classification (the production commit's
+// classifier). PostgreSQL follows the lane, as before. The mutation shards may
+// be skipped only when every changed region's classification explicitly says
+// needs_mutation is false; a classifier that omits the field counts as true.
+export function requiredCiGates(classifications) {
+  const changed = classifications.filter((c) => c.lane !== "unchanged");
+  return {
+    postgres: changed.some((c) => c.lane !== "ui-only"),
+    mutation: changed.some((c) => c.needs_mutation !== false),
+  };
+}
+
+export function requireSuccessfulCi(run, jobs, sha, gates) {
+  if (typeof gates?.postgres !== "boolean" || typeof gates?.mutation !== "boolean")
+    throw new Error("CI gate selection must say whether the PostgreSQL and mutation jobs are required");
   if (run.head_sha !== sha || run.status !== "completed" || run.conclusion !== "success")
     throw new Error("A successful completed CI run for the exact release commit is required");
   const required = ["classify release impact", "audit, lint, types, build, tests", "playwright e2e (us)", "playwright e2e (eu)"];
-  if (strict) required.push("integration on postgres", ...[1, 2, 3, 4].map((n) => `mutation guard ${n}/4`));
+  if (gates.postgres) required.push("integration on postgres");
+  if (gates.mutation) required.push(...[1, 2, 3, 4].map((n) => `mutation guard ${n}/4`));
   for (const name of required) {
     if (!jobs.some((job) => job.name === name && job.conclusion === "success" && job.status === "completed"))
       throw new Error(`Required CI job did not pass: ${name}`);
@@ -165,8 +181,9 @@ export async function runRelease(argv = process.argv.slice(2)) {
     if (!ciRunId || !/^\d+$/.test(String(ciRunId))) throw new Error("No passing exact-commit CI run found");
     const ciRun = JSON.parse(await command("gh", ["api", `repos/${RELEASE_REPOSITORY}/actions/runs/${ciRunId}`]));
     const ciJobs = JSON.parse(await command("gh", ["api", `repos/${RELEASE_REPOSITORY}/actions/runs/${ciRunId}/jobs?per_page=100`]));
-    requireSuccessfulCi(ciRun, ciJobs.jobs, sha, Object.values(report.classifications).some((c) => c.lane !== "ui-only" && c.lane !== "unchanged"));
-    report.ci = { id: ciRunId, url: ciRun.html_url, sha, conclusion: "success" };
+    const gates = requiredCiGates(Object.values(report.classifications));
+    requireSuccessfulCi(ciRun, ciJobs.jobs, sha, gates);
+    report.ci = { id: ciRunId, url: ciRun.html_url, sha, conclusion: "success", gates };
     report.status = "planned"; await save();
     if (!options["--apply"] && !options["--preview-only"] && !options["--stage-only"] && !options["--promote-from"]) return report;
     const maintenance = options["--maintenance-file"] ? JSON.parse(await readFile(options["--maintenance-file"], "utf8")) : undefined;

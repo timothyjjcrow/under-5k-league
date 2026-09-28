@@ -1,15 +1,19 @@
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   INDEPENDENT_OPS_PREFIXES,
@@ -125,7 +129,7 @@ describe("release classifier policy", () => {
     ).toMatchObject({
       lane: "app",
       needs_postgres: true,
-      needs_mutation: true,
+      needs_mutation: false,
     });
   });
 
@@ -135,7 +139,7 @@ describe("release classifier policy", () => {
     ).toMatchObject({
       lane: "app",
       needs_postgres: true,
-      needs_mutation: true,
+      needs_mutation: false,
       needs_db_release: false,
       needs_scheduler_pause: false,
     });
@@ -223,37 +227,41 @@ describe("release classifier policy", () => {
   });
 
   it.each([
-    ".github/workflows/ci.yml",
-    "CLAUDE.md",
-    "README.md",
-    "docs/ARCHITECTURE.md",
-    "docs/PRODUCTION-OPERATIONS.md",
-    ".env.example",
-    "next.config.ts",
-    "package-lock.json",
-    "package.json",
-    "vercel.json",
-    "scripts/build-db.mjs",
-    "scripts/classify-release.mjs",
-    "scripts/release-migrations.mjs",
-    "scripts/vercel-build.mjs",
-    "src/app/actions/admin.ts",
-    "src/lib/release-classification.test.ts",
-    "src/lib/automation-service.test.ts",
+    [".github/workflows/ci.yml", true],
+    // Policy documents stay strict for review but cannot move the ratchet.
+    ["CLAUDE.md", false],
+    ["README.md", false],
+    ["docs/ARCHITECTURE.md", false],
+    ["docs/PRODUCTION-OPERATIONS.md", false],
+    [".env.example", true],
+    ["next.config.ts", true],
+    ["package-lock.json", true],
+    ["package.json", true],
+    ["vercel.json", true],
+    ["scripts/build-db.mjs", true],
+    ["scripts/classify-release.mjs", true],
+    ["scripts/release-migrations.mjs", true],
+    ["scripts/vercel-build.mjs", true],
+    ["src/app/actions/admin.ts", true],
+    ["src/lib/release-classification.test.ts", true],
+    ["src/lib/automation-service.test.ts", true],
     // The lobby bot and relay are hosted independently of the website and
     // its scheduler (.vercelignore excludes them from the upload).
-    "ops/dota-lobby-bot/server.mjs",
-    "ops/dota-lobby-relay/src/index.mjs",
-    "ops/dota-lobby-relay/wrangler.jsonc",
-  ])("keeps strict review without DB or scheduler controls for %s", (file) => {
-    expect(classifyEntries([modified(file)])).toMatchObject({
-      lane: "strict",
-      needs_postgres: true,
-      needs_mutation: true,
-      needs_db_release: false,
-      needs_scheduler_pause: false,
-    });
-  });
+    ["ops/dota-lobby-bot/server.mjs", true],
+    ["ops/dota-lobby-relay/src/index.mjs", true],
+    ["ops/dota-lobby-relay/wrangler.jsonc", true],
+  ])(
+    "keeps strict review without DB or scheduler controls for %s",
+    (file, needsMutation) => {
+      expect(classifyEntries([modified(file)])).toMatchObject({
+        lane: "strict",
+        needs_postgres: true,
+        needs_mutation: needsMutation,
+        needs_db_release: false,
+        needs_scheduler_pause: false,
+      });
+    },
+  );
 
   it("fails closed for an unknown path", () => {
     expect(classifyEntries([modified("unknown.txt")])).toMatchObject({
@@ -308,6 +316,7 @@ describe("release classifier policy", () => {
       ]),
     ).toMatchObject({
       lane: "strict",
+      needs_mutation: true,
       needs_db_release: true,
       needs_scheduler_pause: true,
     });
@@ -345,7 +354,7 @@ describe("release classifier deletions", () => {
     expect(classifyEntries([deleted(file)])).toMatchObject({
       lane: "app",
       needs_postgres: true,
-      needs_mutation: true,
+      needs_mutation: false,
       needs_db_release: false,
       needs_scheduler_pause: false,
     });
@@ -405,22 +414,25 @@ describe("release classifier deletions", () => {
   });
 
   it.each([
-    "README.md",
-    "docs/PRODUCTION-OPERATIONS.md",
-    "scripts/old-helper.mjs",
-    "src/lib/old-service.ts",
-    ".github/workflows/old.yml",
-    "ops/dota-lobby-bot/server.mjs",
-    "ops/dota-lobby-relay/src/index.mjs",
-  ])("keeps strict review without maintenance for deleted %s", (file) => {
-    expect(classifyEntries([deleted(file)])).toMatchObject({
-      lane: "strict",
-      needs_postgres: true,
-      needs_mutation: true,
-      needs_db_release: false,
-      needs_scheduler_pause: false,
-    });
-  });
+    ["README.md", false],
+    ["docs/PRODUCTION-OPERATIONS.md", false],
+    ["scripts/old-helper.mjs", true],
+    ["src/lib/old-service.ts", true],
+    [".github/workflows/old.yml", true],
+    ["ops/dota-lobby-bot/server.mjs", true],
+    ["ops/dota-lobby-relay/src/index.mjs", true],
+  ])(
+    "keeps strict review without maintenance for deleted %s",
+    (file, needsMutation) => {
+      expect(classifyEntries([deleted(file)])).toMatchObject({
+        lane: "strict",
+        needs_postgres: true,
+        needs_mutation: needsMutation,
+        needs_db_release: false,
+        needs_scheduler_pause: false,
+      });
+    },
+  );
 
   it.each([
     "prisma/schema.prisma",
@@ -622,7 +634,7 @@ export function Footer() {
       expect(classifyRelease({ base, head, cwd })).toMatchObject({
         lane: "app",
         needs_postgres: true,
-        needs_mutation: true,
+        needs_mutation: false,
       });
     },
   );
@@ -744,5 +756,220 @@ export function Footer() {
     expect(() =>
       classifyRelease({ base: head.slice(0, 12), head, cwd }),
     ).toThrow(/full lowercase 40-character SHA/i);
+  });
+});
+
+describe("release classifier mutation ratchet", () => {
+  const entry = (file: string, code = "M") => ({
+    status: code,
+    code,
+    oldPath: null,
+    path: file,
+    oldMode: code === "A" ? "000000" : "100644",
+    newMode: code === "D" ? "000000" : "100644",
+  });
+  const needsMutation = (...files: string[]) =>
+    classifyEntries(files.map((file) => entry(file))).needs_mutation;
+
+  it.each([
+    "src/app/schedule/page.tsx",
+    "src/app/players/player-pool.tsx",
+    "src/app/admin/admin-copy-guard.test.ts",
+    "src/app/globals.css",
+    "src/components/player-pool.tsx",
+    "src/components/room-source-guards.test.ts",
+    "public/logo.png",
+    "docs/notes.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "e2e/zz-admin-draft.spec.ts",
+    "e2e/helpers.ts",
+    "e2e-mid/boards.spec.ts",
+  ])("skips the ratchet for %s, which the PostgreSQL suite never loads", (file) => {
+    const result = classifyEntries([entry(file)]);
+    expect(result.needs_mutation).toBe(false);
+    expect(result.reasons.join(" ")).toMatch(/mutation ratchet not needed/);
+  });
+
+  it("skips the ratchet for a page added or deleted with its docs and tests", () => {
+    expect(
+      classifyEntries([
+        entry("src/app/schedule/week-strip.tsx", "A"),
+        entry("src/components/old-strip.tsx", "D"),
+        entry("docs/schedule.md"),
+        entry("e2e-mid/schedule.spec.ts"),
+      ]),
+    ).toMatchObject({ lane: "app", needs_postgres: true, needs_mutation: false });
+  });
+
+  it.each([
+    "src/lib/draft-service.ts",
+    "src/lib/draft.test.ts",
+    "src/app/actions/admin.ts",
+    "src/app/api/draft/tick/route.ts",
+    "src/app/api/dota-lobby/route.ts",
+    "src/app/recap/route.ts",
+    "src/app/calendar.ics/route.ts",
+    "test/integration/draft.itest.ts",
+    "test/integration/factories.ts",
+    "test/fixtures/legacy-tiebreaker.ts",
+    "test/mutation-baseline.json",
+    "prisma/schema.prisma",
+    "prisma/migrations/20990101000000_example/migration.sql",
+    "scripts/mutation-guard.mjs",
+    "scripts/mutation-claims.mjs",
+    "scripts/test-db-safety.mjs",
+    "vitest.config.mts",
+    "vitest.integration.config.mts",
+    "vitest.pg.config.mts",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    "next.config.ts",
+    ".github/workflows/ci.yml",
+    ".github/workflows/mutation-nightly.yml",
+    "ops/dota-lobby-bot/server.mjs",
+    "e2e-mid/helpers.ts",
+    "unknown.txt",
+  ])("runs the ratchet for %s", (file) => {
+    expect(needsMutation(file)).toBe(true);
+    expect(classifyEntries([entry(file, "D")]).needs_mutation).toBe(true);
+  });
+
+  it("runs the ratchet when any one changed file needs it", () => {
+    expect(
+      needsMutation("src/app/schedule/page.tsx", "src/lib/schedule.ts"),
+    ).toBe(true);
+    // A presentation change keeps its lane but not a pass for the ratchet
+    // when an integration test changes beside it.
+    expect(
+      classifyEntries([
+        { ...entry("src/components/site-footer.tsx"), presentationSafe: true },
+        entry("test/integration/draft.itest.ts"),
+      ]),
+    ).toMatchObject({
+      lane: "ui-only",
+      needs_postgres: false,
+      needs_mutation: true,
+    });
+  });
+
+  it("runs the ratchet for renames, copies and mode changes, even of a page", () => {
+    for (const change of [
+      { status: "R100", code: "R", oldPath: "src/app/old/page.tsx" },
+      { status: "C100", code: "C", oldPath: "src/app/old/page.tsx" },
+      { status: "M", code: "M", oldPath: null, newMode: "100755" },
+    ]) {
+      expect(
+        classifyEntries([{ ...entry("src/app/new/page.tsx"), ...change }])
+          .needs_mutation,
+      ).toBe(true);
+    }
+  });
+
+  // The classifier cannot import the guard (it runs as a lone file extracted
+  // from the trusted commit), so these two walks are what keep its rule and
+  // the ratchet's real inputs from drifting apart.
+  const ROOT = process.cwd();
+  const RESOLVE_SUFFIXES = [
+    "",
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".mjs",
+    ".js",
+    "/index.ts",
+    "/index.tsx",
+  ];
+  const isFile = (file: string) =>
+    existsSync(path.join(ROOT, file)) && statSync(path.join(ROOT, file)).isFile();
+
+  function listFiles(dir: string): string[] {
+    return readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap(
+      (item) => {
+        const file = `${dir}/${item.name}`;
+        return item.isDirectory() ? listFiles(file) : [file];
+      },
+    );
+  }
+
+  function resolveLocal(from: string, specifier: string) {
+    let base: string;
+    if (specifier.startsWith("@/")) base = `src/${specifier.slice(2)}`;
+    else if (specifier.startsWith(".")) {
+      base = path.posix.normalize(
+        path.posix.join(path.posix.dirname(from), specifier),
+      );
+    } else return null; // a package
+    const found = RESOLVE_SUFFIXES.map((suffix) => `${base}${suffix}`).find(
+      isFile,
+    );
+    if (!found) throw new Error(`${from} imports unresolvable ${specifier}`);
+    return found;
+  }
+
+  /** Every repo file the PostgreSQL suite or the guard script can load. */
+  function ratchetSources() {
+    const seen = new Set<string>();
+    const queue = [
+      ...listFiles("test/integration"),
+      "vitest.pg.config.mts",
+      "scripts/mutation-guard.mjs",
+    ];
+    while (queue.length > 0) {
+      const file = queue.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (!/\.[cm]?[jt]sx?$/.test(file)) continue;
+      const { importedFiles } = ts.preProcessFile(
+        readFileSync(path.join(ROOT, file), "utf8"),
+        true,
+        true,
+      );
+      for (const { fileName } of importedFiles) {
+        const resolved = resolveLocal(file, fileName);
+        if (resolved) queue.push(resolved);
+      }
+    }
+    return [...seen].sort();
+  }
+
+  it("runs the ratchet for every file the PostgreSQL suite or the guard loads", () => {
+    const sources = ratchetSources();
+    // Sanity: the walk reached past the suite into the code it exercises.
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        "scripts/mutation-claims.mjs",
+        "src/app/actions/admin.ts",
+        "src/app/recap/route.ts",
+        "src/lib/draft-service.ts",
+        "test/fixtures/legacy-tiebreaker.ts",
+      ]),
+    );
+    const neutral = [
+      ...sources,
+      "test/mutation-baseline.json",
+      "vitest.config.mts",
+      "vitest.integration.config.mts",
+      "package.json",
+      "package-lock.json",
+      ".github/workflows/ci.yml",
+      ".github/workflows/mutation-nightly.yml",
+    ].filter((file) => !needsMutation(file));
+    expect(neutral).toEqual([]);
+  });
+
+  it("runs the ratchet for every file the guard mutates", () => {
+    const guard = readFileSync(
+      path.join(ROOT, "scripts/mutation-guard.mjs"),
+      "utf8",
+    );
+    const list = /\nconst FILES = \[([^\]]*)\];/.exec(guard);
+    expect(list).not.toBeNull();
+    const files = [...list![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(files.length).toBeGreaterThan(10);
+    expect(files.filter((file) => !isFile(file))).toEqual([]);
+    expect(files.filter((file) => !needsMutation(file))).toEqual([]);
   });
 });

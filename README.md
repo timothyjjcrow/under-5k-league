@@ -531,6 +531,18 @@ declares the same runtime line used by every CI job.
      `needs_scheduler_pause` flags decide whether the recovery or scheduler
      procedures are also required.
 
+   The mutation ratchet has its own flag. `needs_mutation` is false only when
+   every changed file is a page or component (outside server actions, API and
+   route handlers), a presentation asset, documentation, or a browser/unit
+   test the PostgreSQL suite never loads; CI then skips the four mutation
+   shards, and `release:both` accepts that skip only when the trusted
+   production classification also says false (a classifier without the field
+   counts as true). CI's test job still checks the claim inventory with
+   `node scripts/mutation-guard.mjs --static`, `mutation-nightly.yml`
+   re-verifies every protected claim on `main` at 07:00 UTC, and each shard
+   runs a claim's recorded killer test file before falling back to the whole
+   suite.
+
    A plain deletion of a regular file is judged like an edit to that path, so
    removing a stale doc or dead component needs no maintenance procedure.
    Deleting anything under `prisma/`, `ops/`, the cron or automation-health
@@ -551,7 +563,10 @@ declares the same runtime line used by every CI job.
    to decide whether its PostgreSQL and mutation jobs can be reused or skipped.
    That optimization is not production release authorization. If the
    canonical-production delta is strict, every strict gate must have passed for
-   the candidate even when the event-based CI comparison was narrower. Missing
+   the candidate even when the event-based CI comparison was narrower. The
+   same holds for the mutation shards whenever that delta has
+   `needs_mutation: true`; re-run CI with `force_strict` if the event delta
+   skipped them. Missing
    canonical deployment metadata or an unfetchable/non-ancestor production SHA
    blocks the fast release path.
 

@@ -19,6 +19,7 @@
 //   node scripts/mutation-guard.mjs --discover   # full sweep, rewrites the baseline
 //   node scripts/mutation-guard.mjs --discover --only ID_SUBSTRING
 //   node scripts/mutation-guard.mjs              # verify the baseline (what CI runs)
+//   node scripts/mutation-guard.mjs --static     # inventory + baseline only, no Postgres
 //
 // Verify mode first requires EVERY live claim to appear exactly once in the
 // baseline as either PROTECTED or a reviewed EQUIVALENT. It then re-mutates
@@ -699,6 +700,16 @@ if (discover && shard) {
   console.error("--shard is a verify-mode option and cannot be combined with --discover");
   process.exit(2);
 }
+// `--static` stops after the source-inventory and baseline checks, which need
+// no database. CI's always-required test job runs it, because the mutation
+// shards skip themselves when the release classifier reports
+// needs_mutation=false, and a claim added to a page would otherwise go
+// unnoticed until the nightly verify.
+const staticOnly = process.argv.includes("--static");
+if (staticOnly && (discover || shard)) {
+  console.error("--static checks the committed baseline and takes no other mode");
+  process.exit(2);
+}
 
 const inventoryProblems = validateSourceInventory();
 const allClaims = discoverAll();
@@ -758,6 +769,15 @@ if (!discover) {
     equivalent: effective.equivalent,
     killers: resolveKillers(base, effective.protected).killers,
   };
+}
+
+if (staticOnly) {
+  console.log(
+    `✔ ${allClaims.length} live claims in ${FILES.length} files match ${BASELINE}: ` +
+      `${base.protected.length} protected (${base.killers.size} with a recorded killer), ` +
+      `${base.equivalent.length} reviewed equivalent.`,
+  );
+  process.exit(0);
 }
 
 try {
