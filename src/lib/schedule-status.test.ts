@@ -5,6 +5,7 @@ import {
   regularResultsDue,
   regularSeasonStatus,
   pendingResultsMessage,
+  weekList,
   resultOverdue,
   standingsCaption,
 } from "./schedule-status";
@@ -69,6 +70,36 @@ describe("pendingResultsMessage", () => {
         regularSeasonStatus([m(1, "COMPLETED"), m(2, "SCHEDULED")]),
       ),
     ).toMatch(/1 regular-season match still needs results \(week 2\)/);
+  });
+
+  it("collapses a run of weeks into a range", () => {
+    expect(
+      pendingResultsMessage(
+        regularSeasonStatus([
+          m(3, "SCHEDULED"),
+          m(4, "SCHEDULED"),
+          m(4, "SCHEDULED"),
+          m(5, "LIVE"),
+        ]),
+      ),
+    ).toBe("4 regular-season matches still need results (weeks 3–5).");
+  });
+});
+
+describe("weekList", () => {
+  it("says week for one and weeks for several", () => {
+    expect(weekList([5])).toBe("week 5");
+    expect(weekList([4, 5])).toBe("weeks 4–5");
+    expect(weekList([2, 7])).toBe("weeks 2 and 7");
+  });
+
+  it("sorts, dedupes and mixes singles with ranges", () => {
+    expect(weekList([6, 1, 5, 3, 7, 5])).toBe("weeks 1, 3 and 5–7");
+    expect(weekList([5, 5])).toBe("week 5");
+  });
+
+  it("is empty for no weeks", () => {
+    expect(weekList([])).toBe("");
   });
 });
 

@@ -233,6 +233,7 @@ import {
   regularResultsDue,
   regularSeasonStatus,
   pendingResultsMessage,
+  weekList,
 } from "@/lib/schedule-status";
 import { MatchImportControls } from "@/components/match-import-controls";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -4102,9 +4103,8 @@ function PlayoffControls({
           <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
             ⚠ {status.pending} regular-season result
             {status.pending === 1 ? "" : "s"} still needed — the playoffs are
-            locked until every match is entered (week
-            {status.pendingWeeks.length === 1 ? "" : "s"}{" "}
-            {status.pendingWeeks.join(", ")}).
+            locked until every match is entered (
+            {weekList(status.pendingWeeks)}).
           </div>
         ) : null}
         {(unresolvedTeams.length > 0 ||

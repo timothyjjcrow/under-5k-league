@@ -54,14 +54,35 @@ export function regularSeasonStatus(matches: MatchLike[]): RegularStatus {
   };
 }
 
+/**
+ * A list of week numbers as a reader would write it: "week 5", "weeks 4–5",
+ * "weeks 1, 3 and 5–7". Consecutive weeks collapse into a range, so a long
+ * backlog doesn't print as a wall of numbers. Empty input gives "".
+ */
+export function weekList(weeks: readonly number[]): string {
+  const sorted = [...new Set(weeks)].sort((a, b) => a - b);
+  if (sorted.length === 0) return "";
+  const runs: string[] = [];
+  for (let i = 0; i < sorted.length; ) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+    runs.push(i === j ? `${sorted[i]}` : `${sorted[i]}–${sorted[j]}`);
+    i = j + 1;
+  }
+  const list =
+    runs.length > 1
+      ? `${runs.slice(0, -1).join(", ")} and ${runs[runs.length - 1]}`
+      : runs[0];
+  return `${sorted.length === 1 ? "week" : "weeks"} ${list}`;
+}
+
 /** A short human summary of what's outstanding, e.g. for a toast/banner. */
 export function pendingResultsMessage(status: RegularStatus): string | null {
   if (status.pending === 0) return null;
   const m = status.pending === 1 ? "match" : "matches";
-  const w = status.pendingWeeks.length === 1 ? "week" : "weeks";
   return `${status.pending} regular-season ${m} still ${
     status.pending === 1 ? "needs" : "need"
-  } results (${w} ${status.pendingWeeks.join(", ")}).`;
+  } results (${weekList(status.pendingWeeks)}).`;
 }
 
 /**
