@@ -171,7 +171,14 @@ import {
   slotRound,
   groupPlayoffRounds,
   hasLaterBracketRound,
+  matchRoundLabel,
+  playoffTotalRounds,
 } from "@/lib/schedule";
+import {
+  matchNightSide,
+  matchNightSlate,
+  nightSideLabel,
+} from "@/lib/admin-match-night";
 import { fixturesMatchNightLabel } from "@/lib/match-night";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { playoffSetupRevision } from "@/lib/playoff-command";
@@ -287,6 +294,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const nowMs = Date.now();
   const nextStep =
     season && data ? adminNextStepFor(season, data, nowMs) : null;
+  const tonight =
+    season && data ? matchNightSlate(season.status, data.matches, nowMs) : [];
   const showTiebreakers = data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
@@ -368,6 +377,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               ]
             : season && data
             ? [
+                ...(tonight.length > 0
+                  ? [{ id: "adm-tonight", label: "Tonight" }]
+                  : []),
                 { id: "adm-attention", label: "Needs attention" },
                 ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
                 { id: "adm-schedule", label: "Schedule & results" },
@@ -446,6 +458,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         </>
       ) : season && data ? (
         <>
+          {tonight.length > 0 ? (
+            <TonightMatches
+              season={season}
+              data={data}
+              slate={tonight}
+              nowMs={nowMs}
+            />
+          ) : null}
           <AdminAttention season={season} data={data} />
           {showTiebreakers ? (
             <AdminAnchor id="adm-tiebreakers">
@@ -1011,6 +1031,130 @@ async function loadSeasonAdminData(seasonId: string) {
 
 type AdminData = Awaited<ReturnType<typeof loadSeasonAdminData>>;
 type Season = NonNullable<Awaited<ReturnType<typeof getActiveSeason>>>;
+
+/**
+ * Match night at the top of the page: each of tonight's fixtures with its
+ * state, check-ins, standins and next automatic result check, and a jump to
+ * its full result controls further down. The match page carries the same
+ * admin tools, so the fixture name links there.
+ */
+function TonightMatches({
+  season,
+  data,
+  slate,
+  nowMs,
+}: {
+  season: Season;
+  data: AdminData;
+  slate: AdminData["matches"];
+  nowMs: number;
+}) {
+  const totalRounds = playoffTotalRounds(data.matches);
+  const names = new Map(data.teams.map((team) => [team.id, team.name]));
+  const rosters = new Map(
+    data.teams.map((team) => [
+      team.id,
+      team.members.map((member) => member.userId),
+    ]),
+  );
+  return (
+    <AdminAnchor id="adm-tonight">
+      <Card>
+        <CardHeader
+          headingLevel={2}
+          title="Tonight"
+          subtitle="Fixtures kicking off soon, being played, or still waiting on a result."
+        />
+        <CardBody>
+          <ul className="space-y-2">
+            {slate.map((m) => {
+              const home = m.homeTeamId ? names.get(m.homeTeamId) : undefined;
+              const away = m.awayTeamId ? names.get(m.awayTeamId) : undefined;
+              const open = m.status !== MATCH_STATUS.COMPLETED;
+              const check = autoCheckStatus(m, season, nowMs);
+              const sides =
+                open && m.homeTeamId && m.awayTeamId
+                  ? ([
+                      [home, m.homeTeamId],
+                      [away, m.awayTeamId],
+                    ] as const).map(([name, teamId]) => ({
+                      name: name ?? "?",
+                      label: nightSideLabel(
+                        matchNightSide(
+                          rosters.get(teamId) ?? [],
+                          teamId,
+                          m.standins,
+                          m.availability,
+                          season.teamSize,
+                        ),
+                      ),
+                    }))
+                  : [];
+              return (
+                <li
+                  key={m.id}
+                  data-testid="admin-tonight-match"
+                  className="space-y-1 rounded-lg border border-line p-3 text-sm"
+                >
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-xs text-muted">
+                      {matchRoundLabel(m, totalRounds, { bestOf: true })}
+                    </span>
+                    <Link
+                      href={`/matches/${m.id}#admin-tools`}
+                      className={textLink(
+                        "min-w-0 flex-1 basis-48 font-medium [overflow-wrap:anywhere]",
+                      )}
+                    >
+                      {home ?? "TBD"} vs {away ?? "TBD"}
+                    </Link>
+                    {m.status === MATCH_STATUS.LIVE ? (
+                      <Badge tone="accent">
+                        Live · {m.homeScore}–{m.awayScore}
+                      </Badge>
+                    ) : m.status === MATCH_STATUS.COMPLETED ? (
+                      <Badge tone="success">
+                        Final · {m.homeScore}–{m.awayScore}
+                        {m.forfeit ? " · forfeit" : ""}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {m.scheduledAt ? (
+                    <p className="text-xs text-muted">
+                      Kickoff{" "}
+                      <LocalTime
+                        ts={m.scheduledAt.getTime()}
+                        variant="short"
+                        initial={formatMatchTime(m.scheduledAt, "short")}
+                      />
+                    </p>
+                  ) : null}
+                  {sides.map((side, index) => (
+                    <p
+                      key={index}
+                      className="text-xs text-muted [overflow-wrap:anywhere]"
+                    >
+                      {side.name}: {side.label}
+                    </p>
+                  ))}
+                  {check ? <AutoCheckLine check={check} /> : null}
+                  {open ? (
+                    <a
+                      href={`#adm-match-${m.id}`}
+                      className={textLink("inline-block text-xs")}
+                    >
+                      Result controls ↓
+                    </a>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </CardBody>
+      </Card>
+    </AdminAnchor>
+  );
+}
 
 function AdminAttention({ season, data }: { season: Season; data: AdminData }) {
   const attention = matchAttention(data.matches);
@@ -3283,7 +3427,10 @@ function MatchResultRow({
       ? autoCheck
       : null;
   return (
-    <div className="space-y-2 rounded-lg border border-line p-3">
+    <div
+      id={`adm-match-${m.id}`}
+      className="scroll-mt-40 space-y-2 rounded-lg border border-line p-3"
+    >
       {!resultCorrectionOpen || importedFinal ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {label}
