@@ -526,6 +526,35 @@ describe("adminNextStep — league ticket", () => {
     }
   });
 
+  // The warning renders in the same banner as the step's detail, so the
+  // detail must not also promise that results import themselves.
+  it("never promises results import themselves beside the warning", () => {
+    const running = {
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 10,
+      untimedRegularCount: 0,
+    };
+    const steps = [
+      { ...running, pendingRegularResults: 3, outstandingRegularResults: 1 },
+      { ...running, pendingRegularResults: 3, outstandingRegularResults: 0 },
+      {
+        seasonStatus: SEASON_STATUS.PLAYOFFS,
+        playoffMatchCount: 3,
+        unfinishedPlayoffCount: 2,
+      },
+    ];
+    for (const o of steps) {
+      const without = ticketless(o);
+      expect(without.ticketWarning).toBeTruthy();
+      expect(without.detail).not.toMatch(/import themselves/);
+      expect(without.detail).toMatch(/by hand|doesn't import/);
+      // With a ticket the promise stands.
+      expect(at({ ...o, hasLeagueTicket: true }).detail).toMatch(
+        /import themselves/,
+      );
+    }
+  });
+
   it("drops it once the season is complete", () => {
     expect(
       ticketless({ seasonStatus: SEASON_STATUS.COMPLETE, hasChampion: true })

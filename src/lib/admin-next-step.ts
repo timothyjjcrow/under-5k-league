@@ -232,6 +232,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     pendingRegularResults,
     outstandingRegularResults = pendingRegularResults,
     nextKickoff = null,
+    hasLeagueTicket,
     pendingTiebreakerResults = 0,
     existingTiebreakerCount = 0,
     unresolvedPlayoffTieCount = 0,
@@ -322,6 +323,11 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     };
   }
 
+  // Without a league ticket the games may never reach OpenDota, and the
+  // ticket warning says so in the same banner, so these steps must not also
+  // promise that results import themselves.
+  const ticketless = hasLeagueTicket === false;
+
   if (seasonStatus === SEASON_STATUS.REGULAR_SEASON) {
     if (regularMatchCount === 0) {
       return {
@@ -341,8 +347,9 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     if (outstandingRegularResults > 0) {
       return {
         title: `Season running: ${resultCount(outstandingRegularResults)} outstanding.`,
-        detail:
-          "These fixtures are live or past kickoff. Results import themselves from OpenDota; enter any that can't be found by hand in Schedule & results.",
+        detail: ticketless
+          ? "These fixtures are live or past kickoff. Enter any result that doesn't import by hand in Schedule & results."
+          : "These fixtures are live or past kickoff. Results import themselves from OpenDota; enter any that can't be found by hand in Schedule & results.",
         tone: "waiting",
         jump: JUMP.schedule,
       };
@@ -353,7 +360,9 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         title: nextKickoff
           ? `Season running. Week ${nextKickoff.week} kicks off ${nextKickoff.label}.`
           : "Season running.",
-        detail: `${toPlay} Nothing to enter before kickoff: results import themselves from OpenDota after each match.`,
+        detail: ticketless
+          ? `${toPlay} Nothing to enter before kickoff. After each match, enter the result by hand in Schedule & results if it doesn't import.`
+          : `${toPlay} Nothing to enter before kickoff: results import themselves from OpenDota after each match.`,
         tone: "waiting",
         jump: JUMP.schedule,
       };
@@ -408,7 +417,10 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: `Playoffs underway — ${unfinishedPlayoffCount} bracket match(es) left.`,
         detail:
-          "Results import themselves; enter any that can't be found in the Playoffs card. Each result advances the bracket, and the final crowns the champion and completes the season. Keep the season in Playoffs until then.",
+          (ticketless
+            ? "Enter any result that doesn't import in the Playoffs card."
+            : "Results import themselves; enter any that can't be found in the Playoffs card.") +
+          " Each result advances the bracket, and the final crowns the champion and completes the season. Keep the season in Playoffs until then.",
         tone: "waiting",
         jump: JUMP.playoffs,
       };
