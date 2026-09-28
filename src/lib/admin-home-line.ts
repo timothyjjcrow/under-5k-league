@@ -1,9 +1,11 @@
 import { adminNextStep } from "./admin-next-step";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { projectPlayoffField } from "./playoff-field";
+import { nextRegularKickoff, regularResultsDue } from "./schedule-status";
 import type { MatchLike } from "./standings";
+import { formatLeagueTime } from "./zoned-time";
 
-type LineMatch = MatchLike & { scheduledAt: Date | null };
+type LineMatch = MatchLike & { scheduledAt: Date | null; week: number };
 
 export type AdminHomeInput = {
   seasonStatus: string;
@@ -19,6 +21,8 @@ export type AdminHomeInput = {
   hasChampion: boolean;
   /** Open matches the admin panel's Needs attention card lists. */
   attentionCount: number;
+  /** The clock "past kickoff" and "next kickoff" are judged against. */
+  nowMs: number;
 };
 
 export type AdminHomeLine = {
@@ -49,6 +53,7 @@ export function adminHomeLine(i: AdminHomeInput): AdminHomeLine {
     (match) =>
       match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL,
   );
+  const nextKickoff = nextRegularKickoff(i.matches, i.nowMs);
   const step = adminNextStep({
     seasonStatus: i.seasonStatus,
     draftStatus: i.draftStatus,
@@ -56,8 +61,18 @@ export function adminHomeLine(i: AdminHomeInput): AdminHomeLine {
     minPlayers: i.minPlayers,
     teamCount: i.teams.length,
     regularMatchCount: regular.length,
-    scheduledRegularCount: regular.filter((match) => match.scheduledAt).length,
+    // The same three the panel passes, so the headline matches it word for
+    // word: untimed fixtures, results past kickoff, and the next kickoff.
+    untimedRegularCount: regular.filter(
+      (match) =>
+        open(match) && match.status !== MATCH_STATUS.LIVE && !match.scheduledAt,
+    ).length,
     pendingRegularResults: regular.filter(open).length,
+    outstandingRegularResults: regularResultsDue(i.matches, i.nowMs).length,
+    nextKickoff: nextKickoff && {
+      week: nextKickoff.week,
+      label: formatLeagueTime(nextKickoff.at),
+    },
     pendingTiebreakerResults: tiebreakers.filter(open).length,
     existingTiebreakerCount: tiebreakers.length,
     // Only the regular season's steps read it, and it is the one costly input.

@@ -3,7 +3,6 @@ import { webAnalyticsUrl } from "@/lib/web-analytics";
 import {
   adminSeasonCards,
   coverProblemMatchIds,
-  matchCoverIssues,
   openBookingCount,
 } from "@/lib/admin-sections";
 import {
@@ -38,14 +37,11 @@ import {
 } from "@/lib/constants";
 import {
   AUTO_CHECK_BACKED_OFF_SCANS,
-  type AutoCheck,
-  autoCheckCopy,
   autoCheckStatus,
 } from "@/lib/result-sync";
 import { ImportProgress } from "@/components/import-progress";
 import { DatabaseHealth } from "@/components/database-health";
 import { HistoryCoverage } from "@/components/history-coverage";
-import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
   carriedSeasonSettings,

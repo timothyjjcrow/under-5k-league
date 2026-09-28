@@ -1701,17 +1701,23 @@ async function AdminStrip({ snapshot }: { snapshot: SeasonSnapshot }) {
       select: {
         id: true,
         status: true,
+        homeTeamId: true,
+        awayTeamId: true,
         scheduledAt: true,
         scheduleRevision: true,
         availability: {
           select: { userId: true, status: true, scheduleRevision: true },
         },
-        standins: { select: { replacingUserId: true } },
+        standins: { select: { replacingUserId: true, standinUserId: true } },
         reschedules: { select: { status: true } },
       },
     }),
   ]);
-  // Check-ins count for the fixture's current time only, as on the panel.
+  // A server component renders once per request; the line is a snapshot.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  // Check-ins count for the fixture's current time only, and cover is counted
+  // against the current rosters, both as on the panel.
   const attention = matchAttention(
     open.map((match) => ({
       ...match,
@@ -1719,6 +1725,8 @@ async function AdminStrip({ snapshot }: { snapshot: SeasonSnapshot }) {
         (rsvp) => rsvp.scheduleRevision === match.scheduleRevision,
       ),
     })),
+    snapshot.teams,
+    nowMs,
   );
   const { step, attention: attentionLine } = adminHomeLine({
     seasonStatus: season.status,
@@ -1730,6 +1738,7 @@ async function AdminStrip({ snapshot }: { snapshot: SeasonSnapshot }) {
     hasChampion:
       resolveChampionPresentation(season, matches).championTeamId != null,
     attentionCount: attention.length,
+    nowMs,
   });
   return (
     <Link

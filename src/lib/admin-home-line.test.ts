@@ -14,6 +14,7 @@ function match(overrides: Partial<Row> = {}): Row {
     winnerTeamId: null,
     phase: MATCH_PHASE.REGULAR,
     bracketSlot: null,
+    week: 1,
     scheduledAt: new Date("2026-09-20T18:00:00Z"),
     ...overrides,
   };
@@ -29,6 +30,8 @@ const won = (home: string, away: string): Partial<Row> => ({
 });
 
 const teams = ["a", "b", "c", "d"].map((id) => ({ id }));
+/** The day after the fixtures' kickoff, so an unplayed one is due. */
+const NOW = Date.parse("2026-09-21T00:00:00Z");
 
 function line(overrides: Partial<AdminHomeInput>) {
   return adminHomeLine({
@@ -40,6 +43,7 @@ function line(overrides: Partial<AdminHomeInput>) {
     matches: [],
     hasChampion: false,
     attentionCount: 0,
+    nowMs: NOW,
     ...overrides,
   });
 }
@@ -63,7 +67,7 @@ describe("adminHomeLine", () => {
         attentionCount: 1,
       }),
     ).toEqual({
-      step: "Season running — 2 result(s) outstanding.",
+      step: "Season running: 2 results outstanding.",
       attention: "1 match needs attention",
     });
     expect(line({ matches: [match()], attentionCount: 3 }).attention).toBe(
@@ -71,9 +75,17 @@ describe("adminHomeLine", () => {
     );
   });
 
+  it("names the next kickoff while nothing is due yet", () => {
+    // The panel's wording: a fixture next week is still to play, not missing.
+    expect(
+      line({ matches: [match({ week: 2 })], nowMs: Date.parse("2026-09-14T00:00:00Z") })
+        .step,
+    ).toMatch(/^Season running\. Week 2 kicks off /);
+  });
+
   it("asks for kickoff times before anything else mid-season", () => {
     expect(line({ matches: [match({ scheduledAt: null })] }).step).toBe(
-      "Next step: set the match nights.",
+      "Next step: give every fixture a kickoff time.",
     );
   });
 
@@ -115,6 +127,6 @@ describe("adminHomeLine", () => {
         matches: [{ ...final, ...won("a", "b") }],
         hasChampion: true,
       }).step,
-    ).toBe("Season complete. Choose the league's next state.");
+    ).toBe("Season complete. Open the next season when you're ready.");
   });
 });
