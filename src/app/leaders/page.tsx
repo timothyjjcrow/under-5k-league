@@ -559,21 +559,26 @@ export default async function LeadersPage({
               <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
                 Week {week}
               </span>
+              {/* flex-wrap: on a phone the points-and-hero line drops
+                  under the name. As two shrinking siblings, the NAME broke
+                  across lines instead ("Pudge / Player4"). */}
               {honors.player ? (
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span aria-hidden>⭐</span>
-                  {userMap.has(honors.player.userId) ? (
-                    <PlayerLink
-                      userId={honors.player.userId}
-                      className="font-medium"
-                    >
-                      {userMap.get(honors.player.userId)!.name}
-                    </PlayerLink>
-                  ) : (
-                    <span className="font-medium text-muted">
-                      Former player
-                    </span>
-                  )}
+                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span aria-hidden>⭐</span>
+                    {userMap.has(honors.player.userId) ? (
+                      <PlayerLink
+                        userId={honors.player.userId}
+                        className="font-medium"
+                      >
+                        {userMap.get(honors.player.userId)!.name}
+                      </PlayerLink>
+                    ) : (
+                      <span className="font-medium text-muted">
+                        Former player
+                      </span>
+                    )}
+                  </span>
                   <span className="text-xs text-muted">
                     {honors.player.points} impact points
                     {honors.player.heroId != null
@@ -583,14 +588,16 @@ export default async function LeadersPage({
                 </span>
               ) : null}
               {honors.team ? (
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span aria-hidden>🛡️</span>
-                  <Link
-                    href={`/teams/${honors.team.teamId}`}
-                    className="py-1 -my-1 font-medium hover:text-info"
-                  >
-                    {teamNameOf.get(honors.team.teamId) ?? "?"}
-                  </Link>
+                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span aria-hidden>🛡️</span>
+                    <Link
+                      href={`/teams/${honors.team.teamId}`}
+                      className="py-1 -my-1 font-medium hover:text-info"
+                    >
+                      {teamNameOf.get(honors.team.teamId) ?? "?"}
+                    </Link>
+                  </span>
                   <span className="text-xs text-muted">
                     {honors.team.gameWins} game win
                     {honors.team.gameWins === 1 ? "" : "s"}
