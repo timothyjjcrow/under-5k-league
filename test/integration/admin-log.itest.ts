@@ -176,8 +176,8 @@ describe("the activity card's copy is honest about results and week moves", () =
   // changes are logged here" — but recordResult (a manual score that can
   // override an auto-import) and setWeekNight (retimes a whole week, wipes
   // RSVPs and open proposals) left no line, while the repair paths around
-  // them did. setMatchTime deliberately stays unlogged (frequent,
-  // single-match, low collateral).
+  // them did. setMatchTime is logged too (it resets that match's check-ins
+  // and proposals); its test is below.
   async function seasonWithSchedule() {
     const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
     for (let i = 0; i < 4; i++)

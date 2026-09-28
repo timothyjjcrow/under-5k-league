@@ -1325,35 +1325,37 @@ function AdminAttention({
       booking.standin.name,
     ]),
   );
+  // Stalled or dropped league announcements lead the list, pointing at the
+  // Discord card whose delivery health says which and why.
   const deliveryItems = (delivery ? leagueDeliveryAttention(delivery) : []).map(
     (text, index) => ({ key: `delivery-${index}`, text, href: "#adm-discord" }),
   );
   const items = [
     ...deliveryItems,
     ...adminAttention({
-    seasonStatus: season.status,
-    draftComplete: draftRostersReady(season, data),
-    automation,
-    importsNeedingReview: data.importsNeedingReview,
-    shortTeams: shortTeams(data.teams, season.teamSize).map(
-      ({ team, missing }) => ({ name: team.name, missing }),
-    ),
-    standinClashes: standinClashes(data.assignments, data.matches).map(
-      (clash) => ({
-        standin: standinName.get(clash.standinUserId) ?? "A standin",
-        first: fixture(clash.first),
-        second: fixture(clash.second),
-      }),
-    ),
-    outStandins: outStandins(data.assignments, data.outRsvps, openIds).map(
-      (out) => ({
-        standin: standinName.get(out.userId) ?? "A standin",
-        fixture: fixture(matchById.get(out.matchId)!),
-      }),
-    ),
-    championIssue: resolveChampionPresentation(season, data.matches).issue,
-    unlinkedSignups: data.unlinkedDiscord,
-    unlinkedRostered: unlinkedRosterFor(season, data)?.length ?? 0,
+      seasonStatus: season.status,
+      draftComplete: draftRostersReady(season, data),
+      automation,
+      importsNeedingReview: data.importsNeedingReview,
+      shortTeams: shortTeams(data.teams, season.teamSize).map(
+        ({ team, missing }) => ({ name: team.name, missing }),
+      ),
+      standinClashes: standinClashes(data.assignments, data.matches).map(
+        (clash) => ({
+          standin: standinName.get(clash.standinUserId) ?? "A standin",
+          first: fixture(clash.first),
+          second: fixture(clash.second),
+        }),
+      ),
+      outStandins: outStandins(data.assignments, data.outRsvps, openIds).map(
+        (out) => ({
+          standin: standinName.get(out.userId) ?? "A standin",
+          fixture: fixture(matchById.get(out.matchId)!),
+        }),
+      ),
+      championIssue: resolveChampionPresentation(season, data.matches).issue,
+      unlinkedSignups: data.unlinkedDiscord,
+      unlinkedRostered: unlinkedRosterFor(season, data)?.length ?? 0,
     }),
   ];
   const matches = matchAttention(data.matches, data.teams);

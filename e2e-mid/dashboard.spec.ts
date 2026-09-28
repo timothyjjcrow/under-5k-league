@@ -109,8 +109,11 @@ test("admins get the admin panel's next step under the hero", async ({
   await page.goto("/api/auth/dev?name=Home%20Admin&admin=1");
   await expect(page).toHaveURL(/\/$/);
   await expect(strip).toHaveAttribute("href", "/admin");
-  // The fixture's last week is still open.
-  await expect(strip).toContainText(/Admin.*result\(s\) outstanding\./);
+  // The fixture's last week is still open, and its LIVE series is past
+  // kickoff: the panel's headline, word for word.
+  await expect(strip).toContainText(
+    /Admin.*Season running: \d+ results? outstanding\./,
+  );
   await page.setViewportSize({ width: 360, height: 812 });
   await expectNoHorizontalOverflow(page, "/ admin line");
   assertNoErrors();

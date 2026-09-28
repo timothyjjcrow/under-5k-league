@@ -220,9 +220,9 @@ class TeamWithdrawalLifecycleChangedError extends Error {}
 class TeamAlreadyWithdrawnError extends Error {}
 class TeamNotWithdrawnError extends Error {}
 
-/** Games the winner is credited in a forfeit: the series clinch number. Module
- *  scope on purpose — a local arrow declared just above a transaction becomes
- *  the "enclosing function" the mutation guard anchors its claim ids to. */
+/** Games the winner is credited in a forfeit: the series clinch number. (The
+ *  mutation guard anchors claim ids to TOP-LEVEL declarations only, so a
+ *  local helper would not rename a claim; module scope is just for reuse.) */
 function forfeitScore(bestOf: number): number {
   return Math.floor(bestOf / 2) + 1;
 }
