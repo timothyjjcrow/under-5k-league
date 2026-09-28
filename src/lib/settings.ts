@@ -70,6 +70,7 @@ export const SETTING_KEYS = {
 // ---------------------------------------------------------------------------
 // The DYNAMIC keyspace. Beyond the fixed keys above, the Setting table hosts
 // per-entity rows: exactly-once markers (resultAnnounced:<matchId>,
+// resultNudge:<matchId>:<scheduleRevision>,
 // weekReminder:<season>:<week>:<kickoffMs>, draftReminder:<season>:<revision>,
 // honorsAnnounced:<season>:<week>, playoffRoundBuilt:<season>:<round>,
 // playoffRoundAnnounced:<season>:<round>, signupsOpenAnnounced:<season>), JSON
@@ -106,6 +107,20 @@ export const RESULT_ANNOUNCED_PREFIX = "resultAnnounced:";
 
 export function resultAnnouncedKey(matchId: string): string {
   return `${RESULT_ANNOUNCED_PREFIX}${matchId}`;
+}
+
+/**
+ * Exactly-once marker for the "we couldn't find your games" nudge to a
+ * fixture's captains (result-nudge-service), one per kickoff: the schedule
+ * revision is part of the key, so a fixture moved to a new night can be
+ * nudged again for that night.
+ */
+export function resultNudgeKey(matchId: string, scheduleRevision: number): string {
+  return `${resultNudgePrefix(matchId)}${scheduleRevision}`;
+}
+
+export function resultNudgePrefix(matchId: string): string {
+  return `resultNudge:${matchId}:`;
 }
 
 /**
@@ -398,6 +413,7 @@ export function seasonSettingScopeWhere(
   ];
   const matchScope = matchIds.flatMap<Prisma.SettingWhereInput>((matchId) => [
     { key: resultAnnouncedKey(matchId) },
+    { key: { startsWith: resultNudgePrefix(matchId) } },
     { key: { startsWith: outPingPrefix(matchId) } },
     {
       key: {

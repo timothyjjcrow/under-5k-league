@@ -63,6 +63,7 @@ import {
   maybeAnnounceDraftNight,
   maybeAnnounceUpcomingWeek,
 } from "./reminder-service";
+import { maybeNudgeMissingResults } from "./result-nudge-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { recoverableAnnouncementMarker } from "./announcement-marker";
 
@@ -1173,6 +1174,21 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.REMINDER);
       logStepFailure("draft-reminder", error);
+    }
+  }
+
+  // After this run's own imports, so a series the league step just finished
+  // is judged on what it found rather than nudged about.
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    skipped.push(RESULT_SYNC_SKIPPED.REMINDER);
+  } else {
+    try {
+      await maybeNudgeMissingResults({
+        shouldContinue: () => canStartWork(options, MIN_DISCORD_STEP_MS),
+      });
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.REMINDER);
+      logStepFailure("result-nudge", error);
     }
   }
 

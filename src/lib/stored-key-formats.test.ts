@@ -28,6 +28,8 @@ import {
   playoffRoundBuiltPrefix,
   providerCooldownKey,
   providerCooldownResourcePrefix,
+  resultNudgeKey,
+  resultNudgePrefix,
   seasonSettingScopeWhere,
   signupsOpenAnnouncedKey,
   tiebreakerDrawKey,
@@ -57,6 +59,8 @@ describe("stored Setting key formats", () => {
     expect(tiebreakerDrawPrefix("s1")).toBe("tiebreakerDraw:s1:");
     expect(signupsOpenAnnouncedKey("s1")).toBe("signupsOpenAnnounced:s1");
     expect(outPingPrefix("m1")).toBe("outPing:m1:");
+    expect(resultNudgeKey("m1", 3)).toBe("resultNudge:m1:3");
+    expect(resultNudgePrefix("m1")).toBe("resultNudge:m1:");
     expect(outPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1"))).toBe(
       true,
     );
@@ -84,6 +88,7 @@ describe("stored Setting key formats", () => {
       tiebreakerDrawPrefix("s1"),
       signupsOpenAnnouncedKey("s1"),
       outPingPrefix("m1"),
+      resultNudgePrefix("m1"),
       providerCooldownResourcePrefix("open-dota-match-scan", "m1"),
       providerCooldownResourcePrefix(
         "open-dota-match-import",

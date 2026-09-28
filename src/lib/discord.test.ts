@@ -20,6 +20,7 @@ import {
   playoffsStartedMessage,
   playoffRoundSetMessage,
   playoffsReturnedToRegularMessage,
+  resultNudgeMessage,
   championMessage,
   maskWebhookUrl,
   rolePrefix,
@@ -380,6 +381,37 @@ describe("discord message formatters", () => {
     expect(msg).toContain("**Season 7 semifinals are set!**");
     expect(msg).toContain("• **A** vs **D** — kickoff time still to be set");
     expect(msg.split("\n")).toHaveLength(4);
+  });
+
+  it("asks the captains to report a fixture whose games were never found", () => {
+    const msg = resultNudgeMessage({
+      matchId: "m1",
+      homeName: "Alpha",
+      awayName: "Delta",
+      label: "Week 3",
+      homeScore: 0,
+      awayScore: 0,
+      gamesFound: 0,
+    });
+    expect(msg).toContain(
+      "We couldn't find the games for **Alpha** vs **Delta** (Week 3).",
+    );
+    expect(msg).toMatch(/Captains: report them on the match page: <[^>]+\/matches\/m1>$/);
+  });
+
+  it("names the score a part-played series is stuck at", () => {
+    const msg = resultNudgeMessage({
+      matchId: "m2",
+      homeName: "Alpha",
+      awayName: "Delta",
+      label: "Semifinal",
+      homeScore: 1,
+      awayScore: 0,
+      gamesFound: 1,
+    });
+    expect(msg).toContain("**Alpha** vs **Delta** (Semifinal) is stuck at 1–0");
+    expect(msg).toContain("report the missing games");
+    expect(msg).toMatch(/<[^>]+\/matches\/m2>$/);
   });
 
   it("crowns the champion", () => {
@@ -1622,6 +1654,21 @@ describe("no message unfurls a link preview", () => {
       ]),
       playoffsReturnedToRegularMessage("S1"),
       championMessage("S1", "T", "s1"),
+      signupsOpenMessage("S1", "Sundays"),
+      playoffRoundSetMessage({
+        seasonName: "S1",
+        roundName: "Grand final",
+        fixtures: [{ home: "A", away: "B", whenMs: 1_800_000_000_000 }],
+      }),
+      resultNudgeMessage({
+        matchId: "m1",
+        homeName: "A",
+        awayName: "B",
+        label: "Week 1",
+        homeScore: 1,
+        awayScore: 0,
+        gamesFound: 1,
+      }),
       freeAgentSignedMessage("A", "T"),
       playerReleasedMessage("A", "T"),
       teamWithdrewMessage("T", 3),
@@ -1790,6 +1837,15 @@ describe("no player-supplied name can inject markdown", () => {
       seasonName: EVIL,
       roundName: "Grand final",
       fixtures: [{ home: EVIL, away: EVIL, whenMs: null }],
+    }),
+    resultNudgeMessage({
+      matchId: "m1",
+      homeName: EVIL,
+      awayName: EVIL,
+      label: "Week 1",
+      homeScore: 0,
+      awayScore: 0,
+      gamesFound: 0,
     }),
     freeAgentSignedMessage(EVIL, EVIL),
     playerReleasedMessage(EVIL, EVIL),

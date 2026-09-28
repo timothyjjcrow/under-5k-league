@@ -379,6 +379,31 @@ export function matchResultMessage(m: {
   return `${tail} ${link}${record}`;
 }
 
+/**
+ * Automatic import couldn't find a fixture's games (private match data, a
+ * lobby without the league ticket), or found part of the series and then
+ * nothing for hours. The send mentions the two captains, who can report the
+ * games themselves in one click on the match page; nobody else is pinged.
+ */
+export function resultNudgeMessage(m: {
+  matchId: string;
+  homeName: string;
+  awayName: string;
+  /** matchRoundLabel: "Week 3", "Semifinal", "Grand final", "Tiebreaker". */
+  label: string;
+  homeScore: number;
+  awayScore: number;
+  /** Games imported so far; 0 = none found at all. */
+  gamesFound: number;
+}): string {
+  const fixture = `**${name(m.homeName)}** vs **${name(m.awayName)}** (${m.label})`;
+  const link = `<${resolveSiteUrl()}/matches/${m.matchId}>`;
+  if (m.gamesFound === 0) {
+    return `📋 We couldn't find the games for ${fixture}. Captains: report them on the match page: ${link}`;
+  }
+  return `📋 ${fixture} is stuck at ${m.homeScore}–${m.awayScore}: we couldn't find the rest of the series. Captains: report the missing games on the match page: ${link}`;
+}
+
 export function playoffsStartedMessage(
   seasonName: string,
   pairings: {
