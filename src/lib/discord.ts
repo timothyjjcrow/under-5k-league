@@ -335,6 +335,15 @@ export function draftRecapMessage(r: {
   return lines.join("\n");
 }
 
+/**
+ * A season's own page, scrolled to its bracket. Posts link here rather than
+ * /schedule, which always shows the CURRENT season: after the handoff an old
+ * "playoffs are set" post would open the next season's empty schedule.
+ */
+function seasonBracketUrl(seasonId: string): string {
+  return `${resolveSiteUrl()}/seasons/${encodeURIComponent(seasonId)}#playoffs`;
+}
+
 /** "the semifinals", "the grand final", "Round 3" — a round name mid-sentence. */
 function roundPhrase(round: string): string {
   return /^Round \d+$/.test(round) ? round : `the ${round.toLowerCase()}`;
@@ -424,6 +433,8 @@ export function resultNudgeMessage(m: {
 
 export function playoffsStartedMessage(
   seasonName: string,
+  /** The bracket link opens this season's page, so it survives the handoff. */
+  seasonId: string,
   pairings: {
     home: string;
     away: string;
@@ -445,7 +456,7 @@ export function playoffsStartedMessage(
       return `• ${side(p.home, p.homeSeed)} vs ${side(p.away, p.awaySeed)}${when}`;
     })
     .join("\n");
-  return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${resolveSiteUrl()}/schedule>`;
+  return `🏁 **${seasonName} playoffs are set!**\n${lines}\nBracket: <${seasonBracketUrl(seasonId)}>`;
 }
 
 /**
@@ -457,6 +468,8 @@ export function playoffsStartedMessage(
  */
 export function playoffRoundSetMessage(m: {
   seasonName: string;
+  /** The bracket link opens this season's page, so it survives the handoff. */
+  seasonId: string;
   /** roundName(): "Grand final", "Semifinals", "Quarterfinals", "Round N". */
   roundName: string;
   fixtures: { home: string; away: string; whenMs: number | null }[];
@@ -470,7 +483,7 @@ export function playoffRoundSetMessage(m: {
   });
   // "Semifinals are set", "Grand final is set", "Round 3 is set".
   const verb = /s$/.test(m.roundName) ? "are" : "is";
-  return `🏁 **${name(m.seasonName)} ${m.roundName.toLowerCase()} ${verb} set!**\n${lines.join("\n")}\nBracket: <${resolveSiteUrl()}/schedule>`;
+  return `🏁 **${name(m.seasonName)} ${m.roundName.toLowerCase()} ${verb} set!**\n${lines.join("\n")}\nBracket: <${seasonBracketUrl(m.seasonId)}>`;
 }
 
 export function playoffsReturnedToRegularMessage(seasonName: string): string {
@@ -1147,6 +1160,9 @@ function mentionIdsOf(people: DraftReminderPerson[]): string[] {
 const ORACLE_NAMES_SHOWN = 5;
 
 export function weeklyHonorsMessage(honors: {
+  /** The leaderboards link opens this season's boards (/leaders?season=),
+   *  so the post still shows these honors after the next season starts. */
+  seasonId: string;
   week: number;
   playerName: string | null;
   playerPoints: number;
@@ -1195,7 +1211,9 @@ export function weeklyHonorsMessage(honors: {
       "The previous honors are withdrawn; no eligible box-score award remains for this week.",
     );
   }
-  lines.push(`Full leaderboards: <${resolveSiteUrl()}/leaders>`);
+  lines.push(
+    `Full leaderboards: <${resolveSiteUrl()}/leaders?season=${encodeURIComponent(honors.seasonId)}>`,
+  );
   return lines.join("\n");
 }
 

@@ -353,18 +353,27 @@ describe("discord message formatters", () => {
   });
 
   it("lists every playoff pairing", () => {
-    const msg = playoffsStartedMessage("Season 1", [
+    const msg = playoffsStartedMessage("Season 1", "s1", [
       { home: "A", away: "D" },
       { home: "B", away: "C" },
     ]);
     expect(msg).toContain("A vs D");
     expect(msg).toContain("B vs C");
-    expect(msg).toContain("/schedule");
+    // The season's own page, not /schedule: after the next season starts,
+    // /schedule shows that season, and the post would open an empty page.
+    expect(msg).toMatch(/\nBracket: <[^>]+\/seasons\/s1#playoffs>$/);
+    expect(msg).not.toContain("/schedule");
+  });
+
+  it("encodes the season id in the bracket link", () => {
+    expect(
+      playoffsStartedMessage("Season 1", "season/one", [{ home: "A", away: "B" }]),
+    ).toContain("/seasons/season%2Fone#playoffs>");
   });
 
   it("gives each playoff pairing its seeds and a reader-local kickoff", () => {
     const whenMs = Date.parse("2026-10-03T01:00:00Z");
-    const msg = playoffsStartedMessage("Season 1", [
+    const msg = playoffsStartedMessage("Season 1", "s1", [
       { home: "A", away: "D", homeSeed: 1, awaySeed: 4, whenMs },
       { home: "B", away: "C", homeSeed: 2, awaySeed: 3, whenMs: null },
     ]);
@@ -384,6 +393,7 @@ describe("discord message formatters", () => {
   it("announces the next playoff round with reader-local kickoffs", () => {
     const msg = playoffRoundSetMessage({
       seasonName: "Season 7",
+      seasonId: "s1",
       roundName: "Grand final",
       fixtures: [{ home: "Alpha", away: "Delta", whenMs: 1_800_000_000_000 }],
     });
@@ -391,12 +401,13 @@ describe("discord message formatters", () => {
     expect(msg).toContain(
       "• **Alpha** vs **Delta** — <t:1800000000:F> (<t:1800000000:R>)",
     );
-    expect(msg).toMatch(/\nBracket: <[^>]+\/schedule>$/);
+    expect(msg).toMatch(/\nBracket: <[^>]+\/seasons\/s1#playoffs>$/);
   });
 
   it("agrees the verb with a plural round and says when a kickoff is unset", () => {
     const msg = playoffRoundSetMessage({
       seasonName: "Season 7",
+      seasonId: "s1",
       roundName: "Semifinals",
       fixtures: [
         { home: "A", away: "D", whenMs: null },
@@ -1731,8 +1742,8 @@ describe("no message unfurls a link preview", () => {
         forfeit: true,
         knockout: { nextRound: "Grand final" },
       }),
-      playoffsStartedMessage("S1", [{ home: "A", away: "B" }]),
-      playoffsStartedMessage("S1", [
+      playoffsStartedMessage("S1", "s1", [{ home: "A", away: "B" }]),
+      playoffsStartedMessage("S1", "s1", [
         { home: "A", away: "B", homeSeed: 1, awaySeed: 2, whenMs: 1_800_000_000_000 },
       ]),
       playoffsReturnedToRegularMessage("S1"),
@@ -1740,6 +1751,7 @@ describe("no message unfurls a link preview", () => {
       signupsOpenMessage("S1", "Sundays"),
       playoffRoundSetMessage({
         seasonName: "S1",
+        seasonId: "s1",
         roundName: "Grand final",
         fixtures: [{ home: "A", away: "B", whenMs: 1_800_000_000_000 }],
       }),
@@ -1844,6 +1856,7 @@ describe("no message unfurls a link preview", () => {
         whenMs: 1_800_000_000_000,
       }),
       weeklyHonorsMessage({
+        seasonId: "s1",
         week: 1,
         playerName: "A",
         playerPoints: 10,
@@ -1921,12 +1934,13 @@ describe("no player-supplied name can inject markdown", () => {
       label: "Semifinal",
       knockout: { nextRound: "Grand final" },
     }),
-    playoffsStartedMessage("Season 1", [
+    playoffsStartedMessage("Season 1", "s1", [
       { home: EVIL, away: EVIL, homeSeed: 1, awaySeed: 4, whenMs: 1_800_000_000_000 },
     ]),
     championMessage("Season 1", EVIL, "s1"),
     playoffRoundSetMessage({
       seasonName: EVIL,
+      seasonId: "s1",
       roundName: "Grand final",
       fixtures: [{ home: EVIL, away: EVIL, whenMs: null }],
     }),
@@ -2018,6 +2032,7 @@ describe("no player-supplied name can inject markdown", () => {
       whenMs: 1_800_000_000_000,
     }),
     weeklyHonorsMessage({
+      seasonId: "s1",
       week: 1,
       playerName: EVIL,
       playerPoints: 40,
@@ -2284,6 +2299,7 @@ describe("freeAgentSignedMessage addresses the signed player", () => {
 describe("weeklyHonorsMessage", () => {
   it("names the Player of the Week score impact points, as /leaders does", () => {
     const message = weeklyHonorsMessage({
+      seasonId: "s1",
       week: 4,
       playerName: "Winner",
       playerPoints: 134.2,
@@ -2296,6 +2312,7 @@ describe("weeklyHonorsMessage", () => {
   });
 
   const base = {
+    seasonId: "s1",
     week: 4,
     playerName: "Winner",
     playerPoints: 50,
@@ -2313,6 +2330,14 @@ describe("weeklyHonorsMessage", () => {
       "🔮 Pick'em Oracle of the Week: **Seer** (3 of 3 picks right)",
     );
     expect(lines.at(-1)).toMatch(/^Full leaderboards: /);
+  });
+
+  it("links that season's leaderboards, so the post outlives the handoff", () => {
+    const last = weeklyHonorsMessage(base).split("\n").at(-1);
+    expect(last).toMatch(/^Full leaderboards: <[^>]+\/leaders\?season=s1>$/);
+    expect(
+      weeklyHonorsMessage({ ...base, seasonId: "season/one" }),
+    ).toContain("/leaders?season=season%2Fone>");
   });
 
   it("lists every tied oracle, then caps a long tie", () => {
@@ -2347,6 +2372,7 @@ describe("weeklyHonorsMessage", () => {
 describe("weeklyHonorsMessage corrections", () => {
   it("clearly labels a corrected award", () => {
     const message = weeklyHonorsMessage({
+      seasonId: "s1",
       week: 3,
       playerName: "New winner",
       playerPoints: 42,
@@ -2360,6 +2386,7 @@ describe("weeklyHonorsMessage corrections", () => {
 
   it("explicitly withdraws an award when a corrected week has no eligible games", () => {
     const message = weeklyHonorsMessage({
+      seasonId: "s1",
       week: 3,
       playerName: null,
       playerPoints: 0,

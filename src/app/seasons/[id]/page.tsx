@@ -391,7 +391,8 @@ export default async function SeasonArchivePage({
       ) : null}
 
       {playoff.length > 0 ? (
-        <section className="space-y-4">
+        // #playoffs: the Discord playoff posts link straight to this bracket.
+        <section id="playoffs" className="scroll-mt-24 space-y-4">
           <SectionTitle>Playoffs</SectionTitle>
           {/* overflow-hidden: Bracket scrolls horizontally inside itself, and
               without this the card leaks that width into the page scroll. */}

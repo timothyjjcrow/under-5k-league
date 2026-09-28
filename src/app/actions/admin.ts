@@ -3361,6 +3361,7 @@ export async function startPlayoffs(
   await sendDiscordMessage(
     playoffsStartedMessage(
       season.name,
+      season.id,
       bracket.map((m) => ({
         home: name.get(m.homeTeamId) ?? "?",
         away: name.get(m.awayTeamId) ?? "?",

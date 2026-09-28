@@ -86,6 +86,7 @@ export async function announcePlayoffRoundOnce(
   const sent = await sendDiscordMessage(
     playoffRoundSetMessage({
       seasonName: season.name,
+      seasonId,
       roundName: roundName(round, playoffTotalRounds(playoff)),
       fixtures: fixtures.map((m) => ({
         home: m.homeTeam.name,

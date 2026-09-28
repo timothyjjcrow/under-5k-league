@@ -262,6 +262,7 @@ export async function maybeAnnounceWeekHonors(
   ]);
   const sent = await sendDiscordMessage(
     weeklyHonorsMessage({
+      seasonId,
       week,
       playerName: playerUser?.name ?? null,
       playerPoints: honors.player?.points ?? 0,

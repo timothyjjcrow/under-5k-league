@@ -1151,7 +1151,11 @@ describe("playoffs — the next round is announced once, after it commits", () =
     const kickoff = Math.floor(final.scheduledAt!.getTime() / 1000);
     expect(content).toContain("**Season 7 grand final is set!**");
     expect(content).toContain(`<t:${kickoff}:F> (<t:${kickoff}:R>)`);
-    expect(content).toMatch(/Bracket: <[^>]+\/schedule>$/);
+    // The season's own page, so the link still shows this bracket after the
+    // next season starts.
+    expect(content).toMatch(
+      new RegExp(`Bracket: <[^>]+/seasons/${season.id}#playoffs>$`),
+    );
     expect(new Set(mentions?.users)).toEqual(
       new Set([
         discordIdOf.get(final.homeTeamId),
