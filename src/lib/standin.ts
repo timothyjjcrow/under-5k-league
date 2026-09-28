@@ -106,3 +106,41 @@ export function standinMmrNote(opts: {
     ? `heads up: ${opts.standinMmr} MMR is above this season's ${opts.maxMmr} MMR review threshold`
     : null;
 }
+
+/** One unplayed-fixture booking the captain's standin picker checks. */
+export type StandinBooking = StandinSlot & {
+  standinUserId: string;
+  matchId: string;
+  /** The covered player's name; null = an empty-seat fill. */
+  replacedName: string | null;
+  homeName: string;
+  awayName: string;
+};
+
+/**
+ * Why the assign form should not offer this standin, or null when it may.
+ *
+ * It mirrors the two refusals assignStandinGuarded gives most often, so the
+ * picker stops offering a choice that can only come back as a toast: the
+ * standin already has a booking anywhere in THIS match, or covers another
+ * unplayed fixture the same night (`standinConflict`, with the same target
+ * the server uses). `bookings` are the season's unplayed-fixture bookings,
+ * this match's included. The server still checks both at submit.
+ */
+export function standinPickerBlock(
+  standinUserId: string,
+  target: StandinSlot & { matchId: string },
+  bookings: readonly StandinBooking[],
+): string | null {
+  const theirs = bookings.filter((b) => b.standinUserId === standinUserId);
+  const here = theirs.find((b) => b.matchId === target.matchId);
+  if (here) {
+    return here.replacedName
+      ? `covering ${here.replacedName} in this match`
+      : "filling an open seat in this match";
+  }
+  const clash = theirs.find((b) => standinConflict(target, b));
+  return clash
+    ? `booked for ${clash.homeName} vs ${clash.awayName} that night`
+    : null;
+}

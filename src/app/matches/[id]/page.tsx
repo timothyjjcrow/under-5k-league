@@ -14,7 +14,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { matchMetadata } from "@/lib/link-preview-metadata";
-import { AUTO_SYNC, LEAGUE_GAME_MODE } from "@/lib/constants";
+import { AUTO_SYNC, LEAGUE_GAME_MODE, MATCH_STATUS } from "@/lib/constants";
 import {
   howToHostParts,
   NO_TICKET_REPORT_SUBTITLE,
@@ -22,7 +22,7 @@ import {
 } from "@/lib/match-hosting";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
-import { seatValue } from "@/lib/standin";
+import { seatValue, standinPickerBlock } from "@/lib/standin";
 import { roleShort } from "@/lib/roles";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
@@ -1926,6 +1926,8 @@ async function StandinSection({
     id: string;
     seasonId: string;
     status: string;
+    week: number;
+    scheduledAt: Date | null;
     scheduleRevision: number;
     homeTeamId: string;
     awayTeamId: string;
@@ -2020,6 +2022,56 @@ async function StandinSection({
     ]);
   const rosteredIds = new Set(rostered.map((m) => m.userId));
   const pool = registrations.filter((r) => !rosteredIds.has(r.userId));
+  // The pool's bookings on unplayed fixtures (this one included): the server
+  // refuses a standin already booked in this match or on another fixture the
+  // same night, so those are listed last, disabled, with the reason.
+  const bookings =
+    assignOpen && pool.length > 0
+      ? await prisma.standinAssignment.findMany({
+          where: {
+            standinUserId: { in: pool.map((r) => r.userId) },
+            match: {
+              seasonId: match.seasonId,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          select: {
+            standinUserId: true,
+            matchId: true,
+            replaced: { select: { name: true } },
+            match: {
+              select: {
+                scheduledAt: true,
+                week: true,
+                homeTeam: { select: { name: true } },
+                awayTeam: { select: { name: true } },
+              },
+            },
+          },
+        })
+      : [];
+  const pickerTarget = {
+    matchId: match.id,
+    scheduledAt: match.scheduledAt,
+    week: match.week,
+  };
+  const bookingRows = bookings.map((b) => ({
+    standinUserId: b.standinUserId,
+    matchId: b.matchId,
+    replacedName: b.replaced?.name ?? null,
+    homeName: b.match.homeTeam.name,
+    awayName: b.match.awayTeam.name,
+    scheduledAt: b.match.scheduledAt,
+    week: b.match.week,
+  }));
+  const poolChoices = pool.map((r) => ({
+    reg: r,
+    blocked: standinPickerBlock(r.userId, pickerTarget, bookingRows),
+  }));
+  const pickerOptions = [
+    ...poolChoices.filter((c) => !c.blocked),
+    ...poolChoices.filter((c) => c.blocked),
+  ];
   // One seat, one standin — players already covered leave the Covers list.
   const coveredIds = new Set(
     assignments.map((a) => a.replaced?.id).filter(Boolean),
@@ -2125,6 +2177,12 @@ async function StandinSection({
             Nobody is in the standin pool right now — ask around the Discord;
             late joiners can still sign up as standins.
           </p>
+        ) : poolChoices.every((c) => c.blocked) ? (
+          <p className="text-sm text-muted">
+            Everyone in the standin pool is already booked for this match or
+            another one that night — ask around the Discord; late joiners can
+            still sign up as standins.
+          </p>
         ) : (
           <ActionForm
             action={captainAssignStandin}
@@ -2144,14 +2202,17 @@ async function StandinSection({
               {/* Option text carries what the 9pm decision needs: seat fit
                   (roles) and whether a ping can reach them at all. "no
                   Discord" = neither a verified link nor a typed handle. */}
-              {pool.map((r) => {
+              {/* Someone the server would refuse (already in this match, or
+                  booked the same night) stays listed but can't be picked,
+                  and says why. */}
+              {pickerOptions.map(({ reg: r, blocked }) => {
                 const roles = roleShort(r.roles).join("/");
                 const unreachable = !r.user.discordId && !r.user.discordName;
                 return (
-                  <option key={r.userId} value={r.userId}>
-                    {r.user.name} ({r.mmr} MMR
-                    {roles ? ` · ${roles}` : ""}
-                    {unreachable ? " · no Discord" : ""})
+                  <option key={r.userId} value={r.userId} disabled={!!blocked}>
+                    {blocked
+                      ? `${r.user.name} (${blocked})`
+                      : `${r.user.name} (${r.mmr} MMR${roles ? ` · ${roles}` : ""}${unreachable ? " · no Discord" : ""})`}
                   </option>
                 );
               })}

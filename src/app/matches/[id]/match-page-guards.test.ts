@@ -20,4 +20,17 @@ describe("match page standins card", () => {
       /a\.teamId !== myTeamId \? null : seriesStarted \? \([\s\S]*?Locked: series already started[\s\S]*?captainRemoveStandin/,
     );
   });
+
+  it("keeps standins the server would refuse out of reach, with the reason", () => {
+    // Same bookings the server checks: this season's unplayed fixtures.
+    expect(PAGE).toMatch(
+      /standinUserId: \{ in: pool\.map\(\(r\) => r\.userId\) \},\s*match: \{\s*seasonId: match\.seasonId,\s*status: \{ not: MATCH_STATUS\.COMPLETED \},/,
+    );
+    expect(PAGE).toContain(
+      "blocked: standinPickerBlock(r.userId, pickerTarget, bookingRows)",
+    );
+    expect(PAGE).toMatch(
+      /<option key=\{r\.userId\} value=\{r\.userId\} disabled=\{!!blocked\}>/,
+    );
+  });
 });

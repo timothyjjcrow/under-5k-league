@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   standinConflict,
   standinMmrNote,
+  standinPickerBlock,
   STANDIN_CONFLICT_HOURS,
   STANDIN_MMR_FLAG_GAP,
 } from "./standin";
@@ -131,6 +132,62 @@ describe("standinMmrNote", () => {
   it("named-cover baseline beats the cap: small gap above maxMmr is silent", () => {
     expect(
       standinMmrNote({ standinMmr: 4000, replacedMmr: 3900, maxMmr: 3500 }),
+    ).toBeNull();
+  });
+});
+
+describe("standinPickerBlock", () => {
+  const target = {
+    matchId: "m1",
+    scheduledAt: at("2026-08-02T18:00:00Z"),
+    week: 3,
+  };
+  const booking = (over: Partial<Parameters<typeof standinPickerBlock>[2][number]>) => ({
+    standinUserId: "alice",
+    matchId: "m2",
+    replacedName: "Player5",
+    homeName: "Pudge Party",
+    awayName: "Techies",
+    scheduledAt: at("2026-08-09T18:00:00Z"),
+    week: 4,
+    ...over,
+  });
+
+  it("offers a standin with no bookings", () => {
+    expect(standinPickerBlock("alice", target, [])).toBeNull();
+  });
+
+  it("names the seat they already cover in this match", () => {
+    expect(
+      standinPickerBlock("alice", target, [booking({ matchId: "m1" })]),
+    ).toBe("covering Player5 in this match");
+    expect(
+      standinPickerBlock("alice", target, [
+        booking({ matchId: "m1", replacedName: null }),
+      ]),
+    ).toBe("filling an open seat in this match");
+  });
+
+  it("names the other fixture they are booked for the same night", () => {
+    expect(
+      standinPickerBlock("alice", target, [
+        booking({ scheduledAt: at("2026-08-02T20:00:00Z"), week: 3 }),
+      ]),
+    ).toBe("booked for Pudge Party vs Techies that night");
+  });
+
+  it("uses the server's clash rule: a week apart is fine, same week unset is not", () => {
+    expect(standinPickerBlock("alice", target, [booking({})])).toBeNull();
+    expect(
+      standinPickerBlock("alice", target, [
+        booking({ scheduledAt: null, week: 3 }),
+      ]),
+    ).toBe("booked for Pudge Party vs Techies that night");
+  });
+
+  it("only reads the candidate's own bookings", () => {
+    expect(
+      standinPickerBlock("bob", target, [booking({ matchId: "m1" })]),
     ).toBeNull();
   });
 });
