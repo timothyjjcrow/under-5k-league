@@ -80,6 +80,8 @@ export async function loadPostseason(match: { seasonId: string; phase: string })
   });
 }
 
+export type MatchPostseason = Awaited<ReturnType<typeof loadPostseason>>;
+
 /** The season's auction status; null before its Draft row exists. */
 export function loadDraftStatus(match: { seasonId: string }) {
   return getSeasonDraftStatus(match.seasonId);

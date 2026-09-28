@@ -6,7 +6,7 @@ import {
 } from "@/lib/playoff-match-context";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "@/lib/tiebreaker-format";
 import { LinkArrow, textLink } from "@/components/ui";
-import type { MatchPageMatch, loadPostseason } from "./load";
+import type { MatchPageMatch, MatchPostseason } from "./load";
 
 /** A tiebreaker series' format and what this game decides, above the scoreboard. */
 export function TiebreakerNote({ match }: { match: MatchPageMatch }) {
@@ -38,7 +38,7 @@ export function PlayoffContextLine({
   postseason,
 }: {
   match: MatchPageMatch;
-  postseason: Awaited<ReturnType<typeof loadPostseason>>;
+  postseason: MatchPostseason;
 }) {
   const playoffContext = playoffMatchContext(match, postseason);
   if (!playoffContext) return null;
