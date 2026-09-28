@@ -26,7 +26,9 @@ export function SiteFooter({
   // 775px tall on a phone). Its links come from src/lib/site-nav.ts, so they
   // keep the names every other menu uses.
   const links = footerNav({ ...content, phase, draftStatus });
-  // The .ics feed is a file download, so it renders as a plain <a> below.
+  // Calendar help goes to Schedule's "Add to calendar" menu, which offers a
+  // subscription that picks up reschedules. It used to download the .ics
+  // file here, the one-time copy that menu steers people away from.
   const showCalendar = phase === "REGULAR_SEASON" || phase === "PLAYOFFS";
 
   return (
@@ -63,8 +65,8 @@ export function SiteFooter({
               ))}
               {showCalendar ? (
                 <li>
-                  <a
-                    href="/api/calendar"
+                  <Link
+                    href="/schedule"
                     className={`${FOOTER_LINK_CLASS} flex items-center gap-2 whitespace-nowrap`}
                   >
                     <svg
@@ -80,8 +82,8 @@ export function SiteFooter({
                       <path d="M7 3v3M17 3v3M4.5 9.5h15" />
                       <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
                     </svg>
-                    Calendar (.ics)
-                  </a>
+                    Add to calendar
+                  </Link>
                 </li>
               ) : null}
             </ul>
