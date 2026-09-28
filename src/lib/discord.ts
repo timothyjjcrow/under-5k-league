@@ -1355,6 +1355,14 @@ export async function postWebhookMessage(
   url: string,
   payload: WebhookPayload,
 ): Promise<{ id: string } | null> {
+  return postKeepingId(url, payload, NO_MENTIONS);
+}
+
+async function postKeepingId(
+  url: string,
+  payload: WebhookPayload,
+  allowedMentions: { parse: string[] },
+): Promise<{ id: string } | null> {
   const target = runtimeWebhookUrl(url);
   if (!target) return null;
   if (!discordMutationsAllowed()) return null;
@@ -1362,7 +1370,7 @@ export async function postWebhookMessage(
     const res = await fetch(`${webhookApiUrl(target)}?wait=true`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...payload, allowed_mentions: NO_MENTIONS }),
+      body: JSON.stringify({ ...payload, allowed_mentions: allowedMentions }),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
@@ -1447,6 +1455,79 @@ export async function deleteWebhookMessage(
   } catch {
     return false;
   }
+}
+
+/** How a news post's trip to Discord went. */
+export type NewsDiscordPost =
+  | { ok: true; id: string }
+  | { ok: false; reason: "no-webhook" | "failed" };
+
+/**
+ * Post a league news announcement to the league channel and keep its message
+ * id, so an edit can rewrite this copy and a delete can remove it. News goes
+ * straight to the webhook rather than through the announcement queue because
+ * the queue's sender cannot hand back an id; the admin sees the outcome in the
+ * toast and can post again from the edit form.
+ *
+ * `pingEveryone` is the admin's explicit tick on the form. Only then does the
+ * message open with @everyone and only then does `allowed_mentions` let it
+ * ping; every other news post parses no mentions at all, like the rest of the
+ * league's announcements.
+ */
+export async function postNewsToDiscord(
+  content: string,
+  pingEveryone: boolean,
+): Promise<NewsDiscordPost> {
+  const body = pingEveryone ? `@everyone\n${content}` : content;
+  if (!isValidDiscordContent(body)) return { ok: false, reason: "failed" };
+  let url: string | null;
+  try {
+    url = await getWebhookUrl();
+  } catch {
+    return { ok: false, reason: "failed" };
+  }
+  if (!url) return { ok: false, reason: "no-webhook" };
+  const sent = await postKeepingId(
+    url,
+    { content: body },
+    pingEveryone ? { parse: ["everyone"] } : NO_MENTIONS,
+  );
+  return sent ? { ok: true, id: sent.id } : { ok: false, reason: "failed" };
+}
+
+/**
+ * Rewrite a news post's Discord copy after an edit. The edit never pings: the
+ * PATCH parses no mentions, so an @everyone the original carried is not
+ * re-sent (Discord rebuilds mentions on every edit). "gone" means the copy was
+ * deleted in the channel or the webhook changed.
+ */
+export async function editNewsOnDiscord(
+  messageId: string,
+  content: string,
+): Promise<WebhookEditResult | "no-webhook"> {
+  let url: string | null;
+  try {
+    url = await getWebhookUrl();
+  } catch {
+    return "failed";
+  }
+  if (!url) return "no-webhook";
+  return patchWebhookMessage(url, messageId, { content });
+}
+
+/**
+ * Remove a deleted news post's Discord copy. Best-effort: false means the
+ * copy may still be up and the admin should delete it by hand.
+ */
+export async function deleteNewsFromDiscord(messageId: string): Promise<boolean> {
+  let url: string | null;
+  try {
+    url = await getWebhookUrl();
+  } catch {
+    return false;
+  }
+  if (!url) return false;
+  return deleteWebhookMessage(url, messageId);
 }
 
 export type DiscordSendOptions = {

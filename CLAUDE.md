@@ -2707,13 +2707,24 @@ coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
 - `NewsPost` model (title/body/pinned/author). Pages order posts in the query
   (pinned first, newest first, id last); pure `newsPostError` validation lives
   in `src/lib/news.ts` (tested).
-- Admin "League news" card (create/pin/delete, always rendered — news is
+- Admin "League news" card (create/edit/pin/delete, always rendered — news is
   season-independent) → `src/app/actions/news.ts`. Create carries a UUID
   request receipt committed with the post, so replays/double-clicks create,
   log, and announce once. Pin/delete use conditional writes; every success,
   authoritative no-op, and stale-tab result revalidates `/`, `/news`, and
-  `/admin`. Discord delivery is awaited best-effort and failure is explicit in
-  the success toast; a durable transactional outbox is still future work.
+  `/admin`.
+- **Discord copy**: "Also post to Discord" (on by default) and "Ping
+  @everyone" (off, always the admin's tick) on the form. News posts go
+  straight to the webhook with `?wait=true` (`postNewsToDiscord`) — NOT the
+  announcement outbox, whose sender can't return an id — and
+  `NewsPost.discordMessageId` keeps the id, so Edit PATCHes the copy (parse
+  `[]`, never re-pings) and Delete removes it best-effort. The column also
+  holds a `posting:<ms>` mark while a post is in flight: every write to it is
+  a compare-and-set on the value read (`newsDiscordCopy`, `news.ts`), so a
+  double-click or two admins can't post twice, and a request that lost its
+  mark mid-send deletes its own copy. A failed post frees the mark and the
+  edit form's "Also post to Discord" is the retry; there is no automatic
+  retry for news. Posts from before this have no tracked copy.
 - Surfaced on the dashboard (`LeagueNews` card, top 3, pinned first) and the
   full `/news` archive (footer link). Posts are `<article>` landmarks with
   title-specific permalinks; media respects reduced motion and degrades to its

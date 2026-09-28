@@ -20,9 +20,12 @@ const KLIPY_PAGE_RE =
  * nothing needs saying. Surfaced in the post-success toast so the admin learns
  * how to fix it instead of silently getting a bare link.
  */
-export function newsMediaHint(body: string): string | null {
+export function newsMediaHint(
+  body: string,
+  done: "Posted" | "Saved" = "Posted",
+): string | null {
   if (KLIPY_PAGE_RE.test(body)) {
-    return "Posted — but a Klipy page link won't show as a GIF (Klipy blocks embedding). On klipy.com, right-click the GIF → “Copy image address” (a static.klipy.com/…​.gif URL) and paste that, or use a Giphy/Tenor link — those embed from the page URL.";
+    return `${done} — but a Klipy page link won't show as a GIF (Klipy blocks embedding). On klipy.com, right-click the GIF → “Copy image address” (a static.klipy.com/…​.gif URL) and paste that, or use a Giphy/Tenor link — those embed from the page URL.`;
   }
   return null;
 }
@@ -36,4 +39,49 @@ export function newsPostError(title: string, body: string): string | null {
   if (body.trim().length > NEWS_LIMITS.BODY_MAX)
     return `Keep the body under ${NEWS_LIMITS.BODY_MAX} characters.`;
   return null;
+}
+
+/**
+ * NewsPost.discordMessageId holds one of three things: null (the post has no
+ * Discord copy), a Discord message id (the copy an edit rewrites and a delete
+ * removes), or a "posting:<ms>" mark while a post to Discord is in flight.
+ * Requests claim the column with a compare-and-set before they call Discord,
+ * so a double-click or two admins can't post the same announcement twice.
+ */
+const NEWS_DISCORD_POSTING_PREFIX = "posting:";
+
+/**
+ * A mark older than this belongs to a request that died mid-post (Discord
+ * answers in seconds and the post times out at 5s). Discord may still have
+ * the message, so the admin is told to check the channel before posting again.
+ */
+export const NEWS_DISCORD_POST_STALE_MS = 60_000;
+
+export function newsDiscordPostingMark(nowMs: number): string {
+  return `${NEWS_DISCORD_POSTING_PREFIX}${nowMs}`;
+}
+
+export type NewsDiscordCopy =
+  | { state: "none" }
+  | { state: "posted"; messageId: string }
+  | { state: "posting"; interrupted: boolean };
+
+/** What the stored column says about a post's Discord copy. */
+export function newsDiscordCopy(
+  stored: string | null,
+  nowMs: number,
+): NewsDiscordCopy {
+  if (!stored) return { state: "none" };
+  if (/^\d{1,25}$/.test(stored)) return { state: "posted", messageId: stored };
+  if (stored.startsWith(NEWS_DISCORD_POSTING_PREFIX)) {
+    const at = Number(stored.slice(NEWS_DISCORD_POSTING_PREFIX.length));
+    if (Number.isFinite(at)) {
+      return {
+        state: "posting",
+        interrupted: nowMs - at > NEWS_DISCORD_POST_STALE_MS,
+      };
+    }
+  }
+  // Anything else can't be edited or removed; treat it as no copy.
+  return { state: "none" };
 }

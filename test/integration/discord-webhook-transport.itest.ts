@@ -17,9 +17,12 @@ vi.mock("next/server", async (importOriginal) => {
 });
 import { after } from "next/server";
 import {
+  deleteNewsFromDiscord,
   deleteWebhookMessage,
   deliverPendingLeagueAnnouncements,
+  editNewsOnDiscord,
   patchWebhookMessage,
+  postNewsToDiscord,
   postWebhookMessage,
   sendDiscordMessage,
 } from "@/lib/discord";
@@ -525,5 +528,62 @@ describe("deleteWebhookMessage", () => {
   it("reports a real failure", async () => {
     respond = () => ({ status: 500 });
     expect(await deleteWebhookMessage(hookUrl(), "42")).toBe(false);
+  });
+});
+
+// League news keeps its Discord message id so edits and deletes reach the
+// copy, and pings @everyone only when the admin ticked the box.
+describe("news posts on the league webhook", () => {
+  it("posts with ?wait=true on v10, keeps the id, and pings nobody by default", async () => {
+    const res = await postNewsToDiscord("📣 **Week 3** @everyone @here", false);
+    expect(res).toEqual({ ok: true, id: "1379001234567890123" });
+    expect(recorded[0].method).toBe("POST");
+    expect(recorded[0].url).toBe("/api/v10/webhooks/1111/tok-secret?wait=true");
+    expect(recorded[0].body).toEqual({
+      content: "📣 **Week 3** @everyone @here",
+      allowed_mentions: { parse: [] },
+    });
+  });
+
+  it("opens with @everyone and allows only that ping when the admin asked", async () => {
+    await postNewsToDiscord("📣 **Week 3**", true);
+    expect(recorded[0].body).toEqual({
+      content: "@everyone\n📣 **Week 3**",
+      allowed_mentions: { parse: ["everyone"] },
+    });
+  });
+
+  it("reports a missing webhook apart from a failed post", async () => {
+    respond = () => ({ status: 500 });
+    expect(await postNewsToDiscord("x", false)).toEqual({
+      ok: false,
+      reason: "failed",
+    });
+    await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
+    const envWebhook = process.env.DISCORD_WEBHOOK_URL;
+    delete process.env.DISCORD_WEBHOOK_URL;
+    try {
+      expect(await postNewsToDiscord("x", false)).toEqual({
+        ok: false,
+        reason: "no-webhook",
+      });
+      expect(await editNewsOnDiscord("42", "x")).toBe("no-webhook");
+      expect(await deleteNewsFromDiscord("42")).toBe(false);
+    } finally {
+      if (envWebhook !== undefined) process.env.DISCORD_WEBHOOK_URL = envWebhook;
+    }
+    expect(recorded).toHaveLength(1);
+  });
+
+  it("edits in place without re-pinging, and deletes the copy", async () => {
+    expect(await editNewsOnDiscord("42", "@everyone fixed")).toBe("ok");
+    expect(recorded[0].method).toBe("PATCH");
+    expect(recorded[0].url).toBe("/api/v10/webhooks/1111/tok-secret/messages/42");
+    expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
+
+    respond = () => ({ status: 204 });
+    expect(await deleteNewsFromDiscord("42")).toBe(true);
+    expect(recorded[1].method).toBe("DELETE");
+    expect(recorded[1].url).toBe("/api/v10/webhooks/1111/tok-secret/messages/42");
   });
 });
