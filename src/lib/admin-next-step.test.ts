@@ -560,6 +560,16 @@ describe("adminNextStep — links to the control", () => {
     expect(at({ seasonStatus: SEASON_STATUS.PLAYOFFS }).jump?.href).toBe(
       "#adm-season",
     );
+    // Playoff series and their result controls live in the Playoffs card.
+    for (const unfinishedPlayoffCount of [0, 2]) {
+      expect(
+        at({
+          seasonStatus: SEASON_STATUS.PLAYOFFS,
+          playoffMatchCount: 3,
+          unfinishedPlayoffCount,
+        }).jump?.href,
+      ).toBe("#adm-playoffs");
+    }
   });
 
   it("links nothing while there is nothing to do", () => {

@@ -204,17 +204,31 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
       .first(),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Reset playoffs", exact: true }),
-  ).toBeEnabled();
-  await expect(
     page.getByRole("button", { name: "Regenerate schedule", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByText(/A regular-season result or imported game already exists/i),
   ).toBeVisible();
+  // The Playoffs card lists the series still to play; the decided ones and
+  // the two bracket repairs are folded away beneath them.
+  const playoffs = page.locator("#playoffs");
   await expect(
-    page.getByText(/already advanced a later playoff round/i).first(),
+    playoffs.getByRole("heading", { name: /Series to play/ }),
   ).toBeVisible();
+  const decided = playoffs.locator("summary", { hasText: "Decided series" });
+  await expect(decided.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await decided.click();
+  await expect(
+    playoffs.getByText(/already advanced a later playoff round/i).first(),
+  ).toBeVisible();
+  const fixBracket = playoffs.locator("summary", {
+    hasText: "Fix the bracket",
+  });
+  await expect(fixBracket.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await fixBracket.click();
+  await expect(
+    page.getByRole("button", { name: "Reset playoffs", exact: true }),
+  ).toBeEnabled();
   await expect(
     page.getByRole("button", {
       name: "Return to regular season",

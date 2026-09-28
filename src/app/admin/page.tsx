@@ -1415,10 +1415,10 @@ function SeasonControls({
             championPresentation.championTeamId ? (
               <p className="text-xs text-muted">
                 A crowned season is locked against generic phase reversal.
-                Correct the grand final in Schedule &amp; results, reset the
-                bracket, or use Return to regular season in the Playoffs card;
-                each recovery clears the champion and affected postseason state
-                atomically.
+                Correct the grand final, or use Reset playoffs or Return to
+                regular season under &ldquo;Fix the bracket&rdquo;, all in the
+                Playoffs card; each recovery clears the champion and affected
+                postseason state atomically.
               </p>
             ) : season.status === SEASON_STATUS.COMPLETE &&
               season.championTeamId ? (
@@ -1426,13 +1426,13 @@ function SeasonControls({
                 The stored champion does not agree with one authoritative
                 completed grand final. Generic phase reversal remains locked;
                 use the targeted final correction when that team is a finalist,
-                or the dedicated playoff recovery controls below.
+                or &ldquo;Fix the bracket&rdquo; in the Playoffs card.
               </p>
             ) : season.status === SEASON_STATUS.PLAYOFFS ? (
               <p className="text-xs text-muted">
-                To edit regular-season results, use Return to regular season in
-                the Playoffs card so stale seeds cannot survive the phase
-                change.
+                To edit regular-season results, use Return to regular season
+                under &ldquo;Fix the bracket&rdquo; in the Playoffs card so
+                stale seeds cannot survive the phase change.
               </p>
             ) : null}
           </div>
@@ -3060,7 +3060,7 @@ function ScheduleControls({
                           : ""
                       }. Results are due from kickoff.`
                     : season.status === SEASON_STATUS.PLAYOFFS
-                      ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores below.`
+                      ? `✓ All ${status.total} regular-season results in — the bracket is running. Enter playoff scores in the Playoffs card.`
                       : season.status === SEASON_STATUS.COMPLETE
                         ? `✓ Season complete — all ${status.total} regular-season results recorded.`
                         : playoffField.seedingDeadHeatTeamIds.length > 0 ||
@@ -3189,68 +3189,6 @@ function ScheduleControls({
                 </details>
               );
             })}
-            {/* Playoffs in their own section, labeled by round so the admin
-                entering a bracket-advancing result can tell the final from a
-                semifinal. */}
-            {(() => {
-              const playoff = data.matches.filter(
-                (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
-              );
-              if (playoff.length === 0) return null;
-              const { totalRounds } = groupPlayoffRounds(playoff);
-              const pending = playoff.filter(
-                (m) => m.status !== "COMPLETED",
-              ).length;
-              const latestRound = Math.max(
-                ...playoff.map((match) => slotRound(match.bracketSlot)),
-              );
-              const latestRoundMatches = playoff.filter(
-                (match) => slotRound(match.bracketSlot) === latestRound,
-              );
-              const soleLatestPlayoffId =
-                latestRoundMatches.length === 1
-                  ? latestRoundMatches[0].id
-                  : null;
-              return (
-                <details
-                  open={pending > 0}
-                  className="rounded-lg border border-accent/40"
-                >
-                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
-                    Playoffs
-                    <span className="ml-2 text-xs font-normal text-muted">
-                      {playoff.length - pending}/{playoff.length} entered
-                    </span>
-                  </summary>
-                  <div className="space-y-2 px-3 pb-3">
-                    {playoff.map((m) => (
-                      <MatchResultRow
-                        key={m.id}
-                        m={m}
-                        teams={data.teams}
-                        expectedActiveSeasonId={season.id}
-                        seasonStatus={season.status}
-                        draftStatus={data.draft?.status ?? null}
-                        championTeamId={season.championTeamId}
-                        correctionBlockedByLaterRound={hasLaterBracketRound(
-                          playoff,
-                          m.bracketSlot,
-                        )}
-                        isSoleLatestPlayoffSeries={soleLatestPlayoffId === m.id}
-                        label={
-                          <Link
-                            href={`/matches/${m.id}`}
-                            className={textLink("shrink-0 text-xs")}
-                          >
-                            {roundName(slotRound(m.bracketSlot), totalRounds)}
-                          </Link>
-                        }
-                      />
-                    ))}
-                  </div>
-                </details>
-              );
-            })()}
           </div>
         )}
       </CardBody>
@@ -3259,7 +3197,7 @@ function ScheduleControls({
 }
 
 // One match's result + scheduling + imported-games controls. Used by the
-// week-grouped and playoff sections of ScheduleControls.
+// week-grouped section of ScheduleControls and the Playoffs card's series.
 function MatchResultRow({
   m,
   teams,
@@ -3330,7 +3268,7 @@ function MatchResultRow({
               ? m.phase === MATCH_PHASE.REGULAR ||
                 m.phase === MATCH_PHASE.TIEBREAKER
                 ? "Tiebreaker fixtures depend on this result. Use Reset tiebreaker week in the Playoffs controls before correcting it."
-                : "This series already advanced a later playoff round. It is read-only because changing its winner would strand downstream teams; use Reset playoffs to reseed the full bracket before correcting it."
+                : "This series already advanced a later playoff round. It is read-only because changing its winner would strand downstream teams; use Reset playoffs under “Fix the bracket” to reseed the full bracket before correcting it."
               : !resultOpen
                 ? m.phase === MATCH_PHASE.TIEBREAKER
                   ? "Tiebreaker results are read-only once playoffs begin. Return to Regular season before correcting one."
@@ -3597,6 +3535,90 @@ function MatchResultRow({
   );
 }
 
+/**
+ * The bracket's series with their result controls, in the Playoffs card:
+ * the series still to play first, then the decided ones folded away (open
+ * once nothing is left to play, so the grand-final correction is in view).
+ * They used to sit at the bottom of Schedule & results, so on match night
+ * the Playoffs card held only its two reset buttons.
+ */
+function PlayoffSeries({
+  season,
+  data,
+  playoff,
+}: {
+  season: Season;
+  data: AdminData;
+  playoff: AdminData["matches"];
+}) {
+  const { totalRounds } = groupPlayoffRounds(playoff);
+  const latestRound = Math.max(
+    ...playoff.map((match) => slotRound(match.bracketSlot)),
+  );
+  const latestRoundMatches = playoff.filter(
+    (match) => slotRound(match.bracketSlot) === latestRound,
+  );
+  const soleLatestPlayoffId =
+    latestRoundMatches.length === 1 ? latestRoundMatches[0].id : null;
+  const toPlay = playoff.filter((m) => m.status !== MATCH_STATUS.COMPLETED);
+  const decided = playoff.filter((m) => m.status === MATCH_STATUS.COMPLETED);
+  // Labelled by round so the admin entering a bracket-advancing result can
+  // tell the final from a semifinal.
+  const row = (m: AdminData["matches"][number]) => (
+    <MatchResultRow
+      key={m.id}
+      m={m}
+      teams={data.teams}
+      expectedActiveSeasonId={season.id}
+      seasonStatus={season.status}
+      draftStatus={data.draft?.status ?? null}
+      championTeamId={season.championTeamId}
+      correctionBlockedByLaterRound={hasLaterBracketRound(
+        playoff,
+        m.bracketSlot,
+      )}
+      isSoleLatestPlayoffSeries={soleLatestPlayoffId === m.id}
+      label={
+        <Link href={`/matches/${m.id}`} className={textLink("shrink-0 text-xs")}>
+          {roundName(slotRound(m.bracketSlot), totalRounds)}
+        </Link>
+      }
+    />
+  );
+  return (
+    <div className="space-y-2">
+      {toPlay.length > 0 ? (
+        <section
+          aria-labelledby="playoff-series-to-play"
+          className="space-y-2 rounded-lg border border-accent/40 p-3"
+        >
+          <h3 id="playoff-series-to-play" className="text-sm font-medium">
+            Series to play
+            <span className="ml-2 text-xs font-normal text-muted">
+              {decided.length}/{playoff.length} entered
+            </span>
+          </h3>
+          {toPlay.map(row)}
+        </section>
+      ) : null}
+      {decided.length > 0 ? (
+        <details
+          open={toPlay.length === 0}
+          className="rounded-lg border border-line"
+        >
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+            Decided series
+            <span className="ml-2 text-xs font-normal text-muted">
+              {decided.length}
+            </span>
+          </summary>
+          <div className="space-y-2 px-3 pb-3">{decided.map(row)}</div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function PlayoffControls({
   season,
   data,
@@ -3690,48 +3712,17 @@ function PlayoffControls({
       <CardHeader
         headingLevel={2}
         title="Playoffs"
-        subtitle="Seed the top teams into a single-elimination bracket."
+        subtitle="Seed the top teams into a single-elimination bracket, then enter each series here."
         action={
           /* START and RESET are the same action, and used to be the same
              button in the same pixel of the card header — so muscle memory
              aimed at "Start playoffs" hits "Reset playoffs" once a bracket
-             exists. They are now different controls: Start stays an ordinary
-             button, Reset is type-to-confirm, because it deletes the whole
-             postseason and the playoff RSVPs, standin bookings and pick'em
-             picks are not archived by anything. */
-          playoffMatches.length > 0 ? (
-            <ActionForm
-              action={startPlayoffs}
-              hidden={{ ...commandClaim, intent: "reset" }}
-            >
-              <DangerSubmit
-                token={season.name}
-                disabled={resetPlayoffsLockedReason != null}
-                title="Reset the playoff bracket?"
-                consequences={[
-                  `All ${playoffMatches.length} playoff match(es) are deleted and reseeded from the current standings.`,
-                  ...(playoffGameCount
-                    ? [
-                        `Their ${playoffGameCount} imported game(s) go too — postseason box scores, MVPs, fantasy points and record-book entries with them.`,
-                      ]
-                    : []),
-                  "Playoff check-ins, standin bookings and pick'em picks on those matches are deleted and are NOT archived.",
-                  ...(season.status === SEASON_STATUS.COMPLETE
-                    ? [
-                        "The stored champion record is cleared and the season reopens into Playoffs.",
-                      ]
-                    : []),
-                ]}
-                recovery={
-                  playoffGameCount
-                    ? "The OpenDota match IDs of the deleted games are archived in this card, so their box scores can be re-imported one at a time."
-                    : "The bracket itself reseeds from the standings, so nothing is lost if no games have been imported yet."
-                }
-              >
-                Reset playoffs
-              </DangerSubmit>
-            </ActionForm>
-          ) : (
+             exists. They are different controls: Start stays an ordinary
+             button up here, and Reset lives in "Fix the bracket" below as a
+             type-to-confirm, because it deletes the whole postseason and the
+             playoff RSVPs, standin bookings and pick'em picks are not
+             archived by anything. */
+          playoffMatches.length > 0 ? null : (
             <ActionForm
               action={startPlayoffs}
               hidden={{ ...commandClaim, intent: "start" }}
@@ -3761,14 +3752,9 @@ function PlayoffControls({
             {storedChampion
               ? `${storedChampion.name} is stored as champion, but that record does not match one authoritative completed grand-final winner.`
               : "No authoritative champion is stored for this completed season."}{" "}
-            Reconcile the final with the targeted result controls above, or use
-            the bracket recovery controls here; public pages do not attribute
-            the title while this conflict exists.
-          </div>
-        ) : null}
-        {playoffMatches.length > 0 && resetPlayoffsLockedReason ? (
-          <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs text-muted">
-            Reset playoffs is unavailable: {resetPlayoffsLockedReason}
+            Reconcile the final with its result controls below, or use
+            &ldquo;Fix the bracket&rdquo;; public pages do not attribute the
+            title while this conflict exists.
           </div>
         ) : null}
         {/* Outstanding results get the red line below, which also names the
@@ -3925,48 +3911,116 @@ function PlayoffControls({
             <p className="text-muted">
               {season.status === SEASON_STATUS.COMPLETE
                 ? champion
-                  ? `Postseason complete. The bracket and ${champion.name}'s title are preserved here; use the targeted grand-final correction above for a final-series error, or the destructive recovery controls below for an earlier-round or seeding error.`
-                  : "The season is marked Complete, but no authoritative champion is available. Use the phase or playoff recovery controls to reconcile the final before publishing a title."
-                : `${playoffMatches.length} playoff match(es) created. Enter scores in “Schedule & results” above — the bracket advances and crowns the champion automatically.`}
+                  ? `Postseason complete. The bracket and ${champion.name}'s title are preserved here; use the grand-final correction below for a final-series error, or “Fix the bracket” for an earlier-round or seeding error.`
+                  : "The season is marked Complete, but no authoritative champion is available. Use the phase control or “Fix the bracket” to reconcile the final before publishing a title."
+                : `${playoffMatches.length} playoff match(es) created. Enter each series' score below; the bracket advances and crowns the champion automatically.`}
             </p>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/30 px-3 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="font-medium">Need to correct the table?</div>
+            <PlayoffSeries
+              season={season}
+              data={data}
+              playoff={playoffMatches}
+            />
+            {/* Both repairs remove postseason data, so they sit folded away
+                from the series an admin works through on match night, each
+                still behind typing the season name. */}
+            <details
+              open={
+                season.status === SEASON_STATUS.COMPLETE &&
+                championPresentation.issue != null
+              }
+              className="rounded-lg border border-line px-3 py-1"
+            >
+              <summary className="flex min-h-11 cursor-pointer items-center font-medium">
+                Fix the bracket
+              </summary>
+              <div className="space-y-3 pb-3">
                 <p className="text-xs text-muted">
-                  Return to Regular season removes this postseason first, so a
-                  corrected result can never coexist with stale seeds or a stale
-                  champion.
+                  Only for a seeding mistake, a wrong result in an earlier
+                  round, or a regular-season result that needs correcting. Both
+                  remove playoff data, and each asks you to type the season
+                  name first.
                 </p>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/30 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">Reseed the bracket?</div>
+                    <p className="text-xs text-muted">
+                      {resetPlayoffsLockedReason
+                        ? `Reset playoffs is unavailable: ${resetPlayoffsLockedReason}`
+                        : "Reset playoffs deletes every playoff series and seeds a fresh bracket from the current standings."}
+                    </p>
+                  </div>
+                  <ActionForm
+                    action={startPlayoffs}
+                    hidden={{ ...commandClaim, intent: "reset" }}
+                  >
+                    <DangerSubmit
+                      token={season.name}
+                      disabled={resetPlayoffsLockedReason != null}
+                      title="Reset the playoff bracket?"
+                      consequences={[
+                        `All ${playoffMatches.length} playoff match(es) are deleted and reseeded from the current standings.`,
+                        ...(playoffGameCount
+                          ? [
+                              `Their ${playoffGameCount} imported game(s) go too — postseason box scores, MVPs, fantasy points and record-book entries with them.`,
+                            ]
+                          : []),
+                        "Playoff check-ins, standin bookings and pick'em picks on those matches are deleted and are NOT archived.",
+                        ...(season.status === SEASON_STATUS.COMPLETE
+                          ? [
+                              "The stored champion record is cleared and the season reopens into Playoffs.",
+                            ]
+                          : []),
+                      ]}
+                      recovery={
+                        playoffGameCount
+                          ? "The OpenDota match IDs of the deleted games are archived in this card, so their box scores can be re-imported one at a time."
+                          : "The bracket itself reseeds from the standings, so nothing is lost if no games have been imported yet."
+                      }
+                    >
+                      Reset playoffs
+                    </DangerSubmit>
+                  </ActionForm>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/30 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">Need to correct the table?</div>
+                    <p className="text-xs text-muted">
+                      Return to Regular season removes this postseason first, so
+                      a corrected result can never coexist with stale seeds or a
+                      stale champion.
+                    </p>
+                  </div>
+                  <ActionForm
+                    action={returnToRegularSeasonAction}
+                    hidden={commandClaim}
+                  >
+                    <DangerSubmit
+                      token={season.name}
+                      title="Return to the regular season?"
+                      consequences={[
+                        `All ${playoffMatches.length} playoff match(es) are removed; earlier regular-season matches and standings remain.`,
+                        ...(playoffGameCount
+                          ? [
+                              `${playoffGameCount} imported playoff game(s), their box scores, fantasy points and record entries are removed.`,
+                            ]
+                          : []),
+                        "Playoff check-ins, standin bookings, reschedule requests and pick'em picks are removed.",
+                        ...(season.championTeamId
+                          ? ["The stored champion record is cleared."]
+                          : []),
+                      ]}
+                      recovery={
+                        playoffGameCount
+                          ? "Deleted OpenDota match IDs are archived here for re-import after the corrected bracket is seeded."
+                          : "After correcting regular results, Start playoffs creates a fresh bracket from the authoritative table."
+                      }
+                    >
+                      Return to regular season
+                    </DangerSubmit>
+                  </ActionForm>
+                </div>
               </div>
-              <ActionForm
-                action={returnToRegularSeasonAction}
-                hidden={commandClaim}
-              >
-                <DangerSubmit
-                  token={season.name}
-                  title="Return to the regular season?"
-                  consequences={[
-                    `All ${playoffMatches.length} playoff match(es) are removed; earlier regular-season matches and standings remain.`,
-                    ...(playoffGameCount
-                      ? [
-                          `${playoffGameCount} imported playoff game(s), their box scores, fantasy points and record entries are removed.`,
-                        ]
-                      : []),
-                    "Playoff check-ins, standin bookings, reschedule requests and pick'em picks are removed.",
-                    ...(season.championTeamId
-                      ? ["The stored champion record is cleared."]
-                      : []),
-                  ]}
-                  recovery={
-                    playoffGameCount
-                      ? "Deleted OpenDota match IDs are archived here for re-import after the corrected bracket is seeded."
-                      : "After correcting regular results, Start playoffs creates a fresh bracket from the authoritative table."
-                  }
-                >
-                  Return to regular season
-                </DangerSubmit>
-              </ActionForm>
-            </div>
+            </details>
           </div>
         ) : (
           <p className="text-muted">
@@ -4002,8 +4056,8 @@ function PlayoffControls({
             </summary>
             <p className="mt-2 text-xs text-muted">
               Paste these into the &ldquo;Match ID or URL&rdquo; box on the
-              matching fixture in Schedule &amp; results and press &ldquo;Add
-              game&rdquo; to restore its box score.
+              matching series in this card and press &ldquo;Add game&rdquo; to
+              restore its box score.
             </p>
             <ul className="mt-2 space-y-1 text-xs">
               {data.playoffArchive.map((g) => (

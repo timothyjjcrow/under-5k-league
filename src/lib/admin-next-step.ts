@@ -408,7 +408,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: `Playoffs underway — ${unfinishedPlayoffCount} bracket match(es) left.`,
         detail:
-          "Each result advances the bracket automatically, and the final crowns the champion and completes the season. Keep the season in Playoffs until then.",
+          "Results import themselves; enter any that can't be found in the Playoffs card. Each result advances the bracket, and the final crowns the champion and completes the season. Keep the season in Playoffs until then.",
         tone: "waiting",
         jump: JUMP.playoffs,
       };
@@ -416,9 +416,9 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     return {
       title: "The bracket is finished but no champion is recorded.",
       detail:
-        "Result sync normally reconciles this automatically. Reload once; if it remains, inspect the grand final in Schedule & results and correct or reopen that result without resetting earlier rounds.",
+        "Result sync normally reconciles this automatically. Reload once; if it remains, inspect the grand final in the Playoffs card and correct or reopen that result without resetting earlier rounds.",
       tone: "warning",
-      jump: JUMP.schedule,
+      jump: JUMP.playoffs,
     };
   }
 
