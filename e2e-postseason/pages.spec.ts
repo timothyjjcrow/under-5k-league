@@ -274,10 +274,14 @@ const PLAYOFF_STATUS =
   /^(Through to the (grand final|semifinals)|(Quarterfinal|Semifinal|Grand final) vs .+|Out in the (quarterfinal|semifinal|grand final) \(lost .+\)|Champion|Runner-up \(lost the grand final .+\)|Missed the playoffs)$/;
 
 async function playoffStatusLines(page: Page): Promise<string[]> {
-  const texts = await page
-    .getByRole("region", { name: "Team rosters" })
-    .locator("p")
-    .allTextContents();
+  // allTextContents() does not wait. After goto the rosters can still sit in
+  // React's hidden streaming container (<div hidden id="S:…">) until the
+  // Suspense reveal runs, where the role query finds no region at all. Wait
+  // for the region to be revealed; the boundary swaps in whole, so every
+  // card's status line is there once it is.
+  const rosters = page.getByRole("region", { name: "Team rosters" });
+  await expect(rosters).toBeVisible();
+  const texts = await rosters.locator("p").allTextContents();
   return texts.map((text) => text.trim()).filter((text) => PLAYOFF_STATUS.test(text));
 }
 
@@ -376,7 +380,10 @@ test("complete-season public pages agree on the champion and recap", async ({
   // A finished season's boards point at that page too.
   await page.goto("/leaders");
   await expect(
-    page.getByRole("link", { name: "Season recap →" }),
+    page.locator("#main").getByRole("link", {
+      name: "Season recap",
+      exact: true,
+    }),
   ).toHaveAttribute("href", seasonPage);
 
   await page.goto("/fantasy");
@@ -709,7 +716,7 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   expect(champion).toBeTruthy();
 
   await archivedLink.click();
-  await expect(page.getByText("Season archive", { exact: true })).toBeVisible();
+  await expect(page.getByText("Archived season", { exact: true })).toBeVisible();
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
@@ -732,7 +739,10 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   ).toBeVisible();
   await expectStatValue(page, "Completed series", 35);
   await expect(
-    page.getByRole("link", { name: "Season recap →" }),
+    page.locator("#main").getByRole("link", {
+      name: "Season recap",
+      exact: true,
+    }),
   ).toHaveCount(0);
   // The season page uses Schedule's head-to-head grid, the league's one
   // results grid.
@@ -753,7 +763,10 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
       page.getByText(/Season 9 \(fixture\).*archived/).first(),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "Season archive →" }),
+      page.locator("#main").getByRole("link", {
+        name: "Season recap",
+        exact: true,
+      }),
     ).toHaveAttribute("href", `/seasons/${archivedSeasonId}`);
     const statsNav = page.getByRole("navigation", { name: "Statistics" });
     await expect(
