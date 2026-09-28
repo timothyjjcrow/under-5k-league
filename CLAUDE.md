@@ -1077,13 +1077,19 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   which side was Radiant), and stores the full per-player **box score** (hero,
   KDA, net worth) as `InhouseLobby.boxScore` JSON + `winnerTeam`/`radiantTeam`/
   `durationSecs`/`radiantScore`/`direScore`/`dotaMatchId`. Two entry points:
-  `recordMatch` (paste a match ID) and `autoDetectResult` — `findInhouseGame`
+  `recordMatch` (paste a match ID) and `autoDetectResult` ("Check now") —
+  which, like the scheduled scan, goes through `lookUpLobbyGame`: the lobby
+  bot's match id first when the bot launched the game, else `findInhouseGame`
   scans the 10 players' recent matches in parallel, finds the shared game, and
   takes the most recent one that started after the lobby formed. Auto-detect also
   runs on poll (`maybeAutoDetectResult`, gated by `inhouseDetectWindow`:
   `DETECT_MIN_MINUTES` after Start, `DETECT_READY_MIN_MINUTES` after formation
-  for a READY lobby nobody started; throttled
+  for a READY lobby nobody started — for IN_PROGRESS whichever opens FIRST, so
+  a late Start never closes a window that was already open; throttled
   via an atomic `detectedAt` claim — one active lobby, so API usage is bounded).
+  A hand-hosted game stays READY for its whole length, so once `scanOpensAt`
+  passes the room treats READY like IN_PROGRESS (`inhouseReadyInPlay`: game
+  poll rate, no "(!) Teams locked" title).
   Needs players' "Expose Public Match Data" on. The page renders the box score as
   a `GameResultCard` (hero icons via `heroById`/`HeroIcon`, names, KDA, winner).
 - **THE PLAYED GAME IS THE TRUTH — `buildResult` reconciles the draft against
