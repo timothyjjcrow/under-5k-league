@@ -996,9 +996,11 @@ export function HeroPool({
   heroes: { heroId: number; games: number; wins: number; kda?: number }[];
   limit?: number;
   /**
-   * Below this many games a hero shows a plain W–L with no colour and an empty
-   * bar: "1g · 100% W" in green reads as a trend when it is one game. The
-   * default 0 keeps every existing caller byte-identical.
+   * Below this many games a hero shows a plain W–L with no colour and no bar:
+   * "1g · 100% W" in green reads as a trend when it is one game. The bar's
+   * height is kept (an invisible spacer) so rows stay even, but not its track:
+   * an empty track under every tile read as a broken meter. The default 0
+   * keeps every existing caller byte-identical.
    */
   minGamesForRate?: number;
 }) {
@@ -1049,13 +1051,15 @@ export function HeroPool({
                     </span>
                   )}
                   {h.kda != null ? (
-                    <span className="tabular-nums"> · {h.kda} KDA</span>
+                    // One unit when the line wraps in a narrow tile, never a
+                    // lone "KDA" on its own line.
+                    <span className="whitespace-nowrap tabular-nums"> · {h.kda} KDA</span>
                   ) : null}
                 </div>
               </div>
             </div>
-            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2">
-              {judged ? (
+            {judged ? (
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2">
                 <div
                   className={cn(
                     "bar-fill h-full rounded-full",
@@ -1067,8 +1071,10 @@ export function HeroPool({
                   )}
                   style={{ width: `${winPct}%` }}
                 />
-              ) : null}
-            </div>
+              </div>
+            ) : (
+              <div aria-hidden className="mt-1.5 h-1" />
+            )}
           </div>
         );
       })}
