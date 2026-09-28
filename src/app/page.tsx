@@ -1,7 +1,6 @@
 import { PlayoffOutlook, playoffStatusLine } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { RegularSeasonProgress } from "@/components/league-progress";
-import { LeagueResultsMap } from "@/components/league-results-map";
 import { leagueProgress } from "@/lib/league-progress";
 import { cache, Fragment, Suspense, type ReactNode } from "react";
 import { getSeasonGameLeaders } from "@/lib/cached-queries";
@@ -2383,7 +2382,7 @@ async function SeasonView({
       (a, b) =>
         b.week - a.week || b.createdAt.getTime() - a.createdAt.getTime(),
     )
-    .slice(0, 5);
+    .slice(0, 4);
 
   // Visible to everyone — spectators and unrostered players had no way to
   // see what's coming up without leaving the dashboard. Chronological, not
@@ -2773,43 +2772,23 @@ async function SeasonView({
         ) : null}
       </div>
 
-      {/* The map sets the desktop row height. Size containment keeps the
-          sidebar's lists from stretching the row; only the lists scroll. */}
-      <div className="grid grid-cols-1 items-stretch gap-6 xl:grid-cols-3">
-        <div
-          className={cn(
-            "min-w-0",
-            upcoming.length || recentResults.length
-              ? "xl:col-span-2"
-              : "xl:col-span-3",
-          )}
-        >
-          <LeagueResultsMap
-            className="h-full"
-            standings={standings}
-            matches={matches}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-          />
-        </div>
-        <div className={cn(
-            "flex min-w-0 flex-col gap-4 xl:min-h-[26rem] xl:[contain:size]",
-            !upcoming.length && !recentResults.length && "hidden",
-          )}>
+      {/* What comes after this slate and what just finished: short plain
+          lists with a link to the rest. auto-fit, because either card can be
+          missing (nothing left to play, nothing played yet), and items-start
+          so the shorter card doesn't stretch into an empty box. There is no
+          week-by-week results grid here: the table's form column and Recent
+          results already say it, and Schedule keeps the full grid. */}
+      {upcoming.length > 0 || recentResults.length > 0 ? (
+        <div className="grid items-start gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
           {upcoming.length > 0 ? (
-            <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden xl:flex-1">
+            <Card className="min-w-0 overflow-hidden">
               <CardHeader
-                className="shrink-0 px-4 py-3"
+                className="px-4 py-3"
                 headingLevel={2}
                 title="Coming up"
                 subtitle="After this week's slate"
               />
-              <CardBody
-                className="min-h-0 max-h-60 overflow-y-auto overscroll-y-contain p-0 focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent xl:max-h-none xl:flex-1"
-                tabIndex={0}
-                role="region"
-                aria-label="Upcoming matches; scroll for more"
-              >
+              <CardBody className="p-0">
                 <ul className="divide-y divide-line/60">
                   {upcoming.map((m) => (
                     <li key={m.id}>
@@ -2843,7 +2822,7 @@ async function SeasonView({
               <Link
                 href="/schedule#fixtures"
                 className={textLink(
-                  "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
+                  "my-0 block rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
                 Full schedule <LinkArrow />
@@ -2852,18 +2831,13 @@ async function SeasonView({
           ) : null}
 
           {recentResults.length > 0 ? (
-            <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden xl:flex-[1.4]">
+            <Card className="min-w-0 overflow-hidden">
               <CardHeader
-                className="shrink-0 px-4 py-3"
+                className="px-4 py-3"
                 headingLevel={2}
                 title="Recent results"
               />
-              <CardBody
-                className="min-h-0 max-h-80 overflow-y-auto overscroll-y-contain p-0 focus-visible:outline focus-visible:-outline-offset-2 focus-visible:outline-accent xl:max-h-none xl:flex-1"
-                tabIndex={0}
-                role="region"
-                aria-label="Recent results; scroll for more"
-              >
+              <CardBody className="p-0">
                 <ul className="divide-y divide-line/60">
                   {recentResults.map((m) => (
                     <li key={m.id}>
@@ -2926,7 +2900,7 @@ async function SeasonView({
               <Link
                 href="/schedule#fixtures"
                 className={textLink(
-                  "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
+                  "my-0 block rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
                 All results <LinkArrow />
@@ -2934,7 +2908,7 @@ async function SeasonView({
             </Card>
           ) : null}
         </div>
-      </div>
+      ) : null}
 
       <AnalysisDisclosure title="Player & hero highlights">
         <Suspense fallback={null}>
@@ -3668,12 +3642,6 @@ async function CompleteView({
           </Card>
         </div>
       </div>
-      <LeagueResultsMap
-        standings={standings}
-        matches={matches}
-        teamName={teamName}
-        teamLogoUrl={teamLogoUrl}
-      />
     </div>
   );
 }
