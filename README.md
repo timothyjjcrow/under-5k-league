@@ -356,8 +356,9 @@ release process below. The CLI also supports interactive activation:
 npx vercel project web-analytics enable under-4.5k-league --scope timothyjjcrows-projects
 ```
 
-Open **Admin → Traffic → Open Vercel Web Analytics** (Vercel project access is
-required). Review page views, visitors, top pages, countries, and referrers over
+Use the **Website traffic** link at the foot of /admin (Vercel project access
+is required). It opens the analytics of the deployment you are on:
+`under-4.5k-league` for the US league, `ggd2l-europe` for Europe. Review page views, visitors, top pages, countries, and referrers over
 30 days. Historical untracked visits cannot be backfilled. Ad blockers can
 undercount visitors; server/API request totals are not page views.
 

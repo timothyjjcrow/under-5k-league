@@ -1,4 +1,5 @@
 import { listPage } from "@/lib/list-page";
+import { webAnalyticsUrl } from "@/lib/web-analytics";
 import {
   adminAttention,
   attentionTitle,
@@ -419,7 +420,6 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     // important in the offseason, when inhouse is the live mode.
     { id: "adm-discord", label: "Discord" },
     { id: "adm-activity", label: "Activity" },
-    { id: "adm-traffic", label: "Traffic" },
     { id: "adm-news", label: "News" },
     { id: "adm-security", label: "Security" },
     ...(handoffFirst
@@ -574,34 +574,6 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
       <SecurityControls />
 
-      <AdminSection
-        id="adm-traffic"
-        title="Website traffic"
-        subtitle="Visitors, page views, popular pages, and referral sources."
-      >
-        <CardBody className="space-y-3 text-sm text-muted">
-          <p>
-            Open Web Analytics and select the last 30 days to review public-page
-            traffic. Collection begins after analytics is enabled and the tracker
-            is deployed; earlier visits cannot be reconstructed.
-          </p>
-          <p>
-            Admin, account, and sign-in pages are excluded. Background game-room
-            updates are not page views. Use page views when estimating advertising
-            revenue, and allow a full month for a useful baseline.
-          </p>
-          <a
-            href="https://vercel.com/timothyjjcrows-projects/under-4.5k-league/analytics"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={buttonClasses("secondary")}
-          >
-            Open Vercel Web Analytics ↗
-          </a>
-          <p className="text-xs">Requires access to the league’s Vercel project.</p>
-        </CardBody>
-      </AdminSection>
-
       {season && handoffReadiness && !handoffReadiness.ready ? (
         <AdminSection
           id="adm-new-season"
@@ -650,6 +622,22 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </CardBody>
         </AdminSection>
       ) : null}
+
+      {/* One outbound link, so a footer line rather than a card. Each league
+          is its own Vercel project; the link follows this deployment's region. */}
+      <p className="border-t border-line-soft pt-4 text-xs text-muted">
+        Website traffic:{" "}
+        <a
+          href={webAnalyticsUrl(LEAGUE_CONFIG.region)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={textLink()}
+        >
+          open {LEAGUE_CONFIG.name} in Vercel Web Analytics ↗
+        </a>{" "}
+        (needs access to the league&rsquo;s Vercel project; admin, account and
+        sign-in pages aren&rsquo;t counted).
+      </p>
     </div>
   );
 }
