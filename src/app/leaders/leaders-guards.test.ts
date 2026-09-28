@@ -27,3 +27,28 @@ describe("/leaders per-game boards", () => {
     expect(board("games")).toContain("win${r.summary.wins === 1");
   });
 });
+
+describe("/leaders section layout", () => {
+  const sections = PAGE.split("<section ").slice(1);
+
+  it("gives every board section the same numbered heading and grid", () => {
+    // Two categories plus the report card; the report card used to have no
+    // index and a narrower max-w-3xl column, so the page ended misaligned.
+    expect(sections).toHaveLength(2);
+    for (const section of sections) {
+      expect(section).toContain("<CategoryHeading category=");
+      expect(section).toContain("className={BOARD_GRID}");
+      expect(section).not.toContain("max-w-3xl");
+    }
+    expect(PAGE).toMatch(/id: "report-card",\s*index: "03",/);
+  });
+
+  it("lets a lone last board take the whole row", () => {
+    expect(PAGE).toMatch(/const BOARD_GRID =\s*"[^"]*lg:grid-cols-2 lg:\[&>:last-child:nth-child\(odd\)\]:col-span-2"/);
+  });
+
+  it("keeps both weekly honors on one baseline when they share a line", () => {
+    const row = PAGE.slice(PAGE.indexOf("<span aria-hidden>🛡️</span>") - 200, PAGE.indexOf("<span aria-hidden>🛡️</span>"));
+    expect(row).not.toMatch(/className="mt-[\d.]+ /);
+  });
+});

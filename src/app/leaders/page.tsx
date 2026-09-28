@@ -79,6 +79,30 @@ type DisplayUser = {
   rankTier: number | null;
 };
 
+/**
+ * Two boards to a row on desktop, and a lone last board (an odd count, which
+ * depends on the data: Team sustain is conditional) takes the whole row
+ * instead of leaving an empty half-width cell beside it.
+ */
+const BOARD_GRID =
+  "grid grid-cols-1 gap-4 lg:grid-cols-2 lg:[&>:last-child:nth-child(odd)]:col-span-2";
+
+function CategoryHeading({
+  category,
+}: {
+  category: { id: string; index: string; title: string; description: string };
+}) {
+  return (
+    <div className="flex items-start gap-4 border-b border-line-soft pb-3">
+      <span aria-hidden className="font-display text-3xl font-semibold text-accent/65">{category.index}</span>
+      <div>
+        <h2 id={`${category.id}-title`} className="font-display text-2xl font-semibold uppercase tracking-wide text-fg">{category.title}</h2>
+        <p className="mt-1 text-sm text-muted">{category.description}</p>
+      </div>
+    </div>
+  );
+}
+
 export default async function LeadersPage({
   searchParams,
 }: {
@@ -464,6 +488,14 @@ export default async function LeadersPage({
       description: "Gold, net worth and the players who put in the most games.",
     },
   ] as const;
+  // The report card is a peer of the two categories (the section nav lists it
+  // beside them), so it carries the next display index and the same heading.
+  const reportCategory = {
+    id: "report-card",
+    index: "03",
+    title: "League report card",
+    description: "A broader view of each performance, graded against worldwide Dota benchmarks when those measurements are available.",
+  } as const;
 
   const honorsCard = hasHonors ? (
     <Card id="weekly-honors" className="scroll-mt-24">
@@ -520,7 +552,11 @@ export default async function LeadersPage({
           ) : (
             <div
               key={week}
-              className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-sm"
+              // gap-y-2.5, not a margin on the team entry: a margin shifted
+              // Team of the Week ~3px below Player of the Week whenever the
+              // two sat on one line. Wrapped, the rows keep the 10px the
+              // stacked links need.
+              className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-5 py-3 text-sm"
             >
               <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
                 Week {week}
@@ -549,7 +585,7 @@ export default async function LeadersPage({
                 </span>
               ) : null}
               {honors.team ? (
-                <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
+                <span className="flex min-w-0 items-center gap-1.5">
                   <span aria-hidden>🛡️</span>
                   <Link
                     href={`/teams/${honors.team.teamId}`}
@@ -609,14 +645,8 @@ export default async function LeadersPage({
       {honorsCard}
       {categories.map((category) => (
         <section key={category.id} id={category.id} aria-labelledby={`${category.id}-title`} className="scroll-mt-24 space-y-4">
-          <div className="flex items-start gap-4 border-b border-line-soft pb-3">
-            <span aria-hidden className="font-display text-3xl font-semibold text-accent/65">{category.index}</span>
-            <div>
-              <h2 id={`${category.id}-title`} className="font-display text-2xl font-semibold uppercase tracking-wide text-fg">{category.title}</h2>
-              <p className="mt-1 text-sm text-muted">{category.description}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <CategoryHeading category={category} />
+          <div className={BOARD_GRID}>
             {boards.filter((board) => board.category === category.id).map((board) => (
               <LeaderBoard
                 key={board.key}
@@ -653,12 +683,9 @@ export default async function LeadersPage({
         </section>
       ))}
       {reportRows.length > 0 ? (
-        <section id="report-card" aria-labelledby="report-card-title" className="scroll-mt-24 space-y-4">
-          <div className="border-b border-line-soft pb-3">
-            <h2 id="report-card-title" className="font-display text-2xl font-semibold uppercase tracking-wide">League report card</h2>
-            <p className="mt-1 text-sm text-muted">A broader view of each performance, graded against worldwide Dota benchmarks when those measurements are available.</p>
-          </div>
-          <div className="max-w-3xl">
+        <section id={reportCategory.id} aria-labelledby={`${reportCategory.id}-title`} className="scroll-mt-24 space-y-4">
+          <CategoryHeading category={reportCategory} />
+          <div className={BOARD_GRID}>
             <LeaderBoard
               id="metric-report"
               title="Best report card"
