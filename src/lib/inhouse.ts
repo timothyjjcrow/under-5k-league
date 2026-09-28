@@ -473,37 +473,47 @@ export function detectIntervalSeconds(elapsedMs: number): number {
  * go straight into Dota without pressing the optional Start must still get
  * their game recorded. So there are two clocks:
  *
- *   - IN_PROGRESS: from `startedAt` (the Start press, or the bot's launch) —
- *     the game is known to be running, so the scan opens DETECT_MIN_MINUTES in.
  *   - READY: from lobby FORMATION. Teams lock a few minutes after that and the
  *     group still has to host and launch, so DETECT_READY_MIN_MINUTES (longer)
  *     puts the first scan a few minutes after teams lock.
+ *   - IN_PROGRESS: from `startedAt` (the Start press, or the bot's launch) —
+ *     the game is known to be running, so the scan opens DETECT_MIN_MINUTES in
+ *     — unless the formation clock opens earlier. Start is optional and can be
+ *     pressed (or the bot's launch first noticed) long after the game began,
+ *     so a late stamp must never close a window formation already opened:
+ *     that would hide "Check now" on a finished game and hold its result back
+ *     another DETECT_MIN_MINUTES. The earlier-opening clock wins, and brings
+ *     its `clockMs` with it.
  *
- * `clockMs` also drives the scan's backoff (detectIntervalSeconds). Null for
- * any phase that is not being played. Shared by the service, the automation
- * gate's wake-up and the room's "auto-scan is running" note, so the three can
- * never disagree about when detection starts.
+ * `clockMs` also drives the scan's backoff (detectIntervalSeconds) and the
+ * bot-match wait. Null for any phase that is not being played. Shared by the
+ * service, the automation gate's wake-up and the room's "auto-scan is
+ * running" note, so the three can never disagree about when detection starts.
+ * (The abandonment floors are NOT on this clock: they stay on formation for
+ * READY and on `startedAt` for IN_PROGRESS — see resolveAbandonedLobby.)
  */
 export function inhouseDetectWindow(lobby: {
   status: string;
   createdAtMs: number;
   startedAtMs: number | null;
 }): { clockMs: number; opensAtMs: number } | null {
+  const fromFormation = {
+    clockMs: lobby.createdAtMs,
+    opensAtMs: lobby.createdAtMs + INHOUSE.DETECT_READY_MIN_MINUTES * 60_000,
+  };
   if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
     // Every IN_PROGRESS writer stamps startedAt; formation is the fallback so
     // an inconsistent row is still scanned rather than stranded.
     const clockMs = lobby.startedAtMs ?? lobby.createdAtMs;
-    return {
+    const fromStart = {
       clockMs,
       opensAtMs: clockMs + INHOUSE.DETECT_MIN_MINUTES * 60_000,
     };
+    return fromStart.opensAtMs <= fromFormation.opensAtMs
+      ? fromStart
+      : fromFormation;
   }
-  if (lobby.status === INHOUSE_STATUS.READY) {
-    return {
-      clockMs: lobby.createdAtMs,
-      opensAtMs: lobby.createdAtMs + INHOUSE.DETECT_READY_MIN_MINUTES * 60_000,
-    };
-  }
+  if (lobby.status === INHOUSE_STATUS.READY) return fromFormation;
   return null;
 }
 

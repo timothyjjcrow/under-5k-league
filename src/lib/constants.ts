@@ -294,7 +294,8 @@ export const INHOUSE = {
   // from lobby FORMATION. Teams lock a few minutes after formation and the
   // group still has to host and launch the Dota lobby, so the READY floor is
   // longer: the first scan lands a few minutes after teams lock, not while
-  // the draft is still running.
+  // the draft is still running. A late Start never pushes the scan back: an
+  // IN_PROGRESS game keeps the formation window when that opens first.
   DETECT_MIN_MINUTES: 8,
   DETECT_READY_MIN_MINUTES: 15,
   DETECT_INTERVAL_SECONDS: 180,

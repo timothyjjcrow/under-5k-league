@@ -784,8 +784,8 @@ describe("inhouseDetectWindow", () => {
   const FORMED = Date.UTC(2026, 8, 20, 18, 0);
   const MIN = 60_000;
 
-  it("times a started game from Start", () => {
-    const started = FORMED + 20 * MIN;
+  it("times a game started right after teams lock from Start", () => {
+    const started = FORMED + 5 * MIN;
     expect(
       inhouseDetectWindow({
         status: INHOUSE_STATUS.IN_PROGRESS,
@@ -796,6 +796,58 @@ describe("inhouseDetectWindow", () => {
       clockMs: started,
       opensAtMs: started + INHOUSE.DETECT_MIN_MINUTES * MIN,
     });
+  });
+
+  it("never lets a late Start close a scan window formation already opened", () => {
+    // Formed at FORMED, the READY scan opened 15 minutes in, and the game
+    // ended while OpenDota was still publishing. A player presses Start (or
+    // the bot panel first notices the launch) 56 minutes in: the scan and
+    // "Check now" must stay open, on the formation clock.
+    const fromFormation = {
+      clockMs: FORMED,
+      opensAtMs: FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+    };
+    for (const late of [
+      INHOUSE.DETECT_READY_MIN_MINUTES + 1,
+      56,
+      3 * 60,
+    ]) {
+      expect(
+        inhouseDetectWindow({
+          status: INHOUSE_STATUS.IN_PROGRESS,
+          createdAtMs: FORMED,
+          startedAtMs: FORMED + late * MIN,
+        }),
+      ).toEqual(fromFormation);
+    }
+  });
+
+  it("lets Start bring the scan forward but never push it back", () => {
+    // Pressed before the formation window opens, Start still can't move the
+    // opening later than formation would have put it.
+    const window = inhouseDetectWindow({
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      createdAtMs: FORMED,
+      startedAtMs: FORMED + 10 * MIN,
+    });
+    expect(window?.opensAtMs).toBe(
+      FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+    );
+    for (let startedMin = 0; startedMin <= 120; startedMin += 1) {
+      const started = inhouseDetectWindow({
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        createdAtMs: FORMED,
+        startedAtMs: FORMED + startedMin * MIN,
+      })!;
+      expect(started.opensAtMs).toBeLessThanOrEqual(
+        FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+      );
+      // The clock always matches the floor it opened on.
+      expect([
+        started.clockMs + INHOUSE.DETECT_MIN_MINUTES * MIN,
+        started.clockMs + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+      ]).toContain(started.opensAtMs);
+    }
   });
 
   it("scans a game nobody pressed Start on, timed from formation", () => {
@@ -886,15 +938,30 @@ describe("inhouseScanStatus", () => {
 
   it("keeps a game that just started out of the manual check", () => {
     // The room hides "Game over? Check now" until `live`: a game Start was
-    // pressed on a moment ago can't be over yet.
+    // pressed on a moment ago, right after teams locked, can't be over yet.
     const started = OPENS - INHOUSE.DETECT_MIN_MINUTES * MIN;
     const window = inhouseDetectWindow({
       status: INHOUSE_STATUS.IN_PROGRESS,
-      createdAtMs: started - 20 * MIN,
+      createdAtMs: started - 5 * MIN,
       startedAtMs: started,
     });
     expect(inhouseScanStatus(window!.opensAtMs, started + 3_000).live).toBe(
       false,
+    );
+  });
+
+  it("keeps the manual check on a finished game when Start is pressed late", () => {
+    // The Play screen must not lose "Check now" because someone pressed the
+    // optional Start (or the bot's launch was first noticed) after the game.
+    const formed = OPENS - 60 * MIN;
+    const lateStart = OPENS;
+    const window = inhouseDetectWindow({
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      createdAtMs: formed,
+      startedAtMs: lateStart,
+    });
+    expect(inhouseScanStatus(window!.opensAtMs, lateStart + 3_000).live).toBe(
+      true,
     );
   });
 });

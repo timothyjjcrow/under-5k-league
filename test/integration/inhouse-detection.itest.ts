@@ -28,11 +28,15 @@ afterEach(() => {
   vi.mocked(fetchRecentMatchIds).mockClear();
 });
 
-async function game(startedAt = dueStartedAt(), detectedAt: Date | null = null) {
+async function game(
+  startedAt = dueStartedAt(),
+  detectedAt: Date | null = null,
+  createdAt = new Date(NOW - 30 * 60_000),
+) {
   return prisma.inhouseLobby.create({
     data: {
       status: INHOUSE_STATUS.IN_PROGRESS,
-      createdAt: new Date(NOW - 30 * 60_000),
+      createdAt,
       startedAt,
       detectedAt,
     },
@@ -41,7 +45,8 @@ async function game(startedAt = dueStartedAt(), detectedAt: Date | null = null) 
 
 describe("automatic inhouse detection read budget", () => {
   it("does not load a roster or claim a scan before a game is old enough", async () => {
-    await game(new Date(NOW));
+    // Started the moment teams locked, so neither clock has opened yet.
+    await game(new Date(NOW), null, new Date(NOW - 5 * 60_000));
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const probe = vi.spyOn(prisma.inhouseLobby, "findFirst");
     const roster = vi.spyOn(prisma.inhouseLobbyPlayer, "findMany");
@@ -85,6 +90,23 @@ describe("automatic inhouse detection read budget", () => {
     expect(roster).not.toHaveBeenCalled();
     expect(claim).not.toHaveBeenCalled();
     expect(fetchRecentMatchIds).not.toHaveBeenCalled();
+  });
+
+  it("keeps scanning a game whose Start was pressed long after teams locked", async () => {
+    // Formed an hour ago; the formation window opened long before someone
+    // pressed the optional Start just now. The press must not buy the game
+    // another DETECT_MIN_MINUTES of silence.
+    const lobby = await game(new Date(NOW), null, new Date(NOW - 60 * 60_000));
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const claim = vi.spyOn(prisma.inhouseLobby, "updateMany");
+
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(claim).toHaveBeenCalledOnce();
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      select: { detectedAt: true },
+    });
+    expect(after.detectedAt).toEqual(new Date(NOW));
   });
 
   it("uses only the clock probe while the shared scan cooldown is current", async () => {

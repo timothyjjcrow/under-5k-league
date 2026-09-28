@@ -63,6 +63,7 @@ import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidati
 import { announcementClaimValue } from "./announcement-marker";
 import { honorsClaimValue } from "./honors-service";
 import { AUTO_SYNC, DRAFT_REMINDER, INHOUSE, WEEK_REMINDER } from "./constants";
+import { detectIntervalSeconds } from "./inhouse";
 import {
   draftReminderKey,
   honorsAnnouncedKey,
@@ -629,6 +630,67 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(snapshot).toMatchObject({
       nextWakeAtMs: NOW + INHOUSE.DETECT_MIN_MINUTES * 60_000,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("keeps scanning a game whose Start was pressed late", () => {
+    // Formed an hour ago, scanned a minute ago, Start pressed just now: the
+    // scan the READY window opened keeps its backoff instead of sleeping
+    // another DETECT_MIN_MINUTES from the press.
+    const formed = NOW - 60 * 60_000;
+    const scannedAt = NOW - 60_000;
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        activeLobbies: [
+          {
+            status: "IN_PROGRESS",
+            acceptEndsAt: null,
+            voteEndsAt: null,
+            pickEndsAt: null,
+            startedAt: new Date(NOW),
+            detectedAt: new Date(scannedAt),
+            createdAt: new Date(formed),
+          },
+        ],
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs:
+        scannedAt + detectIntervalSeconds(NOW - formed) * 1_000 + 1,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("measures a late-started game's teardown from Start, as the resolver does", () => {
+    // The scan runs on the formation clock here, but resolveAbandonedLobby
+    // floors IN_PROGRESS on startedAt: waking on formation would pin the
+    // worker on a teardown that cannot happen yet.
+    const startedAt =
+      NOW - (INHOUSE.ABANDON_IN_PROGRESS_HOURS * 60 - 1) * 60_000;
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        activeLobbies: [
+          {
+            status: "IN_PROGRESS",
+            acceptEndsAt: null,
+            voteEndsAt: null,
+            pickEndsAt: null,
+            startedAt: new Date(startedAt),
+            // A scan just ran, so the next one is a full (grown) interval out.
+            detectedAt: new Date(NOW),
+            createdAt: new Date(startedAt - 60 * 60_000),
+          },
+        ],
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs:
+        startedAt + INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 + 1,
       reason: "INHOUSE",
     });
   });

@@ -706,9 +706,11 @@ export function computeAutomationGateSnapshot(
     } else {
       // READY and IN_PROGRESS are both "being played": the result scan runs
       // from either (Start is optional), on the clock inhouseDetectWindow
-      // picks — Start for IN_PROGRESS, formation for READY — and each has an
-      // abandonment floor. Never `updatedAt`: every scan's detectedAt claim
-      // bumps it.
+      // picks, and each has an abandonment floor on the clock
+      // resolveAbandonedLobby reads — formation for READY, Start for
+      // IN_PROGRESS. The scan's clock can be formation for an IN_PROGRESS game
+      // too (a late Start), so the floor must not borrow `detect.clockMs`.
+      // Never `updatedAt`: every scan's detectedAt claim bumps it.
       const createdAt = dateMs(lobby.createdAt, "lobby.createdAt");
       const startedAt = optionalDateMs(lobby.startedAt, "lobby.startedAt");
       if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
@@ -735,7 +737,9 @@ export function computeAutomationGateSnapshot(
         nowMs,
         lobby.status === INHOUSE_STATUS.READY
           ? createdAt + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1
-          : detect.clockMs + INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 + 1,
+          : (startedAt ?? createdAt) +
+              INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 +
+              1,
         "INHOUSE",
       );
     }
