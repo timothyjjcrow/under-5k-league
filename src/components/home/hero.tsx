@@ -15,10 +15,11 @@ import { cn } from "@/lib/utils";
 
 /**
  * Home's shared hero: the season marquee every phase renders, its step rail,
- * and the lines that sit with it. Each phase fills the hero's slots through a
- * builder in its own view file (signups-view, draft-view, season-view,
- * complete-view); src/app/page.tsx loads the data, picks the phase and draws
- * the one <Hero>.
+ * and the lines that sit with it. Each season phase fills the hero's slots
+ * through a builder in its own view file (signups-view, draft-view,
+ * season-view, complete-view), and src/app/page.tsx loads the data, picks the
+ * phase and draws the one <Hero>. With no active season, offseason-view draws
+ * its own.
  */
 
 /** What a phase puts in the hero: its CTA buttons, its counts, its panel. */

@@ -858,10 +858,10 @@ the app is a link (`<PlayerLink userId>` in `ui.tsx` for players; plain
   games) via pure `topBy` (`player-stats.ts`); rate boards use an adaptive
   min-games floor. No wins or win-rate board on purpose (they ranked the
   team's record), no per-board search (the viewer's row is pinned).
-- **Dashboard** (`src/app/page.tsx` + `src/components/home/`) shows a compact playoff bracket during
-  PLAYOFFS and a champion/final-standings recap on COMPLETE. Bracket
-  round-grouping is pure `slotRound` / `groupPlayoffRounds` (`schedule.ts`,
-  tested), shared with `/schedule`.
+- **Dashboard** (`src/app/page.tsx` + `src/components/home/`) shows a
+  compact playoff bracket during PLAYOFFS and a champion/final-standings
+  recap on COMPLETE. Bracket round-grouping is pure `slotRound` /
+  `groupPlayoffRounds` (`schedule.ts`, tested), shared with `/schedule`.
 - **Nav** — `src/lib/site-nav.ts` is the one page list behind the header,
   Explore, the phone tab bar and the footer. Teams shows from DRAFT on (and
   the draft room from `DRAFT_ROOM_LEAD_HOURS` before draft night);
@@ -1892,10 +1892,10 @@ already in the `Setting` table.
   summary math in `src/lib/availability.ts` (`teamAvailability`, tested).
 - Players RSVP via the shared `<CheckinBanner>`
   (`src/components/checkin-banner.tsx`) rendered on the dashboard
-  (`MyNextMatch`, `src/components/home/my-next-match.tsx`), `/schedule`, and unplayed `/matches/[id]`
-  pages (`setAvailability` action — rostered players and assigned standins
-  only, no completed matches). Schedule match rows show per-team ✓/✗ counts
-  while a match is unplayed.
+  (`MyNextMatch`, `src/components/home/my-next-match.tsx`), `/schedule`,
+  and unplayed `/matches/[id]` pages (`setAvailability` action — rostered
+  players and assigned standins only, no completed matches). Schedule match
+  rows show per-team ✓/✗ counts while a match is unplayed.
 - **Captain's check-in reminder** (`src/lib/checkin-nudge-service.ts`,
   `remindUnansweredCheckins`, `test/integration/checkin-nudge.itest.ts`): an
   optional one-press button under the captain's OWN side in the match page's
@@ -2967,9 +2967,9 @@ ask it made twice. What that turned into:
   season, complete, each with a builder for its hero slots) live in
   `src/components/home/`. Source guards read all of it through
   `homePageSource()` (`test/support/source-files.ts`). Matches are fetched
-  ONCE in `Home()` (mid-season+ phases) and passed down; the scenario report is computed once
-  in `SeasonView` and shared by the standings clinch marks, the This-week
-  stakes chips, and the your-team one-liner.
+  ONCE in `Home()` (mid-season+ phases) and passed down; the scenario report
+  is computed once in `SeasonView` and shared by the standings clinch marks,
+  the This-week stakes chips, and the your-team one-liner.
 - Hero meta per phase: signups progress, "Week X of Y + teams + games on
   record" (regular), "N teams still alive + <round> underway" (playoffs),
   champion crest + Relive CTA (complete).
