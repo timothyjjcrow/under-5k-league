@@ -94,11 +94,26 @@ describe("teamPlayoffRun", () => {
       kind: "out",
       round: "Semifinal",
     });
-    // A final won before the title is confirmed is not a crown.
-    expect(teamPlayoffRun("a", all, null)).toEqual({
-      kind: "through",
-      round: "Grand final",
+    // A final won before the title is confirmed is not a crown, and its
+    // loser isn't the runner-up yet either (the team pages say nothing).
+    expect(teamPlayoffRun("a", all, null)).toEqual({ kind: "finalPending" });
+    expect(teamPlayoffRun("b", all, null)).toEqual({ kind: "finalPending" });
+    expect(teamPlayoffRun("e", all, null)).toEqual({
+      kind: "out",
+      round: "Semifinal",
     });
+  });
+
+  it("follows the confirmed champion when it disagrees with the final's row", () => {
+    // A disputed or reopened final: the season names b, the row says a won.
+    const all = [
+      ...quarters,
+      m("R1M0", "a", "e", won("a")),
+      m("R1M1", "c", "b", won("b")),
+      m("R2M0", "a", "b", { phase: "FINAL", ...won("a") }),
+    ];
+    expect(teamPlayoffRun("b", all, "b")).toEqual({ kind: "champion" });
+    expect(teamPlayoffRun("a", all, "b")).toEqual({ kind: "finalPending" });
   });
 });
 
@@ -129,6 +144,10 @@ describe("playoffRunTile", () => {
     expect(playoffRunTile({ kind: "through", round: "Quarterfinal" })).toEqual(
       { value: "Through", hint: "Won the quarterfinal" },
     );
+    expect(playoffRunTile({ kind: "finalPending" })).toEqual({
+      value: "Grand final",
+      hint: "Result pending",
+    });
     expect(playoffRunTile({ kind: "missed" })).toEqual({
       value: "Missed",
       hint: "Didn't make the playoffs",

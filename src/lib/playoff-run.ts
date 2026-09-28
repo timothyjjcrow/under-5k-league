@@ -28,6 +28,13 @@ export type PlayoffRun =
   | { kind: "alive"; round: string; live: boolean }
   /** Won everything so far, next round not drawn yet. */
   | { kind: "through"; round: string }
+  /**
+   * The grand final has a result but the title isn't confirmed yet (season
+   * not complete, or the final is under review). Neither finalist is crowned
+   * or called runner-up until it is, the rule the team pages follow
+   * (playoffStatuses).
+   */
+  | { kind: "finalPending" }
   /** The bracket exists and this team is not in it. */
   | { kind: "missed" };
 
@@ -60,6 +67,9 @@ export function teamPlayoffRun(
         a.id.localeCompare(b.id),
     );
   if (mine.length === 0) return { kind: "missed" };
+  const isFinal = (m: PlayoffRunMatch) =>
+    m.phase === MATCH_PHASE.FINAL ||
+    (totalRounds > 0 && slotRound(m.bracketSlot) === totalRounds - 1);
 
   const lost = mine.find(
     (m) =>
@@ -68,10 +78,11 @@ export function teamPlayoffRun(
       m.winnerTeamId !== teamId,
   );
   if (lost) {
-    const isFinal =
-      lost.phase === MATCH_PHASE.FINAL ||
-      (totalRounds > 0 && slotRound(lost.bracketSlot) === totalRounds - 1);
-    return isFinal ? { kind: "runnerUp" } : { kind: "out", round: label(lost) };
+    if (!isFinal(lost)) return { kind: "out", round: label(lost) };
+    // Runner-up only once the final's winner is the confirmed champion.
+    return championTeamId === lost.winnerTeamId
+      ? { kind: "runnerUp" }
+      : { kind: "finalPending" };
   }
 
   const open = mine.filter((m) => m.status !== MATCH_STATUS.COMPLETED);
@@ -84,7 +95,10 @@ export function teamPlayoffRun(
       live: next.status === MATCH_STATUS.LIVE,
     };
   }
-  return { kind: "through", round: label(mine[mine.length - 1]) };
+  const last = mine[mine.length - 1];
+  // Won the final, but the champion (checked first) isn't this team yet.
+  if (isFinal(last)) return { kind: "finalPending" };
+  return { kind: "through", round: label(last) };
 }
 
 /** "in the quarterfinal", but "in round 1" (no article before a number). */
@@ -113,6 +127,8 @@ export function playoffRunTile(run: PlayoffRun): {
         value: "Through",
         hint: `Won ${inRound(run.round).replace(/^in /, "")}`,
       };
+    case "finalPending":
+      return { value: "Grand final", hint: "Result pending" };
     case "missed":
       return { value: "Missed", hint: "Didn't make the playoffs" };
   }
