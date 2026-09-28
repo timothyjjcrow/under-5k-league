@@ -17,8 +17,8 @@ import { MISSING_LEAGUE_TICKET_WARNING } from "./match-hosting";
  * - Nothing whatsoever prompts "start the playoffs" once the last regular
  *   result lands, or "record the final" when the bracket is one match from a
  *   champion.
- * - COMPLETE is a dead end: the control that starts next season is inside a
- *   collapsed <details> at the bottom of the page.
+ * - COMPLETE was a dead end: the control that starts next season sat inside a
+ *   collapsed <details> at the bottom of the page. It now leads the page.
  * - A season parked in COMPLETE with an unfinished bracket will never crown
  *   anyone, and every playoff result saves with a success toast regardless.
  *
@@ -301,9 +301,9 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       };
     }
     return {
-      title: "Season complete. Choose the league's next state.",
+      title: "Season complete. Open the next season when you're ready.",
       detail:
-        "Open “Season handoff” below. You can archive this season and enter an offseason, or preserve it while immediately opening signups for the next season. Results, rosters, and the champion are kept under History either way.",
+        "Use “Season handoff” at the top of this page. Until then the league rests in Season complete, with the champion and bracket on the home page, and inhouse keeps running. The finished season's results, rosters and champion stay under Season history after the handoff.",
       tone: "done",
     };
   }

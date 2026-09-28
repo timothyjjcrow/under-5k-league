@@ -352,17 +352,21 @@ describe("adminNextStep — playoffs and completion", () => {
     expect(s.detail).not.toMatch(/back to Playoffs/i);
   });
 
-  it("offers a deliberate offseason or next season after a valid finish", () => {
+  // The league rests in Season complete between seasons; the offseason is
+  // only for a cancelled season or reactivating an old one, so the next step
+  // no longer offers it as a peer of opening signups.
+  it("points at opening the next season after a valid finish", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.COMPLETE,
       hasChampion: true,
     });
-    expect(s.title).toMatch(/choose the league's next state/i);
-    // Name the control EXACTLY as the page labels it.
-    expect(s.detail).toContain("Season handoff");
-    expect(s.detail).toContain("offseason");
-    // Archiving sounds destructive; say plainly that nothing is lost.
-    expect(s.detail).toMatch(/kept/i);
+    expect(s.tone).toBe("done");
+    expect(s.title).toMatch(/open the next season/i);
+    // Name the control EXACTLY as the page labels it, where it now is.
+    expect(s.detail).toContain("“Season handoff” at the top of this page");
+    expect(s.detail).not.toMatch(/offseason/i);
+    // Handing off sounds destructive; say plainly that nothing is lost.
+    expect(s.detail).toMatch(/stay under Season history/i);
   });
 });
 

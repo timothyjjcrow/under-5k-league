@@ -29,6 +29,7 @@ import {
   carriedSeasonSettings,
   carriedSettingsLine,
   nextSeasonName,
+  type CarriedSeasonSettings,
 } from "@/lib/season-handoff";
 import {
   createSeason,
@@ -298,6 +299,29 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             <CaptainControls season={season} data={data} />
           </AdminAnchor>
   </> : null;
+  // Between seasons the job left on this page is opening the next one, so
+  // its card leads, right under the title: once a champion is crowned, and
+  // in the offseason. A crowned season's own cards can no longer change much,
+  // so they fold into one "<season> record" section instead of standing
+  // between the admin and the handoff. A Complete season WITHOUT a valid
+  // champion is a recovery state: its cards stay open and the locked handoff
+  // stays last.
+  const handoffFirst = !season || handoffReadiness?.ready === true;
+  const seasonRecord = season && data && handoffReadiness?.ready ? season : null;
+  const championName = handoffReadiness?.ready
+    ? (data?.teams.find((team) => team.id === handoffReadiness.championTeamId)
+        ?.name ?? null)
+    : null;
+  const importQuery = await searchParams;
+  const syncCards = season ? (
+    <AdminAnchor id="adm-sync">
+      <AutoSyncHealth season={season} />
+      <Suspense fallback={<CardSkeleton rows={3} />}>
+        <ImportProgress seasonId={season.id} page={importQuery.importPage} query={importQuery} />
+        <DatabaseHealth />
+      </Suspense>
+    </AdminAnchor>
+  ) : null;
 
   return (
     <div className="space-y-8">
@@ -308,7 +332,21 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
       <AdminJump
         items={[
-          ...(season && data
+          ...(handoffFirst
+            ? [
+                {
+                  id: "adm-new-season",
+                  label: season ? "Season handoff" : "Open a new season",
+                },
+              ]
+            : []),
+          ...(season && data && seasonRecord
+            ? [
+                { id: "adm-attention", label: "Needs attention" },
+                { id: "adm-record", label: "Season record" },
+                { id: "adm-league", label: "League id" },
+              ]
+            : season && data
             ? [
                 { id: "adm-attention", label: "Needs attention" },
                 ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
@@ -335,11 +373,54 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           { id: "adm-traffic", label: "Traffic" },
           { id: "adm-news", label: "News" },
           { id: "adm-security", label: "Security" },
-          { id: "adm-new-season", label: "Season handoff" },
+          ...(handoffFirst
+            ? []
+            : [{ id: "adm-new-season", label: "Season handoff" }]),
         ]}
       />
 
-      {season && data ? (
+      {handoffFirst ? (
+        <OpenNextSeason
+          season={season}
+          previous={newSeasonDefaults}
+          championName={championName}
+        />
+      ) : null}
+
+      {season && data && seasonRecord ? (
+        <>
+          <AdminAttention season={season} data={data} />
+          <AdminSection
+            id="adm-record"
+            title={`${seasonRecord.name} record`}
+            subtitle="Schedule and results, playoffs, standins, phase and draft settings for the finished season. Correct the grand final or reset the playoffs here."
+            headingLevel={2}
+          >
+            <div className="space-y-6 p-3 sm:p-4">
+              {showTiebreakers ? (
+                <AdminAnchor id="adm-tiebreakers">
+                  <TiebreakerControls season={season} data={data} />
+                </AdminAnchor>
+              ) : null}
+              <AdminAnchor id="adm-schedule">
+                <ScheduleControls season={season} data={data} />
+              </AdminAnchor>
+              <AdminAnchor id="adm-playoffs">
+                <PlayoffControls season={season} data={data} />
+              </AdminAnchor>
+              <AdminAnchor id="adm-roster">
+                <RosterMoves season={season} data={data} />
+              </AdminAnchor>
+              <AdminAnchor id="adm-standins">
+                <StandinControls season={season} data={data} />
+              </AdminAnchor>
+              {setupControls}
+            </div>
+          </AdminSection>
+          {syncCards}
+          <LeagueControls season={season} />
+        </>
+      ) : season && data ? (
         <>
           <AdminAttention season={season} data={data} />
           {showTiebreakers ? (
@@ -360,25 +441,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <AdminAnchor id="adm-standins">
             <StandinControls season={season} data={data} />
           </AdminAnchor>
-          <AdminAnchor id="adm-sync">
-            <AutoSyncHealth season={season} />
-            <Suspense fallback={<CardSkeleton rows={3} />}>
-              <ImportProgress seasonId={season.id} page={(await searchParams).importPage} query={await searchParams} />
-              <DatabaseHealth />
-            </Suspense>
-          </AdminAnchor>
+          {syncCards}
           {season.status !== "SIGNUPS" && season.status !== "DRAFT" ? setupControls : null}
           <LeagueControls season={season} />
         </>
-      ) : (
-        <Card>
-          <CardBody className="text-muted">
-            {newSeasonDefaults
-              ? "The league is in the offseason. Archived seasons remain public; open the next season below when signups should begin."
-              : "No active season yet. Configure the first one below to open signups."}
-          </CardBody>
-        </Card>
-      )}
+      ) : null}
 
       <AdminAnchor id="adm-history">
         <Suspense fallback={<CardSkeleton rows={3} />}>
@@ -443,31 +510,153 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         </CardBody>
       </AdminSection>
 
-      <AdminSection
-        id="adm-new-season"
+      {season && handoffReadiness && !handoffReadiness.ready ? (
+        <AdminSection
+          id="adm-new-season"
+          title="Season handoff"
+          subtitle="The normal handoff unlocks after an authoritative champion is crowned."
+        >
+          <CardBody className="space-y-3">
+            <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
+              <div className="font-medium text-fg">Handoff locked</div>
+              <p className="mt-1 text-muted">{handoffReadiness.reason}</p>
+              <p className="mt-1 text-muted">
+                No data has to be discarded to continue the league. Use the
+                phase, result, or playoff recovery controls above first.
+              </p>
+            </div>
+            {season.status !== SEASON_STATUS.COMPLETE ? (
+              <details className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm">
+                <summary className="cursor-pointer font-medium text-danger">
+                  Need to cancel this unfinished season?
+                </summary>
+                <p className="mt-2 text-muted">
+                  This is separate from a normal handoff. It closes every
+                  active-season signup, draft, match, sync, and reminder
+                  workflow immediately. Saved teams, signups, matches, and
+                  games remain in History, and an admin can reactivate the
+                  season later. If an auction is live, its lot and bids are
+                  preserved with both clocks paused for an admin to review.
+                </p>
+                <ActionForm
+                  action={archiveIncompleteSeasonAction}
+                  hidden={{
+                    expectedActiveSeasonId: season.id,
+                    expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+                  }}
+                  className="mt-3"
+                >
+                  <SubmitButton
+                    variant="danger"
+                    confirm={`Cancel and archive unfinished ${season.name}? Active league workflows stop immediately. Nothing is deleted; a live auction is paused, and reactivation remains available from Season history after you enter the offseason.`}
+                  >
+                    Cancel season and enter offseason
+                  </SubmitButton>
+                </ActionForm>
+              </details>
+            ) : null}
+          </CardBody>
+        </AdminSection>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The season handoff once a champion is crowned, and the new-season form in
+ * the offseason: the first card on the page in both states. One titled form
+ * with the one button. Archiving without opening the next season is no longer
+ * a peer choice: staying in Season complete keeps the champion and bracket on
+ * the home page, while the offseason turns them into empty pages. It stays
+ * reachable, folded, because reactivating an older season needs no active
+ * season.
+ */
+function OpenNextSeason({
+  season,
+  previous,
+  championName,
+}: {
+  /** The crowned active season; null in the offseason. */
+  season: Season | null;
+  /** The season the new one follows (carried settings); null for the first. */
+  previous: CarriedSeasonSettings & { name: string } | null;
+  championName: string | null;
+}) {
+  const nextName = nextSeasonName(previous?.name ?? null);
+  return (
+    <Card id="adm-new-season" tone="feature" className="scroll-mt-40">
+      <CardHeader
+        headingLevel={2}
         title={season ? "Season handoff" : "Open a new season"}
         subtitle={
-          !season
-            ? "Configure the league and open signups."
-            : handoffReadiness?.ready
-              ? "Preserve the completed season, then choose an offseason or open fresh signups."
-              : "The normal handoff unlocks after an authoritative champion is crowned."
+          season
+            ? `${championName ? `${championName} won ${season.name}. ` : ""}The league rests in Season complete, with the champion on the home page, until you open the next season.`
+            : previous
+              ? "The league is in the offseason. Archived seasons remain public; open the next season when signups should begin."
+              : "No active season yet. Open the first one to start signups."
         }
-        defaultOpen={!season || handoffReadiness?.ready === true}
-      >
-        <CardBody className="space-y-5">
-          {season && handoffReadiness?.ready ? (
-            <div className="rounded-lg border border-line bg-surface-2/40 p-4">
-              <div className="font-medium text-fg">Enter the offseason</div>
-              <p className="mt-1 text-sm text-muted">
-                Archive {season.name} without opening the next signup window.
-                Results, champion, rosters, recaps, and records stay public
-                under Season history. You can open the next season here later.
+      />
+      <CardBody className="space-y-5">
+        <ActionForm
+          action={createSeason}
+          className="space-y-3"
+          hidden={{ expectedActiveSeasonId: season?.id ?? "" }}
+        >
+          <h3 className="text-base font-semibold text-fg">
+            {nextName ? `Open ${nextName} signups` : "Open the next season's signups"}
+          </h3>
+          <p className="text-sm text-muted">
+            {season
+              ? `Players see the new season on the home page with signups open. ${season.name} moves to Season history with its champion, results and rosters.`
+              : "Players see the new season on the home page with signups open."}
+          </p>
+          <Field label="New season name" htmlFor="newSeasonName">
+            <input
+              id="newSeasonName"
+              name="name"
+              required
+              maxLength={60}
+              defaultValue={nextName}
+              placeholder="Season 1"
+              className={cn(inputCls, "sm:max-w-sm")}
+            />
+          </Field>
+          <p className="text-sm text-muted">
+            {previous ? `Carried over from ${previous.name}: ` : "Starts with: "}
+            <span className="text-fg">
+              {carriedSettingsLine(carriedSeasonSettings(previous))}
+            </span>
+            . You can change any of them once the season is open.
+          </p>
+          <SubmitButton
+            variant="accent"
+            confirm={
+              season
+                ? `Archive completed ${season.name} and open a new signup season? All history remains available.`
+                : "Open this season's signup window now?"
+            }
+          >
+            Open signups
+          </SubmitButton>
+        </ActionForm>
+        {season ? (
+          <details className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm">
+            <summary className="flex min-h-11 cursor-pointer items-center font-medium text-fg">
+              Archive without opening the next season
+            </summary>
+            <div className="space-y-3 pb-2">
+              <p className="text-muted">
+                Only needed to reactivate an older season from Season history,
+                which works with no active season. Archiving takes the league
+                out of Season complete: the home page swaps the champion for an
+                offseason notice, and nobody can sign up until you open the next
+                season here. Results, the champion, rosters and records stay
+                public under Season history. For a long break, stay in Season
+                complete and pin a League news post instead.
               </p>
               <ActionForm
                 action={archiveCompletedSeasonAction}
                 hidden={{ expectedActiveSeasonId: season.id }}
-                className="mt-3"
               >
                 <SubmitButton
                   variant="secondary"
@@ -477,95 +666,10 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
                 </SubmitButton>
               </ActionForm>
             </div>
-          ) : season && handoffReadiness && !handoffReadiness.ready ? (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
-                <div className="font-medium text-fg">Handoff locked</div>
-                <p className="mt-1 text-muted">{handoffReadiness.reason}</p>
-                <p className="mt-1 text-muted">
-                  No data has to be discarded to continue the league. Use the
-                  phase, result, or playoff recovery controls above first.
-                </p>
-              </div>
-              {season.status !== SEASON_STATUS.COMPLETE ? (
-                <details className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm">
-                  <summary className="cursor-pointer font-medium text-danger">
-                    Need to cancel this unfinished season?
-                  </summary>
-                  <p className="mt-2 text-muted">
-                    This is separate from a normal handoff. It closes every
-                    active-season signup, draft, match, sync, and reminder
-                    workflow immediately. Saved teams, signups, matches, and
-                    games remain in History, and an admin can reactivate the
-                    season later. If an auction is live, its lot and bids are
-                    preserved with both clocks paused for an admin to review.
-                  </p>
-                  <ActionForm
-                    action={archiveIncompleteSeasonAction}
-                    hidden={{
-                      expectedActiveSeasonId: season.id,
-                      expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
-                    }}
-                    className="mt-3"
-                  >
-                    <SubmitButton
-                      variant="danger"
-                      confirm={`Cancel and archive unfinished ${season.name}? Active league workflows stop immediately. Nothing is deleted; a live auction is paused, and reactivation remains available from Season history after you enter the offseason.`}
-                    >
-                      Cancel season and enter offseason
-                    </SubmitButton>
-                  </ActionForm>
-                </details>
-              ) : null}
-            </div>
-          ) : null}
-
-          {!season || handoffReadiness?.ready ? (
-            <ActionForm
-              action={createSeason}
-              className="space-y-3"
-              hidden={{ expectedActiveSeasonId: season?.id ?? "" }}
-            >
-              <Field label="New season name" htmlFor="name">
-                <input
-                  id="name"
-                  name="name"
-                  required
-                  maxLength={60}
-                  defaultValue={nextSeasonName(newSeasonDefaults?.name ?? null)}
-                  placeholder="Season 1"
-                  className={cn(inputCls, "sm:max-w-sm")}
-                />
-              </Field>
-              <p className="text-sm text-muted">
-                {newSeasonDefaults
-                  ? `Carried over from ${newSeasonDefaults.name}: `
-                  : "Starts with: "}
-                <span className="text-fg">
-                  {carriedSettingsLine(carriedSeasonSettings(newSeasonDefaults))}
-                </span>
-                . You can change any of them once the season is open.
-              </p>
-              <p className="text-sm text-muted">
-                {season
-                  ? `This archives ${season.name} and immediately opens signups for the new season.`
-                  : "Creating the season immediately opens its signup phase."}
-              </p>
-              <SubmitButton
-                variant="accent"
-                confirm={
-                  season
-                    ? `Archive completed ${season.name} and open a new signup season? All history remains available.`
-                    : "Open this season's signup window now?"
-                }
-              >
-                {season ? "Create next season" : "Create season"}
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-        </CardBody>
-      </AdminSection>
-    </div>
+          </details>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }
 
@@ -588,13 +692,17 @@ function AdminSection({
   subtitle,
   children,
   defaultOpen = false,
+  headingLevel = 3,
 }: {
   id: string;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
+  /** 2 for a section that stands in for top-level cards (the season record). */
+  headingLevel?: 2 | 3;
 }) {
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
     <details
       id={id}
@@ -607,9 +715,9 @@ function AdminSection({
         {/* Set like CardHeader's title and subtitle, so a folded section and
             an open card read as the same kind of heading. */}
         <div className="min-w-0">
-          <h3 className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
+          <Heading className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
             {title}
-          </h3>
+          </Heading>
           {subtitle ? (
             <p className="mt-1.5 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
               {subtitle}
