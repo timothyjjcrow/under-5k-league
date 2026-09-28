@@ -419,7 +419,11 @@ export default async function ScrimsPage({
                   className={`${inputClass} w-full`}
                 />
               </label>
-              <SubmitButton size="sm">Add coach</SubmitButton>
+              {/* Secondary: a set-once form must not compete with Post
+                  availability, the page's one main action. */}
+              <SubmitButton size="sm" variant="secondary">
+                Add coach
+              </SubmitButton>
             </ActionForm>
             {myCaptainTeam.staff.length > 0 ? (
               <ul className="divide-y divide-line/60 rounded-lg border border-line/70">
