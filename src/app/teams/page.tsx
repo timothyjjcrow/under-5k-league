@@ -5,7 +5,11 @@ import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { prisma } from "@/lib/prisma";
-import { projectPlayoffField } from "@/lib/playoff-field";
+import {
+  projectPlayoffField,
+  publicDeadHeatTeamIds,
+} from "@/lib/playoff-field";
+import { TiedChip } from "@/components/standings-table";
 import { draftRecap } from "@/lib/draft-recap";
 import { readDraftSales } from "@/lib/draft-history";
 import { AuctionHistory } from "@/components/auction-history";
@@ -126,7 +130,11 @@ export default async function TeamsPage() {
     );
   }
 
-  const standings = projectPlayoffField(teams, matches).standings;
+  const field = projectPlayoffField(teams, matches);
+  const standings = field.standings;
+  // Level teams waiting on a tiebreaker match: the standings table swaps
+  // their "Tied" chip for the tiebreaker badge, so these cards drop it too.
+  const tiebreakerPending = new Set(publicDeadHeatTeamIds(field, matches));
   const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
   const rowOf = new Map(standings.map((s) => [s.teamId, s]));
   const played = matches.some(
@@ -387,13 +395,10 @@ export default async function TeamsPage() {
                                 part,
                               ],
                         )}
-                        {row?.idDecided && !seed ? (
-                          <span
-                            className="rounded bg-accent/10 px-1.5 py-0.5 font-medium text-accent"
-                            title="Points, game differential, wins and head-to-head are tied"
-                          >
-                            Tied
-                          </span>
+                        {row?.idDecided &&
+                        !seed &&
+                        !(tiebreakerPending.has(t.id) && !t.withdrawn) ? (
+                          <TiedChip className="font-medium" />
                         ) : null}
                         {form.length > 0 ? (
                           <FormStrip form={form} size={4} />

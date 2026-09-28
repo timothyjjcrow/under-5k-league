@@ -1,8 +1,9 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { StandingsTable } from "./standings-table-server";
-import { STANDINGS_RULES } from "./standings-table";
+import { STANDINGS_RULES, TiedChip } from "./standings-table";
 import type { ClinchStatus, TeamStanding } from "@/lib/standings";
 import { scenarioReport } from "@/lib/scenarios";
 import type { MatchLike } from "@/lib/standings";
@@ -151,6 +152,17 @@ describe("mid-season ties", () => {
       expect(teamRowHtml(html, id)).toContain(TIED_CHIP);
     expect(teamRowHtml(html, "d")).toContain("current playoff seed 4");
     expect(html).toContain("Playoff cut · 4 places");
+  });
+
+  // /teams shows the same chip on its cards. It used its own wording and
+  // kept the chip while a tiebreaker was pending, which the table drops.
+  it("is the chip /teams shows, under the table's pending-tiebreaker rule", () => {
+    const teamsPage = readFileSync("src/app/teams/page.tsx", "utf8");
+    expect(teamsPage).toContain('<TiedChip className="font-medium" />');
+    expect(teamsPage).toContain("publicDeadHeatTeamIds(field, matches)");
+    expect(teamsPage).toContain("!(tiebreakerPending.has(t.id) && !t.withdrawn)");
+    expect(teamsPage).not.toContain("game differential");
+    expect(renderToStaticMarkup(createElement(TiedChip))).toContain(TIED_CHIP);
   });
 
   it("shows no tie chips before anyone has played", () => {

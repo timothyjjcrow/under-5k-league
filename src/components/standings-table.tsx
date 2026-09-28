@@ -272,6 +272,24 @@ export function StandingsTableView({
   );
 }
 
+/**
+ * A team whose place fell to the team-id fallback: every tiebreak is level.
+ * /teams shows the same chip, under the same rule: it gives way to the
+ * tiebreaker badge while a tiebreaker match is pending.
+ */
+export function TiedChip({ className }: { className?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label="Fully tied with a neighbouring team — displayed order is provisional"
+      title="Points, game difference, series wins and head-to-head are all level. A tie that affects the playoffs is settled by tiebreaker matches after the regular season."
+      className={cn("rounded bg-accent/10 px-1.5 py-0.5 text-accent", className)}
+    >
+      <span aria-hidden>Tied</span>
+    </span>
+  );
+}
+
 /** The line under a team's name: playoff status, then any chips. */
 function StatusLine({
   row,
@@ -294,16 +312,7 @@ function StatusLine({
           Your team
         </span>
       ) : null}
-      {tied ? (
-        <span
-          role="img"
-          aria-label="Fully tied with a neighbouring team — displayed order is provisional"
-          title="Points, game difference, series wins and head-to-head are all level. A tie that affects the playoffs is settled by tiebreaker matches after the regular season."
-          className="rounded bg-accent/10 px-1.5 py-0.5 text-accent"
-        >
-          <span aria-hidden>Tied</span>
-        </span>
-      ) : null}
+      {tied ? <TiedChip /> : null}
       {row.tiebreakerResolved ? (
         <span
           title="Tiebreaker matches settled this team's playoff place. Regular-season points are unchanged."
