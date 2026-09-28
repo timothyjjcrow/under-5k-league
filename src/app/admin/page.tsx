@@ -590,7 +590,7 @@ function OpenNextSeason({
         title={season ? "Season handoff" : "Open a new season"}
         subtitle={
           season
-            ? `${championName ? `${championName} won ${season.name}. ` : ""}The league rests in Season complete, with the champion on the home page, until you open the next season.`
+            ? `${championName ? `${championName} won ${season.name}. ` : ""}The league stays in Complete, with the champion on the home page, until you open the next season.`
             : previous
               ? "The league is in the offseason. Archived seasons remain public; open the next season when signups should begin."
               : "No active season yet. Open the first one to start signups."
@@ -599,7 +599,7 @@ function OpenNextSeason({
       <CardBody className="space-y-5">
         <ActionForm
           action={createSeason}
-          className="space-y-3"
+          className="space-y-3 [overflow-wrap:anywhere]"
           hidden={{ expectedActiveSeasonId: season?.id ?? "" }}
         >
           <h3 className="text-base font-semibold text-fg">
@@ -649,13 +649,14 @@ function OpenNextSeason({
             </summary>
             <div className="space-y-3 pb-2">
               <p className="text-muted">
-                Only needed to reactivate an older season from Season history,
-                which works with no active season. Archiving takes the league
-                out of Season complete: the home page swaps the champion for an
-                offseason notice, and nobody can sign up until you open the next
-                season here. Results, the champion, rosters and records stay
-                public under Season history. For a long break, stay in Season
-                complete and pin a League news post instead.
+                Use this only to reactivate an older season from Season
+                history, which needs the league to have no active season.
+                Archiving takes the league out of Complete: the home page swaps
+                the champion for an offseason notice, and nobody can sign up
+                until you open the next season here. Results, the champion,
+                rosters and records stay public under Season history. For a
+                long break, stay in Complete and pin a League news post
+                instead.
               </p>
               <ActionForm
                 action={archiveCompletedSeasonAction}

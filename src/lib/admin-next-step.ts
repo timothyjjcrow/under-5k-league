@@ -303,7 +303,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     return {
       title: "Season complete. Open the next season when you're ready.",
       detail:
-        "Use “Season handoff” at the top of this page. Until then the league rests in Season complete, with the champion and bracket on the home page, and inhouse keeps running. The finished season's results, rosters and champion stay under Season history after the handoff.",
+        "Use “Season handoff” at the top of this page. Until then the league stays in Complete, with the champion and bracket on the home page, and inhouse keeps running. The finished season's results, rosters and champion stay under Season history after the handoff.",
       tone: "done",
     };
   }
