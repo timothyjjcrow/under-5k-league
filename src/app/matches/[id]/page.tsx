@@ -489,7 +489,10 @@ export default async function MatchDetailPage({
         ) : null}
       </Card>
 
-      <SectionNav items={sectionItems} label="Match sections" sticky />
+      {/* One chip would only point at the section right below it. */}
+      {sectionItems.length > 1 ? (
+        <SectionNav items={sectionItems} label="Match sections" sticky />
+      ) : null}
 
       {!match.season.isActive ? (
         <div className="rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm text-muted">
