@@ -1110,8 +1110,10 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   state uses 1,200/min/IP; mutations use 300/min/signed-in user (IP fallback
   only for signed-out attempts). Successful mutations return fresh viewer-
   tailored state. Polled by
-  `src/components/inhouse-room.tsx` (`"use client"`, one view per phase incl.
-  `VoteView`; syncs the vote/pick clocks via server `now` offset like
+  `src/components/inhouse-room.tsx` (`"use client"` shell: the poll loop,
+  `act()`, bell and title; one view per phase in `src/components/inhouse/`,
+  incl. `VoteView`, and `room-source-guards.test.ts` reads the shell and that
+  folder as one room; syncs the vote/pick clocks via server `now` offset like
   `draft-room.tsx`; `router.refresh()` on lobby end to update the
   server-rendered leaderboard + results). Page: `src/app/inhouse/page.tsx`.
   Nav link is always visible (season-independent).

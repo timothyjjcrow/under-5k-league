@@ -448,7 +448,8 @@ DRAFTING → READY → IN_PROGRESS → COMPLETED | CANCELLED`, one active lobby 
 time. Pure rules in `src/lib/inhouse.ts`, the engine in
 `src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery, and
 the viewer payload builder `getInhouseState`), the client in
-`src/components/inhouse-room.tsx`, one dispatch endpoint `POST /api/inhouse`.
+`src/components/inhouse-room.tsx` (poll loop and actions) with one file per
+stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`.
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
