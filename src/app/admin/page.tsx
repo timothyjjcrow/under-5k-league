@@ -59,6 +59,7 @@ import {
   setSeasonPhase,
   addCaptain,
   changeCaptain,
+  refreshPlayerData,
   removeCaptain,
   randomizeDraftOrder,
   generateSchedule,
@@ -70,9 +71,6 @@ import {
   removeGame,
   setMatchTime,
   setWeekNight,
-  syncPlayerRanks,
-  syncAllRanks,
-  syncSteamProfiles,
   setMaxMmr,
   setMatchSchedule,
   renameSeason,
@@ -81,7 +79,6 @@ import {
   setSeriesLengths,
   setLeagueId,
   syncLeagueAction,
-  enrichGamesAction,
   setDiscordWebhook,
   clearDiscordWebhook,
   testDiscordWebhook,
@@ -2120,36 +2117,21 @@ function CaptainControls({
         }
         action={
           /* flex-wrap like every other row in this file: this header holds up to
-             six controls (sync ranks/avatars, randomize, start, pause/resume,
-             undo, abort) and without wrapping they pushed /admin past a phone —
-             caught by the mobile tripwire on CI, whose fonts are a few px wider
-             than macOS's, so it read as a 7px page scroll. */
+             six controls (refresh player data, randomize, start,
+             pause/resume, undo, abort) and without wrapping they pushed /admin
+             past a phone — caught by the mobile tripwire on CI, whose fonts
+             are a few px wider than macOS's, so it read as a 7px page scroll. */
           <div className="flex flex-wrap justify-end gap-2">
-            {/* Off while the auction is live or paused: both rewrite the
-                medals, names and avatars captains are reading in the room. */}
+            {/* Off while the auction is live or paused: it rewrites the
+                medals, names and avatars captains are reading in the room.
+                The automation worker refreshes the same data hourly; this is
+                for right before a draft. */}
             {profileSyncAllowed(data.draft?.status) ? (
-              <>
-                <ActionForm action={syncPlayerRanks}>
-                  {/* Pulls medals AND the pub-scouting snapshots the player
-                      pool renders (recent W/L, games, last-played) — one
-                      button, one OpenDota pass. */}
-                  <SubmitButton variant="secondary" size="sm">
-                    Sync ranks &amp; stats
-                  </SubmitButton>
-                </ActionForm>
-                <ActionForm action={syncSteamProfiles}>
-                  <SubmitButton
-                    variant="secondary"
-                    size="sm"
-                    /* It refreshes the Steam persona too, not just the
-                       picture — a rename shows up across the whole site after
-                       this. */
-                    confirm="Refresh every player's Steam name and avatar?"
-                  >
-                    Sync names &amp; avatars
-                  </SubmitButton>
-                </ActionForm>
-              </>
+              <ActionForm action={refreshPlayerData}>
+                <SubmitButton variant="secondary" size="sm">
+                  Refresh player data now
+                </SubmitButton>
+              </ActionForm>
             ) : null}
             {setupOpen ? (
               <>
@@ -5701,32 +5683,19 @@ function LeagueControls({ season }: { season: Season }) {
             </li>
           </ol>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-          <p className="min-w-[14rem] flex-1 text-xs text-muted">
-            <span className="font-medium text-fg">Report-card backfill:</span>{" "}
-            games imported before hero report cards existed are missing their
-            percentile benchmarks — re-fetch them from OpenDota in small
-            batches.
-          </p>
-          <ActionForm action={enrichGamesAction}>
-            <SubmitButton variant="secondary" size="sm">
-              Enrich stored games
-            </SubmitButton>
-          </ActionForm>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-          <p className="min-w-[14rem] flex-1 text-xs text-muted">
-            <span className="font-medium text-fg">Medal backfill:</span> fetch
-            ranked medals for every account that doesn&apos;t have one yet —
-            including people who signed in but never joined a season. Skips
-            accounts that already have a medal; safe to run again.
-          </p>
-          <ActionForm action={syncAllRanks}>
-            <SubmitButton variant="secondary" size="sm">
-              Sync all medals
-            </SubmitButton>
-          </ActionForm>
-        </div>
+        <p className="rounded-lg border border-line bg-surface-2/40 p-3 text-xs text-muted">
+          <span className="font-medium text-fg">Player data refreshes itself:</span>{" "}
+          about once an hour the automation worker updates Steam names and
+          avatars, the medals and scouting stats of the few players checked
+          longest ago, and adds report-card stats to a few games imported
+          before report cards existed. It pauses when OpenDota refuses a
+          request and while an auction is live. To refresh right away, use
+          the Refresh player data now button in{" "}
+          <a href="#adm-captains" className={textLink()}>
+            Captains &amp; draft
+          </a>
+          .
+        </p>
       </CardBody>
     </AdminSection>
   );

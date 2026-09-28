@@ -91,18 +91,17 @@ import {
   enrichStoredGames,
   rememberImportSkip,
 } from "@/lib/match-import";
-import {
-  parseMatchId,
-  parseLeagueId,
-  fetchPubStats,
-  fetchRankTier,
-} from "@/lib/dota";
+import { parseMatchId, parseLeagueId, fetchRankTier } from "@/lib/dota";
 import {
   dotaAccountLinkSnapshot,
   effectiveDotaAccountId,
 } from "@/lib/dota-account";
-import { pubStatsFresh } from "@/lib/pub-stats";
-import { fetchSteamProfiles } from "@/lib/steam";
+import {
+  MANUAL_REFRESH_BUDGET_MS,
+  refreshSteamProfiles,
+  syncRanksFor,
+} from "@/lib/player-data-refresh";
+import { profileSyncAllowed } from "@/lib/draft-admin";
 import { bool, clampInt, localDate, str } from "@/lib/form";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import {
@@ -2326,7 +2325,7 @@ export async function reinstateSignup(
   }
   refresh();
   // Advisory only, never a gate (the operator's-call stance): the flag flow
-  // is one-way — syncPlayerRanks names over-ceiling signups in ITS toast and
+  // is one-way — refreshPlayerData names over-ceiling signups in ITS toast and
   // nothing warned when the same admin later reinstated one.
   const warn = medalProvesIneligible(reg.user.rankTier)
     ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`
@@ -6551,183 +6550,6 @@ export async function setMatchTime(
   };
 }
 
-/** Fetch every active player's ranked medal from OpenDota (a draft resource). */
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Fetch + store ranked medals for a set of users. Non-destructive: retries once
- * on a failed/rate-limited call, and only ever writes a real medal — never
- * overwrites a stored one with a null (whether the null is "couldn't reach
- * OpenDota" or "OpenDota returned no rank"), so a rate-limited run can't wipe
- * everyone's rank. Shared by the registrant sync and the all-accounts backfill.
- */
-/** Per-account outcome, kept small so a batch can tally without re-fetching.
- *  `rank` keys the outage detection + toast counts (unchanged semantics);
- *  `pubSynced` counts the scouting snapshots stored alongside. */
-type RankSyncOutcome = {
-  rank: "ranked" | "ok-no-rank" | "unreachable";
-  pubSynced: boolean;
-};
-
-/** Sync one account's medal (+ fh_unavailable) — and, when `withPub`, its
- *  pub-scouting snapshot — retrying whichever call missed once. */
-async function syncOneRank(
-  u: {
-    id: string;
-    dotaAccountIdV2: number | null;
-    legacyDotaAccountId: number | null;
-  },
-  acc: number,
-  withPub: boolean,
-): Promise<RankSyncOutcome> {
-  // A bulk sync easily trips OpenDota's free rate limit (HTTP 429) or an 8s
-  // timeout — a brief back-off + one retry usually clears it.
-  const noPub = { ok: false as const, stats: null };
-  let [result, pub] = await Promise.all([
-    fetchRankTier(acc),
-    withPub ? fetchPubStats(acc) : Promise.resolve(noPub),
-  ]);
-  if (!result.ok || (withPub && !pub.ok)) {
-    await sleep(700);
-    [result, pub] = await Promise.all([
-      result.ok ? Promise.resolve(result) : fetchRankTier(acc),
-      withPub && !pub.ok ? fetchPubStats(acc) : Promise.resolve(pub),
-    ]);
-  }
-  // Store what OpenDota definitely said: a real medal, the public-match-data
-  // flag (fh_unavailable) auto-import depends on, and/or the scouting
-  // snapshot. A failed half never blocks the half that answered, and neither
-  // failure ever wipes stored data.
-  const data: {
-    fhUnavailable?: boolean;
-    pubStats?: string;
-    pubStatsAt?: Date;
-  } = {};
-  if (result.ok) {
-    if (result.fhUnavailable !== null)
-      data.fhUnavailable = result.fhUnavailable;
-  }
-  if (pub.ok) {
-    data.pubStats = JSON.stringify(pub.stats);
-    data.pubStatsAt = new Date();
-  }
-  if (result.ok && result.rankTier != null) {
-    // Admin corrections survive every automatic refresh, including one that
-    // was already in flight when the correction was saved.
-    await prisma.user.updateMany({
-      where: { id: u.id, ...dotaAccountLinkSnapshot(u), rankTierManual: false },
-      data: { rankTier: result.rankTier },
-    });
-  }
-  if (Object.keys(data).length > 0) {
-    // The WHERE re-asserts the account these figures describe (read-time
-    // precondition in the write): a player relinking a different Dota account
-    // mid-sweep must not get the old account's data stamped onto the new
-    // link. count 0 = they relinked; drop the result — next sweep re-reads.
-    await prisma.user.updateMany({
-      where: { id: u.id, ...dotaAccountLinkSnapshot(u) },
-      data,
-    });
-  }
-  if (!result.ok) return { rank: "unreachable", pubSynced: pub.ok };
-  return {
-    rank: result.rankTier != null ? "ranked" : "ok-no-rank",
-    pubSynced: pub.ok,
-  };
-}
-
-// Serverless functions have a wall-clock ceiling (`maxDuration` on the admin
-// page). One OpenDota timeout is 8s and the retry doubles it, so a serial loop
-// over a full roster during an OpenDota outage blows the budget and the request
-// dies with no response — the button spins "Working…" forever. Guards: run a
-// few accounts at once, stop starting work past a time budget, and bail
-// immediately if the very first batch is entirely unreachable (a strong
-// "OpenDota is down" signal) instead of hitting an 8s timeout for every id.
-const RANK_SYNC_CONCURRENCY = 4;
-const RANK_SYNC_BUDGET_MS = 45_000;
-// The scouting snapshot costs TWO extra OpenDota calls per account, and the
-// free tier's bucket is ~60/min — a 31-account sweep at 3 calls each would
-// burn its own tail into 429s and could even read as a false outage. So each
-// press syncs medals for EVERYONE but refreshes pub snapshots only for the
-// stalest accounts up to this cap (fresh ones are skipped outright), keeping
-// a full press under the bucket; repeated presses converge on full coverage
-// and the toast says how many are still waiting.
-const PUB_SYNC_MAX_PER_RUN = 12;
-
-type RankSyncResult = {
-  ranked: number;
-  unreachable: number;
-  skipped: number;
-  outage: boolean;
-  /** Pub-scouting snapshots stored (rides the same loop as the medals). */
-  stats: number;
-  /** Stale snapshots deferred to a later press by PUB_SYNC_MAX_PER_RUN. */
-  deferred: number;
-};
-
-async function syncRanksFor(
-  users: {
-    id: string;
-    dotaAccountIdV2: number | null;
-    legacyDotaAccountId: number | null;
-    steamId: string;
-    pubStatsAt: Date | null;
-  }[],
-): Promise<RankSyncResult> {
-  const targets = users
-    .map((u) => ({ u, acc: effectiveDotaAccountId(u) }))
-    .filter((t): t is { u: (typeof users)[number]; acc: number } => !!t.acc);
-
-  // Which accounts get the two extra pub calls this run — see
-  // PUB_SYNC_MAX_PER_RUN. Missing/stale snapshots only, stalest first.
-  const nowMs = Date.now();
-  const staleCandidates = targets
-    .filter(({ u }) => !pubStatsFresh(u.pubStatsAt, nowMs))
-    .sort(
-      (a, b) =>
-        (a.u.pubStatsAt?.getTime() ?? 0) - (b.u.pubStatsAt?.getTime() ?? 0),
-    );
-  const pubTargets = new Set(
-    staleCandidates.slice(0, PUB_SYNC_MAX_PER_RUN).map((t) => t.u.id),
-  );
-  const deferred = staleCandidates.length - pubTargets.size;
-
-  let ranked = 0;
-  let unreachable = 0;
-  let skipped = 0;
-  let outage = false;
-  let stats = 0;
-  const startedAt = Date.now();
-
-  for (let i = 0; i < targets.length; i += RANK_SYNC_CONCURRENCY) {
-    if (Date.now() - startedAt > RANK_SYNC_BUDGET_MS) {
-      skipped = targets.length - i;
-      break;
-    }
-    const batch = targets.slice(i, i + RANK_SYNC_CONCURRENCY);
-    const outcomes = await Promise.all(
-      batch.map(({ u, acc }) => syncOneRank(u, acc, pubTargets.has(u.id))),
-    );
-    for (const o of outcomes) {
-      if (o.rank === "unreachable") unreachable++;
-      else if (o.rank === "ranked") ranked++;
-      if (o.pubSynced) stats++;
-    }
-    // Whole first batch unreachable ⇒ OpenDota is down; don't burn the budget
-    // (and the admin's patience) hitting an 8s timeout for every remaining id.
-    if (
-      i === 0 &&
-      batch.length >= 3 &&
-      outcomes.every((o) => o.rank === "unreachable")
-    ) {
-      outage = true;
-      skipped = targets.length - batch.length;
-      break;
-    }
-  }
-  return { ranked, unreachable, skipped, outage, stats, deferred };
-}
-
 const OPENDOTA_OUTAGE_MSG =
   "OpenDota isn't responding right now — no medals were changed. Try again in a few minutes.";
 
@@ -6743,7 +6565,20 @@ function skippedTail(skipped: number): string {
   return skipped ? ` · ${skipped} skipped (time limit — run again)` : "";
 }
 
-export async function syncPlayerRanks(
+/** Older stored games given report-card stats per press (1 OpenDota call
+ *  each). The automatic refresh keeps working through the rest. */
+const MANUAL_ENRICH_GAMES = 3;
+/** Time one game fetch needs before it is started. */
+const MANUAL_ENRICH_START_MS = 13_000;
+
+/**
+ * "Refresh player data now": the on-demand version of the automation
+ * worker's hourly refresh, for right before a draft. Every active signup's
+ * medal (and the private-match-data flag), the stalest few scouting
+ * snapshots, every Steam name and avatar, and a few older games' report-card
+ * stats, within one time budget.
+ */
+export async function refreshPlayerData(
   _prev: ActionResult,
   _fd: FormData,
 ): Promise<ActionResult> {
@@ -6753,15 +6588,53 @@ export async function syncPlayerRanks(
     return { error: "Not authorized" };
   }
   const season = await getActiveSeason();
-  if (!season) return { error: "No active season" };
+  const draft = season
+    ? await prisma.draft.findUnique({
+        where: { seasonId: season.id },
+        select: { status: true },
+      })
+    : null;
+  // Captains are reading these medals and names in the auction room.
+  if (!profileSyncAllowed(draft?.status)) {
+    return {
+      error:
+        "The auction is live or paused, so player data stays as it is until the draft finishes.",
+    };
+  }
+  const deadlineMs = Date.now() + MANUAL_REFRESH_BUDGET_MS;
 
-  const regs = await prisma.registration.findMany({
-    where: { seasonId: season.id, status: "ACTIVE" },
-    include: { user: true },
-  });
+  const steam = await refreshSteamProfiles(deadlineMs);
+  // Persona names are part of the pinned board digest.
+  if (steam.updated > 0) updateTag(AUTOMATION_GATE_TAG);
+
+  const regs = season
+    ? await prisma.registration.findMany({
+        where: { seasonId: season.id, status: "ACTIVE" },
+        include: { user: true },
+      })
+    : [];
   const { ranked, unreachable, skipped, outage, stats, deferred } =
-    await syncRanksFor(regs.map((r) => r.user));
-  if (outage) return { error: OPENDOTA_OUTAGE_MSG };
+    await syncRanksFor(
+      regs.map((r) => r.user),
+      deadlineMs,
+    );
+  const steamPart = steam.updated
+    ? ` · ${steam.updated} Steam name${steam.updated === 1 ? "" : "s"} or avatar${steam.updated === 1 ? "" : "s"} updated`
+    : "";
+  if (outage) {
+    if (steam.updated) refresh();
+    return { error: `${OPENDOTA_OUTAGE_MSG}${steamPart}` };
+  }
+
+  // Only start on stored games while OpenDota is answering and time is left.
+  const enrich =
+    unreachable === 0 && deadlineMs - Date.now() >= MANUAL_ENRICH_START_MS
+      ? await enrichStoredGames(MANUAL_ENRICH_GAMES, {
+          deadlineMs,
+          minStartMs: MANUAL_ENRICH_START_MS,
+          stopOnFailure: true,
+        })
+      : null;
 
   // A medal learned AFTER signup can prove someone ineligible, and nothing else
   // ever re-checks: registrationGate only runs on submit, and a stored MMR is
@@ -6772,10 +6645,12 @@ export async function syncPlayerRanks(
   // who plays is the operator's call (withdraw/reinstate, or setRegistrationMmr).
   // Re-read rather than reusing `regs`: that snapshot predates the sync, so its
   // user.rankTier is exactly the null we just filled in.
-  const flagged = await prisma.registration.findMany({
-    where: { seasonId: season.id, status: "ACTIVE" },
-    include: { user: { select: { name: true, rankTier: true } } },
-  });
+  const flagged = season
+    ? await prisma.registration.findMany({
+        where: { seasonId: season.id, status: "ACTIVE" },
+        include: { user: { select: { name: true, rankTier: true } } },
+      })
+    : [];
   const overCeiling = flagged.filter((r) =>
     medalProvesIneligible(r.user.rankTier),
   );
@@ -6791,42 +6666,22 @@ export async function syncPlayerRanks(
         )}${overCeiling.length > 5 ? `, +${overCeiling.length - 5} more` : ""} — review before the draft.`
     : "";
 
+  const gamesPart =
+    enrich && (enrich.enriched > 0 || enrich.remaining > 0)
+      ? ` · ${enrich.enriched} older game${enrich.enriched === 1 ? "" : "s"} given report-card stats${enrich.remaining ? ` (${enrich.remaining} to go)` : ""}`
+      : "";
+  const summary = `${regs.length} signup${regs.length === 1 ? "" : "s"} checked · ${ranked} ranked${stats > 0 ? ` · ${stats} scouting profile${stats === 1 ? "" : "s"}` : ""}${deferred > 0 ? ` (${deferred} more in the hourly refresh)` : ""}${steamPart}${gamesPart}`;
+  await logAdminAction({
+    action: "refreshPlayerData",
+    summary: `Refreshed player data: ${summary}`,
+    seasonId: season?.id ?? null,
+  });
   refresh();
+  if (enrich && enrich.enriched > 0) refreshGames();
   return {
-    message: `Synced ${regs.length} players · ${ranked} ranked${stats > 0 ? ` · ${stats} scouting profile${stats === 1 ? "" : "s"}` : ""}${deferred > 0 ? ` (${deferred} more next run)` : ""}${unreachableTail(unreachable)}${skippedTail(skipped)}${warning}`,
+    message: `Refreshed player data · ${summary}${unreachableTail(unreachable)}${skippedTail(skipped)}${warning}`,
   };
 }
-
-/**
- * Backfill medals for EVERY account that doesn't have one yet — including people
- * who logged in but never signed up (the registrant sync above skips them).
- * Only targets null-medal accounts, so it makes no wasted API calls and never
- * touches a medal that's already set; login fills in new accounts going forward.
- */
-export async function syncAllRanks(
-  _prev: ActionResult,
-  _fd: FormData,
-): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
-  const users = await prisma.user.findMany({ where: { rankTier: null, rankTierManual: false } });
-  if (users.length === 0) {
-    return { message: "Every account already has a medal" };
-  }
-  const { ranked, unreachable, skipped, outage } = await syncRanksFor(users);
-  if (outage) return { error: OPENDOTA_OUTAGE_MSG };
-  refresh();
-  return {
-    message: `Checked ${users.length} account(s) without a medal · ${ranked} now ranked${unreachableTail(unreachable)}${skippedTail(skipped)}`,
-  };
-}
-
-// (syncAllRanks deliberately reports medals only — its filter is null-medal
-// accounts, so its purpose stays "medal backfill"; the scouting snapshots it
-// happens to refresh along the way are a free side effect.)
 
 /**
  * Break-glass: invalidate EVERY signed-in session (advances the session epoch).
@@ -7545,61 +7400,6 @@ export async function syncLeagueAction(
   return {
     message: `League sync · imported ${res.imported} of ${res.scanned} league games`,
   };
-}
-
-/** Backfill report-card stats (benchmarks, XPM…) onto older imported games. */
-export async function enrichGamesAction(
-  _prev: ActionResult,
-  _fd: FormData,
-): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
-  const res = await enrichStoredGames();
-  if (res.enriched === 0 && res.remaining === 0) {
-    return { message: "Every stored game already has report-card data" };
-  }
-  refreshGames();
-  return {
-    message: `Enriched ${res.enriched} game(s)${
-      res.failed ? ` · ${res.failed} not on OpenDota right now` : ""
-    }${res.remaining ? ` · ${res.remaining} to go — run again` : ""}`,
-  };
-}
-
-/** Refresh every user's Steam persona name + avatar (batched). */
-export async function syncSteamProfiles(
-  _prev: ActionResult,
-  _fd: FormData,
-): Promise<ActionResult> {
-  try {
-    await requireAdmin();
-  } catch {
-    return { error: "Not authorized" };
-  }
-  const users = await prisma.user.findMany();
-  const profiles = await fetchSteamProfiles(users.map((u) => u.steamId));
-  let updated = 0;
-  try {
-    for (const u of users) {
-      const p = profiles.get(u.steamId);
-      if (!p) continue;
-      await prisma.user.update({
-        where: { id: u.id },
-        data: { name: p.name, avatar: p.avatar, profileUrl: p.profileUrl },
-      });
-      updated++;
-    }
-  } finally {
-    // Persona names are part of the pinned board digest. Preserve partial
-    // progress if a later profile update fails without issuing one cache
-    // operation per user on a successful batch.
-    if (updated > 0) updateTag(AUTOMATION_GATE_TAG);
-  }
-  refresh();
-  return { message: `Updated ${updated} of ${users.length} Steam profiles` };
 }
 
 /** Set (or clear) the draft night — announced with countdowns during signups. */

@@ -325,6 +325,7 @@ const FILES = [
   "src/lib/side-game-claims.ts",
   "src/lib/team-identity-service.ts",
   "src/lib/users.ts",
+  "src/lib/player-data-refresh.ts",
 ];
 
 // Keys that merely IDENTIFY the row. Everything else in a WHERE is state, and

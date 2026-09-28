@@ -93,9 +93,10 @@ export function voidLotConfirm(o: {
 }
 
 /**
- * The two Sync buttons on /admin rewrite the medals, names and avatars the
- * captains are reading in the room, so they stay off while an auction is live
- * or paused. They come back once it is finished (or before it starts).
+ * "Refresh player data now" on /admin and the hourly automatic refresh
+ * rewrite the medals, names and avatars the captains are reading in the room,
+ * so both stay off while an auction is live or paused. They come back once it
+ * is finished (or before it starts).
  */
 export function profileSyncAllowed(
   draftStatus: string | null | undefined,

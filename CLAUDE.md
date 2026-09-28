@@ -41,7 +41,8 @@ per-phase or offseason so unused features stay hidden.
   only; never describe it as a production setup path. `npm run set-admins`
   reconciles existing accounts to the allowlist in one shot. Steam name/avatar
   come from `fetchSteamProfile`/`fetchSteamProfiles` (GetPlayerSummaries, needs
-  `STEAM_API_KEY`) — set on login, bulk-refreshed via admin `syncSteamProfiles`,
+  `STEAM_API_KEY`) — set on login, bulk-refreshed by the hourly player data
+  refresh and the admin's "Refresh player data now" (`player-data-refresh.ts`),
   and per-user via /me's one "Refresh my Steam & Dota info" button
   (`refreshMyAccounts`, which runs `refreshSteamProfile`'s and `refreshRank`'s
   halves side by side, each under its own cooldown). `<Avatar>` falls back to
@@ -447,8 +448,9 @@ has to justify it.
   match data off, unscheduled fixtures).
 - **Ranked medals**: `src/lib/rank.ts` decodes OpenDota `rank_tier` (pure,
   tested) → `<RankBadge>`. `fetchPlayerRankTier` fills `User.rankTier` on profile
-  link/refresh (`updateDotaAccount`/`refreshRank`) and in bulk via admin
-  `syncPlayerRanks`. Medals render on players/teams/draft (a captain resource).
+  link/refresh (`updateDotaAccount`/`refreshRank`) and in bulk by the hourly
+  player data refresh and admin `refreshPlayerData` (see "Player data refreshes
+  itself"). Medals render on players/teams/draft (a captain resource).
 - **In-client league sync**: `Season.dotaLeagueId` + `syncLeagueGames` (fetch
   `/leagues/{id}/matchIds`, `classifyGame` each vs. scheduled matches, import).
   Admin `setLeagueId` / `syncLeagueAction`. League registration is done at
@@ -763,6 +765,41 @@ fh_unavailable` — true means "Expose Public Match Data" is off, the #1
 - **LIVE chips**: /schedule rows and the dashboard This-week strip show a
   pulsing partial score (`live` flag on `MatchView`) while a series is LIVE —
   auto-sync makes "Bo3 at 1–0" a common minutes-fresh state.
+
+## Player data refreshes itself (done)
+
+Medals, pub-scouting snapshots, Steam names/avatars and report-card backfill
+used to need four admin buttons that nobody pressed after draft week. Now the
+automation worker does a small pass about once an hour
+(`refreshPlayerDataAutomatically`, `src/lib/player-data-refresh.ts`,
+`test/integration/player-data-refresh.itest.ts`):
+
+- **Below result sync, always.** `runResultSync({ refreshPlayerData: true })`
+  (only the scheduled worker passes the flag) runs it LAST, and only when
+  nothing is being watched (no league window, live inhouse/queue, or live
+  draft). It claims `playerDataRefreshAt` via `claimThrottle` only after
+  those checks and only with enough of the 45s budget left, so a busy run
+  leaves the claim for the next idle one.
+- **Small and stalest-first.** Steam profiles in one batched call (only
+  changed rows written), then `PLAYER_DATA_REFRESH_ACCOUNTS` (4) accounts
+  picked by pure `pickStaleAccounts` (`pub-stats.ts`: this season's signups
+  first, never-fetched first, then oldest; fresh ones skipped), then
+  `PLAYER_DATA_REFRESH_GAMES` (3) games through `enrichStoredGames`.
+- **Backs off on the first refusal.** No retry: the first OpenDota call that
+  fails stops the pass, stamps the refused account in
+  `playerDataRefreshFailedUser` (it goes last next time), and writes a FUTURE
+  timestamp into the throttle so the next pass waits
+  `PLAYER_DATA_REFRESH_BACKOFF_MS`. A refusal is not a degraded run; only an
+  exception is (`PLAYER_DATA_REFRESH_FAILED`).
+- **Hands off during a live auction** (`profileSyncAllowed`), same as the
+  manual button: getDraftState re-reads medals every poll.
+- **One manual button**, "Refresh player data now" (`refreshPlayerData`) in
+  the Captains & draft card: Steam names, every active signup's medal, the
+  stalest 12 scouting snapshots and a few games, with the over-ceiling medal
+  warning in its toast. "Sync league games" and the history backfills stay
+  separate. The hourly pass does NOT toast anyone about a newly learned
+  over-ceiling medal; the Needs review list's "MMR ≠ medal" flag and the
+  manual button are where an admin sees it.
 
 ## Player-facing navigation & info pages (done)
 
@@ -2339,7 +2376,8 @@ renders byte-identical to the pre-feature page:
 - **Capture points mirror rankTier exactly**: login (`ensurePubStats` —
   MISSING-only, the ensureRankTier rule; an earlier 7-day staleness gate put
   a recurring 8s worst case on the login path and was reverted), /me
-  link/refresh, and the admin "Sync ranks & stats" button. Never overwritten
+  link/refresh, the hourly player data refresh, and the admin "Refresh player
+  data now" button. Never overwritten
   on a failed fetch, and **every async profile-metadata write re-asserts
   both stored Dota-link columns in its WHERE** — a relink committing mid-fetch must not
   inherit the old account's rank or scouting data; the login-only missing
@@ -2347,12 +2385,13 @@ renders byte-identical to the pre-feature page:
   refresh wins (raced in rank-sync.itest.ts). These
   updateMany claims are NEW to the mutation baseline — assume unprotected
   until a full `--discover` says otherwise.
-- **`PUB_SYNC_MAX_PER_RUN` (12) is the API budget** — the bulk sync fires 3
-  OpenDota calls per account with pub stats riding along, and the free tier's
+- **`PUB_SYNC_MAX_PER_RUN` (12) is the API budget** — the manual refresh fires
+  3 OpenDota calls per account with pub stats riding along, and the free tier's
   bucket is ~60/min, so an uncapped 31-account sweep burned its own tail into
   429s (and could false-trigger the outage bail). Each press syncs medals for
-  everyone, pub snapshots for the STALEST ≤12 (fresh ones skipped via
-  `pubStatsFresh`); the toast reports "(N more next run)".
+  every active signup, pub snapshots for the STALEST ≤12 (fresh ones skipped
+  via `pubStatsFresh`); the toast reports "(N more next run)". The hourly pass
+  (below) is what reaches everyone else.
 - `PoolPlayer` stays FROZEN: everything rides `PoolScoutInfo`, one parallel
   record (the `PoolDraftInfo` precedent) carrying `{inhouse?, pub?,
 statement?}` — an older signup's goals, sent only when they add to
@@ -2663,8 +2702,9 @@ coaches), `scrim-result-service.ts` (imports). Pure copy and verdicts:
   `/players/[id]`, "Best report card" board on `/leaders`.
 - Admin backfill: `enrichStoredGames` (integration-tested) re-fetches games
   missing the marker by `dotaMatchId` in bounded batches, merging new fields
-  WITHOUT touching userId/teamId attribution; button lives in the Dota
-  league integration card.
+  WITHOUT touching userId/teamId attribution. The hourly player data refresh
+  enriches a few games per pass (`stopOnFailure`), and "Refresh player data
+  now" does a few more when OpenDota answered; there is no separate button.
 
 ## Opponent scouting report (done, branch: ambitious-features)
 
@@ -3147,7 +3187,9 @@ the guard you need is missing rather than present.
 actions use `<SubmitButton confirm>` (a `window.confirm`). The FIVE with no
 in-app undo use `<DangerSubmit>` (`src/components/danger-submit.tsx`), which
 requires TYPING the season or team name: delete season, abort draft, reset
-playoffs, regenerate schedule, remove captain. `window.confirm` focuses OK by
+playoffs, regenerate schedule, remove captain (once any fixture exists; before
+a schedule only the team goes, so it is a plain confirm, and pre-draft
+`changeCaptain` swaps the captain while keeping the team row). `window.confirm` focuses OK by
 default — one Enter — and looks identical whether it guards "Rename team" or a
 cascade delete of a season, which is exactly the distinction that matters.
 Do NOT reach for DangerSubmit on a reversible action; the fatigue it would

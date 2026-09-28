@@ -65,6 +65,14 @@ export const SETTING_KEYS = {
   // a ping people can't opt out of gets the whole channel muted, which is
   // permanently worse than silence.
   INHOUSE_PING_ROLE_ID: "inhousePingRoleId",
+  // ISO timestamp claimed by the automation worker's hourly player data
+  // refresh (medals, scouting stats, Steam names, report-card backfill). A
+  // failed OpenDota call writes a FUTURE timestamp here, which is the
+  // back-off: claimThrottle refuses until it has aged a full interval.
+  PLAYER_DATA_REFRESH_AT: "playerDataRefreshAt",
+  // User id whose fetch failed on the last player data refresh; the next
+  // pass tries that account last so it can't hold up everyone else.
+  PLAYER_DATA_REFRESH_FAILED_USER: "playerDataRefreshFailedUser",
 } as const;
 
 // ---------------------------------------------------------------------------

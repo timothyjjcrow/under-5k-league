@@ -1678,6 +1678,19 @@ export type EnrichResult = {
   enriched: number;
   failed: number;
   remaining: number;
+  /** stopOnFailure ended the batch at a game OpenDota didn't return. */
+  stoppedOnFailure?: boolean;
+};
+
+export type EnrichOptions = OpenDotaFetchOptions & {
+  /** Time left that a game needs before it is started (unattended runs). */
+  minStartMs?: number;
+  /**
+   * Stop at the first game OpenDota doesn't return — usually a rate limit or
+   * an outage — instead of spending the rest of the batch on it. The
+   * automatic refresh sets this so it backs off rather than piling on.
+   */
+  stopOnFailure?: boolean;
 };
 
 /**
@@ -1690,7 +1703,10 @@ export type EnrichResult = {
  * idempotent. Bounded per run so one click can't burn the API budget; run
  * again to continue where it left off.
  */
-export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
+export async function enrichStoredGames(
+  limit = 12,
+  options: EnrichOptions = {},
+): Promise<EnrichResult> {
   // The `"benchmarks":` key only ever appears as a line's own field — a
   // player whose persona name is literally `benchmarks` serializes with a
   // comma after it, so the colon keeps the marker probe honest.
@@ -1728,7 +1744,9 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   });
   const requeue = (game: { id: string; players: string }) =>
     writeIfUnchanged(game, { fetchedAt: new Date() });
+  let stoppedOnFailure = false;
   for (const game of batch) {
+    if (!canStartOpenDotaFetch(options, options.minStartMs)) break;
     let lines: PlayerStat[];
     try {
       const parsed = JSON.parse(game.players);
@@ -1740,10 +1758,14 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
       continue;
     }
 
-    const od = await fetchOpenDotaMatch(game.dotaMatchId);
+    const od = await fetchOpenDotaMatch(game.dotaMatchId, options);
     if (!od) {
       failed++;
       await requeue(game);
+      if (options.stopOnFailure) {
+        stoppedOnFailure = true;
+        break;
+      }
       continue;
     }
 
@@ -1784,6 +1806,7 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
     enriched,
     failed,
     remaining: await prisma.game.count({ where: unenriched }),
+    ...(stoppedOnFailure ? { stoppedOnFailure } : {}),
   };
 }
 

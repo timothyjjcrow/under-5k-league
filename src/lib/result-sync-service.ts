@@ -61,6 +61,7 @@ import {
   maybeAnnounceUpcomingWeek,
 } from "./reminder-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
+import { refreshPlayerDataAutomatically } from "./player-data-refresh";
 import { recoverableAnnouncementMarker } from "./announcement-marker";
 
 // Automatic result sync — the league updates itself instead of waiting on a
@@ -101,6 +102,12 @@ export type RunResultSyncOptions = {
   /** Absolute epoch-millisecond deadline supplied by the automation lease. */
   deadlineMs?: number;
   signal?: AbortSignal;
+  /**
+   * Finish with the hourly player data refresh (refreshPlayerDataAutomatically).
+   * Only the scheduled automation worker sets this; direct callers get result
+   * sync alone.
+   */
+  refreshPlayerData?: boolean;
 };
 
 const RESULT_SYNC_ISSUE = {
@@ -114,6 +121,7 @@ const RESULT_SYNC_ISSUE = {
   NOTIFICATIONS: "NOTIFICATION_RETRY_FAILED",
   OUTBOX: "LEAGUE_NOTIFICATION_DELIVERY_FAILED",
   CURSOR: "CURSOR_READ_FAILED",
+  PLAYER_DATA: "PLAYER_DATA_REFRESH_FAILED",
 } as const;
 
 const RESULT_SYNC_SKIPPED = {
@@ -1166,6 +1174,24 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.NOTIFICATIONS);
       logStepFailure("notifications", error);
+    }
+  }
+
+  // Lowest priority, last: the hourly player data refresh (medals, scouting
+  // stats, Steam names, report-card backfill). It shares OpenDota's budget
+  // with result sync, so it waits while result sync is watching a match or
+  // lobby. It throttles and times itself: not running, running short or
+  // backing off after a rate limit is normal, never a skipped step. Only an
+  // unexpected failure is reported.
+  if (
+    options.refreshPlayerData &&
+    !(league.watch || inhouse.watch || draft.watch)
+  ) {
+    try {
+      await refreshPlayerDataAutomatically(options);
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.PLAYER_DATA);
+      logStepFailure("player-data", error);
     }
   }
 

@@ -147,6 +147,48 @@ export function pubStatsFresh(
   );
 }
 
+/**
+ * Which stale accounts the automatic pass refreshes, in order: this season's
+ * signups first (the pool, the draft room and the teams show their data),
+ * then everyone else; within each, never-refreshed accounts first, then the
+ * oldest snapshot, then id. The account whose fetch failed last pass goes
+ * last, so one account OpenDota keeps refusing can't hold up the rest.
+ * Pure — the player data refresh passes in what it read.
+ */
+export function pickStaleAccounts<
+  T extends { id: string; pubStatsAt: Date | null },
+>(
+  candidates: readonly T[],
+  opts: {
+    signupIds: ReadonlySet<string>;
+    lastFailedId: string | null;
+    nowMs: number;
+    limit: number;
+  },
+): T[] {
+  const seen = new Set<string>();
+  return candidates
+    .filter((u) => {
+      if (seen.has(u.id) || pubStatsFresh(u.pubStatsAt, opts.nowMs)) {
+        return false;
+      }
+      seen.add(u.id);
+      return true;
+    })
+    .sort((a, b) => {
+      const failed =
+        Number(a.id === opts.lastFailedId) - Number(b.id === opts.lastFailedId);
+      if (failed !== 0) return failed;
+      const signup =
+        Number(opts.signupIds.has(b.id)) - Number(opts.signupIds.has(a.id));
+      if (signup !== 0) return signup;
+      const at = (a.pubStatsAt?.getTime() ?? -1) - (b.pubStatsAt?.getTime() ?? -1);
+      if (at !== 0) return at;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    })
+    .slice(0, opts.limit);
+}
+
 /** What the player pool actually ships to the client: the recent-window W/L,
  *  the last-played stamp, and the top-3 most-played heroes. Deliberately NO
  *  lifetime games figure — a volume stat is the one number nobody should be

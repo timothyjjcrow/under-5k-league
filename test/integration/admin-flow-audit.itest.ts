@@ -1816,7 +1816,7 @@ describe("assignStandin unpacks the empty-seat option from the form", () => {
 });
 
 describe("reinstateSignup medal advisory", () => {
-  // The flag flow is one-way: syncPlayerRanks names over-ceiling signups in
+  // The flag flow is one-way: refreshPlayerData names over-ceiling signups in
   // its own toast and expects a withdraw — nothing warned when the same admin
   // later REINSTATED a flagged signup. Advisory only, never a gate: the
   // mutation must succeed either way (operator's call).

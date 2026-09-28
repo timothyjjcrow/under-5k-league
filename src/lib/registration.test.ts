@@ -336,8 +336,8 @@ describe("withdrawGateError — on the auction block", () => {
 // A medal is often learned AFTER signup: players sign up before linking their
 // Dota account, or OpenDota is unreachable at that moment. registrationGate only
 // runs on submit and a stored MMR is league-approved by design, so nothing
-// re-judges those signups — the admin's "Sync ranks & stats" is the one moment the
-// league learns the truth, and it uses this predicate to name them.
+// re-judges those signups — the admin's "Refresh player data now" names them
+// with this predicate (the hourly refresh fills medals in without a toast).
 describe("medalProvesIneligible — the post-signup ceiling check", () => {
   it("is false when there is no medal to judge by", () => {
     expect(medalProvesIneligible(null)).toBe(false);

@@ -243,10 +243,12 @@ already collected.
 
 Players' **ranked medals** come from the same source (OpenDota `rank_tier`). The
 Dota account is derived from each player's verified Steam sign-in; players can
-refresh their own medal, or an admin can populate everyone's at once with the
-**Sync ranks & stats** button before the draft (it also pulls
-each player's pub-scouting snapshot — recent-games win rate, most-played
-heroes, last played — which the player pool and profiles render).
+refresh their own medal. The automation worker also refreshes a few of the
+stalest accounts about once an hour (medal, Steam name and avatar, and each
+player's pub-scouting snapshot — recent-games win rate, most-played heroes,
+last played — which the player pool and profiles render), and an admin can
+refresh every signup at once with **Refresh player data now** before the
+draft.
 
 ## Scripts
 
