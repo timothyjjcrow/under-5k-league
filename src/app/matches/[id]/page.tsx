@@ -35,6 +35,7 @@ import { formatMatchTime } from "@/lib/match-time";
 import { matchNightRoster } from "@/lib/availability";
 import { canViewNamedMatchAvailability } from "@/lib/visibility";
 import {
+  isPlayoffPhase,
   matchCheckinOpen,
   matchLogisticsOpen,
   matchResultsOpen,
@@ -506,7 +507,8 @@ export default async function MatchDetailPage({
         <div className="rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-3 text-sm text-muted">
           <strong className="text-fg">Result pending.</strong> The scheduled
           kickoff has passed, but this series is not final yet. A captain can
-          report the Dota game while the fixture&apos;s league phase is open.
+          report the Dota game until the{" "}
+          {isPlayoffPhase(match.phase) ? "playoffs end" : "regular season ends"}.
         </div>
       ) : null}
 
@@ -592,7 +594,7 @@ export default async function MatchDetailPage({
                         href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
                         target="_blank"
                         rel="noreferrer"
-                        className={textLink("text-xs")}
+                        className={textLink("whitespace-nowrap text-xs")}
                       >
                         OpenDota <LinkArrow out />
                       </a>
