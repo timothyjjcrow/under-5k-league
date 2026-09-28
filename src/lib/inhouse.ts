@@ -318,6 +318,52 @@ export function inhouseAlerts(
   return alerts;
 }
 
+/**
+ * The stages where a lobby member has something to press: accept, vote, pick,
+ * and (once teams lock) get into the Dota lobby. A game in progress needs
+ * nothing, so it is not here.
+ */
+const FOCUS_STATUSES: readonly string[] = [
+  "READY_CHECK",
+  "CAPTAIN_VOTE",
+  "DRAFTING",
+  "READY",
+];
+
+export type InhouseFocusSnapshot = {
+  /** `lobby?.id ?? null`. */
+  lobbyId: string | null;
+  /** `lobby?.status ?? null`. */
+  status: string | null;
+  /** MEMBERSHIP (`me.inLobby`). */
+  inLobby: boolean;
+};
+
+/**
+ * Should the room scroll its current stage to the top of the screen?
+ *
+ * The page opens with its title, links and the stage strip above the room, so
+ * on a phone a captain on the clock saw the pick clock and not one player to
+ * pick. When a MEMBER's lobby reaches a stage that needs them (a new lobby, a
+ * new status, or their first sight of it, including a reload mid-draft), the
+ * room brings that stage up. Only then: it never scrolls a spectator, never
+ * again within the same stage (the viewer may have scrolled on purpose), and
+ * never for a game in progress.
+ */
+export function shouldFocusStage(
+  prev: InhouseFocusSnapshot | null,
+  next: InhouseFocusSnapshot,
+): boolean {
+  if (!next.inLobby || !next.status || !FOCUS_STATUSES.includes(next.status))
+    return false;
+  return (
+    prev === null ||
+    !prev.inLobby ||
+    prev.lobbyId !== next.lobbyId ||
+    prev.status !== next.status
+  );
+}
+
 /** Was the viewer sitting in a ready check as of the previous poll? */
 export function wasInReadyCheck(prev: InhouseAlertSnapshot | null): boolean {
   return !!prev && prev.inLobby && prev.status === "READY_CHECK";

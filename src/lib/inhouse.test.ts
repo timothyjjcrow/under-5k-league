@@ -18,6 +18,7 @@ import {
   queueSlots,
   requeueLastSeenAt,
   seedOrder,
+  shouldFocusStage,
   tallyMethod,
   wasInReadyCheck,
   type CaptainCandidate,
@@ -895,5 +896,59 @@ describe("inhouseScanStatus", () => {
     expect(inhouseScanStatus(window!.opensAtMs, started + 3_000).live).toBe(
       false,
     );
+  });
+});
+
+describe("shouldFocusStage", () => {
+  const snap = (
+    status: string | null,
+    inLobby = true,
+    lobbyId: string | null = status ? "lobby-1" : null,
+  ) => ({ lobbyId, status, inLobby });
+
+  it("brings each stage that needs a member into view once", () => {
+    expect(shouldFocusStage(snap(null), snap("READY_CHECK"))).toBe(true);
+    expect(shouldFocusStage(snap("READY_CHECK"), snap("CAPTAIN_VOTE"))).toBe(
+      true,
+    );
+    expect(shouldFocusStage(snap("CAPTAIN_VOTE"), snap("DRAFTING"))).toBe(
+      true,
+    );
+    expect(shouldFocusStage(snap("DRAFTING"), snap("READY"))).toBe(true);
+  });
+
+  it("stays put within a stage, so a viewer who scrolled keeps their place", () => {
+    for (const status of ["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "READY"])
+      expect(shouldFocusStage(snap(status), snap(status))).toBe(false);
+  });
+
+  it("focuses a member's first sight of their lobby, including a reload", () => {
+    expect(shouldFocusStage(null, snap("DRAFTING"))).toBe(true);
+    // Queued when the lobby formed: the previous poll had no lobby for them.
+    expect(shouldFocusStage(snap(null, false), snap("READY_CHECK"))).toBe(
+      true,
+    );
+  });
+
+  it("focuses a new lobby even at the same stage", () => {
+    expect(
+      shouldFocusStage(
+        snap("READY_CHECK", true, "lobby-1"),
+        snap("READY_CHECK", true, "lobby-2"),
+      ),
+    ).toBe(true);
+  });
+
+  it("never scrolls a spectator", () => {
+    expect(shouldFocusStage(null, snap("DRAFTING", false))).toBe(false);
+    expect(
+      shouldFocusStage(snap("CAPTAIN_VOTE", false), snap("DRAFTING", false)),
+    ).toBe(false);
+  });
+
+  it("leaves a game in progress and the empty queue alone", () => {
+    expect(shouldFocusStage(snap("READY"), snap("IN_PROGRESS"))).toBe(false);
+    expect(shouldFocusStage(null, snap("IN_PROGRESS"))).toBe(false);
+    expect(shouldFocusStage(snap("READY"), snap(null, false))).toBe(false);
   });
 });

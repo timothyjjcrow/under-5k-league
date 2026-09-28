@@ -37,8 +37,10 @@ import {
   orderCaptains,
   queueSlots,
   readyCheckEndedToast,
+  shouldFocusStage,
   wasInReadyCheck,
   type InhouseAlertSnapshot,
+  type InhouseFocusSnapshot,
 } from "@/lib/inhouse";
 import { inhousePollCadence } from "@/lib/room-poll";
 import { INHOUSE_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
@@ -205,6 +207,11 @@ export function InhouseRoom({
   // what suppresses alerts for a mid-lobby page load.
   const prevAlertRef = useRef<InhouseAlertSnapshot | null>(null);
   const originalTitleRef = useRef<string | null>(null);
+  // The current stage view, and what the last poll said about it, so the
+  // room can bring a stage that needs this member to the top of the screen
+  // (shouldFocusStage decides when).
+  const stageRef = useRef<HTMLDivElement>(null);
+  const prevFocusRef = useRef<InhouseFocusSnapshot | null>(null);
   // Result banners the viewer closed — stays dismissed across the polls of
   // the 10-minute lastResult window AND across reloads (localStorage), so a
   // refresh doesn't resurrect a banner they already read.
@@ -517,6 +524,29 @@ export function InhouseRoom({
     // minutes.
     prevAlertRef.current = snap;
   }, [state, soundOn]);
+
+  // On a phone the page's title, links and the stage strip sit above the
+  // room, so a member reaching a stage that needs them (accept, vote, pick,
+  // get into the Dota lobby) could see the clock but not the thing to press.
+  // Scroll that stage to the top once per stage; never for spectators.
+  useEffect(() => {
+    if (!state) return;
+    const snap: InhouseFocusSnapshot = {
+      lobbyId: state.lobby?.id ?? null,
+      status: state.lobby?.status ?? null,
+      inLobby: state.me.inLobby,
+    };
+    const focus = shouldFocusStage(prevFocusRef.current, snap);
+    prevFocusRef.current = snap;
+    if (focus) {
+      stageRef.current?.scrollIntoView({
+        block: "start",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+      });
+    }
+  }, [state]);
 
   // Flip the tab title while something needs this viewer's attention. Unlike
   // the chime this needs no sound toggle or prior-gesture audio unlock, so a
@@ -896,66 +926,69 @@ export function InhouseRoom({
         )
       ) : null}
 
-      {!lobby ? (
-        <QueueView
-          state={state}
-          pending={pending}
-          mmr={mmr}
-          setMmr={setMmr}
-          mmrHint={mmrHint}
-          signupMmr={signupMmr}
-          act={act}
-        />
-      ) : lobby.status === "READY_CHECK" ? (
-        <ReadyCheckView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          offset={offset}
-          pending={pending}
-          act={act}
-        />
-      ) : lobby.status === "CAPTAIN_VOTE" ? (
-        <VoteView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          offset={offset}
-          pending={pending}
-          act={act}
-        />
-      ) : lobby.status === "DRAFTING" ? (
-        <DraftView
-          key={lobby.id}
-          state={state}
-          me={me}
-          lobby={lobby}
-          offset={offset}
-          selected={selectedInPool}
-          setSelected={setSelected}
-          pending={pending}
-          act={act}
-        />
-      ) : lobby.status === "READY" ? (
-        <ReadyView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          serverNow={state.now}
-          pending={pending}
-          act={act}
-        />
-      ) : (
-        <InProgressView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          offset={offset}
-          serverNow={state.now}
-          pending={pending}
-          act={act}
-        />
-      )}
+      {/* scroll-mt clears the 80px sticky header (see shouldFocusStage). */}
+      <div ref={stageRef} className="scroll-mt-24">
+        {!lobby ? (
+          <QueueView
+            state={state}
+            pending={pending}
+            mmr={mmr}
+            setMmr={setMmr}
+            mmrHint={mmrHint}
+            signupMmr={signupMmr}
+            act={act}
+          />
+        ) : lobby.status === "READY_CHECK" ? (
+          <ReadyCheckView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            offset={offset}
+            pending={pending}
+            act={act}
+          />
+        ) : lobby.status === "CAPTAIN_VOTE" ? (
+          <VoteView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            offset={offset}
+            pending={pending}
+            act={act}
+          />
+        ) : lobby.status === "DRAFTING" ? (
+          <DraftView
+            key={lobby.id}
+            state={state}
+            me={me}
+            lobby={lobby}
+            offset={offset}
+            selected={selectedInPool}
+            setSelected={setSelected}
+            pending={pending}
+            act={act}
+          />
+        ) : lobby.status === "READY" ? (
+          <ReadyView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            serverNow={state.now}
+            pending={pending}
+            act={act}
+          />
+        ) : (
+          <InProgressView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            offset={offset}
+            serverNow={state.now}
+            pending={pending}
+            act={act}
+          />
+        )}
+      </div>
 
       {me.canCancel ? (
         <div className="text-right">
@@ -2168,32 +2201,6 @@ function DraftView({
         </div>
       </div>
 
-      <div className="rounded-xl border border-line bg-surface/60 px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-          <span>Snake draft · 1 pick, then pairs</span>
-          <span className="tabular-nums">
-            {picksMade}/{totalPicks} drafted
-          </span>
-        </div>
-        <div
-          aria-label={`${picksMade} of ${totalPicks} players drafted`}
-          className="mt-2 flex gap-1.5"
-        >
-          {Array.from({ length: totalPicks }, (_, i) => (
-            <span
-              key={i}
-              className={cn(
-                "h-1.5 flex-1 rounded-full",
-                i < picksMade ? "bg-accent" : "bg-line",
-              )}
-            />
-          ))}
-        </div>
-        {balanceLabel ? (
-          <p className="mt-2 text-center text-xs text-muted">{balanceLabel}</p>
-        ) : null}
-      </div>
-
       {me.isAdmin && !me.isOnClock ? (
         <p
           role="note"
@@ -2206,9 +2213,10 @@ function DraftView({
         </p>
       ) : null}
 
-      {/* Pool FIRST in DOM: on phones the on-clock captain needs it now —
-          Team 1's roster card would otherwise bury it (same treatment as the
-          league draft room). lg:order-* restores the three-column desktop. */}
+      {/* Pool FIRST in DOM, directly under the clock: on phones the
+          on-clock captain needs it now — Team 1's roster card would otherwise
+          bury it (same treatment as the league draft room). lg:order-*
+          restores the three-column desktop. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.1fr_1fr]">
         {/* Draft pool. Tapping a player puts the Draft button on that
             same row, so a pick is two taps in one place instead of a hunt
@@ -2312,6 +2320,34 @@ function DraftView({
             onClock={lobby.pickTeam === lobby.teams[1].team}
           />
         </div>
+      </div>
+
+      {/* Draft progress and the MMR balance sit under the pool, so the pool
+          starts right under the pick clock. */}
+      <div className="rounded-xl border border-line bg-surface/60 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+          <span>Snake draft · 1 pick, then pairs</span>
+          <span className="tabular-nums">
+            {picksMade}/{totalPicks} drafted
+          </span>
+        </div>
+        <div
+          aria-label={`${picksMade} of ${totalPicks} players drafted`}
+          className="mt-2 flex gap-1.5"
+        >
+          {Array.from({ length: totalPicks }, (_, i) => (
+            <span
+              key={i}
+              className={cn(
+                "h-1.5 flex-1 rounded-full",
+                i < picksMade ? "bg-accent" : "bg-line",
+              )}
+            />
+          ))}
+        </div>
+        {balanceLabel ? (
+          <p className="mt-2 text-center text-xs text-muted">{balanceLabel}</p>
+        ) : null}
       </div>
     </div>
   );
