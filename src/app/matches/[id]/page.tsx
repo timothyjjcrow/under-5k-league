@@ -13,7 +13,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { shareMetadata } from "@/lib/share-metadata";
+import { matchMetadata } from "@/lib/link-preview-metadata";
 import { AUTO_SYNC, LEAGUE_GAME_MODE } from "@/lib/constants";
 import {
   howToHostParts,
@@ -97,6 +97,7 @@ import {
   FormStrip,
   HeroIcon,
   KDA,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -113,17 +114,11 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const match = await prisma.match.findUnique({
-    where: { id },
-    select: {
-      homeTeam: { select: { name: true } },
-      awayTeam: { select: { name: true } },
-    },
-  });
+  // The round and teams, then the kickoff, live score or result.
+  const metadata = await matchMetadata(id);
   // notFound() in metadata runs before the shell streams → real 404 status.
-  if (!match) notFound();
-  const title = `${match.homeTeam.name} vs ${match.awayTeam.name}`;
-  return shareMetadata(title, `${title} — box score and results in ${LEAGUE_CONFIG.name}.`);
+  if (!metadata) notFound();
+  return metadata;
 }
 
 export default async function MatchDetailPage({
@@ -252,8 +247,10 @@ export default async function MatchDetailPage({
 
   return (
     <div className="space-y-6">
+      {/* The page's h1 names the fixture, like its tab title and link
+          preview, so someone moving by headings knows which match this is. */}
       <PageTitle
-        title="Match center"
+        title={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
         subtitle={`${match.season.name} · ${postseasonLabel}`}
         action={
           <ContextBackLink
@@ -289,7 +286,7 @@ export default async function MatchDetailPage({
                   : tiebreakerStage === 4 ? "If the team from Game 2 wins, the bracket is complete. If the team from Game 3 wins, both teams play Game 5."
                     : "Deciding final: winner finishes first, loser finishes second in the tiebreaker."
           }</p> : null}
-          <Link href={match.season.isActive ? "/schedule#tiebreakers" : `/seasons/${match.seasonId}`} className="inline-block py-1 text-info hover:underline">{match.season.isActive ? "View full tiebreaker bracket →" : "View tiebreaker results →"}</Link>
+          <Link href={match.season.isActive ? "/schedule#tiebreakers" : `/seasons/${match.seasonId}`} className="inline-block py-1 text-info hover:underline">{match.season.isActive ? "View full tiebreaker bracket" : "View tiebreaker results"} <LinkArrow /></Link>
         </div>
       ) : null}
 
@@ -478,7 +475,9 @@ export default async function MatchDetailPage({
                       </span>
                     </>
                   ) : (
-                    <span className="text-muted">Box score →</span>
+                    <span className="text-muted">
+                      Box score <LinkArrow />
+                    </span>
                   )}
                 </a>
               );
@@ -563,6 +562,7 @@ export default async function MatchDetailPage({
               >
                 <CardHeader
                   title={`Game ${i + 1}`}
+                  headingLevel={2}
                   // 0s / 0-0 means the header stats never got reported — showing
                   // "0m 0s · 0-0 kills" reads as a real (absurd) game.
                   subtitle={
@@ -588,7 +588,7 @@ export default async function MatchDetailPage({
                         rel="noreferrer"
                         className={textLink("text-xs")}
                       >
-                        OpenDota ↗
+                        OpenDota <LinkArrow out />
                       </a>
                     </div>
                   }
@@ -1070,6 +1070,7 @@ async function StakesBanner({
     <Card className="border-accent/30">
       <CardHeader
         title="Tonight's stakes"
+        headingLevel={2}
         subtitle="How each feasible result changes playoff qualification"
       />
       <CardBody className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -1620,7 +1621,7 @@ function ReportCardStrip({ line }: { line: PlayerStat }) {
           aria-label={`Overall report-card grade ${overall} — ${percentLabel(avg!)} vs the world on this hero`}
           title={`vs the world on this hero: ${percentLabel(avg!)}`}
           className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide",
+            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs font-semibold uppercase tracking-wide",
             GRADE_CHIP[gradeTone(overall)],
           )}
         >
@@ -1634,7 +1635,7 @@ function ReportCardStrip({ line }: { line: PlayerStat }) {
           aria-label={`${r.label}: grade ${r.grade}, ${percentLabel(r.pct)}`}
           title={`${r.label} — ${percentLabel(r.pct)}`}
           className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10px] tabular-nums",
+            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs tabular-nums",
             GRADE_CHIP[gradeTone(r.grade)],
           )}
         >
@@ -2008,7 +2009,7 @@ async function StandinSection({
                     <SubmitButton
                       variant="ghost"
                       size="sm"
-                      className="text-danger"
+                      className="text-danger-soft"
                       confirm={`Remove ${a.standin.name} as standin? Discord is told to stand down.`}
                     >
                       Remove

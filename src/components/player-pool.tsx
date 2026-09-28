@@ -10,6 +10,7 @@ import {
   EmptyState,
   HeroIcon,
   HeroList,
+  LinkArrow,
   PlayerLink,
   RankBadge,
   RoleBadges,
@@ -237,7 +238,7 @@ export function PlayerPool({
           className={cn(
             CHIP_BASE,
             "h-11 px-3 sm:h-9",
-            captainOnly ? "border-brand/50 bg-brand/10 text-brand" : CHIP_OFF,
+            captainOnly ? CHIP_ON : CHIP_OFF,
           )}
         >
           Wants captain
@@ -450,7 +451,7 @@ export function PlayerPool({
                           rel="noreferrer"
                           className={textLink()}
                         >
-                          Dotabuff ↗
+                          Dotabuff <LinkArrow out />
                         </a>
                       ) : null}
                       <DiscordTag
@@ -564,7 +565,7 @@ export function PlayerPool({
                     )}
                   >
                     {p.wantsCaptain ? (
-                      <Badge tone="brand">Wants captain</Badge>
+                      <Badge tone="accent">Wants captain</Badge>
                     ) : null}
                     {p.drafted ? (
                       draftInfo?.[p.userId] ? (

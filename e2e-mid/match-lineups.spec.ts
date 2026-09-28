@@ -116,7 +116,7 @@ test("players check in and captains bring in standins without any lineup confirm
       await expect(target.getByRole("button", { name: "Confirm playing lineup" })).toHaveCount(0);
     };
     await login(page, f.users[0], path);
-    await expect(page.getByRole("heading", { name: "Match center", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `${f.homeName} vs ${f.awayName}`, level: 1, exact: true })).toBeVisible();
     await noLineupCard(page);
 
     await login(page, f.users[f.teamSize - 1], path);
@@ -198,7 +198,7 @@ test("former players retain actual appearances and auction receipts while identi
     // The history season crowned a champion, so the Hall of Fame opens on it.
     await expect(page.getByRole("heading", { name: "Champion history" })).toBeVisible();
     await expect(page.getByRole("heading", { name: f.homeName, exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "🏆 Championship contributions", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Championship contributions", exact: true })).toBeVisible();
     await page.goto(`/matches/${f.matchId}`);
     await expect(page.getByText("Correct player attribution · Admin", { exact: true })).toHaveCount(0);
     await login(page, f.users[1], `/matches/${f.matchId}`);

@@ -86,16 +86,69 @@ export function draftPhasePresentation(
 }
 
 /**
- * One sentence under the season name. Returns "" for an unknown status so a
- * future phase renders nothing rather than a stale line about another one.
+ * The ONE name for the league's current phase, used by every phase chip: the
+ * header chip, the footer and the dashboard hero. They
+ * used to keep three hand-copied maps with different
+ * wording, and the footer's said "Draft in progress" for an auction that had
+ * not started (or had already finished), because a season-phase map cannot
+ * see the auction. Inside DRAFT the label comes from `draftPhasePresentation`,
+ * so "Draft setup" / "Draft live" / "Draft paused" / "Draft complete" say what
+ * a visitor can actually do.
+ *
+ * Every chip sits beside the season's name, so the label never repeats the
+ * word "Season" ("Season 7 · Complete", not "Season 7 · Season complete").
+ * `null` is the offseason; an unknown status renders as itself.
  */
+export function seasonPhaseLabel(
+  status: string | null | undefined,
+  draftStatus?: string | null,
+): string {
+  switch (status) {
+    case SEASON_STATUS.SIGNUPS:
+      return "Signups open";
+    case SEASON_STATUS.DRAFT:
+      return draftPhasePresentation(draftStatus).badge;
+    case SEASON_STATUS.REGULAR_SEASON:
+      return "Regular season";
+    case SEASON_STATUS.PLAYOFFS:
+      return "Playoffs";
+    case SEASON_STATUS.COMPLETE:
+      return "Complete";
+    case null:
+    case undefined:
+      return "Between seasons";
+    default:
+      return status;
+  }
+}
+
+export type PhaseTone = "brand" | "accent" | "success" | "info" | "neutral";
+
+/** The badge colour that goes with `seasonPhaseLabel`, shared the same way. */
+export function seasonPhaseTone(status: string | null | undefined): PhaseTone {
+  switch (status) {
+    case SEASON_STATUS.SIGNUPS:
+      return "info";
+    case SEASON_STATUS.DRAFT:
+    case SEASON_STATUS.PLAYOFFS:
+      return "accent";
+    case SEASON_STATUS.REGULAR_SEASON:
+      return "success";
+    case SEASON_STATUS.COMPLETE:
+      // Gold, like the trophy: red reads as an error, and a finished season
+      // is the league's good news.
+      return "accent";
+    default:
+      return "neutral";
+  }
+}
+
 /**
  * Phase labels for the season-HISTORY surfaces (/seasons, /seasons/[id]) and
  * the ADMIN surfaces (panel + phase-move toast) — each pair was byte-identical
- * and is single-sourced here. The dashboard and the phase badges in the
- * header/footer keep deliberately different per-surface copy; do not unify
- * those into these history/admin labels. The schedule destination label below
- * is shared separately because it names the same link in both global navs.
+ * and is single-sourced here. They name a phase as a STEP ("In season",
+ * "Draft") rather than describing the live league, so they stay separate from
+ * `seasonPhaseLabel` above, which every current-phase chip uses.
  */
 export const HISTORY_PHASE_LABEL: Record<string, string> = {
   SIGNUPS: "Signups open",
@@ -114,19 +167,9 @@ export const ADMIN_PHASE_LABEL: Record<string, string> = {
 };
 
 /**
- * Name the current season's schedule destination in global navigation.
- *
- * The route stays `/schedule`, but its job changes after the regular season:
- * an active bracket is “Playoffs” and a completed bracket is read-only “Season
- * results”. Header and footer must not describe the same destination
- * differently, so this small piece of navigation copy is shared.
+ * One sentence under the season name. Returns "" for an unknown status so a
+ * future phase renders nothing rather than a stale line about another one.
  */
-export function scheduleDestinationLabel(status: string | null): string {
-  if (status === SEASON_STATUS.PLAYOFFS) return "Playoffs";
-  if (status === SEASON_STATUS.COMPLETE) return "Season results";
-  return "Schedule";
-}
-
 export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
   switch (status) {
     case SEASON_STATUS.SIGNUPS:
@@ -155,4 +198,14 @@ export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
     default:
       return "";
   }
+}
+
+/**
+ * The admin-typed match night (`Season.matchSchedule`), ready to quote in a
+ * sentence: trimmed, and without a trailing full stop, because every surface
+ * that quotes it ends the sentence itself ("Wednesdays, 8pm ET.. Games are
+ * on…" otherwise). Null when the admin hasn't set one.
+ */
+export function matchNightText(raw: string | null | undefined): string | null {
+  return raw?.trim().replace(/[.\s]+$/, "") || null;
 }

@@ -4,9 +4,16 @@ import type { Metadata } from "next";
 import { ChampionBanner } from "@/components/champion-banner";
 import { AuctionHistory } from "@/components/auction-history";
 import { SeasonAwards } from "@/components/season-awards";
-import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
+import {
+  HISTORY_PHASE_LABEL as PHASE_LABEL,
+  seasonPhaseLabel,
+} from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
+import { getSeasonDraftStatus, getViewerFantasyEntered } from "@/lib/queries";
+import { fantasyListed } from "@/lib/site-nav";
+import { SEASON_STATUS } from "@/lib/constants";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -23,6 +30,7 @@ import {
   CardHeader,
   CardSkeleton,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -163,7 +171,7 @@ function ResultRow({
           aria-label={matchLabel}
           className="inline-flex min-h-11 items-center text-xs font-medium text-info hover:underline"
         >
-          Match details ↗
+          Match details <LinkArrow />
         </Link>
       </div>
     </div>
@@ -191,14 +199,34 @@ export default async function SeasonArchivePage({
       },
     }),
     prisma.game.count({ where: { match: { seasonId: id } } }),
-    // Fantasy is linked when the season had managers; otherwise the page
-    // would open onto "Entries 0".
+    // An archived season links Fantasy when it had managers; otherwise the
+    // page would open onto "Entries 0".
     prisma.fantasyRoster.findFirst({
       where: { seasonId: id },
       select: { id: true },
     }),
   ]);
   if (!season) notFound();
+
+  // The current season names its phase as the header and footer chips do,
+  // and links Fantasy by the menus' rule. Both reads are request-cached: the
+  // root layout already made them.
+  const draftStatus =
+    season.isActive && season.status === SEASON_STATUS.DRAFT
+      ? await getSeasonDraftStatus(season.id)
+      : null;
+  const fantasyLocked = season.fantasyLockedAt != null || gameCount > 0;
+  const viewer = season.isActive && fantasyLocked ? await getSessionUser() : null;
+  const showFantasy = season.isActive
+    ? fantasyListed({
+        phase: season.status,
+        draftStatus,
+        fantasyLocked,
+        fantasyEntered: viewer
+          ? await getViewerFantasyEntered(season.id, viewer.id)
+          : false,
+      })
+    : fantasyEntry !== null;
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
@@ -236,10 +264,19 @@ export default async function SeasonArchivePage({
     <div className="space-y-8">
       <PageTitle
         title={season.name}
-        subtitle={season.isActive ? "Current season" : "Season archive"}
+        subtitle={
+          // The badge already says "Current season"; the subtitle says where
+          // the season is, in the header chip's words, so a finished one
+          // stops reading as running.
+          season.isActive
+            ? season.status === SEASON_STATUS.COMPLETE
+              ? "Season complete"
+              : seasonPhaseLabel(season.status, draftStatus)
+            : "Season archive"
+        }
         action={
           season.isActive ? (
-            <Badge tone="brand">Current season</Badge>
+            <Badge tone="success">Current season</Badge>
           ) : (
             <Badge tone="neutral">
               {PHASE_LABEL[season.status] ?? season.status}
@@ -270,7 +307,7 @@ export default async function SeasonArchivePage({
           ) : null}
           {/* Fantasy and pick'em can have useful season state even when no
               OpenDota Game rows were imported. */}
-          {fantasyEntry ? (
+          {showFantasy ? (
             <Link
               href={`/fantasy?season=${season.id}`}
               className={buttonClasses("secondary", "sm")}

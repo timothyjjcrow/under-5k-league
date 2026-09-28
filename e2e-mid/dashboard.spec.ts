@@ -23,15 +23,42 @@ test("dashboard shows the regular-season hero, standings, and a LIVE chip", asyn
   assertNoErrors();
 });
 
+// The header's status chip says what is happening now: with the staged LIVE
+// series it reads "Series live" on every page, phones included, and opens
+// this week's fixtures.
+test("the header chip links the live series from any page, on phones too", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/news");
+  const chip = page
+    .getByRole("banner")
+    .getByRole("link", { name: /^League status: .+ — Series live$/ });
+  await expect(chip).toHaveAttribute("href", "/schedule#this-week");
+  await expect(chip).toContainText("Series live");
+
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expect(chip).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/news header chip");
+  await chip.click();
+  await expect(page).toHaveURL(/\/schedule#this-week$/);
+  assertNoErrors();
+});
+
 test("signed-out newcomers can find the mid-season standin signup", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/");
 
-  const cta = page.getByRole("link", { name: "Sign in to stand in →" });
+  const cta = page.getByRole("link", { name: "Sign in to stand in" });
   await expect(cta).toBeVisible();
+  // Dev login is on in e2e, so this goes through /login; with only Steam it
+  // goes straight to Steam, and the note beside it says what is shared.
   await expect(cta).toHaveAttribute("href", "/login?next=/me");
+  await expect(
+    page.getByText(/so we never see your password or email\.$/),
+  ).toBeVisible();
 
   assertNoErrors();
 });

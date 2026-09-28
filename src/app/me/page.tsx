@@ -36,8 +36,10 @@ import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
   HARD_MMR_CEILING,
   MATCH_PHASE,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
+  SEASON_STATUS,
 } from "@/lib/constants";
 import { registrationSeasonClosedError } from "@/lib/registration";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
@@ -161,7 +163,8 @@ export default async function MePage({
 
   // Returning player: no signup for this season yet, but one from a past
   // season — carry those answers into the fresh form so they don't retype.
-  const [previous, standinAssignments] = await Promise.all([
+  const seasonComplete = season?.status === SEASON_STATUS.COMPLETE;
+  const [previous, standinAssignments, coveredMatches] = await Promise.all([
     season && !reg
       ? prisma.registration.findFirst({
           where: { userId: user.id, NOT: { seasonId: season.id } },
@@ -176,6 +179,16 @@ export default async function MePage({
           orderBy: { match: { week: "asc" } },
         })
       : null,
+    // Once the season is over, the standin card thanks them for the cover
+    // they gave instead of saying "no assignments yet".
+    season && seasonComplete && reg?.status === "ACTIVE" && !member
+      ? prisma.standinAssignment.count({
+          where: {
+            standinUserId: user.id,
+            match: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
+          },
+        })
+      : 0,
   ]);
   const form = reg ?? previous;
   // A booked playoff fixture is named by its round ("Semifinal"), the way the
@@ -613,7 +626,7 @@ export default async function MePage({
                 </div>
                 <div className="ml-auto shrink-0">
                   {member.isCaptain ? (
-                    <Badge tone="brand">Captain</Badge>
+                    <Badge tone="accent">Captain</Badge>
                   ) : (
                     <span className="text-sm text-muted">
                       Drafted for{" "}
@@ -633,10 +646,25 @@ export default async function MePage({
                 bare card stays standin-only: during SIGNUPS every registrant
                 is unrostered, and an empty "your assignments" box for the
                 whole pool would be noise. */}
-            {isRegistered &&
-            !member &&
-            standinAssignments &&
-            (reg?.type === "STANDIN" || standinAssignments.length > 0) ? (
+            {isRegistered && !member && seasonComplete ? (
+              // A finished season has nothing left to book: thank the ones
+              // who covered, and say nothing to the ones who were never
+              // needed.
+              coveredMatches > 0 ? (
+                <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
+                  <div className="text-xs uppercase tracking-wide text-muted">
+                    Your standin assignments
+                  </div>
+                  <p className="mt-1 text-sm text-muted">
+                    Season over — you covered {coveredMatches}{" "}
+                    {coveredMatches === 1 ? "match" : "matches"}. Thanks!
+                  </p>
+                </div>
+              ) : null
+            ) : isRegistered &&
+              !member &&
+              standinAssignments &&
+              (reg?.type === "STANDIN" || standinAssignments.length > 0) ? (
               <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   Your standin assignments

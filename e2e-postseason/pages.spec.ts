@@ -9,48 +9,27 @@ import {
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
 for (const archived of [false, true]) {
-  test(`feature tour preserves history ${archived ? "when the next season opens" : "after the final"}`, async ({
+  test(`How it works points to what's next ${archived ? "when the next season opens" : "after the final"}`, async ({
     page,
   }) => {
     const assertNoErrors = trackPageErrors(page);
     await reseed(page, "complete", archived);
-    await page.goto("/features");
-    const directory = page.getByRole("region", {
-      name: "Everything the league offers.",
-    });
-    await expect(directory.getByRole("article")).toHaveCount(32);
-    await expect(
-      directory.getByRole("link", { name: "Season history", exact: true }),
-    ).toHaveAttribute("href", "/seasons");
-    await expect(
-      directory.getByRole("link", { name: "Hall of Fame", exact: true }),
-    ).toHaveAttribute("href", "/hall-of-fame");
-    await expect(
-      page.getByRole("heading", {
-        name: archived ? "Signups are open" : "Ready for next season?",
-      }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Sign up with Steam" }),
-    ).toHaveCount(archived ? 2 : 0);
-    await expect(page.locator('main a[href="/draft"]')).toHaveCount(0);
-    await expect(
-      directory.getByRole("link", { name: "Playoff race", exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      directory.getByRole("link", { name: "Season recap", exact: true }),
-    ).toHaveCount(archived ? 0 : 1);
-    if (!archived) {
+    await page.goto("/how-it-works");
+    const main = page.locator("#main");
+    if (archived) {
+      // The next season is in signups: its one button is the header's join
+      // link ("Season 10 (fixture)" is too long to name).
       await expect(
-        page.locator("main").getByText(/^Season complete/),
-      ).toBeVisible();
+        main.getByRole("link", { name: "Join the season" }),
+      ).toHaveAttribute("href", "/login?next=/me");
+    } else {
+      // A finished season has nothing to sign up for until the next one.
+      await expect(main.getByRole("link", { name: /^Join the season/ })).toHaveCount(0);
       await expect(
-        directory.getByRole("link", { name: "Fantasy", exact: true }),
-      ).toHaveAttribute("href", "/fantasy");
-      await expect(
-        directory.getByRole("link", { name: "Pick'em", exact: true }),
-      ).toHaveAttribute("href", "/pickem");
+        main.getByRole("link", { name: "Sign up as a standin" }),
+      ).toHaveCount(0);
     }
+    await expect(page.locator('main a[href="/draft"]')).toHaveCount(0);
     assertNoErrors();
   });
 }
@@ -146,9 +125,15 @@ test("mid-playoffs renders the real bracket and supports tracing a run", async (
   await expect(
     page.getByRole("heading", { name: "Season 9 (fixture)" }),
   ).toBeVisible();
+  // The schedule keeps one name in every phase; the page's own heading is
+  // what says "Playoffs".
+  const primaryNav = page.getByRole("navigation", { name: "Primary" }).first();
   await expect(
-    page.getByRole("link", { name: "Playoffs", exact: true }).first(),
+    primaryNav.getByRole("link", { name: "Schedule", exact: true }),
   ).toBeVisible();
+  await expect(
+    primaryNav.getByRole("link", { name: "Playoffs", exact: true }),
+  ).toHaveCount(0);
   const bracket = page.getByRole("region", { name: "Playoff bracket" });
   await expect(bracket).toBeVisible();
   await expect(
@@ -282,7 +267,10 @@ test("complete-season public pages agree on the champion and recap", async ({
 
   const champion = await championName(page);
   await expect(
-    page.getByRole("link", { name: "Season results", exact: true }).first(),
+    page
+      .getByRole("navigation", { name: "Primary" })
+      .first()
+      .getByRole("link", { name: "Schedule", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Won the grand final")).toBeVisible();
   await expect(
@@ -465,22 +453,22 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     page.getByRole("heading", { name: "League offseason" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Review Season 9 (fixture) →" }),
+    page.getByRole("link", { name: "Review Season 9 (fixture)" }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page, "/ offseason home");
 
-  await page.goto("/features");
+  await page.goto("/how-it-works");
+  // Between seasons the page's one button is the league Discord (League
+  // news where the region has no invite), never a signup.
   await expect(
-    page.getByRole("heading", { name: "Ready for next season?" }),
-  ).toBeVisible();
-  await expect(page.locator('main a[href="/recap"]')).toHaveCount(0);
-  await expect(
-    page.getByRole("link", { name: "Sign up with Steam" }),
+    page.locator("#main").getByRole("link", { name: "Sign up as a standin" }),
   ).toHaveCount(0);
   await expect(
-    page.getByRole("link", { name: "Find an inhouse game" }),
+    page.locator("#main").getByRole("link", {
+      name: /^(Join our Discord|League news)$/,
+    }),
   ).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/features offseason");
+  await expectNoHorizontalOverflow(page, "/how-it-works offseason");
 
   for (const [path, heading] of [
     ["/players", "Players"],
@@ -493,8 +481,9 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     await expect(
       page.getByText("League offseason", { exact: true }),
     ).toBeVisible();
+    // The footer lists Season history too; this is the page's own pointer.
     await expect(
-      page.getByRole("link", { name: "Season history" }),
+      page.locator("#main").getByRole("link", { name: "Season history" }),
     ).toBeVisible();
     await expectNoHorizontalOverflow(page, `${path} offseason`);
   }

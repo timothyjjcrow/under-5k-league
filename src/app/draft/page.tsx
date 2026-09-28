@@ -1,3 +1,4 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
@@ -24,7 +25,10 @@ import {
   voidCurrentLotAction,
 } from "@/app/actions/admin";
 
-export const metadata = { title: "Draft" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("draft");
+}
 
 export default async function DraftPage() {
   const season = await getActiveSeason();

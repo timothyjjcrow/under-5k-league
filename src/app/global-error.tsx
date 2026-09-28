@@ -4,6 +4,21 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 
 import { useEffect } from "react";
 
+// Plain links, not next/link: the root layout just failed, so a full page
+// load is the better retry. Inline styles, like the rest of this file.
+const LINK_STYLE = {
+  minHeight: "44px",
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: "8px",
+  border: "1px solid #26324c",
+  padding: "0 16px",
+  boxSizing: "border-box",
+  color: "#e8edf5",
+  fontWeight: 600,
+  textDecoration: "none",
+} as const;
+
 /**
  * Last-resort UI for failures in the root layout itself (session, season, or
  * navigation queries). `app/error.tsx` cannot catch its parent layout.
@@ -60,7 +75,10 @@ export default function GlobalError({
           </h1>
           <p style={{ margin: "12px 0 0", color: "#aab5c8", lineHeight: 1.5 }}>
             The league data may be temporarily unavailable. Try again; if the
-            problem continues, send the reference below to an administrator.
+            problem continues,{" "}
+            {LEAGUE_CONFIG.discordInviteUrl
+              ? "ask a league admin on Discord and send the reference below."
+              : "send the reference below to a league admin."}
           </p>
           {error.digest ? (
             <p
@@ -74,23 +92,55 @@ export default function GlobalError({
               ref: {error.digest}
             </p>
           ) : null}
-          <button
-            type="button"
-            onClick={unstable_retry}
+          <div
             style={{
-              minHeight: "44px",
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "center",
+              gap: "8px",
               marginTop: "24px",
-              border: 0,
-              borderRadius: "8px",
-              padding: "0 20px",
-              background: "#dc3434",
-              color: "white",
-              fontWeight: 600,
-              cursor: "pointer",
             }}
           >
-            Try again
-          </button>
+            <button
+              type="button"
+              onClick={unstable_retry}
+              style={{
+                minHeight: "44px",
+                border: 0,
+                borderRadius: "8px",
+                padding: "0 20px",
+                background: "#dc3434",
+                color: "white",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Try again
+            </button>
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+            <a href="/" style={LINK_STYLE}>
+              Back to home
+            </a>
+            {/* Phase-independent: this document can't read the season. */}
+            <a href="/how-it-works" style={LINK_STYLE}>
+              How it works
+            </a>
+            {LEAGUE_CONFIG.discordInviteUrl ? (
+              <a
+                href={LEAGUE_CONFIG.discordInviteUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  ...LINK_STYLE,
+                  border: 0,
+                  background: "#5865F2",
+                  color: "white",
+                }}
+              >
+                Ask on Discord
+              </a>
+            ) : null}
+          </div>
         </main>
       </body>
     </html>

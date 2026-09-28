@@ -23,11 +23,22 @@ import { draftNightSoon } from "@/lib/draft-setup";
 import { prisma } from "@/lib/prisma";
 import { resolveSiteUrl } from "@/lib/site-url";
 import { getPublicReadSignals } from "@/lib/public-read-signals";
-import { getPublicHasHistory } from "@/lib/public-navigation";
+import {
+  getPublicHasHistory,
+  getPublicHasLiveMatch,
+  getPublicLeagueContent,
+  getPublicSeasonHasGames,
+} from "@/lib/public-navigation";
+import {
+  getSeasonDraftStatus,
+  getViewerFantasyEntered,
+  getViewerRegistration,
+} from "@/lib/queries";
+import { joinSeasonCta, type NavContent } from "@/lib/site-nav";
+import { siteDescription } from "@/lib/link-preview";
 
 const SITE_URL = resolveSiteUrl();
-const DESCRIPTION =
-  "An amateur Dota 2 league built around a soft 4.5K MMR limit — sign in with Steam, join the season, get drafted, and compete.";
+const DESCRIPTION = siteDescription();
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -38,7 +49,7 @@ export const metadata: Metadata = {
   description: DESCRIPTION,
   applicationName: LEAGUE_CONFIG.name,
   icons: {
-    icon: LEAGUE_CONFIG.branding.icon,
+    icon: [...LEAGUE_CONFIG.branding.icons],
     apple: LEAGUE_CONFIG.branding.appleIcon,
   },
   openGraph: {
@@ -63,7 +74,7 @@ export const viewport: Viewport = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [user, season, hasHistory, publicReadSignals] =
+  const [user, season, hasHistory, publicReadSignals, leagueContent] =
     await Promise.all([
       getSessionUser(),
       getActiveSeason(),
@@ -73,6 +84,9 @@ export default async function RootLayout({
       // heartbeat that loses the import claim can see the cursor advance and
       // refresh the stale RSC payload.
       getPublicReadSignals(),
+      // The statistics pages and the Hall of Fame are only offered once they
+      // have something to show: two indexed rows behind the shared snapshot.
+      getPublicLeagueContent(null),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
   // Draft night during Signups: link the draft room before Start.
@@ -83,13 +97,64 @@ export default async function RootLayout({
     // eslint-disable-next-line react-hooks/purity
     Date.now(),
   );
-  const myTeam =
-    user && season
-      ? await prisma.teamMember.findFirst({
-          where: { seasonId: season.id, userId: user.id },
-          select: { teamId: true },
-        })
-      : null;
+  // The draft status, the viewer's signup and their fantasy entry are
+  // request-cached (queries.ts): Home's page and link preview reuse them.
+  const [myTeam, draftStatus, registration, seriesLive, seasonHasGames, fantasyEntered] =
+    await Promise.all([
+      user && season
+        ? prisma.teamMember.findFirst({
+            where: { seasonId: season.id, userId: user.id },
+            select: { teamId: true },
+          })
+        : null,
+      // The menus hide Schedule, Fantasy and Pick'em until the auction is
+      // complete, and the phase chips name the auction's state. Only the
+      // DRAFT phase needs it: one indexed row, one column.
+      season?.status === "DRAFT" ? getSeasonDraftStatus(season.id) : null,
+      // During signups the header offers "Join Season N" to anyone who
+      // hasn't joined: one unique-key row, signed-in viewers only.
+      user && season?.status === "SIGNUPS"
+        ? getViewerRegistration(season.id, user.id)
+        : null,
+      // The header's "Series live" chip: one indexed row behind the shared
+      // public snapshot, and only while matches can be live.
+      season?.status === "REGULAR_SEASON" || season?.status === "PLAYOFFS"
+        ? getPublicHasLiveMatch(season.id)
+        : false,
+      // Fantasy is offered until its rosters lock. The first import stamps
+      // fantasyLockedAt; a season with games but no stamp is locked too. One
+      // indexed row behind the shared snapshot, only while picks can be open.
+      season &&
+      season.fantasyLockedAt === null &&
+      (season.status === "DRAFT" ||
+        season.status === "REGULAR_SEASON" ||
+        season.status === "PLAYOFFS")
+        ? getPublicSeasonHasGames(season.id)
+        : false,
+      // After the lock, only managers who entered keep Fantasy in their
+      // menus: one unique-key row, signed-in viewers only, once rosters can
+      // be locked.
+      user &&
+      (season?.status === "REGULAR_SEASON" ||
+        season?.status === "PLAYOFFS" ||
+        season?.status === "COMPLETE")
+        ? getViewerFantasyEntered(season.id, user.id)
+        : false,
+    ]);
+  const navContent: NavContent = {
+    hasHistory,
+    hasGames: leagueContent.hasGames,
+    hasChampion: leagueContent.hasChampion,
+    fantasyLocked: season?.fantasyLockedAt != null || seasonHasGames,
+    fantasyEntered,
+  };
+  const join = joinSeasonCta({
+    phase: season?.status ?? null,
+    seasonName: season?.name ?? null,
+    signedIn: user !== null,
+    registrationStatus: registration?.status ?? null,
+    onRoster: myTeam !== null,
+  });
 
   return (
     <html
@@ -106,8 +171,12 @@ export default async function RootLayout({
           phase={season?.status ?? null}
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}
-          hasHistory={hasHistory}
+          draftStatus={draftStatus}
+          content={navContent}
+          join={join}
+          seriesLive={seriesLive}
           draftRoomSoon={draftRoomSoon}
+          seasonId={season?.id ?? null}
         />
         <main
           id="main"
@@ -118,7 +187,8 @@ export default async function RootLayout({
         <SiteFooter
           seasonName={season?.name ?? null}
           phase={season?.status ?? null}
-          hasHistory={hasHistory}
+          draftStatus={draftStatus}
+          content={navContent}
         />
         <Toaster />
         <NavigationContextTracker />

@@ -23,12 +23,21 @@
   --color-success: #3fb950;
   --color-danger: #e5534b;
   /* Danger as TEXT on a danger-tinted chip (a lost or live result). Plain
-     danger there is 4.3:1, under AA for the chips' small type; this is 5.6:1. */
+     danger there is 4.3:1, under AA for the chips' small type; this is 5.6:1.
+     Also the text colour of red Badges and of ghost/secondary buttons that do
+     something destructive: plain danger on surface-2 is 4.2:1, this 5.4:1. */
   --color-danger-soft: #f47067;
+  /* The SOLID danger button's background. White on plain danger is 3.7:1;
+     this darker red is 5.6:1 and stays distinct from the brand-red primary
+     button, so "Withdraw team" never looks like the page's main action. */
+  --color-danger-strong: #c42b2b;
   /* Link blue. Was #4c8dff, which fell to 4.1:1 on the raised cards
      (surface-3, the LIVE match card) once link colours applied at all; this
      keeps every blue link above AA (4.8:1 on the darkest card, 6.9:1 on bg). */
   --color-info: #609aff;
+  /* Blue TEXT on a blue-tinted Badge. Link blue there is 4.4:1 on surface-2
+     at the badges' 12px; this is 5.6:1 (5.0:1 even on surface-3). */
+  --color-info-soft: #82b1ff;
 
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,

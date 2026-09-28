@@ -143,7 +143,7 @@ test("the record book lists records compactly and scopes by season", async ({ pa
   await expect(page.getByText(/Most deaths|Wild card/)).toHaveCount(0);
   await expect(page.getByText(/tie goes to whoever set the mark first/)).toBeVisible();
   // No champion yet, so no link to a Hall of Fame that would only say so.
-  await expect(page.getByRole("link", { name: "Career legends →" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Career legends/ })).toHaveCount(0);
   // One season of games: "All seasons" would be the same list, so no picker
   // and no separate submit button.
   const picker = page.getByRole("navigation", { name: "Choose a season for records" });
@@ -409,6 +409,12 @@ test("public statistics metadata is route-specific and invalid archives are noin
     .first()
     .getAttribute("href");
   expect(profileHref).toBeTruthy();
+  // Profiles stay out of search results; their links still unfurl.
+  await page.goto(profileHref!);
+  await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute(
+    "content",
+    "noindex, follow",
+  );
   const profileResponse = await page.goto(
     `${profileHref}?season=one&season=two`,
   );
@@ -422,6 +428,60 @@ test("public statistics metadata is route-specific and invalid archives are noin
   );
 });
 
+test("league pages unfurl with their page name, the season and the fixture", async ({
+  page,
+}) => {
+  // Discord shows og:title and og:description, not the tab title. They used
+  // to read "GGD2L" and one shared sentence on every page below.
+  await page.goto("/");
+  const brand = await page.getByRole("banner").locator("img[alt]").first().getAttribute("alt");
+  await expect(page).toHaveTitle(brand!);
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    / · (Regular season|Playoffs)$/,
+  );
+  for (const [path, title, description] of [
+    ["/schedule", "Schedule", /fixtures, kickoff times, results and standings/],
+    ["/teams", "Teams", /teams, rosters and results/],
+    ["/players", "Players", /signup, standin and roster/],
+    ["/seasons", "Season history", /champions, final standings and results/],
+    ["/inhouse", "Inhouse", /Pick-up Dota 2 games/],
+    ["/scrims", "Scrims", /book casual league scrims/],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+      "content",
+      title,
+    );
+    await expect(
+      page.locator('meta[property="og:description"]'),
+    ).toHaveAttribute("content", description);
+    await expect(page.locator('meta[property="og:description"]')).not.toHaveAttribute(
+      "content",
+      /4\.5K/,
+    );
+  }
+
+  // A fixture names its round and teams, then its kickoff, live score or result.
+  await page.goto("/schedule");
+  const matchHref = await page
+    .locator('#main a[href^="/matches/"]')
+    .first()
+    .getAttribute("href");
+  expect(matchHref).toBeTruthy();
+  await page.goto(matchHref!);
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    /^.+ · .+ vs .+$/,
+  );
+  await expect(
+    page.locator('meta[property="og:description"]'),
+  ).toHaveAttribute(
+    "content",
+    / · (.+ won \d+–\d+|Drawn \d+–\d+|Live · \d+–\d+ · Best of \d+|.+ · Best of \d+)/,
+  );
+});
+
 test("public stat and content pages stay inside a 360px viewport", async ({
   page,
 }) => {
@@ -432,7 +492,7 @@ test("public stat and content pages stay inside a 360px viewport", async ({
     "/records",
     "/players/compare",
     "/news",
-    "/features",
+    "/how-it-works",
   ]) {
     await page.goto(path);
     await expectNoHorizontalOverflow(page, path);

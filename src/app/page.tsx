@@ -9,7 +9,13 @@ import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { draftNightSoon } from "@/lib/draft-setup";
-import { getSeasonSnapshot, type SeasonSnapshot } from "@/lib/queries";
+import {
+  getSeasonMatches,
+  getSeasonSnapshot,
+  getViewerFantasyEntered,
+  type SeasonSnapshot,
+} from "@/lib/queries";
+import { fantasyListed } from "@/lib/site-nav";
 import { prisma } from "@/lib/prisma";
 import {
   computeStandings,
@@ -61,6 +67,7 @@ import {
   EmptyState,
   FormStrip,
   HeroIcon,
+  LinkArrow,
   LinkifiedText,
   PlayerLink,
   Progress,
@@ -99,6 +106,8 @@ import {
   HISTORY_PHASE_LABEL,
   draftPhasePresentation,
   phaseSubtitle,
+  seasonPhaseLabel,
+  seasonPhaseTone,
 } from "@/lib/season-copy";
 import { NewsMedia } from "@/components/news-media";
 import { formatMatchTime } from "@/lib/match-time";
@@ -113,22 +122,8 @@ import {
   canViewAvailabilitySummary,
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
-
-const PHASE_LABEL: Record<string, string> = {
-  SIGNUPS: "Signups open",
-  DRAFT: "Draft",
-  REGULAR_SEASON: "Regular season",
-  PLAYOFFS: "Playoffs",
-  COMPLETE: "Season complete",
-};
-
-const PHASE_TONE: Record<string, "brand" | "accent" | "success" | "info"> = {
-  SIGNUPS: "info",
-  DRAFT: "accent",
-  REGULAR_SEASON: "success",
-  PLAYOFFS: "accent",
-  COMPLETE: "brand",
-};
+import { homeMetadata } from "@/lib/link-preview-metadata";
+import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
 
 const PHASE_ORDER = [
   "SIGNUPS",
@@ -150,6 +145,12 @@ function fmtWhen(d: Date | null): string | null {
   // Delegates to formatMatchTime — these strings are LocalTime hydration
   // snapshots, so drifting from the client's formatter causes flicker.
   return d ? formatMatchTime(d, "full") : null;
+}
+
+// "Copy invite link" shares this page, so its link preview carries the
+// season, its phase and what a visitor can do now.
+export function generateMetadata() {
+  return homeMetadata();
 }
 
 export default async function Home() {
@@ -177,18 +178,18 @@ export default async function Home() {
         />
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href="/inhouse" className={buttonClasses("accent")}>
-            Play an inhouse →
+            Play an inhouse <LinkArrow />
           </Link>
           {latestSeason ? (
             <Link
               href={`/seasons/${latestSeason.id}`}
               className={buttonClasses("secondary")}
             >
-              Review {latestSeason.name} →
+              Review {latestSeason.name} <LinkArrow />
             </Link>
           ) : (
-            <Link href="/features" className={buttonClasses("secondary")}>
-              See what the league offers
+            <Link href="/how-it-works" className={buttonClasses("secondary")}>
+              How it works
             </Link>
           )}
           <DiscordButton />
@@ -226,14 +227,23 @@ export default async function Home() {
       season.status === "PLAYOFFS") &&
     !isActiveReg &&
     !isRemovedReg;
-  const standinRegistrationHref = user ? "/me" : "/login?next=/me";
-  const standinRegistrationLabel = user
-    ? "Register as a standin →"
-    : "Sign in to stand in →";
+  // Signed out, the button goes straight to Steam and carries the sign-in
+  // note, which /login would otherwise have shown.
+  const standinRegistration = (variant: "primary" | "secondary") =>
+    user ? (
+      <Link href="/me" className={buttonClasses(variant, "lg")}>
+        Register as a standin <LinkArrow />
+      </Link>
+    ) : (
+      <SteamSignInButton next="/me" variant={variant}>
+        Sign in to stand in <LinkArrow />
+      </SteamSignInButton>
+    );
+  const steamNote = user ? null : <SteamSignInNote />;
   let heroAction: ReactNode = null;
   // Draft night during Signups: from shortly before the scheduled time until
   // the admin presses Start, the hero points everyone at the draft room (a
-  // waiting room that goes live by itself) instead of the feature tour.
+  // waiting room that goes live by itself) instead of How it works.
   const draftRoomSoon = draftNightSoon(
     season.status,
     season.draftAt?.getTime(),
@@ -242,25 +252,26 @@ export default async function Home() {
     Date.now(),
   );
   if (season.status === "SIGNUPS") {
-    // The feature tour rides along during signups — new visitors can't see
-    // most of the league (draft, fantasy, pick'em…) until later phases. On
-    // draft night the draft room takes its place.
+    // How it works rides along during signups: the draft, match nights and
+    // who can join, on one screen, for visitors deciding whether to sign up.
+    // On draft night the draft room takes its place.
     const sideLink = draftRoomSoon ? (
       <Link href="/draft" className={buttonClasses("accent", "lg")}>
-        Enter the draft room →
+        Enter the draft room <LinkArrow />
       </Link>
     ) : (
-      <Link href="/features" className={buttonClasses("secondary", "lg")}>
-        See what you&apos;re joining
+      <Link href="/how-it-works" className={buttonClasses("secondary", "lg")}>
+        How it works
       </Link>
     );
     heroAction = !user ? (
       <>
         {/* next=/me: signing in "to join" should land on the signup form. */}
-        <Link href="/login?next=/me" className={buttonClasses("primary", "lg")}>
-          Sign in with Steam to join →
-        </Link>
+        <SteamSignInButton next="/me">
+          Sign in with Steam to join <LinkArrow />
+        </SteamSignInButton>
         {sideLink}
+        {steamNote}
       </>
     ) : isRemovedReg ? (
       <>
@@ -272,7 +283,7 @@ export default async function Home() {
     ) : !isActiveReg ? (
       <>
         <Link href="/me" className={buttonClasses("primary", "lg")}>
-          Join the season →
+          Join the season <LinkArrow />
         </Link>
         {sideLink}
       </>
@@ -286,12 +297,10 @@ export default async function Home() {
           {draftPresentation.action}
         </Link>
         {standinRegistrationOpen ? (
-          <Link
-            href={standinRegistrationHref}
-            className={buttonClasses("secondary", "lg")}
-          >
-            {standinRegistrationLabel}
-          </Link>
+          <>
+            {standinRegistration("secondary")}
+            {steamNote}
+          </>
         ) : null}
       </>
     );
@@ -301,15 +310,11 @@ export default async function Home() {
     // page, below the news.
     heroAction = (
       <>
-        <Link
-          href={standinRegistrationHref}
-          className={buttonClasses("primary", "lg")}
-        >
-          {standinRegistrationLabel}
-        </Link>
+        {standinRegistration("primary")}
         <Link href="/inhouse" className={buttonClasses("secondary", "lg")}>
-          Play an inhouse →
+          Play an inhouse <LinkArrow />
         </Link>
+        {steamNote}
       </>
     );
   }
@@ -322,10 +327,8 @@ export default async function Home() {
     season.status === "COMPLETE";
   const [matches, gamesOnRecord] = showsMatches
     ? await Promise.all([
-        prisma.match.findMany({
-          where: { seasonId: season.id },
-          orderBy: [{ week: "asc" }],
-        }),
+        // Request-cached: the link preview reads it for the champion.
+        getSeasonMatches(season.id),
         prisma.game.count({ where: { match: { seasonId: season.id } } }),
       ])
     : [[] as Match[], 0];
@@ -442,15 +445,17 @@ export default async function Home() {
         <span className="font-display text-lg font-semibold">
           {champion.name}
         </span>
-        <Badge tone="brand">🏆 Champions</Badge>
+        <Badge tone="accent">
+          <span aria-hidden="true">🏆</span> Champions
+        </Badge>
       </span>
     ) : null;
     heroAction = (
       <Link
-        href={`/recap?season=${season.id}`}
+        href={`/seasons/${season.id}`}
         className={buttonClasses("accent", "lg")}
       >
-        Relive the season →
+        Relive the season <LinkArrow />
       </Link>
     );
   }
@@ -459,11 +464,12 @@ export default async function Home() {
   // newcomers get the late standin-registration CTA assembled above. Everything
   // else falls through to the phase's own CTA buttons.
   // During SIGNUPS the same reasoning applies to a player who has ALREADY
-  // signed up: heroAction falls through to the feature tour, so the biggest
-  // slot on the page greeted 30 registered players with "See what you're
-  // joining". They have joined. What they uniquely can do is fill the rest of
-  // the league — and the ask this page makes twice ("5 more for another team")
-  // had no control behind it anywhere on the site.
+  // signed up: heroAction falls through to How it works (once the feature
+  // tour, "See what you're joining"), so the biggest slot on the page greeted
+  // 30 registered players with a pitch for what they had already joined.
+  // What they uniquely can do is fill the rest of the league — and the ask
+  // this page makes twice ("5 more for another team") had no control behind
+  // it anywhere on the site.
   const heroAside =
     showsMatches && user && !heroAction ? (
       <Suspense
@@ -485,9 +491,7 @@ export default async function Home() {
     <div className="space-y-8">
       <Hero
         phase={season.status}
-        phaseLabel={
-          season.status === "DRAFT" ? draftPresentation.badge : undefined
-        }
+        phaseLabel={seasonPhaseLabel(season.status, snapshot.draftStatus)}
         active={season.status === "DRAFT" ? draftPresentation.live : undefined}
         title={season.name}
         subtitle={phaseSubtitle(season.status, {
@@ -641,7 +645,8 @@ async function PinnedNotices() {
           href={`/news?${new URLSearchParams({ post: post.id })}`}
           className="block py-2 text-fg hover:text-info"
         >
-          📌 Pinned notice: {post.title} →
+          <span aria-hidden="true">📌</span> Pinned notice: {post.title}{" "}
+          <LinkArrow />
         </Link>
       ))}
     </aside>
@@ -660,7 +665,7 @@ async function LeagueNews() {
         subtitle="The latest from the admins"
         action={
           <Link href="/news" className={textLink("text-sm")}>
-            All news →
+            All news <LinkArrow />
           </Link>
         }
       />
@@ -678,7 +683,12 @@ async function LeagueNews() {
                     href={`/news?${new URLSearchParams({ post: p.id })}#${p.id}`}
                     className="hover:text-info"
                   >
-                    {p.pinned ? "📌 " : ""}
+                    {p.pinned ? (
+                      <>
+                        <span aria-hidden="true">📌 </span>
+                        <span className="sr-only">Pinned: </span>
+                      </>
+                    ) : null}
                     {p.title}
                   </Link>
                 </h3>
@@ -787,7 +797,7 @@ async function MyNextMatch({
           href="/schedule#fixtures"
           className={buttonClasses("secondary", "sm", "mt-3 w-full")}
         >
-          See this week&apos;s schedule →
+          See this week&apos;s schedule <LinkArrow />
         </Link>
       </Card>
     );
@@ -843,7 +853,7 @@ async function MyNextMatch({
             </strong>
           </span>
           <Link href={`/matches/${next.id}`} className={textLink("shrink-0")}>
-            Respond →
+            Respond <LinkArrow />
           </Link>
         </div>
       ) : null}
@@ -968,14 +978,14 @@ function Hero({
             )}
           >
             {phase ? (
-              <Badge tone={PHASE_TONE[phase] ?? "neutral"}>
+              <Badge tone={seasonPhaseTone(phase)}>
                 {live ? (
                   <span
                     aria-hidden
                     className="animate-live-pulse mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-current"
                   />
                 ) : null}
-                {phaseLabel ?? PHASE_LABEL[phase] ?? phase}
+                {phaseLabel ?? seasonPhaseLabel(phase)}
               </Badge>
             ) : null}
             {/* Persistent league fact: the Dota region every game is played on.
@@ -1162,7 +1172,7 @@ async function InhouseStrip() {
         <span className="truncate text-muted">{label}</span>
       </span>
       <span className="shrink-0 font-medium text-accent group-hover:underline">
-        {cta} →
+        {cta} <LinkArrow />
       </span>
     </Link>
   );
@@ -1201,8 +1211,8 @@ function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <InviteLink />
-        <Link href="/features" className={textLink("text-sm")}>
-          What&apos;s coming →
+        <Link href="/how-it-works" className={textLink("text-sm")}>
+          How it works <LinkArrow />
         </Link>
       </div>
       <p className="mt-2 text-xs text-muted">
@@ -1351,12 +1361,10 @@ async function SignupsView({
 
           <div className="flex flex-wrap items-center gap-3 pt-1">
             {!loggedIn ? (
-              <Link
-                href="/login?next=/me"
-                className={buttonClasses("primary", "lg")}
-              >
+              // The Why Steam sign-in? note below is this button's notice.
+              <SteamSignInButton next="/me">
                 Sign in with Steam to join
-              </Link>
+              </SteamSignInButton>
             ) : isActivePlayer ? (
               <div className="flex flex-wrap items-center gap-3">
                 <Badge
@@ -1377,11 +1385,17 @@ async function SignupsView({
                         : "You’re signed up to play"}
                 </Badge>
                 <Link href="/me" className={buttonClasses("secondary")}>
-                  {myDraftReadiness === DRAFT_READINESS.STALE
-                    ? "Reconfirm draft night →"
-                    : myDraftReadiness === DRAFT_READINESS.AWAITING
-                      ? "Confirm draft night →"
-                      : "Review your signup"}
+                  {myDraftReadiness === DRAFT_READINESS.STALE ? (
+                    <>
+                      Reconfirm draft night <LinkArrow />
+                    </>
+                  ) : myDraftReadiness === DRAFT_READINESS.AWAITING ? (
+                    <>
+                      Confirm draft night <LinkArrow />
+                    </>
+                  ) : (
+                    "Review your signup"
+                  )}
                 </Link>
               </div>
             ) : isStandin ? (
@@ -1400,7 +1414,7 @@ async function SignupsView({
               </div>
             ) : (
               <Link href="/me" className={buttonClasses("primary", "lg")}>
-                Join the season →
+                Join the season <LinkArrow />
               </Link>
             )}
             {/* One Discord CTA in <main> at a time. A signed-up player who
@@ -1471,7 +1485,7 @@ async function SignupsView({
           }
           action={
             <Link href="/players" className={textLink("text-sm")}>
-              View all →
+              View all <LinkArrow />
             </Link>
           }
         />
@@ -1665,7 +1679,7 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
         title="Live from the draft room"
         action={
           <Link href="/draft" className={buttonClasses("accent", "sm")}>
-            Watch live →
+            Watch live <LinkArrow />
           </Link>
         }
       />
@@ -1978,13 +1992,30 @@ async function SeasonView({
   const picksMade = openPickemIds.filter((id) => myPicks.has(id)).length;
   const fantasyLocked = season.fantasyLockedAt != null || gamesOnRecord > 0;
   const picksMissing = pickemOpen - picksMade;
+  // Fantasy gets a tile while picks are open and, after the lock, only for
+  // managers who entered: the menus' rule (site-nav.ts). The entry read is
+  // request-cached; the layout already made it for the menus.
+  const showFantasy = fantasyListed({
+    phase: season.status,
+    draftStatus: snapshot.draftStatus,
+    fantasyLocked,
+    fantasyEntered:
+      userId && fantasyLocked
+        ? await getViewerFantasyEntered(season.id, userId)
+        : false,
+  });
 
   // The side-game band renders BELOW the table now. It used to sit above both
   // the standings and This-week, so the secondary loop (pick'em, fantasy) got
   // the first full-width band on the page while the primary one — your match,
   // your team, the table — started below it.
   const sideGames = (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div
+      className={cn(
+        "grid grid-cols-1 gap-3 sm:grid-cols-3",
+        showFantasy ? "lg:grid-cols-5" : "lg:grid-cols-4",
+      )}
+    >
       <SideGameLink
         href="/pickem"
         icon="🔮"
@@ -1999,12 +2030,14 @@ async function SeasonView({
             : "See the oracle board"
         }
       />
-      <SideGameLink
-        href="/fantasy"
-        icon="🧙"
-        title="Fantasy"
-        hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
-      />
+      {showFantasy ? (
+        <SideGameLink
+          href="/fantasy"
+          icon="🧙"
+          title="Fantasy"
+          hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
+        />
+      ) : null}
       <SideGameLink
         href="/inhouse"
         icon="⚔️"
@@ -2053,7 +2086,7 @@ async function SeasonView({
                 href="/schedule#playoff-bracket"
                 className={textLink("text-sm")}
               >
-                Full bracket →
+                Full bracket <LinkArrow />
               </Link>
             }
           />
@@ -2076,7 +2109,7 @@ async function SeasonView({
                   href="/schedule#playoff-bracket"
                   className={buttonClasses("secondary", "sm")}
                 >
-                  Open playoff schedule →
+                  Open playoff schedule <LinkArrow />
                 </Link>
               }
             />
@@ -2126,7 +2159,7 @@ async function SeasonView({
                   href="/schedule#standings"
                   className={textLink("text-sm")}
                 >
-                  Full standings →
+                  Full standings <LinkArrow />
                 </Link>
               }
             />
@@ -2287,7 +2320,7 @@ async function SeasonView({
                   href={`/teams/${myTeam.id}`}
                   className={textLink("inline-block text-sm font-medium")}
                 >
-                  Team page →
+                  Team page <LinkArrow />
                 </Link>
               </CardBody>
             </Card>
@@ -2368,7 +2401,7 @@ async function SeasonView({
                   "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
-                Full schedule →
+                Full schedule <LinkArrow />
               </Link>
             </Card>
           ) : null}
@@ -2438,7 +2471,7 @@ async function SeasonView({
                           {m.winnerTeamId
                             ? `${teamName.get(m.winnerTeamId) ?? "Winning team"} won the series`
                             : "Series drawn"}{" "}
-                          · Match details →
+                          · Match details
                         </p>
                       </Link>
                     </li>
@@ -2451,7 +2484,7 @@ async function SeasonView({
                   "my-0 shrink-0 rounded-none border-t border-line-soft px-4 py-2.5 text-xs font-medium focus-visible:ring-inset",
                 )}
               >
-                All results →
+                All results <LinkArrow />
               </Link>
             </Card>
           ) : null}
@@ -2553,7 +2586,7 @@ async function ThisWeek({
         title={title}
         action={
           <Link href="/schedule#fixtures" className={textLink("text-sm")}>
-            Full schedule →
+            Full schedule <LinkArrow />
           </Link>
         }
       />
@@ -2706,7 +2739,7 @@ async function ThisWeek({
                 </div>
                 <p className="flex items-center justify-between border-t border-line-soft pt-3 text-xs text-muted group-hover/match:text-info">
                   <span>Match details & check-in</span>
-                  <span aria-hidden>↗</span>
+                  <span aria-hidden>→</span>
                 </p>
               </Link>
               {pick ? (
@@ -2839,7 +2872,7 @@ async function LeaguePulse({
         title="League pulse"
         action={
           <Link href="/leaders" className={textLink("text-sm")}>
-            Leaders →
+            Leaders <LinkArrow />
           </Link>
         }
       />
@@ -2857,7 +2890,7 @@ async function LeaguePulse({
                 invalid 5v5 box scores must be inspected, removed, and
                 re-imported; unknown hero IDs require a hero-catalogue update.{" "}
                 <Link href="/admin/data-quality" className={textLink()}>
-                  Open data quality →
+                  Open data quality <LinkArrow />
                 </Link>
               </span>
             ) : (
@@ -3139,7 +3172,7 @@ async function CompleteView({
               title="Final standings"
               action={
                 <Link href="/schedule#fixtures" className={textLink("text-sm")}>
-                  Full schedule →
+                  Full schedule <LinkArrow />
                 </Link>
               }
             />
@@ -3171,10 +3204,10 @@ async function CompleteView({
               </p>
               <div className="flex flex-wrap gap-2">
                 <Link
-                  href={`/recap?season=${season.id}`}
+                  href={`/seasons/${season.id}`}
                   className={buttonClasses("accent")}
                 >
-                  🏆 Season recap →
+                  <span aria-hidden="true">🏆</span> Season recap <LinkArrow />
                 </Link>
                 <Link href="/leaders" className={buttonClasses("secondary")}>
                   Leaderboards

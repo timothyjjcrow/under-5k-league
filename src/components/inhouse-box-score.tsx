@@ -3,6 +3,7 @@ import {
   Badge,
   HeroIcon,
   KDA,
+  LinkArrow,
   PlayerLink,
   textLink,
 } from "@/components/ui";
@@ -113,7 +114,7 @@ export function InhouseBoxScore({
             rel="noreferrer"
             className={textLink()}
           >
-            Full match on OpenDota ↗
+            Full match on OpenDota <LinkArrow out />
           </a>
         ) : null}
       </div>

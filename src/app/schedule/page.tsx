@@ -1,3 +1,4 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import { calendarFeedLinks } from "@/lib/calendar-links";
 import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
@@ -72,7 +73,10 @@ import {
 } from "@/lib/visibility";
 import type { Match, StandinAssignment, User } from "@prisma/client";
 
-export const metadata = { title: "Schedule" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("schedule");
+}
 
 type MatchStandin = StandinAssignment & {
   standin: User;
@@ -962,7 +966,7 @@ function SeasonGrid({
           !cell.played && "text-muted hover:text-info",
         )}
       >
-        <span className="text-[10px] font-semibold uppercase">
+        <span className="text-xs font-semibold uppercase">
           {cell.played ? cell.result : cell.live ? "Live" : `W${cell.week}`}
         </span>
         <span>{cell.played ? cell.score : "vs"}</span>

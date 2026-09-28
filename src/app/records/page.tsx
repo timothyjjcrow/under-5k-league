@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
-import { hasOfficialChampion } from "@/lib/official-champion";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import {
   analyzeRecordGames,
   formatGameDuration,
@@ -19,6 +19,7 @@ import {
   Card,
   EmptyState,
   HeroIcon,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   SectionTitle,
@@ -116,14 +117,16 @@ export default async function RecordsPage({
 }: {
   searchParams: Promise<{ season?: string | string[] }>;
 }) {
-  const [games, seasons, query, champion] = await Promise.all([
+  const [games, seasons, query, { hasChampion }] = await Promise.all([
     getAllGamesForRecords(),
     prisma.season.findMany({
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: { id: true, name: true, isActive: true },
     }),
     searchParams,
-    hasOfficialChampion(),
+    // The Hall of Fame is linked once a season has an official champion (the
+    // menus' rule, hasOfficialChampion); before that the page is one note.
+    getPublicLeagueContent(null),
   ]);
   const seasonParam = singleSearchParam(query.season);
   if (seasonParam === null) notFound();
@@ -177,7 +180,7 @@ export default async function RecordsPage({
         subtitle={selectedSeason
           ? `The best single-game performances of ${selectedSeason.name}.`
           : "The best single-game performances in league history."}
-        action={champion ? <Link href="/hall-of-fame" className={textLink("text-sm font-semibold")}>Career legends →</Link> : undefined}
+        action={hasChampion ? <Link href="/hall-of-fame" className={textLink("text-sm font-semibold")}>Career legends <LinkArrow /></Link> : undefined}
       />
       <StatsNav active="records" seasonId={selectedSeason?.id} />
       <StatsDataNotice {...analysis.diagnostics} />

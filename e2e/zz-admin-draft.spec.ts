@@ -77,7 +77,10 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // Before Start draft, the dashboard must say setup/waiting rather than tell
   // every visitor that captains are actively bidding.
   await page.goto("/");
-  await expect(page.getByText("Draft setup", { exact: true })).toBeVisible();
+  // The phase badge appears in the hero and the footer — scope to main.
+  await expect(
+    page.locator("#main").getByText("Draft setup", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/draft is being prepared/i)).toBeVisible();
   await expect(
     page.getByRole("link", { name: "View the draft room →" }),
@@ -144,6 +147,14 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(playerPage.getByText(/Available ·/)).toBeVisible({
     timeout: 15_000,
   });
+  // Every page loaded from now on says the auction is live in its header,
+  // and the chip opens the draft room.
+  await playerPage.goto("/news");
+  await expect(
+    playerPage
+      .getByRole("banner")
+      .getByRole("link", { name: /^League status: .+ — Draft live$/ }),
+  ).toHaveAttribute("href", "/draft");
   await playerContext.close();
 
   await expect(page).toHaveURL(/\/draft/);

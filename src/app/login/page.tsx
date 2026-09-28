@@ -3,14 +3,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { safeReturnPath } from "@/lib/return-path";
-import {
-  Card,
-  CardBody,
-  DiscordButton,
-  ShieldCheckIcon,
-  SteamSafetyNote,
-  textLink,
-} from "@/components/ui";
+import { Card, CardBody, buttonClasses, textLink } from "@/components/ui";
+import { SteamSignInNote } from "@/components/steam-sign-in";
 
 export const metadata = { title: "Sign in" };
 
@@ -66,20 +60,12 @@ export default async function LoginPage({
     <div className="mx-auto max-w-md">
       <Card>
         <CardBody className="space-y-6 text-center">
+          {/* No logo in the card: the header already shows it. */}
           <div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={LEAGUE_CONFIG.branding.logo}
-              style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
-              alt={`${LEAGUE_CONFIG.name} — amateur Dota 2 league`}
-              width={LEAGUE_CONFIG.branding.logoWidth}
-              height={LEAGUE_CONFIG.branding.logoHeight}
-              className="mx-auto w-44 max-w-full sm:w-52"
-            />
-            <h1 className="mt-3 font-display text-2xl font-semibold text-fg">
+            <h1 className="font-display text-2xl font-semibold text-fg">
               Sign in to {LEAGUE_CONFIG.name}
             </h1>
-            <p className="mt-4 text-sm text-muted">
+            <p className="mt-3 text-sm text-muted">
               {intro}
             </p>
           </div>
@@ -102,33 +88,17 @@ export default async function LoginPage({
             </div>
           ) : null}
 
-          <div className="space-y-2">
+          {/* The page does one job, so Steam is its one primary button. The
+              note under it is the collection notice and stays visible. */}
+          <div className="space-y-3">
             <a
               href={steamHref}
-              className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-[#1b2838] px-4 font-medium text-white transition-colors hover:bg-[#223247] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              className={buttonClasses("primary", "lg", "w-full gap-3")}
             >
               <SteamIcon />
               Sign in through Steam
             </a>
-            <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted">
-              <ShieldCheckIcon size={13} className="text-success" />
-              Secure — you sign in on Steam, no password shared.
-            </p>
-          </div>
-
-          <SteamSafetyNote />
-
-          <div className="space-y-3 border-t border-line pt-5">
-            <div>
-              <h2 className="font-display text-base font-semibold text-fg">
-                Join the league community
-              </h2>
-              <p className="mt-1 text-xs text-muted">
-                Steam signs you into this site. Discord is where the league
-                coordinates matches and announcements.
-              </p>
-            </div>
-            <DiscordButton label="Join the community Discord" className="w-full" />
+            <SteamSignInNote />
           </div>
 
           {devLogin ? (

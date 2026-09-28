@@ -121,7 +121,7 @@ export function RegularSeasonProgress({ progress }: { progress: Progress }) {
                 %
               </span>
             </span>
-            <span className="mt-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-cyan-300 sm:text-[10px]">
+            <span className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300">
               Complete
             </span>
           </div>

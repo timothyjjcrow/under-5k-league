@@ -1,5 +1,7 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { prisma } from "@/lib/prisma";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { draftRecap } from "@/lib/draft-recap";
@@ -29,11 +31,16 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Teams" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("teams");
+}
 
 export default async function TeamsPage() {
   const season = await getActiveSeason();
   if (!season) {
+    // The Hall of Fame is linked once a season has a champion.
+    const { hasChampion } = await getPublicLeagueContent(null);
     return (
       <div className="space-y-6">
         <PageTitle title="Teams" />
@@ -48,12 +55,14 @@ export default async function TeamsPage() {
               >
                 Season history
               </Link>
-              <Link
-                href="/hall-of-fame"
-                className={buttonClasses("secondary", "sm")}
-              >
-                Hall of Fame
-              </Link>
+              {hasChampion ? (
+                <Link
+                  href="/hall-of-fame"
+                  className={buttonClasses("secondary", "sm")}
+                >
+                  Hall of Fame
+                </Link>
+              ) : null}
               <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
                 Play an inhouse →
               </Link>
@@ -260,7 +269,7 @@ export default async function TeamsPage() {
                         {withdrawnTeamIds.has(row.teamId) ? (
                           <Badge
                             tone="danger"
-                            className="mt-1 px-1.5 py-0 text-[10px]"
+                            className="mt-1 px-1.5 py-0"
                             title="Withdrawn teams retain played results but cannot qualify for playoffs"
                           >
                             Withdrawn
@@ -276,7 +285,7 @@ export default async function TeamsPage() {
                         </span>
                         <span
                           className={cn(
-                            "mt-1 block font-mono text-[10px] tabular-nums",
+                            "mt-1 block font-mono text-xs tabular-nums",
                             moved > 0
                               ? "text-cyan-300"
                               : moved < 0
@@ -628,7 +637,7 @@ export default async function TeamsPage() {
             {recap.biggestSpend ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  💸 Biggest spend
+                  <span aria-hidden="true">💸</span> Biggest spend
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.biggestSpend.name} · ${recap.biggestSpend.price}
@@ -641,7 +650,7 @@ export default async function TeamsPage() {
             {recap.bestValue ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  🕵️ Best steal
+                  <span aria-hidden="true">🕵️</span> Best steal
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.bestValue.name} · ${recap.bestValue.price}
@@ -654,7 +663,7 @@ export default async function TeamsPage() {
             {recap.topSpender ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  🐳 Top spender
+                  <span aria-hidden="true">🐳</span> Top spender
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.topSpender.teamName}
@@ -668,7 +677,7 @@ export default async function TeamsPage() {
             (recap.bargainHunter.teamId ?? recap.bargainHunter.teamName) !== (recap.topSpender?.teamId ?? recap.topSpender?.teamName) ? (
               <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  🧾 Bargain hunter
+                  <span aria-hidden="true">🧾</span> Bargain hunter
                 </div>
                 <div className="mt-1 truncate font-medium">
                   {recap.bargainHunter.teamName}

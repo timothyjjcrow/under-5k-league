@@ -1,3 +1,5 @@
+import { shareMetadata } from "@/lib/share-metadata";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
@@ -10,16 +12,24 @@ import {
   Card,
   CardBody,
   EmptyState,
+  LinkArrow,
   PageTitle,
   TeamCrest,
   textLink,
 } from "@/components/ui";
 
-import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
+import {
+  HISTORY_PHASE_LABEL as PHASE_LABEL,
+  seasonPhaseLabel,
+} from "@/lib/season-copy";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { productionDeleteBackupRequired } from "@/lib/backup-receipt.mjs";
 
-export const metadata = { title: "Season history" };
+export const metadata = shareMetadata(
+  "Season history",
+  `Every ${LEAGUE_CONFIG.name} season: champions, final standings and results.`,
+  "/seasons",
+);
 
 export default async function SeasonsPage() {
   const [seasons, viewer] = await Promise.all([
@@ -47,6 +57,15 @@ export default async function SeasonsPage() {
   ]);
   const isAdmin = viewer?.role === "ADMIN";
   const activeSeason = seasons.find((season) => season.isActive) ?? null;
+  const championOf = new Map(
+    seasons.map((season) => [
+      season.id,
+      resolveChampionPresentation(season, season.matches).championTeamId,
+    ]),
+  );
+  // The Hall of Fame is linked once a season has a champion (the menus' rule);
+  // before that it is empty boards or a copy of Leaders.
+  const hasChampion = [...championOf.values()].some((id) => id !== null);
   const backupReceiptRequired = productionDeleteBackupRequired(process.env);
 
   return (
@@ -55,12 +74,11 @@ export default async function SeasonsPage() {
         title="Season history"
         subtitle="Every season the league has run — champions, standings, and rosters."
         action={
-          <Link
-            href="/hall-of-fame"
-            className={textLink("text-sm")}
-          >
-            Hall of Fame →
-          </Link>
+          hasChampion ? (
+            <Link href="/hall-of-fame" className={textLink("text-sm")}>
+              Hall of Fame <LinkArrow />
+            </Link>
+          ) : undefined
         }
       />
 
@@ -91,14 +109,9 @@ export default async function SeasonsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {seasons.map((s) => {
-            const championPresentation = resolveChampionPresentation(
-              s,
-              s.matches,
-            );
-            const champion = championPresentation.championTeamId
-              ? s.teams.find(
-                  (team) => team.id === championPresentation.championTeamId,
-                )
+            const championTeamId = championOf.get(s.id);
+            const champion = championTeamId
+              ? s.teams.find((team) => team.id === championTeamId)
               : null;
             return (
               <div key={s.id} className="flex h-full flex-col gap-1.5">
@@ -113,7 +126,7 @@ export default async function SeasonsPage() {
                         {s.name}
                       </span>
                       {s.isActive ? (
-                        <Badge tone="brand">Current</Badge>
+                        <Badge tone="success">Current</Badge>
                       ) : (
                         <Badge tone="neutral">
                           {PHASE_LABEL[s.status] ?? s.status}
@@ -138,7 +151,9 @@ export default async function SeasonsPage() {
                         {s.status === "COMPLETE"
                           ? "Champion state needs review"
                           : s.isActive
-                            ? "Season in progress"
+                            ? // Where the season is, in the header chip's
+                              // words: "Signups open" is not "in progress".
+                              seasonPhaseLabel(s.status, s.draft?.status)
                             : "No champion recorded"}
                       </div>
                     )}

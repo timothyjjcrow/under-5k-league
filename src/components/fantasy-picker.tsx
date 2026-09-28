@@ -169,7 +169,7 @@ export function FantasyPicker({
                     <input type="checkbox" checked={selected} disabled={disabled} onChange={() => toggle(c.userId)} ref={(el) => { if (el) el.checked = selected; }} className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-accent)]" />
                     <Avatar name={c.name} src={c.avatar} size={34} />
                     <span className="min-w-0 flex-1">
-                      <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-semibold"><span className="min-w-0 truncate">{c.name}</span>{c.isCaptain ? <span title="Captain" className="rounded bg-accent/15 px-1 text-[10px] font-bold text-accent">C</span> : null}</span>
+                      <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-semibold"><span className="min-w-0 truncate">{c.name}</span>{c.isCaptain ? <span title="Captain" className="rounded bg-accent/15 px-1 text-xs font-bold text-accent">C</span> : null}</span>
                       <span className="mt-0.5 block truncate text-xs text-muted">{c.released ? "Released · remove from lineup" : c.teamName}</span>
                       <span className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted"><RankBadge rankTier={c.rankTier} />{c.roles.length ? c.roles.map((key) => <span key={key} className="rounded border border-line bg-surface-2/60 px-1.5 py-0.5">Pos {key}</span>) : <span>Position not listed</span>}</span>
                     </span>

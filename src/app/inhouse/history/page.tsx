@@ -1,3 +1,4 @@
+import { shareMetadata } from "@/lib/share-metadata";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
@@ -21,6 +22,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   buttonClasses,
@@ -28,11 +30,10 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
-export const metadata = {
-  title: "Inhouse history",
-  description:
-    "Every completed inhouse game — scores, MVPs, and box-score links.",
-};
+export const metadata = shareMetadata(
+  "Inhouse history",
+  "Every completed inhouse game — scores, MVPs, and box-score links.",
+);
 
 const HISTORY_RESULT_SELECT = {
   id: true,
@@ -145,6 +146,7 @@ export default async function InhouseHistoryPage({
       <Card className="overflow-hidden">
         <CardHeader
           title="Completed games"
+          headingLevel={2}
           subtitle={
             total > 0
               ? `${first}–${last} of ${total}, newest first${linkedOutsidePage ? " · linked game shown above" : ""}`
@@ -265,7 +267,7 @@ export default async function InhouseHistoryPage({
                                 "inline-flex min-h-11 items-center text-xs",
                               )}
                             >
-                              OpenDota ↗
+                              OpenDota <LinkArrow out />
                             </a>
                           ) : null}
                           {isAdmin ? (
@@ -276,7 +278,7 @@ export default async function InhouseHistoryPage({
                               <SubmitButton
                                 variant="ghost"
                                 size="sm"
-                                className="min-h-11 text-danger hover:underline"
+                                className="min-h-11 text-danger-soft hover:underline"
                                 confirm={`Void the ${formatMatchTime(playedAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, and everyone's Elo recalculates without it.`}
                               >
                                 void
@@ -330,7 +332,7 @@ export default async function InhouseHistoryPage({
                       href={`/inhouse/history?page=${page + 1}`}
                       className={buttonClasses("secondary", "sm")}
                     >
-                      Older games →
+                      Older games <LinkArrow />
                     </Link>
                   ) : (
                     <span />

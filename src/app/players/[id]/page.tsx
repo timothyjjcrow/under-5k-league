@@ -1,4 +1,3 @@
-import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -14,7 +13,7 @@ import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { getRosterHistory } from "@/lib/player-roster-history";
 import { appearanceCareers } from "@/lib/appearance-careers";
 import { PlayerTeamHistory } from "@/components/player-team-history";
-import { shareMetadata } from "@/lib/share-metadata";
+import { playerProfileMetadata } from "@/lib/share-metadata";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
@@ -55,6 +54,7 @@ import {
   HeroList,
   HeroPool,
   KDA,
+  LinkArrow,
   PlayerLink,
   RankMedal,
   RoleBadges,
@@ -127,10 +127,7 @@ export async function generateMetadata({
       : null,
     favoriteHero ? `${favoriteHero.name} player` : null,
   ].filter((highlight): highlight is string => highlight !== null);
-  return shareMetadata(
-    `${user.name} · Player`,
-    `${user.name}'s player profile${highlights.length > 0 ? ` · ${highlights.join(" · ")}` : ""} — match history in ${LEAGUE_CONFIG.name}.`,
-  );
+  return playerProfileMetadata(user.name, highlights);
 }
 
 export default async function PlayerProfilePage({
@@ -592,12 +589,17 @@ export default async function PlayerProfilePage({
           <ContextBackLink href="/players" className={textLink("text-sm")}>
             ← All players
           </ContextBackLink>
-          <Link
-            href={`/players/compare?a=${user.id}`}
-            className={textLink("text-sm")}
-          >
-            Compare vs… →
-          </Link>
+          {/* Compare lists players with an imported league game (the same
+              trusted lines as gameRows); anyone else, such as a standin who
+              never played, would open onto "Player unavailable". */}
+          {gameRows.length > 0 ? (
+            <Link
+              href={`/players/compare?a=${user.id}`}
+              className={textLink("text-sm")}
+            >
+              Compare vs… <LinkArrow />
+            </Link>
+          ) : null}
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
           {/* Signature hero portrait fading in from the right. */}
@@ -642,7 +644,7 @@ export default async function PlayerProfilePage({
                 {user.role === "ADMIN" ? (
                   <Badge tone="accent">Admin</Badge>
                 ) : null}
-                {isCaptain ? <Badge tone="brand">Captain</Badge> : null}
+                {isCaptain ? <Badge tone="accent">Captain</Badge> : null}
                 {isStandin ? <Badge tone="info">Standin</Badge> : null}
                 {withdrewThisSeason ? (
                   <Badge tone="neutral">Withdrew this season</Badge>
@@ -1193,7 +1195,7 @@ export default async function PlayerProfilePage({
                         ) : null}
                         {activeReg.wantsCaptain ? (
                           <Detail label="Captaincy">
-                            <Badge tone="brand">Wants to captain</Badge>
+                            <Badge tone="accent">Wants to captain</Badge>
                           </Detail>
                         ) : null}
                         {hasText(activeReg.statement) ? (

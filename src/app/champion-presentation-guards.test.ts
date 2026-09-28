@@ -17,7 +17,6 @@ describe("public champion presentation wiring", () => {
     "src/app/hall-of-fame/page.tsx",
     "src/app/players/[id]/page.tsx",
     "src/app/matches/[id]/page.tsx",
-    "src/app/features/page.tsx",
   ])("routes %s through the shared champion resolver", (path) => {
     expect(read(path)).toContain("resolveChampionPresentation");
   });

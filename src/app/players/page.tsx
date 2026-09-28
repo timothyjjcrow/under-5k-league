@@ -1,8 +1,11 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
+import { SteamJoin } from "@/components/steam-sign-in";
 import Link from "next/link";
 import { Suspense } from "react";
 import { hasText } from "@/lib/utils";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { prisma } from "@/lib/prisma";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { PlayerPool, type PoolDraftInfo } from "@/components/player-pool";
@@ -20,7 +23,7 @@ import {
 } from "@/lib/player-pool";
 import { poolPubRecord } from "@/lib/pub-stats";
 import { heroById } from "@/lib/heroes";
-import { REGISTRATION_STATUS } from "@/lib/constants";
+import { REGISTRATION_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { playerDirectoryPresentation } from "@/lib/player-directory-lifecycle";
 import {
   canViewLeagueContact,
@@ -34,6 +37,7 @@ import {
   CardHeader,
   EmptyState,
   HeroIcon,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -47,10 +51,18 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Players" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("players");
+}
 
 export default async function PlayersPage() {
-  const season = await getActiveSeason();
+  // Compare players fills from imported games; before the league's first one
+  // it would only open onto "No player careers yet".
+  const [season, { hasGames }] = await Promise.all([
+    getActiveSeason(),
+    getPublicLeagueContent(null),
+  ]);
   if (!season) {
     return (
       <div className="space-y-6">
@@ -63,14 +75,16 @@ export default async function PlayersPage() {
               <Link href="/seasons" className={buttonClasses("secondary", "sm")}>
                 Season history
               </Link>
-              <Link
-                href="/players/compare"
-                className={buttonClasses("secondary", "sm")}
-              >
-                Compare players
-              </Link>
+              {hasGames ? (
+                <Link
+                  href="/players/compare"
+                  className={buttonClasses("secondary", "sm")}
+                >
+                  Compare players
+                </Link>
+              ) : null}
               <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
-                Play an inhouse →
+                Play an inhouse <LinkArrow />
               </Link>
             </div>
           }
@@ -121,6 +135,8 @@ export default async function PlayersPage() {
     season.status,
     draft?.status,
   );
+  // After the final nobody is "on call" any more.
+  const seasonOver = season.status === SEASON_STATUS.COMPLETE;
   const draftedUserIds = new Set(
     teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
@@ -225,17 +241,24 @@ export default async function PlayersPage() {
               <Link href="/me" className={buttonClasses("secondary", "sm")}>
                 Signup removed — see details
               </Link>
+            ) : canSignUp && !viewer ? (
+              // Straight to Steam, then back to the signup form.
+              <SteamJoin next="/me" size="sm">
+                Sign in with Steam to join
+              </SteamJoin>
             ) : canSignUp ? (
               <Link href="/me" className={buttonClasses("primary", "sm")}>
-                Join the season →
+                Join the season <LinkArrow />
               </Link>
             ) : null}
-            <Link
-              href="/players/compare"
-              className={textLink("text-sm")}
-            >
-              Compare players →
-            </Link>
+            {hasGames ? (
+              <Link
+                href="/players/compare"
+                className={textLink("text-sm")}
+              >
+                Compare players <LinkArrow />
+              </Link>
+            ) : null}
           </span>
         }
       />
@@ -281,7 +304,7 @@ export default async function PlayersPage() {
             label="Standins"
             value={standins.length}
             tone={standins.length > 0 ? "default" : "muted"}
-            hint="on call"
+            hint={seasonOver ? undefined : "on call"}
           />
           {teams.length > 0 ? (
             <StatCell label="Teams" value={teams.length} />
@@ -341,7 +364,7 @@ export default async function PlayersPage() {
                         <PlayerLink userId={p.userId} className="font-medium">
                           {p.user.name}
                         </PlayerLink>
-                        <Badge tone="brand">Wants to captain</Badge>
+                        <Badge tone="accent">Wants to captain</Badge>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                         {p.mmr > 0 ? <span>{p.mmr} MMR</span> : null}
@@ -489,7 +512,9 @@ export default async function PlayersPage() {
         <SectionTitle
           aside={
             standins.length > 0
-              ? `· ${standins.length} on call for match night`
+              ? seasonOver
+                ? `· ${standins.length} this season`
+                : `· ${standins.length} on call for match night`
               : undefined
           }
         >
@@ -501,7 +526,7 @@ export default async function PlayersPage() {
           // pool made the page look like it had failed to load.
           <EmptyState
             compact
-            title="No standins yet"
+            title={seasonOver ? "No standins this season" : "No standins yet"}
             description="Standins fill in when a rostered player can't make a match."
           />
         ) : (

@@ -65,7 +65,7 @@ function BracketGame({ game, doubleElimination, admin }: { game: TiebreakerBrack
     >
       <div className="flex flex-wrap items-center justify-between gap-1 border-b border-line-soft px-3 py-2.5">
         <h4 className="text-xs font-semibold uppercase tracking-wider">{`${game.bestOf === 1 ? "Game" : "Series"} ${game.number}`}</h4>
-        <span className={cn("text-[10px] font-semibold uppercase tracking-wide", game.status === "live" ? "text-danger" : game.status === "scheduled" ? "text-accent" : "text-muted")}>
+        <span className={cn("text-xs font-semibold uppercase tracking-wide", game.status === "live" ? "text-danger" : game.status === "scheduled" ? "text-accent" : "text-muted")}>
           {admin && game.status === "waiting" ? "Not created yet" : statusLabels[game.status]}
         </span>
       </div>

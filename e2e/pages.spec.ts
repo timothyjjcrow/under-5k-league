@@ -21,7 +21,17 @@ test("signed-out profile requests explain sign-in without a duplicate header CTA
   await expect(
     page.getByRole("banner").getByRole("link", { name: "Sign in" }),
   ).toHaveCount(0);
-  await expect(page.getByText("Steam signs you into this site.")).toBeVisible();
+  // One job: Steam is the one button, with the notice of what it shares
+  // right under it. The Discord invite lives in the footer, not here.
+  const main = page.locator("#main");
+  await expect(
+    main.getByRole("link", { name: "Sign in through Steam" }),
+  ).toBeVisible();
+  await expect(
+    main.getByText(/so we never see your password or email\.$/),
+  ).toBeVisible();
+  await expect(main.getByRole("link", { name: /Discord/ })).toHaveCount(0);
+  await expect(main.locator("img")).toHaveCount(0);
 });
 
 test("retired policy routes stay absent and the login page fits a phone", async ({
@@ -134,6 +144,10 @@ test("home renders the season timeline, pool composition, and footer", async ({
   } else {
     await expect(discord).toHaveCount(0);
   }
+  // One line on who runs the league and who fixes or removes a profile.
+  await expect(page.getByRole("contentinfo")).toContainText(
+    LEAGUE_CONFIG.footerNote,
+  );
   const support = page.getByRole("contentinfo").getByRole("link", {
     name: "Support the league on Buy Me a Coffee (opens in a new tab)",
   });
@@ -148,49 +162,118 @@ test("home renders the season timeline, pool composition, and footer", async ({
 test("internal pages keep the active league phase visible in the header", async ({
   page,
 }) => {
-  await page.goto("/features");
+  await page.goto("/how-it-works");
   await expect(
     page.getByRole("link", {
-      name: "League status: Season 1 — Signups",
+      name: "League status: Season 1 — Signups open",
     }),
   ).toBeVisible();
 });
 
-test("mobile menu surfaces club pages and My profile", async ({ page }) => {
+test("signups put Join Season 1 in the header and the phone tab bar", async ({
+  page,
+}) => {
+  await page.goto("/inhouse");
+  const header = page.getByRole("banner");
+  // Signed out: join through sign-in, and sign-in stays for returning players.
+  await expect(
+    header.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveAttribute("href", "/login?next=/me");
+  await expect(
+    header.getByRole("link", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const dock = page.getByRole("navigation", { name: "Quick navigation" });
+  await expect(
+    dock.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveAttribute("href", "/login?next=/me");
+  // Join takes the Players tab; Inhouse keeps its tab and Players waits in
+  // the tab bar's sheet.
+  await expect(
+    dock.getByRole("link", { name: "Inhouse", exact: true }),
+  ).toHaveAttribute("href", "/inhouse");
+  await expect(dock.getByRole("link", { name: "Players" })).toHaveCount(0);
+  await dock.getByRole("button", { name: "Explore league" }).click();
+  await expect(
+    page
+      .getByRole("navigation", { name: "Explore league", exact: true })
+      .getByRole("link", { name: "Players", exact: true }),
+  ).toBeVisible();
+
+  // Signed in without a signup, both go straight to the form on /me.
+  const steamId = "76561197" + String(Date.now()).slice(-9);
+  await page.goto(
+    `/api/auth/dev?name=Join+Tester&steamId=${steamId}&redirect=/inhouse`,
+  );
+  await expect(
+    dock.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveAttribute("href", "/me");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await header.getByRole("link", { name: "Join Season 1", exact: true }).click();
+  await expect(page).toHaveURL(/\/me$/);
+  // The form is right there, so the header button steps aside.
+  await expect(
+    header.getByRole("link", { name: "Join Season 1", exact: true }),
+  ).toHaveCount(0);
+});
+
+test("phones get one menu: the tab bar's sheet, plus the avatar's account menu", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  // Signed in, so the account group carries My profile.
   await page.goto(
     "/api/auth/dev?name=Menu+Tester&steamId=76561190000000042&redirect=/",
   );
-  const profile = page.getByRole("link", { name: "My profile — Menu Tester" });
-  const menuButton = page.getByRole("button", { name: "Open menu" });
-  await expect(profile).toHaveCSS("min-height", "44px");
-  await expect(menuButton).toHaveCSS("height", "44px");
-  await menuButton.click();
-  const menu = page.locator("#mobile-nav");
-  const exploreButton = menu.getByRole("button", { name: "Explore" });
-  await expect(exploreButton).toHaveAttribute("aria-expanded", "false");
-  await exploreButton.click();
-  const explore = menu.getByRole("group", { name: "Explore" });
+  // The ☰ menu is gone: it listed the same pages as the tab bar's sheet.
+  await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(0);
+
+  // The avatar opens the same account menu as on desktop.
+  const account = page.getByRole("button", { name: "Account — Menu Tester" });
+  await expect(account).toHaveCSS("min-height", "44px");
+  await account.click();
+  const accountMenu = page.getByRole("navigation", {
+    name: "Account",
+    exact: true,
+  });
   await expect(
-    explore.getByRole("link", { name: "League news" }),
+    accountMenu.getByRole("link", { name: "My account" }),
   ).toBeVisible();
-  await expect(menu.getByRole("link", { name: "Hall of Fame" })).toBeVisible();
-  await expect(menu.getByRole("link", { name: "Record book" })).toBeVisible();
   await expect(
-    menu.getByRole("link", { name: "Compare players" }),
+    accountMenu.getByRole("button", { name: "Log out" }),
   ).toBeVisible();
-  await expect(menu.getByRole("link", { name: "My profile" })).toBeVisible();
-  // SIGNUPS phase: Features is already an inline nav item — Explore must not
-  // duplicate it.
-  await expect(menu.getByRole("link", { name: "Features" })).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(accountMenu).toHaveCount(0);
+  await expect(account).toBeFocused();
+
+  const dock = page.getByRole("navigation", { name: "Quick navigation" });
+  await dock.getByRole("button", { name: "Explore league" }).click();
+  const sheet = page.getByRole("navigation", {
+    name: "Explore league",
+    exact: true,
+  });
+  await expect(sheet.getByRole("link", { name: "League news" })).toBeVisible();
+  // This league has no games or champion yet, so its empty statistics pages
+  // and the Hall of Fame are not offered (they stay reachable by address).
+  for (const label of ["Hall of Fame", "Record book", "Compare players"]) {
+    await expect(sheet.getByRole("link", { name: label })).toHaveCount(0);
+  }
+  // How it works lives in Explore's League group, listed once; Merch once too.
+  await expect(sheet.getByRole("link", { name: "How it works" })).toHaveCount(1);
+  await expect(sheet.getByRole("link", { name: /Merch/ })).toHaveCount(1);
+  // No page is both a tab and an entry in the sheet.
+  for (const label of await dock.getByRole("link").allTextContents()) {
+    await expect(
+      sheet.getByRole("link", { name: label.trim(), exact: true }),
+    ).toHaveCount(0);
+  }
 });
 
 test("desktop Explore menu keeps evergreen league pages discoverable", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/features");
+  await page.goto("/how-it-works");
   const button = page.getByRole("button", { name: /Explore/ });
   await expect(button).toBeVisible();
   await button.click();
@@ -198,12 +281,12 @@ test("desktop Explore menu keeps evergreen league pages discoverable", async ({
   await expect(
     explore.getByRole("link", { name: "League news" }),
   ).toBeVisible();
-  await expect(
-    explore.getByRole("link", { name: "Record book" }),
-  ).toBeVisible();
-  await expect(
-    explore.getByRole("link", { name: "Compare players" }),
-  ).toBeVisible();
+  // No league game is on record yet, so the statistics pages (all empty)
+  // and the Hall of Fame (no champion) wait; the Statistics group with them.
+  for (const label of ["Record book", "Compare players", "Hall of Fame"]) {
+    await expect(explore.getByRole("link", { name: label })).toHaveCount(0);
+  }
+  await expect(explore.getByText("Statistics", { exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(explore).toHaveCount(0);
   await expect(button).toBeFocused();
@@ -221,7 +304,26 @@ test("public statistics and news explain their pre-result empty states", async (
   ] as const) {
     await page.goto(path);
     await expect(page.getByText(emptyTitle, { exact: true })).toBeVisible();
+    // Every statistics page is empty too, so the tab bar between them is
+    // left out until the first game.
+    await expect(
+      page.getByRole("navigation", { name: "Statistics" }),
+    ).toHaveCount(0);
   }
+  // Nor do other pages point at them: no game yet means nothing to compare,
+  // and no champion means no Hall of Fame.
+  await page.goto("/records");
+  await expect(
+    page.locator('#main a[href="/hall-of-fame"]'),
+  ).toHaveCount(0);
+  await page.goto("/players");
+  await expect(
+    page.locator('#main a[href^="/players/compare"]'),
+  ).toHaveCount(0);
+  await page.goto("/seasons");
+  await expect(
+    page.locator('#main a[href="/hall-of-fame"]'),
+  ).toHaveCount(0);
 });
 
 test("profile page renders the searchable hero picker", async ({ page }) => {

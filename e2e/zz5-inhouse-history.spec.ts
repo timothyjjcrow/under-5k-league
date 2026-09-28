@@ -123,7 +123,7 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
     await expect(
       page.getByRole("button", { name: "void", exact: true }),
     ).toHaveCount(0);
-    await page.getByRole("link", { name: "Older games →" }).click();
+    await page.getByRole("link", { name: "Older games" }).click();
     await expect(history.locator(":scope > li")).toHaveCount(2);
     await page
       .locator(`#result-${lobbyId(0)}`)
@@ -139,7 +139,7 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
     await expect(page.getByText("Linked game", { exact: true })).toBeVisible();
     const expanded = page.locator(`#result-${lobbyId(0)}`);
     await expect(
-      expanded.getByRole("link", { name: "Full match on OpenDota ↗" }),
+      expanded.getByRole("link", { name: "Full match on OpenDota" }),
     ).toHaveAttribute("href", "https://www.opendota.com/matches/8990000000");
     await expect(
       expanded.getByRole("link", { name: names[9], exact: true }),

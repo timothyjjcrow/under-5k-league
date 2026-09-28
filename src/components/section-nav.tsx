@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  chipBarEdges,
+  chipBarMask,
+  revealChipScrollLeft,
+  type ChipBarEdges,
+} from "@/lib/chip-bar";
 import { cn } from "@/lib/utils";
 
 function revealSection(id: string, focus: boolean) {
@@ -58,7 +64,15 @@ export function SectionReady() {
   return <span ref={marker} hidden />;
 }
 
-/** Native anchors remain usable before hydration; enhanced jumps open details. */
+/**
+ * Native anchors remain usable before hydration; enhanced jumps open details.
+ *
+ * `sticky` pins the bar under the 80px header from desktop width (`lg`) up.
+ * Below that it scrolls away with the page: on a phone the header, the tab bar
+ * and a pinned chip bar together took a quarter of the screen while reading a
+ * match. The header offsets (`top-20`, the draft/inhouse clock bars and their
+ * observers) are untouched; only this bar stops pinning.
+ */
 export function SectionNav({
   items,
   label,
@@ -70,6 +84,49 @@ export function SectionNav({
 }) {
   const [active, setActive] = useState("");
   const resolvedHash = useRef("");
+  const listRef = useRef<HTMLUListElement>(null);
+  // The server render assumes the bar overflows to the right, which is the
+  // phone case the fade exists for; the first measurement corrects it.
+  const [edges, setEdges] = useState<ChipBarEdges>({ start: false, end: true });
+
+  // Fade only the sides that really have more chips.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () => {
+      const next = chipBarEdges(list);
+      setEdges((prev) =>
+        prev.start === next.start && prev.end === next.end ? prev : next,
+      );
+    };
+    measure();
+    list.addEventListener("scroll", measure, { passive: true });
+    const resize = new ResizeObserver(measure);
+    resize.observe(list);
+    return () => {
+      list.removeEventListener("scroll", measure);
+      resize.disconnect();
+    };
+  }, [items]);
+
+  // Keep the highlighted chip inside the bar as the reader moves down the
+  // page. This scrolls the bar sideways only, never the page.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || !active || list.scrollWidth <= list.clientWidth) return;
+    const chip = [...list.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.getAttribute("href") === `#${active}`,
+    );
+    if (!chip) return;
+    const left = revealChipScrollLeft({
+      bar: list.getBoundingClientRect(),
+      chip: chip.getBoundingClientRect(),
+      scrollLeft: list.scrollLeft,
+    });
+    if (left === null) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+    list.scrollTo({ left, behavior: reduce.matches ? "auto" : "smooth" });
+  }, [active]);
   useEffect(() => {
     const observed = new Set<string>();
     const initialHash = window.location.hash.slice(1);
@@ -145,10 +202,17 @@ export function SectionNav({
       aria-label={label}
       className={cn(
         "rounded-xl border border-line bg-bg/95 px-2 py-2",
-        sticky && "sticky top-20 z-20 backdrop-blur",
+        sticky && "lg:sticky lg:top-20 lg:z-20 lg:backdrop-blur",
       )}
     >
-      <ul className="flex gap-1 overflow-x-auto pb-1 pr-4 [mask-image:linear-gradient(to_right,black_calc(100%_-_1rem),transparent)]">
+      <ul
+        ref={listRef}
+        className="flex gap-1 overflow-x-auto pb-1"
+        style={{
+          maskImage: chipBarMask(edges),
+          WebkitMaskImage: chipBarMask(edges),
+        }}
+      >
         {items.map((item) => (
           <li key={item.id}>
             <a

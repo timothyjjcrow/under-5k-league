@@ -18,12 +18,12 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/");
 
-  const cta = page.getByRole("link", { name: "Register as a standin →" });
+  const cta = page.getByRole("link", { name: "Register as a standin" });
   await expect(cta).toBeVisible();
   await expect(cta).toHaveAttribute("href", "/me");
   // Without a team they can still play tonight.
   await expect(
-    page.getByRole("link", { name: "Play an inhouse →" }),
+    page.getByRole("link", { name: "Play an inhouse" }),
   ).toHaveAttribute("href", "/inhouse");
   await cta.click();
 

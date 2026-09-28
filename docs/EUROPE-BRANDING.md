@@ -1,8 +1,22 @@
 # GGD2L Europe branding
 
-The Europe deployment uses `public/brand/ggd2l-europe-logo.png`, a 1254 × 1254 PNG. CSS lightening blends its midnight background into the site's dark surfaces. The existing US assets are preserved.
+The Europe master is `public/brand/ggd2l-europe-logo.png`, a 1254 × 1254 PNG (2.2MB). CSS lightening blends its midnight background into the site's dark surfaces. The existing US assets are preserved.
 
-`LEAGUE_CONFIG.branding` selects the regional logo for the header, footer, sign-in and error pages, app icons, social previews, and Discord queue-board author icon. The former Next.js metadata image files live in `public/` at their original URLs so file-convention metadata cannot override the regional selection.
+`LEAGUE_CONFIG.branding` selects the regional images for the header, footer and error pages, tab and app icons, social previews, and Discord queue-board author icon. The former Next.js metadata image files live in `public/` at their original URLs so file-convention metadata cannot override the regional selection.
+
+## Served sizes
+
+Pages never load a master. The right-sized copies below were exported from the masters with the `sharp` build that ships with Next.js (palette PNG, quality 90); `src/lib/brand-assets.test.ts` checks their sizes for both regions.
+
+| Use | US | Europe |
+| --- | --- | --- |
+| Header, footer and 404 emblem (228px tall, 3x the 76px header) | `brand/ggd2l-nav.png` (278 × 228) | `brand/ggd2l-europe-nav.png` (228 × 228) |
+| Tab icon | `icon.svg` | `brand/ggd2l-europe-icon-32.png`, `-48.png` |
+| Apple touch icon | `brand/ggd2l-icon-180.png` | `brand/ggd2l-europe-icon-180.png` |
+| Installed-app icons | `icon.svg`, `brand/ggd2l-icon-192.png`, `apple-icon.png` (512) | `brand/ggd2l-europe-icon-192.png`, `-512.png` |
+| Link preview (1200 × 630) | `opengraph-image.png`, `twitter-image.png` | `brand/ggd2l-europe-og.png`: the badge 560px tall, centred on its own background colour, rgb(7, 11, 19) |
+
+The masters stay in `public/brand/` for re-exports and for the Discord queue board's author icon, which Discord resizes itself.
 
 The same Europe image is used for the Discord server icon, bot avatar, and announcement/queue/alert webhook avatars.
 

@@ -1327,7 +1327,7 @@ function QueueView({
                       >
                         {q.name}
                       </PlayerLink>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] text-muted">
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
                         <span className="tabular-nums">#{i + 1}</span>
                         {isMe ? <span className="text-accent">You</span> : null}
                         {q.mmr > 0 ? (
