@@ -810,7 +810,7 @@ async function MyNextMatch({
           href="/schedule#fixtures"
           className={buttonClasses("secondary", "sm", "w-full")}
         >
-          See this week&apos;s schedule →
+          See this week&apos;s schedule <LinkArrow />
         </Link>
       </div>
     );
@@ -3266,7 +3266,7 @@ async function CompleteView({
                   Record book
                 </Link>
                 <Link href="/seasons" className={buttonClasses("secondary")}>
-                  Season archive
+                  Season history
                 </Link>
               </div>
             </CardBody>

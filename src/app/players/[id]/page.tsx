@@ -1576,7 +1576,7 @@ function UnjoinedProfile({
                 Your profile fills in once you sign up for a season or play an
                 inhouse.{" "}
                 <Link href="/me" className={textLink()}>
-                  Go to My account →
+                  Go to My account <LinkArrow />
                 </Link>
               </p>
             ) : null}

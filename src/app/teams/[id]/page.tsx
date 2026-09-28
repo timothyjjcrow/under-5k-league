@@ -74,6 +74,7 @@ import {
   CardHeader,
   FormStrip,
   HeroPool,
+  LinkArrow,
   PlayerLink,
   RankBadge,
   RoleBadges,
@@ -393,14 +394,14 @@ export default async function TeamPage({
             href={team.season.isActive ? "/teams" : `/seasons/${team.seasonId}`}
             className={textLink("text-sm")}
           >
-            {team.season.isActive ? "← All teams" : "← Season archive"}
+            {team.season.isActive ? "← All teams" : `← ${team.season.name}`}
           </ContextBackLink>
           {/* The standings sit behind the rank badge beside the team's
               name, and the calendar in the Matches card. */}
           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
             {team.season.isActive ? (
               <Link href="/scrims" className={textLink("text-sm")}>
-                Scrims →
+                Scrims <LinkArrow />
               </Link>
             ) : null}
             {team.season.isActive ? (
@@ -833,7 +834,7 @@ export default async function TeamPage({
                     href={`/schedule?team=${team.id}#fixtures`}
                     className={textLink("text-sm")}
                   >
-                    Team schedule →
+                    Team schedule <LinkArrow />
                   </Link>
                   {showCalendar ? (
                     <div className="ml-auto">

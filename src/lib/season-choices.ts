@@ -68,8 +68,9 @@ export function seasonHref(
 
 /**
  * The link from a finished season's boards to that season's own page, which
- * holds its champion, bracket and season awards. None while the season is
- * still running: that page would only repeat the boards.
+ * holds its champion, bracket and season awards: its recap, archived or not
+ * ("Season history" is the list of every season, /seasons). None while the
+ * season is still running: that page would only repeat the boards.
  */
 export function finishedSeasonLink(season: {
   id: string;
@@ -77,9 +78,8 @@ export function finishedSeasonLink(season: {
   status: string;
 }): { href: string; label: string } | null {
   const href = `/seasons/${encodeURIComponent(season.id)}`;
-  if (!season.isActive) return { href, label: "Season archive →" };
-  if (season.status === SEASON_STATUS.COMPLETE) {
-    return { href, label: "Season recap →" };
+  if (!season.isActive || season.status === SEASON_STATUS.COMPLETE) {
+    return { href, label: "Season recap" };
   }
   return null;
 }

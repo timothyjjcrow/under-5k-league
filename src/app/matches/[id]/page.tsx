@@ -270,7 +270,7 @@ export default async function MatchDetailPage({
               ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
                 ? "← Schedule"
                 : "← Playoff bracket"
-              : "← Season archive"}
+              : `← ${match.season.name}`}
           </ContextBackLink>
         }
       />

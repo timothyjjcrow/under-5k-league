@@ -272,7 +272,7 @@ export default async function SeasonArchivePage({
             ? season.status === SEASON_STATUS.COMPLETE
               ? "Season complete"
               : seasonPhaseLabel(season.status, draftStatus)
-            : "Season archive"
+            : "Archived season"
         }
         action={
           season.isActive ? (

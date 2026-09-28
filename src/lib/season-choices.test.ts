@@ -95,16 +95,16 @@ describe("seasonHref", () => {
 });
 
 describe("finishedSeasonLink", () => {
-  it("points an archived season's boards at its season page", () => {
+  it("points an archived season's boards at its recap page", () => {
     expect(
       finishedSeasonLink({ id: "s 1", isActive: false, status: "PLAYOFFS" }),
-    ).toEqual({ href: "/seasons/s%201", label: "Season archive →" });
+    ).toEqual({ href: "/seasons/s%201", label: "Season recap" });
   });
 
   it("calls the current season's page its recap once the final is played", () => {
     expect(
       finishedSeasonLink({ id: "s3", isActive: true, status: "COMPLETE" }),
-    ).toEqual({ href: "/seasons/s3", label: "Season recap →" });
+    ).toEqual({ href: "/seasons/s3", label: "Season recap" });
   });
 
   it("links nothing while the current season is still being played", () => {

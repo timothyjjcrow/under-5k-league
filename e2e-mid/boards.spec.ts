@@ -170,8 +170,9 @@ test("Hall of Fame waits for a champion instead of showing empty boards", async 
   await page.goto("/hall-of-fame");
   await expect(page.getByRole("heading", { name: "Hall of Fame", level: 1 })).toBeVisible();
   await expect(page.getByText("No champion yet", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Leaders →" })).toHaveAttribute("href", "/leaders");
-  await expect(page.getByRole("link", { name: "Record book →" })).toHaveAttribute("href", "/records");
+  const next = page.locator("main");
+  await expect(next.getByRole("link", { name: "Leaders", exact: true })).toHaveAttribute("href", "/leaders");
+  await expect(next.getByRole("link", { name: "Record book", exact: true })).toHaveAttribute("href", "/records");
   await expect(page.getByRole("heading", { name: "Career honors" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Game performance" })).toHaveCount(0);
   await expect(page.getByText("Nobody has qualified yet.")).toHaveCount(0);

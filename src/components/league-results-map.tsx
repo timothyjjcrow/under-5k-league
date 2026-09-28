@@ -193,7 +193,7 @@ export function LeagueResultsMap({
       </CardBody>
       <div className="flex justify-between gap-3 px-4 py-2.5 text-[11px] text-muted">
         <span>Series scores · F = forfeit</span>
-        <span>Open any result ↗</span>
+        <span>Select a result to open its match</span>
       </div>
     </Card>
   );

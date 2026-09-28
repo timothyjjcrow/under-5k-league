@@ -28,6 +28,7 @@ import { HEROES, heroById, type Hero } from "@/lib/heroes";
 import {
   EmptyState,
   HeroIcon,
+  LinkArrow,
   PageTitle,
   buttonClasses,
 } from "@/components/ui";
@@ -143,7 +144,7 @@ export default async function MetaPage({
             href={finishedLink.href}
             className={buttonClasses("secondary", "sm")}
           >
-            {finishedLink.label}
+            {finishedLink.label} <LinkArrow />
           </Link>
         ) : undefined
       }

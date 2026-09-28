@@ -21,7 +21,7 @@ test("team sections jump to the roster and retain the team in its schedule link"
   await expect(page.locator("#team-matches h2").first()).toBeFocused();
   await expectNoHorizontalOverflow(page, "team sections");
   await page
-    .getByRole("link", { name: "Team schedule →", exact: true })
+    .getByRole("link", { name: "Team schedule", exact: true })
     .click();
   await expect(page).toHaveURL(
     new RegExp(`/schedule\\?team=${teamId}#fixtures$`),

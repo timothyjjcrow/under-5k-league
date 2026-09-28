@@ -41,6 +41,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
 } from "@/components/ui";
@@ -103,7 +104,7 @@ export default async function LeadersPage({
   const finishedLink = finishedSeasonLink(season);
   const titleAction = finishedLink ? (
     <Link href={finishedLink.href} className={buttonClasses("secondary", "sm")}>
-      {finishedLink.label}
+      {finishedLink.label} <LinkArrow />
     </Link>
   ) : undefined;
 

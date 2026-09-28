@@ -21,6 +21,7 @@ import {
   EmojiLead,
   EmptyState,
   buttonClasses,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   SectionTitle,
@@ -140,8 +141,12 @@ export default async function HallOfFamePage() {
           description="The Hall of Fame opens when a season crowns its champion. Until then, Leaders and the Record book follow the season."
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              <Link href="/leaders" className={buttonClasses("secondary", "sm")}>Leaders →</Link>
-              <Link href="/records" className={buttonClasses("secondary", "sm")}>Record book →</Link>
+              <Link href="/leaders" className={buttonClasses("secondary", "sm")}>
+                Leaders <LinkArrow />
+              </Link>
+              <Link href="/records" className={buttonClasses("secondary", "sm")}>
+                Record book <LinkArrow />
+              </Link>
             </div>
           }
         />
