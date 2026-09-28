@@ -34,6 +34,7 @@ import { mentionUsers } from "@/lib/discord-mentions";
 import { claimThrottle, claimThrottleAnswer } from "@/lib/settings";
 import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
 import { isPlayoffPhase } from "@/lib/league-lifecycle";
+import { roundLabelsForPost } from "@/lib/playoff-rounds";
 import type { ActionResult } from "@/lib/action-result";
 import { singleActiveSeason } from "@/lib/season";
 import {
@@ -93,6 +94,7 @@ export async function setAvailability(
               seasonId: true,
               week: true,
               phase: true,
+              bracketSlot: true,
               status: true,
               scheduledAt: true,
               scheduleRevision: true,
@@ -179,6 +181,10 @@ export async function setAvailability(
       week: match.week,
       isPlayoff: isPlayoffPhase(match.phase),
       isTiebreaker: match.phase === "TIEBREAKER",
+      // Read after the commit, never inside the SERIALIZABLE check-in.
+      roundLabel: isPlayoffPhase(match.phase)
+        ? (await roundLabelsForPost([match])).get(match.id)
+        : null,
       whenMs: match.scheduledAt?.getTime() ?? null,
       // Deep link — the mentioned captain lands on the page that holds the
       // Standins card, not on the front door.
@@ -316,6 +322,7 @@ export async function markAwayDates(
             week: f.week,
             isPlayoff: isPlayoffPhase(f.phase),
             isTiebreaker: f.phase === "TIEBREAKER",
+            roundLabel: f.roundLabel,
             whenMs: f.whenMs,
             matchId: f.matchId,
           })),

@@ -884,6 +884,34 @@ describe("reschedule league-calendar rules (integration)", () => {
     ).rejects.toThrow(/within four hours of Alpha vs Delta \(Semifinal\)/);
   });
 
+  it("hands the accepted post a playoff fixture's round name", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const [a, b, c, d] = await Promise.all(
+      ["Alpha", "Bravo", "Charlie", "Delta"].map((n, i) => makeTeam(season.id, n, i)),
+    );
+    // A 4-team bracket: its two first-round slots are the semifinals.
+    const semi = await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 6, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M0", homeTeamId: a.id, awayTeamId: b.id,
+        scheduledAt: ORIGINAL_NIGHT,
+      },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 6, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1", homeTeamId: c.id, awayTeamId: d.id,
+        scheduledAt: ORIGINAL_NIGHT,
+      },
+    });
+    await proposeReschedule(a.captainId, semi.id, NIGHT);
+    const pending = await pendingFor(semi.id);
+    const accepted = await respondReschedule(b.captainId, pending!.id, true);
+    if (!accepted.accepted) throw new Error("expected an acceptance");
+    expect(accepted.isPlayoff).toBe(true);
+    expect(accepted.roundLabel).toBe("Semifinal");
+  });
+
   it("re-checks the clash at acceptance, after the rest of the schedule moved", async () => {
     const { a, b, ab, ac } = await setupThreeTeams();
     const target = new Date(ORIGINAL_NIGHT.getTime() + 24 * HOUR);

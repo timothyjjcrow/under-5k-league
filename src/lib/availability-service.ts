@@ -23,6 +23,7 @@ import {
 } from "./away-range";
 import { postAuctionWorkOpen } from "./league-lifecycle";
 import { loadPlayoffRoundsBySeason } from "./playoff-rounds";
+import { matchRoundLabel } from "./schedule";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
 
@@ -262,6 +263,8 @@ export async function listAwayFixtures(
 export type AwayMarkedFixture = AwayFixtureRef & {
   week: number;
   phase: string;
+  /** `matchRoundLabel` ("Semifinal"), so the captain's post names the round. */
+  roundLabel: string;
   homeName: string;
   awayName: string;
   whenMs: number;
@@ -432,6 +435,7 @@ export async function markAwayRange(opts: {
               ...ref,
               week: match.week,
               phase: match.phase,
+              roundLabel: matchRoundLabel(match, playoffRounds),
               homeName: match.homeTeam.name,
               awayName: match.awayTeam.name,
               whenMs: kickoffMs!,

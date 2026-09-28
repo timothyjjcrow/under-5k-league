@@ -191,6 +191,9 @@ describe("listAwayFixtures — the /me card's list and render gate", () => {
       message:
         "Marked you out for 1 fixture: Semifinal vs Bravo. Captains can now line up cover.",
     });
+    // The captain's post names the round too, not just "playoff match".
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toContain("can't make the semifinal —");
   });
 
   it("renders nothing for a non-participant or outside the check-in phases", async () => {

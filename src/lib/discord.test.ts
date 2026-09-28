@@ -1128,6 +1128,31 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
     expect(msg).not.toContain("week 9");
   });
 
+  it("names a playoff fixture by its round", () => {
+    const base = {
+      playerName: "Puppey",
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      whenMs: null,
+    };
+    expect(playerOutMessage({ ...base, roundLabel: "Semifinal" }))
+      .toContain("can't make the semifinal —");
+    expect(playerOutMessage({ ...base, roundLabel: "Grand final" }))
+      .toContain("can't make the grand final —");
+    expect(playerOutMessage({ ...base, roundLabel: "Round 1" }))
+      .toContain("can't make the playoff round 1 —");
+    // A bracket that couldn't place the fixture keeps the phase name.
+    expect(playerOutMessage({ ...base, roundLabel: "Playoffs" }))
+      .toContain("can't make the playoff match —");
+    expect(playerBackInMessage({ ...base, roundLabel: "Semifinal" }))
+      .toContain("can make the semifinal after all");
+    // A regular week ignores any round label.
+    expect(playerOutMessage({ ...base, isPlayoff: false, roundLabel: "Semifinal" }))
+      .toContain("can't make the week 9 match");
+  });
+
   it("tells the captain a player who said OUT can make it after all", () => {
     const msg = playerBackInMessage({
       playerName: "Dendi",
@@ -1211,6 +1236,18 @@ describe("playerAwayMessage", () => {
     expect(lines[3]).toContain("Playoff match");
     expect(lines[3]).not.toContain("<t:");
     expect(lines[4]).toContain("line up standins");
+  });
+
+  it("names each playoff fixture by its round", () => {
+    const msg = playerAwayMessage("Dendi", [
+      { ...fixture(8, null, "m8"), isPlayoff: true, roundLabel: "Semifinal" },
+      { ...fixture(9, null, "m9"), isPlayoff: true, roundLabel: "Grand final" },
+      { ...fixture(9, null, "m10"), isPlayoff: true, roundLabel: "Playoffs" },
+    ]);
+    const lines = msg.split("\n");
+    expect(lines[1]).toMatch(/^• Semifinal: \*\*Radiant Raccoons\*\*/);
+    expect(lines[2]).toMatch(/^• Grand final: /);
+    expect(lines[3]).toMatch(/^• Playoff match: /);
   });
 
   it("labels a tiebreaker like the one-match message does", () => {
@@ -1307,6 +1344,76 @@ describe("weekReminderMessage", () => {
     const msg = weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [] });
     expect(msg).toContain("Playoff matches");
     expect(msg).not.toContain("Week 9");
+  });
+
+  it("names the playoff round in the header when the bracket gives one", () => {
+    const header = (roundLabel: string | null) =>
+      weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [], roundLabel })
+        .split("\n")[0];
+    expect(header("Semifinals")).toBe("⏰ **Semifinals coming up — check in!**");
+    expect(header("Grand final")).toBe("⏰ **Grand final coming up — check in!**");
+    expect(header("Quarterfinals")).toBe(
+      "⏰ **Quarterfinals coming up — check in!**",
+    );
+    expect(header("Round 1")).toBe(
+      "⏰ **Playoff round 1 matches coming up — check in!**",
+    );
+    // No placeable round, or a slate spanning rounds: the phase name, never
+    // the database week number.
+    for (const unnamed of [null, "Playoffs", "Week 9"]) {
+      expect(header(unnamed)).toBe("⏰ **Playoff matches coming up — check in!**");
+    }
+    // A round name never leaks into a regular or tiebreaker week.
+    expect(
+      weekReminderMessage({ week: 3, isPlayoff: false, fixtures: [], roundLabel: "Semifinals" }),
+    ).toContain("Week 3 matches");
+  });
+
+  it("states the kickoff's day and clock time once, beside the countdown", () => {
+    const fixture = (i: number) => ({
+      matchId: `m${i}`,
+      homeName: `Home ${i}`,
+      awayName: `Away ${i}`,
+      scheduledAt: 1_800_000_000_000,
+      homeIn: 1,
+      homeSize: 5,
+      awayIn: 2,
+      awaySize: 5,
+      waitingOn: [],
+    });
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [fixture(1), fixture(2)],
+    });
+    const lines = msg.split("\n");
+    expect(lines[1]).toBe("Kickoff: <t:1800000000:F> (<t:1800000000:R>)");
+    // One reminder is one kickoff, so the rows don't repeat the date.
+    expect(msg.match(/<t:1800000000:F>/g)).toHaveLength(1);
+    expect(lines[2]).toMatch(
+      /^🆚 \*\*Home 1\*\* vs \*\*Away 1\*\* · check-ins 1\/5 vs 2\/5 · <[^>]+\/matches\/m1>$/,
+    );
+  });
+
+  it("gives each row its own time if kickoffs ever differ", () => {
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [1_800_000_000_000, 1_800_003_600_000].map((scheduledAt, i) => ({
+        matchId: `m${i}`,
+        homeName: "A",
+        awayName: "B",
+        scheduledAt,
+        homeIn: 0,
+        homeSize: 5,
+        awayIn: 0,
+        awaySize: 5,
+        waitingOn: [],
+      })),
+    });
+    expect(msg).not.toContain("Kickoff:");
+    expect(msg).toContain("**B** — <t:1800000000:F> (<t:1800000000:R>) · check-ins");
+    expect(msg).toContain("**B** — <t:1800003600:F> (<t:1800003600:R>) · check-ins");
   });
 
   it("mentions the people who owe an answer, and names the unlinked ones", () => {
@@ -1415,6 +1522,10 @@ describe("weekReminderMessage", () => {
     // transport materialization cannot prepend hidden/omitted users.
     expect(delivered).toBe(announcement.content);
     expect(delivered.length).toBeLessThanOrEqual(2_000);
+    // The clock time is part of the packed body, not added after it.
+    expect(delivered.split("\n")[1]).toBe(
+      "Kickoff: <t:1800000000:F> (<t:1800000000:R>)",
+    );
     const visibleMentions = [...delivered.matchAll(/<@(\d{17,20})>/g)].map(
       (match) => match[1],
     );
@@ -1466,6 +1577,22 @@ describe("rescheduleMessage", () => {
         whenMs: 1784167200000,
       }),
     ).toContain("Playoffs");
+  });
+
+  it("names the playoff round when it is known", () => {
+    const base = {
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      whenMs: 1784167200000,
+    };
+    expect(rescheduleMessage({ ...base, roundLabel: "Semifinal" }))
+      .toContain("Semifinal: **A** vs **B**");
+    expect(rescheduleMessage({ ...base, roundLabel: "Round 2" }))
+      .toContain("Playoff round 2: **A** vs **B**");
+    expect(rescheduleMessage({ ...base, roundLabel: "Playoffs" }))
+      .toContain("Playoffs: **A** vs **B**");
   });
 });
 
@@ -2213,7 +2340,8 @@ describe("no player-supplied name can inject markdown", () => {
         },
       ],
     });
-    expect(reminder.split("\n")).toHaveLength(4); // header, fixture, waiting, footer
+    // header, kickoff, fixture, waiting, footer
+    expect(reminder.split("\n")).toHaveLength(5);
     // One line per fixture: a persona newline must not forge a fixture row.
     const away = playerAwayMessage(nl, [
       { homeName: nl, awayName: nl, week: 1, isPlayoff: false, whenMs: null },
@@ -2573,6 +2701,23 @@ describe("adminRetimeMessage", () => {
       .toContain("Playoffs:");
     expect(adminRetimeMessage({ moves: [{ ...move(1), isTiebreaker: true }], clearedRsvps: 0 }))
       .toContain("Tiebreaker week 3:");
+  });
+
+  it("names a playoff fixture's round when it is known", () => {
+    const one = adminRetimeMessage({
+      moves: [{ ...move(1), isPlayoff: true, roundLabel: "Grand final" }],
+      clearedRsvps: 0,
+    });
+    expect(one).toContain("Grand final: **Home 1** vs **Away 1** now plays");
+    const many = adminRetimeMessage({
+      moves: [
+        { ...move(1), isPlayoff: true, roundLabel: "Semifinal" },
+        { ...move(2), isPlayoff: true, roundLabel: "Semifinal" },
+      ],
+      clearedRsvps: 0,
+    });
+    expect(many).toContain("• Semifinal: **Home 1** vs **Away 1**");
+    expect(many).toContain("• Semifinal: **Home 2** vs **Away 2**");
   });
 });
 

@@ -672,6 +672,20 @@ export function inhouseResultVoidedMessage(m: {
   return `↩️ **That inhouse result has been voided by an admin** — it's off the ladder, and the result posted for that game no longer stands.${link}`;
 }
 
+/**
+ * A playoff fixture's round, from the name the site gives it
+ * (`matchRoundLabel`): "Semifinal", "Grand final", or "Playoff round 2" in a
+ * bracket deep enough to number its rounds. Null when there is no name, or
+ * the bracket couldn't place the fixture ("Playoffs"), so the caller keeps
+ * its phase-only wording.
+ */
+function playoffFixtureTitle(roundLabel: string | null | undefined): string | null {
+  if (!roundLabel || roundLabel === "Playoffs") return null;
+  return /^Round \d+$/.test(roundLabel)
+    ? `Playoff ${roundLabel.toLowerCase()}`
+    : roundLabel;
+}
+
 export function playerOutMessage(m: {
   playerName: string;
   homeName: string;
@@ -679,6 +693,9 @@ export function playerOutMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"); a playoff fixture is
+   *  named by its round instead of "playoff match" when given. */
+  roundLabel?: string | null;
   /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
   whenMs: number | null;
   /** Deep link target — the match page holds the Standins card the message
@@ -687,7 +704,9 @@ export function playerOutMessage(m: {
 }): string {
   const label = m.isTiebreaker
     ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+    : m.isPlayoff
+      ? (playoffFixtureTitle(m.roundLabel)?.toLowerCase() ?? "playoff match")
+      : `week ${m.week} match`;
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
@@ -706,7 +725,9 @@ export function playerBackInMessage(
 ): string {
   const label = m.isTiebreaker
     ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+    : m.isPlayoff
+      ? (playoffFixtureTitle(m.roundLabel)?.toLowerCase() ?? "playoff match")
+      : `week ${m.week} match`;
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
@@ -746,7 +767,9 @@ export function playerAwayMessage(
   for (const [i, f] of fixtures.entries()) {
     const label = f.isTiebreaker
       ? "Tiebreaker match"
-      : f.isPlayoff ? "Playoff match" : `Week ${f.week} match`;
+      : f.isPlayoff
+        ? (playoffFixtureTitle(f.roundLabel) ?? "Playoff match")
+        : `Week ${f.week} match`;
     const when = f.whenMs != null ? ` (<t:${Math.floor(f.whenMs / 1000)}:F>)` : "";
     const link = f.matchId ? ` <${resolveSiteUrl()}/matches/${f.matchId}>` : "";
     const line = `• ${label}: **${name(f.homeName)}** vs **${name(f.awayName)}**${when}${link}`;
@@ -900,6 +923,10 @@ export type WeekReminderInput = {
   pickemOpen?: boolean;
   /** Teams with no regular fixture this week (an odd number of teams). */
   byeTeamNames?: string[];
+  /** The playoff round these fixtures make up, as `roundGroupLabel` names it
+   *  ("Semifinals", "Grand final", "Round 2"). Anything it can't name — a
+   *  bracket it couldn't place, or a mix of rounds — keeps "Playoff matches". */
+  roundLabel?: string | null;
 };
 
 export type WeekReminderAnnouncement = {
@@ -909,16 +936,40 @@ export type WeekReminderAnnouncement = {
   mentionUserIds: string[];
 };
 
+/** Reader-local day and clock time plus the countdown: "Sunday, 4 October
+ *  2026 20:00 (in 23 hours)". The countdown alone left nobody able to say
+ *  what time the games actually are. */
+function kickoffStamp(ms: number): string {
+  const t = Math.floor(ms / 1000);
+  return `<t:${t}:F> (<t:${t}:R>)`;
+}
+
+/** Header for a playoff reminder: the round's own name where the bracket
+ *  gives one, "Playoff matches" when it doesn't. */
+function playoffReminderHeading(roundLabel: string | null | undefined): string {
+  const label = roundLabel?.trim() ?? "";
+  const numbered = /^Round (\d+)$/.exec(label);
+  if (numbered) return `Playoff round ${numbered[1]} matches`;
+  // "Playoffs" means the bracket couldn't place these fixtures, and "Week N"
+  // means they span rounds; neither names anything a player would recognise.
+  if (!label || label === "Playoffs" || /^Week \d+$/.test(label)) {
+    return "Playoff matches";
+  }
+  return label;
+}
+
 function reminderFixtureBlock(
   f: WeekReminderFixture,
   site: string,
+  /** The header already carries the shared kickoff, so the row skips it. */
+  showKickoff: boolean,
 ): {
   lines: string[];
   mentionUserIds: string[];
 } {
-  const t = Math.floor(f.scheduledAt / 1000);
+  const when = showKickoff ? ` — ${kickoffStamp(f.scheduledAt)}` : "";
   const lines = [
-    `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}** — <t:${t}:R> · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
+    `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}**${when} · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
   ];
   if (f.waitingOn.length === 0) return { lines, mentionUserIds: [] };
 
@@ -977,7 +1028,9 @@ export function weekReminderAnnouncement(
   const site = resolveSiteUrl();
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week} matches`
-    : m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
+    : m.isPlayoff
+      ? playoffReminderHeading(m.roundLabel)
+      : `Week ${m.week} matches`;
   // With an odd number of teams one rests each week. The reminder is the one
   // post that reaches players who don't open the site, so it names them too:
   // otherwise the resting team watches everyone else check in and wonders.
@@ -991,7 +1044,15 @@ export function weekReminderAnnouncement(
     // The reminder is the one weekly post everyone sees; pick'em otherwise
     // relies on people remembering to visit the page before kickoff.
     (m.pickemOpen ? ` Pick'em closes at kickoff: <${site}/pickem>` : "");
+  // One reminder covers one kickoff, so the time goes once under the header
+  // rather than repeating the same date on every row. Rows only carry their
+  // own time if a caller ever mixes kickoffs.
+  const kickoffs = new Set(
+    m.fixtures.map((f) => Math.floor(f.scheduledAt / 1000)),
+  );
+  const sharedKickoff = kickoffs.size === 1 ? m.fixtures[0].scheduledAt : null;
   const lines = [`⏰ **${label} coming up — check in!**`];
+  if (sharedKickoff != null) lines.push(`Kickoff: ${kickoffStamp(sharedKickoff)}`);
   const includedMentions: string[] = [];
   let shownFixtures = 0;
 
@@ -1017,7 +1078,11 @@ export function weekReminderAnnouncement(
   };
 
   for (let index = 0; index < m.fixtures.length; index += 1) {
-    const block = reminderFixtureBlock(m.fixtures[index], site);
+    const block = reminderFixtureBlock(
+      m.fixtures[index],
+      site,
+      sharedKickoff == null,
+    );
     const candidate = [...lines, ...block.lines];
     const omitted = m.fixtures.length - index - 1;
     if (!packedContent(candidate, omitted, index + 1)) break;
@@ -1281,10 +1346,14 @@ export function rescheduleMessage(m: {
   whenMs: number;
   /** RSVPs the retime invalidated — the rosters have to hear about this. */
   clearedRsvps?: number;
+  /** `matchRoundLabel` ("Semifinal"): names a playoff fixture's round. */
+  roundLabel?: string | null;
 }): string {
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week}`
-    : m.isPlayoff ? "Playoffs" : `Week ${m.week}`;
+    : m.isPlayoff
+      ? (playoffFixtureTitle(m.roundLabel) ?? "Playoffs")
+      : `Week ${m.week}`;
   const t = `<t:${Math.floor(m.whenMs / 1000)}:F>`;
   // Retiming clears every check-in (an old answer about a night nobody is
   // playing). Saying so is the only notice the roster gets — the site shows
@@ -1308,6 +1377,8 @@ export type AdminRetimeMove = {
    *  moved: calling a first-ever time a move sends players looking for an
    *  earlier time they never had. */
   firstTime?: boolean;
+  /** `matchRoundLabel` ("Semifinal"): names a playoff fixture's round. */
+  roundLabel?: string | null;
 };
 
 const ADMIN_RETIME_MAX_LINES = 10;
@@ -1326,7 +1397,9 @@ export function adminRetimeMessage(m: {
   const label = (move: AdminRetimeMove) =>
     move.isTiebreaker
       ? `Tiebreaker week ${move.week}`
-      : move.isPlayoff ? "Playoffs" : `Week ${move.week}`;
+      : move.isPlayoff
+        ? (playoffFixtureTitle(move.roundLabel) ?? "Playoffs")
+        : `Week ${move.week}`;
   const when = (move: AdminRetimeMove) =>
     move.whenMs == null
       ? "unscheduled for now"

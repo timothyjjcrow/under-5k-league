@@ -18,6 +18,7 @@ import {
 } from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
 import { rescheduleDeadline } from "./schedule";
+import { roundLabelsForPost } from "./playoff-rounds";
 import { isSerializationConflict } from "./prisma-errors";
 
 export type AcceptedReschedule = {
@@ -26,6 +27,8 @@ export type AcceptedReschedule = {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` ("Semifinal"), so the post names a playoff round. */
+  roundLabel: string | null;
   newTime: Date;
   /** The captain who PROPOSED it — they asked and have been waiting. */
   notifyUserId: string | null;
@@ -452,6 +455,8 @@ export async function respondReschedule(
           standinUserIds: standins.map((s) => s.standinUserId),
           matchId: match.id,
           seasonId: match.seasonId,
+          phase: match.phase,
+          bracketSlot: match.bracketSlot,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -477,6 +482,19 @@ export async function respondReschedule(
   const standinClashes = await clashesAfterRetime(outcome.seasonId, [
     outcome.matchId,
   ]);
+  // The round's name for the post, read outside the SERIALIZABLE write.
+  const roundLabel =
+    (
+      await roundLabelsForPost([
+        {
+          id: outcome.matchId,
+          seasonId: outcome.seasonId,
+          phase: outcome.phase,
+          week: outcome.week,
+          bracketSlot: outcome.bracketSlot,
+        },
+      ])
+    ).get(outcome.matchId) ?? null;
   return {
     accepted: true,
     homeName: outcome.homeName,
@@ -484,6 +502,7 @@ export async function respondReschedule(
     week: outcome.week,
     isPlayoff: outcome.isPlayoff,
     isTiebreaker: outcome.isTiebreaker,
+    roundLabel,
     newTime: outcome.newTime,
     notifyUserId: outcome.notifyUserId,
     clearedRsvps: outcome.clearedRsvps,

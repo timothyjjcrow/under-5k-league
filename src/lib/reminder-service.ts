@@ -21,7 +21,8 @@ import {
   teamAvailability,
 } from "./availability";
 import { draftReminderKey, weekReminderKey } from "./settings";
-import { byeTeamsByWeek } from "./schedule";
+import { byeTeamsByWeek, roundGroupLabel } from "./schedule";
+import { loadPlayoffRoundsBySeason } from "./playoff-rounds";
 import { draftReminderDue } from "./draft-setup";
 import { DRAFT_READINESS, draftReadiness } from "./draft-readiness";
 import { raceHook } from "./race-hook";
@@ -254,9 +255,26 @@ export async function maybeAnnounceUpcomingWeek(season: {
     }),
   }));
 
+  // A playoff reminder names its round ("Semifinals coming up"). The depth
+  // read is a garnish: if it fails the header says "Playoff matches", as it
+  // always did, rather than costing the reminder.
+  const isPlayoff = isPlayoffPhase(next.phase);
+  let roundLabel: string | null = null;
+  if (isPlayoff) {
+    let depth = 0;
+    try {
+      depth =
+        (await loadPlayoffRoundsBySeason([season.id])).get(season.id) ?? 0;
+    } catch {
+      // Depth 0: the formatter keeps "Playoff matches".
+    }
+    roundLabel = roundGroupLabel(matches, depth);
+  }
+
   const announcement = weekReminderAnnouncement({
     week: next.week,
-    isPlayoff: isPlayoffPhase(next.phase),
+    isPlayoff,
+    roundLabel,
     isTiebreaker: next.phase === MATCH_PHASE.TIEBREAKER,
     fixtures,
     pickemOpen: matches.some((m) => predictionOpen(m)),

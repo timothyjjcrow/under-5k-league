@@ -102,6 +102,38 @@ describe("week reminder (integration)", () => {
     ).toBe(2);
   });
 
+  it("states the kickoff time and names the playoff round", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const teams = await Promise.all(
+      ["Alpha", "Bravo", "Charlie", "Delta"].map((n, i) =>
+        makeTeam(season.id, n, i),
+      ),
+    );
+    const kickoff = new Date(Math.floor((Date.now() + 4 * 3600_000) / 1000) * 1000);
+    for (const [i, slot] of ["R0M0", "R0M1"].entries()) {
+      await prisma.match.create({
+        data: {
+          seasonId: season.id,
+          week: 6,
+          phase: MATCH_PHASE.PLAYOFF,
+          bracketSlot: slot,
+          homeTeamId: teams[i * 2].id,
+          awayTeamId: teams[i * 2 + 1].id,
+          scheduledAt: kickoff,
+        },
+      });
+    }
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const lines = mockSend.mock.calls[0][0].split("\n");
+    const t = kickoff.getTime() / 1000;
+    expect(lines[0]).toBe("⏰ **Semifinals coming up — check in!**");
+    expect(lines[1]).toBe(`Kickoff: <t:${t}:F> (<t:${t}:R>)`);
+    expect(lines.filter((l) => l.startsWith("🆚"))).toHaveLength(2);
+    // No bye line in the playoffs.
+    expect(lines.join("\n")).not.toContain("Bye");
+  });
+
   it("names the team with a bye, and only a team that sits the whole week out", async () => {
     const { season } = await setupWeek(4);
     await makeTeam(season.id, "Rested", 2);

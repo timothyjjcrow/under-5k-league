@@ -131,6 +131,7 @@ export async function respondReschedule(
         week: outcome.week,
         isPlayoff: outcome.isPlayoff,
         isTiebreaker: outcome.isTiebreaker,
+        roundLabel: outcome.roundLabel,
         whenMs: outcome.newTime.getTime(),
         clearedRsvps: outcome.clearedRsvps,
       }),

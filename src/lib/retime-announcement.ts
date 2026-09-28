@@ -7,6 +7,7 @@ import { MATCH_PHASE } from "./constants";
 import { adminRetimeMessage, sendDiscordMessage } from "./discord";
 import { mentionUsers } from "./discord-mentions";
 import { isPlayoffPhase } from "./league-lifecycle";
+import { roundLabelsForPost } from "./playoff-rounds";
 
 export async function announceAdminRetime(
   matchIds: string[],
@@ -22,8 +23,10 @@ export async function announceAdminRetime(
       orderBy: [{ scheduledAt: "asc" }, { week: "asc" }, { id: "asc" }],
       select: {
         id: true,
+        seasonId: true,
         week: true,
         phase: true,
+        bracketSlot: true,
         scheduledAt: true,
         homeTeam: { select: { name: true, captainId: true } },
         awayTeam: { select: { name: true, captainId: true } },
@@ -31,6 +34,7 @@ export async function announceAdminRetime(
       },
     });
     if (matches.length === 0) return false;
+    const roundLabels = await roundLabelsForPost(matches);
     const content = adminRetimeMessage({
       clearedRsvps,
       moves: matches.map((match) => ({
@@ -42,6 +46,7 @@ export async function announceAdminRetime(
         isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
         whenMs: match.scheduledAt?.getTime() ?? null,
         firstTime: firstTimeIds.includes(match.id),
+        roundLabel: roundLabels.get(match.id) ?? null,
       })),
     });
     // Both captains of every moved fixture, plus anyone booked to stand in:
