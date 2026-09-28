@@ -37,7 +37,7 @@ was verified against the repo's tripwires before being accepted:
   (5 admin sources + byte-exact strings in three lib files),
   `dashboard-guards.test.ts` (page.tsx), `danger-submit.test.ts` (pins local
   variable names), and the `[source]` slice of `applyFloor` in
-  `inhouse-bets.itest.ts`.
+  `inhouse-bets.itest.ts` (deleted with Cred betting on 2026-09-27).
 - **e2e couplings**: `zz3` imports room timeout constants; `e2e-mid/stage.ts`
   depends on `AUTO_SYNC` backoff semantics; `scripts/seed-fixture.ts` imports
   `test/integration/factories.ts`, so factory signatures are a shared API.
