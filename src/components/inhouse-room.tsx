@@ -732,9 +732,9 @@ export function InhouseRoom({
   // only on a successful act(), so a captain who tapped the top-MMR player and
   // then let the clock run out — resolveStalledPick auto-drafts that exact
   // player, it sorts the pool the same way — came back on the clock two picks
-  // later holding a dead id. The footer then rendered an ENABLED button
-  // reading "Draft " with no name, and every click was a "Player already
-  // drafted" toast while their real 60s clock burned.
+  // later holding a dead id. The old footer Draft button then rendered
+  // ENABLED with no name, and every click was a "Player already drafted"
+  // toast while their real 60s clock burned.
   const selectedInPool =
     selected && lobby?.pool.some((p) => p.userId === selected)
       ? selected
@@ -2210,49 +2210,84 @@ function DraftView({
           Team 1's roster card would otherwise bury it (same treatment as the
           league draft room). lg:order-* restores the three-column desktop. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.1fr_1fr]">
-        {/* Draft pool */}
+        {/* Draft pool. Tapping a player puts the Draft button on that
+            same row, so a pick is two taps in one place instead of a hunt
+            for a button under the whole pool while the clock runs. */}
         <div className="min-w-0 rounded-[var(--radius)] border border-line bg-surface/80 lg:order-2">
-          <div className="border-b border-line px-4 py-3 text-sm font-semibold">
-            Draft pool · {lobby.pool.length}
+          <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3 text-sm">
+            <span className="font-semibold">
+              Draft pool · {lobby.pool.length}
+            </span>
+            {me.canPick && lobby.pool.length > 0 ? (
+              <span className="min-w-0 text-right text-xs text-muted">
+                {me.isOnClock
+                  ? "Tap a player, then Draft"
+                  : `Tap a player to draft for ${lobby.onClockCaptain?.name ?? "the current captain"}`}
+              </span>
+            ) : null}
           </div>
           <div className="space-y-1.5 p-3">
             {lobby.pool.map((p) => {
               const pickable = me.canPick;
               const isSel = selected === p.userId;
               return (
-                <button
+                <div
                   key={p.userId}
-                  disabled={!pickable}
-                  aria-pressed={isSel}
-                  aria-label={`Select ${p.name} to draft`}
-                  onClick={() => setSelected(isSel ? null : p.userId)}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",
-                    pickable ? "hover:border-accent/50" : "cursor-default",
+                    "flex items-center rounded-lg border transition-colors",
                     isSel
                       ? "border-accent bg-accent/15"
                       : "border-line bg-surface-2/40",
+                    pickable && !isSel ? "hover:border-accent/50" : "",
                   )}
                 >
-                  <Avatar name={p.name} src={p.avatar} size={26} />
-                  <span className="min-w-0 flex-1 truncate font-medium">
-                    {p.name}
-                  </span>
-                  {p.record ? (
-                    <span
-                      title={`Inhouse record ${p.record.wins}-${p.record.losses}`}
-                      className="text-xs tabular-nums text-muted"
+                  <button
+                    type="button"
+                    disabled={!pickable}
+                    aria-pressed={isSel}
+                    aria-label={`Select ${p.name} to draft`}
+                    onClick={() => setSelected(isSel ? null : p.userId)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                      pickable ? "" : "cursor-default",
+                    )}
+                  >
+                    <Avatar name={p.name} src={p.avatar} size={26} />
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {p.name}
+                    </span>
+                    {p.record ? (
+                      <span
+                        title={`Inhouse record ${p.record.wins}-${p.record.losses}`}
+                        className="text-xs tabular-nums text-muted"
+                      >
+                        {p.record.wins}-{p.record.losses}
+                      </span>
+                    ) : null}
+                    <RankBadge rankTier={p.rankTier} />
+                    {p.mmr > 0 ? (
+                      <span className="text-xs text-muted tabular-nums">
+                        {p.mmr}
+                      </span>
+                    ) : null}
+                  </button>
+                  {isSel && pickable ? (
+                    // The same pick action as ever; only its place moved.
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => act({ action: "pick", userId: p.userId })}
+                      aria-label={
+                        me.isOnClock
+                          ? `Draft ${p.name}`
+                          : `Admin: draft ${p.name} for ${lobby.onClockCaptain?.name ?? "the current captain"}`
+                      }
+                      className={buttonClasses("accent", "sm", "mr-1.5 shrink-0")}
                     >
-                      {p.record.wins}-{p.record.losses}
-                    </span>
+                      Draft
+                    </button>
                   ) : null}
-                  <RankBadge rankTier={p.rankTier} />
-                  {p.mmr > 0 ? (
-                    <span className="text-xs text-muted tabular-nums">
-                      {p.mmr}
-                    </span>
-                  ) : null}
-                </button>
+                </div>
               );
             })}
             {lobby.pool.length === 0 ? (
@@ -2261,25 +2296,6 @@ function DraftView({
               </p>
             ) : null}
           </div>
-          {me.canPick ? (
-            <div className="border-t border-line p-3">
-              <button
-                disabled={pending || !selected}
-                onClick={() =>
-                  selected && act({ action: "pick", userId: selected })
-                }
-                className={buttonClasses("accent", "md", "w-full")}
-              >
-                {selected
-                  ? me.isOnClock
-                    ? `Draft ${lobby.pool.find((p) => p.userId === selected)?.name ?? ""}`
-                    : `Admin: draft ${lobby.pool.find((p) => p.userId === selected)?.name ?? ""} for ${lobby.onClockCaptain?.name ?? "the current captain"}`
-                  : me.isOnClock
-                    ? "Select a player to draft"
-                    : `Select a player to draft for ${lobby.onClockCaptain?.name ?? "the current captain"}`}
-              </button>
-            </div>
-          ) : null}
         </div>
 
         <div className="min-w-0 lg:order-1">

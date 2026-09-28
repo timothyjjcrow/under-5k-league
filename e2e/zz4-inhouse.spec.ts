@@ -191,10 +191,15 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Now it's the observer's turn — pick through the real UI.
   await expect(page.getByText("Your pick").first()).toBeVisible();
   await captureRoom(page, "draft");
-  await page
+  // Tapping a player puts the Draft button on that same row.
+  await expect(page.getByRole("button", { name: /^Draft / })).toHaveCount(0);
+  const firstRow = page
     .getByRole("button", { name: /^Select .* to draft$/ })
-    .first()
-    .click();
+    .first();
+  await firstRow.click();
+  await expect(
+    firstRow.locator("..").getByRole("button", { name: /^Draft / }),
+  ).toBeVisible();
   await page.getByRole("button", { name: /^Draft / }).click();
 
   // Administrators have a browser recovery control for a captain whose tab is
