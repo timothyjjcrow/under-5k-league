@@ -5,7 +5,6 @@ import { getSessionUser } from "@/lib/auth";
 import { shareMetadata } from "@/lib/share-metadata";
 import { SteamJoin } from "@/components/steam-sign-in";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { SOFT_MMR_LIMIT } from "@/lib/constants";
 import { eligibilityText, howItWorksAction } from "@/lib/how-it-works";
 import { seasonMatchNightLabel } from "@/lib/match-night";
 import {
@@ -156,7 +155,10 @@ export default async function HowItWorksPage() {
             <div className="min-w-0">
               <dt className="font-semibold">Who can join</dt>
               <dd className="mt-1 leading-relaxed text-muted">
-                {eligibilityText(season ? season.maxMmr : SOFT_MMR_LIMIT)}
+                {/* Between seasons there is no review threshold to quote:
+                    each season sets its own, so only the hard ceiling,
+                    which never changes, is stated. */}
+                {eligibilityText(season?.maxMmr ?? 0)}
               </dd>
             </div>
             <div className="min-w-0">

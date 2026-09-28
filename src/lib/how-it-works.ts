@@ -5,7 +5,8 @@ import { joinSeasonCta } from "./site-nav";
 
 /**
  * Who can join, in one or two sentences. `softLimit` is the season's review
- * threshold (`Season.maxMmr`; 0 = none). Only the hard ceiling turns anyone
+ * threshold (`Season.maxMmr`; 0 = none, and also what to pass between
+ * seasons, when the next season's threshold isn't known yet). Only the hard ceiling turns anyone
  * away, and a Divine 3 or higher medal is over it whatever MMR is typed
  * (`registrationGate`).
  */
