@@ -18,6 +18,7 @@ import {
   TEAM_IDENTITY_PING_THROTTLE_SECONDS,
   teamIdentityNotPostedMessage,
   teamIdentityPingKey,
+  teamIdentityPostIsThrottled,
   teamIdentitySummary,
 } from "@/lib/team-identity";
 import { logAdminAction } from "@/lib/admin-log";
@@ -34,10 +35,12 @@ function refreshGames() {
 }
 
 /**
- * Post a change to the league channel. A captain's posts are throttled per
- * team (an admin's never are); false means this one was held back. A
- * throttle-store failure posts anyway: the save is committed, and missing
- * the announcement is worse than an occasional extra one.
+ * Post a change to the league channel. Every rename posts. A captain's
+ * logo-only change is throttled per team (an admin's never is); false means
+ * this one was held back. A captain's rename still stamps the throttle, so a
+ * run of logo tweaks right after it stays quiet. A throttle-store failure
+ * posts anyway: the save is committed, and missing the announcement is worse
+ * than an occasional extra one.
  */
 async function announceIdentityChange(saved: SavedTeamIdentity): Promise<boolean> {
   if (saved.byCaptain) {
@@ -51,7 +54,7 @@ async function announceIdentityChange(saved: SavedTeamIdentity): Promise<boolean
     } catch {
       claimed = true;
     }
-    if (!claimed) return false;
+    if (!claimed && teamIdentityPostIsThrottled(saved)) return false;
   }
   await sendDiscordMessage(teamIdentityChangedMessage(saved));
   return true;
@@ -78,7 +81,7 @@ export async function editTeamIdentity(
   if (saved.nameChanged || saved.logoChanged) {
     // Captain edits land in the same activity log as admin ones, under the
     // same key, so "who renamed this team?" has one answer. Every change is
-    // logged, even one the Discord throttle holds back.
+    // logged, even a logo change the Discord throttle holds back.
     await logAdminAction({
       action: "renameTeam",
       summary: teamIdentitySummary(saved),

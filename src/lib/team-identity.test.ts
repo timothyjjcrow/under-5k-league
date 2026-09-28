@@ -6,6 +6,7 @@ import {
   defaultTeamName,
   logoPreviewNote,
   normalizeTeamName,
+  teamIdentityPostIsThrottled,
   teamIdentitySummary,
   teamNameKey,
   TEAM_NAME_MAX_LENGTH,
@@ -139,6 +140,18 @@ describe("teamIdentitySummary", () => {
         logoChanged: true,
       }),
     ).toBe(`Set "Radiant Raccoons" to the generated crest`);
+  });
+});
+
+describe("teamIdentityPostIsThrottled", () => {
+  it("never holds back a rename, from a captain or an admin", () => {
+    expect(teamIdentityPostIsThrottled({ byCaptain: true, nameChanged: true })).toBe(false);
+    expect(teamIdentityPostIsThrottled({ byCaptain: false, nameChanged: true })).toBe(false);
+  });
+
+  it("throttles only a captain's change that keeps the name", () => {
+    expect(teamIdentityPostIsThrottled({ byCaptain: true, nameChanged: false })).toBe(true);
+    expect(teamIdentityPostIsThrottled({ byCaptain: false, nameChanged: false })).toBe(false);
   });
 });
 

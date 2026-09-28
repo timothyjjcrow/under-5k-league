@@ -76,10 +76,12 @@ export type TeamIdentityChange = {
 };
 
 /**
- * A captain's name and logo changes post to the league channel at most once
- * per team in this window. Every change is still saved and logged; this only
- * stops a captain trying names back and forth from flooding the channel and
- * using up the webhook's rate limit, which other announcements share.
+ * A captain's logo-only changes post to the league channel at most once per
+ * team in this window. Renames are never held back: the league announces
+ * every rename, from a captain or an admin. Every change is still saved and
+ * logged; this only stops a captain trying logos back and forth from flooding
+ * the channel and using up the webhook's rate limit, which other
+ * announcements share.
  */
 export const TEAM_IDENTITY_PING_THROTTLE_SECONDS = 15 * 60;
 
@@ -87,10 +89,21 @@ export function teamIdentityPingKey(teamId: string): string {
   return `teamIdentityPing:${teamId}`;
 }
 
-/** The toast for a save whose Discord post was held back by the throttle. */
+/**
+ * Whether the post for this change waits on the throttle. Only a captain's
+ * change that keeps the name does; a rename always posts, and so does
+ * anything an admin saves.
+ */
+export function teamIdentityPostIsThrottled(
+  change: Pick<TeamIdentityChange, "byCaptain" | "nameChanged">,
+): boolean {
+  return change.byCaptain && !change.nameChanged;
+}
+
+/** The toast for a logo change whose Discord post was held back by the throttle. */
 export function teamIdentityNotPostedMessage(name: string): string {
   const minutes = Math.round(TEAM_IDENTITY_PING_THROTTLE_SECONDS / 60);
-  return `Saved ${name}. Discord already heard about a change to this team in the last ${minutes} minutes, so this one wasn't posted there.`;
+  return `Saved ${name}. Discord already heard about a change to this team in the last ${minutes} minutes, so this logo change wasn't posted there.`;
 }
 
 /** One activity-log line naming what changed, old name first. */
