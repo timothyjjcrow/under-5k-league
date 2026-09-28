@@ -85,13 +85,13 @@ import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import { DiscordSetupPrompt } from "@/components/discord-setup";
 import {
-  AUTO_SYNC,
   DISCORD_INVITE_URL,
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
   GAME_SERVER_REGION,
   REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
 } from "@/lib/constants";
 import { pickemControlFor, predictionOpen } from "@/lib/pickem";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
@@ -120,6 +120,7 @@ import { announcedMatchNight } from "@/lib/match-night";
 import { firstMedia } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
 import { rosterOrder } from "@/lib/team-roster";
+import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
 import {
   DRAFT_READINESS,
   draftReadiness,
@@ -565,9 +566,14 @@ export default async function Home() {
       >
         <MyNextMatch
           seasonId={season.id}
+          seasonStatus={season.status}
           userId={user.id}
-          playoffRounds={playoffTotalRounds(matches)}
-          byeMatches={season.status === "REGULAR_SEASON" ? matches : []}
+          matches={matches}
+          teams={snapshot.teams}
+          standin={
+            isActiveReg &&
+            snapshot.myReg?.type === REGISTRATION_TYPE.STANDIN
+          }
         />
       </Suspense>
     ) : season.status === "SIGNUPS" && isActiveReg && !draftRoomSoon ? (
@@ -833,88 +839,136 @@ async function LeagueNews() {
   );
 }
 
-// The signed-in player's next unplayed match with one-click check-in — the
-// thing a rostered player most wants from the home page mid-season.
+// The signed-in league member's panel in the hero mid-season: their next
+// unplayed match with one-click check-in, the thing a rostered player most
+// wants from the home page, and otherwise what is actually true for them.
 async function MyNextMatch({
   seasonId,
+  seasonStatus,
   userId,
-  playoffRounds,
-  byeMatches,
+  matches,
+  teams,
+  standin,
 }: {
   seasonId: string;
+  seasonStatus: string;
   userId: string;
-  /** playoffTotalRounds of the season, so a playoff fixture reads "Semifinal". */
-  playoffRounds: number;
-  /** The season's matches while a regular week can be a bye; else empty. */
-  byeMatches: Match[];
+  /** The season's matches, as Home already read them. */
+  matches: Match[];
+  teams: SeasonSnapshot["teams"];
+  /** The viewer has an ACTIVE standin registration. */
+  standin: boolean;
 }) {
-  const myTeams = await prisma.teamMember.findMany({
-    where: { seasonId, userId },
-    select: { teamId: true, team: { select: { withdrawn: true } } },
+  const teamById = new Map(teams.map((t) => [t.id, t]));
+  const rosterTeams = teams.filter((t) =>
+    t.members.some((m) => m.userId === userId),
+  );
+  // Assigned standins are participants too: without their bookings they'd
+  // get no check-in prompt anywhere but the match page itself. The covered
+  // player's bookings say when someone else has their seat.
+  const bookings = await prisma.standinAssignment.findMany({
+    where: {
+      match: { seasonId },
+      OR: [{ standinUserId: userId }, { replacingUserId: userId }],
+    },
+    select: {
+      matchId: true,
+      teamId: true,
+      standinUserId: true,
+      replacingUserId: true,
+      standin: { select: { name: true } },
+    },
   });
-  const teamIds = myTeams.map((t) => t.teamId);
-
-  // Assigned standins are participants too — without this they'd get no
-  // check-in prompt anywhere but the match page itself.
-  // A check-in answers for an exact future match night. LIVE, untimed and
-  // stale-unreported fixtures remain visible elsewhere, but none can become
-  // the player's primary RSVP prompt.
   // Async server component: Date.now is request-time state, not render replay.
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
-  const freshFrom = new Date(nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000);
+  const { next, live, covered, idle, teamId } = myMatchPanel({
+    userId,
+    seasonStatus,
+    rosterTeamIds: rosterTeams.map((t) => t.id),
+    withdrawnTeamIds: new Set(
+      rosterTeams.filter((t) => t.withdrawn).map((t) => t.id),
+    ),
+    standin,
+    matches,
+    bookings,
+    nowMs,
+  });
+  const playoffRounds = playoffTotalRounds(matches);
+  const teamNameOf = (id: string) => teamById.get(id)?.name ?? "?";
   // A team resting this week is told so before the match after it, instead
   // of the panel jumping silently to a fixture a week away.
-  const playingTeam = myTeams.find((t) => !t.team.withdrawn);
-  const byeWeek = playingTeam
-    ? teamByeWeek(byeMatches, playingTeam.teamId, nowMs)
-    : null;
-  const byeNote =
-    byeWeek != null ? <ByeWeekNote week={byeWeek} who="Your team" /> : null;
-  const mine = {
-    seasonId,
-    status: "SCHEDULED" as const,
-    scheduledAt: { gte: freshFrom },
-    OR: [
-      ...(teamIds.length
-        ? [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }]
-        : []),
-      { standins: { some: { standinUserId: userId } } },
-    ],
-  };
-  // Chronological, not week order — an accepted reschedule can legally move a
-  // match past the next week's night, and the banner should point at whatever
-  // actionable fixture plays first.
-  const order = [
-    { scheduledAt: { sort: "asc" as const, nulls: "last" as const } },
-    { week: "asc" as const },
-    { createdAt: "asc" as const },
-  ];
-  const candidates = await prisma.match.findMany({
-    where: mine,
-    orderBy: order,
-    include: { homeTeam: true, awayTeam: true, standins: true },
-  });
-  // A named standin replaces the roster seat for this match. The replaced
-  // player must not get a success toast for an RSVP that every readiness count
-  // intentionally ignores; the assigned standin gets the prompt instead.
-  const next = candidates.find((match) => {
-    if (match.standins.some((a) => a.standinUserId === userId)) return true;
-    const rosterTeamId = teamIds.find(
-      (id) => id === match.homeTeamId || id === match.awayTeamId,
-    );
-    if (!rosterTeamId) return false;
-    return !match.standins.some(
-      (a) => a.teamId === rosterTeamId && a.replacingUserId === userId,
-    );
-  });
-  // The hero's control slot must never be an empty 23rem column, so an
-  // unrostered viewer (or a player whose season is done) gets the spectator
-  // form of the same thing rather than nothing at all.
-  if (!next && byeNote) {
+  const byeWeek =
+    teamId && seasonStatus === "REGULAR_SEASON"
+      ? teamByeWeek(matches, teamId, nowMs)
+      : null;
+  const notes = (
+    <>
+      {byeWeek != null ? <ByeWeekNote week={byeWeek} who="Your team" /> : null}
+      {live ? (
+        // A series being played is not the check-in (the match page has its
+        // own "ready for the next game"), so it is a link, above the prompt.
+        <Link
+          href={`/matches/${live.match.id}`}
+          className="group flex items-center gap-3 rounded-[var(--radius)] border border-danger/40 bg-danger/10 px-4 py-3 text-sm"
+        >
+          <span
+            aria-hidden
+            className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
+          />
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <span className="font-medium">Your series is live</span>{" "}
+            <span className="text-muted">
+              ·{" "}
+              {live.teamId === live.match.homeTeamId
+                ? `${live.match.homeScore}–${live.match.awayScore}`
+                : `${live.match.awayScore}–${live.match.homeScore}`}{" "}
+              vs{" "}
+              {teamNameOf(
+                live.teamId === live.match.homeTeamId
+                  ? live.match.awayTeamId
+                  : live.match.homeTeamId,
+              )}
+            </span>
+          </span>
+          <span className="shrink-0 text-info group-hover:underline">
+            Match page <LinkArrow />
+          </span>
+        </Link>
+      ) : null}
+      {covered ? (
+        <Link
+          href={`/matches/${covered.match.id}`}
+          className="group flex items-start gap-3 rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm"
+        >
+          <span className="shrink-0 rounded bg-surface-2 px-2 py-0.5 text-xs font-semibold text-muted">
+            Covered
+          </span>
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <span className="font-medium">
+              {matchRoundLabel(covered.match, playoffRounds)}:
+            </span>{" "}
+            <span className="text-muted">
+              {covered.booking.standin.name} is standing in for you.
+            </span>
+          </span>
+          <span className="shrink-0 text-info group-hover:underline">
+            <LinkArrow />
+          </span>
+        </Link>
+      ) : null}
+    </>
+  );
+
+  // The hero's control slot must never be an empty 23rem column, so every
+  // branch below renders something.
+  if (!next && (live || covered)) {
+    return <div className="space-y-2">{notes}</div>;
+  }
+  if (!next && byeWeek != null) {
     return (
       <div className="space-y-2">
-        {byeNote}
+        {notes}
         <Link
           href="/schedule#fixtures"
           className={buttonClasses("secondary", "sm", "w-full")}
@@ -925,23 +979,26 @@ async function MyNextMatch({
     );
   }
   if (!next) {
+    const onlyFinalLeft =
+      matches.some((m) => m.phase === "FINAL" && m.status !== "COMPLETED") &&
+      !matches.some((m) => m.phase === "PLAYOFF" && m.status !== "COMPLETED");
+    const copy = idleCopy(idle, onlyFinalLeft);
     return (
       <Card className="p-4 text-sm">
-        <div className="font-medium">No match of your own coming up</div>
-        <p className="mt-1 text-muted">
-          You&apos;re not on a roster for an upcoming fixture — the week&apos;s
-          games are still worth watching.
-        </p>
+        <div className="font-medium">{copy.title}</div>
+        <p className="mt-1 text-muted">{copy.text}</p>
         <Link
-          href="/schedule#fixtures"
+          href={copy.href}
           className={buttonClasses("secondary", "sm", "mt-3 w-full")}
         >
-          See this week&apos;s schedule <LinkArrow />
+          {copy.cta} <LinkArrow />
         </Link>
       </Card>
     );
   }
 
+  const homeTeam = teamById.get(next.homeTeamId);
+  const awayTeam = teamById.get(next.awayTeamId);
   const [myRsvp, pendingReschedule] = await Promise.all([
     prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: next.id, userId }, scheduleRevision: next.scheduleRevision },
@@ -958,24 +1015,22 @@ async function MyNextMatch({
   const awaitingMyAnswer =
     !!pendingReschedule &&
     pendingReschedule.proposedById !== userId &&
-    (next.homeTeam.captainId === userId || next.awayTeam.captainId === userId);
+    (homeTeam?.captainId === userId || awayTeam?.captainId === userId);
 
   return (
     <div className="space-y-2">
-      {byeNote}
+      {notes}
       <CheckinBanner
         variant="panel"
         eyebrow={`Your next match · ${matchRoundLabel(next, playoffRounds, { bestOf: true })}`}
         matchId={next.id}
         scheduleRevision={next.scheduleRevision}
-        remainingGames={next.status === "LIVE"}
-        heading={`${next.homeTeam.name} vs ${next.awayTeam.name}`}
+        heading={`${teamNameOf(next.homeTeamId)} vs ${teamNameOf(next.awayTeamId)}`}
         when={fmtWhen(next.scheduledAt)}
         whenTs={next.scheduledAt?.getTime()}
         myRsvp={myRsvp?.status ?? null}
         viewerIsCaptain={
-          next.homeTeam.captainId === userId ||
-          next.awayTeam.captainId === userId
+          homeTeam?.captainId === userId || awayTeam?.captainId === userId
         }
         detailsHref={`/matches/${next.id}`}
       />
@@ -1003,6 +1058,82 @@ async function MyNextMatch({
       ) : null}
     </div>
   );
+}
+
+/** What the hero's panel says when there is nothing to check in for. */
+function idleCopy(
+  idle: PanelIdle,
+  onlyFinalLeft: boolean,
+): { title: string; text: string; href: string; cta: string } {
+  const schedule = { href: "/schedule#fixtures", cta: "See the schedule" };
+  const bracket = { href: "/schedule#playoff-bracket", cta: "See the bracket" };
+  switch (idle) {
+    case "no-fixtures":
+      return {
+        title: "Fixtures are coming soon",
+        text: "Your team's schedule hasn't been published yet.",
+        ...schedule,
+      };
+    case "games-played":
+      return {
+        title: "Your regular season is done",
+        text: "Your team has played every regular-season fixture.",
+        href: "/schedule#standings",
+        cta: "See the standings",
+      };
+    case "no-upcoming":
+      return {
+        title: "Nothing to check in for yet",
+        text: "Your team's next match has no kickoff time yet, or its result is still coming in.",
+        ...schedule,
+      };
+    case "bracket-pending":
+      return {
+        title: "The playoff bracket is on its way",
+        text: "Playoff fixtures show here once the bracket is drawn.",
+        href: "/schedule#playoff-bracket",
+        cta: "See the playoff schedule",
+      };
+    case "through":
+      return {
+        title: "You're through",
+        text: "Your next round is drawn once the other series finish.",
+        ...bracket,
+      };
+    case "champion":
+      return {
+        title: "Champions",
+        text: "Your team won the final.",
+        ...bracket,
+      };
+    case "season-over":
+      return {
+        title: "Your season is over",
+        text: "Thanks for playing. The playoffs go on without you.",
+        href: "/schedule#playoff-bracket",
+        cta: onlyFinalLeft ? "Follow the final" : "Follow the playoffs",
+      };
+    case "withdrawn":
+      return {
+        title: "Your team has withdrawn",
+        text: "Its remaining fixtures were forfeited. The rest of the league is still worth watching.",
+        ...schedule,
+      };
+    case "standin-list":
+      return {
+        title: "You're on the standin list",
+        text: "No booking yet. Captains book standins from a match page when they need cover.",
+        href: "/schedule#fixtures",
+        cta: "See this week's schedule",
+      };
+    default:
+      return {
+        title: "No match of your own coming up",
+        text: "You're not on a team this season. The week's games are still worth watching.",
+        href: "/schedule#fixtures",
+        cta: "See this week's schedule",
+      };
+  }
 }
 
 // ---------- Hero ----------
