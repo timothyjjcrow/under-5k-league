@@ -2339,7 +2339,11 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
             </colgroup>
             <thead className="text-xs text-muted">
               <tr className="border-b border-line">
-                <th scope="col" className="px-4 py-2 text-left font-medium">
+                <th
+                  scope="col"
+                  id="draft-roster-col-team"
+                  className="px-4 py-2 text-left font-medium"
+                >
                   Team
                 </th>
                 <th scope="col" className="px-2 py-2 text-right font-medium">
@@ -2352,12 +2356,21 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
                 ) : null}
               </tr>
             </thead>
-            <tbody className="divide-y divide-line-soft">
-              {teams.map((t) => (
-                <tr key={t.id} className="align-top">
+            {/* One row group per team. The row header is the team alone: the
+                roster sits in its own cell below it (Seats and Budget span
+                both rows), so a screen reader names each cell by the team,
+                not by the whole roster. The roster cell points back at the
+                team and the Team column with `headers`. */}
+            {teams.map((t, i) => (
+              <tbody
+                key={t.id}
+                className={i > 0 ? "border-t border-line-soft" : undefined}
+              >
+                <tr className="align-top">
                   <th
                     scope="row"
-                    className="min-w-0 px-4 py-3 text-left font-normal"
+                    id={`draft-roster-${t.id}`}
+                    className="min-w-0 px-4 pt-3 text-left font-normal"
                   >
                     <Link
                       href={`/teams/${t.id}`}
@@ -2374,41 +2387,49 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
                         {t.name}
                       </span>
                     </Link>
-                    {/* leading-7: two wrapped lines of tap-safe links must not
-                        overlap each other. */}
-                    <p className="mt-1 leading-7 text-muted [overflow-wrap:anywhere]">
-                      {rosterOrder(t.members).map((m, i) => (
-                        <Fragment key={m.id}>
-                          {i > 0 ? ", " : null}
-                          <PlayerLink userId={m.userId} className="text-fg">
-                            {m.user.name}
-                          </PlayerLink>
-                          {m.isCaptain ? (
-                            <span
-                              title="Captain"
-                              className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-accent/40 bg-accent/15 px-1 align-middle text-[11px] font-semibold text-accent"
-                            >
-                              <span aria-hidden>C</span>
-                              <span className="sr-only">captain</span>
-                            </span>
-                          ) : budgetsSet ? (
-                            <span className="text-xs"> ${m.price}</span>
-                          ) : null}
-                        </Fragment>
-                      ))}
-                    </p>
                   </th>
-                  <td className="px-2 py-3 text-right tabular-nums">
+                  <td rowSpan={2} className="px-2 py-3 text-right tabular-nums">
                     {t.members.length}/{season.teamSize}
                   </td>
                   {budgetsSet ? (
-                    <td className="px-4 py-3 text-right tabular-nums">
+                    <td
+                      rowSpan={2}
+                      className="px-4 py-3 text-right tabular-nums"
+                    >
                       ${t.budget}
                     </td>
                   ) : null}
                 </tr>
-              ))}
-            </tbody>
+                <tr className="align-top">
+                  {/* leading-7: two wrapped lines of tap-safe links must not
+                      overlap each other. */}
+                  <td
+                    headers={`draft-roster-col-team draft-roster-${t.id}`}
+                    className="min-w-0 px-4 pt-1 pb-3 leading-7 text-muted [overflow-wrap:anywhere]"
+                  >
+                    {rosterOrder(t.members).map((m, j) => (
+                      <Fragment key={m.id}>
+                        {j > 0 ? ", " : null}
+                        <PlayerLink userId={m.userId} className="text-fg">
+                          {m.user.name}
+                        </PlayerLink>
+                        {m.isCaptain ? (
+                          <span
+                            title="Captain"
+                            className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded border border-accent/40 bg-accent/15 px-1 align-middle text-[11px] font-semibold text-accent"
+                          >
+                            <span aria-hidden>C</span>
+                            <span className="sr-only">captain</span>
+                          </span>
+                        ) : budgetsSet ? (
+                          <span className="text-xs"> ${m.price}</span>
+                        ) : null}
+                      </Fragment>
+                    ))}
+                  </td>
+                </tr>
+              </tbody>
+            ))}
           </table>
         </CardBody>
       </Card>
