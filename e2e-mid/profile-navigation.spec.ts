@@ -34,7 +34,9 @@ test("player match history has a reloadable section link without changing career
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/players");
+  // Start from a leaderboard so the profile belongs to someone with league
+  // games: the Matches section only exists once there are games to list.
+  await page.goto("/leaders");
   await page
     .locator('#main a[href^="/players/"]:not([href*="compare"])')
     .first()

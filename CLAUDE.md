@@ -28,7 +28,11 @@ per-phase or offseason so unused features stay hidden.
   on the next poll/action (no cron/websocket).
 - **Mutations**: server actions in `src/app/actions/*` (forms) and JSON route
   handlers in `src/app/api/draft/*` (the live draft).
-- **Auth**: `src/lib/auth.ts` (jose-signed cookie session), `steam.ts` (OpenID
+- **Auth**: `src/lib/auth.ts` (jose-signed cookie session; the token itself
+  lives in `session-token.ts`, DB-free). Sessions SLIDE: `src/proxy.ts`
+  re-issues a week-old cookie on GET page loads with the same uid, epoch and
+  sign-in time (180-day absolute cap), so an epoch bump still revokes it and
+  the admin allowlist is still re-read per request. `steam.ts` (OpenID
   2.0), `users.ts` (upsert + `resolveRole`). Dev/mock login: `/api/auth/dev`
   (gated by `ALLOW_DEV_LOGIN`). Admin: `ADMIN_STEAM_IDS` is authoritative
   (exactly those SteamID64s are admin; others demoted on login), and production
@@ -38,7 +42,9 @@ per-phase or offseason so unused features stay hidden.
   reconciles existing accounts to the allowlist in one shot. Steam name/avatar
   come from `fetchSteamProfile`/`fetchSteamProfiles` (GetPlayerSummaries, needs
   `STEAM_API_KEY`) — set on login, bulk-refreshed via admin `syncSteamProfiles`,
-  and per-user via profile `refreshSteamProfile`. `<Avatar>` falls back to
+  and per-user via /me's one "Refresh my Steam & Dota info" button
+  (`refreshMyAccounts`, which runs `refreshSteamProfile`'s and `refreshRank`'s
+  halves side by side, each under its own cooldown). `<Avatar>` falls back to
   initials when `avatar` is null.
 - **UI kit**: `src/components/ui.tsx` (server-safe presentational components).
   `site-header.tsx` and `draft-room.tsx` are `"use client"`.
@@ -512,7 +518,9 @@ has to justify it.
 - **The signed-up-but-unlinked prompt** (`src/components/discord-setup.tsx`):
   linking used to be offered in exactly ONE place — a card partway down `/me`
   — while the invite had six. `DiscordSetupPrompt` renders on the dashboard
-  (and `DiscordSetupCard` at the top of `/me`) for a viewer who is ACTIVE in
+  (on `/me` the season card now comes first and its derived "You're signed
+  up. Next:" list, `accountNextSteps` in `src/lib/account-page.ts`, points
+  at the Discord card instead) for a viewer who is ACTIVE in
   the season and has no `discordId`, and is phase-independent on purpose: a
   player who signs up during SIGNUPS is still unreachable in week 4. It is
   DERIVED state, never a dismissible flag — a nag that can be dismissed
@@ -540,10 +548,14 @@ has to justify it.
   TTLs (member 5min, everything else 30s) because a non-member is mid-fix and
   the nag must notice their join fast — and /me's live read calls
   `primeMembershipMemo` so the dashboard can't contradict the profile page.
-  Surfaces: /me's Discord card is three-state (In the server ✓ / Rules pending
-  / Not in the server + a durable CTA strip; the one-shot `?discord=` join
-  button renders only when `membership === null` so two CTAs never stack);
-  `DiscordJoinCard` renders on the dashboard via `DiscordSetupPrompt` for
+  Surfaces: /me has ONE Discord card (`AccountDiscordCard`,
+  `src/components/account-discord-card.tsx`) whose badge and single primary
+  button follow the state (not linked / Not in the server / Rules pending /
+  In the server ✓, plain "Linked ✓" for unknown); the buttons come from pure
+  `discordCardCtas` (`src/lib/account-page.ts`, tested), and the one-shot
+  `?discord=` join button appears only when `membership === null`, so two
+  CTAs never stack; `DiscordJoinCard` renders on the dashboard via
+  `DiscordSetupPrompt` for
   linked-but-not-in/pending ACTIVE players (unknown renders NOTHING); the
   admin card's `getDiscordReachFunnel` extends the reach line with
   in-server/pending/missing/unknown — **unknown is its own count, never lumped
@@ -582,16 +594,21 @@ has to justify it.
     sweep deadline both sit on top of this). The stand-in tests enforce their
     own bucket server-side, so the exact request COUNT is what proves the
     pacing, not just the outcome.
-  - **The join CTAs carry three DISTINCT names on purpose** ("Join the
-    server" = one-click re-OAuth in `DiscordJoinCard`; "Use the invite
-    instead" beside it; "Join via the invite" in /me's strip — and the pending
-    strip says "Open Discord" vs the card's "Open the server"). Two rules
+  - **The join CTAs carry DISTINCT names on purpose** ("Join the server" =
+    one-click re-OAuth; "Use the invite instead" beside it, on the dashboard's
+    `DiscordJoinCard` and on /me's card alike; a pending member gets "Open
+    the server" on the dashboard and "Open Discord" on /me). Two rules
     collide here: one-control-one-name, and **a broken auto-join must always
     leave an invite path visible** — re-OAuth alone bounces a player whose
     join 403s (bot missing CREATE_INSTANT_INVITE, mismatched app) through
-    consent back to the same card forever.
-  - **The live membership answer beats the `?discord=` param** (`/me`'s
-    `discordNoteResolved`): the note was minted by the CALLBACK, and a player
+    consent back to the same card forever. /me's card pins both with a
+    render test (`account-discord-card.test.ts`: no two controls share a
+    name in any state, and the invite sits beside every one-click button).
+    The typed handle there lives behind a "Can't link? Type your handle"
+    disclosure, shown openly only where linking isn't configured.
+  - **The live membership answer beats the `?discord=` param** (pure
+    `discordLinkNote` in `account-page.ts`, tested): the note was minted by
+    the CALLBACK, and a player
     who was already in the server when the auto-join 403'd otherwise reads
     "we couldn't add you — join it with the button below" under an
     "In the server ✓" badge, with no such button on the page.
@@ -651,9 +668,10 @@ has to justify it.
     claimed. When copy follows a JSX expression onto a new source line, use
     the quoted-string form — the plain leading space is line-trimmed
     ("(@gone4)isn't"); this has now bitten three times.
-    COVERAGE LIMIT (stated, not hidden): the three-state /me card, the
-    dashboard join nag and the note-resolution are server-rendered JSX with no
-    automated render test (no jsdom; e2e has no bot env) — the lib layer under
+    COVERAGE LIMIT (stated, not hidden): the dashboard join nag is
+    server-rendered JSX with no automated render test (no jsdom; e2e has no
+    bot env); /me's card and its note resolution now have unit and
+    renderToStaticMarkup tests, but not against a live bot — the lib layer under
     them is fully itested, and they were verified in a real browser via the
     `discord-fixture` launch entry (port 3115): run
     `node scripts/discord-standin.mjs` (a stand-in Discord API on :4310 whose
@@ -662,9 +680,14 @@ has to justify it.
     `scripts/link-fixture-discord.ts` links fixture users to those ids; log in
     with `/api/auth/dev`.
 - **Player questionnaire**: `Registration.roles` (comma-sep position keys,
-  helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, `statement`,
-  `captainNote` — captured on `/me`, surfaced in the player pool and draft room
-  (`getDraftState` carries roles/heroes/note for the nominated player).
+  helpers + tests in `src/lib/roles.ts`), `favoriteHeroes`, and ONE "About
+  you (shown to captains)" box — captured on `/me`, surfaced in the player
+  pool and draft room (`getDraftState` carries roles/heroes/note for the
+  nominated player). The box replaced two (goals + captain note) but both
+  columns stay: new text is stored in `captainNote` and clears `statement`;
+  a box submitted unchanged leaves an old two-part row alone; every surface
+  shows old rows JOINED via `aboutText` (`src/lib/about-you.ts`), never one
+  part dropped.
 
 ## Automatic result sync (done)
 
@@ -2295,8 +2318,8 @@ renders byte-identical to the pre-feature page:
   `pubStatsFresh`); the toast reports "(N more next run)".
 - `PoolPlayer` stays FROZEN: everything rides `PoolScoutInfo`, one parallel
   record (the `PoolDraftInfo` precedent) carrying `{inhouse?, pub?,
-statement?}` — statement is the row quote's fallback when `captainNote` is
-  empty, sent only when it will render. Token/title text lives in
+statement?}` — an older signup's goals, sent only when they add to
+  `captainNote`; the row shows the two joined (`aboutText`). Token/title text lives in
   `player-pool.ts` (`inhouseToken`/`pubToken`/…) so the rows, the lg column
   and the hopefuls cards can never phrase the same fact differently.
   The component takes `now` (server epoch ms) so SSR and hydration compute

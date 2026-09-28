@@ -243,7 +243,7 @@ test("warm public statistics refresh on the first read after real admin correcti
       for (const key of ["records", "seasonRecords", "leaders"]) {
         expect(corrected[key].html, `${key} first response excludes the removed game's participant statistics`).not.toContain(playerLink(fixture.playerId));
       }
-      expect(corrected.player.html).toContain("No games recorded yet");
+      expect(corrected.player.html).toContain("No league games yet");
       expect(corrected.player.text).not.toContain("9999");
       expect(await originalMetaSample(corrected.meta)).toBe(`${Number(sample) - 1}`);
       await expect(corrected.scouting.page.getByRole("heading", { name: "Scouting report", exact: true })).toBeVisible();

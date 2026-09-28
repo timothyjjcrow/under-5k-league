@@ -10,6 +10,7 @@
 // looked, because every surface also renders in their own zone.
 
 import { LEAGUE_CONFIG } from "./league-config";
+import { zoneLabel } from "./zone-label";
 
 /** A formatter that exposes `timeZone`'s wall clock, field by field. */
 export function zoneFormatter(timeZone: string): Intl.DateTimeFormat {
@@ -102,39 +103,9 @@ export function epochToZonedDatetimeLocal(ms: number, timeZone: string): string 
     .slice(0, 16);
 }
 
-// The US zones have names players already use ("Pacific", "Eastern"); the
-// league-config label for the US night is "Pacific" for the same reason.
-const US_ZONE_NAMES: Record<string, string> = {
-  "America/Los_Angeles": "Pacific",
-  "America/Vancouver": "Pacific",
-  "America/Denver": "Mountain",
-  "America/Edmonton": "Mountain",
-  "America/Phoenix": "Arizona",
-  "America/Chicago": "Central",
-  "America/Winnipeg": "Central",
-  "America/New_York": "Eastern",
-  "America/Toronto": "Eastern",
-  "America/Detroit": "Eastern",
-  "America/Anchorage": "Alaska",
-  "Pacific/Honolulu": "Hawaii",
-};
-
-const REGION_PREFIX =
-  /^(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific)\//;
-
-/**
- * A zone in plain words: "Berlin time", "Pacific time". A zone with no city
- * in its id ("UTC", "Etc/GMT-1") falls back to the id itself.
- */
-export function zoneLabel(timeZone: string): string {
-  const known = US_ZONE_NAMES[timeZone];
-  if (known) return `${known} time`;
-  if (REGION_PREFIX.test(timeZone)) {
-    const city = timeZone.slice(timeZone.lastIndexOf("/") + 1).replace(/_/g, " ");
-    if (city) return `${city} time`;
-  }
-  return `${timeZone} time`;
-}
+// Plain-words zone names live in zone-label.ts (import-free, so
+// league-config can use them too); re-exported here for the admin forms.
+export { zoneLabel } from "./zone-label";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

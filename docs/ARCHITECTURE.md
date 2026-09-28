@@ -53,15 +53,18 @@ keyed on `steamId` (`src/lib/users.ts` — role from the authoritative
 unique administrator before deployment, while the atomic
 `bootstrapAdminSteamId` Setting claim is local-development fallback only),
 best-effort backfills the OpenDota rank medal (`ensureRankTier`), and mints a stateless
-jose HS256 JWT session cookie (`src/lib/auth.ts`, claims `{uid, ep}`, 30
-days). Production session and one-shot OAuth cookies use browser-enforced
+jose HS256 JWT session cookie (`src/lib/auth.ts` over `session-token.ts`,
+claims `{uid, ep, at}`, 30 days). `src/proxy.ts` re-issues a session more
+than a week old on GET page loads, keeping uid, epoch and the sign-in time
+`at`, and stops 180 days after sign-in, so active players stay signed in
+through a season. Production session and one-shot OAuth cookies use browser-enforced
 `__Host-` names (Secure, host-only, `Path=/`), preventing a sibling subdomain
 from tossing a competing identity/state cookie. The first hardened deployment
 therefore intentionally signs out sessions minted under the legacy name.
 Production `getSessionUser` re-evaluates the allowlist on every
 authenticated request, so removing an administrator revokes the existing
 cookie's authority on the next request instead of waiting for another login.
-There is no middleware: every page, action, and route calls
+The proxy never authorizes anything: every page, action, and route calls
 `getSessionUser`/`requireUser`/`requireAdmin` itself. Revocation is a global
 session epoch in the `Setting` table (`src/lib/session-epoch.ts`), bumped by
 the admin "revoke all sessions" action. A dev/mock login exists at

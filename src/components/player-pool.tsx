@@ -21,9 +21,11 @@ import {
 import { heroById } from "@/lib/heroes";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
-  filterAndSortPlayers,
+  filterPoolRows,
   inhouseTitle,
   inhouseToken,
+  lastSeasonTitle,
+  lastSeasonToken,
   pubHeroTitle,
   pubTitle,
   pubToken,
@@ -31,13 +33,17 @@ import {
   type PoolPlayer,
   type PoolScoutInfo,
   type PoolSort,
+  type PoolStatusFilter,
 } from "@/lib/player-pool";
-import { pubActivity } from "@/lib/pub-stats";
+import { pubLastPlayed } from "@/lib/pub-stats";
+import { aboutText } from "@/lib/about-you";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
 
 /** Which team drafted a player, keyed by userId (parallel to the frozen
- * PoolPlayer type). `price` is null for captains — no draft price shown. */
+ * PoolPlayer type). `price` is null for captains — no draft price shown.
+ * `captain` comes from the roster row, never from the price: a captain keeps
+ * a nonzero price after transferCaptaincy. */
 export type PoolDraftInfo = Record<
   string,
   {
@@ -45,10 +51,9 @@ export type PoolDraftInfo = Record<
     teamName: string;
     teamLogoUrl?: string | null;
     price: number | null;
+    captain?: boolean;
   }
 >;
-
-type PoolStatus = "all" | "drafted" | "free";
 
 /** The component's sort space: the shared lib's three, plus the pool-only
  *  inhouse ordering. Deliberately NOT added to PoolSort — that type is shared
@@ -60,14 +65,25 @@ const ROLE_KEYS: string[] = DOTA_ROLES.map((r) => r.key);
 
 export function PlayerPool({
   players,
+  standinIds,
   showDraftStatus,
+  captainSelectionOpen = false,
   draftInfo,
   scout,
   now,
   showContact = false,
 }: {
   players: PoolPlayer[];
+  /** Which rows are STANDIN registrations. A parallel list rather than a
+   *  PoolPlayer field: that shape is shared with the draft room, which never
+   *  lists standins. */
+  standinIds?: string[];
   showDraftStatus: boolean;
+  /** Captains are still being chosen (signups, or a draft not yet started).
+   *  "Wants captain" is a setup-time signal: once the auction starts the
+   *  volunteers who weren't picked stop wearing the badge, and the filter
+   *  chip goes with it. */
+  captainSelectionOpen?: boolean;
   draftInfo?: PoolDraftInfo;
   /** Per-player scouting extras (inhouse record, pub snapshot, goals quote) —
    *  a parallel record like draftInfo, so PoolPlayer stays frozen. */
@@ -83,6 +99,8 @@ export function PlayerPool({
   // Data-presence gates (the anyDrafted precedent — never season phase).
   // Computed before the state hooks: the sort seeding below reads anyInhouse.
   const anyInhouse = players.some((p) => !!scout?.[p.userId]?.inhouse);
+  const standinSet = useMemo(() => new Set(standinIds ?? []), [standinIds]);
+  const anyStandin = players.some((p) => standinSet.has(p.userId));
   const nowMs = now;
   const grid = rowGrid(anyInhouse);
   // Filter state seeds from the URL so a captain can SEND someone "the pos-1
@@ -105,11 +123,16 @@ export function PlayerPool({
     if (s === "inhouse") return anyInhouse ? "inhouse" : "mmr";
     return s && SORTS.includes(s as PoolSort) ? (s as PoolSort) : "mmr";
   });
+  // A stale ?cap=1 link after the draft starts must not filter invisibly:
+  // the chip that would show (and clear) it is gone by then.
   const [captainOnly, setCaptainOnly] = useState(
-    () => params.get("cap") === "1",
+    () => captainSelectionOpen && params.get("cap") === "1",
   );
-  const [status, setStatus] = useState<PoolStatus>(() => {
+  const [status, setStatus] = useState<PoolStatusFilter>(() => {
     const s = params.get("status");
+    // A shared ?status=standin link degrades like ?sort=inhouse when there is
+    // nobody to show, rather than filtering to an empty list with no chip.
+    if (s === "standin") return anyStandin ? "standin" : "all";
     return s === "drafted" || s === "free" ? s : "all";
   });
 
@@ -154,15 +177,19 @@ export function PlayerPool({
     // "inhouse" is a pool-only re-sort layered on the shared lib: filter with
     // the neutral mmr order, then band by inhouse record (ranked > provisional
     // > no games; the stable sort keeps the MMR order inside the tail band).
-    const base = filterAndSortPlayers(players, {
-      query,
-      role,
-      sort: sort === "inhouse" ? "mmr" : sort,
-      captainOnly,
-      status,
-    });
+    const base = filterPoolRows(
+      players,
+      {
+        query,
+        role,
+        sort: sort === "inhouse" ? "mmr" : sort,
+        captainOnly,
+        status,
+      },
+      standinSet,
+    );
     return sort === "inhouse" ? sortByInhouseRecord(base, scout ?? {}) : base;
-  }, [players, query, role, sort, captainOnly, status, scout]);
+  }, [players, query, role, sort, captainOnly, status, scout, standinSet]);
   const filtersActive =
     query !== "" || role !== null || captainOnly || status !== "all";
   // Sort is deliberately NOT reset: it's an ordering preference, not a filter,
@@ -231,39 +258,57 @@ export function PlayerPool({
           ))}
         </div>
 
-        <button
-          type="button"
-          onClick={() => setCaptainOnly((v) => !v)}
-          aria-pressed={captainOnly}
-          className={cn(
-            CHIP_BASE,
-            "h-11 px-3 sm:h-9",
-            captainOnly ? CHIP_ON : CHIP_OFF,
-          )}
-        >
-          Wants captain
-        </button>
+        {captainSelectionOpen ? (
+          <button
+            type="button"
+            onClick={() => setCaptainOnly((v) => !v)}
+            aria-pressed={captainOnly}
+            className={cn(
+              CHIP_BASE,
+              "h-11 px-3 sm:h-9",
+              captainOnly ? CHIP_ON : CHIP_OFF,
+            )}
+          >
+            Wants captain
+          </button>
+        ) : null}
 
-        {showDraftStatus && anyDrafted ? (
+        {(showDraftStatus && anyDrafted) || anyStandin ? (
           <div
             className="flex items-center gap-1"
             role="group"
-            aria-label="Filter by draft status"
+            aria-label="Filter by status"
           >
-            <StatusChip
-              active={status === "drafted"}
-              onClick={() =>
-                setStatus((s) => (s === "drafted" ? "all" : "drafted"))
-              }
-            >
-              Drafted
-            </StatusChip>
-            <StatusChip
-              active={status === "free"}
-              onClick={() => setStatus((s) => (s === "free" ? "all" : "free"))}
-            >
-              Free agents
-            </StatusChip>
+            {showDraftStatus && anyDrafted ? (
+              <>
+                <StatusChip
+                  active={status === "drafted"}
+                  onClick={() =>
+                    setStatus((s) => (s === "drafted" ? "all" : "drafted"))
+                  }
+                >
+                  Drafted
+                </StatusChip>
+                <StatusChip
+                  active={status === "free"}
+                  onClick={() =>
+                    setStatus((s) => (s === "free" ? "all" : "free"))
+                  }
+                >
+                  Free agents
+                </StatusChip>
+              </>
+            ) : null}
+            {anyStandin ? (
+              <StatusChip
+                active={status === "standin"}
+                onClick={() =>
+                  setStatus((s) => (s === "standin" ? "all" : "standin"))
+                }
+              >
+                Standins
+              </StatusChip>
+            ) : null}
           </div>
         ) : null}
 
@@ -275,7 +320,10 @@ export function PlayerPool({
         >
           <option value="mmr">Sort: MMR</option>
           {anyInhouse ? <option value="inhouse">Sort: Inhouse</option> : null}
-          <option value="rank">Sort: Rank</option>
+          {/* "Medal", not "Rank": the Inhouse column beside it shows ladder
+              ranks (#1), and this sorts by Dota medal. The value stays "rank"
+              so shared ?sort=rank links keep working. */}
+          <option value="rank">Sort: Medal</option>
           <option value="name">Sort: Name</option>
         </select>
       </div>
@@ -334,27 +382,27 @@ export function PlayerPool({
               <span className="hidden text-right lg:block">Inhouse</span>
             ) : null}
             <span>Roles</span>
-            <span className="hidden xl:block">Signature heroes</span>
-            <span className="text-right">
-              {showDraftStatus ? "Status" : "Notes"}
-            </span>
+            <span className="hidden xl:block">Favorite heroes</span>
+            <span className="text-right">Status</span>
           </div>
           <ul className="divide-y divide-line/60">
             {filtered.map((p) => {
               const sc = scout?.[p.userId];
               const ih = sc?.inhouse;
               const pub = sc?.pub;
-              const activity = pub
-                ? pubActivity(pub.lastPlayedAt, nowMs)
+              // Measured when the snapshot was taken, and only while it is
+              // recent: an old snapshot says nothing about last week.
+              const activity = pub ? pubLastPlayed(pub, nowMs) : null;
+              // One quote line per row: what they wrote about themselves.
+              // Signups made before the form had one "About you" box keep a
+              // captain note and goals; both show, joined, never one dropped.
+              const about = aboutText(
+                { captainNote: p.captainNote, statement: sc?.statement },
+                " · ",
+              );
+              const quote = about
+                ? { text: about, label: "About this player" }
                 : null;
-              // One quote line per row: the captain note (written TO captains)
-              // beats the player's own goals; the goals fill the slot when no
-              // note exists. `statement` is only sent when it would render.
-              const quote = hasText(p.captainNote)
-                ? { text: p.captainNote, label: "Note for captains" }
-                : sc?.statement
-                  ? { text: sc.statement, label: "Their goals" }
-                  : null;
               return (
                 <li
                   key={p.userId}
@@ -389,7 +437,19 @@ export function PlayerPool({
                     <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
                       {/* Facts before actions: the scouting tokens lead, the
                         outbound links follow. Plain text — no new tap targets
-                        on a line already carrying two. */}
+                        on a line already carrying two. The league's own
+                        history goes first: for a returning player it is the
+                        most direct evidence a captain has. */}
+                      {sc?.lastSeason ? (
+                        // Free text (season and team names), so it may break
+                        // anywhere rather than widen a phone row.
+                        <span
+                          className="min-w-0 tabular-nums [overflow-wrap:anywhere]"
+                          title={lastSeasonTitle(sc.lastSeason)}
+                        >
+                          {lastSeasonToken(sc.lastSeason)}
+                        </span>
+                      ) : null}
                       {ih ? (
                         <span
                           className="tabular-nums lg:hidden"
@@ -403,40 +463,46 @@ export function PlayerPool({
                           className="tabular-nums"
                           title={pubTitle(pub, nowMs)}
                         >
-                          {pubToken(pub)}
+                          {pubToken(pub, nowMs)}
                         </span>
                       ) : null}
                       {pub && pub.topHeroes.length > 0 ? (
-                        /* What they ACTUALLY play — the self-typed signature
+                        /* What they ACTUALLY play — the self-picked favorite
                          heroes live in their own column; these are OpenDota's
-                         lifetime most-played. role="img" + a spoken label per
-                         the decorative-indicator convention; each icon's title
-                         names the hero and its record. */
-                        <span
-                          role="img"
-                          aria-label={`Most played: ${pub.topHeroes
-                            .map(
-                              (h) =>
-                                heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
-                            )
-                            .join(", ")}`}
-                          className="flex items-center gap-1"
-                        >
-                          {pub.topHeroes.map((h) => {
-                            const hero = heroById(h.heroId);
-                            // title on the ICON, not a wrapper — the browser
-                            // shows the innermost title, and the img fills any
-                            // span around it.
-                            return hero ? (
-                              <span key={h.heroId} aria-hidden>
-                                <HeroIcon
-                                  hero={hero}
-                                  size={18}
-                                  title={pubHeroTitle(h)}
-                                />
-                              </span>
-                            ) : null;
-                          })}
+                         lifetime most-played. The visible label is what tells
+                         the two icon strips apart on a phone, where both sit
+                         in one row; it is aria-hidden because the strip's own
+                         spoken label already says it. role="img" + a spoken
+                         label per the decorative-indicator convention; each
+                         icon's title names the hero and its record. */
+                        <span className="flex items-center gap-1">
+                          <span aria-hidden>Most played (pubs)</span>
+                          <span
+                            role="img"
+                            aria-label={`Most played (pubs): ${pub.topHeroes
+                              .map(
+                                (h) =>
+                                  heroById(h.heroId)?.name ?? `Hero #${h.heroId}`,
+                              )
+                              .join(", ")}`}
+                            className="flex items-center gap-1"
+                          >
+                            {pub.topHeroes.map((h) => {
+                              const hero = heroById(h.heroId);
+                              // title on the ICON, not a wrapper — the browser
+                              // shows the innermost title, and the img fills any
+                              // span around it.
+                              return hero ? (
+                                <span key={h.heroId} aria-hidden>
+                                  <HeroIcon
+                                    hero={hero}
+                                    size={18}
+                                    title={pubHeroTitle(h)}
+                                  />
+                                </span>
+                              ) : null;
+                            })}
+                          </span>
                         </span>
                       ) : null}
                       {activity?.quiet ? (
@@ -539,22 +605,31 @@ export function PlayerPool({
                     </span>
                   ) : null}
 
-                  {/* 4 — roles, and (below md) the hero strip riding along with
-                    them: both answer "what does this player play", and packing
-                    them onto one phone row is what keeps a row to three lines. */}
+                  {/* 4 — roles, and (below md) the favorite-heroes strip riding
+                    along with them: both answer "what does this player play",
+                    and packing them onto one phone row is what keeps a row to
+                    three lines. The strip is labeled here because on a phone
+                    there is no column header, and the meta line above carries
+                    a second (pub most-played) strip. */}
                   <span
                     className={cn(CELL, "flex flex-wrap items-center gap-2")}
                   >
                     <RoleBadges roles={p.roles} />
-                    <span className="md:hidden">
-                      <HeroList value={p.favoriteHeroes} size={22} max={6} />
-                    </span>
+                    {hasText(p.favoriteHeroes) ? (
+                      <span className="flex items-center gap-1.5 md:hidden">
+                        <span className="text-xs text-muted">
+                          Favorite heroes
+                        </span>
+                        <HeroList value={p.favoriteHeroes} size={22} max={6} />
+                      </span>
+                    ) : null}
                   </span>
 
-                  {/* 5 — draft status / captain interest. DOM order puts this
-                    BEFORE heroes so md gets its five tracks in the right order;
-                    `xl:order` swaps the two back for the wide layout, where
-                    heroes want the column to the LEFT of status.
+                  {/* 5 — status: standin, captain, team or free agent, plus
+                    captain interest while captains are being chosen. DOM order
+                    puts this BEFORE heroes so md gets its five tracks in the
+                    right order; `xl:order` swaps the two back for the wide
+                    layout, where heroes want the column to the LEFT of status.
                     It spans both phone tracks rather than sitting in track 3 —
                     an `auto` track sized by a "Techies Anonymous $4" chip stole
                     ~170px back off the name column on the row above. */}
@@ -564,10 +639,23 @@ export function PlayerPool({
                       "flex flex-wrap items-center gap-1.5 justify-end md:justify-end xl:order-2",
                     )}
                   >
-                    {p.wantsCaptain ? (
+                    {/* Only volunteers still waiting on the call: a designated
+                      captain reads "Captain" instead, and after the auction
+                      starts the volunteers who weren't picked stop carrying
+                      a signup-week badge for the rest of the season. */}
+                    {captainSelectionOpen &&
+                    p.wantsCaptain &&
+                    !draftInfo?.[p.userId]?.captain ? (
                       <Badge tone="accent">Wants captain</Badge>
                     ) : null}
-                    {p.drafted ? (
+                    {draftInfo?.[p.userId]?.captain ? (
+                      <Badge tone="accent">Captain</Badge>
+                    ) : null}
+                    {standinSet.has(p.userId) ? (
+                      // Before the draft-status branch: a standin is never
+                      // rostered, and "Free agent" would say they can be signed.
+                      <Badge>Standin</Badge>
+                    ) : p.drafted ? (
                       draftInfo?.[p.userId] ? (
                         <TeamChip info={draftInfo[p.userId]} />
                       ) : (
@@ -578,7 +666,7 @@ export function PlayerPool({
                     ) : null}
                   </span>
 
-                  {/* 6 — signature heroes in their own column, xl only: between
+                  {/* 6 — favorite heroes in their own column, xl only: between
                     md and xl there is no track to spare, and above they ride
                     with the roles. */}
                   <span className={cn(CELL, "hidden xl:order-1 xl:block")}>

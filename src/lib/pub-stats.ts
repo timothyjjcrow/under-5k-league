@@ -20,9 +20,10 @@ export type PubStats = {
 };
 
 /** How long a stored snapshot stays fresh before the admin bulk sync spends
- *  two OpenDota calls refreshing it. Login deliberately does NOT read this —
- *  it fills missing snapshots only (the ensureRankTier rule), so a login
- *  never pays a recurring OpenDota round trip. */
+ *  two OpenDota calls refreshing it, and how long "last played" is shown for
+ *  it (pubLastPlayed). Login deliberately does NOT read this — it fills
+ *  missing snapshots only (the ensureRankTier rule), so a login never pays a
+ *  recurring OpenDota round trip. */
 export const PUB_STATS_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Days without a pub game before the pool flags the account as quiet — a
@@ -91,6 +92,15 @@ export type PubActivity = {
   quiet: boolean;
 };
 
+/** "today" / "5d ago" / "3w ago" / "4mo ago" / "2y ago" for a whole-day span. */
+function agoLabel(days: number): string {
+  if (days < 1) return "today";
+  if (days < 14) return `${days}d ago`;
+  if (days < 60) return `${Math.floor(days / 7)}w ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
+
 /** Relative recency of the last visible pub game; null when unknown. */
 export function pubActivity(
   lastPlayedAtSecs: number | null,
@@ -98,12 +108,32 @@ export function pubActivity(
 ): PubActivity | null {
   if (!lastPlayedAtSecs || lastPlayedAtSecs <= 0) return null;
   const days = Math.floor((nowMs - lastPlayedAtSecs * 1000) / 86_400_000);
-  const quiet = days >= PUB_QUIET_DAYS;
-  if (days < 1) return { label: "today", quiet };
-  if (days < 14) return { label: `${days}d ago`, quiet };
-  if (days < 60) return { label: `${Math.floor(days / 7)}w ago`, quiet };
-  if (days < 365) return { label: `${Math.floor(days / 30)}mo ago`, quiet };
-  return { label: `${Math.floor(days / 365)}y ago`, quiet };
+  return { label: agoLabel(days), quiet: days >= PUB_QUIET_DAYS };
+}
+
+/** How long ago a snapshot was taken ("3d ago"); null when unknown. The
+ *  numbers are a snapshot, so every surface showing them says when. */
+export function pubCheckedAgo(
+  checkedAtMs: number | null,
+  nowMs: number,
+): string | null {
+  if (checkedAtMs == null) return null;
+  return agoLabel(Math.max(0, Math.floor((nowMs - checkedAtMs) / 86_400_000)));
+}
+
+/**
+ * "Last played" for a snapshot, measured when the snapshot was TAKEN, and only
+ * while it is inside the refresh window. Measuring a months-old snapshot's
+ * last game against today made someone who plays daily read "last played 5mo
+ * ago · MMR may be stale"; past the window we simply don't know.
+ */
+export function pubLastPlayed(
+  pub: { lastPlayedAt: number | null; checkedAt: number | null },
+  nowMs: number,
+): PubActivity | null {
+  if (pub.checkedAt == null) return null;
+  if (!pubStatsFresh(new Date(pub.checkedAt), nowMs)) return null;
+  return pubActivity(pub.lastPlayedAt, pub.checkedAt);
 }
 
 /** True while a stored snapshot is recent enough that the bulk sync should
@@ -127,10 +157,15 @@ export type PoolPub = {
   recentWins: number;
   recentLosses: number;
   lastPlayedAt: number | null;
+  /** Epoch MS the snapshot was taken (`User.pubStatsAt`), or null. */
+  checkedAt: number | null;
   topHeroes: PubHero[];
 };
 
-export function poolPubRecord(raw: string | null | undefined): PoolPub | null {
+export function poolPubRecord(
+  raw: string | null | undefined,
+  checkedAt: Date | null,
+): PoolPub | null {
   const stats = parsePubStats(raw);
   if (!stats) return null;
   if (stats.recentWins + stats.recentLosses === 0) return null;
@@ -138,6 +173,7 @@ export function poolPubRecord(raw: string | null | undefined): PoolPub | null {
     recentWins: stats.recentWins,
     recentLosses: stats.recentLosses,
     lastPlayedAt: stats.lastPlayedAt,
+    checkedAt: checkedAt?.getTime() ?? null,
     topHeroes: stats.topHeroes.slice(0, 3),
   };
 }

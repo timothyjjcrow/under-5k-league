@@ -1945,7 +1945,7 @@ export function DraftRoom({
             </div>
             {state.nominatedPlayer.favoriteHeroes ? (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-muted">Heroes:</span>
+                <span className="text-muted">Favorite heroes:</span>
                 <HeroList
                   value={state.nominatedPlayer.favoriteHeroes}
                   size={30}
@@ -1956,7 +1956,7 @@ export function DraftRoom({
                 text is a click away on the player's profile. */}
             {hasText(state.nominatedPlayer.captainNote) ? (
               <div className="line-clamp-3 [overflow-wrap:anywhere]">
-                <span className="text-muted">Note to captains:</span>{" "}
+                <span className="text-muted">Note for captains:</span>{" "}
                 {state.nominatedPlayer.captainNote}
               </div>
             ) : null}

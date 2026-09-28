@@ -40,6 +40,7 @@ import { revokeAllSessions } from "@/app/actions/admin";
 import { getSessionEpoch, bumpSessionEpoch } from "@/lib/session-epoch";
 import { createSession, destroySession, getSessionUser } from "@/lib/auth";
 import { SESSION_COOKIE } from "@/lib/constants";
+import { refreshSessionToken, verifySessionToken } from "@/lib/session-token";
 import { prisma } from "@/lib/prisma";
 import { makeUser } from "./factories";
 
@@ -85,7 +86,7 @@ describe("session revocation (break-glass epoch)", () => {
 // actually REJECTED once the epoch moves past it.
 // ---------------------------------------------------------------------------
 
-/** Mirror auth.ts's module-private secret(): AUTH_SECRET when it's a real
+/** Mirror session-token.ts's module-private secret(): AUTH_SECRET when it's a real
  *  (32+ char) value, else the dev fallback. Needed to mint tokens auth.ts
  *  didn't (the pre-epoch legacy shape) with a signature it will accept. */
 function signingSecret(): Uint8Array {
@@ -249,5 +250,73 @@ describe("session JWT path (real createSession/getSessionUser)", () => {
       secure: false,
     });
     expect(await getSessionUser()).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Staying signed in: src/proxy.ts re-issues a week-old token. The re-issue
+// must not become a way around revocation or the admin allowlist.
+// ---------------------------------------------------------------------------
+
+const WEEK_AND_A_DAY_MS = 8 * 24 * 60 * 60 * 1000;
+
+/** The cookie as the proxy would re-issue it on a page load 8 days later. */
+async function reissuedAWeekLater(): Promise<string> {
+  const token = jar.get(SESSION_COOKIE)!;
+  const fresh = await refreshSessionToken(token, Date.now() + WEEK_AND_A_DAY_MS);
+  expect(fresh).toBeTruthy();
+  return fresh!;
+}
+
+describe("re-issued sessions (the proxy's sliding refresh)", () => {
+  beforeEach(async () => {
+    jar.clear();
+    jarOptions.clear();
+    await syncEpochCache();
+  });
+
+  it("a re-issued token signs the same user in", async () => {
+    const user = await makeUser("Weekly Regular");
+    await createSession(user.id);
+    jar.set(SESSION_COOKIE, await reissuedAWeekLater());
+    expect((await getSessionUser())?.id).toBe(user.id);
+  });
+
+  it("keeps its original epoch, so revoking all sessions still signs it out", async () => {
+    const user = await makeUser("Refreshed Then Revoked");
+    await createSession(user.id);
+    const original = await verifySessionToken(jar.get(SESSION_COOKIE)!);
+    const fresh = await reissuedAWeekLater();
+    expect((await verifySessionToken(fresh, Date.now() + WEEK_AND_A_DAY_MS))?.ep).toBe(
+      original?.ep,
+    );
+
+    await bumpSessionEpoch();
+    jar.set(SESSION_COOKIE, fresh);
+    expect(await getSessionUser()).toBeNull();
+    // Re-issuing again can't launder it into the new epoch either.
+    const again = await refreshSessionToken(fresh, Date.now() + 2 * WEEK_AND_A_DAY_MS);
+    jar.set(SESSION_COOKIE, again!);
+    expect(await getSessionUser()).toBeNull();
+  });
+
+  it("still re-reads the admin allowlist on every request", async () => {
+    const user = await makeUser("Refreshed Admin", "ADMIN");
+    vi.stubEnv("ADMIN_STEAM_IDS", user.steamId);
+    await createSession(user.id);
+    jar.set(SESSION_COOKIE, await reissuedAWeekLater());
+    expect((await getSessionUser())?.role).toBe("ADMIN");
+
+    vi.stubEnv("ADMIN_STEAM_IDS", "76561199999999999");
+    expect((await getSessionUser())?.role).toBe("USER");
+  });
+
+  it("createSession records the sign-in time the re-issue cap counts from", async () => {
+    const user = await makeUser("Fresh Sign-in");
+    const before = Math.floor(Date.now() / 1000);
+    await createSession(user.id);
+    const claims = await verifySessionToken(jar.get(SESSION_COOKIE)!);
+    expect(claims?.at).toBeGreaterThanOrEqual(before);
+    expect(claims?.at).toBe(claims?.iat);
   });
 });

@@ -178,11 +178,13 @@ test("former players retain actual appearances and auction receipts while identi
   await withFixture(request, true, async (f) => {
     const noErrors = trackPageErrors(page);
     await page.goto(`/players/${f.users[1].id}`);
-    await expect(page.getByRole("heading", { name: "Seasons played", exact: true })).toBeVisible();
-    await expect(page.getByText("1 games · 1 map wins", { exact: true })).toBeVisible();
-    await expect(page.getByText("1–0–0 series", { exact: true })).toBeVisible();
-    await expect(page.getByText("🏆 Championship contribution", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Original auction purchase: \$47/)).toBeVisible();
+    // One Seasons row carries the released player's appearance, their
+    // original auction price and the title they played for.
+    await expect(page.getByRole("heading", { name: "Seasons", exact: true })).toBeVisible();
+    const seasonRow = page.locator("#player-seasons li").filter({ hasText: f.homeName });
+    await expect(seasonRow.getByText("Drafted for $47", { exact: true })).toBeVisible();
+    await expect(seasonRow.getByText("1–0 series · 1 game", { exact: true })).toBeVisible();
+    await expect(seasonRow.getByTitle("Won the title", { exact: true })).toBeVisible();
     expect(await db.teamMember.count({ where: { userId: f.users[1].id } })).toBe(0);
 
     await page.goto(`/seasons/${f.seasonId}`);

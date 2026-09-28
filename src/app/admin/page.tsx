@@ -156,6 +156,7 @@ import {
   groupPlayoffRounds,
   hasLaterBracketRound,
 } from "@/lib/schedule";
+import { fixturesMatchNightLabel } from "@/lib/match-night";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { playoffSetupRevision } from "@/lib/playoff-command";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
@@ -1026,6 +1027,8 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
     (match) => match.status === MATCH_STATUS.COMPLETED,
   );
   const hasImportedGame = data.matches.some((match) => match.games.length > 0);
+  // What /me and /schedule print as the match night once fixtures have times.
+  const fixturesNight = fixturesMatchNightLabel(data.matches);
   return (
     <Card>
       <CardHeader
@@ -1310,7 +1313,11 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
             Save schedule
           </SubmitButton>
           <span className="text-xs text-muted">
-            shown before signup{season.matchSchedule ? "" : " · using default"}
+            {/* Once fixtures have kickoffs, pages print the night most of
+                them use (a single moved week doesn't change it). */}
+            {fixturesNight
+              ? `players now see the night most fixtures use: ${fixturesNight}`
+              : `shown before signup${season.matchSchedule ? "" : " · using default"}`}
           </span>
         </ActionForm>
         <ActionForm

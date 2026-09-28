@@ -1,36 +1,15 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
-import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "./prisma";
 import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from "./constants";
 import { getSessionEpoch } from "./session-epoch";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
 import { expireHttpOnlyCookie } from "./cookie-policy";
-
-// Session-signing key. Resolved lazily (so a missing secret fails a request,
-// not the build) and FAIL-CLOSED: in production a missing/short AUTH_SECRET
-// throws instead of silently falling back to a known constant — otherwise
-// anyone could forge a session for any userId (uids are public in /players/[id]
-// URLs) and take over an admin account. The dev fallback only applies outside
-// production so local dev and tests work without config.
-const DEV_FALLBACK_SECRET = "insecure-dev-secret-please-change-0123456789abcd";
-let cachedSecret: Uint8Array | null = null;
-
-function secret(): Uint8Array {
-  if (cachedSecret) return cachedSecret;
-  const configured = process.env.AUTH_SECRET;
-  if (configured && configured.length >= 32) {
-    cachedSecret = new TextEncoder().encode(configured);
-    return cachedSecret;
-  }
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "AUTH_SECRET must be set to a random string of at least 32 characters in production.",
-    );
-  }
-  cachedSecret = new TextEncoder().encode(DEV_FALLBACK_SECRET);
-  return cachedSecret;
-}
+import {
+  sessionCookieOptions,
+  signSessionToken,
+  verifySessionToken,
+} from "./session-token";
 
 export type SessionUser = {
   id: string;
@@ -40,14 +19,18 @@ export type SessionUser = {
   role: string;
 };
 
-/** Sign a session JWT and set it as an httpOnly cookie. Route handlers/actions only. */
+/**
+ * Sign a session JWT and set it as an httpOnly cookie. Route handlers/actions
+ * only. src/proxy.ts re-issues it (same user, epoch and sign-in time) once
+ * it is a week old, so an active player stays signed in.
+ */
 export async function createSession(userId: string) {
-  const ep = await getSessionEpoch(Date.now());
-  const token = await new SignJWT({ uid: userId, ep })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("30d")
-    .sign(secret());
+  const now = Date.now();
+  const ep = await getSessionEpoch(now);
+  const token = await signSessionToken(
+    { uid: userId, ep, at: Math.floor(now / 1000) },
+    now,
+  );
 
   const cookieStore = await cookies();
   // The hardened production name intentionally invalidates sessions from the
@@ -56,13 +39,7 @@ export async function createSession(userId: string) {
   if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) {
     expireHttpOnlyCookie(cookieStore, LEGACY_SESSION_COOKIE);
   }
-  cookieStore.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
+  cookieStore.set(SESSION_COOKIE, token, sessionCookieOptions());
 }
 
 export async function destroySession() {
@@ -87,14 +64,13 @@ export const getSessionUser = cache(async function getSessionUser(): Promise<Ses
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   try {
-    const { payload } = await jwtVerify(token, secret(), {
-      algorithms: ["HS256"],
-    });
+    const session = await verifySessionToken(token);
+    if (!session) return null;
     // Reject sessions minted before the current epoch — the break-glass that
-    // makes "sign out all users" able to revoke stolen/outstanding tokens.
-    const tokenEpoch = Number(payload.ep ?? 0);
-    if (tokenEpoch < (await getSessionEpoch(Date.now()))) return null;
-    const uid = payload.uid as string;
+    // makes "sign out all users" able to revoke stolen/outstanding tokens. A
+    // re-issued token keeps its original epoch, so this still catches it.
+    if (session.ep < (await getSessionEpoch(Date.now()))) return null;
+    const uid = session.uid;
     const user = await prisma.user.findUnique({
       where: { id: uid },
       select: {

@@ -31,8 +31,13 @@ describe("player-directory contact visibility wiring", () => {
   });
 
   it("runs standin contact through the same subject/member/admin policy", () => {
+    // Standins share the pool table, so their rows are built by the same
+    // per-row mapping (and the same contact check) as full players.
     expect(playersPage).toMatch(
-      /canViewLeagueContact\(\s*viewer,\s*s\.userId,\s*viewerHasActiveRegistration/,
+      /const poolRegistrations = \[\.\.\.players, \.\.\.standins\]/,
+    );
+    expect(playersPage).toMatch(
+      /poolRegistrations\.map\(\(p\) => \(\{[\s\S]*?canViewLeagueContact\(\s*viewer,\s*p\.userId,\s*viewerHasActiveRegistration/,
     );
     expect(playersPage).not.toMatch(
       /standins\.map[\s\S]*?\{viewer \? \(/,

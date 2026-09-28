@@ -278,7 +278,7 @@ describe("draft readiness confirmation", () => {
 
     const edited = await saveRegistration(
       {},
-      fd({ type: "PLAYER", mmr: 3000, roles: "1", statement: "Still in" }),
+      fd({ type: "PLAYER", mmr: 3000, roles: "1", about: "Still in" }),
     );
     expect(edited?.error).toBeUndefined();
     expect(
@@ -342,6 +342,198 @@ describe("draft readiness confirmation", () => {
     expect(reinstated?.error).toBeUndefined();
     stored = await prisma.registration.findUniqueOrThrow({
       where: { id: registration.id },
+    });
+    expect(stored.status).toBe("ACTIVE");
+    expect(stored.draftConfirmedAt).toBeNull();
+  });
+});
+
+/** The hidden fields /me posts with the signup form while a draft time shows. */
+function signupSeeing(
+  seasonId: string,
+  fields: Record<string, string | number>,
+  revision = 1,
+  at = DRAFT_ONE,
+) {
+  return fd({
+    ...fields,
+    seenDraftSeasonId: seasonId,
+    seenDraftRevision: revision,
+    seenDraftAtTs: at.getTime(),
+  });
+}
+
+describe("joining the draft pool confirms the draft time the form showed", () => {
+  beforeEach(() => {
+    vi.mocked(requireUser).mockReset();
+    vi.mocked(requireAdmin).mockReset();
+  });
+  afterEach(() => setRaceHook(null));
+
+  async function scheduledSeason() {
+    return makeSeason({
+      status: "SIGNUPS",
+      draftAt: DRAFT_ONE,
+      draftRevision: 1,
+    });
+  }
+
+  it("stamps a new full player's signup ready for the time they saw", async () => {
+    const season = await scheduledSeason();
+    const user = await makeUser("Fresh Joiner");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const result = await saveRegistration(
+      {},
+      signupSeeing(season.id, { type: "PLAYER", mmr: 3000 }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    expect(result?.message).toMatch(/ready for draft night/i);
+    const stored = await prisma.registration.findUniqueOrThrow({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+    });
+    expect(stored.draftConfirmedRevision).toBe(1);
+    expect(stored.draftConfirmedFor?.getTime()).toBe(DRAFT_ONE.getTime());
+    expect(draftReadiness(stored, 1)).toBe(DRAFT_READINESS.READY);
+  });
+
+  it("leaves a stale tab's signup unconfirmed after the admin moved the time", async () => {
+    const season = await scheduledSeason();
+    // The page was rendered at revision 1; the admin has since moved it.
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { draftAt: DRAFT_TWO, draftRevision: 2 },
+    });
+    const user = await makeUser("Stale Tab");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const result = await saveRegistration(
+      {},
+      signupSeeing(season.id, { type: "PLAYER", mmr: 3000 }),
+    );
+
+    // They still join; only the confirmation waits for the current time.
+    expect(result?.error).toBeUndefined();
+    expect(result?.message).not.toMatch(/ready for draft night/i);
+    const stored = await prisma.registration.findUniqueOrThrow({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+    });
+    expect(stored.status).toBe("ACTIVE");
+    expect(stored.draftConfirmedAt).toBeNull();
+  });
+
+  it("confirms nothing for a standin, another season's form, or a plain edit", async () => {
+    const season = await scheduledSeason();
+    const standin = await makeUser("Standin Joiner");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+    expect(
+      (
+        await saveRegistration(
+          {},
+          signupSeeing(season.id, { type: "STANDIN", mmr: 3000 }),
+        )
+      )?.error,
+    ).toBeUndefined();
+
+    const otherSeason = await makeUser("Other Season Tab");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(otherSeason));
+    expect(
+      (
+        await saveRegistration(
+          {},
+          signupSeeing("some-older-season", { type: "PLAYER", mmr: 3000 }),
+        )
+      )?.error,
+    ).toBeUndefined();
+
+    // Signed up before the time was posted: an edit is not a confirmation.
+    const earlier = await makeUser("Earlier Signup");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: earlier.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(earlier));
+    expect(
+      (
+        await saveRegistration(
+          {},
+          signupSeeing(season.id, { type: "PLAYER", mmr: 3000, roles: "2" }),
+        )
+      )?.error,
+    ).toBeUndefined();
+
+    const rows = await prisma.registration.findMany({
+      where: {
+        seasonId: season.id,
+        userId: { in: [standin.id, otherSeason.id, earlier.id] },
+      },
+    });
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(row.draftConfirmedAt).toBeNull();
+  });
+
+  it("confirms a withdrawn player who rejoins, and a standin who steps up", async () => {
+    const season = await scheduledSeason();
+    const returning = await makeUser("Comes Back");
+    const steppingUp = await makeUser("Steps Up");
+    for (const [user, type, status] of [
+      [returning, "PLAYER", "WITHDRAWN"],
+      [steppingUp, "STANDIN", "ACTIVE"],
+    ] as const) {
+      await prisma.registration.create({
+        data: { seasonId: season.id, userId: user.id, type, status, mmr: 3000 },
+      });
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+      const result = await saveRegistration(
+        {},
+        signupSeeing(season.id, { type: "PLAYER", mmr: 3000 }),
+      );
+      expect(result?.error).toBeUndefined();
+      const stored = await prisma.registration.findUniqueOrThrow({
+        where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
+      });
+      expect(stored).toMatchObject({ type: "PLAYER", status: "ACTIVE" });
+      expect(draftReadiness(stored, 1)).toBe(DRAFT_READINESS.READY);
+    }
+  });
+
+  it("confirms nothing once the auction has finished", async () => {
+    const season = await makeSeason({
+      status: "DRAFT",
+      draftAt: DRAFT_ONE,
+      draftRevision: 1,
+    });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: "COMPLETE" },
+    });
+    // A former full player may rejoin the free-agent pool after the draft,
+    // but there is no draft time left to confirm.
+    const user = await makeUser("Post Draft Return");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "WITHDRAWN",
+        mmr: 3000,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const result = await saveRegistration(
+      {},
+      signupSeeing(season.id, { type: "PLAYER", mmr: 3000 }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    const stored = await prisma.registration.findUniqueOrThrow({
+      where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
     });
     expect(stored.status).toBe("ACTIVE");
     expect(stored.draftConfirmedAt).toBeNull();

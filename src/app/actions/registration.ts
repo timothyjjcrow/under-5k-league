@@ -4,7 +4,7 @@ import { revalidatePath, updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth";
+import { requireUser, type SessionUser } from "@/lib/auth";
 import { raceHook } from "@/lib/race-hook";
 import { getActiveSeason } from "@/lib/season";
 import {
@@ -14,6 +14,10 @@ import {
   type RegistrationType,
 } from "@/lib/constants";
 import { draftSetupOpen } from "@/lib/draft-setup";
+import {
+  parseSeenDraftSchedule,
+  seenScheduleIsCurrent,
+} from "@/lib/draft-readiness";
 import {
   medalProvesIneligible,
   registrationGate,
@@ -46,6 +50,8 @@ import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
+import { mergeAccountRefresh } from "@/lib/account-page";
+import { aboutUnchanged, submittedAbout } from "@/lib/about-you";
 import { claimProviderCooldown } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
@@ -87,21 +93,16 @@ export async function confirmDraftReadiness(
     return { error: "Sign in required" };
   }
 
-  const revisionRaw = str(formData, "draftRevision").trim();
-  const draftAtRaw = str(formData, "draftAtTs").trim();
+  const seen = parseSeenDraftSchedule(
+    str(formData, "draftRevision"),
+    str(formData, "draftAtTs"),
+  );
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
-  const expectedRevision = Number(revisionRaw);
-  const expectedDraftAt = Number(draftAtRaw);
-  if (
-    !/^\d+$/.test(revisionRaw) ||
-    !Number.isSafeInteger(expectedRevision) ||
-    expectedRevision < 0 ||
-    !/^\d+$/.test(draftAtRaw) ||
-    !Number.isSafeInteger(expectedDraftAt) ||
-    expectedDraftAt <= 0
-  ) {
+  if (!seen) {
     return { error: "Reload the page and review the draft time again." };
   }
+  const expectedRevision = seen.revision;
+  const expectedDraftAt = seen.atMs;
 
   const season = await getActiveSeason();
   if (!season) return { error: "No active season" };
@@ -252,10 +253,9 @@ export async function saveRegistration(
   // Clamp on whole hero names, not raw characters — a mid-name cut rendered
   // as garbage in the player pool and draft room.
   const favoriteHeroes = clampHeroList(str(formData, "favoriteHeroes"), 200);
-  // Trim before storing: a whitespace-only note used to render as an empty
-  // pair of smart quotes with a "NOTE FOR CAPTAINS" label above it.
-  const statement = str(formData, "statement").trim().slice(0, 1000);
-  const captainNote = str(formData, "captainNote").trim().slice(0, 1000);
+  // One "About you" box (see about-you.ts). Trimmed before storing: a
+  // whitespace-only note used to render as an empty pair of smart quotes.
+  const about = submittedAbout(formData);
 
   const existing = await prisma.registration.findUnique({
     where: { seasonId_userId: { seasonId: season.id, userId: user.id } },
@@ -468,14 +468,38 @@ export async function saveRegistration(
   const resetDraftConfirmation =
     !!existing &&
     (existing.type !== type || existing.status !== REGISTRATION_STATUS.ACTIVE);
+  // Joining the draft pool from a form that showed the draft time counts as
+  // confirming it: the player has just read "Draft night: …" and pressed
+  // Join, and asking again in a box above the button they pressed left many
+  // unconfirmed. Only for a real join (new, returning from withdrawn, or a
+  // standin becoming a full player), never an ordinary edit, and only when
+  // the season's schedule still matches what the page showed. That last check
+  // runs INSIDE the write's transaction below, so a stale tab can't confirm a
+  // time the player never saw.
+  const seenDraft =
+    type === REGISTRATION_TYPE.PLAYER &&
+    (!existing || resetDraftConfirmation) &&
+    str(formData, "seenDraftSeasonId").trim() === season.id
+      ? parseSeenDraftSchedule(
+          str(formData, "seenDraftRevision"),
+          str(formData, "seenDraftAtTs"),
+        )
+      : null;
+  let confirmedDraft = false;
+  // New text goes to captainNote and clears the old goals column. A box
+  // submitted exactly as the form showed it leaves both columns untouched, so
+  // an old two-part answer is only merged once the player edits it.
+  const aboutData =
+    existing && aboutUnchanged(about, existing)
+      ? {}
+      : { captainNote: about, statement: "" };
   const registrationData = {
     type,
     mmr: check.mmr,
     wantsCaptain,
     roles,
     favoriteHeroes,
-    statement,
-    captainNote,
+    ...aboutData,
     status: REGISTRATION_STATUS.ACTIVE,
     ...(resetDraftConfirmation ? clearedDraftConfirmation : {}),
   };
@@ -502,7 +526,13 @@ export async function saveRegistration(
           ] = await Promise.all([
             tx.season.findUnique({
               where: { id: season.id },
-              select: { isActive: true, status: true, updatedAt: true },
+              select: {
+                isActive: true,
+                status: true,
+                updatedAt: true,
+                draftRevision: true,
+                draftAt: true,
+              },
             }),
             tx.draft.findUnique({
               where: { seasonId: season.id },
@@ -563,13 +593,31 @@ export async function saveRegistration(
           // but before this write. SERIALIZABLE must choose one winner.
           await raceHook("registration.saveRegistration.afterLifecycleGate");
 
+          // The draft time the form showed, judged against the schedule this
+          // transaction read (the revision, the time, and setup still open).
+          // A mismatch is not an error: the player joins, unconfirmed, and
+          // /me asks them to confirm the current time as before.
+          const confirmNow =
+            !!seenDraft &&
+            seenScheduleIsCurrent(seenDraft, currentSeason) &&
+            draftSetupOpen(currentSeason.status, currentDraft?.status);
+          const writeData = confirmNow
+            ? {
+                ...registrationData,
+                draftConfirmedRevision: seenDraft.revision,
+                draftConfirmedAt: new Date(),
+                draftConfirmedFor: new Date(seenDraft.atMs),
+              }
+            : registrationData;
+          confirmedDraft = confirmNow;
+
           const revived = await tx.registration.updateMany({
             where: {
               seasonId: season.id,
               userId: user.id,
               status: statusClaim,
             },
-            data: registrationData,
+            data: writeData,
           });
           if (revived.count === 1) return false;
 
@@ -582,7 +630,7 @@ export async function saveRegistration(
             data: {
               seasonId: season.id,
               userId: user.id,
-              ...registrationData,
+              ...writeData,
             },
           });
           return true;
@@ -683,7 +731,8 @@ export async function saveRegistration(
           // The adjustment note already names the medal — don't say it twice.
           (mmrNote ? "" : medalLabel)) +
       mmrNote +
-      lockedMmrNote,
+      lockedMmrNote +
+      (confirmedDraft ? " · you're down as ready for draft night" : ""),
   };
 }
 
@@ -1056,7 +1105,7 @@ export async function updateDotaAccount(
         message:
           claim === "cooldown"
             ? `${linkMessage} · OpenDota was refreshed recently; wait a minute before refreshing the medal again`
-            : `${linkMessage} · couldn't safely start the OpenDota refresh; wait a minute and use Refresh medal`,
+            : `${linkMessage} · couldn't safely start the OpenDota refresh; wait a minute and use Refresh my Steam & Dota info`,
       };
     }
     // The scouting snapshot rides the same moment (in parallel — independent
@@ -1100,7 +1149,7 @@ export async function updateDotaAccount(
       medal = result.rankTier ? ` · ${rankMedalName(result.rankTier)}` : "";
     } else {
       // Couldn't reach OpenDota — leave the stored medal alone rather than
-      // wiping it; they can retry with "Refresh medal".
+      // wiping it; they can retry with "Refresh my Steam & Dota info".
       medal = " · couldn't fetch medal (wait a minute, then try Refresh)";
     }
     const current = await prisma.user.findUnique({
@@ -1171,6 +1220,13 @@ export async function refreshRank(
   } catch {
     return { error: "Sign in required" };
   }
+  return refreshOpenDotaProfileFor(user);
+}
+
+/** The OpenDota half: medal, public-data flag and the pub snapshot. */
+async function refreshOpenDotaProfileFor(
+  user: SessionUser,
+): Promise<ActionResult> {
   const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
   if (!dbUser) return { error: "Sign in required" };
   const accountId = effectiveDotaAccountId(dbUser);
@@ -1279,6 +1335,34 @@ export async function refreshSteamProfile(
   } catch {
     return { error: "Sign in required" };
   }
+  return refreshSteamProfileFor(user);
+}
+
+/**
+ * My account's one refresh button: Steam name/avatar and the OpenDota medal,
+ * public-data flag and scouting snapshot together. Each half keeps its own
+ * cooldown claim and failure handling; the toast says what each one did.
+ */
+export async function refreshMyAccounts(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  const [steam, dota] = await Promise.all([
+    refreshSteamProfileFor(user),
+    refreshOpenDotaProfileFor(user),
+  ]);
+  return mergeAccountRefresh(steam, dota);
+}
+
+async function refreshSteamProfileFor(
+  user: SessionUser,
+): Promise<ActionResult> {
   const claim = await claimProviderCooldown(
     "steam-profile",
     user.id,

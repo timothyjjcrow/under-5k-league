@@ -706,7 +706,7 @@ test("a player profile hero survives a phone", async ({ page }) => {
   // elsewhere. This one is scoped to the element that broke, so it can be
   // strict without any false-positive surface.
   const seasonName = await page.evaluate(() => {
-    const sl = document.querySelector('#main a[href^="/seasons/"]');
+    const sl = document.querySelector('#player-seasons a[href^="/seasons/"]');
     const span = sl?.parentElement?.querySelector<HTMLElement>(
       'a[href^="/teams/"] span.truncate',
     );

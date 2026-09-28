@@ -15,7 +15,7 @@ test("signed-out profile requests explain sign-in without a duplicate header CTA
   ).toBeVisible();
   await expect(
     page.getByText(
-      "Sign in to open your profile and continue setting up your league account.",
+      "Sign in to open your account and continue setting up for the league.",
     ),
   ).toBeVisible();
   await expect(
@@ -331,10 +331,10 @@ test("profile page renders the searchable hero picker", async ({ page }) => {
   const steamId = "76561199" + String(Date.now()).slice(-9);
   await page.goto(`/api/auth/dev?name=HeroFan&steamId=${steamId}&redirect=/me`);
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Dota / Dotabuff account", level: 2 }),
+    page.getByRole("heading", { name: "Steam & Dota", level: 2 }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Discord", level: 2 }),

@@ -177,7 +177,12 @@ test("profile saves optional details with clear dirty state", async ({
   await page.goto(
     "/api/auth/dev?name=QoL+Player&steamId=76561190000991998&redirect=/me",
   );
-  await expect(page.getByRole("heading", { name: "Your setup" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "My account", level: 1 }),
+  ).toBeVisible();
+  // The old four-tile setup checklist is gone; nothing is asked of someone
+  // who hasn't signed up (their only step is the season card itself).
+  await expect(page.locator("#signup-next-steps")).toHaveCount(0);
   const optional = page
     .locator("details:has(> summary)")
     .filter({
@@ -186,20 +191,32 @@ test("profile saves optional details with clear dirty state", async ({
     .last();
   await optional.locator("summary").click();
   await page
-    .getByLabel("What you want from the league (public)")
+    .getByLabel("About you (public, shown to captains)")
     .fill("Practice communication");
   await expect(
     page.getByText("Unsaved changes", { exact: true }),
   ).toBeVisible();
   // Closed details retain successful controls in the form submission.
   await optional.locator("summary").click();
+  // Mid-season a newcomer can only register as a standin, and the button
+  // says so.
   await page
-    .getByRole("button", { name: "Join the season", exact: true })
+    .getByRole("button", { name: "Register as a standin", exact: true })
     .click();
   await expect(
     page.getByRole("button", { name: "Update signup" }),
   ).toBeVisible();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  // Right under the button they just pressed: what is still left to do.
+  const nextSteps = page.locator("#signup-next-steps");
+  await expect(
+    nextSteps.getByRole("heading", { name: "You're signed up. Next:" }),
+  ).toBeVisible();
+  await expect(
+    nextSteps.getByRole("link", {
+      name: /^(Link|Add) your Discord so captains can reach you$/,
+    }),
+  ).toHaveAttribute("href", "#profile-discord");
   await page.reload();
   // Returning players see their current participation without the full form.
   const savedSignup = page.locator("#signup-details");
@@ -213,7 +230,7 @@ test("profile saves optional details with clear dirty state", async ({
   ).toBeVisible();
   await optional.locator("summary").click();
   await expect(
-    page.getByLabel("What you want from the league (public)"),
+    page.getByLabel("About you (public, shown to captains)"),
   ).toHaveValue("Practice communication");
 });
 

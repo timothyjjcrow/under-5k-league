@@ -10,6 +10,7 @@ import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { leagueProgress, progressSummary } from "@/lib/league-progress";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
+import { fixturesMatchNightLabel, seasonMatchNightLabel } from "@/lib/match-night";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
@@ -62,7 +63,7 @@ import {
 } from "@/lib/availability";
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
-import { AUTO_SYNC, MATCH_SCHEDULE } from "@/lib/constants";
+import { AUTO_SYNC } from "@/lib/constants";
 import { CheckinBanner } from "@/components/checkin-banner";
 import {
   ScheduleFold,
@@ -703,9 +704,9 @@ export default async function SchedulePage() {
   );
   const hasTimes = matches.some((m) => m.scheduledAt);
   const calendarTeams = sortedTeams.map(({ id, name }) => ({ id, name }));
-  const matchNight =
-    season.matchSchedule?.trim() ||
-    (MATCH_SCHEDULE.announced ? MATCH_SCHEDULE.label : null);
+  // Once fixtures have kickoffs, the weekly night is read from them
+  // (lib/match-night), never from the pre-signup text.
+  const matchNight = hasTimes ? fixturesMatchNightLabel(matches) : null;
 
   return (
     <div className="space-y-6">
@@ -906,7 +907,7 @@ export default async function SchedulePage() {
                         <div className="flex w-full max-w-md flex-col gap-3">
                           {showMatchNight ? (
                             <ScheduleCallout
-                              label={season.matchSchedule}
+                              label={seasonMatchNightLabel(season, matches)}
                               description={calloutDescription(season.status)}
                               className="text-left"
                             />

@@ -168,6 +168,38 @@ export function careerReportCard(lines: BenchmarkLine[]): CareerReport {
   return { games: lines.length, graded, metrics, avgPct, focus, best };
 }
 
+/** Graded games a profile's report card needs before it passes judgment:
+ *  letter grades (overall and per metric) and the Strength / Work on
+ *  callouts. One or two games is a sample, not a verdict, and the card is
+ *  public. The percentile bars themselves are facts and show from game one. */
+export const REPORT_CARD_MIN_GRADED = 3;
+
+export type ReportVerdicts = {
+  /** False below REPORT_CARD_MIN_GRADED: show no letter grades at all. */
+  graded: boolean;
+  overall: Grade | null;
+  best: CareerMetric | null;
+  /** Criticism is for the player themselves, never a stranger: null unless
+   *  `ownProfile`. The per-metric bars still show the same numbers. */
+  focus: CareerMetric | null;
+};
+
+/** Which verdicts a profile's report card may show, for this viewer. */
+export function reportVerdicts(
+  report: CareerReport,
+  ownProfile: boolean,
+): ReportVerdicts {
+  if (report.graded < REPORT_CARD_MIN_GRADED) {
+    return { graded: false, overall: null, best: null, focus: null };
+  }
+  return {
+    graded: true,
+    overall: report.avgPct != null ? gradeFor(report.avgPct) : null,
+    best: report.best,
+    focus: ownProfile ? report.focus : null,
+  };
+}
+
 /** Format a 0..1 percentile as an ordinal, e.g. 0.72 → "72nd percentile". */
 export function percentLabel(pct: number): string {
   const n = Math.round(clamp01(pct) * 100);

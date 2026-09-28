@@ -28,9 +28,15 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   await cta.click();
 
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
-  await expect(page.getByRole("radio", { name: /Standin/ })).toBeChecked();
+  // Mid-season only a standin signup is possible, so the form offers no
+  // greyed-out Full player choice and its button says what it does.
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Register as a standin", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Make sure you can play before you sign up")).toHaveCount(0);
 
   assertNoErrors();
 });
@@ -136,14 +142,15 @@ test("Fantasy and Pick'em fit a narrow phone", async ({ page }) => {
   assertNoErrors();
 });
 
-// /me's identity card was broken in two ways that a single measurement misses,
-// which is why this test asserts both. `Avatar` sets width/height but bakes in
-// no shrink floor (callers pass one), so as a flex child beside the name block
-// and the button column it was crushed to a 19px-wide sliver of its 56px box —
-// measured still squashed at 430px, i.e. on every phone made. And the 17-digit
-// SteamID64 is one unbreakable token, which pushed the row past the card
-// itself: 58px of overflow at 320px, 18px at 360px, 3px at 375px, and 0 by
-// 390px.
+// /me's identity row (now the top of the "Steam & Dota" card) was broken in
+// two ways that a single measurement misses, which is why this test asserts
+// both. `Avatar` sets width/height but bakes in no shrink floor (callers pass
+// one), so as a flex child beside the name block it was crushed to a 19px-wide
+// sliver of its 56px box — measured still squashed at 430px, i.e. on every
+// phone made. And one unbreakable token in the row (it used to be the 17-digit
+// SteamID64; now it can only be a long Steam name) pushed the row past the
+// card itself: 58px of overflow at 320px, 18px at 360px, 3px at 375px, and 0
+// by 390px.
 //
 // 360px, not 390px, for exactly that reason: the first cut of this test ran at
 // 390px, where the overflow is genuinely zero, and passed against a complete
@@ -153,12 +160,14 @@ test("mobile /me identity card fits its card", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 844 });
   await page.goto("/me");
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   // Wait for the identity card itself, not just the page heading — the first
   // cut of this test measured before it rendered, got "element missing", and
   // reported that as zero overflow. It passed against a full revert of the fix.
-  const steamLink = page.locator('#main a[href*="steamcommunity.com"]').first();
+  const steamLink = page
+    .locator('#profile-dota a[href*="steamcommunity.com"]')
+    .first();
   await steamLink.waitFor({ state: "visible", timeout: 10_000 });
 
   await expectNoSqueezedText(page, "/me");
@@ -169,13 +178,18 @@ test("mobile /me identity card fits its card", async ({ page }) => {
   // deliberately excuses anything inside a clipping ancestor.
   const card = await page.evaluate(() => {
     const steam = document.querySelector<HTMLAnchorElement>(
-      '#main a[href*="steamcommunity.com"]',
+      '#profile-dota a[href*="steamcommunity.com"]',
     );
-    const body = steam?.closest("div.flex");
-    if (!body) return null;
-    const av = body.firstElementChild!.getBoundingClientRect();
+    // The avatar row: avatar first, then the name block holding the links.
+    const row = steam?.closest("div.flex.items-center");
+    const cardEl = steam?.closest<HTMLElement>("#profile-dota");
+    if (!row || !cardEl) return null;
+    const av = row.firstElementChild!.getBoundingClientRect();
     return {
-      overflow: body.scrollWidth - body.clientWidth,
+      overflow: Math.max(
+        row.scrollWidth - row.clientWidth,
+        cardEl.scrollWidth - cardEl.clientWidth,
+      ),
       avatar: [Math.round(av.width), Math.round(av.height)] as [number, number],
     };
   });

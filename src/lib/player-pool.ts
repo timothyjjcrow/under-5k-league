@@ -1,7 +1,7 @@
 // Pure filtering + sorting for the player-pool UI. Kept DB-free so it's
 // unit-testable and reusable on client and server.
 import { heroById } from "./heroes";
-import { pubActivity, pubWinRate } from "./pub-stats";
+import { pubCheckedAgo, pubLastPlayed, pubWinRate } from "./pub-stats";
 import { parseRoles } from "./roles";
 
 export type PoolPlayer = {
@@ -44,6 +44,8 @@ export type PoolPubRecord = {
   recentLosses: number;
   /** Epoch SECONDS of their newest visible pub game, or null. */
   lastPlayedAt: number | null;
+  /** Epoch MS the snapshot was taken, or null when unknown. */
+  checkedAt: number | null;
   /** Most-played heroes across their whole pub history, top 3 by games. */
   topHeroes: { heroId: number; games: number; wins: number }[];
 };
@@ -52,11 +54,29 @@ export type PoolPubRecord = {
  *  shape — one parallel record keyed by userId (the PoolDraftInfo precedent),
  *  so PoolPlayer and the shared filter lib stay untouched. Entries are only
  *  present when there is something to show; a missing key renders nothing. */
+/** A returning player's most recent earlier league season (see
+ *  buildPoolLastSeasons). */
+export type PoolLastSeason = {
+  seasonName: string;
+  teamName: string;
+  /** Completed series this player appeared in for that team, the series
+   *  record the profile's Seasons card shows; null when none were recorded. */
+  record: { wins: number; losses: number; draws: number } | null;
+  /** What that team paid for them at the auction; null for a captain, a $0
+   *  free-agent signing, or someone who played for a team without a roster
+   *  row there (a standin, or a player released later). */
+  price: number | null;
+  captain: boolean;
+  /** That team won the season's title. */
+  champion: boolean;
+};
+
 export type PoolScout = {
   inhouse?: PoolInhouseRecord;
   pub?: PoolPubRecord;
-  /** Signup "goals" — the row's quote fallback when captainNote is empty
-   *  (only sent when it will actually render; payload trimming). */
+  lastSeason?: PoolLastSeason;
+  /** An older signup's "goals", shown joined with its captain note (only
+   *  sent when it adds something; payload trimming). */
   statement?: string;
 };
 export type PoolScoutInfo = Record<string, PoolScout>;
@@ -112,10 +132,9 @@ export function buildPoolInhouseInfo(
 }
 
 // --- Scouting token/title text -----------------------------------------------
-// One source for the strings the pool row, its lg column, and the captain-
-// hopefuls cards all render — two hand-copies of a token is how the header
-// starts lying about a column. Pure so both the client component and the
-// server page can call them.
+// One source for the strings the pool row and its lg column render — two
+// hand-copies of a token is how the header starts lying about a column. Pure
+// so both the client component and the server page can call them.
 
 /** "Inhouse 1042 · 7–3" (ranked) / "Inhouse 2–0" (provisional — no rating:
  *  a 1-game Elo is noise, the same reason rankInhouse never ranks them). */
@@ -131,22 +150,33 @@ export function inhouseTitle(ih: PoolInhouseRecord): string {
     : `Provisional — ${ih.games} inhouse game${ih.games === 1 ? "" : "s"}`;
 }
 
-/** "Pubs 54% in last 100" — the win rate NAMES its recent window, so nobody
- *  reads a hot (or cold) streak as a lifetime figure. The window is however
- *  many games OpenDota could see, so a 37-game account honestly reads
- *  "in last 37". Deliberately no games-played volume figure. */
-export function pubToken(pub: PoolPubRecord): string {
+/** "Pubs 54% in last 100 · checked 3d ago" — the win rate NAMES its recent
+ *  window, so nobody reads a hot (or cold) streak as a lifetime figure, and
+ *  says when the snapshot was taken, so a months-old one never reads as
+ *  current. The window is however many games OpenDota could see, so a
+ *  37-game account honestly reads "in last 37". Deliberately no games-played
+ *  volume figure. */
+export function pubToken(pub: PoolPubRecord, nowMs: number): string {
   const rate = pubWinRate(pub);
   const window = pub.recentWins + pub.recentLosses;
+  const checked = pubCheckedAgo(pub.checkedAt, nowMs);
+  const suffix = checked ? ` · checked ${checked}` : "";
   // poolPubRecord filters empty windows, but stay honest if one slips in.
-  if (rate == null) return "Pubs — no visible games";
-  return `Pubs ${Math.round(rate * 100)}% in last ${window}`;
+  if (rate == null) return `Pubs — no visible games${suffix}`;
+  return `Pubs ${Math.round(rate * 100)}% in last ${window}${suffix}`;
 }
 
 export function pubTitle(pub: PoolPubRecord, nowMs: number): string {
   const window = pub.recentWins + pub.recentLosses;
-  const activity = pubActivity(pub.lastPlayedAt, nowMs);
-  return `Last ${window} pub games: ${pub.recentWins}W–${pub.recentLosses}L · last played ${activity?.label ?? "unknown"}`;
+  const checked = pubCheckedAgo(pub.checkedAt, nowMs);
+  const activity = pubLastPlayed(pub, nowMs);
+  return [
+    `Last ${window} pub games: ${pub.recentWins}W–${pub.recentLosses}L`,
+    activity ? `last played ${activity.label}` : null,
+    `checked ${checked ?? "at an unknown time"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** Hover text for a most-played-hero icon: "Pudge — 220 pub games, 55% won". */
@@ -158,6 +188,139 @@ export function pubHeroTitle(h: {
   const name = heroById(h.heroId)?.name ?? `Hero #${h.heroId}`;
   const pct = h.games > 0 ? `, ${Math.round((h.wins / h.games) * 100)}% won` : "";
   return `${name} — ${h.games} pub game${h.games === 1 ? "" : "s"}${pct}`;
+}
+
+/**
+ * Each returning player's most recent EARLIER league season: the team they
+ * played for, their series record there, their auction price and whether
+ * that team won the title. The same facts as the profile's Seasons card
+ * (recorded appearances first, then the season's final roster), boiled down
+ * to one scouting token. Data-presence gated like every pool token: a player
+ * with no earlier season gets no entry, so a first season renders unchanged.
+ *
+ * Within the chosen season the roster team wins when they also played for it;
+ * otherwise the team they played the most games for (a standin, or a player
+ * released mid-season); otherwise the roster team with no record (a season
+ * with no imported games).
+ */
+export function buildPoolLastSeasons(input: {
+  userIds: Iterable<string>;
+  /** Earlier seasons, NEWEST FIRST. Anything not listed is ignored. */
+  seasons: readonly { id: string; name: string }[];
+  /** appearanceCareers rows (any users; filtered here). */
+  appearances: readonly {
+    userId: string;
+    teamId: string;
+    seasonId: string;
+    games: number;
+    seriesWins: number;
+    seriesLosses: number;
+    seriesDraws: number;
+  }[];
+  /** TeamMember rows in those seasons (at most one per user per season). */
+  memberships: readonly {
+    userId: string;
+    teamId: string;
+    seasonId: string;
+    price: number;
+    isCaptain: boolean;
+  }[];
+  teamNames: ReadonlyMap<string, string>;
+  /** seasonId → champion teamId, for seasons with a resolved champion. */
+  champions: ReadonlyMap<string, string>;
+}): Record<string, PoolLastSeason> {
+  const want = new Set(input.userIds);
+  const order = new Map(input.seasons.map((season, i) => [season.id, i]));
+  const byUser = new Map<
+    string,
+    {
+      apps: (typeof input.appearances)[number][];
+      rows: (typeof input.memberships)[number][];
+    }
+  >();
+  const slot = (userId: string) => {
+    let entry = byUser.get(userId);
+    if (!entry) byUser.set(userId, (entry = { apps: [], rows: [] }));
+    return entry;
+  };
+  for (const a of input.appearances) {
+    if (want.has(a.userId) && order.has(a.seasonId) && a.games > 0) {
+      slot(a.userId).apps.push(a);
+    }
+  }
+  for (const m of input.memberships) {
+    if (want.has(m.userId) && order.has(m.seasonId)) slot(m.userId).rows.push(m);
+  }
+
+  const out: Record<string, PoolLastSeason> = {};
+  for (const [userId, { apps, rows }] of byUser) {
+    const rank = (seasonId: string) => order.get(seasonId) ?? Infinity;
+    const seasonId = [...apps, ...rows]
+      .map((x) => x.seasonId)
+      .sort((a, b) => rank(a) - rank(b))[0];
+    const season = input.seasons[rank(seasonId)];
+    const seasonApps = apps
+      .filter((a) => a.seasonId === seasonId)
+      .sort((a, b) => b.games - a.games || a.teamId.localeCompare(b.teamId));
+    const roster = rows.find((m) => m.seasonId === seasonId);
+    const teamId =
+      roster && seasonApps.some((a) => a.teamId === roster.teamId)
+        ? roster.teamId
+        : (seasonApps[0]?.teamId ?? roster?.teamId);
+    const teamName = teamId ? input.teamNames.get(teamId) : undefined;
+    if (!season || !teamId || teamName === undefined) continue;
+    const app = seasonApps.find((a) => a.teamId === teamId);
+    const rostered = roster?.teamId === teamId ? roster : undefined;
+    out[userId] = {
+      seasonName: season.name,
+      teamName,
+      record:
+        app && app.seriesWins + app.seriesLosses + app.seriesDraws > 0
+          ? {
+              wins: app.seriesWins,
+              losses: app.seriesLosses,
+              draws: app.seriesDraws,
+            }
+          : null,
+      price:
+        rostered && !rostered.isCaptain && rostered.price > 0
+          ? rostered.price
+          : null,
+      captain: !!rostered?.isCaptain,
+      champion: input.champions.get(seasonId) === teamId,
+    };
+  }
+  return out;
+}
+
+/** "Season 3: Dire Straits · 4–3 series · $12 · 🏆 champion". */
+export function lastSeasonToken(ls: PoolLastSeason): string {
+  const parts = [
+    `${ls.seasonName}: ${ls.teamName}${ls.captain ? " (captain)" : ""}`,
+  ];
+  if (ls.record) {
+    const { wins, losses, draws } = ls.record;
+    parts.push(`${wins}–${losses}${draws > 0 ? `–${draws}` : ""} series`);
+  }
+  if (ls.price != null) parts.push(`$${ls.price}`);
+  if (ls.champion) parts.push("🏆 champion");
+  return parts.join(" · ");
+}
+
+/** Hover detail for the token, spelled out. */
+export function lastSeasonTitle(ls: PoolLastSeason): string {
+  const parts = [
+    `${ls.seasonName}: played for ${ls.teamName}${ls.captain ? " as captain" : ""}`,
+  ];
+  if (ls.record) {
+    const { wins, losses, draws } = ls.record;
+    parts.push(
+      `series they played in: ${wins} won, ${losses} lost${draws > 0 ? `, ${draws} drawn` : ""}`,
+    );
+  }
+  if (ls.price != null) parts.push(`drafted for $${ls.price}`);
+  if (ls.champion) parts.push("won the title");
+  return parts.join(" · ");
 }
 
 /**
@@ -208,6 +371,39 @@ export type FilterablePlayer = {
   wantsCaptain?: boolean;
   drafted?: boolean;
 };
+
+/** The /players status chips: the lib's draft-status filter plus "standin". */
+export type PoolStatusFilter = "all" | "drafted" | "free" | "standin";
+
+/**
+ * The /players pool's filter. Standins sit in the same table as full players,
+ * so search, roles and sort work for everyone, but registration type is a
+ * pool-only fact: `filterAndSortPlayers` is shared with the draft room, which
+ * must never list a standin, so neither PoolPlayer nor PoolFilter learns about
+ * it. The type narrowing happens here, then the shared lib does the rest.
+ *
+ * "drafted" and "free" are about FULL players: a standin is never rostered,
+ * so the lib alone would count every standin as a free agent, and a free agent
+ * is someone a captain can sign (signFreeAgent refuses standins).
+ * Never mutates the input.
+ */
+export function filterPoolRows<
+  T extends FilterablePlayer & { userId: string },
+>(
+  rows: T[],
+  filter: Omit<PoolFilter, "status"> & { status?: PoolStatusFilter },
+  standinIds: ReadonlySet<string>,
+): T[] {
+  const { status = "all", ...rest } = filter;
+  const typed =
+    status === "all"
+      ? rows
+      : rows.filter((r) => standinIds.has(r.userId) === (status === "standin"));
+  return filterAndSortPlayers(typed, {
+    ...rest,
+    status: status === "standin" ? "all" : status,
+  });
+}
 
 /** Filter + sort a player list. Never mutates the input. */
 export function filterAndSortPlayers<T extends FilterablePlayer>(

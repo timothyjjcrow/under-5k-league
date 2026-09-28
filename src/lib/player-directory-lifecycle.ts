@@ -31,10 +31,15 @@ export type PlayerDirectoryPresentation = {
  * nor the broad Season.status can say whether the auction has run. The shared
  * setup capability is the authority for captain selection; the Draft row then
  * distinguishes an active auction from its completed result.
+ *
+ * Standins are listed in the same table (marked on each row). `hasStandins`
+ * only changes the live auction's title: "Draft pool" alone would claim they
+ * are up for bidding, and they can't be drafted.
  */
 export function playerDirectoryPresentation(
   seasonStatus: SeasonStatus | string,
   draftStatus: DraftStatus | string | null | undefined,
+  hasStandins = false,
 ): PlayerDirectoryPresentation {
   if (draftSetupOpen(seasonStatus, draftStatus)) {
     return {
@@ -56,7 +61,7 @@ export function playerDirectoryPresentation(
       stage: "AUCTION",
       captainSelectionOpen: false,
       showDraftStatus: true,
-      poolTitle: "Draft pool",
+      poolTitle: hasStandins ? "Draft pool and standins" : "Draft pool",
       poolAside: "· track drafted players and who remains",
       emptyDescription:
         "No active full-player registrations are available for this auction.",
@@ -107,4 +112,26 @@ export function playerDirectoryPresentation(
     availabilityLabel: "Free agents",
     availabilityHint: "undrafted",
   };
+}
+
+/**
+ * Whether a player's profile still shows "Wants to captain". It is news only
+ * while captains are being picked, the same window the /players badge and
+ * filter use, and only for a full player who isn't on a team yet (a
+ * designated captain already has one).
+ */
+export function profileWantsCaptain(input: {
+  wantsCaptain: boolean;
+  onTeam: boolean;
+  standin: boolean;
+  seasonStatus: SeasonStatus | string;
+  draftStatus: DraftStatus | string | null | undefined;
+}): boolean {
+  return (
+    input.wantsCaptain &&
+    !input.onTeam &&
+    !input.standin &&
+    playerDirectoryPresentation(input.seasonStatus, input.draftStatus)
+      .captainSelectionOpen
+  );
 }
