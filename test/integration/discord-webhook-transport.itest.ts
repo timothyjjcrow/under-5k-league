@@ -568,7 +568,7 @@ describe("news posts on the league webhook", () => {
         reason: "no-webhook",
       });
       expect(await editNewsOnDiscord("42", "x")).toBe("no-webhook");
-      expect(await deleteNewsFromDiscord("42")).toBe(false);
+      expect(await deleteNewsFromDiscord("42")).toBe("failed");
     } finally {
       if (envWebhook !== undefined) process.env.DISCORD_WEBHOOK_URL = envWebhook;
     }
@@ -582,8 +582,15 @@ describe("news posts on the league webhook", () => {
     expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
 
     respond = () => ({ status: 204 });
-    expect(await deleteNewsFromDiscord("42")).toBe(true);
+    expect(await deleteNewsFromDiscord("42")).toBe("deleted");
     expect(recorded[1].method).toBe("DELETE");
     expect(recorded[1].url).toBe("/api/v10/webhooks/1111/tok-secret/messages/42");
+  });
+
+  it("reports a 404 as gone, not deleted: another webhook may have sent it", async () => {
+    respond = () => ({ status: 404, body: { code: 10008 } });
+    expect(await deleteNewsFromDiscord("42")).toBe("gone");
+    respond = () => ({ status: 500 });
+    expect(await deleteNewsFromDiscord("42")).toBe("failed");
   });
 });

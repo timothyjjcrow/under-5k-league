@@ -1438,23 +1438,42 @@ export async function patchWebhookMessage(
   }
 }
 
-/** Remove a message this webhook sent (admin "Remove board"). Best-effort. */
-export async function deleteWebhookMessage(
+/**
+ * How a webhook message DELETE went. "gone" is Discord's 404: this webhook
+ * has no such message. That is either a message already deleted in the
+ * channel or one a DIFFERENT webhook sent (message routes are scoped to the
+ * webhook that sent them), so it is not proof the message is off the channel.
+ */
+type WebhookDeleteResult = "deleted" | "gone" | "failed";
+
+async function deleteWebhookMessageResult(
   url: string,
   messageId: string,
-): Promise<boolean> {
+): Promise<WebhookDeleteResult> {
   const target = runtimeWebhookUrl(url);
-  if (!target) return false;
-  if (!discordMutationsAllowed()) return false;
+  if (!target) return "failed";
+  if (!discordMutationsAllowed()) return "failed";
   try {
     const res = await fetch(
       `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
       { method: "DELETE", signal: AbortSignal.timeout(2500) },
     );
-    return res.ok || res.status === 404; // already gone is a success
+    if (res.ok) return "deleted";
+    return res.status === 404 ? "gone" : "failed";
   } catch {
-    return false;
+    return "failed";
   }
+}
+
+/** Remove a message this webhook sent (admin "Remove board"). Best-effort. */
+export async function deleteWebhookMessage(
+  url: string,
+  messageId: string,
+): Promise<boolean> {
+  // Already gone counts as success here: the board stores the id of the
+  // webhook that posted it and never deletes a stranded board through this
+  // route (see inhouse-board-service), so its 404 really is "deleted".
+  return (await deleteWebhookMessageResult(url, messageId)) !== "failed";
 }
 
 /** How a news post's trip to Discord went. */
@@ -1516,18 +1535,23 @@ export async function editNewsOnDiscord(
 }
 
 /**
- * Remove a deleted news post's Discord copy. Best-effort: false means the
- * copy may still be up and the admin should delete it by hand.
+ * Remove a deleted news post's Discord copy through the CURRENT league
+ * webhook. "deleted" is the only confirmed removal. "gone" (a 404) means the
+ * copy was already deleted in the channel OR was sent by a webhook that has
+ * since been replaced, which cannot delete it; "failed" covers no webhook
+ * and every other error. Both leave the copy possibly still up.
  */
-export async function deleteNewsFromDiscord(messageId: string): Promise<boolean> {
+export async function deleteNewsFromDiscord(
+  messageId: string,
+): Promise<WebhookDeleteResult> {
   let url: string | null;
   try {
     url = await getWebhookUrl();
   } catch {
-    return false;
+    return "failed";
   }
-  if (!url) return false;
-  return deleteWebhookMessage(url, messageId);
+  if (!url) return "failed";
+  return deleteWebhookMessageResult(url, messageId);
 }
 
 export type DiscordSendOptions = {

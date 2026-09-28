@@ -405,13 +405,21 @@ export async function deleteNewsPost(
   await logAdminAction({
     action: "deleteNewsPost",
     summary: `Deleted news post "${post.title}"${
-      removed ? " and its Discord copy" : ""
+      removed === "deleted" ? " and its Discord copy" : ""
     }`,
   });
-  if (removed === true) {
+  if (removed === "deleted") {
     return { message: "Post deleted, and its Discord copy with it." };
   }
-  if (removed === false) {
+  if (removed === "gone") {
+    // Discord's 404 can't tell "already deleted" from "sent by a webhook
+    // that has since been replaced", and only the second leaves it up.
+    return {
+      message:
+        "Post deleted. Discord couldn't find its copy through the current webhook: it was already deleted in the channel, or the webhook has changed since it was posted. If it's still in the channel, delete it there by hand.",
+    };
+  }
+  if (removed === "failed") {
     return {
       message:
         "Post deleted, but its Discord copy couldn't be removed. Delete it in the channel by hand.",

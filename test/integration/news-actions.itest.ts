@@ -69,7 +69,7 @@ beforeEach(async () => {
   vi.mocked(editNewsOnDiscord).mockReset();
   vi.mocked(editNewsOnDiscord).mockResolvedValue("ok");
   vi.mocked(deleteNewsFromDiscord).mockReset();
-  vi.mocked(deleteNewsFromDiscord).mockResolvedValue(true);
+  vi.mocked(deleteNewsFromDiscord).mockResolvedValue("deleted");
   vi.mocked(revalidatePath).mockReset();
 });
 afterEach(() => setRaceHook(null));
@@ -555,12 +555,29 @@ describe("the Discord copy follows the post's lifecycle", () => {
 
   it("tells the admin when the Discord copy couldn't be removed", async () => {
     const post = await existingPost({ discordMessageId: DISCORD_ID });
-    vi.mocked(deleteNewsFromDiscord).mockResolvedValueOnce(false);
+    vi.mocked(deleteNewsFromDiscord).mockResolvedValueOnce("failed");
 
     const result = await deleteNewsPost({}, form({ postId: post.id }));
 
     expect(result?.message).toMatch(/couldn't be removed.*by hand/);
     expect(await prisma.newsPost.count()).toBe(0);
+  });
+
+  it("never claims a copy Discord couldn't find was removed", async () => {
+    // A 404 through the current webhook: deleted in the channel already, or
+    // sent by a webhook that has since been replaced and is still up.
+    const post = await existingPost({ discordMessageId: DISCORD_ID });
+    vi.mocked(deleteNewsFromDiscord).mockResolvedValueOnce("gone");
+
+    const result = await deleteNewsPost({}, form({ postId: post.id }));
+
+    expect(result?.message).not.toMatch(/with it/);
+    expect(result?.message).toMatch(/webhook has changed.*by hand/);
+    expect(await prisma.newsPost.count()).toBe(0);
+    const log = await prisma.adminAction.findFirstOrThrow({
+      where: { action: "deleteNewsPost" },
+    });
+    expect(log.summary).not.toContain("Discord copy");
   });
 
   it("an edit claims the post's Discord slot, so a rival's copy is never posted twice (seam)", async () => {
