@@ -1,4 +1,4 @@
-import { globSync, readFileSync } from "node:fs";
+import { globSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -68,6 +68,32 @@ export function sourceFile(relativePath: string): SourceFile {
     path: relativePath,
     text: readFileSync(path.join(REPO_ROOT, relativePath), "utf8"),
   };
+}
+
+/**
+ * Every non-test .ts/.tsx file directly inside one folder (repo-relative),
+ * its `page.tsx` first and the rest by name. For a route folder whose
+ * dynamic segment (`[id]`) a glob can't spell: a page split into a loader and
+ * one file per card keeps its rules checkable wherever a card moves within
+ * the folder. Throws when fewer than `minFiles` are found.
+ */
+export function folderSourceFiles(
+  relativeDir: string,
+  minFiles: number,
+): SourceFile[] {
+  const names = readdirSync(path.join(REPO_ROOT, relativeDir))
+    .filter((name) => /\.tsx?$/.test(name) && !TEST_FILE.test(name))
+    .sort((a, b) =>
+      a === "page.tsx" ? -1 : b === "page.tsx" ? 1 : a.localeCompare(b),
+    );
+  if (names.length < minFiles) {
+    throw new Error(
+      `Source guard found ${names.length} file(s) in ${relativeDir}, expected ` +
+        `at least ${minFiles}. The code it protects has moved; re-point the ` +
+        `guard before trusting it.`,
+    );
+  }
+  return names.map((name) => sourceFile(`${relativeDir}/${name}`));
 }
 
 /** Every matching file's text, joined into one searchable string. */

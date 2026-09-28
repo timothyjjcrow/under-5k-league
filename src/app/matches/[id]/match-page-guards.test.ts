@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  folderSourceFiles,
+  haystackOf,
   sourceFile,
   stripLineComments,
 } from "../../../../test/support/source-files";
@@ -8,8 +10,23 @@ import {
  * Source contracts for the match page's captain tools. The page is a server
  * component with no render test (no jsdom), so the rules that keep a captain
  * from pressing a control that can only error are pinned here.
+ *
+ * The page is a loader plus one file per card, all in this folder. PAGE is
+ * every one of them (page.tsx first), so a rule still holds wherever its card
+ * moves within the folder; CARD reads one file where order inside it matters.
  */
-const PAGE = stripLineComments(sourceFile("src/app/matches/[id]/page.tsx").text);
+const DIR = "src/app/matches/[id]";
+const FILES = folderSourceFiles(DIR, 12);
+const PAGE = stripLineComments(haystackOf(FILES));
+const CARD = (name: string) =>
+  stripLineComments(sourceFile(`${DIR}/${name}`).text);
+
+describe("match page files", () => {
+  it("reads the page first, then its cards", () => {
+    expect(FILES[0].path).toBe(`${DIR}/page.tsx`);
+    expect(FILES.map((f) => f.path)).toContain(`${DIR}/load.ts`);
+  });
+});
 
 describe("match page standins card", () => {
   it("offers Remove only before the series has a game", () => {
@@ -46,10 +63,12 @@ describe("match page standins card", () => {
 });
 
 describe("match page captain tools order and anchors", () => {
-  const tools = PAGE.slice(PAGE.indexOf("id={MATCH_ANCHOR.tools}"));
+  const TOOLS = CARD("captain-tools.tsx");
+  const tools = TOOLS.slice(TOOLS.indexOf("id={MATCH_ANCHOR.tools}"));
 
   it("puts the cards that need an answer before lobby setup and reporting", () => {
-    const reschedule = tools.indexOf("<RescheduleSection match={match} />");
+    expect(TOOLS.indexOf("id={MATCH_ANCHOR.tools}")).toBeGreaterThan(-1);
+    const reschedule = tools.indexOf("<RescheduleSection match={match} viewer={viewer} />");
     const standins = tools.indexOf("<StandinSection");
     const report = tools.indexOf("<ReportResultSection");
     expect(reschedule).toBeGreaterThan(-1);
@@ -136,6 +155,28 @@ describe("match page result card", () => {
   });
 });
 
+describe("match page lobby bot panel", () => {
+  it("gives players, standins and admins the season lobby's name and password", () => {
+    // resolveDotaLobby lets them view the season lobby, and DOTA-LOBBY-BOT.md
+    // sends players to this panel for the password. It used to sit only in
+    // the captain-only result card, so nobody else could ever see it.
+    expect(CARD("page.tsx")).toMatch(
+      /\{!showCaptainTools \? \(\s*<Suspense fallback=\{null\}>\s*<PlayerLobbyPanel match=\{match\} viewer=\{viewer\} \/>/,
+    );
+    const panel = CARD("lobby-panel.tsx");
+    // The same windows as the captains' panel in the result card.
+    expect(panel).toContain(
+      'if (!viewer || !lobbyBotKindEnabled("season")) return null;',
+    );
+    expect(panel).toMatch(
+      /!match\.season\.isActive \|\|\s*match\.status === "COMPLETED" \|\|\s*!matchResultsOpen\(match\.season\.status, match\.phase\)/,
+    );
+    expect(panel).toMatch(/!seesPlayerLobbyPanel\(\s*viewer,\s*match,/);
+    // Two panels: the captains' (with the controls) and everyone else's.
+    expect(PAGE.match(/<DotaLobbyControls\b/g)).toHaveLength(2);
+    expect(PAGE.match(/kind="season"/g)).toHaveLength(2);
+  });
+});
 
 describe("match page box scores", () => {
   it("keeps Game 1 open and folds later games, still reachable by id", () => {
@@ -149,7 +190,8 @@ describe("match page box scores", () => {
   });
 
   it("shows one report-card chip per player that opens the named metrics", () => {
-    const strip = PAGE.slice(PAGE.indexOf("function ReportCardStrip"));
+    const BOX = CARD("box-score.tsx");
+    const strip = BOX.slice(BOX.indexOf("function ReportCardStrip"));
     expect(strip).toMatch(
       /<details[\s\S]*?<summary[\s\S]*?Report \{overall\}[\s\S]*?<\/summary>/,
     );
@@ -159,10 +201,12 @@ describe("match page box scores", () => {
   });
 
   it("prints each game's team net worth once, in the panel", () => {
-    const side = PAGE.slice(
-      PAGE.indexOf("function SidePlayers"),
-      PAGE.indexOf("function ReportCardStrip"),
+    const BOX = CARD("box-score.tsx");
+    const side = BOX.slice(
+      BOX.indexOf("function SidePlayers"),
+      BOX.indexOf("function ReportCardStrip"),
     );
+    expect(side.length).toBeGreaterThan(0);
     expect(side).not.toMatch(/formatNetWorth\(totalNet\)|Net worth\{" "\}/);
     expect(PAGE).toContain("Recorded net worth");
   });
@@ -218,9 +262,10 @@ describe("match page admin tools", () => {
     expect(PAGE).toMatch(
       /viewer\?\.role === "ADMIN" && match\.season\.isActive \? \(\s*<AdminMatchTools\s+match=\{match\}/,
     );
-    expect(PAGE.indexOf("<AdminMatchTools")).toBeGreaterThan(-1);
-    expect(PAGE.indexOf("<AdminMatchTools")).toBeLessThan(
-      PAGE.indexOf('id="match-games"'),
+    const page = CARD("page.tsx");
+    expect(page.indexOf("<AdminMatchTools")).toBeGreaterThan(-1);
+    expect(page.indexOf("<AdminMatchTools")).toBeLessThan(
+      page.indexOf('id="match-games"'),
     );
   });
 
@@ -297,5 +342,26 @@ describe("match page admin tools", () => {
       "<RevealHashTarget prefix={ADMIN_MATCH_ROW_PREFIX} />",
     );
     expect(TOOLS).toContain("href={`/admin#${adminMatchRowId(match.id)}`}");
+  });
+});
+
+describe("match page shared reads", () => {
+  it("reads the match, season, draft and viewer once, not per card", () => {
+    // Every card used to re-read the season (five places), the draft (three)
+    // and the viewer. The page loads the match with its season and passes it
+    // and the viewer down; the draft status is load.ts's request-cached read.
+    const cards = FILES.filter(
+      (f) => !/\/(page\.tsx|load\.ts)$/.test(f.path),
+    );
+    expect(cards.length).toBeGreaterThanOrEqual(10);
+    for (const card of cards) {
+      expect(card.text, card.path).not.toMatch(
+        /prisma\.(season|draft)\.|prisma\.match\.findUnique|getSessionUser\(/,
+      );
+    }
+    expect(CARD("page.tsx")).toContain("const match = await loadMatch(id);");
+    expect(CARD("load.ts")).toMatch(
+      /export function loadDraftStatus\([^)]*\) \{\s*return getSeasonDraftStatus\(/,
+    );
   });
 });

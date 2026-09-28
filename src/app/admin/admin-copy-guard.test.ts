@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
+  folderSourceFiles,
   haystackOf,
   sourceFiles,
 } from "../../../test/support/source-files";
@@ -393,7 +394,8 @@ describe("admin copy names only controls that exist", () => {
   // with no admin controls. A link into a match page must name an anchor it
   // renders; a match's own admin row (#adm-match-<id>) must exist here.
   it("admin links into a match land on an anchor that exists", () => {
-    const matchPage = read("src/app/matches/[id]/page.tsx");
+    // The page and every card file beside it.
+    const matchPage = haystackOf(folderSourceFiles("src/app/matches/[id]", 12));
     const anchors = [
       ...new Set(
         [...renderedAdmin.matchAll(/\/matches\/\$\{[^}]+\}#([a-z-]+)/g)].map(

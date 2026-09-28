@@ -1,35 +1,30 @@
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
 import { loadSidePlayerIds } from "@/lib/availability-service";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { matchCheckinOpen } from "@/lib/league-lifecycle";
-import { CheckinBanner } from "./checkin-banner";
+import { CheckinBanner } from "@/components/checkin-banner";
+import { loadDraftStatus, type MatchPageMatch, type MatchViewer } from "./load";
 
 /** While a series is LIVE, a player on either side (or the standin covering
  * them) can say they're ready for the remaining games. Rendered only for that
  * viewer; everyone else gets nothing. `names: false` keeps the captain's
  * named list off when the page's Matchup card already shows it. */
 export async function LiveSeriesCheckin({
-  matchId,
+  match,
+  viewer,
   names = true,
 }: {
-  matchId: string;
+  match: MatchPageMatch;
+  viewer: MatchViewer;
   names?: boolean;
 }) {
-  const viewer = await getSessionUser();
   if (!viewer) return null;
-  const match = await prisma.match.findUnique({
-    where: { id: matchId },
-    include: {
-      season: { select: { isActive: true, status: true, draft: { select: { status: true } } } },
-      homeTeam: { select: { id: true, withdrawn: true, captainId: true } },
-      awayTeam: { select: { id: true, withdrawn: true, captainId: true } },
-    },
-  });
-  if (!match || match.status !== "LIVE" || !match.season.isActive) return null;
+  if (match.status !== "LIVE" || !match.season.isActive) return null;
+  const draftStatus = await loadDraftStatus(match);
   // Server component: one request-time decision, never a client render clock.
   // eslint-disable-next-line react-hooks/purity
-  if (!matchCheckinOpen(match.season.status, match.season.draft?.status, match.status, match.scheduledAt, Date.now())) return null;
+  if (!matchCheckinOpen(match.season.status, draftStatus, match.status, match.scheduledAt, Date.now())) return null;
+  const matchId = match.id;
   const [member, assignments, ownRsvp] = await Promise.all([
     prisma.teamMember.findFirst({ where: { seasonId: match.seasonId, userId: viewer.id, teamId: { in: [match.homeTeamId, match.awayTeamId] } }, select: { teamId: true } }),
     prisma.standinAssignment.findMany({ where: { matchId, OR: [{ standinUserId: viewer.id }, { replacingUserId: viewer.id }] }, select: { teamId: true, standinUserId: true, replacingUserId: true } }),

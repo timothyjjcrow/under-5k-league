@@ -35,7 +35,10 @@ const FANTASY_ACTION = read("actions", "fantasy.ts");
 const FANTASY_PICKER = read("..", "components", "fantasy-picker.tsx");
 const PICKEM_BUTTON = read("..", "components", "pickem-submit-button.tsx");
 const PICK_FORM = read("..", "components", "pickem-pick-form.tsx");
-const MATCH = read("matches", "[id]", "page.tsx");
+// The match preview decides the pick'em control; its Matchup card renders it.
+const MATCH =
+  read("matches", "[id]", "match-preview.tsx") +
+  read("matches", "[id]", "matchup-card.tsx");
 const SEASON_ARCHIVE = read("seasons", "[id]", "page.tsx");
 const SEASON_SCOPE = read("..", "lib", "season-scope.ts");
 
@@ -235,7 +238,7 @@ describe("pick'em control: one implementation, gated like /pickem", () => {
       /pickemPlayable=\{\s*season\.isActive &&\s*postAuctionWorkOpen\(/,
     );
     expect(MATCH).toMatch(
-      /canPlay:\s*!!previewSeason\?\.isActive &&\s*postAuctionWorkOpen\(/,
+      /canPlay:\s*match\.season\.isActive &&\s*postAuctionWorkOpen\(/,
     );
   });
 

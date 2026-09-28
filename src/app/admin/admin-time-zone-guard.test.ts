@@ -58,7 +58,7 @@ describe("admin time boxes", () => {
     // The reschedule box is labelled "your time"; the two captains may sit in
     // different zones and each proposes on their own clock.
     const reschedule = fieldProps(
-      readFileSync(join(ROOT, "src", "app", "matches", "[id]", "page.tsx"), "utf8"),
+      readFileSync(join(ROOT, "src", "app", "matches", "[id]", "reschedule.tsx"), "utf8"),
     );
     expect(reschedule.length).toBeGreaterThan(0);
     expect(reschedule.every((props) => !props.includes("timeZone="))).toBe(true);
