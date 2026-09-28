@@ -87,10 +87,12 @@ test("match return restores an opened past week and the clicked scoreboard posit
   await expect(week).toHaveAttribute("aria-expanded", "false");
   await week.click();
   await expect(page).toHaveURL(/weeks=1/);
+  // Chrome's accessible name puts a space before the card link's sr-only
+  // ": Home vs Away" suffix, so the name reads "Match page : …".
   const details = page
     .getByRole("article", { name: / · Final score$/ })
     .first()
-    .getByRole("link", { name: /^Match page: / });
+    .getByRole("link", { name: /^Match page ?: / });
   await details.evaluate((link) =>
     window.scrollTo({
       top: window.scrollY + link.getBoundingClientRect().top - 350,

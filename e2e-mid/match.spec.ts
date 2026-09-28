@@ -15,10 +15,12 @@ test("a completed match page renders the box score with an MVP chip", async ({
   // the header hamburger and "Add to calendar" also have aria-expanded) and
   // open its first match.
   await page.locator('#fixtures button[aria-expanded="false"]').first().click();
+  // Chrome's accessible name puts a space before the card link's sr-only
+  // ": Home vs Away" suffix, so the name reads "Match page : …".
   await page
     .getByRole("article", { name: / · Final score$/ })
     .first()
-    .getByRole("link", { name: /^Match page: / })
+    .getByRole("link", { name: /^Match page ?: / })
     .click();
 
   await expect(page).toHaveURL(/\/matches\//);
@@ -55,7 +57,7 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   // exercising the pre-game scouting state regardless of within-week order.
   const scheduledDetails = page
     .getByRole("article", { name: / · Upcoming$/ })
-    .getByRole("link", { name: /^Match page: / });
+    .getByRole("link", { name: /^Match page ?: / });
   await expect(scheduledDetails.first()).toBeVisible();
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);

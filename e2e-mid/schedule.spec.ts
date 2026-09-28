@@ -180,9 +180,11 @@ test("the team filter narrows the week rows and the All teams option restores th
   // count() doesn't auto-wait — anchor on rendered content first so the
   // streamed page is actually there before counting.
   await expect(page.getByText("Week 1").first()).toBeVisible();
+  // Chrome's accessible name puts a space before the card link's sr-only
+  // ": Home vs Away" suffix, so the name reads "Match page : …".
   const fixtures = page.locator("#fixtures");
   await expect(
-    fixtures.getByRole("link", { name: /^Match page: / }).first(),
+    fixtures.getByRole("link", { name: /^Match page ?: / }).first(),
   ).toBeVisible();
   // Each series shows once, as a card in an open week or as a result line in
   // a closed one, so count distinct match links.
