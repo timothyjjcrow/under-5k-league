@@ -62,23 +62,14 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
   await expect(page.getByText("Scouting report")).toBeVisible();
-  const matchSections = page.getByRole("navigation", {
-    name: "Match sections",
-  });
-  await matchSections
-    .getByRole("link", { name: "Scouting", exact: true })
-    .click();
-  await expect(page).toHaveURL(/#match-scouting$/);
-  await expect(
-    page.getByRole("heading", { name: "Scouting report" }),
-  ).toBeFocused();
-  await matchSections
-    .getByRole("link", { name: "Matchup", exact: true })
-    .click();
-  await expect(page).toHaveURL(/#match-matchup$/);
   await expect(
     page.getByRole("heading", { name: "Matchup", exact: true }),
-  ).toBeFocused();
+  ).toBeVisible();
+  // A visitor's preview has two cards, so there is no jump bar: with only
+  // two places to go it would point at what is already on screen.
+  await expect(
+    page.getByRole("navigation", { name: "Match sections" }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Captain tools", exact: true }),
   ).toHaveCount(0);
@@ -115,6 +106,30 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.locator("#match-games").getByRole("button", { name: "✓ I'm in" }),
   ).toBeVisible();
+  // A captain's preview has three places to go, so it gets the jump bar,
+  // and each chip is named after the card it lands on.
+  const matchSections = page.getByRole("navigation", {
+    name: "Match sections",
+  });
+  await expect(matchSections.getByRole("link")).toHaveText([
+    "Matchup",
+    "Scouting",
+    "Captain tools",
+  ]);
+  await matchSections
+    .getByRole("link", { name: "Scouting", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#match-scouting$/);
+  await expect(
+    page.getByRole("heading", { name: "Scouting report" }),
+  ).toBeFocused();
+  await matchSections
+    .getByRole("link", { name: "Matchup", exact: true })
+    .click();
+  await expect(page).toHaveURL(/#match-matchup$/);
+  await expect(
+    page.getByRole("heading", { name: "Matchup", exact: true }),
+  ).toBeFocused();
   await captainJump.click();
   await expect(page).toHaveURL(/#match-tools$/);
   await expect(

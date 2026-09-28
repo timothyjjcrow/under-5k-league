@@ -241,14 +241,15 @@ export default async function MatchDetailPage({
     match.status !== "COMPLETED" &&
     match.scheduledAt != null &&
     match.scheduledAt.getTime() < renderedAt;
+  // Each label names the card it jumps to. Played games get no entry: the
+  // scoreboard's Game chips already jump to each box score.
   const sectionItems = [
     ...(hasPreview
       ? [
-          { id: "match-games", label: "Match night" },
           { id: "match-matchup", label: "Matchup" },
           { id: "match-scouting", label: "Scouting" },
         ]
-      : [{ id: "match-games", label: "Games" }]),
+      : []),
     ...(showCaptainTools
       ? [{ id: "match-tools", label: "Captain tools" }]
       : []),
@@ -500,9 +501,11 @@ export default async function MatchDetailPage({
         ) : null}
       </Card>
 
-      {/* One chip would only point at the section right below it. */}
-      {sectionItems.length > 1 ? (
-        <SectionNav items={sectionItems} label="Match sections" sticky />
+      {/* A jump bar earns its space only with three places to go; with one
+          or two it just points at what is already on screen. Never pinned
+          here: a pinned bar sat over the box scores. */}
+      {sectionItems.length >= 3 ? (
+        <SectionNav items={sectionItems} label="Match sections" />
       ) : null}
 
       {!match.season.isActive ? (
@@ -530,7 +533,7 @@ export default async function MatchDetailPage({
 
       <section
         id="match-games"
-        className="scroll-mt-40 space-y-6"
+        className="scroll-mt-24 space-y-6"
         aria-label={hasPreview ? "Match preview" : "Match games"}
       >
         {games.length === 0 && match.status !== "COMPLETED" ? (
@@ -576,7 +579,7 @@ export default async function MatchDetailPage({
               <Card
                 key={g.id}
                 id={`game-${g.id}`}
-                className="scroll-mt-40 overflow-hidden"
+                className="scroll-mt-24 overflow-hidden"
               >
                 <CardHeader
                   title={`Game ${i + 1}`}
@@ -657,7 +660,7 @@ export default async function MatchDetailPage({
       {showCaptainTools ? (
         <section
           id="match-tools"
-          className="scroll-mt-40 space-y-4"
+          className="scroll-mt-24 space-y-4"
           aria-labelledby="match-tools-title"
         >
           <div className="flex items-center gap-3 border-t border-line pt-6">
@@ -882,7 +885,7 @@ async function MatchPreview({
 
       <StakesBanner match={match} seasonMatches={seasonMatches} />
 
-      <Card id="match-matchup" className="scroll-mt-40 overflow-hidden">
+      <Card id="match-matchup" className="scroll-mt-24 overflow-hidden">
         <CardHeader
           title="Matchup"
           headingLevel={2}
@@ -1197,7 +1200,7 @@ async function ScoutingReport({
   });
 
   return (
-    <Card id="match-scouting" className="scroll-mt-40 overflow-hidden">
+    <Card id="match-scouting" className="scroll-mt-24 overflow-hidden">
       <CardHeader
         title="Scouting report"
         headingLevel={2}
