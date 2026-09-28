@@ -83,9 +83,12 @@ import {
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
   GAME_SERVER_REGION,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
 } from "@/lib/constants";
+import { matchAttention } from "@/lib/admin-attention";
+import { adminHomeLine } from "@/lib/admin-home-line";
 import { pickemControlFor, predictionOpen } from "@/lib/pickem";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { PickemTray } from "@/components/pickem-pick-form";
@@ -647,6 +650,9 @@ export default async function Home() {
       />
     ) : null;
 
+  // The admin's own line under the hero (AdminStrip); players never see it.
+  const isAdmin = user?.role === "ADMIN";
+
   const hero = (
     <Hero
       phase={season.status}
@@ -679,10 +685,19 @@ export default async function Home() {
 
   return (
     <div className="space-y-8">
-      {defending ? (
+      {defending || isAdmin ? (
         <div className="space-y-3">
           {hero}
-          <DefendingChampionLine champion={defending} />
+          {defending ? <DefendingChampionLine champion={defending} /> : null}
+          {isAdmin ? (
+            <Suspense
+              fallback={
+                <div className="skeleton h-12 rounded-[var(--radius)]" />
+              }
+            >
+              <AdminStrip snapshot={snapshot} />
+            </Suspense>
+          ) : null}
         </div>
       ) : (
         hero
@@ -1627,6 +1642,74 @@ function SeasonTimeline({ phase }: { phase: string }) {
         })}
       </ol>
     </div>
+  );
+}
+
+/**
+ * For admins only, one line under the hero: the admin panel's next step and
+ * how many open matches its Needs attention card lists, linking the panel.
+ * Home otherwise showed Tim exactly what a visitor sees on match night.
+ * Database reads only (request-cached matches plus one query for the open
+ * matches' check-ins, covers and reschedules), never a Discord call.
+ */
+async function AdminStrip({ snapshot }: { snapshot: SeasonSnapshot }) {
+  const { season } = snapshot;
+  const [matches, open] = await Promise.all([
+    getSeasonMatches(season.id),
+    prisma.match.findMany({
+      where: { seasonId: season.id, status: { not: MATCH_STATUS.COMPLETED } },
+      select: {
+        id: true,
+        status: true,
+        scheduledAt: true,
+        scheduleRevision: true,
+        availability: {
+          select: { userId: true, status: true, scheduleRevision: true },
+        },
+        standins: { select: { replacingUserId: true } },
+        reschedules: { select: { status: true } },
+      },
+    }),
+  ]);
+  // Check-ins count for the fixture's current time only, as on the panel.
+  const attention = matchAttention(
+    open.map((match) => ({
+      ...match,
+      availability: match.availability.filter(
+        (rsvp) => rsvp.scheduleRevision === match.scheduleRevision,
+      ),
+    })),
+  );
+  const { step, attention: attentionLine } = adminHomeLine({
+    seasonStatus: season.status,
+    draftStatus: snapshot.draftStatus,
+    playerCount: snapshot.playerCount,
+    minPlayers: snapshot.capacity.minPlayers,
+    teams: snapshot.teams,
+    matches,
+    hasChampion:
+      resolveChampionPresentation(season, matches).championTeamId != null,
+    attentionCount: attention.length,
+  });
+  return (
+    <Link
+      href="/admin"
+      className="group flex items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm transition-colors hover:border-muted/60"
+    >
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <Badge tone="info">Admin</Badge>
+        <span className="text-fg">{step}</span>
+        {attentionLine ? (
+          <span className="text-muted">
+            <span aria-hidden>· </span>
+            {attentionLine}
+          </span>
+        ) : null}
+      </span>
+      <span className="shrink-0 font-medium text-accent group-hover:underline">
+        Open admin <LinkArrow />
+      </span>
+    </Link>
   );
 }
 

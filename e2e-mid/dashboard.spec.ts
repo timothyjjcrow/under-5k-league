@@ -94,6 +94,28 @@ test("home shows a pinned post once, with the latest news below", async ({
   assertNoErrors();
 });
 
+// An admin gets the panel's next step as one line under the hero, linking
+// the panel; everyone else sees Home as before.
+test("admins get the admin panel's next step under the hero", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/");
+  const main = page.locator("#main");
+  const strip = main.getByRole("link", { name: /Open admin$/ });
+  await expect(main.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(strip).toHaveCount(0);
+
+  await page.goto("/api/auth/dev?name=Home%20Admin&admin=1");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(strip).toHaveAttribute("href", "/admin");
+  // The fixture's last week is still open.
+  await expect(strip).toContainText(/Admin.*result\(s\) outstanding\./);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expectNoHorizontalOverflow(page, "/ admin line");
+  assertNoErrors();
+});
+
 // The dashboard is the widest page in the app — standings table, bracket, the
 // This-week grid — and it was the one page with no overflow tripwire at all.
 test("dashboard has no horizontal page overflow on a phone", async ({
