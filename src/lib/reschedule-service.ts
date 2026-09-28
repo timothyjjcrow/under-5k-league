@@ -21,6 +21,8 @@ import { rescheduleDeadline } from "./schedule";
 import { isSerializationConflict } from "./prisma-errors";
 
 export type AcceptedReschedule = {
+  /** For the announcement's match-page link. */
+  matchId: string;
   homeName: string;
   awayName: string;
   week: number;
@@ -46,6 +48,8 @@ export type AcceptedReschedule = {
 // action layer does the Discord send, so a webhook failure can never affect
 // the proposal write itself.
 export type ProposedReschedule = {
+  /** For the announcement's link to the Reschedule card. */
+  matchId: string;
   homeName: string;
   awayName: string;
   week: number;
@@ -62,6 +66,8 @@ export type ProposedReschedule = {
 };
 
 export type DeclinedReschedule = {
+  /** For the announcement's link to the Reschedule card. */
+  matchId: string;
   homeName: string;
   awayName: string;
   week: number;
@@ -263,6 +269,7 @@ export async function proposeReschedule(
         });
 
         return {
+          matchId: match.id,
           homeName: match.homeTeam.name,
           awayName: match.awayTeam.name,
           week: match.week,
@@ -328,6 +335,7 @@ export async function respondReschedule(
             throw new UserFacingError("That proposal is no longer open");
           return {
             accepted: false as const,
+            matchId: match.id,
             homeName: match.homeTeam.name,
             awayName: match.awayTeam.name,
             week: match.week,
@@ -479,6 +487,7 @@ export async function respondReschedule(
   ]);
   return {
     accepted: true,
+    matchId: outcome.matchId,
     homeName: outcome.homeName,
     awayName: outcome.awayName,
     week: outcome.week,

@@ -664,11 +664,17 @@ export function rescheduleProposedMessage(m: {
   isTiebreaker?: boolean;
   proposerName: string;
   whenMs: number;
+  /** Deep link to the Reschedule card, where the other captain answers.
+   *  Optional so hand-built calls stay valid. */
+  matchId?: string;
 }): string {
   const label = m.isTiebreaker
     ? "tiebreaker match"
     : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
-  return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond on the match page.`;
+  const where = m.matchId
+    ? `on the match page: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.reschedule)}>`
+    : "on the match page.";
+  return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond ${where}`;
 }
 
 /**
@@ -685,11 +691,17 @@ export function rescheduleDeclinedMessage(m: {
   isTiebreaker?: boolean;
   declinerName: string;
   whenMs: number;
+  /** Deep link to the Reschedule card, where the proposer can try another
+   *  time. Optional so hand-built calls stay valid. */
+  matchId?: string;
 }): string {
   const label = m.isTiebreaker
     ? "tiebreaker match"
     : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
-  return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.`;
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.reschedule)}>`
+    : "";
+  return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.${link}`;
 }
 
 /** Cap the ping list so one badly-organised team can't produce a wall of
@@ -1089,6 +1101,9 @@ export function rescheduleMessage(m: {
   whenMs: number;
   /** RSVPs the retime invalidated — the rosters have to hear about this. */
   clearedRsvps?: number;
+  /** Deep link to the match page, where players check in again (the admin
+   *  retime's shape). Optional so hand-built calls stay valid. */
+  matchId?: string;
 }): string {
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week}`
@@ -1100,7 +1115,10 @@ export function rescheduleMessage(m: {
   const reset = m.clearedRsvps
     ? ` Check-ins were reset (${m.clearedRsvps} cleared) — everyone please RSVP again.`
     : "";
-  return `🗓️ **Rescheduled** — ${label}: **${name(m.homeName)}** vs **${name(m.awayName)}** now plays ${t} (both captains agreed).${reset}`;
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}/matches/${m.matchId}>`
+    : "";
+  return `🗓️ **Rescheduled** — ${label}: **${name(m.homeName)}** vs **${name(m.awayName)}** now plays ${t} (both captains agreed).${reset}${link}`;
 }
 
 export type AdminRetimeMove = {

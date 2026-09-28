@@ -76,6 +76,7 @@ export async function proposeReschedule(
       isTiebreaker: proposed.isTiebreaker,
       proposerName: user.name,
       whenMs: proposed.proposedTime.getTime(),
+      matchId: proposed.matchId,
     }),
     // Addressed to the opposing captain — the message literally asks them to
     // respond, so it should reach them rather than wait to be noticed.
@@ -133,6 +134,7 @@ export async function respondReschedule(
         isTiebreaker: outcome.isTiebreaker,
         whenMs: outcome.newTime.getTime(),
         clearedRsvps: outcome.clearedRsvps,
+        matchId: outcome.matchId,
       }),
       // The proposer asked and has been waiting — and the booked standins'
       // personally-mentioned assignment message quoted the OLD kickoff, so
@@ -154,6 +156,7 @@ export async function respondReschedule(
         isTiebreaker: outcome.isTiebreaker,
         declinerName: user.name,
         whenMs: outcome.proposedTime.getTime(),
+        matchId: outcome.matchId,
       }),
       await mentionUsers([outcome.notifyUserId]),
     );

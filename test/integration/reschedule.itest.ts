@@ -55,6 +55,8 @@ describe("reschedule service (integration)", () => {
     // The service returns announcement data (the action's Discord ping).
     const proposed = await proposeReschedule(home.captainId, match.id, NIGHT);
     expect(proposed).toMatchObject({
+      // The announcement links the match's Reschedule card.
+      matchId: match.id,
       homeName: "Home",
       awayName: "Away",
       isPlayoff: false,
@@ -357,7 +359,7 @@ describe("reschedule service (integration)", () => {
     ).rejects.toThrow(/opposing captain/i);
     await expect(
       respondReschedule(replacementCaptain.id, pending!.id, false),
-    ).resolves.toMatchObject({ accepted: false });
+    ).resolves.toMatchObject({ accepted: false, matchId: match.id });
   });
 
   it("proposer cannot accept their own proposal", async () => {
@@ -797,6 +799,7 @@ describe("reschedule — the acceptance carries the match's booked standins", ()
 
     if (!outcome.accepted) throw new Error("expected an acceptance");
     expect(outcome.standinUserIds).toEqual([standin.id]);
+    expect(outcome.matchId).toBe(match.id);
   });
 
   it("a decline carries no standinUserIds — nothing moved, nobody needs a new time", async () => {

@@ -2018,6 +2018,47 @@ describe("match-page deep links", () => {
     expect(msg).toMatch(/<[^<>\s]*\/matches\/m1#match-standins>/);
   });
 
+  it("reschedule messages link the match page, the Reschedule card where there is an answer to give", () => {
+    const fixture = {
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+      matchId: "m1",
+    };
+    // The proposal asks the other captain to respond: land on that card.
+    expect(
+      rescheduleProposedMessage({ ...fixture, proposerName: "P" }),
+    ).toMatch(/respond on the match page: <[^<>\s]*\/matches\/m1#match-reschedule>$/);
+    // A decline goes to the proposer, who may want to try another time.
+    expect(
+      rescheduleDeclinedMessage({ ...fixture, declinerName: "D" }),
+    ).toMatch(/original kickoff stands\. <[^<>\s]*\/matches\/m1#match-reschedule>$/);
+    // An acceptance asks everyone to check in again, on the match page.
+    expect(
+      rescheduleMessage({ ...fixture, clearedRsvps: 3 }),
+    ).toMatch(/RSVP again\. <[^<>\s]*\/matches\/m1>$/);
+  });
+
+  it("reschedule messages stay link-free without a matchId — hand-built calls", () => {
+    const fixture = {
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+    };
+    for (const msg of [
+      rescheduleProposedMessage({ ...fixture, proposerName: "P" }),
+      rescheduleDeclinedMessage({ ...fixture, declinerName: "D" }),
+      rescheduleMessage(fixture),
+    ]) {
+      expect(msg).not.toContain("/matches/");
+      expect(msg).toBe(msg.trim());
+    }
+  });
+
   it("playerOutMessage stays link-free without one — hand-built calls", () => {
     const msg = playerOutMessage({
       playerName: "Dendi",
