@@ -75,14 +75,19 @@ const roomText = (room: Room) => roomCode(room).join("\n");
 
 /** Every `fetch(...)` call in `src`, returned as its full argument text. */
 function fetchCalls(src: string): string[] {
+  return callArgs(src, "fetch");
+}
+
+/** Every `callee(...)` call in `src`, returned as its full argument text. */
+function callArgs(src: string, callee: string): string[] {
   const calls: string[] = [];
-  const needle = "fetch(";
+  const needle = `${callee}(`;
   let from = 0;
   for (;;) {
     const at = src.indexOf(needle, from);
     if (at === -1) break;
     from = at + needle.length;
-    // Skip identifiers that merely END in "fetch(" (prefetch(, refetch(…).
+    // Skip identifiers that merely END in the callee (prefetch(, refetch(…).
     const before = src[at - 1] ?? " ";
     if (/[A-Za-z0-9_$.]/.test(before)) continue;
     // Walk forward balancing parens to the end of the call.
@@ -283,6 +288,24 @@ describe("live rooms delegate their poll policy", () => {
         `${rate} is back in UI code — schedule() must take its delay ` +
           `from inhousePollCadence so the rules stay in one tested place.`,
       ).toEqual([]);
+    }
+  });
+
+  it("inhouse-room tells the cadence and the tab title when a READY game is being played", () => {
+    // Start is optional, so a game hosted by hand is READY for its whole
+    // length; inhouseReadyInPlay ends READY's fast poll and "(!) Teams locked"
+    // once the scan window opens. Its tests prove nothing if the room stops
+    // passing the window and the clock: READY would silently go back to
+    // polling every 1.5s, with a "(!)" in the tab, for the whole game.
+    const src = roomText(INHOUSE_ROOM);
+    const uses = [
+      ...callArgs(src, "inhousePollCadence"),
+      ...callArgs(src, "inhouseTitleFlag"),
+    ];
+    expect(uses.length).toBeGreaterThanOrEqual(3);
+    for (const args of uses) {
+      expect(args).toMatch(/\bscanOpensAt:/);
+      expect(args).toMatch(/\bserverNow:/);
     }
   });
 

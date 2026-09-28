@@ -6,6 +6,7 @@ import {
   inhouseAlerts,
   inhouseDetectWindow,
   inhouseLobbyCode,
+  inhouseReadyInPlay,
   inhouseScanStatus,
   inhouseTitleFlag,
   mmrBalance,
@@ -570,12 +571,16 @@ describe("wasInReadyCheck", () => {
 // The tab title. Unlike the chime it is STATE-derived and ungated by the sound
 // toggle, so it reaches a backgrounded tab that has never had a user gesture.
 describe("inhouseTitleFlag", () => {
+  // Teams locked a few minutes ago; the result scan opens in a minute.
+  const SCAN_OPENS = Date.UTC(2026, 8, 28, 20, 15);
   const s = (over: Partial<Parameters<typeof inhouseTitleFlag>[0]> = {}) => ({
     status: null as string | null,
     inLobby: true,
     isOnClock: false,
     hasAccepted: false,
     hasVoted: false,
+    scanOpensAt: SCAN_OPENS as number | null,
+    serverNow: SCAN_OPENS - 60_000,
     ...over,
   });
 
@@ -613,6 +618,23 @@ describe("inhouseTitleFlag", () => {
 
   it("announces locked teams (the cue to go host the Dota lobby)", () => {
     expect(inhouseTitleFlag(s({ status: "READY" }))).toBe("(!) Teams locked");
+    // An unknown scan window keeps the cue rather than guessing.
+    expect(
+      inhouseTitleFlag(s({ status: "READY", scanOpensAt: null, serverNow: SCAN_OPENS })),
+    ).toBe("(!) Teams locked");
+  });
+
+  it("drops the locked-teams cue once the game is plausibly being played", () => {
+    // Start is optional, so a game hosted by hand stays READY until its
+    // result imports. A "(!)" for the whole game would outlive the thing it
+    // asks for, so it ends when the result scan's window opens.
+    for (const serverNow of [SCAN_OPENS, SCAN_OPENS + 45 * 60_000]) {
+      expect(inhouseTitleFlag(s({ status: "READY", serverNow }))).toBeNull();
+    }
+    // Your pick still wins (the flag ordering is untouched).
+    expect(
+      inhouseTitleFlag(s({ status: "READY", isOnClock: true, serverNow: SCAN_OPENS })),
+    ).toBe("(!) Your pick");
   });
 
   it("says nothing to a spectator, whatever the lobby is doing", () => {
@@ -963,6 +985,37 @@ describe("inhouseScanStatus", () => {
     expect(inhouseScanStatus(window!.opensAtMs, lateStart + 3_000).live).toBe(
       true,
     );
+  });
+});
+
+describe("inhouseReadyInPlay", () => {
+  const FORMED = Date.UTC(2026, 8, 28, 20, 0);
+
+  it("ends READY's setup when the formation scan window opens", () => {
+    const opens = inhouseDetectWindow({
+      status: INHOUSE_STATUS.READY,
+      createdAtMs: FORMED,
+      startedAtMs: null,
+    })!.opensAtMs;
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, opens - 1)).toBe(false);
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, opens)).toBe(true);
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, opens + 3_600_000)).toBe(true);
+  });
+
+  it("speaks only for READY, and never on an unknown window or clock", () => {
+    const opens = FORMED;
+    for (const status of [
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CAPTAIN_VOTE,
+      INHOUSE_STATUS.DRAFTING,
+      INHOUSE_STATUS.IN_PROGRESS,
+      null,
+      undefined,
+    ]) {
+      expect(inhouseReadyInPlay(status, opens, opens + 1)).toBe(false);
+    }
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, null, opens)).toBe(false);
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, null)).toBe(false);
   });
 });
 

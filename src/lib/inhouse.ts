@@ -388,6 +388,10 @@ export type InhouseTitleSnapshot = {
   hasAccepted: boolean;
   /** The viewer has cast their captain-selection ballot. */
   hasVoted: boolean;
+  /** `lobby.scanOpensAt` (see inhouseReadyInPlay). */
+  scanOpensAt: number | null;
+  /** The server clock of the last poll. */
+  serverNow: number;
 };
 
 export function inhouseTitleFlag(
@@ -405,8 +409,42 @@ export function inhouseTitleFlag(
   // they have accepted: a "(!)" that survives the action it is asking for
   // teaches people to ignore the "(!)".
   if (s.status === "CAPTAIN_VOTE" && !s.hasVoted) return "(!) Lobby up — vote";
-  if (s.status === "READY") return "(!) Teams locked";
+  // The cue to go host and join the Dota lobby — dropped once the game is
+  // plausibly being played, for the same reason. Start is optional, so a
+  // game hosted by hand is READY until its result imports.
+  if (
+    s.status === "READY" &&
+    !inhouseReadyInPlay(s.status, s.scanOpensAt, s.serverNow)
+  )
+    return "(!) Teams locked";
   return null;
+}
+
+/**
+ * Is a READY lobby, by now, a game being played rather than one being set up?
+ *
+ * Start is optional, so a game hosted by hand stays READY from team lock
+ * until its result imports — the whole game. What READY carries for setup
+ * (the fast room poll, the "(!) Teams locked" tab flag) is for the few
+ * minutes it takes to get ten people into the Dota lobby, so it ends when the
+ * result scan's window opens (`scanOpensAt`, DETECT_READY_MIN_MINUTES after
+ * formation — the moment the room starts treating the game as possibly
+ * over). From then on the room treats READY like IN_PROGRESS.
+ *
+ * An unknown window keeps the setup behaviour. `serverNow` is the server
+ * clock of the last poll, so the render stays idempotent.
+ */
+export function inhouseReadyInPlay(
+  status: string | null | undefined,
+  scanOpensAt: number | null | undefined,
+  serverNow: number | null | undefined,
+): boolean {
+  return (
+    status === INHOUSE_STATUS.READY &&
+    scanOpensAt != null &&
+    serverNow != null &&
+    serverNow >= scanOpensAt
+  );
 }
 
 export function readyCheckEndedToast(o: {

@@ -1,4 +1,5 @@
 import { DRAFT_ROOM, INHOUSE, INHOUSE_STATUS, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
+import { inhouseReadyInPlay } from "./inhouse";
 
 /**
  * The poll cadence for both live rooms.
@@ -137,6 +138,9 @@ export function roomPollCadence(
 /**
  * Membership controls background updates; the phase controls foreground speed.
  * Only ready checks, captain votes, draft picks and game setup need the fast rate.
+ * Game setup ends when a READY lobby is plausibly being played
+ * (inhouseReadyInPlay): Start is optional, so a game hosted by hand stays
+ * READY for its whole length and must poll at the game rate like IN_PROGRESS.
  */
 export function inhousePollCadence(
   o: Omit<RoomPollInput, "active"> & {
@@ -144,20 +148,30 @@ export function inhousePollCadence(
     idleMs?: number;
     /** Undefined preserves the cold-start rate before the first snapshot. */
     lobbyStatus?: string | null;
+    /** `lobby.scanOpensAt` from the last snapshot. */
+    scanOpensAt?: number | null;
+    /** The server clock of the last snapshot. */
+    serverNow?: number | null;
   },
 ): RoomPollCadence {
   const idleMs = o.idleMs ?? INHOUSE.POLL_IDLE_MS;
+  const readyInPlay = inhouseReadyInPlay(
+    o.lobbyStatus,
+    o.scanOpensAt,
+    o.serverNow,
+  );
   const timedPhase =
     o.lobbyStatus === undefined ||
-    [
-      INHOUSE_STATUS.READY_CHECK,
-      INHOUSE_STATUS.CAPTAIN_VOTE,
-      INHOUSE_STATUS.DRAFTING,
-      INHOUSE_STATUS.READY,
-    ].some((status) => status === o.lobbyStatus);
+    (!readyInPlay &&
+      [
+        INHOUSE_STATUS.READY_CHECK,
+        INHOUSE_STATUS.CAPTAIN_VOTE,
+        INHOUSE_STATUS.DRAFTING,
+        INHOUSE_STATUS.READY,
+      ].some((status) => status === o.lobbyStatus));
   const activeMs = timedPhase
     ? o.activeMs
-    : o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS
+    : readyInPlay || o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS
       ? INHOUSE.POLL_GAME_MS
       : INHOUSE.POLL_QUEUE_MS;
   return roomPollCadence(o, {

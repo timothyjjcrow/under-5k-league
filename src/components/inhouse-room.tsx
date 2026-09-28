@@ -249,6 +249,8 @@ export function InhouseRoom({
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
         lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
+        scanOpensAt: latestStateRef.current?.lobby?.scanOpensAt ?? null,
+        serverNow: latestStateRef.current?.now ?? null,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
         // for everyone — fetch once rather than skipping forever (a tab that is
         // HIDDEN at load would otherwise never learn it had a stake).
@@ -341,6 +343,8 @@ export function InhouseRoom({
           // Keep the latest ACCEPTED state through a failed or stale poll.
           hasStake: hasStakeRef.current,
           lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
+          scanOpensAt: latestStateRef.current?.lobby?.scanOpensAt ?? null,
+          serverNow: latestStateRef.current?.now ?? null,
           rateLimited,
           reached: !!next,
           failureCount: consecutiveFailures,
@@ -473,6 +477,8 @@ export function InhouseRoom({
         isOnClock: state.me.isOnClock,
         hasAccepted: state.me.hasAccepted,
         hasVoted: !!state.me.myVote?.method,
+        scanOpensAt: state.lobby?.scanOpensAt ?? null,
+        serverNow: state.now,
       },
     );
     document.title = flag ? `${flag} · ${original}` : original;
