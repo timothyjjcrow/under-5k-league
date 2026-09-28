@@ -801,9 +801,10 @@ function OpenNextSeason({
               <p className="text-muted">
                 Use this only to reactivate an older season from Season
                 history, which needs the league to have no active season.
-                Archiving takes the league out of Complete: the home page swaps
-                the champion for an offseason notice, and nobody can sign up
-                until you open the next season here. Results, the champion,
+                Archiving takes the league out of Complete: the home page
+                swaps the champion card and bracket for an offseason notice
+                that still names the champion as the defending champion, and
+                nobody can sign up until you open the next season here. Results, the champion,
                 rosters and records stay public under Season history. For a
                 long break, stay in Complete and pin a League news post
                 instead.
