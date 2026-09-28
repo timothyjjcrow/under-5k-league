@@ -137,6 +137,9 @@ test("hero table sorts in place and folds unpicked heroes into one line", async 
     rows.evaluateAll((nodes) =>
       nodes.map((node) => Number(node.querySelector("td")?.textContent?.trim())),
     );
+  // count() doesn't auto-wait, and the page streams in behind the root
+  // loading screen: wait for the table itself before counting its rows.
+  await expect(rows.first()).toBeVisible();
   expect(await rows.count()).toBeGreaterThan(1);
 
   // Most picked first by default.
