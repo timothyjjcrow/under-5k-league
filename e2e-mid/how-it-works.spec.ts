@@ -12,7 +12,7 @@ test("during the season How it works asks newcomers to stand in", async ({
   // Dev login is on in e2e, so sign-in goes through /login (with only Steam
   // it goes straight to Steam); the note beside it says what is shared.
   await expect(
-    main.getByRole("link", { name: "Sign up as a standin" }),
+    main.getByRole("link", { name: "Register as a standin" }),
   ).toHaveAttribute("href", "/login?next=/me");
   await expect(
     main.getByText(/so we never see your password or email\.$/),
