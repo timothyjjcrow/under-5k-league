@@ -183,7 +183,7 @@ test("former players retain actual appearances and auction receipts while identi
     await expect(page.getByRole("heading", { name: "Seasons", exact: true })).toBeVisible();
     const seasonRow = page.locator("#player-seasons li").filter({ hasText: f.homeName });
     await expect(seasonRow.getByText("Drafted for $47", { exact: true })).toBeVisible();
-    await expect(seasonRow.getByText("1–0 series · 1 game", { exact: true })).toBeVisible();
+    await expect(seasonRow.getByText("1W 0D 0L series · 1 game", { exact: true })).toBeVisible();
     await expect(seasonRow.getByTitle("Won the title", { exact: true })).toBeVisible();
     expect(await db.teamMember.count({ where: { userId: f.users[1].id } })).toBe(0);
 

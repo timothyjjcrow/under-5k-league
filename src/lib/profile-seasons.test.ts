@@ -88,7 +88,7 @@ describe("profileSeasonRows", () => {
       champion: true,
     });
     expect(profileSeasonNote(row)).toBe("Drafted for $12");
-    expect(profileSeasonRecord(row)).toBe("1–1 series · 3 games");
+    expect(profileSeasonRecord(row)).toBe("1W 0D 1L series · 3 games");
   });
 
   it("says Captain for a captain's older record instead of a $0 price", () => {
@@ -140,7 +140,7 @@ describe("profileSeasonRows", () => {
     });
     expect(row).toMatchObject({ teamName: "Bravo", role: null, stoodIn: 2 });
     expect(profileSeasonNote(row)).toBe("Stood in for 2 matches");
-    expect(profileSeasonRecord(row)).toBe("1–0 series · 2 games");
+    expect(profileSeasonRecord(row)).toBe("1W 0D 0L series · 2 games");
   });
 
   it("keeps cover served on matches whose games were never imported", () => {
@@ -227,6 +227,6 @@ describe("profileSeasonRows", () => {
     const [row] = rows({
       appearances: [app({ games: 1, seriesWins: 2, seriesLosses: 1, seriesDraws: 1 })],
     });
-    expect(profileSeasonRecord(row)).toBe("2–1–1 series · 1 game");
+    expect(profileSeasonRecord(row)).toBe("2W 1D 1L series · 1 game");
   });
 });

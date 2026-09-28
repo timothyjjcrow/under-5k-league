@@ -5,6 +5,8 @@
 // bookings on completed matches. Presentation only: nothing here writes, and
 // the detailed membership dates stay in the admin season export.
 
+import { seriesRecordText } from "./team-matches";
+
 /** Tenures ended by these never made a real season with that team: the sale
  *  was undone, the draft was aborted and re-run, or the team was dissolved
  *  before the draft. Shown only if the player somehow also played for it. */
@@ -224,13 +226,15 @@ export function profileSeasonNote(row: ProfileSeasonRow): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** "2–1 series · 5 games" (either half omitted when there is none). */
+/**
+ * "2W 0D 1L series · 5 games" (either half omitted when there is none). The
+ * record is written the way the standings and team pages write it
+ * (seriesRecordText), so a bare middle number never means losses here and
+ * draws there.
+ */
 export function profileSeasonRecord(row: ProfileSeasonRow): string | null {
   const parts: string[] = [];
-  if (row.series) {
-    const { wins, losses, draws } = row.series;
-    parts.push(`${wins}–${losses}${draws > 0 ? `–${draws}` : ""} series`);
-  }
+  if (row.series) parts.push(`${seriesRecordText(row.series)} series`);
   if (row.games > 0) parts.push(`${row.games} game${row.games === 1 ? "" : "s"}`);
   return parts.length > 0 ? parts.join(" · ") : null;
 }

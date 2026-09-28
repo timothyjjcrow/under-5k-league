@@ -3,6 +3,7 @@
 import { heroById } from "./heroes";
 import { pubCheckedAgo, pubLastPlayed, pubWinRate } from "./pub-stats";
 import { parseRoles } from "./roles";
+import { seriesRecordText } from "./team-matches";
 
 export type PoolPlayer = {
   userId: string;
@@ -293,15 +294,15 @@ export function buildPoolLastSeasons(input: {
   return out;
 }
 
-/** "Season 3: Dire Straits · 4–3 series · $12 · 🏆 champion". */
+/**
+ * "Season 3: Dire Straits · 4W 0D 3L series · $12 · 🏆 champion". The record
+ * reads the way the standings and team pages write it (seriesRecordText).
+ */
 export function lastSeasonToken(ls: PoolLastSeason): string {
   const parts = [
     `${ls.seasonName}: ${ls.teamName}${ls.captain ? " (captain)" : ""}`,
   ];
-  if (ls.record) {
-    const { wins, losses, draws } = ls.record;
-    parts.push(`${wins}–${losses}${draws > 0 ? `–${draws}` : ""} series`);
-  }
+  if (ls.record) parts.push(`${seriesRecordText(ls.record)} series`);
   if (ls.price != null) parts.push(`$${ls.price}`);
   if (ls.champion) parts.push("🏆 champion");
   return parts.join(" · ");

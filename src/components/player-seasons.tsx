@@ -89,7 +89,7 @@ export function PlayerSeasons({
                   </span>
                 )}
                 {row.role?.kind === "captain" ? (
-                  <Badge tone="brand">Captain</Badge>
+                  <Badge tone="accent">Captain</Badge>
                 ) : null}
                 {note ? (
                   <span className="text-xs text-muted">{note}</span>

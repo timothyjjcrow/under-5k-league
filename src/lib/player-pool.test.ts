@@ -412,7 +412,7 @@ describe("buildPoolLastSeasons (returning players' last league season)", () => {
       champion: true,
     });
     expect(lastSeasonToken(out.u1)).toBe(
-      "Season 3: Dire Straits · 4–3 series · $12 · 🏆 champion",
+      "Season 3: Dire Straits · 4W 0D 3L series · $12 · 🏆 champion",
     );
   });
 
@@ -423,7 +423,7 @@ describe("buildPoolLastSeasons (returning players' last league season)", () => {
     });
     expect(out.u2).toMatchObject({ captain: true, price: null });
     expect(lastSeasonToken(out.u2)).toBe(
-      "Season 3: Radiant Rascals (captain) · 2–2–1 series",
+      "Season 3: Radiant Rascals (captain) · 2W 1D 2L series",
     );
   });
 
