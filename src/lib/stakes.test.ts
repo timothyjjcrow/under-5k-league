@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   clinchFromReport,
+  playoffOutlookShown,
   remainingRegular,
   seasonScenarioReport,
   type StakesMatchRow,
@@ -233,5 +234,23 @@ describe("seasonScenarioReport memo", () => {
       ids.length,
     );
     expect(again).not.toBe(first); // evicted, recomputed
+  });
+});
+
+describe("playoffOutlookShown", () => {
+  it("waits for the first final regular-season series", () => {
+    expect(playoffOutlookShown([])).toBe(false);
+    expect(
+      playoffOutlookShown([
+        row({ id: "live", status: "LIVE" }),
+        row({ id: "tb", phase: "TIEBREAKER", status: "COMPLETED" }),
+      ]),
+    ).toBe(false);
+    expect(
+      playoffOutlookShown([
+        row({ id: "w1", status: "COMPLETED" }),
+        row({ id: "w2", week: 2 }),
+      ]),
+    ).toBe(true);
   });
 });

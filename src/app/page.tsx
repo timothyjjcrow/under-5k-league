@@ -22,7 +22,11 @@ import {
   computeStandings,
   standingsMovement,
 } from "@/lib/standings";
-import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
+import {
+  clinchFromReport,
+  playoffOutlookShown,
+  seasonScenarioReport,
+} from "@/lib/stakes";
 import {
   projectPlayoffField,
   publicDeadHeatTeamIds,
@@ -135,8 +139,11 @@ import {
 } from "@/lib/champion-presentation";
 import {
   canViewAvailabilitySummary,
+  canViewLeagueContact,
   hasActiveLeagueParticipation,
+  type VisibilityViewer,
 } from "@/lib/visibility";
+import { DiscordTag } from "@/components/discord-tag";
 import { homeMetadata } from "@/lib/link-preview-metadata";
 import {
   getDefendingChampion,
@@ -357,6 +364,28 @@ export default async function Home() {
       sideLink
     );
   } else if (season.status === "DRAFT") {
+    // The viewer's own team, once they are on one: a player is rostered when
+    // they are bought, a captain's roster is worth a line once it is final.
+    const draftDone = snapshot.draftStatus === DRAFT_STATUS.COMPLETE;
+    const myDraftTeam = user
+      ? snapshot.teams.find((team) =>
+          team.members.some((member) => member.userId === user.id),
+        )
+      : undefined;
+    const teamLine =
+      user && myDraftTeam && (myDraftTeam.captainId !== user.id || draftDone) ? (
+        <YourTeamLine
+          team={myDraftTeam}
+          viewerId={user.id}
+          teamSize={season.teamSize}
+          captainContact={await captainContact(
+            user,
+            myDraftTeam.captainId,
+            isActiveReg,
+          )}
+          fixturesSoon={draftDone}
+        />
+      ) : null;
     heroAction = (
       <>
         <Link href="/draft" className={buttonClasses("accent", "lg")}>
@@ -368,6 +397,7 @@ export default async function Home() {
         {captaining && draftSetupOpen(season.status, snapshot.draftStatus) ? (
           <CaptainLine draftAt={season.draftAt} />
         ) : null}
+        {teamLine}
         {standinRegistrationOpen ? (
           <>
             {standinRegistration("secondary")}
@@ -567,7 +597,9 @@ export default async function Home() {
         <MyNextMatch
           seasonId={season.id}
           seasonStatus={season.status}
-          userId={user.id}
+          viewer={user}
+          viewerHasActiveRegistration={isActiveReg}
+          teamSize={season.teamSize}
           matches={matches}
           teams={snapshot.teams}
           standin={
@@ -845,20 +877,25 @@ async function LeagueNews() {
 async function MyNextMatch({
   seasonId,
   seasonStatus,
-  userId,
+  viewer,
+  viewerHasActiveRegistration,
+  teamSize,
   matches,
   teams,
   standin,
 }: {
   seasonId: string;
   seasonStatus: string;
-  userId: string;
+  viewer: NonNullable<VisibilityViewer>;
+  viewerHasActiveRegistration: boolean;
+  teamSize: number;
   /** The season's matches, as Home already read them. */
   matches: Match[];
   teams: SeasonSnapshot["teams"];
   /** The viewer has an ACTIVE standin registration. */
   standin: boolean;
 }) {
+  const userId = viewer.id;
   const teamById = new Map(teams.map((t) => [t.id, t]));
   const rosterTeams = teams.filter((t) =>
     t.members.some((m) => m.userId === userId),
@@ -978,6 +1015,23 @@ async function MyNextMatch({
       </div>
     );
   }
+  const myTeam = teamId ? teamById.get(teamId) : undefined;
+  if (!next && idle === "no-fixtures" && myTeam) {
+    // Rostered, schedule not out yet: who they play for is the useful part.
+    return (
+      <YourTeamLine
+        team={myTeam}
+        viewerId={userId}
+        teamSize={teamSize}
+        captainContact={await captainContact(
+          viewer,
+          myTeam.captainId,
+          viewerHasActiveRegistration,
+        )}
+        fixturesSoon
+      />
+    );
+  }
   if (!next) {
     const onlyFinalLeft =
       matches.some((m) => m.phase === "FINAL" && m.status !== "COMPLETED") &&
@@ -1056,6 +1110,86 @@ async function MyNextMatch({
           </Link>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The captain's Discord handle for their teammate's team line: members only
+ * (the league-wide contact rule), and never the viewer's own.
+ */
+async function captainContact(
+  viewer: NonNullable<VisibilityViewer>,
+  captainId: string,
+  viewerHasActiveRegistration: boolean,
+) {
+  if (
+    viewer.id === captainId ||
+    !canViewLeagueContact(viewer, captainId, viewerHasActiveRegistration)
+  ) {
+    return null;
+  }
+  return prisma.user.findUnique({
+    where: { id: captainId },
+    select: { discordName: true, discordId: true },
+  });
+}
+
+/**
+ * The viewer's own team in the hero, from the moment they are drafted until
+ * their first fixture exists: home listed every roster but never said "you're
+ * on Team 3, your captain is ...". A player gets their captain (with the
+ * captain's Discord handle, for members); a captain gets their roster count.
+ */
+function YourTeamLine({
+  team,
+  viewerId,
+  teamSize,
+  captainContact,
+  fixturesSoon,
+}: {
+  team: SeasonSnapshot["teams"][number];
+  viewerId: string;
+  teamSize: number;
+  captainContact: { discordName: string; discordId: string | null } | null;
+  /** The auction is over and fixtures are what comes next. */
+  fixturesSoon: boolean;
+}) {
+  const captaining = team.captainId === viewerId;
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/70 p-4 text-sm backdrop-blur-sm">
+      <p className="font-medium [overflow-wrap:anywhere]">
+        {captaining ? "Your team: " : "You’re on "}
+        <Link href={`/teams/${team.id}`} className={textLink("font-semibold")}>
+          {team.name}
+        </Link>
+      </p>
+      {captaining ? (
+        <p className="mt-1 text-muted">
+          Your roster: {team.members.length}/{teamSize}
+          {fixturesSoon ? " · Fixtures coming soon" : ""}
+        </p>
+      ) : (
+        <>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted">
+            <span className="[overflow-wrap:anywhere]">
+              Captain{" "}
+              <PlayerLink userId={team.captainId} className="text-fg">
+                {team.captain.name}
+              </PlayerLink>
+            </span>
+            {captainContact?.discordName ? (
+              <DiscordTag
+                name={captainContact.discordName}
+                verified={!!captainContact.discordId}
+              />
+            ) : null}
+          </p>
+          {fixturesSoon ? (
+            <p className="mt-1 text-muted">Fixtures coming soon.</p>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -2158,7 +2292,11 @@ async function SeasonView({
     ? standings.findIndex((s) => s.teamId === myTeam.id) + 1
     : 0;
   const myScenario = myTeam ? (report?.teams.get(myTeam.id) ?? null) : null;
-  const myStakeLine = myScenario ? playoffStatusLine(myScenario) : null;
+  // Each team's playoff outlook waits for the first final regular-season
+  // series; before it every team would read "Playoff spot still open".
+  const outlookShown = playoffOutlookShown(matches);
+  const myStakeLine =
+    myScenario && outlookShown ? playoffStatusLine(myScenario) : null;
   // "Next up" must be the SAME match the stake line's "next series" is about
   // (the engine orders by kickoff when times exist) — falling back to
   // chronological order, like the MyNextMatch banner above.
@@ -2386,7 +2524,7 @@ async function SeasonView({
           teams={teams}
           teamName={teamName}
           teamLogoUrl={teamLogoUrl}
-          report={report}
+          report={outlookShown ? report : null}
           showCheckins={showCheckins}
           myPicks={userId ? myPicks : null}
           pickemPlayable={

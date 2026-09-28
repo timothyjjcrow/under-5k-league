@@ -15,6 +15,10 @@ const scrimPage = readFileSync(
   path.resolve(process.cwd(), "src/app/scrims/[id]/page.tsx"),
   "utf8",
 );
+const homePage = readFileSync(
+  path.resolve(process.cwd(), "src/app/page.tsx"),
+  "utf8",
+);
 
 describe("player-directory contact visibility wiring", () => {
   it("does not equate any signed-in account with directory contact access", () => {
@@ -64,6 +68,23 @@ describe("player-directory contact visibility wiring", () => {
     );
     expect(playerProfile).toMatch(
       /canSeeLeagueContact \? \(\s*<DiscordTag/,
+    );
+  });
+});
+
+describe("home team line contact visibility wiring", () => {
+  it("reads a captain's handle only through the shared policy", () => {
+    const loader = homePage.slice(
+      homePage.indexOf("async function captainContact("),
+      homePage.indexOf("function YourTeamLine("),
+    );
+    expect(loader).toMatch(
+      /!canViewLeagueContact\(viewer, captainId, viewerHasActiveRegistration\)/,
+    );
+    expect(loader).toMatch(/return null;[\s\S]*prisma\.user\.findUnique/);
+    // The line renders the handle from that loader and nothing else.
+    expect(homePage).toMatch(
+      /captainContact\?\.discordName \? \(\s*<DiscordTag/,
     );
   });
 });
