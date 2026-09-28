@@ -1022,12 +1022,20 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   straight from READY_CHECK to DRAFTING. The keepalive is now 10s and is pinned
   shorter than both action windows, but membership remains the correct gate.
 - **Game-setup instructions**: once teams lock, the READY and IN_PROGRESS
-  views render a `GameSetupCard` — step 1 hosts the Dota 2 lobby with a shared
-  fixed name (`GGD2L Inhouse`) + password (`ggd2l`), shown as click-to-copy
-  chips; step 2 requires the `Under 5K In-House League` ticket so the private
-  game reaches OpenDota; step 3 points each player to their team's
-  Discord voice channel (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side
-  highlighted via `me.myTeam`). Lobby details and channel names are constants.
+  views render a `GameSetupCard` ("Get into the Dota lobby") straight under
+  the view's banner, and it shows ONE path. When the lobby bot answers
+  (`DotaLobbyControls`' `onAvailability` reports "on"), its panel is the path —
+  its lobby name/password and "Create Dota lobby" for captains, sides named
+  after the captains — and the by-hand steps plus the optional "Start the game
+  clock" fold under "Bot not working?" (a bot-launched game starts the clock
+  itself). Otherwise the by-hand steps show: step 1 the shared fixed name
+  (`GGD2L Inhouse`) + password (`ggd2l`) as click-to-copy chips, with a host
+  who must be one of the league's ticket admins (only they can pick the
+  ticket in Dota); step 2 the `Under 5K In-House League` ticket so the
+  private game reaches OpenDota; step 3 each team's Discord voice channel
+  (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side highlighted via
+  `me.myTeam`). Players never see a bot panel that can't help them; admins
+  keep its status line. Lobby details and channel names are constants.
   `inhouseLobbyCode` remains only as the short "#1234" lobby label in the
   room header.
 - **Captain-selection vote**: a filled lobby opens in `READY_CHECK`; after all

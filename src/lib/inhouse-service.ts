@@ -1878,6 +1878,7 @@ export async function maybeAutoDetectResult(
     select: {
       userId: true,
       team: true,
+      isCaptain: true,
       user: {
         select: {
           name: true,

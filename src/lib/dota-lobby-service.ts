@@ -133,8 +133,23 @@ export async function recoverableInhouseBotLobby(viewer: SessionUser) {
 type InhouseSpecLobby = {
   id: string;
   radiantTeam: number;
-  players: { team: number | null; user: DotaAccountIdentity }[];
+  players: {
+    team: number | null;
+    isCaptain?: boolean;
+    user: DotaAccountIdentity & { name?: string };
+  }[];
 };
+
+/**
+ * A side's display name in the bot panel: the drafting captain's team, the way
+ * players think of it, or "Team N" when the roster has no single captain for
+ * that side. Display only: the bot never sends or checks side names.
+ */
+function inhouseSideName(lobby: InhouseSpecLobby, team: number) {
+  const captains = lobby.players.filter((p) => p.team === team && p.isCaptain);
+  const name = captains.length === 1 ? captains[0].user.name : undefined;
+  return name ? `${name}'s team` : `Team ${team}`;
+}
 
 /**
  * The bot spec for an in-house lobby. One builder for the browser controls and
@@ -159,8 +174,8 @@ function inhouseLobbySpec(lobby: InhouseSpecLobby): DotaLobbySpec {
     serverRegion: LEAGUE_CONFIG.gameServerRegionId,
     radiant: team(lobby.radiantTeam),
     dire: team(lobby.radiantTeam === 1 ? 2 : 1),
-    radiantName: `Team ${lobby.radiantTeam}`,
-    direName: `Team ${lobby.radiantTeam === 1 ? 2 : 1}`,
+    radiantName: inhouseSideName(lobby, lobby.radiantTeam),
+    direName: inhouseSideName(lobby, lobby.radiantTeam === 1 ? 2 : 1),
   };
 }
 

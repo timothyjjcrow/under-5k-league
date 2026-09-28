@@ -209,6 +209,10 @@ describe("Dota lobby authorization and settings", () => {
         serverRegion: LEAGUE_CONFIG.gameServerRegionId,
         radiant: [player.steamId],
         dire: [captain.steamId],
+        // Sides read as the captain's team; a side with no captain on the
+        // roster falls back to its number.
+        radiantName: "Team 2",
+        direName: "Captain's team",
       },
     });
     expect(

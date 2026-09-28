@@ -245,7 +245,19 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Teams locked — the setup card tells players how to make the Dota lobby
   // and which voice channel to join (their team's is highlighted).
   await expect(page.getByText("Teams are set!")).toBeVisible();
-  await expect(page.getByText("How to play this game")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Get into the Dota lobby" }),
+  ).toBeVisible();
+  // No lobby bot in this environment: players get the by-hand steps only,
+  // never a bot panel that can't help them, and are told who can host.
+  await expect(
+    page.getByRole("region", { name: "Steam lobby bot" }),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByLabel("Game setup", { exact: true })
+      .getByText(/host must be one of the league's ticket admins/),
+  ).toBeVisible();
   await expect(page.getByTitle("Copy lobby name")).toContainText(
     `${LEAGUE_CONFIG.name} Inhouse`,
   );
