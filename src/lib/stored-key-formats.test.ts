@@ -26,6 +26,7 @@ import {
   providerCooldownKey,
   providerCooldownResourcePrefix,
   seasonSettingScopeWhere,
+  signupsOpenAnnouncedKey,
   tiebreakerDrawKey,
   tiebreakerDrawPrefix,
 } from "./settings";
@@ -45,6 +46,7 @@ describe("stored Setting key formats", () => {
     expect(playoffRoundBuiltPrefix("s1")).toBe("playoffRoundBuilt:s1:");
     expect(tiebreakerDrawKey("s1", "g")).toBe("tiebreakerDraw:s1:g");
     expect(tiebreakerDrawPrefix("s1")).toBe("tiebreakerDraw:s1:");
+    expect(signupsOpenAnnouncedKey("s1")).toBe("signupsOpenAnnounced:s1");
     expect(outPingPrefix("m1")).toBe("outPing:m1:");
     expect(outPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1"))).toBe(
       true,
@@ -70,6 +72,7 @@ describe("stored Setting key formats", () => {
       draftTeamsPingPrefix("s1"),
       playoffRoundBuiltPrefix("s1"),
       tiebreakerDrawPrefix("s1"),
+      signupsOpenAnnouncedKey("s1"),
       outPingPrefix("m1"),
       providerCooldownResourcePrefix("open-dota-match-scan", "m1"),
       providerCooldownResourcePrefix(

@@ -6,6 +6,7 @@ import {
   rescheduleMessage,
   adminRetimeMessage,
   signupMessage,
+  signupsOpenMessage,
   draftStartedAnnouncement,
   draftCompleteAnnouncement,
   regularSeasonStartedMessage,
@@ -119,6 +120,19 @@ describe("discord message formatters", () => {
 
   it("uses singular for the first signup", () => {
     expect(signupMessage("Zai", 1, 20)).toContain("1 player in");
+  });
+
+  it("announces a season opening with its match night and the signup link", () => {
+    const msg = signupsOpenMessage("Season 9", "Sundays at 6:00 PM PT");
+    expect(msg).toContain("**Season 9 signups are open!**");
+    expect(msg).toContain("Match night: Sundays at 6:00 PM PT.");
+    expect(msg).toMatch(/Sign up: <[^>]+\/me>$/);
+  });
+
+  it("leaves the match night out until one is announced", () => {
+    const msg = signupsOpenMessage("Season 9", null);
+    expect(msg).not.toContain("Match night");
+    expect(msg).toContain("signups are open!** Sign up: <");
   });
 
 
@@ -1710,6 +1724,7 @@ describe("no player-supplied name can inject markdown", () => {
 
   const messages = () => [
     signupMessage(EVIL, 3, 10),
+    signupsOpenMessage(EVIL, EVIL),
     draftCompleteAnnouncement({
       seasonName: "S1",
       teams: [

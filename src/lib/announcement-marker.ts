@@ -250,7 +250,14 @@ export async function releaseAnnouncementClaim(
 
 /** A bounded, non-identifying queue key for one marker generation. */
 export function announcementDedupeKey(
-  kind: "series" | "champion" | "reminder" | "honors",
+  kind:
+    | "series"
+    | "champion"
+    | "reminder"
+    | "honors"
+    | "signups"
+    | "round"
+    | "nudge",
   claim: AnnouncementMarkerClaim,
 ): string {
   const markerDigest = createHash("sha256")

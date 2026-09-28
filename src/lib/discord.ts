@@ -71,6 +71,21 @@ export function signupMessage(
   return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when}`;
 }
 
+/**
+ * A new season is open for signups: the first thing the channel hears from a
+ * season, so it says what to do (sign up on /me) and, when one is announced,
+ * the weekly match night players are signing up for. Mentions nobody: a
+ * season opening is news for everyone, not something one person owes.
+ */
+export function signupsOpenMessage(
+  seasonName: string,
+  /** The announced weekly night (announcedMatchNight), or null when unset. */
+  matchNight: string | null,
+): string {
+  const night = matchNight ? ` Match night: ${name(matchNight)}.` : "";
+  return `📝 **${name(seasonName)} signups are open!**${night} Sign up: <${resolveSiteUrl()}/me>`;
+}
+
 export function draftScheduledMessage(
   seasonName: string,
   whenMs: number,

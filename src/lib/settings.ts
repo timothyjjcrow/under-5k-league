@@ -71,7 +71,8 @@ export const SETTING_KEYS = {
 // The DYNAMIC keyspace. Beyond the fixed keys above, the Setting table hosts
 // per-entity rows: exactly-once markers (resultAnnounced:<matchId>,
 // weekReminder:<season>:<week>:<kickoffMs>, draftReminder:<season>:<revision>,
-// honorsAnnounced:<season>:<week>, playoffRoundBuilt:<season>:<round>), JSON
+// honorsAnnounced:<season>:<week>, playoffRoundBuilt:<season>:<round>,
+// signupsOpenAnnounced:<season>), JSON
 // state blobs (playoffGamesArchive:<season>, importSkip:<season>,
 // leagueSyncSkip:<season>) and per-pair throttles
 // (outPing:<matchId>:<userId>, providerCooldown:*), plus tiebreakerDraw:
@@ -118,6 +119,14 @@ export const CHAMPION_ANNOUNCED_PREFIX = "championAnnounced:";
 
 export function championAnnouncedKey(seasonId: string): string {
   return `${CHAMPION_ANNOUNCED_PREFIX}${seasonId}`;
+}
+
+/**
+ * Exactly-once marker for "signups are open" — posted once when an admin
+ * creates the season (announceSignupsOpenOnce).
+ */
+export function signupsOpenAnnouncedKey(seasonId: string): string {
+  return `signupsOpenAnnounced:${seasonId}`;
 }
 
 /**
@@ -343,6 +352,7 @@ export function seasonSettingScopeWhere(
 ): Prisma.SettingWhereInput {
   const seasonScope: Prisma.SettingWhereInput[] = [
     { key: championAnnouncedKey(seasonId) },
+    { key: signupsOpenAnnouncedKey(seasonId) },
     { key: { startsWith: weekReminderPrefix(seasonId) } },
     { key: { startsWith: draftReminderPrefix(seasonId) } },
     { key: { startsWith: draftPresencePrefix(seasonId) } },

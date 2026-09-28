@@ -135,6 +135,7 @@ import {
 } from "@/lib/league-announcement-outbox";
 import { reachabilityNote } from "@/lib/discord-roles";
 import { mentionsOf } from "@/lib/discord-mentions";
+import { announceSignupsOpenOnce } from "@/lib/signups-open-announcement";
 import { logAdminAction } from "@/lib/admin-log";
 import { productionDeleteBackupError } from "@/lib/backup-receipt.mjs";
 import {
@@ -507,6 +508,12 @@ export async function createSeason(
       : `Created "${name}" from the offseason`,
     seasonId: handoff.newSeasonId,
   });
+  // Post-commit and best-effort: the season exists whatever Discord says.
+  try {
+    await announceSignupsOpenOnce(handoff.newSeasonId);
+  } catch {
+    console.error("[admin] SIGNUPS_OPEN_ANNOUNCEMENT_FAILED");
+  }
   refresh();
   return { message: `Created ${name}` };
 }
