@@ -162,7 +162,7 @@ describe("TeamCrest", () => {
     // A team-tinted glow must name its team, or it can't pick the hue up.
     const glowPages = [
       "../app/teams/[id]/page.tsx",
-      "../app/matches/[id]/page.tsx",
+      "../app/matches/[id]/scoreboard.tsx",
     ];
     for (const page of glowPages) {
       const source = readFileSync(join(__dirname, page), "utf8");

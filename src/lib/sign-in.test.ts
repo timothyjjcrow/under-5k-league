@@ -59,7 +59,7 @@ describe("the signed-out form error", () => {
 describe("signed-out visitors on a match that's open for check-in", () => {
   it("are told they can sign in to check in, and come back to the match", () => {
     const page = readFileSync(
-      join(__dirname, "../app/matches/[id]/page.tsx"),
+      join(__dirname, "../app/matches/[id]/match-preview.tsx"),
       "utf8",
     ).replace(/\s+/g, " ");
     // Same gate as the player's own banner, minus the roster check that

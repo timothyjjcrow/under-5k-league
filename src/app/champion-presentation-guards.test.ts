@@ -51,7 +51,8 @@ describe("public champion presentation wiring", () => {
   });
 
   it("uses the authoritative final id for the match-detail crown badge", () => {
-    const match = read("src/app/matches/[id]/page.tsx");
+    // The page resolves the champion; its scoreboard renders the badge.
+    const match = read("src/app/matches/[id]/scoreboard.tsx");
 
     expect(match).toContain(
       "match.id === championPresentation.authoritativeFinalId",

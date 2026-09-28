@@ -1996,6 +1996,15 @@ already in the `Setting` table.
   recent-form strips, prior-meetings line (leader-phrased head-to-head), and
   the same check-in banner as `/schedule` for participants. Completed matches
   without imports keep the "no games recorded" empty state.
+- **The match page is a loader plus one file per card** (2026-09 split).
+  `src/app/matches/[id]/load.ts` loads the match (teams, games, standin
+  bookings, season) once and `page.tsx` hands it and the viewer to each card
+  file beside it; the draft status, both rosters and the OUT check-ins are
+  request-cached reads there (React `cache()`), so streamed cards share one
+  query each. No card re-reads the match, season, draft or viewer, and
+  `match-page-guards.test.ts` pins that. That test reads every file in the
+  folder (`folderSourceFiles`, since a glob can't spell `[id]`), so a rule
+  holds wherever its card moves inside the folder.
 
 ## MMR-weighted draft budgets (done)
 
