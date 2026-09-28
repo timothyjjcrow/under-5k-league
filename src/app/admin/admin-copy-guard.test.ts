@@ -448,4 +448,20 @@ describe("admin copy names only controls that exist", () => {
       "outstandingRegularResults: regularResultsDue(data.matches, nowMs).length,",
     );
   });
+
+  // Needs attention links "N rostered players and standins haven't linked
+  // Discord" to this card. With rosters but no active signups the card used
+  // to answer "Nobody has signed up" and never name them.
+  it("the Discord reach card names the unlinked roster Needs attention counts", () => {
+    const page = read("src/app/admin/page.tsx");
+    const card = page.slice(
+      page.indexOf("async function DiscordReachCard("),
+      page.indexOf("function DiscordReachLine("),
+    );
+    const noSignups = card.indexOf("Nobody has signed up for this season yet.");
+    const rosterBranch = card.indexOf("rosterUnlinked && rosterUnlinked.length > 0 ? (");
+    expect(rosterBranch).toBeGreaterThan(-1);
+    expect(rosterBranch).toBeLessThan(noSignups);
+    expect(card.slice(rosterBranch, noSignups)).toContain("{cappedNames(rosterUnlinked)}");
+  });
 });

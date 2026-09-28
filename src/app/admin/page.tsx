@@ -5526,15 +5526,42 @@ async function DiscordReachCard({
         subtitle="Who league mentions and pings reach, and who to chase."
       />
       <CardBody>
-        {reach.registered === 0 ? (
+        {reach.registered > 0 ? (
+          <DiscordReachLine reach={reach} rosterUnlinked={rosterUnlinked} />
+        ) : rosterUnlinked && rosterUnlinked.length > 0 ? (
+          // Rosters can exist with no active signup behind them (a hand-run
+          // league, a fixture). Needs attention counts these same people and
+          // links here, so the card must name them rather than say nobody
+          // has signed up.
+          <div>
+            <p className="text-sm">
+              <b>{rosterUnlinked.length}</b> rostered{" "}
+              {rosterUnlinked.length === 1
+                ? "player or standin hasn't"
+                : "players and standins haven't"}{" "}
+              linked Discord, so pings can&apos;t reach them:{" "}
+              {cappedNames(rosterUnlinked)}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Nobody has an active signup for this season, so there&apos;s no
+              signed-up count to compare against.
+            </p>
+          </div>
+        ) : (
           <p className="text-sm text-muted">
             Nobody has signed up for this season yet.
           </p>
-        ) : (
-          <DiscordReachLine reach={reach} rosterUnlinked={rosterUnlinked} />
         )}
       </CardBody>
     </Card>
+  );
+}
+
+/** A name list the card caps at 12, so an unlinked league isn't a wall of names. */
+function cappedNames(names: string[]): string {
+  return (
+    names.slice(0, 12).join(", ") +
+    (names.length > 12 ? ` +${names.length - 12} more` : "")
   );
 }
 
@@ -5563,10 +5590,8 @@ function DiscordReachLine({
   const thin = pct < 50;
   const g = reach.linked > 0 ? reach.guild : null;
   // The funnel's lists are uncapped (the chase message names everyone); the
-  // CARD caps at 12 so an unlinked league isn't a wall of names.
-  const capped = (names: string[]) =>
-    names.slice(0, 12).join(", ") +
-    (names.length > 12 ? ` +${names.length - 12} more` : "");
+  // CARD caps them (cappedNames).
+  const capped = cappedNames;
   // Guild lists render "name (@linked-handle)" — the membership check is
   // about the LINKED ACCOUNT, and the handle is what lets an admin verify a
   // "missing" verdict against the member list in seconds (an alt-account
