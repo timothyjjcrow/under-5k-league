@@ -17,29 +17,81 @@
  */
 export type DiscordRefusalKind = "post" | "webhook" | "transient";
 
-export function discordRefusalKind(status: number): DiscordRefusalKind {
+/**
+ * Discord's JSON error codes for a 400 that is about the WEBHOOK'S CHANNEL,
+ * not the message: a webhook in a forum (or media) channel gets 220001
+ * ("thread_name or thread_id required") on every plain post, and 220002-
+ * 220004 are the other forum-webhook refusals. Treated like a dead webhook,
+ * so the queue pauses until a working one is saved instead of dropping every
+ * queued announcement one by one.
+ */
+const WEBHOOK_CHANNEL_400_CODES: ReadonlySet<number> = new Set([
+  220001, 220002, 220003, 220004,
+]);
+
+/**
+ * `discordCode` is the `code` field of Discord's JSON error body, when the
+ * transport read one (it does for a 400).
+ */
+export function discordRefusalKind(
+  status: number,
+  discordCode?: number | null,
+): DiscordRefusalKind {
+  if (
+    status === 400 &&
+    discordCode != null &&
+    WEBHOOK_CHANNEL_400_CODES.has(discordCode)
+  ) {
+    return "webhook";
+  }
   if (status === 400 || status === 413) return "post";
   if (status === 401 || status === 403 || status === 404) return "webhook";
   return "transient";
 }
 
-/** The `lastErrorCode` stored for an HTTP answer from Discord. */
-export function discordErrorCode(status: number): string {
-  return `DISCORD_${status}`;
+/**
+ * The `lastErrorCode` stored for an HTTP answer from Discord:
+ * `DISCORD_<status>`, or `DISCORD_400_<code>` for a channel-level 400, so
+ * the admin card can tell a paused queue from a dropped post.
+ */
+export function discordErrorCode(
+  status: number,
+  discordCode?: number | null,
+): string {
+  return status === 400 &&
+    discordCode != null &&
+    WEBHOOK_CHANNEL_400_CODES.has(discordCode)
+    ? `DISCORD_400_${discordCode}`
+    : `DISCORD_${status}`;
+}
+
+/** The HTTP status (and Discord code) inside a stored code, or null. */
+function parseDiscordErrorCode(
+  code: string | null | undefined,
+): { status: number; discordCode: number | null } | null {
+  const match = /^DISCORD_(\d{3})(?:_(\d+))?$/.exec(code ?? "");
+  return match
+    ? {
+        status: Number(match[1]),
+        discordCode: match[2] ? Number(match[2]) : null,
+      }
+    : null;
 }
 
 /** The HTTP status inside a `DISCORD_<status>` code, or null. */
 function discordStatusOf(
   code: string | null | undefined,
 ): number | null {
-  const match = /^DISCORD_(\d{3})$/.exec(code ?? "");
-  return match ? Number(match[1]) : null;
+  return parseDiscordErrorCode(code)?.status ?? null;
 }
 
 /** True when the stored code means the webhook itself refused the post. */
 export function isWebhookRefusalCode(code: string | null | undefined): boolean {
-  const status = discordStatusOf(code);
-  return status !== null && discordRefusalKind(status) === "webhook";
+  const parsed = parseDiscordErrorCode(code);
+  return (
+    parsed !== null &&
+    discordRefusalKind(parsed.status, parsed.discordCode) === "webhook"
+  );
 }
 
 /** Stored when a time-bound post was dropped instead of being sent late. */
@@ -55,8 +107,12 @@ export function deliveryErrorLabel(
   code: string | null | undefined,
 ): string | null {
   if (!code) return null;
-  const status = discordStatusOf(code);
-  if (status !== null) {
+  const parsed = parseDiscordErrorCode(code);
+  if (parsed !== null) {
+    const { status } = parsed;
+    if (discordRefusalKind(status, parsed.discordCode) === "webhook" && status === 400) {
+      return "webhook is in a forum channel, which needs a thread for every post (400)";
+    }
     if (status === 404) return "webhook not found (404)";
     if (status === 401) return "webhook token no longer valid (401)";
     if (status === 403) return "webhook not allowed to post (403)";

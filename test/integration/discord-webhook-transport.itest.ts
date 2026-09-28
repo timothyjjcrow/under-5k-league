@@ -36,8 +36,10 @@ import {
   enqueueLeagueAnnouncement,
   expireLeagueAnnouncementGroup,
   LEAGUE_ANNOUNCEMENT_STATUS,
+  loadLeagueDeliveryHealth,
   resumeLeagueAnnouncements,
 } from "@/lib/league-announcement-outbox";
+import { deliveryPaused } from "@/lib/league-delivery";
 
 // The queue board's transport, exercised over REAL HTTP against a stand-in for
 // Discord. Module mocks can prove the service's decisions but not the wire
@@ -214,6 +216,55 @@ describe("sendDiscordMessage", () => {
         lastErrorCode: "DISCORD_400",
       },
       { status: LEAGUE_ANNOUNCEMENT_STATUS.SENT, lastErrorCode: null },
+    ]);
+  });
+
+  // A webhook in a forum channel gets a 400 (code 220001, "thread_name or
+  // thread_id required") on EVERY plain post. Read as a bad post, the queue
+  // drained and cancelled every announcement one by one, with nothing left to
+  // resend once the webhook was fixed. It is the webhook, so the queue pauses.
+  it("pauses, not drops, when a forum-channel webhook refuses every post", async () => {
+    respond = () => ({
+      status: 400,
+      body: {
+        message:
+          "Webhooks posted to forum channels must have a thread_name or thread_id",
+        code: 220001,
+      },
+    });
+    expect(await sendDiscordMessage("Series result")).toBe(true);
+    expect(await sendDiscordMessage("Champion crowned")).toBe(true);
+    // One request: the second post waits behind the paused first.
+    expect(recorded).toHaveLength(1);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { status: true, lastErrorCode: true },
+      }),
+    ).toEqual([
+      {
+        status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+        lastErrorCode: "DISCORD_400_220001",
+      },
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, lastErrorCode: null },
+    ]);
+    const health = await loadLeagueDeliveryHealth(
+      new Date(Date.now() + 60_000),
+    );
+    expect(deliveryPaused(health)).toBe(true);
+    expect(health.refusedRecently).toBe(0);
+
+    // A working webhook saved: both go out, in order.
+    respond = () => ({ status: 204 });
+    await setSetting(
+      SETTING_KEYS.DISCORD_WEBHOOK_URL,
+      `${base}/api/webhooks/3333/text-channel`,
+    );
+    expect(await resumeLeagueAnnouncements()).toBe(2);
+    await deliverPendingLeagueAnnouncements({ limit: 2 });
+    expect(recorded.slice(1).map((r) => r.body?.content)).toEqual([
+      "Series result",
+      "Champion crowned",
     ]);
   });
 

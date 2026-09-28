@@ -2176,7 +2176,21 @@ async function postTo(
       }),
       signal: AbortSignal.timeout(5000),
     });
-    return res.ok ? true : { status: res.status };
+    if (res.ok) return true;
+    // A 400 can be about the webhook's channel rather than this post (a
+    // forum channel refuses every plain post), and only the body's code
+    // says which. The queue pauses on those instead of dropping the post.
+    if (res.status === 400) {
+      const body: unknown = await res.json().catch(() => null);
+      const code =
+        body && typeof body === "object" && "code" in body
+          ? (body as { code: unknown }).code
+          : null;
+      if (typeof code === "number" && Number.isSafeInteger(code)) {
+        return { status: res.status, discordCode: code };
+      }
+    }
+    return { status: res.status };
   } catch {
     if (process.env.NODE_ENV !== "production") {
       console.warn("[discord] webhook send failed");

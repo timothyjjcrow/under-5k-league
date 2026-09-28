@@ -45,6 +45,20 @@ describe("discordRefusalKind", () => {
     }
   });
 
+  // A forum-channel webhook refuses EVERY plain post with a 400; only the
+  // body's code tells it from a bad post. Dropping each one would drain the
+  // whole queue with nothing left to resend once the webhook is fixed.
+  it("pauses on a 400 about the webhook's channel, not the post", () => {
+    for (const code of [220001, 220002, 220003, 220004]) {
+      expect(discordRefusalKind(400, code)).toBe("webhook");
+    }
+    // Other 400 codes (an invalid body, say) are still about the post.
+    expect(discordRefusalKind(400, 50035)).toBe("post");
+    expect(discordRefusalKind(400, null)).toBe("post");
+    // The code only matters on a 400.
+    expect(discordRefusalKind(413, 220001)).toBe("post");
+  });
+
   it("retries rate limits, outages and anything unrecognised", () => {
     for (const status of [405, 429, 500, 502, 503, 504, 302]) {
       expect(discordRefusalKind(status)).toBe("transient");
@@ -60,6 +74,11 @@ describe("refusal codes", () => {
     expect(isWebhookRefusalCode("DISCORD_400")).toBe(false);
     expect(isWebhookRefusalCode("TRANSPORT_REJECTED")).toBe(false);
     expect(isWebhookRefusalCode(null)).toBe(false);
+    // A channel-level 400 keeps its Discord code, so it reads as paused.
+    expect(discordErrorCode(400, 220001)).toBe("DISCORD_400_220001");
+    expect(isWebhookRefusalCode("DISCORD_400_220001")).toBe(true);
+    expect(discordErrorCode(400, 50035)).toBe("DISCORD_400");
+    expect(discordErrorCode(400)).toBe("DISCORD_400");
   });
 
   it("labels every code in plain words, never echoing a URL", () => {
@@ -69,6 +88,9 @@ describe("refusal codes", () => {
     );
     expect(deliveryErrorLabel("DISCORD_400")).toBe(
       "Discord refused the post (400)",
+    );
+    expect(deliveryErrorLabel("DISCORD_400_220001")).toBe(
+      "webhook is in a forum channel, which needs a thread for every post (400)",
     );
     expect(deliveryErrorLabel("DISCORD_503")).toBe("Discord unavailable (503)");
     expect(deliveryErrorLabel("DISCORD_429")).toBe(

@@ -51,7 +51,13 @@ type AnnouncementDb = Pick<Prisma.TransactionClient, "leagueAnnouncement">;
  * whether the post is dropped, the queue pauses, or it is retried
  * (discordRefusalKind).
  */
-export type LeagueSendResult = boolean | { status: number };
+export type LeagueSendResult =
+  | boolean
+  | {
+      status: number;
+      /** The `code` in Discord's JSON error body, when it was read. */
+      discordCode?: number;
+    };
 type Send = (
   content: string,
   mentions?: MentionAllowlist,
@@ -99,8 +105,8 @@ function failedSendData(result: LeagueSendResult, now: Date, attempts: number) {
       lastErrorCode: "TRANSPORT_REJECTED",
     };
   }
-  const lastErrorCode = discordErrorCode(result.status);
-  switch (discordRefusalKind(result.status)) {
+  const lastErrorCode = discordErrorCode(result.status, result.discordCode);
+  switch (discordRefusalKind(result.status, result.discordCode)) {
     case "post":
       return {
         ...released,
