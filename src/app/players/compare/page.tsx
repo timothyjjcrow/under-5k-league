@@ -477,11 +477,15 @@ export default async function ComparePage({
                   <div key={u.id} className="flex min-w-0 items-center gap-2.5">
                     <Avatar name={u.name} src={u.avatar} size={36} />
                     <span className="min-w-0">
+                      {/* Two lines before a cut: two-up on a phone, one
+                          line left "Roshan's …" beside "The Playe…". */}
                       <PlayerLink
                         userId={u.id}
-                        className="block truncate font-semibold"
+                        className="block font-semibold"
                       >
-                        {u.name}
+                        <span className="line-clamp-2 [overflow-wrap:anywhere]">
+                          {u.name}
+                        </span>
                       </PlayerLink>
                       <RankBadge rankTier={u.rankTier} />
                     </span>

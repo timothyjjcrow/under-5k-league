@@ -1204,7 +1204,9 @@ async function InhouseStrip() {
             className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-success"
           />
         ) : null}
-        <span className="truncate text-muted">{label}</span>
+        {/* Two lines on a phone rather than "The inhouse queue i…": the
+            sentence is the strip's whole message. */}
+        <span className="line-clamp-2 text-muted">{label}</span>
       </span>
       <span className="shrink-0 font-medium text-accent group-hover:underline">
         {cta} <LinkArrow />

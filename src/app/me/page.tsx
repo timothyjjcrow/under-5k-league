@@ -531,7 +531,11 @@ export default async function MePage({
                   <div className="text-xs uppercase tracking-wide text-muted">
                     Your team
                   </div>
-                  <div className="truncate font-medium">{member.team.name}</div>
+                  {/* Two lines before a cut: beside "Drafted for $N" one
+                      line showed only the start of the name. */}
+                  <div className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
+                    {member.team.name}
+                  </div>
                 </div>
                 <div className="ml-auto shrink-0">
                   {member.isCaptain ? (
