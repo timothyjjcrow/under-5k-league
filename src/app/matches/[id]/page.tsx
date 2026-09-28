@@ -101,7 +101,6 @@ import {
   HeroIcon,
   KDA,
   LinkArrow,
-  PageTitle,
   PlayerLink,
   RankBadge,
   RoleBadges,
@@ -252,32 +251,30 @@ export default async function MatchDetailPage({
 
   return (
     <div className="space-y-6">
-      {/* The page's h1 names the fixture, like its tab title and link
-          preview, so someone moving by headings knows which match this is. */}
-      <PageTitle
-        title={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
-        subtitle={`${match.season.name} · ${postseasonLabel}`}
-        action={
-          <ContextBackLink
-            href={
-              match.season.isActive
-                ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
-                  ? match.phase === "TIEBREAKER"
-                    ? "/schedule#tiebreakers"
-                    : "/schedule#fixtures"
-                  : "/schedule#playoff-bracket"
-                : `/seasons/${match.seasonId}`
-            }
-            className={buttonClasses("secondary", "sm")}
-          >
-            {match.season.isActive
+      {/* A small back link, not a title block: the scoreboard below is the
+          page's visible title, so a phone reaches it without scrolling past
+          the team names printed twice. The destination still follows how
+          the viewer arrived (schedule, bracket or a season's archive). */}
+      <p>
+        <ContextBackLink
+          href={
+            match.season.isActive
               ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
-                ? "← Schedule"
-                : "← Playoff bracket"
-              : `← ${match.season.name}`}
-          </ContextBackLink>
-        }
-      />
+                ? match.phase === "TIEBREAKER"
+                  ? "/schedule#tiebreakers"
+                  : "/schedule#fixtures"
+                : "/schedule#playoff-bracket"
+              : `/seasons/${match.seasonId}`
+          }
+          className={textLink("text-sm")}
+        >
+          {match.season.isActive
+            ? match.phase === "REGULAR" || match.phase === "TIEBREAKER"
+              ? "← Schedule"
+              : "← Playoff bracket"
+            : `← ${match.season.name}`}
+        </ContextBackLink>
+      </p>
 
       {match.phase === "TIEBREAKER" ? (
         <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
@@ -318,7 +315,14 @@ export default async function MatchDetailPage({
           }}
         />
         <CardBody className="relative space-y-6 px-3 py-6 sm:px-6 sm:py-8">
+          {/* The page's h1 names the fixture, like its tab title and link
+              preview, so someone moving by headings knows which match this
+              is. On screen the team names right below say the same. */}
+          <h1 className="sr-only">
+            {match.homeTeam.name} vs {match.awayTeam.name}
+          </h1>
           <div className="flex flex-wrap items-center justify-center gap-2">
+            <Badge>{postseasonLabel}</Badge>
             <Badge>Bo{match.bestOf}</Badge>
             {match.status === "COMPLETED" ? (
               <>
