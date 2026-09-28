@@ -253,7 +253,11 @@ export function SectionNav({
     <nav
       aria-label={label}
       className={cn(
-        "rounded-xl border border-line bg-bg/95 px-2 py-2",
+        // From sm the box hugs its chips: four chips in a full-width box
+        // read as an empty card between the page's hero and its first
+        // section. max-w-full keeps a longer bar at the page width, where
+        // it scrolls (or wraps, with `wrap`) as before.
+        "max-w-full rounded-xl border border-line bg-bg/95 px-2 py-2 sm:w-fit",
         sticky && "lg:sticky lg:top-20 lg:z-20 lg:backdrop-blur",
       )}
     >
