@@ -1,11 +1,11 @@
-import { Card, CardBody, CardHeader } from "@/components/ui";
+import { Card, CardBody, CardHeader, EmojiLead } from "@/components/ui";
 import type { DraftRecap } from "@/lib/draft-recap";
 
 /**
  * Draft-night superlatives (biggest spend, best steal, top spender, bargain
  * hunter) from draftRecap. Presentational and server-safe, so the finished
- * draft room (a client component) and server pages can share one card.
- * Renders nothing when no player was bought.
+ * draft room (a client component) and /teams share one card instead of two
+ * copies that drift. Renders nothing when no player was bought.
  */
 export function DraftRecapCard({
   recap,
@@ -71,7 +71,10 @@ function RecapTile({
 }) {
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
+      {/* The leading emoji stays on screen but isn't read out. */}
+      <div className="text-xs uppercase tracking-wide text-muted">
+        <EmojiLead text={label} />
+      </div>
       <div className="mt-1 truncate font-medium">{value}</div>
       <div className="truncate text-xs text-muted">{detail}</div>
     </div>

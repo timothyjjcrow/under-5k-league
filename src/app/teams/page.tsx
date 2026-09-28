@@ -9,6 +9,7 @@ import { projectPlayoffField } from "@/lib/playoff-field";
 import { draftRecap } from "@/lib/draft-recap";
 import { readDraftSales } from "@/lib/draft-history";
 import { AuctionHistory } from "@/components/auction-history";
+import { DraftRecapCard } from "@/components/draft-recap-card";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
 import { formByTeam } from "@/lib/team-matches";
@@ -36,9 +37,9 @@ import {
   Badge,
   Card,
   CardBody,
-  CardHeader,
   EmptyState,
   FormStrip,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -487,7 +488,8 @@ export default async function TeamsPage() {
                         className={textLink("text-xs")}
                       >
                         Team jersey
-                        <span className="sr-only"> for {t.name}</span> →
+                        <span className="sr-only"> for {t.name}</span>{" "}
+                        <LinkArrow />
                       </Link>
                     </div>
                   ) : null}
@@ -500,68 +502,12 @@ export default async function TeamsPage() {
 
       <PowerRankingsCard rows={power} teams={powerTeams} frozen={powerFrozen} />
 
-      {recap && recap.totalSpent > 0 ? (
-        <Card>
-          <CardHeader
-            title={isDraft ? "Draft night — so far" : "Draft night"}
-            subtitle={`$${recap.totalSpent} spent at the auction`}
-          />
-          <CardBody className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            {recap.biggestSpend ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  <span aria-hidden="true">💸</span> Biggest spend
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.biggestSpend.name} · ${recap.biggestSpend.price}
-                </div>
-                <div className="truncate text-xs text-muted">
-                  {recap.biggestSpend.teamName}
-                </div>
-              </div>
-            ) : null}
-            {recap.bestValue ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  <span aria-hidden="true">🕵️</span> Best steal
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.bestValue.name} · ${recap.bestValue.price}
-                </div>
-                <div className="truncate text-xs text-muted">
-                  {recap.bestValue.mmr} MMR for {recap.bestValue.teamName}
-                </div>
-              </div>
-            ) : null}
-            {recap.topSpender ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  <span aria-hidden="true">🐳</span> Top spender
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.topSpender.teamName}
-                </div>
-                <div className="text-xs text-muted">
-                  ${recap.topSpender.spent} total
-                </div>
-              </div>
-            ) : null}
-            {recap.bargainHunter &&
-            (recap.bargainHunter.teamId ?? recap.bargainHunter.teamName) !== (recap.topSpender?.teamId ?? recap.topSpender?.teamName) ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  <span aria-hidden="true">🧾</span> Bargain hunter
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.bargainHunter.teamName}
-                </div>
-                <div className="text-xs text-muted">
-                  ${recap.bargainHunter.spent} total
-                </div>
-              </div>
-            ) : null}
-          </CardBody>
-        </Card>
+      {/* The finished draft room renders the same card. */}
+      {recap ? (
+        <DraftRecapCard
+          recap={recap}
+          title={isDraft ? "Draft night — so far" : "Draft night"}
+        />
       ) : null}
 
       <AuctionHistory seasonId={season.id} />
