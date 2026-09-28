@@ -1083,7 +1083,12 @@ function adminNextStepFor(season: Season, data: AdminData): AdminNextStep {
     minPlayers: cap.minPlayers,
     teamCount: data.teams.length,
     regularMatchCount: regular.length,
-    scheduledRegularCount: regular.filter((m) => m.scheduledAt).length,
+    untimedRegularCount: regular.filter(
+      (m) =>
+        m.status !== MATCH_STATUS.COMPLETED &&
+        m.status !== MATCH_STATUS.LIVE &&
+        !m.scheduledAt,
+    ).length,
     pendingRegularResults: regular.filter((m) => m.status !== "COMPLETED")
       .length,
     pendingTiebreakerResults: data.matches.filter(
@@ -2907,14 +2912,17 @@ function ScheduleControls({
               <label
                 htmlFor="firstNight"
                 className="text-xs text-muted"
-                title="Week 1 plays at this time on the league's clock; each later week (and playoff round) is +7 days at the same time. Leave empty for no times."
+                title="Week 1 plays at this time on the league's clock; each later week (and playoff round) is +7 days at the same time."
               >
                 First match night
               </label>
+              {/* Required: a fixture with no kickoff gets no check-in, no
+                  reminder, no automatic results and no pick'em lock. */}
               <LocalDatetimeField
                 id="firstNight"
                 name="firstNight"
                 tsName="firstNightTs"
+                required
                 defaultTs={season.firstMatchNight?.getTime()}
                 timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"

@@ -114,7 +114,11 @@ describe("destructive actions leave a trail", () => {
 
     await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({
+        firstNight: "2026-10-07T20:00",
+        firstNightTs: String(Date.now() + 7 * 864e5),
+        expectedActiveSeasonId: season.id,
+      }),
     );
 
     const [row] = await recentAdminActions(1);

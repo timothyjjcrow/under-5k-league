@@ -29,6 +29,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 
 import { prisma } from "@/lib/prisma";
 import { formatLeagueTime } from "@/lib/zoned-time";
+import { matchNightForWeek } from "@/lib/schedule";
 import {
   assignStandin,
   generateSchedule,
@@ -97,6 +98,14 @@ const fd = (o: Record<string, string>) => {
   return f;
 };
 const empty: ActionResult = {};
+/** generateSchedule's required first match night, a week from now. */
+const firstNightFields = () => {
+  const first = new Date(Date.now() + 7 * 864e5);
+  return {
+    firstNight: "2026-10-07T20:00",
+    firstNightTs: String(first.getTime()),
+  };
+};
 
 beforeEach(resetDb);
 afterEach(() => {
@@ -900,7 +909,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
@@ -922,7 +931,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
@@ -952,6 +961,51 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
     expect(res?.message).toContain(`week 1: ${formatLeagueTime(first)}, then weekly`);
   });
 
+  // Fixtures without a kickoff get no check-in, reminder or automatic
+  // results, and filling times in afterwards took one form per week.
+  it("refuses to generate without a first match night", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Untimed${i}`, i + 1);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+
+    const res = await generateSchedule(
+      empty,
+      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+    );
+
+    expect(res?.error).toMatch(/Set the first match night/);
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(
+      0,
+    );
+  });
+
+  it("gives every generated fixture a kickoff, a week apart", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Timed${i}`, i + 1);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    const fields = firstNightFields();
+
+    const res = await generateSchedule(
+      empty,
+      fd({ ...fields, expectedActiveSeasonId: season.id }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    const matches = await prisma.match.findMany({
+      where: { seasonId: season.id },
+    });
+    expect(matches).toHaveLength(6);
+    for (const match of matches) {
+      expect(match.scheduledAt?.getTime()).toBe(
+        matchNightForWeek(new Date(Number(fields.firstNightTs)), match.week).getTime(),
+      );
+    }
+  });
+
   it("refuses to expose a schedule while the auction is still live", async () => {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
     for (let i = 0; i < 4; i++) await makeTeam(season.id, `Live${i}`, i + 1);
@@ -961,7 +1015,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     if (!res) throw new Error("generateSchedule returned no action result");
@@ -979,7 +1033,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(await getSetting(`weekReminder:${season.id}:1`)).toBeNull();
@@ -1001,7 +1055,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toMatch(/reinstate/i);
@@ -1033,7 +1087,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
@@ -1092,7 +1146,7 @@ describe("schedule controls — stale season claims", () => {
 
     const generated = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
     const week = await setWeekNight(
       empty,
@@ -1141,7 +1195,7 @@ describe("schedule controls — stale season claims", () => {
     transaction.mockRejectedValueOnce(conflict);
     const generated = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
     transaction.mockRejectedValueOnce(conflict);
     const week = await setWeekNight(
@@ -1831,7 +1885,7 @@ describe("generateSchedule — the results gate (both halves)", () => {
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toMatch(/results are already recorded/i);
@@ -1852,7 +1906,7 @@ describe("generateSchedule — the results gate (both halves)", () => {
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toMatch(/results are already recorded/i);
@@ -1889,7 +1943,7 @@ describe("generateSchedule — the results gate (both halves)", () => {
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(fired).toBe(true);
@@ -1922,7 +1976,7 @@ describe("generateSchedule — the double-round-robin switch is actually wired",
     const res = await generateSchedule(
       empty,
       fd({
-        firstNight: "",
+        ...firstNightFields(),
         doubleRound: "on",
         expectedActiveSeasonId: season.id,
       }),
@@ -1962,7 +2016,7 @@ describe("generateSchedule — the double-round-robin switch is actually wired",
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();

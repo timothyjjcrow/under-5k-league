@@ -2964,10 +2964,18 @@ export async function generateSchedule(
     };
   }
 
-  // Optional first-match-night: week 1 plays then, each later week +7 days.
-  const firstNightRaw = str(formData, "firstNight").trim();
+  // Week 1 plays at the first match night, each later week +7 days on the
+  // league's clock. It is required: a fixture with no kickoff gets no
+  // check-in, no weekly reminder, no automatic result import and no pick'em
+  // lock, and filling times in afterwards took one form per week.
+  if (!str(formData, "firstNight").trim()) {
+    return {
+      error:
+        "Set the first match night. Week 1 plays then and each later week a week after, so every fixture has a kickoff for check-in, reminders and automatic results.",
+    };
+  }
   const firstNight = localDate(formData, "firstNight", "firstNightTs");
-  if (firstNightRaw && !firstNight) {
+  if (!firstNight) {
     return { error: "Invalid first match night" };
   }
 
@@ -3079,25 +3087,21 @@ export async function generateSchedule(
             homeTeamId: pairing.home,
             awayTeamId: pairing.away,
             bestOf: currentSeason.regularBestOf,
-            scheduledAt: firstNight
-              ? matchNightForWeek(firstNight, i + 1)
-              : null,
+            scheduledAt: matchNightForWeek(firstNight, i + 1),
           })),
         );
 
         // A generated schedule is just as authoritative as a manual retime.
-        // Check every dated fixture before replacing the old schedule so an
+        // Check every fixture before replacing the old schedule so an
         // already-booked SCHEDULED/LIVE scrim cannot be hidden underneath a
         // new official kickoff. Both this path and scrim claiming are
         // Serializable, so a concurrent claim/generate race has one loser.
         for (const row of rows) {
-          const scrimClash = row.scheduledAt
-            ? await findConfirmedScrimConflict(tx, {
-                seasonId: currentSeason.id,
-                teamIds: [row.homeTeamId, row.awayTeamId],
-                scheduledAt: row.scheduledAt,
-              })
-            : null;
+          const scrimClash = await findConfirmedScrimConflict(tx, {
+            seasonId: currentSeason.id,
+            teamIds: [row.homeTeamId, row.awayTeamId],
+            scheduledAt: row.scheduledAt,
+          });
           if (scrimClash) {
             throw new ScrimScheduleConflictError(scrimClash);
           }
@@ -3280,16 +3284,9 @@ export async function generateSchedule(
       : null,
   ].filter(Boolean);
   return {
-    // A blank first night isn't just "no times shown": unscheduled matches are
-    // never auto-scanned, get no week reminder, and never lock pick'em. Say so
-    // rather than letting the league discover it in week 2.
     message: `Schedule generated · ${outcome.rows} matches over ${outcome.weeks} week(s)${
       doubleRound ? " (double round robin)" : ""
-    }${
-      firstNight
-        ? ` · week 1: ${formatLeagueTime(firstNight)}, then weekly`
-        : " · no kickoff times set, so auto-sync, reminders and pick'em locks stay off until you set them"
-    }${
+    } · week 1: ${formatLeagueTime(firstNight)}, then weekly${
       collateral.length
         ? ` · the old fixtures were replaced, clearing ${collateral.join(", ")}`
         : ""

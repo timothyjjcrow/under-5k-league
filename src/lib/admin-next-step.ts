@@ -38,8 +38,12 @@ export type AdminPhaseInput = {
   minPlayers: number;
   teamCount: number;
   regularMatchCount: number;
-  /** Regular matches carrying a kickoff time. */
-  scheduledRegularCount: number;
+  /**
+   * Unplayed regular fixtures (not live) with no kickoff time. Each one gets
+   * no check-in, reminder, automatic result import or pick'em lock, so the
+   * warning stays up until the last one has a time, not just the first.
+   */
+  untimedRegularCount: number;
   pendingRegularResults: number;
   pendingTiebreakerResults?: number;
   /** Already-created tiebreaker fixtures, including completed games. */
@@ -179,6 +183,17 @@ const TICKET_PHASES: ReadonlySet<string> = new Set([
   SEASON_STATUS.PLAYOFFS,
 ]);
 
+/** Fixtures with no kickoff: the step names how many are left. */
+function untimedStep(count: number): AdminNextStep {
+  const fixtures = count === 1 ? "1 fixture still has" : `${count} fixtures still have`;
+  return {
+    title: "Next step: give every fixture a kickoff time.",
+    detail: `${fixtures} no kickoff time, so ${count === 1 ? "it gets" : "they get"} no check-in, no weekly Discord reminder, no automatic result import and no pick'em lock. Set each week's time with “Move a match night”, or, before any result is in, regenerate the schedule with a first match night.`,
+    tone: "warning",
+    jump: JUMP.schedule,
+  };
+}
+
 export function adminNextStep(i: AdminPhaseInput): AdminNextStep {
   const step = phaseStep(i);
   return i.hasLeagueTicket === false && TICKET_PHASES.has(i.seasonStatus)
@@ -194,7 +209,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     minPlayers,
     teamCount,
     regularMatchCount,
-    scheduledRegularCount,
+    untimedRegularCount,
     pendingRegularResults,
     pendingTiebreakerResults = 0,
     existingTiebreakerCount = 0,
@@ -263,6 +278,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
           jump: JUMP.schedule,
         };
       }
+      if (untimedRegularCount > 0) return untimedStep(untimedRegularCount);
       return {
         title: "Next step: start the Regular season.",
         detail: `The schedule is ready. Until you press “${START_REGULAR_SEASON}” in phase control, automatic result sync, the weekly Discord reminder and result reporting stay off, and Discord hasn't been told the season has started.`,
@@ -295,15 +311,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         jump: JUMP.schedule,
       };
     }
-    if (scheduledRegularCount === 0) {
-      return {
-        title: "Next step: set the match nights.",
-        detail:
-          "No fixture has a kickoff time, so automatic result sync never scans, no weekly Discord reminder goes out, and pick'em never locks. Use “Move a match night”, or regenerate with a first match night.",
-        tone: "warning",
-        jump: JUMP.schedule,
-      };
-    }
+    if (untimedRegularCount > 0) return untimedStep(untimedRegularCount);
     if (pendingRegularResults > 0) {
       return {
         title: `Season running — ${pendingRegularResults} result(s) outstanding.`,

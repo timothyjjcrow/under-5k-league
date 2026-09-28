@@ -14,7 +14,7 @@ const base: AdminPhaseInput = {
   minPlayers: 10,
   teamCount: 0,
   regularMatchCount: 0,
-  scheduledRegularCount: 0,
+  untimedRegularCount: 0,
   pendingRegularResults: 0,
   playoffMatchCount: 0,
   unfinishedPlayoffCount: 0,
@@ -193,7 +193,6 @@ describe("adminNextStep — draft", () => {
       seasonStatus: SEASON_STATUS.DRAFT,
       draftStatus: DRAFT_STATUS.COMPLETE,
       regularMatchCount: 6,
-      scheduledRegularCount: 6,
       pendingRegularResults: 6,
     });
     expect(s.title).toBe("Next step: start the Regular season.");
@@ -210,7 +209,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 2,
     });
     expect(result.title).toMatch(/schedule a tiebreaker week/i);
@@ -222,7 +220,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 2,
       pendingTiebreakerResults: 1,
     });
@@ -236,7 +233,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 3,
       existingTiebreakerCount: 1,
       pendingTiebreakerResults: 0,
@@ -252,7 +248,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       unresolvedPlayoffTieCount: 3,
       existingTiebreakerCount: 4,
       pendingTiebreakerResults: 1,
@@ -265,7 +260,6 @@ describe("adminNextStep — regular season", () => {
     const result = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       existingTiebreakerCount: 4,
       unresolvedPlayoffTieCount: 0,
       pendingTiebreakerResults: 0,
@@ -280,24 +274,52 @@ describe("adminNextStep — regular season", () => {
     );
   });
 
-  // A schedule with no kickoff times silently disables auto-sync, the weekly
-  // reminder and pick'em locks for the whole season — the toast that said so is
-  // long gone by the time it matters.
+  // A fixture with no kickoff time gets no auto-sync, weekly reminder,
+  // check-in or pick'em lock — the toast that said so is long gone by the
+  // time it matters.
   it("warns when no fixture has a kickoff time", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 0,
+      untimedRegularCount: 15,
+      pendingRegularResults: 15,
     });
     expect(s.tone).toBe("warning");
-    expect(s.detail).toMatch(/pick'em never locks/i);
+    expect(s.title).toBe("Next step: give every fixture a kickoff time.");
+    expect(s.detail).toMatch(/^15 fixtures still have no kickoff time/);
+    expect(s.detail).toMatch(/no pick'em lock/i);
+    expect(s.jump?.href).toBe("#adm-schedule");
+  });
+
+  // Timing week 1 alone used to clear the warning while weeks 2-5 still read
+  // "Time TBC".
+  it("keeps warning until the last fixture has a time", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.REGULAR_SEASON,
+      regularMatchCount: 15,
+      untimedRegularCount: 1,
+      pendingRegularResults: 15,
+    });
+    expect(s.tone).toBe("warning");
+    expect(s.detail).toMatch(/^1 fixture still has no kickoff time, so it gets/);
+  });
+
+  it("warns before the season starts too, while fixtures lack a time", () => {
+    const s = at({
+      seasonStatus: SEASON_STATUS.DRAFT,
+      draftStatus: DRAFT_STATUS.COMPLETE,
+      regularMatchCount: 6,
+      untimedRegularCount: 4,
+      pendingRegularResults: 6,
+    });
+    expect(s.title).toBe("Next step: give every fixture a kickoff time.");
+    expect(s.jump?.href).toBe("#adm-schedule");
   });
 
   it("reports outstanding results without nagging for an action", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       pendingRegularResults: 3,
     });
     expect(s.tone).toBe("waiting");
@@ -308,7 +330,6 @@ describe("adminNextStep — regular season", () => {
     const s = at({
       seasonStatus: SEASON_STATUS.REGULAR_SEASON,
       regularMatchCount: 15,
-      scheduledRegularCount: 15,
       pendingRegularResults: 0,
     });
     expect(s.title).toMatch(/Start playoffs/);
@@ -493,7 +514,6 @@ describe("adminNextStep — links to the control", () => {
       at({
         seasonStatus: SEASON_STATUS.REGULAR_SEASON,
         regularMatchCount: 15,
-        scheduledRegularCount: 15,
       }).jump?.href,
     ).toBe("#adm-playoffs");
     expect(at({ seasonStatus: SEASON_STATUS.PLAYOFFS }).jump?.href).toBe(
