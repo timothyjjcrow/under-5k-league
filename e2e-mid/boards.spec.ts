@@ -77,27 +77,31 @@ test("leaders opens on weekly honors and ranks what each player did", async ({ p
   assertNoErrors();
 });
 
-test("homepage league pulse shares the trusted honors and hero state", async ({
+// Home shows the latest official honors as one open line. There is no
+// disclosure to open and no caveats: /leaders explains a week still in
+// progress or waiting on box scores.
+test("homepage shows the latest weekly honors as one open line", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/");
-  await page
-    .locator("summary")
-    .filter({ hasText: "Player & hero highlights" })
-    .click();
-  const pulse = page.getByRole("heading", {
-    name: "League pulse",
+  await expect(
+    page.locator("summary").filter({ hasText: "Player & hero highlights" }),
+  ).toHaveCount(0);
+  const heading = page.getByRole("heading", {
+    name: /^Week \d+ honors$/,
     level: 2,
   });
-  await expect(pulse).toBeVisible();
-  const card = pulse.locator(
-    "xpath=ancestor::div[contains(@class, 'rounded-')][1]",
-  );
-  await expect(card.getByText(/is still in progress/i)).toBeVisible();
-  await expect(card.getByText(/most picked/i)).toBeVisible();
-  await expect(card.locator('a[href="/meta"]')).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/ league pulse");
+  await expect(heading).toBeVisible();
+  const line = heading.locator("xpath=ancestor::section[1]");
+  await expect(line).toContainText("Player of the week:");
+  await expect(line).toContainText(/\(best game \d+\/\d+\/\d+ on .+\)/);
+  await expect(line).toContainText("Team of the week:");
+  await expect(line).not.toContainText(/impact points|still in progress/i);
+  await expect(
+    line.getByRole("link", { name: "All honors" }),
+  ).toHaveAttribute("href", "/leaders#weekly-honors");
+  await expectNoHorizontalOverflow(page, "/ weekly honors");
   assertNoErrors();
 });
 

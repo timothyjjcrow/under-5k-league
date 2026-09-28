@@ -1,10 +1,7 @@
 import { PlayoffOutlook, playoffStatusLine } from "@/components/playoff-outlook";
-import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { RegularSeasonProgress } from "@/components/league-progress";
 import { leagueProgress } from "@/lib/league-progress";
 import { cache, Fragment, Suspense, type ReactNode } from "react";
-import { getSeasonGameLeaders } from "@/lib/cached-queries";
-import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { draftNightSoon, draftSetupOpen } from "@/lib/draft-setup";
@@ -52,13 +49,9 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "@/lib/availability";
-import { weeklyHonors } from "@/lib/honors";
-import {
-  HONOR_WEEK_STATE,
-  isNoPerformanceHonorWeek,
-} from "@/lib/honors-readiness";
+import { honorBestGame, weeklyHonors } from "@/lib/honors";
+import { HONOR_WEEK_STATE } from "@/lib/honors-readiness";
 import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
-import { heroMeta } from "@/lib/hero-meta";
 import { heroById } from "@/lib/heroes";
 import type { Match } from "@prisma/client";
 import {
@@ -70,7 +63,6 @@ import {
   CardSkeleton,
   DiscordButton,
   EmptyState,
-  HeroIcon,
   LinkArrow,
   LinkifiedText,
   PlayerLink,
@@ -78,6 +70,7 @@ import {
   RoleBadges,
   ScheduleCallout,
   Skeleton,
+  TAP_SAFE,
   TeamCrest,
   buttonClasses,
   textLink,
@@ -823,7 +816,6 @@ function SeasonViewSkeleton({
           <CardSkeleton key={i} rows={3} className="min-w-0" />
         ))}
       </div>
-      <div className="skeleton h-20 rounded-xl" />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
@@ -2884,11 +2876,13 @@ async function SeasonView({
         </div>
       ) : null}
 
-      <AnalysisDisclosure title="Player & hero highlights">
-        <Suspense fallback={null}>
-          <LeaguePulse seasonId={season.id} teams={teams} teamName={teamName} />
-        </Suspense>
-      </AnalysisDisclosure>
+      <Suspense fallback={null}>
+        <WeeklyHonorsLine
+          seasonId={season.id}
+          teams={teams}
+          teamName={teamName}
+        />
+      </Suspense>
       {sideGames}
     </div>
   );
@@ -3157,12 +3151,13 @@ async function ThisWeek({
 }
 
 /**
- * A taste of the league's stat life: the latest weekly honors and the
- * most-contested hero, teasing /leaders and /meta. A pending honors status can
- * still render before usable games exist so a final-but-broken box score is
- * never presented as merely an in-progress week.
+ * The latest weekly honors as one open line: "Week 4 honors · Player of the
+ * week: X (best game 12/2/18 on Tiny) · Team of the week: Y". Only official
+ * honors (the same readiness rows Discord and /leaders use); until a week has
+ * them it renders nothing, and /leaders explains a week still in progress or
+ * waiting on box scores.
  */
-async function LeaguePulse({
+async function WeeklyHonorsLine({
   seasonId,
   teams,
   teamName,
@@ -3171,213 +3166,66 @@ async function LeaguePulse({
   teams: SeasonSnapshot["teams"];
   teamName: Map<string, string>;
 }) {
-  // Shared, tag-busted scan (cached-queries.ts) rather than a private copy of
-  // the same query — an all-games roll-up repeated per request per viewer.
-  const [games, honorReadiness, viewer] = await Promise.all([
-    getSeasonGameLeaders(seasonId),
-    getSeasonHonorReadiness(seasonId),
-    getSessionUser(),
-  ]);
-  if (games.length === 0 && honorReadiness.length === 0) return null;
-  const viewerIsAdmin = viewer?.role === "ADMIN";
-
-  const parsed = games.map((g) => {
-    const decoded = decodeGamePlayers(g.players);
-    return { ...g, decoded, lines: trustedGamePlayers(decoded) };
-  });
-  const hasBoxScoreIssue = parsed.some(
-    (game) => game.decoded.malformed || !game.decoded.completeRoster,
+  const latest = (await getSeasonHonorReadiness(seasonId)).find(
+    (row) => row.state === HONOR_WEEK_STATE.READY && row.games.length > 0,
   );
-  const hasUnknownHero = parsed.some(
-    (game) =>
-      game.lines.length === 10 &&
-      game.lines.some((player) => !heroById(player.heroId)),
-  );
-  const hasDataIssue = hasBoxScoreIssue || hasUnknownHero;
+  if (!latest) return null;
   const teamOf = new Map(
     teams.flatMap((t) => t.members.map((m) => [m.userId, t.id] as const)),
   );
-
-  // Same readiness rows Discord uses: a final score alone cannot crown an
-  // award while its played games are missing or their 5v5 attribution is bad.
-  const latestReady = honorReadiness.find(
-    (row) => row.state === HONOR_WEEK_STATE.READY && row.games.length > 0,
-  );
-  const latestPending = honorReadiness.find(
-    (row) => row.state !== HONOR_WEEK_STATE.READY,
-  );
-  const newestHonorWeek = honorReadiness[0];
-  const latestNoPerformance = isNoPerformanceHonorWeek(newestHonorWeek)
-    ? newestHonorWeek
-    : null;
-  const latestWeek = latestReady?.week ?? 0;
-  const honors = latestReady
-    ? weeklyHonors(latestReady.games, teamOf)
-    : { player: null, team: null };
+  const honors = weeklyHonors(latest.games, teamOf);
   const potw = honors.player
     ? await prisma.user.findUnique({
         where: { id: honors.player.userId },
-        select: { id: true, name: true, avatar: true },
+        select: { id: true, name: true },
       })
     : null;
-
-  // The league's most-contested hero so far.
-  const meta = heroMeta(
-    parsed
-      // Keep the dashboard teaser inside the same trust boundary as /meta.
-      // A newly added hero is omitted until the bundled hero catalogue is
-      // updated instead of rendering a misleading partial hero pool.
-      .filter(
-        (game) =>
-          game.lines.length === 10 &&
-          game.lines.every((player) => heroById(player.heroId)),
-      )
-      .map((g) => ({
-        radiantWin: g.radiantWin,
-        lines: g.lines.map((p) => ({
-          userId: p.userId,
-          heroId: p.heroId,
-          isRadiant: p.isRadiant,
-          kills: p.kills,
-          deaths: p.deaths,
-          assists: p.assists,
-        })),
-      })),
-  );
-  const topPick = meta.rows[0];
-  const topHero = topPick ? heroById(topPick.heroId) : null;
-
-  // Avoid a header-only shell when there is neither publishable league data
-  // nor a state that needs explaining.
-  if (
-    !latestPending &&
-    !latestNoPerformance &&
-    !honors.player &&
-    !honors.team &&
-    !topPick &&
-    !hasDataIssue
-  ) {
-    return null;
-  }
+  if (!potw && !honors.team) return null;
+  const best = potw ? honorBestGame(latest.games, potw.id) : null;
+  const bestHero = best
+    ? (heroById(best.heroId)?.name ?? `Hero #${best.heroId}`)
+    : null;
 
   return (
-    <Card className="min-w-0">
-      <CardHeader
-        headingLevel={2}
-        title="League pulse"
-        action={
-          <Link href="/leaders" className={textLink("text-sm")}>
-            Leaders <LinkArrow />
+    <section
+      aria-labelledby="home-weekly-honors"
+      className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-2 rounded-[var(--radius)] border border-line bg-surface/60 px-4 py-3 text-sm"
+    >
+      <h2 id="home-weekly-honors" className="text-sm font-semibold">
+        Week {latest.week} honors
+      </h2>
+      {potw ? (
+        <p className="min-w-0 [overflow-wrap:anywhere]">
+          <span aria-hidden>⭐ </span>
+          <span className="text-muted">Player of the week:</span>{" "}
+          <PlayerLink userId={potw.id} className="font-medium">
+            {potw.name}
+          </PlayerLink>
+          {best ? (
+            <span className="text-muted">
+              {" "}
+              (best game {best.kills}/{best.deaths}/{best.assists} on{" "}
+              {bestHero})
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+      {honors.team ? (
+        <p className="min-w-0 [overflow-wrap:anywhere]">
+          <span aria-hidden>🛡️ </span>
+          <span className="text-muted">Team of the week:</span>{" "}
+          <Link
+            href={`/teams/${honors.team.teamId}`}
+            className={cn(TAP_SAFE, "font-medium hover:text-info")}
+          >
+            {teamName.get(honors.team.teamId) ?? "?"}
           </Link>
-        }
-      />
-      <CardBody className="space-y-3 text-sm">
-        {hasDataIssue ? (
-          <div className="flex min-w-0 items-start gap-2 text-accent">
-            <span aria-hidden className="shrink-0">
-              ⚠
-            </span>
-            {/* The repair steps are admin work; players only need to know
-                some games are not counted yet. */}
-            {viewerIsAdmin ? (
-              <span>
-                Some imported games are omitted from League pulse. Incomplete or
-                invalid 5v5 box scores must be inspected, removed, and
-                re-imported; unknown hero IDs require a hero-catalogue update.{" "}
-                <Link href="/admin/data-quality" className={textLink()}>
-                  Open data quality <LinkArrow />
-                </Link>
-              </span>
-            ) : (
-              <span className="text-muted">
-                A few games are still being checked, so they are not counted
-                here yet.
-              </span>
-            )}
-          </div>
-        ) : null}
-        {latestPending ? (
-          <div className="flex min-w-0 items-start gap-2 text-muted">
-            <span aria-hidden className="shrink-0">
-              ⏳
-            </span>
-            <span>
-              {latestPending.state === HONOR_WEEK_STATE.IN_PROGRESS
-                ? `Week ${latestPending.week} is still in progress; honors publish after the full slate is final.`
-                : `Week ${latestPending.week} is final, but honors are waiting for complete, valid 5v5 box scores.`}
-            </span>
-          </div>
-        ) : null}
-        {latestNoPerformance ? (
-          <div className="flex min-w-0 items-start gap-2 text-muted">
-            <span aria-hidden className="shrink-0">
-              ◇
-            </span>
-            <span>
-              Week {latestNoPerformance.week} is final with no played games, so
-              no performance honors were awarded.
-            </span>
-          </div>
-        ) : null}
-        {potw && honors.player ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className="shrink-0">
-              ⭐
-            </span>
-            <span className="min-w-0 flex-1 leading-relaxed">
-              <PlayerLink userId={potw.id} className="font-medium">
-                {potw.name}
-              </PlayerLink>{" "}
-              <span className="text-muted">
-                · Week {latestWeek} Player of the Week · {honors.player.points}{" "}
-                impact points
-              </span>
-            </span>
-          </div>
-        ) : null}
-        {honors.team ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className="shrink-0">
-              🛡️
-            </span>
-            <span className="min-w-0 flex-1 leading-relaxed">
-              <Link
-                href={`/teams/${honors.team.teamId}`}
-                className="font-medium hover:text-info"
-              >
-                {teamName.get(honors.team.teamId) ?? "?"}
-              </Link>{" "}
-              <span className="text-muted">
-                · Week {latestWeek} team · {honors.team.gameWins} game win
-                {honors.team.gameWins === 1 ? "" : "s"}
-              </span>
-            </span>
-          </div>
-        ) : null}
-        {topPick ? (
-          <div className="flex min-w-0 items-center gap-2">
-            {/* Unknown hero ids are omitted above until the catalogue updates. */}
-            {topHero ? (
-              <HeroIcon hero={topHero} size={22} />
-            ) : (
-              <span
-                aria-hidden
-                className="h-[22px] w-[22px] shrink-0 rounded-md border border-line/70 bg-surface-2"
-              />
-            )}
-            <span className="min-w-0 flex-1 leading-relaxed">
-              <Link href="/meta" className="font-medium hover:text-info">
-                {topHero?.name ?? `Hero #${topPick.heroId}`}
-              </Link>{" "}
-              <span className="text-muted">
-                · most picked · {topPick.picks} pick
-                {topPick.picks === 1 ? "" : "s"}, {topPick.winRate}% wins
-              </span>
-            </span>
-          </div>
-        ) : null}
-      </CardBody>
-    </Card>
+        </p>
+      ) : null}
+      <Link href="/leaders#weekly-honors" className={textLink("text-sm")}>
+        All honors <LinkArrow />
+      </Link>
+    </section>
   );
 }
 
