@@ -1,11 +1,17 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import Link from "next/link";
-import { ContextBackLink } from "@/components/context-back-link";
-import { SectionNav } from "@/components/section-nav";
-import { ProfileMatchSpotlight } from "@/components/profile-match-spotlight";
-import { profileMatch } from "@/lib/profile-match";
-import { Suspense } from "react";
 import { notFound } from "next/navigation";
+import { SectionNav } from "@/components/section-nav";
+import { ProfileCareer } from "@/components/profile-career";
+import {
+  ProfileHeader,
+  UnjoinedProfile,
+} from "@/components/profile-header";
+import { ProfileHeroesAndRecords } from "@/components/profile-heroes-records";
+import { ProfileMatchHistory } from "@/components/profile-match-history";
+import { ProfileOverview } from "@/components/profile-overview";
+import { ProfilePerformance } from "@/components/profile-performance";
+import { profileMatch } from "@/lib/profile-match";
+import { profileSections } from "@/lib/profile-sections";
 import { prisma } from "@/lib/prisma";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
 import { getPlayerGameFacts } from "@/lib/player-game-history";
@@ -13,18 +19,15 @@ import { getRosterHistory } from "@/lib/player-roster-history";
 import { appearanceCareers } from "@/lib/appearance-careers";
 import { playerProfileMetadata, shareMetadata } from "@/lib/share-metadata";
 import { profileSeasonRows } from "@/lib/profile-seasons";
-import { PlayerSeasons } from "@/components/player-seasons";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
-import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
-import { roleLabels } from "@/lib/roles";
+import { heroById, parseHeroList } from "@/lib/heroes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { profileWantsCaptain } from "@/lib/player-directory-lifecycle";
 import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { getSessionUser } from "@/lib/auth";
-import { DiscordTag } from "@/components/discord-tag";
 import {
   currentStreak,
   summarizePlayerGames,
@@ -33,13 +36,11 @@ import {
   decodeGamePlayers,
   trustedGamePlayers,
 } from "@/lib/player-stats";
-import type { PlayerStat } from "@/lib/match-import";
 import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
-import { leagueRecords, toRecordGames, type PlayerRecord } from "@/lib/records";
-import { formatNetWorth, cn, hasText } from "@/lib/utils";
+import { leagueRecords, toRecordGames } from "@/lib/records";
+import { hasText } from "@/lib/utils";
 import { aboutText } from "@/lib/about-you";
 import { rankMedalName } from "@/lib/rank";
-import { pubTitle, pubToken } from "@/lib/player-pool";
 import {
   parsePubStats,
   poolPubRecord,
@@ -47,55 +48,22 @@ import {
   pubLastPlayed,
 } from "@/lib/pub-stats";
 import {
-  Avatar,
-  Badge,
-  buttonClasses,
-  Card,
-  CardBody,
-  CardHeader,
-  CardSkeleton,
-  FormStrip,
-  HeroIcon,
-  HeroList,
-  HeroPool,
-  KDA,
-  LinkArrow,
-  RankMedal,
-  RoleBadges,
-  SectionTitle,
-  Sparkline,
-  Stat,
-  textLink,
-} from "@/components/ui";
-import {
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
   REGISTRATION_STATUS,
 } from "@/lib/constants";
-import { PROVISIONAL_GAMES } from "@/lib/inhouse-stats";
-import { loadInhouseLadder } from "@/lib/inhouse-ladder";
-import { parseInhouseBox } from "@/lib/inhouse-box";
-import { inhousePlayedAt } from "@/lib/inhouse-history";
-import { formatMatchTime } from "@/lib/match-time";
-import { LocalTime } from "@/components/local-time";
-import { seriesRecordText, type FormResult } from "@/lib/team-matches";
+import type { FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
 import {
   groupBySeries,
   pickStandout,
+  recordedAverage,
+  seasonHistoryView,
+  seriesOpponent,
   seriesOutcome,
-  type SeriesOutcome,
 } from "@/lib/profile-history";
-import { ShowMore } from "@/components/show-more";
-import {
-  careerReportCard,
-  gradeFor,
-  gradeTone,
-  percentLabel,
-  REPORT_CARD_MIN_GRADED,
-  reportVerdicts,
-} from "@/lib/benchmarks";
+import { careerReportCard, reportVerdicts } from "@/lib/benchmarks";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { playoffRunTile, teamPlayoffRun } from "@/lib/playoff-run";
 import { canViewLeagueContact } from "@/lib/visibility";
@@ -402,7 +370,7 @@ export default async function PlayerProfilePage({
   // Pull this player's line out of each imported game — every season's games.
   // The parsed box score is kept so achievements can identify each game's MVP;
   // won/mvp are computed once here and shared by the tiles, the badge math,
-  // and the match-history rows (the 🏅 chip).
+  // the standout game and the match-history rows.
   const gameRows = games
     .map((g) => {
       const parsed = trustedGamePlayers(decodeGamePlayers(g.players));
@@ -435,10 +403,8 @@ export default async function PlayerProfilePage({
     : [];
   const careerSummary = summarizePlayerGames(careerLines);
   const seasonSummary = summarizePlayerGames(seasonLines);
-  // Stat tiles show the active season once it has games, career otherwise —
-  // so veterans keep a record during SIGNUPS/DRAFT of a new season.
+  // The overview's tiles show this season once it has games, career before.
   const hasSeasonGames = seasonSummary.games > 0;
-  const tiles = hasSeasonGames ? seasonSummary : careerSummary;
   // Trophy case + report card: career-wide, same rows as the match history.
   const achievementLines = gameRows.map(({ stat, won, mvp }) => ({
     kills: stat.kills,
@@ -492,10 +458,7 @@ export default async function PlayerProfilePage({
     );
 
   // Match history is one entry per series (how the league scores), latest
-  // first. gameRows is newest-first, so series and seasons keep that order —
-  // and a season stays one group even if a game with no start time (startTime
-  // defaults to 0) sorts out of order. A per-season header shows only when the
-  // player has series in more than one season.
+  // first. gameRows is newest-first, so series and seasons keep that order.
   const seriesHistory = groupBySeries(
     gameRows.map((row) => ({
       ...row,
@@ -518,12 +481,7 @@ export default async function PlayerProfilePage({
       match,
       games: seriesGames,
       outcome: seriesOutcome(match, teamId, seriesGames),
-      opponentName:
-        teamId === match.homeTeamId
-          ? match.awayTeam.name
-          : teamId === match.awayTeamId
-            ? match.homeTeam.name
-            : `${match.homeTeam.name} / ${match.awayTeam.name}`,
+      opponentName: seriesOpponent(match, teamId),
       round: matchRoundLabel(
         match,
         playoffRoundsBySeason.get(match.seasonId) ?? 0,
@@ -531,38 +489,7 @@ export default async function PlayerProfilePage({
       playedAt,
     };
   });
-  type SeriesEntry = (typeof seriesHistory)[number];
-  const historyGroups: {
-    seasonId: string;
-    seasonName: string;
-    series: SeriesEntry[];
-  }[] = [];
-  for (const entry of seriesHistory) {
-    const group = historyGroups.find(
-      (g) => g.seasonId === entry.match.seasonId,
-    );
-    if (group) group.series.push(entry);
-    else
-      historyGroups.push({
-        seasonId: entry.match.seasonId,
-        seasonName: entry.match.season.name,
-        series: [entry],
-      });
-  }
-  const multiSeasonHistory = historyGroups.length > 1;
-  // An unknown `?season=` falls back to the all-seasons view rather than
-  // presenting a misleading empty history (links copied from an old profile
-  // should stay useful after a season gets removed or renamed).
-  const selectedHistoryGroup = historySeasonParam
-    ? historyGroups.find((group) => group.seasonId === historySeasonParam)
-    : undefined;
-  const visibleSeries = selectedHistoryGroup
-    ? selectedHistoryGroup.series
-    : historyGroups.flatMap((group) => group.series);
-  const seriesCountBySeason = new Map(
-    historyGroups.map((group) => [group.seasonId, group.series.length]),
-  );
-  const showSeasonHeaders = multiSeasonHistory && !selectedHistoryGroup;
+  const history = seasonHistoryView(seriesHistory, historySeasonParam);
   const latestLeagueGame = gameRows.find((row) => row.game.startTime > 0);
 
   // Team + record for this season, if drafted.
@@ -589,7 +516,6 @@ export default async function PlayerProfilePage({
       : null;
   const playoffTile = playoffRun ? playoffRunTile(playoffRun) : null;
 
-  const roles = roleLabels(activeReg?.roles);
   const isStandin = activeReg?.type === "STANDIN";
   const isCaptain = !!membership?.isCaptain;
   // Season context only: the badges already say Captain / Standin and the
@@ -608,8 +534,6 @@ export default async function PlayerProfilePage({
     parseHeroList(activeReg?.favoriteHeroes).matched[0] ??
     null;
 
-  // Band/card visibility, computed once so a SectionTitle can never render
-  // above an empty band. Everything gates on data presence, never phase.
   const hasLeagueGames = gameRows.length > 0;
   // What they wrote about themselves, shown once under the header. Signups
   // from before the form had one "About you" box keep two answers; they show
@@ -627,45 +551,21 @@ export default async function PlayerProfilePage({
       draftStatus: draft?.status,
     });
   const selfPickedHeroes = activeReg?.favoriteHeroes;
-  const heroCardVisible =
-    leagueHeroes.length > 0 ||
-    pubHeroes.length > 0 ||
-    hasText(selfPickedHeroes);
 
   // Economy averages + a standout game. Net-worth/GPM/last-hits are optional per
   // game (older imports may lack them), so average only over games that have it.
-  type GameRow = (typeof gameRows)[number];
-  const avgOf = (
-    rows: GameRow[],
-    pick: (s: PlayerStat) => number | null | undefined,
-  ) =>
-    rows.length
-      ? Math.round(
-          rows.reduce((sum, r) => sum + (pick(r.stat) ?? 0), 0) / rows.length,
-        )
-      : null;
-  const avgNet = avgOf(
-    gameRows.filter((r) => r.stat.netWorth != null),
-    (s) => s.netWorth,
-  );
-  const avgGpm = avgOf(
-    gameRows.filter((r) => r.stat.gpm != null),
-    (s) => s.gpm,
-  );
-  const avgLh = avgOf(
-    gameRows.filter((r) => r.stat.lastHits != null),
-    (s) => s.lastHits,
-  );
+  const avgNet = recordedAverage(gameRows.map((r) => r.stat.netWorth));
+  const avgGpm = recordedAverage(gameRows.map((r) => r.stat.gpm));
+  const avgLh = recordedAverage(gameRows.map((r) => r.stat.lastHits));
   // Their best performance by impact points (the Match MVP rating), so a
   // support's big game can stand out, not just the richest one.
   const bestGame = pickStandout(gameRows);
-  const hasPerf = avgNet != null || avgGpm != null;
   const bestView = bestGame
     ? {
         matchId: bestGame.game.matchId,
         hero: heroById(bestGame.stat.heroId),
         heroId: bestGame.stat.heroId,
-        won: bestGame.stat.isRadiant === bestGame.game.radiantWin,
+        won: bestGame.won,
         kills: bestGame.stat.kills,
         deaths: bestGame.stat.deaths,
         assists: bestGame.stat.assists,
@@ -675,12 +575,7 @@ export default async function PlayerProfilePage({
           bestGame.game.match,
           playoffRoundsBySeason.get(bestGame.game.match.seasonId) ?? 0,
         ),
-        opponent:
-          bestGame.stat.teamId === bestGame.game.match.homeTeamId
-            ? bestGame.game.match.awayTeam.name
-            : bestGame.stat.teamId === bestGame.game.match.awayTeamId
-              ? bestGame.game.match.homeTeam.name
-              : `${bestGame.game.match.homeTeam.name} / ${bestGame.game.match.awayTeam.name}`,
+        opponent: seriesOpponent(bestGame.game.match, bestGame.stat.teamId),
       }
     : null;
 
@@ -695,1177 +590,128 @@ export default async function PlayerProfilePage({
       )
     : null;
   const featuredMatch = teamSpotlight ?? latestLeagueGame?.game.match ?? null;
-  const featuredPlayoffRounds = teamSpotlight
-    ? playoffTotalRounds(seasonMatches)
-    : latestLeagueGame
-      ? (playoffRoundsBySeason.get(latestLeagueGame.game.match.seasonId) ?? 0)
-      : 0;
-  const featuredTeams = teamSpotlight
-    ? seasonTeams
-    : latestLeagueGame
-      ? [
-          latestLeagueGame.game.match.homeTeam,
-          latestLeagueGame.game.match.awayTeam,
-        ]
-      : [];
-  const recordsVisible = heldRecords.length > 0;
-  const profileVisible = heroCardVisible || recordsVisible;
-  // With no league games the inhouse card leads the page (it is their one
-  // real record); otherwise it sits with the rest of their career.
-  const inhouseInOverview = !hasLeagueGames && !!recentInhouse;
-  const careerVisible =
-    badges.length > 0 ||
-    seasonRows.length > 0 ||
-    (!!recentInhouse && !inhouseInOverview);
-  const sectionItems = [
-    { id: "player-overview", label: "Overview" },
-    ...(hasLeagueGames ? [{ id: "player-matches", label: "Matches" }] : []),
-    ...(hasPerf || reportCard.graded > 0
-      ? [{ id: "player-performance", label: "Performance" }]
-      : []),
-    ...(heroCardVisible ? [{ id: "player-heroes", label: "Heroes" }] : []),
-    // Named for the card it jumps to. "About" is the player's own words
-    // under the header, so a tab called that must not land on records.
-    ...(recordsVisible ? [{ id: "player-records", label: "Records" }] : []),
-    ...(careerVisible ? [{ id: "player-career", label: "Career" }] : []),
-  ];
-  const overviewItems =
-    (hasLeagueGames ? 1 : 0) +
-    (featuredMatch ? 1 : 0) +
-    (inhouseInOverview ? 1 : 0);
+  const featured = featuredMatch
+    ? {
+        match: featuredMatch,
+        teams: teamSpotlight
+          ? seasonTeams
+          : latestLeagueGame
+            ? [
+                latestLeagueGame.game.match.homeTeam,
+                latestLeagueGame.game.match.awayTeam,
+              ]
+            : [],
+        playoffRounds: teamSpotlight
+          ? playoffTotalRounds(seasonMatches)
+          : latestLeagueGame
+            ? (playoffRoundsBySeason.get(
+                latestLeagueGame.game.match.seasonId,
+              ) ?? 0)
+            : 0,
+        nowMs,
+        teamContext: !!teamSpotlight,
+      }
+    : null;
 
-  return (
-    <div className="space-y-6">
-      <div>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <ContextBackLink href="/players" className={textLink("text-sm")}>
-            ← All players
-          </ContextBackLink>
-          {/* Compare lists players with an imported league game (the same
-              trusted lines as gameRows); anyone else, such as a standin who
-              never played, would open onto "Player unavailable". */}
-          {gameRows.length > 0 ? (
-            <Link
-              href={`/players/compare?a=${user.id}`}
-              className={textLink("text-sm")}
-            >
-              Compare vs… <LinkArrow />
-            </Link>
-          ) : null}
-        </div>
-        <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
-          {/* Signature hero portrait fading in from the right. */}
-          {signatureHero ? (
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 right-0 w-2/3 sm:w-1/2"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={heroPortrait(signatureHero)}
-                alt=""
-                className="profile-hero-bg h-full w-full object-cover object-center opacity-30"
-              />
-            </div>
-          ) : null}
-          {/* Ambient graphics shared with the home hero for brand cohesion. */}
-          <div
-            aria-hidden
-            className="hero-grid pointer-events-none absolute inset-0 opacity-50"
-          />
-          <div
-            aria-hidden
-            className="animate-hero-glow pointer-events-none absolute -left-8 top-0 h-40 w-40 -translate-y-1/3 rounded-full bg-brand/20 blur-3xl"
-          />
-          <div
-            aria-hidden
-            className="animate-hero-glow-alt pointer-events-none absolute -right-8 bottom-0 h-40 w-40 translate-y-1/3 rounded-full bg-accent/15 blur-3xl"
-          />
-          <div className="relative flex flex-wrap items-center gap-5 p-6">
-            <Avatar
-              name={user.name}
-              src={user.avatar}
-              size={88}
-              className="shrink-0 shadow-lg shadow-black/40 ring-2 ring-line/80"
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
-                  {user.name}
-                </h1>
-                {user.role === "ADMIN" ? (
-                  <Badge tone="accent">Admin</Badge>
-                ) : null}
-                {isCaptain ? <Badge tone="accent">Captain</Badge> : null}
-                {isStandin ? <Badge tone="info">Standin</Badge> : null}
-                {wantsCaptainNow ? (
-                  <Badge tone="neutral">Wants to captain</Badge>
-                ) : null}
-                <RankMedal rankTier={user.rankTier} size={34} showLabel />
-              </div>
-              {subtitle ? (
-                <div className="mt-1 text-sm text-muted">
-                  {subtitle}
-                  {isSelf ? (
-                    <>
-                      {" · "}
-                      <Link href="/me" className={textLink()}>
-                        Edit your signup →
-                      </Link>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
-              {/* gap-y-2, not gap-y-1.5: every link in this row carries
-                  TAP_SAFE, which grows the hit box 4px above and below, so two
-                  wrapped rows need >=8px between them. At 6px the Dotabuff and
-                  OpenDota boxes overlapped by 2px (measured) and OpenDota
-                  painted last, so a tap on the bottom edge of Dotabuff opened
-                  OpenDota. Same rule player-pool.tsx already states: hit boxes
-                  may touch, never overlap. */}
-              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted">
-                {activeReg ? (
-                  <span>
-                    <span className="font-semibold text-fg">
-                      {activeReg.mmr}
-                    </span>{" "}
-                    MMR
-                  </span>
-                ) : null}
-                {roles.length > 0 ? (
-                  <RoleBadges roles={activeReg?.roles} />
-                ) : null}
-                {pubScout ? (
-                  <span
-                    className="tabular-nums"
-                    title={pubTitle(pubScout, nowMs)}
-                  >
-                    {pubToken(pubScout, nowMs)}
-                  </span>
-                ) : null}
-                {pubLast?.quiet ? (
-                  /* The consequence is part of the text, not a tooltip: a
-                     phone never shows a title, and "last played 5mo ago"
-                     alone doesn't say why a captain should care. Measured
-                     when the snapshot was taken, and only while it is
-                     recent (pubLastPlayed). */
-                  <span title="No visible pub games in over two months when their pub stats were last checked, so the listed MMR may describe who they used to be">
-                    last played {pubLast.label} · MMR may be stale
-                  </span>
-                ) : null}
-                {user.profileUrl ? (
-                  <a
-                    href={user.profileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={textLink()}
-                  >
-                    Steam ↗
-                  </a>
-                ) : null}
-                {accountId ? (
-                  <>
-                    <a
-                      href={`https://www.dotabuff.com/players/${accountId}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={textLink()}
-                    >
-                      Dotabuff ↗
-                    </a>
-                    <a
-                      href={`https://www.opendota.com/players/${accountId}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={textLink()}
-                    >
-                      OpenDota ↗
-                    </a>
-                  </>
-                ) : null}
-                {canSeeLeagueContact ? (
-                  <DiscordTag
-                    name={user.discordName}
-                    verified={!!user.discordId}
-                  />
-                ) : null}
-                {canSeeLeagueContact && !user.discordName ? (
-                  /* Members-only like the tag itself: on draft night the
-                     absence IS the information — this player can't be reached
-                     where the league lives. The player themself gets the fix,
-                     not just the fact. */
-                  isSelf ? (
-                    <Link href="/me#profile-discord" className={textLink()}>
-                      Add your Discord →
-                    </Link>
-                  ) : (
-                    <span
-                      className="text-muted"
-                      title="No Discord linked or entered. The league coordinates on Discord, so reaching this player takes extra work"
-                    >
-                      no Discord
-                    </span>
-                  )
-                ) : null}
-              </div>
-              {canSeeLeagueContact && user.fhUnavailable === true ? (
-                /* Members-only operational flag, like the Discord tokens
-                   above. === true on purpose: null is UNKNOWN and unknown must
-                   never render as a negative. Its own line, because the
-                   explanation used to live only in a hover title, and the
-                   player it is about needs the fix spelled out. */
-                <p className="mt-2 text-xs text-muted">
-                  <span className="font-medium text-danger">
-                    Private match data.
-                  </span>{" "}
-                  {isSelf ? (
-                    <>
-                      Expose Public Match Data is off in your Dota client, so
-                      your games can&apos;t auto-import.{" "}
-                      <Link href="/me#profile-dota" className={textLink()}>
-                        How to turn it on →
-                      </Link>
-                    </>
-                  ) : (
-                    "Expose Public Match Data is off in their Dota client, so their games can't auto-import and results need a manual report."
-                  )}
-                </p>
-              ) : null}
-            </div>
-            {team ? (
-              // basis-full below sm: this card and the name column are flex
-              // siblings, and the column carries `min-w-0` (it must, or a long
-              // name widens the page). min-w-0 sets its min-content
-              // contribution to ZERO, so the row can never overflow and
-              // `flex-wrap` NEVER FIRES — the card kept its full 153px and the
-              // name column absorbed the whole shortfall. Measured at 375px it
-              // was 12px wide, and `[overflow-wrap:anywhere]` on the h1 then
-              // rendered the player's name ONE CHARACTER PER LINE: a 504px-tall
-              // h1 in a 908px hero card, with Dotabuff/OpenDota squeezed to
-              // 57px and wrapped onto two lines ~940px down. Broken at every
-              // phone width, healthy by 640px — which is why it never showed up
-              // on a desktop. Taking the card out of the line is the fix that
-              // cannot backfire: the floor has to go on the item that is
-              // ALLOWED to shrink, and a min-width on the name column instead
-              // overflows the page below ~320px.
-              <Link
-                href={`/teams/${team.id}`}
-                className="basis-full rounded-lg border border-line bg-surface/60 px-4 py-2 text-sm backdrop-blur transition-colors hover:border-muted/60 sm:basis-auto"
-              >
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  Team
-                </div>
-                <div className="font-medium">{team.name}</div>
-                {membership && !membership.isCaptain ? (
-                  <div className="text-xs text-muted">
-                    Drafted for ${membership.price}
-                  </div>
-                ) : null}
-              </Link>
-            ) : null}
-            {signupAbout ? (
-              // Their own words, once, under the header. Full width so a
-              // long answer wraps instead of squeezing the name.
-              <dl className="basis-full border-t border-line/60 pt-4 text-sm">
-                <div className="min-w-0">
-                  <dt className="text-xs font-medium uppercase tracking-wide text-muted">
-                    About
-                  </dt>
-                  <dd className="mt-0.5 whitespace-pre-line [overflow-wrap:anywhere]">
-                    {signupAbout}
-                  </dd>
-                </div>
-              </dl>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs only earn their space with three or more sections to jump
-          between; a new signup's page is short enough to scroll. */}
-      {sectionItems.length >= 3 ? (
-        <SectionNav items={sectionItems} label="Player sections" sticky />
-      ) : null}
-
-      <section
-        id="player-overview"
-        aria-label="Player overview"
-        className="scroll-mt-40 space-y-3"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          {/* With no league games the heading IS the one status line: the
-              signup details, pub form and inhouse record around it are what
-              they do have. */}
-          <h2 className="font-display text-xl font-semibold">
-            {!hasLeagueGames
-              ? "No league games yet"
-              : hasSeasonGames
-                ? "Season form"
-                : "Career form"}
-          </h2>
-          {hasLeagueGames ? (
-            <span className="text-xs text-muted">
-              {hasSeasonGames ? season?.name : "All league seasons"}
-            </span>
-          ) : null}
-        </div>
-        {overviewItems > 0 ? (
-          <div
-            className={cn(
-              "grid grid-cols-1 gap-4",
-              overviewItems >= 2 && "lg:grid-cols-2",
-            )}
-          >
-            {hasLeagueGames ? (
-              <div className="grid min-w-0 grid-cols-2 gap-3">
-                {/* Games won and lost, not series: "Game record" keeps it
-                    apart from the team's series record beside it. */}
-                <Stat
-                  label={hasSeasonGames ? "Game record" : "Career game record"}
-                  value={`${tiles.wins}–${tiles.losses}`}
-                  hint={
-                    hasSeasonGames && careerSummary.games > seasonSummary.games
-                      ? `${tiles.winRate}% · career ${careerSummary.wins}–${careerSummary.losses}`
-                      : `${tiles.winRate}% win rate`
-                  }
-                />
-                <Stat label="Games" value={tiles.games} hint={streakLabel} />
-                <Stat
-                  label="Avg KDA"
-                  value={`${tiles.avgKills}/${tiles.avgDeaths}/${tiles.avgAssists}`}
-                  hint={`${tiles.kda} ratio`}
-                />
-                {team && playoffTile ? (
-                  <Stat
-                    label="Playoffs"
-                    value={playoffTile.value}
-                    hint={playoffTile.hint}
-                    // md: a round name ("Quarterfinal") at text-3xl overflows
-                    // a half-width tile on a phone.
-                    size="md"
-                  />
-                ) : team ? (
-                  <Stat
-                    label="Team rank"
-                    value={teamRank > 0 ? `#${teamRank}` : "—"}
-                    hint={
-                      teamRow
-                        ? `${seriesRecordText(teamRow)} · ${teamRow.points} pts`
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <Stat
-                    label="Hero pool"
-                    value={careerSummary.topHeroes.length}
-                    hint="heroes played"
-                  />
-                )}
-              </div>
-            ) : null}
-
-            {featuredMatch ? (
-              <ProfileMatchSpotlight
-                match={featuredMatch}
-                teams={featuredTeams}
-                playoffRounds={featuredPlayoffRounds}
-                nowMs={nowMs}
-                teamContext={!!teamSpotlight}
-              />
-            ) : null}
-            {inhouseInOverview ? (
-              <Suspense fallback={<CardSkeleton rows={3} />}>
-                <InhouseCareerCard userId={user.id} />
-              </Suspense>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-
-      {hasLeagueGames ? (
-        <Card id="player-matches" className="scroll-mt-40 overflow-hidden">
-          <CardHeader
-            title="Match history"
-            headingLevel={2}
-            subtitle={
-              selectedHistoryGroup
-                ? selectedHistoryGroup.seasonName
-                : multiSeasonHistory
-                  ? "All seasons"
-                  : historyGroups[0]?.seasonName
-            }
-            action={
-              recentFormStrip.length > 0 || multiSeasonHistory ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  {recentFormStrip.length > 0 ? (
-                    <FormStrip form={recentFormStrip} size={5} />
-                  ) : null}
-                  {multiSeasonHistory ? (
-                    <form
-                      method="get"
-                      action={`/players/${id}#player-matches`}
-                      className="flex items-center gap-2"
-                    >
-                      <label>
-                        <span className="sr-only">Show games from season</span>
-                        <select
-                          name="season"
-                          defaultValue={selectedHistoryGroup?.seasonId ?? ""}
-                          className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-xs text-fg outline-none focus:border-accent/60 sm:h-8"
-                        >
-                          <option value="">All seasons</option>
-                          {historyGroups.map((group) => (
-                            <option key={group.seasonId} value={group.seasonId}>
-                              {group.seasonName}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button
-                        type="submit"
-                        className={buttonClasses("secondary", "sm")}
-                      >
-                        View
-                      </button>
-                    </form>
-                  ) : null}
-                </div>
-              ) : undefined
-            }
-          />
-          <CardBody className="p-0">
-            <SeriesList
-              series={visibleSeries.slice(0, HISTORY_PREVIEW)}
-              previousSeasonId={null}
-              showSeasonHeaders={showSeasonHeaders}
-              seriesCountBySeason={seriesCountBySeason}
-            />
-            {visibleSeries.length > HISTORY_PREVIEW ? (
-              <ShowMore
-                showLabel={`Show all ${visibleSeries.length} series`}
-                hideLabel="Show fewer"
-              >
-                <SeriesList
-                  series={visibleSeries.slice(HISTORY_PREVIEW)}
-                  previousSeasonId={
-                    visibleSeries[HISTORY_PREVIEW - 1].match.seasonId
-                  }
-                  showSeasonHeaders={showSeasonHeaders}
-                  seriesCountBySeason={seriesCountBySeason}
-                  className="border-t border-line/60"
-                />
-              </ShowMore>
-            ) : null}
-          </CardBody>
-        </Card>
-      ) : null}
-
-      {/* ---------- How they play ---------- */}
-      {/* Bands: an h2 SectionTitle over an auto-fit grid. auto-fit, NEVER
-          grid-cols-1 (it silently wins the cascade and collapses the band at
-          every width — the dashboard rule): every card here is conditional,
-          so an absent one must collapse its track instead of leaving a hole. */}
-      {hasPerf || reportCard.graded > 0 ? (
-        <section id="player-performance" className="scroll-mt-40 space-y-3">
-          <SectionTitle>How they play</SectionTitle>
-          <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr))]">
-            {hasPerf ? (
-              <Card className="min-w-0">
-                <CardHeader
-                  title="Performance"
-                  subtitle="Averages across every season's imported games"
-                />
-                <CardBody className="space-y-4">
-                  {/* auto-fit, not grid-cols-3: each Stat is individually
-                      null-gated (legacy imports lack economy fields), and a
-                      fixed 3-track grid holds a hole per missing metric. */}
-                  <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(8rem,100%),1fr))]">
-                    {avgNet != null ? (
-                      <Stat
-                        label="Avg net worth"
-                        value={formatNetWorth(avgNet)}
-                      />
-                    ) : null}
-                    {avgGpm != null ? (
-                      <Stat label="Avg GPM" value={avgGpm} />
-                    ) : null}
-                    {avgLh != null ? (
-                      <Stat label="Avg last hits" value={avgLh} />
-                    ) : null}
-                  </div>
-                  {kdaByGame.length >= 2 ? (
-                    /* max-w-md: full width, justify-between held ~700px of
-                       dead middle between label and sparkline at desktop. */
-                    <div className="flex max-w-md items-center justify-between gap-4 rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
-                      <div>
-                        <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                          KDA by game
-                        </div>
-                        <div className="text-xs text-muted">
-                          last {kdaByGame.length}
-                        </div>
-                      </div>
-                      <Sparkline values={kdaByGame} width={160} height={38} />
-                    </div>
-                  ) : null}
-                  {bestView ? (
-                    <Link
-                      href={`/matches/${bestView.matchId}`}
-                      className="block rounded-lg border border-line bg-surface-2/40 p-3 text-sm transition-colors hover:border-muted/60"
-                    >
-                      <span
-                        className="block text-[10px] font-medium uppercase tracking-wide text-muted"
-                        title="Their best game by impact points, the rating behind Match MVP"
-                      >
-                        Standout game
-                      </span>
-                      {/* On a phone the stats take their own line under the
-                          hero (basis-full); from sm they sit at the end of
-                          the row. Side by side at 390px they crushed the
-                          opponent's name to one word per line and printed it
-                          over the net worth. */}
-                      <span className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                        {bestView.hero ? (
-                          <HeroIcon hero={bestView.hero} size={30} />
-                        ) : null}
-                        <span className="min-w-0 flex-1">
-                          <span className="block font-medium">
-                            {bestView.hero?.name ?? `Hero ${bestView.heroId}`}
-                          </span>
-                          <span className="block text-xs text-muted [overflow-wrap:anywhere]">
-                            vs {bestView.opponent} · {bestView.round}
-                          </span>
-                        </span>
-                        <Badge
-                          tone={bestView.won ? "success" : "danger"}
-                          className="sm:order-last"
-                        >
-                          {bestView.won ? "W" : "L"}
-                        </Badge>
-                        <span className="flex basis-full flex-wrap items-baseline gap-x-2 text-xs sm:block sm:basis-auto sm:text-right">
-                          <KDA
-                            kills={bestView.kills}
-                            deaths={bestView.deaths}
-                            assists={bestView.assists}
-                            className="sm:block"
-                          />
-                          <span className="text-muted sm:block">
-                            {formatNetWorth(bestView.netWorth)}
-                            {bestView.gpm != null
-                              ? ` · ${bestView.gpm} GPM`
-                              : ""}
-                          </span>
-                        </span>
-                      </span>
-                    </Link>
-                  ) : null}
-                </CardBody>
-              </Card>
-            ) : null}
-            {reportCard.graded > 0 ? (
-              <Card className="min-w-0">
-                <CardHeader
-                  title="Report card"
-                  subtitle={`How they stack up vs the world on their heroes — OpenDota percentiles over ${reportCard.graded} graded game${reportCard.graded === 1 ? "" : "s"}`}
-                />
-                <CardBody className="space-y-4">
-                  {!verdicts.graded ? (
-                    <p className="text-xs text-muted">
-                      Grades appear after {REPORT_CARD_MIN_GRADED} graded
-                      games.
-                    </p>
-                  ) : verdicts.overall != null && reportCard.avgPct != null ? (
-                    <div className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                      <span
-                        className={cn(
-                          "font-display text-4xl font-bold leading-none",
-                          gradeTone(verdicts.overall) === "success"
-                            ? "text-success"
-                            : gradeTone(verdicts.overall) === "accent"
-                              ? "text-accent"
-                              : gradeTone(verdicts.overall) === "muted"
-                                ? "text-muted"
-                                : "text-fg/80",
-                        )}
-                      >
-                        {verdicts.overall}
-                      </span>
-                      <span className="text-sm text-muted">
-                        overall — {percentLabel(reportCard.avgPct)} vs the world
-                        on their heroes
-                      </span>
-                    </div>
-                  ) : null}
-                  <ul className="space-y-2">
-                    {reportCard.metrics.map((m) => {
-                      // Below the minimum the bar stays neutral and no
-                      // letter shows: a colour is a verdict too.
-                      const grade = verdicts.graded ? gradeFor(m.avgPct) : null;
-                      const tone = grade ? gradeTone(grade) : "muted";
-                      return (
-                        <li
-                          key={m.key}
-                          className="flex items-center gap-3 text-sm"
-                        >
-                          <span className="w-28 shrink-0 truncate text-xs text-muted sm:w-32">
-                            {m.label}
-                          </span>
-                          <span
-                            role="img"
-                            aria-label={`${m.label}: ${percentLabel(m.avgPct)}${grade ? `, grade ${grade}` : ""}`}
-                            className="min-w-0 flex-1"
-                          >
-                            <span className="block h-2 w-full overflow-hidden rounded-full bg-surface-2">
-                              <span
-                                className={cn(
-                                  "block h-full rounded-full",
-                                  tone === "success"
-                                    ? "bg-success/80"
-                                    : tone === "accent"
-                                      ? "bg-accent/80"
-                                      : tone === "muted"
-                                        ? grade
-                                          ? "bg-line"
-                                          : "bg-muted/60"
-                                        : "bg-fg/40",
-                                )}
-                                style={{
-                                  width: `${Math.round(m.avgPct * 100)}%`,
-                                }}
-                              />
-                            </span>
-                          </span>
-                          <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">
-                            {percentLabel(m.avgPct).replace(" percentile", "")}
-                            {grade ? (
-                              <b
-                                className={cn(
-                                  "ml-1.5 font-semibold",
-                                  tone === "success"
-                                    ? "text-success"
-                                    : tone === "accent"
-                                      ? "text-accent"
-                                      : "text-fg/80",
-                                )}
-                              >
-                                {grade}
-                              </b>
-                            ) : null}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {verdicts.best || verdicts.focus ? (
-                    // auto-fit: visitors never get "Work on", so a lone
-                    // Strength callout takes the full width, not half a row.
-                    <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
-                      {verdicts.best ? (
-                        <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-xs">
-                          <span aria-hidden>💪</span> <b>Strength:</b>{" "}
-                          {verdicts.best.label} —{" "}
-                          {percentLabel(verdicts.best.avgPct)}
-                        </div>
-                      ) : null}
-                      {verdicts.focus ? (
-                        <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
-                          <span aria-hidden>🎯</span> <b>Work on:</b>{" "}
-                          {verdicts.focus.label} —{" "}
-                          {percentLabel(verdicts.focus.avgPct)}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </CardBody>
-              </Card>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {profileVisible ? (
-        <section id="player-about" className="scroll-mt-40 space-y-3">
-          <SectionTitle>Player profile</SectionTitle>
-          <div className="space-y-6">
-            {heroCardVisible ? (
-              <Card id="player-heroes" className="min-w-0 scroll-mt-40">
-                <CardHeader
-                  title="Hero pool"
-                  subtitle="League games, public pubs, and their favorite heroes"
-                />
-                <CardBody className="space-y-4">
-                  {leagueHeroes.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                        In this league
-                      </div>
-                      <HeroPool
-                        heroes={leagueHeroes}
-                        minGamesForRate={HERO_RATE_MIN_GAMES}
-                      />
-                    </div>
-                  ) : null}
-                  {hasText(selfPickedHeroes) ? (
-                    <div className="space-y-2">
-                      <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                        Favorite heroes
-                      </div>
-                      <HeroList value={selfPickedHeroes} size={26} />
-                    </div>
-                  ) : null}
-                  {pubHeroes.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                        Most played (pubs)
-                        {pubCheckedLabel ? (
-                          <span className="font-normal normal-case tracking-normal">
-                            {" "}
-                            · checked {pubCheckedLabel}
-                          </span>
-                        ) : null}
-                      </div>
-                      <HeroPool
-                        heroes={pubHeroes}
-                        limit={5}
-                        minGamesForRate={HERO_RATE_MIN_GAMES}
-                      />
-                    </div>
-                  ) : null}
-                </CardBody>
-              </Card>
-            ) : null}
-
-            {heldRecords.length > 0 ? (
-              <Card id="player-records" className="min-w-0 scroll-mt-40">
-                <CardHeader
-                  title="League records"
-                  subtitle="All-time single-game records"
-                  action={
-                    <Link href="/records" className={textLink("text-sm")}>
-                      Record book →
-                    </Link>
-                  }
-                />
-                <CardBody className="flex flex-wrap gap-2">
-                  {heldRecords.map((record) => {
-                    const hero = heroById(record.heroId);
-                    return (
-                      <Link
-                        key={record.key}
-                        href={`/matches/${record.matchId}`}
-                        className="flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm transition-colors hover:border-muted/60"
-                        title={`${record.title}: ${recordDisplayValue(record)}`}
-                      >
-                        <span aria-hidden>{record.emoji}</span>
-                        {hero ? <HeroIcon hero={hero} size={22} /> : null}
-                        <span>
-                          <span className="block font-medium">
-                            {record.title}
-                          </span>
-                          <span className="block font-mono text-xs tabular-nums text-muted">
-                            {recordDisplayValue(record)}
-                          </span>
-                        </span>
-                        <Badge tone={record.won ? "success" : "danger"}>
-                          {record.won ? "W" : "L"}
-                        </Badge>
-                      </Link>
-                    );
-                  })}
-                </CardBody>
-              </Card>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {careerVisible ? (
-        <section
-          id="player-career"
-          aria-label="Player career"
-          className="scroll-mt-40 space-y-4"
-        >
-          {badges.length > 0 ? (
-            <Card>
-              <CardHeader
-                title="Achievements"
-                subtitle="Earned across every season's imported games"
-              />
-              {/* Each badge says what it is for in visible text: the
-                  description used to live only in a hover tooltip, which a
-                  phone never shows. */}
-              <CardBody>
-                <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {badges.map((b) => (
-                    <li
-                      key={b.key}
-                      className="flex min-w-0 items-start gap-2.5 rounded-lg border border-line bg-surface-2/50 px-3 py-2"
-                    >
-                      <span aria-hidden className="text-lg leading-6">
-                        {b.emoji}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block text-sm font-medium">
-                          {b.label}
-                          {b.count > 1 ? (
-                            <span className="ml-1.5 font-mono text-xs tabular-nums text-muted">
-                              ×{b.count}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="block text-xs text-muted">
-                          {b.desc}
-                        </span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </CardBody>
-            </Card>
-          ) : null}
-
-          <PlayerSeasons rows={seasonRows} teamLogos={teamLogos} />
-
-          {/* Inhouse career — only stream for players with a completed game
-              (players with no league games get it at the top instead). */}
-          {recentInhouse && !inhouseInOverview ? (
-            <Suspense fallback={<CardSkeleton rows={3} />}>
-              <InhouseCareerCard userId={user.id} />
-            </Suspense>
-          ) : null}
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-/** The whole profile of an account that has joined nothing yet. */
-function UnjoinedProfile({
-  user,
-  isSelf,
-}: {
-  user: { name: string; avatar: string | null; role: string };
-  isSelf: boolean;
-}) {
-  return (
-    <div className="space-y-6">
-      <div>
-        <div className="mb-3">
-          <ContextBackLink href="/players" className={textLink("text-sm")}>
-            ← All players
-          </ContextBackLink>
-        </div>
-        <div className="flex flex-wrap items-center gap-5 rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 p-6 shadow-sm">
-          <Avatar
-            name={user.name}
-            src={user.avatar}
-            size={88}
-            className="shrink-0 shadow-lg shadow-black/40 ring-2 ring-line/80"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
-                {user.name}
-              </h1>
-              {user.role === "ADMIN" ? (
-                <Badge tone="accent">Admin</Badge>
-              ) : null}
-            </div>
-            <p className="mt-1 text-sm text-muted">
-              Hasn&apos;t joined a season yet
-            </p>
-            {isSelf ? (
-              <p className="mt-2.5 text-sm text-muted">
-                Your profile fills in once you sign up for a season or play an
-                inhouse.{" "}
-                <Link href="/me" className={textLink()}>
-                  Go to My account <LinkArrow />
-                </Link>
-              </p>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Games on a hero before its win rate gets a colour; below it, a plain W–L. */
-const HERO_RATE_MIN_GAMES = 3;
-
-/** Latest series shown before "Show all". */
-const HISTORY_PREVIEW = 5;
-
-type HistorySeries = {
-  matchId: string;
-  match: { seasonId: string; season: { name: string } };
-  games: {
-    game: { id: string };
-    stat: PlayerStat;
-    won: boolean;
-  }[];
-  outcome: SeriesOutcome;
-  opponentName: string;
-  round: string;
-  playedAt: Date | null;
-};
-
-/**
- * One row per series: the result from their side, the opponent, the week or
- * playoff round and the date, with their hero and KDA for each game beneath.
- * The whole row opens the match page.
- */
-function SeriesList({
-  series,
-  previousSeasonId,
-  showSeasonHeaders,
-  seriesCountBySeason,
-  className,
-}: {
-  series: HistorySeries[];
-  /** Season of the row just above this list, so a header isn't repeated. */
-  previousSeasonId: string | null;
-  showSeasonHeaders: boolean;
-  seriesCountBySeason: ReadonlyMap<string, number>;
-  className?: string;
-}) {
-  return (
-    <ul className={cn("divide-y divide-line/60", className)}>
-      {series.map((entry, i) => {
-        const seasonId = entry.match.seasonId;
-        const prior = i > 0 ? series[i - 1].match.seasonId : previousSeasonId;
-        const count = seriesCountBySeason.get(seasonId) ?? 0;
-        return (
-          <li key={entry.matchId}>
-            {showSeasonHeaders && seasonId !== prior ? (
-              <Link
-                href={`/seasons/${seasonId}`}
-                className="flex items-center justify-between border-b border-line/60 bg-surface-2/40 px-5 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
-              >
-                <span className="truncate">{entry.match.season.name}</span>
-                <span className="shrink-0 tabular-nums">{count} series</span>
-              </Link>
-            ) : null}
-            <Link
-              href={`/matches/${entry.matchId}`}
-              className="block px-5 py-3 text-sm hover:bg-surface-2/40"
-            >
-              <span className="flex items-center gap-3">
-                <Badge
-                  tone={
-                    entry.outcome.result === "W"
-                      ? "success"
-                      : entry.outcome.result === "L"
-                        ? "danger"
-                        : entry.outcome.result === "D"
-                          ? "neutral"
-                          : "info"
-                  }
-                >
-                  {entry.outcome.result ?? "Live"}
-                </Badge>
-                <span className="min-w-0 flex-1">
-                  <span className="block font-medium leading-snug [overflow-wrap:anywhere]">
-                    <span className="font-normal text-muted">vs </span>
-                    {entry.opponentName}
-                  </span>
-                  <span className="mt-1 block text-xs text-muted">
-                    {entry.outcome.label} · {entry.round}
-                    {entry.playedAt ? (
-                      <>
-                        {" · "}
-                        <LocalTime
-                          ts={entry.playedAt.getTime()}
-                          variant="date"
-                          initial={formatMatchTime(entry.playedAt, "date")}
-                        />
-                      </>
-                    ) : null}
-                  </span>
-                </span>
-              </span>
-              <span className="mt-2 block space-y-1.5 pl-10">
-                {/* Only the games THEY played, so no "Game 2" numbering: a
-                    standin who covered one game of three has one line. */}
-                {entry.games.map(({ game, stat, won }) => {
-                  const hero = heroById(stat.heroId);
-                  return (
-                    <span
-                      key={game.id}
-                      className="flex items-center gap-2 text-xs"
-                    >
-                      {hero ? <HeroIcon hero={hero} size={22} /> : null}
-                      <span className="min-w-0 flex-1 truncate text-muted">
-                        {hero?.name ?? `Hero ${stat.heroId}`}
-                      </span>
-                      <KDA
-                        kills={stat.kills}
-                        deaths={stat.deaths}
-                        assists={stat.assists}
-                        className="shrink-0"
-                      />
-                      <span
-                        className={cn(
-                          "w-3 shrink-0 text-right font-semibold",
-                          won ? "text-success" : "text-danger",
-                        )}
-                      >
-                        <span aria-hidden>{won ? "W" : "L"}</span>
-                        <span className="sr-only">{won ? "won" : "lost"}</span>
-                      </span>
-                    </span>
-                  );
-                })}
-              </span>
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function recordDisplayValue(record: PlayerRecord): string {
-  switch (record.key) {
-    case "netWorth":
-      return formatNetWorth(record.value);
-    case "gpm":
-      return `${record.value} GPM`;
-    case "xpm":
-      return `${record.value} XPM`;
-    default:
-      return new Intl.NumberFormat("en-US").format(record.value);
-  }
-}
-
-// ---------- Inhouse career ----------
-
-// The player's ladder identity, surfaced where people actually look each
-// other up. Rank comes from the FULL ladder (Elo accumulates globally); the
-// recent-game rows come from a separate small query with box scores.
-async function InhouseCareerCard({ userId }: { userId: string }) {
-  const [ladder, recent] = await Promise.all([
-    loadInhouseLadder(),
-    prisma.inhouseLobby.findMany({
-      where: {
-        status: INHOUSE_STATUS.COMPLETED,
-        players: { some: { userId } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-      select: {
-        id: true,
-        winnerTeam: true,
-        radiantTeam: true,
-        radiantScore: true,
-        direScore: true,
-        boxScore: true,
-        matchStartTime: true,
-        startedAt: true,
-        createdAt: true,
-        players: { select: { userId: true, team: true } },
-      },
-    }),
-  ]);
-  if (recent.length === 0) return null;
-
-  const me = [...ladder.ranked, ...ladder.provisional].find(
-    (r) => r.userId === userId,
-  );
-  if (!me) return null;
-  const rank = ladder.ranked.findIndex((r) => r.userId === userId);
-
-  const games = recent.map((l) => {
-    const mine = l.players.find((p) => p.userId === userId);
-    const line = parseInhouseBox(l.boxScore).find((b) => b.userId === userId);
-    const won = mine?.team != null && mine.team === l.winnerTeam;
-    return { lobby: l, line, won, playedAt: inhousePlayedAt(l) };
+  // Which bands render (and the tabs that jump to them), decided once.
+  const sections = profileSections({
+    leagueGames: hasLeagueGames,
+    economy: avgNet != null || avgGpm != null,
+    gradedGames: reportCard.graded > 0,
+    heroes:
+      leagueHeroes.length > 0 ||
+      pubHeroes.length > 0 ||
+      hasText(selfPickedHeroes),
+    records: heldRecords.length > 0,
+    achievements: badges.length > 0,
+    seasons: seasonRows.length > 0,
+    inhouse: !!recentInhouse,
   });
 
   return (
-    <Card>
-      <CardHeader
-        title="Inhouse"
-        subtitle="Pick-up ladder across every inhouse game"
-        action={
-          <Link href="/inhouse" className={textLink("text-sm")}>
-            Ladder →
-          </Link>
+    <div className="space-y-6">
+      <ProfileHeader
+        user={user}
+        isSelf={isSelf}
+        canSeeLeagueContact={canSeeLeagueContact}
+        comparable={hasLeagueGames}
+        signatureHero={signatureHero}
+        isCaptain={isCaptain}
+        isStandin={isStandin}
+        wantsCaptainNow={wantsCaptainNow}
+        subtitle={subtitle}
+        signup={activeReg}
+        pubScout={pubScout}
+        pubLast={pubLast}
+        nowMs={nowMs}
+        accountId={accountId}
+        team={team}
+        draftPrice={
+          membership && !membership.isCaptain ? membership.price : null
         }
+        signupAbout={signupAbout}
       />
-      <CardBody className="space-y-4">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
-          <span className="tabular-nums">
-            <span className="font-semibold">{me.rating}</span>
-            <span className="text-muted"> Elo</span>
-            <span className="ml-1 text-xs text-muted">(peak {me.peak})</span>
-          </span>
-          <span className="text-muted tabular-nums">
-            {rank >= 0 ? `#${rank + 1} of ${ladder.ranked.length}` : "unranked"}
-          </span>
-          <span className="tabular-nums">
-            <span className="text-success">{me.wins}W</span>
-            <span className="text-muted">–</span>
-            <span className="text-danger">{me.losses}L</span>
-            <span className="ml-1 text-xs text-muted">
-              {Math.round(me.winRate * 100)}%
-            </span>
-          </span>
-          <FormStrip form={me.form} size={4} />
-          {me.games < PROVISIONAL_GAMES ? (
-            // Says what provisional MEANS, in the /inhouse strip's words: a
-            // bare "provisional" beside "unranked" explained neither.
-            <Badge tone="neutral">
-              provisional · {PROVISIONAL_GAMES - me.games} more{" "}
-              {PROVISIONAL_GAMES - me.games === 1 ? "game" : "games"} to rank
-            </Badge>
-          ) : null}
-        </div>
-        <div className="divide-y divide-line/60 border-t border-line/60">
-          {games.map(({ lobby, line, won, playedAt }) => {
-            const hero = line ? heroById(line.heroId) : null;
-            return (
-              <Link
-                key={lobby.id}
-                href={`/inhouse/history?game=${lobby.id}#result-${lobby.id}`}
-                className="flex items-center gap-3 py-2 text-sm transition-colors hover:bg-surface-2/40"
-              >
-                <span className="w-24 shrink-0 text-xs text-muted">
-                  <LocalTime
-                    ts={playedAt.getTime()}
-                    variant="short"
-                    initial={formatMatchTime(playedAt, "short")}
-                  />
-                </span>
-                <Badge tone={won ? "success" : "danger"}>
-                  {won ? "Win" : "Loss"}
-                </Badge>
-                <span className="font-mono text-xs tabular-nums text-muted">
-                  {lobby.radiantScore ?? 0}–{lobby.direScore ?? 0}
-                </span>
-                <span className="flex min-w-0 flex-1 items-center justify-end gap-2">
-                  {hero ? (
-                    <>
-                      <HeroIcon hero={hero} size={24} />
-                      <span className="hidden truncate text-xs text-muted sm:inline">
-                        {hero.name}
-                      </span>
-                    </>
-                  ) : null}
-                  {line ? (
-                    <KDA
-                      kills={line.kills}
-                      deaths={line.deaths}
-                      assists={line.assists}
-                      className="shrink-0 text-xs"
-                    />
-                  ) : null}
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      </CardBody>
-    </Card>
+
+      {/* Tabs only earn their space with three or more sections to jump
+          between; a new signup's page is short enough to scroll. */}
+      {sections.nav.length >= 3 ? (
+        <SectionNav items={sections.nav} label="Player sections" sticky />
+      ) : null}
+
+      <ProfileOverview
+        hasLeagueGames={hasLeagueGames}
+        hasSeasonGames={hasSeasonGames}
+        seasonName={season?.name}
+        seasonSummary={seasonSummary}
+        careerSummary={careerSummary}
+        streakLabel={streakLabel}
+        team={team ? { rank: teamRank, row: teamRow, playoffTile } : null}
+        featured={featured}
+        inhouseUserId={sections.inhouseInOverview ? user.id : null}
+      />
+
+      {sections.matches ? (
+        <ProfileMatchHistory
+          playerId={id}
+          history={history}
+          recentForm={recentFormStrip}
+        />
+      ) : null}
+
+      {sections.performance ? (
+        <ProfilePerformance
+          showPerformance={sections.performanceCard}
+          showReportCard={sections.reportCard}
+          avgNet={avgNet}
+          avgGpm={avgGpm}
+          avgLh={avgLh}
+          kdaByGame={kdaByGame}
+          bestView={bestView}
+          reportCard={reportCard}
+          verdicts={verdicts}
+        />
+      ) : null}
+
+      {sections.profile ? (
+        <ProfileHeroesAndRecords
+          showHeroes={sections.heroes}
+          showRecords={sections.records}
+          leagueHeroes={leagueHeroes}
+          selfPickedHeroes={selfPickedHeroes}
+          pubHeroes={pubHeroes}
+          pubCheckedLabel={pubCheckedLabel}
+          heldRecords={heldRecords}
+        />
+      ) : null}
+
+      {sections.career ? (
+        <ProfileCareer
+          badges={badges}
+          seasonRows={seasonRows}
+          teamLogos={teamLogos}
+          inhouseUserId={sections.inhouseInCareer ? user.id : null}
+        />
+      ) : null}
+    </div>
   );
 }

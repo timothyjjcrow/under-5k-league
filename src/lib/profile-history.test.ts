@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { groupBySeries, pickStandout, seriesOutcome } from "./profile-history";
+import {
+  groupBySeries,
+  pickStandout,
+  recordedAverage,
+  seasonHistoryView,
+  seriesOpponent,
+  seriesOutcome,
+} from "./profile-history";
 
 const line = (
   id: string,
@@ -130,5 +137,95 @@ describe("seriesOutcome", () => {
     expect(
       seriesOutcome(match, null, [{ won: true }, { won: true }, { won: false }]),
     ).toEqual({ result: "W", label: "2–1 in their games" });
+  });
+});
+
+describe("seriesOpponent", () => {
+  const match = {
+    homeTeamId: "home",
+    awayTeamId: "away",
+    homeTeam: { name: "Radiant Rascals" },
+    awayTeam: { name: "Dire Straits" },
+  };
+
+  it("names the other side from the team they played for", () => {
+    expect(seriesOpponent(match, "home")).toBe("Dire Straits");
+    expect(seriesOpponent(match, "away")).toBe("Radiant Rascals");
+  });
+
+  it("names both teams when their line carries no team of this match", () => {
+    expect(seriesOpponent(match, null)).toBe("Radiant Rascals / Dire Straits");
+    expect(seriesOpponent(match, undefined)).toBe(
+      "Radiant Rascals / Dire Straits",
+    );
+    expect(seriesOpponent(match, "someone-else")).toBe(
+      "Radiant Rascals / Dire Straits",
+    );
+  });
+});
+
+describe("recordedAverage", () => {
+  it("averages only the games that recorded a value, rounded", () => {
+    expect(recordedAverage([400, null, 501, undefined])).toBe(451);
+  });
+
+  it("is null when no game recorded one, never zero", () => {
+    expect(recordedAverage([])).toBeNull();
+    expect(recordedAverage([null, undefined])).toBeNull();
+  });
+
+  it("keeps a recorded zero", () => {
+    expect(recordedAverage([0, 0])).toBe(0);
+  });
+});
+
+describe("seasonHistoryView", () => {
+  const s = (id: string, seasonId: string) => ({
+    id,
+    match: { seasonId, season: { name: `Season ${seasonId}` } },
+  });
+  // Latest first, the way the profile reads them. s2 has a game with no start
+  // time that sorted below an s1 series: s2 must still be one group.
+  const series = [s("a", "2"), s("b", "1"), s("c", "2"), s("d", "1")];
+
+  it("groups series by season in first-seen order, keeping their order", () => {
+    const view = seasonHistoryView(series, undefined);
+    expect(view.groups.map((g) => [g.seasonId, g.seasonName])).toEqual([
+      ["2", "Season 2"],
+      ["1", "Season 1"],
+    ]);
+    expect(view.groups[0].series.map((x) => x.id)).toEqual(["a", "c"]);
+    expect(view.visible.map((x) => x.id)).toEqual(["a", "c", "b", "d"]);
+    expect([...view.countBySeason]).toEqual([
+      ["2", 2],
+      ["1", 2],
+    ]);
+    expect(view.multiSeason).toBe(true);
+    expect(view.selected).toBeUndefined();
+    expect(view.showSeasonHeaders).toBe(true);
+  });
+
+  it("shows one season's series, without headers, when ?season= names it", () => {
+    const view = seasonHistoryView(series, "1");
+    expect(view.selected?.seasonName).toBe("Season 1");
+    expect(view.visible.map((x) => x.id)).toEqual(["b", "d"]);
+    expect(view.showSeasonHeaders).toBe(false);
+    // The season picker still lists every season.
+    expect(view.groups).toHaveLength(2);
+  });
+
+  it("falls back to every season for an unknown or empty ?season=", () => {
+    for (const param of ["gone", ""]) {
+      const view = seasonHistoryView(series, param);
+      expect(view.selected).toBeUndefined();
+      expect(view.visible).toHaveLength(4);
+      expect(view.showSeasonHeaders).toBe(true);
+    }
+  });
+
+  it("drops the headers for a one-season history", () => {
+    const view = seasonHistoryView([s("a", "1"), s("b", "1")], undefined);
+    expect(view.multiSeason).toBe(false);
+    expect(view.showSeasonHeaders).toBe(false);
   });
 });
