@@ -117,3 +117,34 @@ describe("match page result card", () => {
   });
 });
 
+
+describe("match page box scores", () => {
+  it("keeps Game 1 open and folds later games, still reachable by id", () => {
+    expect(PAGE).toMatch(
+      /if \(i === 0\) \{\s*return \(\s*<Card\s+key=\{g\.id\}\s+id=\{`game-\$\{g\.id\}`\}/,
+    );
+    // The scoreboard's Game chips link to #game-<id>; AutoOpenDetails opens
+    // the folded game when that jump lands on it.
+    expect(PAGE).toMatch(/<AutoOpenDetails\s+id=\{`game-\$\{g\.id\}`\}/);
+    expect(PAGE).toContain("href={`#game-${game.id}`}");
+  });
+
+  it("shows one report-card chip per player that opens the named metrics", () => {
+    const strip = PAGE.slice(PAGE.indexOf("function ReportCardStrip"));
+    expect(strip).toMatch(
+      /<details[\s\S]*?<summary[\s\S]*?Report \{overall\}[\s\S]*?<\/summary>/,
+    );
+    expect(strip).toContain("{r.label}");
+    // No abbreviated per-metric chips ("HD/min", "TD").
+    expect(strip).not.toContain("r.short");
+  });
+
+  it("prints each game's team net worth once, in the panel", () => {
+    const side = PAGE.slice(
+      PAGE.indexOf("function SidePlayers"),
+      PAGE.indexOf("function ReportCardStrip"),
+    );
+    expect(side).not.toMatch(/formatNetWorth\(totalNet\)|Net worth\{" "\}/);
+    expect(PAGE).toContain("Recorded net worth");
+  });
+});

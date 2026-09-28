@@ -40,6 +40,19 @@ test("a completed match page renders the box score with an MVP chip", async ({
       .locator(gameTarget!)
       .getByRole("heading", { name: "Game 1", exact: true }),
   ).toBeInViewport();
+  // Every fixture series has two games. The second folds to its result line
+  // (a full box score is a phone-height and a half), and its chip opens it.
+  const secondGame = page.getByRole("link", { name: /^Game 2 / }).first();
+  const secondTarget = await secondGame.getAttribute("href");
+  expect(secondTarget).toMatch(/^#game-/);
+  const secondBox = page.locator(secondTarget!);
+  await expect(secondBox).toHaveJSProperty("open", false);
+  await secondGame.click();
+  await expect(secondBox).toHaveJSProperty("open", true);
+  await expect(
+    secondBox.getByRole("heading", { name: "Game 2", exact: true }),
+  ).toBeInViewport();
+  await expect(secondBox.getByText("Recorded net worth")).toBeVisible();
   await expectNoHorizontalOverflow(page, "mobile match center box score");
 
   assertNoErrors();

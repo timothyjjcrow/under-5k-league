@@ -2,6 +2,7 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
 import { Suspense } from "react";
 import { LiveSeriesCheckin } from "@/components/live-series-checkin";
+import { AutoOpenDetails } from "@/components/auto-open-details";
 import { fetchGamesForScouting } from "@/lib/game-participants";
 import { GameIdentityEditor } from "@/components/game-identity-editor";
 import {
@@ -662,45 +663,31 @@ export default async function MatchDetailPage({
               0,
             );
             const direNet = dire.reduce((s, p) => s + (p.netWorth ?? 0), 0);
-            return (
-              <Card
-                key={g.id}
-                id={`game-${g.id}`}
-                className="scroll-mt-24 overflow-hidden"
+            // 0s / 0-0 means the header stats never got reported — showing
+            // "0m 0s · 0-0 kills" reads as a real (absurd) game.
+            const gameLine =
+              [
+                g.durationSecs > 0
+                  ? `${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s`
+                  : null,
+                g.radiantScore + g.direScore > 0
+                  ? `${g.radiantScore}-${g.direScore} kills`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || undefined;
+            const openDota = (
+              <a
+                href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
+                target="_blank"
+                rel="noreferrer"
+                className={textLink("whitespace-nowrap text-xs")}
               >
-                <CardHeader
-                  title={`Game ${i + 1}`}
-                  headingLevel={2}
-                  // 0s / 0-0 means the header stats never got reported — showing
-                  // "0m 0s · 0-0 kills" reads as a real (absurd) game.
-                  subtitle={
-                    [
-                      g.durationSecs > 0
-                        ? `${Math.floor(g.durationSecs / 60)}m ${g.durationSecs % 60}s`
-                        : null,
-                      g.radiantScore + g.direScore > 0
-                        ? `${g.radiantScore}-${g.direScore} kills`
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || undefined
-                  }
-                  action={
-                    <div className="flex items-center gap-2">
-                      {winnerName ? (
-                        <Badge tone="success">{winnerName} won</Badge>
-                      ) : null}
-                      <a
-                        href={`https://www.opendota.com/matches/${g.dotaMatchId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={textLink("whitespace-nowrap text-xs")}
-                      >
-                        OpenDota <LinkArrow out />
-                      </a>
-                    </div>
-                  }
-                />
+                OpenDota <LinkArrow out />
+              </a>
+            );
+            const boxScore = (
+              <>
                 <CardBody className="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2">
                   <NetWorthAdvantage
                     radiantName={radiantName}
@@ -728,6 +715,68 @@ export default async function MatchDetailPage({
                   />
                 </CardBody>
                 {viewer?.role === "ADMIN" ? <GameIdentityEditor gameId={g.id} /> : null}
+              </>
+            );
+            if (i === 0) {
+              return (
+                <Card
+                  key={g.id}
+                  id={`game-${g.id}`}
+                  className="scroll-mt-24 overflow-hidden"
+                >
+                  <CardHeader
+                    title={`Game ${i + 1}`}
+                    headingLevel={2}
+                    subtitle={gameLine}
+                    action={
+                      <div className="flex items-center gap-2">
+                        {winnerName ? (
+                          <Badge tone="success">{winnerName} won</Badge>
+                        ) : null}
+                        {openDota}
+                      </div>
+                    }
+                  />
+                  {boxScore}
+                </Card>
+              );
+            }
+            // Later games fold to their result line, as /inhouse does: a
+            // full box score is about 1,760px on a phone, so an open Bo3 was
+            // 7,000px. The id stays on the <details>, and a jump from the
+            // scoreboard's Game chips (or a shared #game- link) opens it.
+            return (
+              <Card key={g.id} className="overflow-hidden">
+                <AutoOpenDetails
+                  id={`game-${g.id}`}
+                  className="group/game scroll-mt-24"
+                >
+                  <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-4 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+                    <div className="min-w-0 flex-1 basis-48">
+                      <h2 className="text-base font-semibold leading-snug text-fg">
+                        Game {i + 1}
+                      </h2>
+                      {gameLine ? (
+                        <p className="mt-1.5 text-sm text-muted">{gameLine}</p>
+                      ) : null}
+                    </div>
+                    <span className="flex min-w-0 items-center gap-3">
+                      {winnerName ? (
+                        <Badge tone="success">{winnerName} won</Badge>
+                      ) : null}
+                      <span
+                        aria-hidden
+                        className="text-muted transition-transform group-open/game:rotate-180 motion-reduce:transition-none"
+                      >
+                        ▾
+                      </span>
+                    </span>
+                  </summary>
+                  <div className="border-t border-line-soft">
+                    <p className="flex justify-end px-5 pt-4">{openDota}</p>
+                    {boxScore}
+                  </div>
+                </AutoOpenDetails>
               </Card>
             );
           })
@@ -1832,7 +1881,6 @@ function SidePlayers({
   maxNet: number;
   mvpId?: string | null;
 }) {
-  const totalNet = players.reduce((s, p) => s + (p.netWorth ?? 0), 0);
   const hasNet = players.some((p) => p.netWorth != null);
   const hasGpm = players.some((p) => p.gpm != null);
   const hasLh = players.some((p) => p.lastHits != null);
@@ -1860,14 +1908,8 @@ function SidePlayers({
             <Badge className="shrink-0">Loss</Badge>
           )}
         </span>
-        {hasNet ? (
-          <span className="shrink-0 text-xs text-muted">
-            Net worth{" "}
-            <span className="font-mono text-accent">
-              {formatNetWorth(totalNet)}
-            </span>
-          </span>
-        ) : null}
+        {/* No team net-worth total here: the Recorded net worth panel above
+            both sides already prints it. */}
       </div>
       <ul className="space-y-0.5">
         {ordered.map((p, idx) => {
@@ -1974,48 +2016,63 @@ const GRADE_CHIP: Record<ReturnType<typeof gradeTone>, string> = {
   muted: "border-line text-muted",
 };
 
+const GRADE_TEXT: Record<ReturnType<typeof gradeTone>, string> = {
+  success: "text-success",
+  accent: "text-accent",
+  default: "text-fg/80",
+  muted: "text-muted",
+};
+
 /**
- * The hero report card: per-metric worldwide percentile grades (from
- * OpenDota's benchmarks) as a compact chip strip under a player's line.
- * Absent entirely for games imported before benchmarks were stored.
+ * The hero report card (per-metric worldwide percentile grades from OpenDota's
+ * benchmarks) as ONE overall chip under a player's line; tapping it opens the
+ * metrics by name. Seven chips per player was up to 80 per game, with
+ * abbreviations like "HD/min" and "TD" explained nowhere, beside the raw
+ * numbers they graded. Absent for games imported before benchmarks were
+ * stored.
  */
 function ReportCardStrip({ line }: { line: PlayerStat }) {
   const rows = gameReportCard(line);
-  if (rows.length === 0) return null;
   const avg = cardAverage(rows);
-  const overall: Grade | null = avg == null ? null : gradeFor(avg);
+  if (avg == null) return null;
+  const overall: Grade = gradeFor(avg);
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-[42px]">
-      {overall ? (
-        <span
-          role="img"
-          aria-label={`Overall report-card grade ${overall} — ${percentLabel(avg!)} vs the world on this hero`}
-          title={`vs the world on this hero: ${percentLabel(avg!)}`}
-          className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs font-semibold uppercase tracking-wide",
-            GRADE_CHIP[gradeTone(overall)],
-          )}
-        >
-          <span aria-hidden>Report {overall}</span>
+    <details className="group/report mt-1.5 pl-10">
+      <summary
+        title={`vs the world on this hero: ${percentLabel(avg)}`}
+        className={cn(
+          "inline-flex min-h-6 cursor-pointer list-none items-center gap-1 rounded border px-1.5 text-xs font-semibold uppercase tracking-wide [&::-webkit-details-marker]:hidden",
+          GRADE_CHIP[gradeTone(overall)],
+        )}
+      >
+        Report {overall}
+        <span className="sr-only">
+          , {percentLabel(avg)} vs the world on this hero
         </span>
-      ) : null}
-      {rows.map((r) => (
         <span
-          key={r.key}
-          role="img"
-          aria-label={`${r.label}: grade ${r.grade}, ${percentLabel(r.pct)}`}
-          title={`${r.label} — ${percentLabel(r.pct)}`}
-          className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-px text-xs tabular-nums",
-            GRADE_CHIP[gradeTone(r.grade)],
-          )}
+          aria-hidden
+          className="text-[10px] transition-transform group-open/report:rotate-180 motion-reduce:transition-none"
         >
-          <span aria-hidden>
-            {r.short} <b>{r.grade}</b>
-          </span>
+          ▾
         </span>
-      ))}
-    </div>
+      </summary>
+      <ul className="mt-1.5 max-w-xs space-y-0.5 text-xs">
+        {rows.map((r) => (
+          <li key={r.key} className="flex items-baseline justify-between gap-3">
+            <span className="text-muted">{r.label}</span>
+            <span className="shrink-0 tabular-nums">
+              {percentLabel(r.pct)}{" "}
+              <b className={cn("font-semibold", GRADE_TEXT[gradeTone(r.grade)])}>
+                {r.grade}
+              </b>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-[11px] text-muted">
+        Percentiles against everyone playing this hero worldwide.
+      </p>
+    </details>
   );
 }
 
