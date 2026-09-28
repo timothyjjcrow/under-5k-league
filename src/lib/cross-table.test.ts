@@ -21,14 +21,14 @@ describe("crossTable", () => {
   it("mirrors one meeting into both perspectives", () => {
     const t = crossTable(["A", "B"], [m({})]);
     expect(t.cells.get("A")!.get("B")).toEqual([
-      { matchId: "m1", week: 1, played: true, live: false, result: "W", score: "2–0" },
+      { matchId: "m1", week: 1, played: true, live: false, result: "W", score: "2–0", forfeit: false },
     ]);
     expect(t.cells.get("B")!.get("A")).toEqual([
-      { matchId: "m1", week: 1, played: true, live: false, result: "L", score: "0–2" },
+      { matchId: "m1", week: 1, played: true, live: false, result: "L", score: "0–2", forfeit: false },
     ]);
   });
 
-  it("flags a mid-series LIVE match as live but not played", () => {
+  it("flags a mid-series LIVE match as live but not played, with its running score", () => {
     const t = crossTable(
       ["A", "B"],
       [m({ status: "LIVE", homeScore: 1, awayScore: 0, winnerTeamId: null })],
@@ -37,6 +37,17 @@ describe("crossTable", () => {
     expect(cell.played).toBe(false);
     expect(cell.live).toBe(true);
     expect(cell.result).toBeNull();
+    expect(cell.score).toBe("1–0");
+    expect(t.cells.get("B")!.get("A")![0].score).toBe("0–1");
+  });
+
+  it("marks a ruled result as a forfeit for both sides", () => {
+    const t = crossTable(
+      ["A", "B"],
+      [m({ forfeit: true, homeScore: 0, awayScore: 2, winnerTeamId: "B" })],
+    );
+    expect(t.cells.get("A")!.get("B")![0]).toMatchObject({ result: "L", forfeit: true });
+    expect(t.cells.get("B")!.get("A")![0]).toMatchObject({ result: "W", forfeit: true });
   });
 
   it("marks drawn series D for both sides", () => {
@@ -51,10 +62,10 @@ describe("crossTable", () => {
   it("leaves unplayed meetings result-null but keeps the week", () => {
     const t = crossTable(
       ["A", "B"],
-      [m({ status: "SCHEDULED", week: 4, homeScore: 0, awayScore: 0, winnerTeamId: null })],
+      [m({ id: "m4", status: "SCHEDULED", week: 4, homeScore: 0, awayScore: 0, winnerTeamId: null })],
     );
     expect(t.cells.get("A")!.get("B")).toEqual([
-      { matchId: "m4", week: 4, played: false, live: false, result: null, score: null },
+      { matchId: "m4", week: 4, played: false, live: false, result: null, score: null, forfeit: false },
     ]);
   });
 

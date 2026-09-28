@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
-test("home and schedule agree on progress and preserve the full standings behind the simple view", async ({
+test("home and schedule agree on progress and show one standings table with game difference", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
@@ -12,37 +12,38 @@ test("home and schedule agree on progress and preserve the full standings behind
     const bar = page.getByRole("progressbar", {
       name: "Regular-season series complete",
     });
-    await expect(bar).toBeVisible();
-    const count = await bar.getAttribute("aria-valuenow");
-    if (progress !== null) expect(count).toBe(progress);
-    progress = count;
-    const overview = page.getByRole("table", {
-      name: "League standings overview",
+    if (path === "/") {
+      await expect(bar).toBeVisible();
+      progress = `${await bar.getAttribute("aria-valuenow")} of ${await bar.getAttribute("aria-valuemax")} series played`;
+    } else {
+      // Schedule leads with the fixtures: the same count rides the subtitle
+      // instead of repeating the home page's progress ring.
+      await expect(bar).toHaveCount(0);
+      await expect(
+        page.locator("h1 + p").filter({ hasText: progress! }),
+      ).toBeVisible();
+    }
+    const table = page.getByRole("table", {
+      name: "League standings",
+      exact: true,
     });
-    await expect(overview).toBeVisible();
-    const teams = await overview
+    await expect(table).toBeVisible();
+    const teams = await table
       .locator('a[href^="/teams/"]')
       .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
     expect(teams.length).toBeGreaterThan(0);
-    await page
-      .getByRole("button", { name: "Detailed statistics", exact: true })
-      .click();
-    await expect(overview).toHaveCount(0);
-    const detailed = page.getByRole("table").first();
-    expect(
-      await detailed
-        .locator('a[href^="/teams/"]')
-        .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-    ).toEqual(teams);
-    await expect(page.getByRole("button", { name: /^Pts/ })).toBeVisible();
-    await page
-      .getByRole("button", { name: "Simple standings", exact: true })
-      .click();
-    await expect(overview).toBeVisible();
-    await expectNoHorizontalOverflow(
-      page,
-      `${path} simple and detailed standings`,
-    );
+    // One layout: no Simple/Detailed toggle and no sort buttons, and game
+    // difference (the first tiebreak) stays on screen on a phone.
+    await expect(
+      page.getByRole("button", { name: /Detailed statistics|Simple standings/ }),
+    ).toHaveCount(0);
+    await expect(table.getByRole("button")).toHaveCount(0);
+    for (const header of ["Series won, drawn and lost", "Game difference", "Points"]) {
+      await expect(
+        table.getByRole("columnheader", { name: header, exact: true }),
+      ).toBeVisible();
+    }
+    await expectNoHorizontalOverflow(page, `${path} standings`);
   }
   // The fixture's live/future matches are unfinished, not overdue results.
   await expect(
@@ -68,14 +69,14 @@ test("schedule keeps analysis discoverable and labels filtered counts for the se
   await expect(race).not.toHaveAttribute("open", "");
   await race.locator("summary").first().click();
   await expect(
-    page.getByRole("heading", { name: "Remaining opponents", exact: true }),
+    page.getByRole("heading", { name: "Playoff picture", exact: true }),
   ).toBeVisible();
   await page
     .locator("summary")
     .filter({ hasText: "Head-to-head results grid" })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Head-to-head results", exact: true }),
+    page.getByRole("table", { name: /^Head-to-head results\./ }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page, "expanded league analysis");
   await page
@@ -84,9 +85,6 @@ test("schedule keeps analysis discoverable and labels filtered counts for the se
   await expect(page.locator("#this-week")).toContainText(
     "0 of 1 series complete",
   );
-  await expect(
-    page.getByText("Team fixtures · League standings below"),
-  ).toBeVisible();
   noErrors();
 });
 

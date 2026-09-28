@@ -112,6 +112,7 @@ import {
   freeAgentSignedMessage,
   playerReleasedMessage,
   teamWithdrewMessage,
+  teamIdentityChangedMessage,
   playoffsStartedMessage,
   playoffsReturnedToRegularMessage,
   standinRemovedMessage,
@@ -169,7 +170,13 @@ import {
 } from "@/lib/season-phase-policy";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
-import { normalizeTeamLogoUrl } from "@/lib/team-logo";
+import { saveTeamIdentity } from "@/lib/team-identity-service";
+import {
+  carriedTeamIdentity,
+  carriedTeamIdentityNote,
+  defaultTeamName,
+  teamIdentitySummary,
+} from "@/lib/team-identity";
 import {
   describeScrimConflict,
   findConfirmedScrimConflict,
@@ -1020,12 +1027,25 @@ export async function addCaptain(
   }
 
   await raceHook("admin.addCaptain.beforeTx");
-  let added: { name: string; teamName: string; discordId: string | null };
+  let added: {
+    name: string;
+    teamName: string;
+    discordId: string | null;
+    carriedNote: string;
+  };
   try {
     added = await prisma.$transaction(
       async (tx) => {
-        const [currentSeason, draft, user, reg, existing, highest] =
-          await Promise.all([
+        const [
+          currentSeason,
+          draft,
+          user,
+          reg,
+          existing,
+          highest,
+          previousTeam,
+          seasonTeams,
+        ] = await Promise.all([
             tx.season.findUnique({ where: { id: expectedActiveSeasonId } }),
             tx.draft.findUnique({
               where: { seasonId: expectedActiveSeasonId },
@@ -1054,6 +1074,20 @@ export async function addCaptain(
               orderBy: { draftOrder: "desc" },
               select: { draftOrder: true },
             }),
+            // A returning captain's last team, by THIS account as captain only:
+            // a different captain never inherits another team's identity.
+            tx.team.findFirst({
+              where: {
+                captainId: userId,
+                seasonId: { not: expectedActiveSeasonId },
+              },
+              orderBy: [{ season: { createdAt: "desc" } }, { createdAt: "desc" }],
+              select: { name: true, logoUrl: true },
+            }),
+            tx.team.findMany({
+              where: { seasonId: expectedActiveSeasonId },
+              select: { name: true },
+            }),
           ]);
         if (!currentSeason?.isActive) throw new ActiveSeasonChangedError();
         if (!draftSetupOpen(currentSeason.status, draft?.status)) {
@@ -1078,11 +1112,18 @@ export async function addCaptain(
         }
 
         const order = highest ? highest.draftOrder + 1 : 0;
-        const teamName = `${user.name}'s Team`;
+        // Keep last time's name and logo so a returning captain's identity
+        // (and the champions' name) survives the season change.
+        const carried = carriedTeamIdentity(
+          previousTeam,
+          seasonTeams.map((team) => team.name),
+        );
+        const teamName = carried.name ?? defaultTeamName(user.name);
         const team = await tx.team.create({
           data: {
             seasonId: currentSeason.id,
             name: teamName,
+            logoUrl: carried.logoUrl,
             captainId: user.id,
             budget: currentSeason.draftBudget,
             draftOrder: order,
@@ -1098,7 +1139,12 @@ export async function addCaptain(
           },
         });
         await captureRosterTenure(tx, member, { kind: "CAPTAIN_DESIGNATION", mmr: reg.mmr || null, roles: reg.roles, actorId: actor.id });
-        return { name: user.name, teamName, discordId: user.discordId };
+        return {
+          name: user.name,
+          teamName,
+          discordId: user.discordId,
+          carriedNote: carriedTeamIdentityNote(carried),
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -1128,7 +1174,7 @@ export async function addCaptain(
   }
   await logAdminAction({
     action: "addCaptain",
-    summary: `Designated ${added.name} as captain of "${added.teamName}"`,
+    summary: `Designated ${added.name} as captain of "${added.teamName}"${added.carriedNote ? " (kept from their last team)" : ""}`,
     seasonId: season.id,
   });
   await sendDiscordMessage(
@@ -1136,7 +1182,11 @@ export async function addCaptain(
     mentionsOf([added.discordId]),
   );
   refresh();
-  return { message: `${added.name} is now a captain` };
+  return {
+    message: added.carriedNote
+      ? `${added.name} is now a captain. ${added.carriedNote}`
+      : `${added.name} is now a captain`,
+  };
 }
 
 /** Undo captain designation (only allowed before the draft starts). */
@@ -1571,13 +1621,17 @@ export async function transferCaptaincy(
   };
 }
 
-/** Update a team's public identity (captains can't edit it themselves). */
+/**
+ * Update any team's public identity from /admin. Captains edit their own team
+ * from its page (actions/teams.ts); both go through saveTeamIdentity.
+ */
 export async function renameTeam(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let actor: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    actor = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -1590,64 +1644,26 @@ export async function renameTeam(
         "The active season changed while this page was open — reload before editing a team.",
     };
   }
-  const teamId = str(formData, "teamId");
-  const name = str(formData, "name").trim().slice(0, 60);
-  if (!name) return { error: "Enter a team name" };
-  const logo = formData.has("logoUrl")
-    ? normalizeTeamLogoUrl(str(formData, "logoUrl"))
-    : null;
-  if (logo && "error" in logo) return logo;
-  try {
-    await prisma.$transaction(
-      async (tx) => {
-        const currentSeason = await tx.season.findUnique({
-          where: { id: expectedActiveSeasonId },
-          select: { isActive: true, status: true },
-        });
-        if (!currentSeason?.isActive) throw new ActiveSeasonChangedError();
-        if (currentSeason.status === SEASON_STATUS.COMPLETE) {
-          throw new DraftSetupLockedError(
-            "The season is complete — team details are historical and read-only.",
-          );
-        }
-        const changed = await tx.team.updateMany({
-          where: { id: teamId, seasonId: expectedActiveSeasonId },
-          data: {
-            name,
-            ...(logo ? { logoUrl: logo.logoUrl } : {}),
-          },
-        });
-        if (changed.count === 0) throw new CaptainStateChangedError();
-        // Record snapshots embed team names; fence older in-flight refreshes.
-        await stampResultChange(tx);
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-  } catch (error) {
-    if (error instanceof DraftSetupLockedError) return { error: error.message };
-    if (error instanceof CaptainStateChangedError)
-      return { error: "Unknown team" };
-    if (
-      error instanceof ActiveSeasonChangedError ||
-      isSerializationConflict(error)
-    ) {
-      return {
-        error: "The season or team just changed — reload and try again.",
-      };
-    }
-    throw error;
+  const saved = await saveTeamIdentity({
+    editor: { userId: actor.id, isAdmin: true },
+    teamId: str(formData, "teamId"),
+    expectedSeasonId: expectedActiveSeasonId,
+    name: str(formData, "name"),
+    logoUrl: formData.has("logoUrl") ? str(formData, "logoUrl") : undefined,
+  });
+  if (!saved.ok) return { error: saved.error };
+  if (saved.nameChanged || saved.logoChanged) {
+    await logAdminAction({
+      action: "renameTeam",
+      summary: teamIdentitySummary(saved),
+      seasonId: saved.seasonId,
+    });
+    await sendDiscordMessage(teamIdentityChangedMessage(saved));
   }
   // The record-book cache embeds matchup team identity under the shared games
   // tag, so an edit must expire that dependency as well as the page shell.
-  await logAdminAction({
-    action: "renameTeam",
-    summary: logo
-      ? `Updated team ${teamId} identity to "${name}" (${logo.logoUrl ? "custom logo" : "generated crest"})`
-      : `Renamed team ${teamId} to "${name}"`,
-    seasonId: season.id,
-  });
   refreshGames();
-  return { message: `Saved ${name}` };
+  return { message: `Saved ${saved.name}` };
 }
 
 /**

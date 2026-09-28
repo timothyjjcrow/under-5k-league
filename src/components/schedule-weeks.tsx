@@ -1,17 +1,26 @@
 "use client";
 
 // The /schedule scoreboards: a team filter, compact completed weeks,
-// and visible progress for each round. Fully played past weeks start closed.
+// and visible progress for each round. Fully played past weeks start closed
+// (under a team filter too) and show one line of results per series.
 // The server page serializes everything (dates preformatted so hydration
 // never disagrees on locale); this component only filters and toggles.
 
-import { useMemo } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { cn } from "@/lib/utils";
-import type { playoffPathLines } from "@/components/playoff-outlook";
+import { scheduleFilterTeamId, weekStartsCollapsed } from "@/lib/schedule";
+import type { PlayoffPathLine } from "@/components/playoff-outlook";
 
 export type RsvpSide = {
   confirmed: number;
@@ -31,13 +40,15 @@ export type MatchView = {
   homeScore: number;
   awayScore: number;
   playoffPaths?: {
-    home: ReturnType<typeof playoffPathLines>;
-    away: ReturnType<typeof playoffPathLines>;
+    home: PlayoffPathLine[];
+    away: PlayoffPathLine[];
   };
   done: boolean;
   /** Ruled/defaulted result — the score was never played; badge it. */
   forfeit: boolean;
   awaitingResult?: boolean;
+  /** The viewer captains a side of this overdue fixture and can report it. */
+  reportResult?: boolean;
   /** Series in progress — some games imported, not decided (auto-sync makes
    *  "Bo3 at 1–0" a common minutes-fresh state worth showing live). */
   live: boolean;
@@ -76,6 +87,9 @@ export type WeekView = {
   nightTs?: number | null;
   /** Server-formatted date-only fallback for the first paint. */
   nightInitial?: string | null;
+  /** Before the league's current week — listed newest first under a
+   *  small "Earlier weeks" heading (see orderScheduleWeeks). */
+  earlier?: boolean;
 };
 
 export function ScheduleWeeks({
@@ -88,11 +102,11 @@ export function ScheduleWeeks({
   teams: { id: string; name: string; logoUrl?: string | null }[];
 }) {
   const params = useSearchParams();
-  const requestedTeam = params.get("team");
-  const candidate = requestedTeam === null ? initialTeamId : requestedTeam;
-  const filterTeam = teams.some((team) => team.id === candidate)
-    ? candidate!
-    : null;
+  const filterTeam = scheduleFilterTeamId(
+    params.get("team"),
+    initialTeamId,
+    teams.map((team) => team.id),
+  );
   const setFilterTeam = (team: string | null) => {
     const url = new URL(window.location.href);
     url.searchParams.set("team", team ?? "all");
@@ -123,10 +137,6 @@ export function ScheduleWeeks({
   };
 
   const currentWeek = weeks.find((w) => w.isCurrent)?.week;
-  const defaultCollapsed = (w: WeekView) =>
-    w.total > 0 &&
-    w.completed === w.total &&
-    (currentWeek == null || w.week < currentWeek);
 
   const visibleWeeks = useMemo(() => {
     if (!filterTeam) return weeks;
@@ -169,16 +179,6 @@ export function ScheduleWeeks({
               ))}
             </select>
           </label>
-          {filterTeam ? (
-            <button
-              type="button"
-              onClick={() => setFilterTeam(null)}
-              aria-pressed={!filterTeam}
-              className="min-h-11 rounded-lg border border-line px-4 text-sm font-medium text-muted hover:bg-surface-2 hover:text-fg"
-            >
-              All teams
-            </button>
-          ) : null}
           <div
             className="hidden min-h-11 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted sm:ml-auto sm:flex"
             aria-label="Match status legend"
@@ -202,53 +202,68 @@ export function ScheduleWeeks({
               Upcoming
             </span>
           </div>
-          {filterTeam ? (
-            <p className="w-full text-xs text-muted">
-              Team fixtures · League standings below
-            </p>
-          ) : null}
         </div>
       ) : null}
 
       <div className="space-y-5">
-        {visibleWeeks.map((w) => {
+        {visibleWeeks.map((w, index) => {
           const completed = filterTeam
             ? w.matches.filter((match) => match.done).length
             : w.completed;
           const total = filterTeam ? w.matches.length : w.total;
-          // A team filter means the reader is scanning one team's season —
-          // collapsing weeks would just hide what they asked for.
-          const collapsed = filterTeam
-            ? false
-            : (collapsedOverride[w.week] ?? defaultCollapsed(w));
-          const canToggle = !filterTeam;
+          // The same collapse rules apply under a team filter: a finished
+          // past week is one line of results, not a full card, so a player's
+          // own season never buries the standings below it.
+          const collapsed =
+            collapsedOverride[w.week] ??
+            weekStartsCollapsed({ week: w.week, completed, total }, currentWeek);
+          // Only a heading when something current or upcoming sits above it;
+          // a list that is ALL earlier weeks needs no divider.
+          const earlierHeading =
+            w.earlier && index > 0 && !visibleWeeks[index - 1].earlier;
+          const shownByes = filterTeam
+            ? w.byes.filter((b) => b.id === filterTeam)
+            : w.byes;
+          const byeRow =
+            shownByes.length > 0 ? (
+              <div className="flex items-center gap-2 border-t border-line-soft px-4 py-3 text-xs text-muted first:border-t-0 sm:px-5">
+                <span className="rounded bg-surface-2 px-2 py-1 text-xs font-semibold uppercase tracking-wider">
+                  Bye
+                </span>
+                <span>{shownByes.map((b) => b.name).join(", ")}</span>
+              </div>
+            ) : null;
           return (
-            <div
-              key={w.week}
-              // Deep-link target ("/schedule#this-week"); scroll-mt clears
-              // the sticky site header.
-              id={w.isCurrent ? "this-week" : undefined}
-              className={cn(
-                "overflow-hidden rounded-xl border bg-surface",
-                w.isCurrent
-                  ? "scroll-mt-24 border-accent/50"
-                  : "border-line-soft",
-              )}
-            >
-              <h3
+            <Fragment key={w.week}>
+              {earlierHeading ? (
+                <h3 className="pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
+                  Earlier weeks
+                </h3>
+              ) : null}
+              <div
+                // Deep-link target ("/schedule#this-week"); scroll-mt clears
+                // the sticky site header.
+                id={w.isCurrent ? "this-week" : undefined}
                 className={cn(
-                  "flex items-center gap-3 px-4 py-3 sm:px-5",
-                  w.isCurrent ? "bg-accent/[0.05]" : "bg-surface-2/30",
+                  "overflow-hidden rounded-xl border bg-surface",
+                  w.isCurrent
+                    ? "scroll-mt-24 border-accent/50"
+                    : "border-line-soft",
                 )}
               >
-                <WeekProgress
-                  completed={completed}
-                  total={total}
-                  current={w.isCurrent}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    {canToggle ? (
+                <h3
+                  className={cn(
+                    "flex items-center gap-3 px-4 py-3 sm:px-5",
+                    w.isCurrent ? "bg-accent/[0.05]" : "bg-surface-2/30",
+                  )}
+                >
+                  <WeekProgress
+                    completed={completed}
+                    total={total}
+                    current={w.isCurrent}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                       <button
                         type="button"
                         aria-label={w.label ?? `Week ${w.week}`}
@@ -275,88 +290,179 @@ export function ScheduleWeeks({
                           />
                         </svg>
                       </button>
-                    ) : (
-                      <span className="inline-flex min-h-11 items-center text-base font-semibold text-fg">
-                        {w.label ?? `Week ${w.week}`}
-                      </span>
-                    )}
-                    {w.isCurrent ? (
-                      <Badge tone="accent">This week</Badge>
+                      {w.isCurrent ? (
+                        <Badge tone="accent">This week</Badge>
+                      ) : null}
+                      {w.isOverdue ? (
+                        <Badge tone="accent">Results overdue</Badge>
+                      ) : null}
+                    </span>
+                    {!filterTeam && w.nightTs != null && w.nightInitial ? (
+                      <LocalTime
+                        ts={w.nightTs}
+                        variant="date"
+                        initial={w.nightInitial}
+                        className="block text-xs font-normal text-muted"
+                      />
                     ) : null}
-                    {w.isOverdue ? (
-                      <Badge tone="accent">Results overdue</Badge>
+                    <span className="sr-only">
+                      {total
+                        ? `${completed} of ${total} series complete`
+                        : "No fixture · bye week"}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-right text-xs font-normal text-muted">
+                    {/* A filtered bye week has nothing to count: "0 of 0"
+                        only buried the one word that matters. */}
+                    {total ? (
+                      <span
+                        className={cn(
+                          "block font-mono text-sm tabular-nums",
+                          completed === total ? "text-success" : "text-fg",
+                        )}
+                      >
+                        {completed}
+                        <span className="text-muted"> of {total}</span>
+                      </span>
                     ) : null}
+                    {/* "Final" is the grand final's word alone — a round
+                        header reading "Grand final · 0 / 1 FINAL" said it twice
+                        and meant two different things. */}
+                    <span className="mt-0.5 block text-xs uppercase tracking-wider">
+                      {total ? "Played" : "Bye"}
+                    </span>
                   </span>
-                  {!filterTeam && w.nightTs != null && w.nightInitial ? (
-                    <LocalTime
-                      ts={w.nightTs}
-                      variant="date"
-                      initial={w.nightInitial}
-                      className="block text-xs font-normal text-muted"
-                    />
-                  ) : null}
-                  <span className="sr-only">
-                    {total
-                      ? `${completed} of ${total} series complete`
-                      : "No fixture · bye week"}
-                  </span>
-                </span>
-                <span className="shrink-0 text-right text-xs font-normal text-muted">
-                  <span
-                    className={cn(
-                      "block font-mono text-sm tabular-nums",
-                      completed === total && total > 0
-                        ? "text-success"
-                        : "text-fg",
-                    )}
-                  >
-                    {completed}
-                    <span className="text-muted"> of {total}</span>
-                  </span>
-                  {/* "Final" is the grand final's word alone — a round
-                      header reading "Grand final · 0 / 1 FINAL" said it twice
-                      and meant two different things. */}
-                  <span className="mt-0.5 block text-xs uppercase tracking-wider">
-                    {total ? "Played" : "Bye"}
-                  </span>
-                </span>
-              </h3>
-              {collapsed ? null : (
-                <div className="border-t border-line-soft">
-                  <div
-                    className={cn(
-                      "grid grid-cols-1 gap-px bg-line-soft",
-                      w.matches.length > 1 && "lg:grid-cols-2",
-                      w.matches.length > 2 && "xl:grid-cols-3",
-                    )}
-                  >
-                    {w.matches.map((m) => (
-                      <MatchRow key={m.id} match={m} />
-                    ))}
-                  </div>
-                  {w.byes.length > 0 &&
-                  (!filterTeam || w.byes.some((b) => b.id === filterTeam)) ? (
-                    <div className="flex items-center gap-2 border-t border-line-soft px-4 py-3 text-xs text-muted sm:px-5">
-                      <span className="rounded bg-surface-2 px-2 py-1 text-xs font-semibold uppercase tracking-wider">
-                        Bye
-                      </span>
-                      <span>
-                        {(filterTeam
-                          ? w.byes.filter((b) => b.id === filterTeam)
-                          : w.byes
-                        )
-                          .map((b) => b.name)
-                          .join(", ")}
-                      </span>
+                </h3>
+                {collapsed ? (
+                  // A closed week still says who won: one line per series,
+                  // each opening its match. Expanding shows the full cards.
+                  w.matches.length > 0 || byeRow ? (
+                    <div className="border-t border-line-soft">
+                      {w.matches.length > 0 ? (
+                        <ul
+                          aria-label={`${w.label ?? `Week ${w.week}`} results`}
+                          className="divide-y divide-line-soft"
+                        >
+                          {w.matches.map((m) => (
+                            <li key={m.id}>
+                              <ResultLine match={m} />
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {byeRow}
                     </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
+                  ) : null
+                ) : (
+                  <div className="border-t border-line-soft">
+                    <div
+                      className={cn(
+                        "grid grid-cols-1 gap-px bg-line-soft",
+                        w.matches.length > 1 && "lg:grid-cols-2",
+                        w.matches.length > 2 && "xl:grid-cols-3",
+                      )}
+                    >
+                      {w.matches.map((m) => (
+                        <MatchRow key={m.id} match={m} />
+                      ))}
+                    </div>
+                    {byeRow}
+                  </div>
+                )}
+              </div>
+            </Fragment>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/** URL flag that keeps the regular-season fold open across a match visit. */
+const FOLD_PARAM = "results";
+
+/**
+ * Finished history during the playoffs (the regular season, a settled
+ * tiebreaker): one section that starts closed, so the bracket and the
+ * standings stay within reach instead of sitting either side of every
+ * finished result. It opens by itself when the URL shows the reader was
+ * already inside it (a team picked or a week opened, for the regular season;
+ * a return from one of its matches) or points straight at it, as the home
+ * page's "Full schedule" links do.
+ */
+export function ScheduleFold({
+  id,
+  title,
+  description,
+  rememberParam = FOLD_PARAM,
+  openOnFilter = true,
+  children,
+}: {
+  id: string;
+  title: string;
+  description?: string;
+  /** URL flag that keeps this fold open across a match visit. */
+  rememberParam?: string;
+  /** Also open when a team filter or opened week is in the URL. */
+  openOnFilter?: boolean;
+  children: ReactNode;
+}) {
+  const params = useSearchParams();
+  const [initiallyOpen] = useState(
+    () =>
+      (openOnFilter && (params.has("team") || params.has("weeks"))) ||
+      params.get(rememberParam) === "open",
+  );
+  const fold = useRef<HTMLDetailsElement>(null);
+  // The id names this section ("#fixtures", "#tiebreakers"), so arriving at
+  // it (or jumping to it later) opens it. Read after mount: the server never
+  // sees the hash.
+  useEffect(() => {
+    const openIfTargeted = () => {
+      if (window.location.hash === `#${id}` && fold.current)
+        fold.current.open = true;
+    };
+    openIfTargeted();
+    window.addEventListener("hashchange", openIfTargeted);
+    return () => window.removeEventListener("hashchange", openIfTargeted);
+  }, [id]);
+  return (
+    <details
+      ref={fold}
+      id={id}
+      open={initiallyOpen}
+      onToggle={(event) => {
+        const url = new URL(window.location.href);
+        if (event.currentTarget.open) url.searchParams.set(rememberParam, "open");
+        else url.searchParams.delete(rememberParam);
+        window.history.replaceState(
+          null,
+          "",
+          url.pathname + url.search + url.hash,
+        );
+      }}
+      className="group scroll-mt-24 rounded-xl border border-line bg-surface/40 open:bg-surface/60"
+    >
+      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-5 py-4 transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold leading-snug">{title}</h2>
+          {description ? (
+            <p className="mt-0.5 text-xs text-muted">{description}</p>
+          ) : null}
+        </div>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-5 w-5 shrink-0 text-muted transition-transform group-open:rotate-180"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </summary>
+      <div className="border-t border-line-soft p-3 sm:p-5">{children}</div>
+    </details>
   );
 }
 
@@ -426,6 +532,47 @@ function WeekProgress({
   );
 }
 
+/** One series on one line: a closed week's results at a glance. */
+function ResultLine({ match: m }: { match: MatchView }) {
+  const scored = m.done || m.live;
+  const name = (winner: boolean) =>
+    m.done ? (winner ? "font-semibold text-fg" : "text-muted") : "text-fg";
+  return (
+    <Link
+      href={`/matches/${m.id}`}
+      className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 px-4 py-2 text-sm transition-colors hover:bg-surface-2/60 sm:px-5"
+    >
+      <span className={cn("text-right [overflow-wrap:anywhere]", name(m.homeWin))}>
+        {m.homeName}
+      </span>{" "}
+      <span
+        className={cn(
+          "whitespace-nowrap font-mono tabular-nums",
+          m.live ? "text-danger" : m.done ? "text-fg" : "text-muted",
+        )}
+      >
+        {m.live ? <span className="sr-only">live </span> : null}
+        {scored ? `${m.homeScore}–${m.awayScore}` : "vs"}
+        {m.done && m.forfeit ? (
+          <span
+            aria-hidden
+            title="Forfeit: this score was ruled, not played"
+            className="ml-1 font-sans text-xs font-semibold text-muted"
+          >
+            F
+          </span>
+        ) : null}
+      </span>{" "}
+      <span className={cn("[overflow-wrap:anywhere]", name(m.awayWin))}>
+        {m.awayName}
+        {m.done && m.forfeit ? (
+          <span className="sr-only"> (forfeit)</span>
+        ) : null}
+      </span>
+    </Link>
+  );
+}
+
 function RsvpBadge({ side }: { side: RsvpSide }) {
   const waiting = Math.max(0, side.expected - side.confirmed - side.out);
   const spoken = `${side.confirmed} of ${side.expected} confirmed${side.out > 0 ? `, ${side.out} unavailable` : ""}${waiting > 0 ? `, ${waiting} waiting` : ""}`;
@@ -466,8 +613,10 @@ function MatchRow({ match: m }: { match: MatchView }) {
       : "Final score"
     : m.live
       ? "Live"
-      : m.awaitingResult
-        ? "Awaiting result"
+      : m.reportResult
+        ? "Result needed"
+        : m.awaitingResult
+          ? "Awaiting result"
         : m.whenTs != null
           ? "Upcoming"
           : "Time TBD";
@@ -498,11 +647,17 @@ function MatchRow({ match: m }: { match: MatchView }) {
       paths: m.playoffPaths?.away,
     },
   ];
+  // The whole card opens the match page: its one link stretches an overlay
+  // (::after) across the card, so every tap on the card lands there, and
+  // screen readers hear one short, match-specific link per card instead of
+  // two team links and an anonymous "details" (team pages stay a tap away
+  // from the standings and the match page). A control with its own label,
+  // like the reschedule chip, sits above the overlay (relative z-10).
   return (
     <article
       aria-label={`${m.homeName} vs ${m.awayName} · ${status}`}
       className={cn(
-        "flex min-w-0 flex-col bg-surface transition-colors hover:bg-surface-2/60",
+        "relative flex min-w-0 flex-col bg-surface transition-colors hover:bg-surface-2/60",
         m.live && "bg-danger/[0.04]",
       )}
     >
@@ -557,23 +712,30 @@ function MatchRow({ match: m }: { match: MatchView }) {
               className="rounded-lg"
             />
             <div className="min-w-0 flex-1">
-              <Link
-              href={`/teams/${side.id}`}
-              className={cn(
-                "flex min-h-11 min-w-0 items-center py-2 text-sm [overflow-wrap:anywhere] hover:text-info",
-                m.done
-                  ? side.winner
-                    ? "font-semibold text-fg"
-                    : "text-muted"
-                  : "font-medium text-fg",
-              )}
-            >
-              {side.name}
-            </Link>
+              <span
+                className={cn(
+                  "flex min-h-9 min-w-0 items-center py-1 text-sm [overflow-wrap:anywhere]",
+                  m.done
+                    ? side.winner
+                      ? "font-semibold text-fg"
+                      : "text-muted"
+                    : "font-medium text-fg",
+                )}
+              >
+                {side.name}
+              </span>
               {side.paths && side.paths.length > 0 ? (
                 <dl className="space-y-1 pb-2 text-[11px] leading-relaxed">
                   {side.paths.map((path) => (
-                    <div key={path.key} className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-1.5">
+                    <div
+                      key={path.key}
+                      className={cn(
+                        "grid gap-1.5",
+                        path.key === "any"
+                          ? "grid-cols-[auto_minmax(0,1fr)]"
+                          : "grid-cols-[2.5rem_minmax(0,1fr)]",
+                      )}
+                    >
                       <dt className="font-medium text-accent">{path.label}</dt>
                       <dd className="text-muted [overflow-wrap:anywhere]">{path.description}</dd>
                     </div>
@@ -621,11 +783,27 @@ function MatchRow({ match: m }: { match: MatchView }) {
         {m.reschedulePending ? (
           <RescheduleChip matchId={m.id} pending={m.reschedulePending} />
         ) : null}
+        {m.reportResult ? (
+          <Link
+            href={`/matches/${m.id}#match-tools`}
+            className="relative z-10 inline-flex min-h-11 shrink-0 items-center rounded px-1 text-xs font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+          >
+            Report result
+            <span className="sr-only">
+              : {m.homeName} vs {m.awayName}
+            </span>
+            <span aria-hidden>&nbsp;→</span>
+          </Link>
+        ) : null}
         <Link
           href={`/matches/${m.id}`}
-          className="inline-flex min-h-11 shrink-0 items-center justify-end pl-2 text-xs font-semibold text-info hover:underline"
+          className="inline-flex min-h-11 shrink-0 items-center justify-end pl-2 text-xs font-semibold text-info hover:underline focus-visible:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-info/60"
         >
-          details →
+          Match page
+          <span className="sr-only">
+            : {m.homeName} vs {m.awayName}
+          </span>
+          <span aria-hidden>&nbsp;→</span>
         </Link>
       </div>
       {m.standins.length > 0 ? (
@@ -670,7 +848,7 @@ function RescheduleChip({
       href={`/matches/${matchId}`}
       aria-label={`Time change proposed — ${label}. Open the match page to respond.`}
       title={`Time change proposed — ${label}`}
-      className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+      className="relative z-10 inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
     >
       <span aria-hidden>⏳</span>
     </Link>

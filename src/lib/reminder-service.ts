@@ -21,6 +21,7 @@ import {
   teamAvailability,
 } from "./availability";
 import { draftReminderKey, weekReminderKey } from "./settings";
+import { byeTeamsByWeek } from "./schedule";
 import { draftReminderDue } from "./draft-setup";
 import { DRAFT_READINESS, draftReadiness } from "./draft-readiness";
 import { raceHook } from "./race-hook";
@@ -33,6 +34,29 @@ import {
   recoverableAnnouncementMarker,
   releaseAnnouncementClaim,
 } from "./announcement-marker";
+
+/**
+ * The teams sitting out a regular week: every team still in the league with
+ * no regular fixture that week, whatever its kickoff (a week split across
+ * nights is still one week). Withdrawn teams are left out, as on the site.
+ */
+async function weekByeTeamNames(seasonId: string, week: number): Promise<string[]> {
+  const [weekMatches, teams] = await Promise.all([
+    prisma.match.findMany({
+      where: { seasonId, week, phase: MATCH_PHASE.REGULAR },
+      select: { week: true, phase: true, homeTeamId: true, awayTeamId: true },
+    }),
+    prisma.team.findMany({
+      where: { seasonId, withdrawn: false },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+  ]);
+  const byeIds = new Set(
+    byeTeamsByWeek(weekMatches, teams.map((t) => t.id)).get(week) ?? [],
+  );
+  return teams.filter((t) => byeIds.has(t.id)).map((t) => t.name);
+}
 
 /**
  * Scheduled match-night reminder: the first automation pass after a league
@@ -235,6 +259,10 @@ export async function maybeAnnounceUpcomingWeek(season: {
     isTiebreaker: next.phase === MATCH_PHASE.TIEBREAKER,
     fixtures,
     pickemOpen: matches.some((m) => predictionOpen(m)),
+    byeTeamNames:
+      next.phase === MATCH_PHASE.REGULAR
+        ? await weekByeTeamNames(season.id, next.week)
+        : [],
   });
   const sent = await sendDiscordMessage(
     announcement.content,

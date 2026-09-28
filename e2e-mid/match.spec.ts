@@ -11,13 +11,14 @@ test("a completed match page renders the box score with an MVP chip", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/schedule");
 
-  // Past completed weeks start collapsed — expand the first (#main scope:
-  // the header hamburger also has aria-expanded) and open its first match.
-  await page.locator('#main button[aria-expanded="false"]').first().click();
+  // Past completed weeks start collapsed — expand the first (#fixtures scope:
+  // the header hamburger and "Add to calendar" also have aria-expanded) and
+  // open its first match.
+  await page.locator('#fixtures button[aria-expanded="false"]').first().click();
   await page
     .getByRole("article", { name: / · Final score$/ })
     .first()
-    .getByRole("link", { name: "details →" })
+    .getByRole("link", { name: /^Match page: / })
     .click();
 
   await expect(page).toHaveURL(/\/matches\//);
@@ -54,7 +55,7 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   // exercising the pre-game scouting state regardless of within-week order.
   const scheduledDetails = page
     .getByRole("article", { name: / · Upcoming$/ })
-    .getByRole("link", { name: "details →" });
+    .getByRole("link", { name: /^Match page: / });
   await expect(scheduledDetails.first()).toBeVisible();
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
@@ -183,7 +184,6 @@ test("captains can report an open series and get a clear correction handoff once
 
   // Capture the dynamically staged captain's team from the match itself, then
   // use the team filter to reach a completed fixture for the same captain.
-  // Filtering expands every week; current fixtures come first, past weeks follow.
   const captainTeam = page.locator('#main a[href^="/teams/"]').first();
   const captainTeamName = (await captainTeam.textContent())?.trim();
   expect(captainTeamName).toBeTruthy();
@@ -191,13 +191,16 @@ test("captains can report an open series and get a clear correction handoff once
   await page
     .getByRole("combobox", { name: "Show matches for" })
     .selectOption({ label: captainTeamName! });
-  // Scope out the separate "Your next match" check-in banner, which carries
-  // its own details link above the five filtered regular-season rows.
-  const teamMatches = page
+  // Filtered weeks keep the collapse rules: the team's finished earlier weeks
+  // are one-line results, newest first, and each line opens its match. Scope
+  // to #fixtures, clear of the separate "Your next match" check-in banner.
+  const latestResult = page
     .locator("#fixtures")
-    .getByRole("link", { name: "details →" });
-  await expect(teamMatches).toHaveCount(5);
-  await teamMatches.last().click();
+    .getByRole("list", { name: /^Week \d+ results$/ })
+    .first()
+    .getByRole("link");
+  await expect(latestResult).toHaveCount(1);
+  await latestResult.click();
 
   await expect(
     page.getByText("Series complete", { exact: true }),

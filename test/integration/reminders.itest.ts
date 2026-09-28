@@ -102,6 +102,31 @@ describe("week reminder (integration)", () => {
     ).toBe(2);
   });
 
+  it("names the team with a bye, and only a team that sits the whole week out", async () => {
+    const { season } = await setupWeek(4);
+    await makeTeam(season.id, "Rested", 2);
+    const gone = await makeTeam(season.id, "Gone", 3);
+    await prisma.team.update({ where: { id: gone.id }, data: { withdrawn: true } });
+    // Plays this week, on a later night: not a bye.
+    const late = await makeTeam(season.id, "Late", 4);
+    const lateAway = await makeTeam(season.id, "Late Away", 5);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: late.id,
+        awayTeamId: lateAway.id,
+        scheduledAt: new Date(Date.now() + 30 * 3600_000),
+      },
+    });
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const msg = mockSend.mock.calls[0][0];
+    expect(msg).toContain("💤 Bye: **Rested** — no match this week.");
+    expect(msg).not.toMatch(/Bye:.*(Gone|Late)/);
+  });
+
   it("stays quiet outside the window, off-season, and without a webhook", async () => {
     const far = await setupWeek(48); // kickoff too far out
     expect(await maybeAnnounceUpcomingWeek(far.season)).toBe(false);

@@ -37,6 +37,7 @@ import {
   standinAssignedMessage,
   standinRemovedMessage,
   teamWithdrewMessage,
+  teamIdentityChangedMessage,
   weekReminderAnnouncement,
   weekReminderMessage,
   weeklyHonorsMessage,
@@ -1077,6 +1078,32 @@ describe("weekReminderMessage", () => {
     expect(closed).not.toContain("pickem");
   });
 
+  it("names the teams sitting out the week, above the RSVP line", () => {
+    const msg = weekReminderMessage({
+      week: 1,
+      isPlayoff: false,
+      fixtures: [],
+      byeTeamNames: ["Team One", "[free mmr](https://evil.test)"],
+    });
+    expect(msg).toMatch(
+      /\n💤 Bye: \*\*Team One\*\*, \*\*.+\*\* — no match this week\.\nRSVP on your match page/,
+    );
+    // Team names are captain-typed: the masked link must stay inert.
+    expect(msg).toContain("\\[free mmr\\]");
+    expect(msg).not.toContain("](");
+  });
+
+  it("leaves the bye line out of playoff and tiebreaker weeks, and when nobody rests", () => {
+    for (const extra of [{ isPlayoff: true }, { isTiebreaker: true }]) {
+      const msg = weekReminderMessage({
+        week: 6, isPlayoff: false, fixtures: [], byeTeamNames: ["Team One"], ...extra,
+      });
+      expect(msg).not.toContain("Bye");
+    }
+    expect(weekReminderMessage({ week: 1, isPlayoff: false, fixtures: [], byeTeamNames: [] }))
+      .not.toContain("Bye");
+  });
+
   it("labels playoff rounds without a week number", () => {
     const msg = weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [] });
     expect(msg).toContain("Playoff matches");
@@ -1550,6 +1577,20 @@ describe("no message unfurls a link preview", () => {
       freeAgentSignedMessage("A", "T"),
       playerReleasedMessage("A", "T"),
       teamWithdrewMessage("T", 3),
+      teamIdentityChangedMessage({
+        teamId: "t1",
+        previousName: "Old",
+        name: "New",
+        nameChanged: true,
+        logoChanged: false,
+      }),
+      teamIdentityChangedMessage({
+        teamId: "t1",
+        previousName: "New",
+        name: "New",
+        nameChanged: false,
+        logoChanged: true,
+      }),
       inhouseQueueMessage(4, 10),
       inhouseQueueMessage(4, 10, "999"),
       inhouseLobbyMessage([{ name: "A", discordId: null }]),
@@ -1699,6 +1740,20 @@ describe("no player-supplied name can inject markdown", () => {
     freeAgentSignedMessage(EVIL, EVIL),
     playerReleasedMessage(EVIL, EVIL),
     teamWithdrewMessage(EVIL, 3),
+    teamIdentityChangedMessage({
+      teamId: "t1",
+      previousName: EVIL,
+      name: EVIL,
+      nameChanged: true,
+      logoChanged: true,
+    }),
+    teamIdentityChangedMessage({
+      teamId: "t1",
+      previousName: EVIL,
+      name: EVIL,
+      nameChanged: false,
+      logoChanged: true,
+    }),
     playerOutMessage({
       playerName: EVIL,
       homeName: EVIL,
@@ -1834,6 +1889,15 @@ describe("no player-supplied name can inject markdown", () => {
       }).content.split("\n"),
     ).toHaveLength(3);
     expect(teamWithdrewMessage(nl, 3)).not.toContain("\n");
+    expect(
+      teamIdentityChangedMessage({
+        teamId: "t1",
+        previousName: nl,
+        name: nl,
+        nameChanged: true,
+        logoChanged: false,
+      }),
+    ).not.toContain("\n");
     expect(
       rescheduleDeclinedMessage({
         homeName: nl,
@@ -2140,5 +2204,44 @@ describe("adminRetimeMessage", () => {
       .toContain("Playoffs:");
     expect(adminRetimeMessage({ moves: [{ ...move(1), isTiebreaker: true }], clearedRsvps: 0 }))
       .toContain("Tiebreaker week 3:");
+  });
+});
+
+describe("teamIdentityChangedMessage", () => {
+  it("names the old and new team and links the team page", () => {
+    const msg = teamIdentityChangedMessage({
+      teamId: "team-1",
+      previousName: "w4tkins's Team",
+      name: "My Team Sucks",
+      nameChanged: true,
+      logoChanged: false,
+    });
+    expect(msg).toContain("**w4tkins's Team** is now **My Team Sucks**");
+    expect(msg).toMatch(/<https?:\/\/[^>]+\/teams\/team-1>$/);
+    expect(msg).not.toContain("logo");
+  });
+
+  it("mentions a logo that changed with the name", () => {
+    expect(
+      teamIdentityChangedMessage({
+        teamId: "team-1",
+        previousName: "Old",
+        name: "New",
+        nameChanged: true,
+        logoChanged: true,
+      }),
+    ).toContain("**Old** is now **New**, with a new logo");
+  });
+
+  it("announces a logo-only change under the current name", () => {
+    expect(
+      teamIdentityChangedMessage({
+        teamId: "team-1",
+        previousName: "Radiant Raccoons",
+        name: "Radiant Raccoons",
+        nameChanged: false,
+        logoChanged: true,
+      }),
+    ).toMatch(/^🎨 \*\*Radiant Raccoons\*\* has a new logo: </);
   });
 });

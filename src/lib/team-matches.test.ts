@@ -3,7 +3,11 @@ import {
   formByTeam,
   headToHead,
   recentForm,
+  rematches,
   resultFor,
+  seriesRecordSpoken,
+  seriesRecordText,
+  teamFixtureOrder,
   type TeamMatchLike,
 } from "./team-matches";
 
@@ -82,6 +86,50 @@ describe("headToHead", () => {
   });
 });
 
+describe("rematches", () => {
+  it("keeps only opponents met in more than one completed series", () => {
+    const matches = [
+      m({ homeTeamId: A, awayTeamId: B, winnerTeamId: A }),
+      m({ homeTeamId: A, awayTeamId: C, winnerTeamId: C }),
+      // The playoff rematch with B, drawn this time.
+      m({ homeTeamId: B, awayTeamId: A, winnerTeamId: null, homeScore: 1, awayScore: 1 }),
+      // Still to play: not a meeting yet.
+      m({ homeTeamId: C, awayTeamId: A, status: "SCHEDULED", winnerTeamId: null }),
+    ];
+    expect(rematches(headToHead(A, matches))).toEqual([
+      {
+        opponentId: B,
+        wins: 1,
+        losses: 0,
+        draws: 1,
+        gamesFor: 3,
+        gamesAgainst: 2,
+      },
+    ]);
+  });
+
+  it("is empty for a single round robin", () => {
+    const matches = [
+      m({ homeTeamId: A, awayTeamId: B }),
+      m({ homeTeamId: A, awayTeamId: C }),
+    ];
+    expect(rematches(headToHead(A, matches))).toEqual([]);
+  });
+});
+
+describe("seriesRecordText", () => {
+  it("writes wins, draws, losses in the standings' order, lettered", () => {
+    // 3 won, 1 drawn, 3 lost: never "3–3–1", which reads as three draws.
+    const record = { wins: 3, draws: 1, losses: 3 };
+    expect(seriesRecordText(record)).toBe("3W 1D 3L");
+    expect(seriesRecordSpoken(record)).toBe("3 won, 1 drawn, 3 lost");
+  });
+
+  it("keeps a zero column so every record has the same shape", () => {
+    expect(seriesRecordText({ wins: 4, draws: 0, losses: 0 })).toBe("4W 0D 0L");
+  });
+});
+
 describe("formByTeam", () => {
   it("builds per-team form from each team's own matches", () => {
     const matches = [
@@ -93,5 +141,53 @@ describe("formByTeam", () => {
     expect(map.get(A)).toEqual(["L", "W"]); // newest-first
     expect(map.get(B)).toEqual(["D", "L"]);
     expect(map.get(C)).toEqual(["D", "W"]);
+  });
+});
+
+describe("teamFixtureOrder", () => {
+  const day = (d: number) => new Date(Date.UTC(2026, 8, d, 19));
+  const fixture = (
+    id: string,
+    status: string,
+    week: number,
+    scheduledAt: Date | null,
+  ) => ({ id, status, week, scheduledAt });
+
+  it("puts a live series first, then upcoming by kickoff, then results newest first", () => {
+    const ordered = teamFixtureOrder([
+      fixture("w1", "COMPLETED", 1, day(1)),
+      fixture("w2", "COMPLETED", 2, day(8)),
+      fixture("w4-untimed", "SCHEDULED", 4, null),
+      fixture("w3", "SCHEDULED", 3, day(22)),
+      fixture("semi-live", "LIVE", 9, day(15)),
+      fixture("w5", "SCHEDULED", 5, day(29)),
+    ]);
+    expect(ordered.map((m) => m.id)).toEqual([
+      "semi-live",
+      "w3",
+      "w5",
+      "w4-untimed",
+      "w2",
+      "w1",
+    ]);
+  });
+
+  it("orders results by kickoff, so a moved match sits where it was played", () => {
+    const ordered = teamFixtureOrder([
+      fixture("w3", "COMPLETED", 3, day(15)),
+      // Week 2 was pushed back past week 3's night.
+      fixture("w2-moved", "COMPLETED", 2, day(17)),
+      fixture("w1-untimed", "COMPLETED", 1, null),
+    ]);
+    expect(ordered.map((m) => m.id)).toEqual(["w2-moved", "w3", "w1-untimed"]);
+  });
+
+  it("falls back to week order when no result has a time", () => {
+    const ordered = teamFixtureOrder([
+      fixture("a", "COMPLETED", 1, null),
+      fixture("b", "COMPLETED", 3, null),
+      fixture("c", "COMPLETED", 2, null),
+    ]);
+    expect(ordered.map((m) => m.id)).toEqual(["b", "c", "a"]);
   });
 });

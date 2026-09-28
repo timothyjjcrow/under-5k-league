@@ -4,13 +4,61 @@ export type TeamLogoUrlResult =
   | { logoUrl: string | null }
   | { error: string };
 
+const DISCORD_ATTACHMENT_LOGO_ERROR =
+  "Discord image links stop working after about a day, and the crest falls back to initials. Upload the logo somewhere permanent (Imgur, for example) and paste that image link instead.";
+
 /**
- * Normalize an admin-supplied team logo location.
+ * A file uploaded to Discord. Its links are signed and expire (the `ex=`
+ * parameter), so a crest pasted from a Discord message quietly turns back into
+ * initials a day later. Server icons, avatars and emoji on the same CDN are
+ * permanent and stay allowed.
+ */
+function isDiscordAttachment(url: URL): boolean {
+  return (
+    /(^|\.)discordapp\.(com|net)$/.test(url.hostname) &&
+    /^\/(ephemeral-)?attachments\//.test(url.pathname)
+  );
+}
+
+const NOT_AN_IMAGE_FILE_ERROR =
+  "Use a direct link to the image file itself, like https://i.imgur.com/abc.png.";
+
+const SITE_PATH_LOGO_ERROR =
+  "A logo stored on this site must be a path to an image file, like /brand/logo.png.";
+
+/**
+ * Artwork deployed with the app: a plain path whose last part is an image
+ * file. No query string, no "." or ".." parts and no percent-encoding, so the
+ * path can't be steered anywhere else once the browser resolves it.
+ */
+const SITE_IMAGE_PATH =
+  /^(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)+\.(?:png|jpe?g|gif|webp|avif|svg)$/i;
+
+/**
+ * The app's own endpoints. Every route handler lives under /api, and several
+ * act on a GET (starting a Discord link, exporting a season). A logo renders
+ * as an <img> on every team surface, and an image request to the site
+ * carries the viewer's cookies, so a logo pointing there would run that
+ * endpoint as whoever looks at the team.
+ */
+function isAppEndpoint(pathname: string): boolean {
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // A malformed escape can't be routed as /api anyway.
+  }
+  return /^\/+api(\/|$)/i.test(decoded);
+}
+
+/**
+ * Normalize a team logo location typed by an admin or the team's captain.
  *
  * Production pages are HTTPS, so accepting HTTP would create a logo that the
  * browser blocks as mixed content. Root-relative paths remain useful for
- * artwork deployed with the app, while protocol-relative and data URLs are
- * deliberately refused.
+ * artwork deployed with the app, but only as a plain path to an image file,
+ * never one of the app's own endpoints. Protocol-relative and data URLs are
+ * deliberately refused, and so are Discord attachment links, which expire.
  */
 export function normalizeTeamLogoUrl(raw: string): TeamLogoUrlResult {
   const value = raw.trim();
@@ -25,6 +73,9 @@ export function normalizeTeamLogoUrl(raw: string): TeamLogoUrlResult {
   }
 
   if (value.startsWith("/") && !value.startsWith("//")) {
+    if (isAppEndpoint(value) || !SITE_IMAGE_PATH.test(value)) {
+      return { error: SITE_PATH_LOGO_ERROR };
+    }
     return { logoUrl: value };
   }
 
@@ -40,6 +91,11 @@ export function normalizeTeamLogoUrl(raw: string): TeamLogoUrlResult {
   if (url.username || url.password) {
     return { error: "Team logo URLs cannot include credentials" };
   }
+  if (isDiscordAttachment(url)) return { error: DISCORD_ATTACHMENT_LOGO_ERROR };
+  // The site's own address typed in full is the same request as a path; the
+  // host can't be checked here (two leagues, previews), so no host may serve
+  // a logo from /api.
+  if (isAppEndpoint(url.pathname)) return { error: NOT_AN_IMAGE_FILE_ERROR };
   const canonical = url.toString();
   if (canonical.length > TEAM_LOGO_URL_MAX_LENGTH) {
     return {

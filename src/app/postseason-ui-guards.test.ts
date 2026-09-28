@@ -97,10 +97,14 @@ describe("postseason UI lifecycle guards", () => {
 describe("postseason status semantics", () => {
   it("shows withdrawn status on both team summaries and power rankings", () => {
     const teams = read("src/app/teams/page.tsx");
+    const power = read("src/components/power-rankings-card.tsx");
 
-    expect(teams).toContain("withdrawnTeamIds.has(row.teamId)");
     expect(teams).toContain("t.withdrawn ? (");
-    expect(teams.match(/Withdrawn/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(teams).toContain("withdrawn: t.withdrawn");
+    expect(teams).toContain("<PowerRankingsCard");
+    expect(power).toContain("team?.withdrawn ? (");
+    expect(teams.match(/Withdrawn/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
+    expect(power.match(/Withdrawn/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
   });
 
   it("gives the standings a row header, spoken seeds, and a semantic cut", () => {

@@ -511,10 +511,46 @@ test("team page renders roster, form, and the what-we-need card", async ({
   await page.locator('#main a[href^="/teams/"]').first().click();
   await expect(page).toHaveURL(/\/teams\/.+/);
   await expect(page.getByText("Roster").first()).toBeVisible();
+  // A single round robin meets each opponent once, and those results are
+  // already the Matches list, so there is no Head-to-head card to repeat
+  // them (the postseason spec covers a playoff rematch).
   await expect(
     page.getByRole("heading", { name: "Head-to-head", exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  // On a phone the page leads with the next or live series, then the
+  // roster, then the full fixture list.
+  const top = (selector: string) =>
+    page
+      .locator(selector)
+      .evaluate((element) => element.getBoundingClientRect().top);
+  const rosterTop = await top("#team-roster");
+  expect(rosterTop).toBeLessThan(await top("#team-matches"));
+  if ((await page.locator("#team-overview").count()) > 0) {
+    expect(await top("#team-overview")).toBeLessThan(rosterTop);
+  }
   await expectNoHorizontalOverflow(page, "/teams/[id]");
+
+  // The rank badge opens the standings, and the Matches card carries the
+  // same "Add to calendar" menu as Schedule, offering this team's feed.
+  const teamId = new URL(page.url()).pathname.split("/").pop();
+  await expect(
+    page.getByRole("link", { name: /^#\d+ of \d+ in the standings$/ }),
+  ).toHaveAttribute("href", "/schedule#standings");
+  const matches = page.locator("#team-matches");
+  await matches
+    .getByRole("button", { name: "Add to calendar", exact: true })
+    .click();
+  const download = matches.getByRole("link", {
+    name: "Download .ics file",
+    exact: true,
+  });
+  await expect(download).toHaveAttribute(
+    "href",
+    `/api/calendar?team=${teamId}`,
+  );
+  await expectNoHorizontalOverflow(page, "/teams/[id] calendar menu");
+  await page.keyboard.press("Escape");
+  await expect(download).toHaveCount(0);
   assertNoErrors();
 });
 
@@ -536,9 +572,9 @@ test("teams roster chips do not overlap on a phone", async ({ page }) => {
   await expect
     .poll(() => page.locator('#main a[href^="/players/"]').count())
     .toBeGreaterThan(4);
-  // Page-wide: this covers both the wrapped roster chips and each team title's
-  // neighboring captain link. PlayerLink's TAP_SAFE outdent makes insufficient
-  // title/subtitle spacing a real ambiguous tap target, not a visual-only gap.
+  // Page-wide: this covers both the wrapped roster chips and each team title
+  // beside its crest link. PlayerLink's TAP_SAFE outdent makes insufficient
+  // spacing a real ambiguous tap target, not a visual-only gap.
   await expectNoOverlappingTargets(page, "/teams rosters");
   await expectNoHorizontalOverflow(page, "/teams");
   assertNoErrors();

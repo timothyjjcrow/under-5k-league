@@ -1,14 +1,13 @@
 import type { ScenarioReport } from "@/lib/scenarios";
 import type { computeStandings, ClinchStatus } from "@/lib/standings";
 import type { FormResult } from "@/lib/team-matches";
-import { StandingsTableClient, type StandingsRowView } from "./standings-table";
+import { StandingsTableView, type StandingsRowView } from "./standings-table";
 
 /**
- * Server-side adapter for the sortable client table: flattens the maps into
- * plain rows (Maps don't cross the client boundary) and drops clinch marks
- * when every team makes the bracket (they'd all be ✓).
+ * Adapter for the league table: flattens the maps into plain rows and drops
+ * clinch marks when every team makes the bracket (they'd all be ✓).
  *
- * Lives beside the client half rather than in a page module — /,
+ * Lives beside the table rather than in a page module — /,
  * /schedule and /seasons/[id] all render it, and importing a component
  * from "@/app/page" pulled the whole 2,700-line dashboard module into
  * those routes' graphs.
@@ -28,7 +27,6 @@ export function StandingsTable({
   playoffSeedByTeam,
   unresolvedPlayoffTeamIds = [],
   eligibleTeams,
-  overview = false,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -55,8 +53,6 @@ export function StandingsTable({
   unresolvedPlayoffTeamIds?: string[];
   /** Number of non-withdrawn teams competing for playoff places. */
   eligibleTeams?: number;
-  /** Start with readable records; full sortable statistics remain available. */
-  overview?: boolean;
 }) {
   // "Everyone makes the bracket" must be judged against the whole league,
   // not the (possibly sliced) rows this table happens to show.
@@ -118,9 +114,8 @@ export function StandingsTable({
   });
   });
   return (
-    <StandingsTableClient
+    <StandingsTableView
       rows={rows}
-      overview={overview}
       playoffCut={playoffCut}
       viewerTeamId={viewerTeamId}
       totalTeams={fieldSize}

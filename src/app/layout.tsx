@@ -36,6 +36,7 @@ import {
 } from "@/lib/queries";
 import { joinSeasonCta, type NavContent } from "@/lib/site-nav";
 import { siteDescription } from "@/lib/link-preview";
+import { getTeamHueStyleSheet } from "@/lib/team-hue-snapshot";
 
 const SITE_URL = resolveSiteUrl();
 const DESCRIPTION = siteDescription();
@@ -74,7 +75,7 @@ export const viewport: Viewport = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [user, season, hasHistory, publicReadSignals, leagueContent] =
+  const [user, season, hasHistory, publicReadSignals, leagueContent, teamHueCss] =
     await Promise.all([
       getSessionUser(),
       getActiveSeason(),
@@ -85,8 +86,12 @@ export default async function RootLayout({
       // refresh the stale RSC payload.
       getPublicReadSignals(),
       // The statistics pages and the Hall of Fame are only offered once they
-      // have something to show: two indexed rows behind the shared snapshot.
+      // have something to show: one game row and the Hall of Fame's own
+      // champion test, behind the shared snapshot.
       getPublicLeagueContent(null),
+      // Crest colours are decoration: without them crests use their
+      // fallback hue, so a failure here must never take the page down.
+      getTeamHueStyleSheet().catch(() => ""),
     ]);
   const resultCursorAtRender = publicReadSignals.resultChangedAt;
   // Draft night during Signups: link the draft room before Start.
@@ -163,6 +168,11 @@ export default async function RootLayout({
       data-scroll-behavior="smooth"
     >
       <body className="flex min-h-full flex-col">
+        {teamHueCss ? (
+          // Each season's teams get evenly spaced crest colours (see
+          // lib/team-hues.ts). Only team ids and integers go in here.
+          <style dangerouslySetInnerHTML={{ __html: teamHueCss }} />
+        ) : null}
         <a href="#main" className="skip-link">
           Skip to main content
         </a>

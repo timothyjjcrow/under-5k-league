@@ -38,6 +38,7 @@ import {
   playoffTotalRounds,
   roundName,
   slotRound,
+  teamByeWeek,
 } from "@/lib/schedule";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
@@ -97,9 +98,11 @@ import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { HeroVideo } from "@/components/hero-video";
 import { CheckinBanner } from "@/components/checkin-banner";
+import { ByeWeekNote } from "@/components/bye-week-note";
 import { StandingsTable } from "@/components/standings-table-server";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
+import { SeriesRecord } from "@/components/series-record";
 import { InviteLink } from "@/components/invite-link";
 import {
   DRAFT_PASSED_LABEL,
@@ -479,6 +482,7 @@ export default async function Home() {
           seasonId={season.id}
           userId={user.id}
           playoffRounds={playoffTotalRounds(matches)}
+          byeMatches={season.status === "REGULAR_SEASON" ? matches : []}
         />
       </Suspense>
     ) : season.status === "SIGNUPS" && isActiveReg && !draftRoomSoon ? (
@@ -725,15 +729,18 @@ async function MyNextMatch({
   seasonId,
   userId,
   playoffRounds,
+  byeMatches,
 }: {
   seasonId: string;
   userId: string;
   /** playoffTotalRounds of the season, so a playoff fixture reads "Semifinal". */
   playoffRounds: number;
+  /** The season's matches while a regular week can be a bye; else empty. */
+  byeMatches: Match[];
 }) {
   const myTeams = await prisma.teamMember.findMany({
     where: { seasonId, userId },
-    select: { teamId: true },
+    select: { teamId: true, team: { select: { withdrawn: true } } },
   });
   const teamIds = myTeams.map((t) => t.teamId);
 
@@ -744,7 +751,16 @@ async function MyNextMatch({
   // the player's primary RSVP prompt.
   // Async server component: Date.now is request-time state, not render replay.
   // eslint-disable-next-line react-hooks/purity
-  const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
+  const nowMs = Date.now();
+  const freshFrom = new Date(nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000);
+  // A team resting this week is told so before the match after it, instead
+  // of the panel jumping silently to a fixture a week away.
+  const playingTeam = myTeams.find((t) => !t.team.withdrawn);
+  const byeWeek = playingTeam
+    ? teamByeWeek(byeMatches, playingTeam.teamId, nowMs)
+    : null;
+  const byeNote =
+    byeWeek != null ? <ByeWeekNote week={byeWeek} who="Your team" /> : null;
   const mine = {
     seasonId,
     status: "SCHEDULED" as const,
@@ -785,6 +801,19 @@ async function MyNextMatch({
   // The hero's control slot must never be an empty 23rem column, so an
   // unrostered viewer (or a player whose season is done) gets the spectator
   // form of the same thing rather than nothing at all.
+  if (!next && byeNote) {
+    return (
+      <div className="space-y-2">
+        {byeNote}
+        <Link
+          href="/schedule#fixtures"
+          className={buttonClasses("secondary", "sm", "w-full")}
+        >
+          See this week&apos;s schedule →
+        </Link>
+      </div>
+    );
+  }
   if (!next) {
     return (
       <Card className="p-4 text-sm">
@@ -823,6 +852,7 @@ async function MyNextMatch({
 
   return (
     <div className="space-y-2">
+      {byeNote}
       <CheckinBanner
         variant="panel"
         eyebrow={`Your next match · ${matchRoundLabel(next, playoffRounds, { bestOf: true })}`}
@@ -2165,7 +2195,6 @@ async function SeasonView({
             />
             <CardBody className="p-0">
               <StandingsTable
-                overview
                 standings={standings}
                 totalTeams={standings.length}
                 eligibleTeams={playoffField.eligibleTeamIds.length}
@@ -3126,8 +3155,7 @@ async function CompleteView({
           {championRow ? (
             <div className="text-sm text-muted">
               <span className="font-medium text-fg">
-                {championRow.wins}–{championRow.losses}
-                {championRow.draws > 0 ? `–${championRow.draws}` : ""}
+                <SeriesRecord record={championRow} />
               </span>{" "}
               regular season · {championRow.points} pts
             </div>
@@ -3178,7 +3206,6 @@ async function CompleteView({
             />
             <CardBody className="p-0">
               <StandingsTable
-                overview
                 standings={standings}
                 teamName={teamName}
                 teamLogoUrl={teamLogoUrl}

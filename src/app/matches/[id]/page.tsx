@@ -86,6 +86,7 @@ import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "@/lib/tiebreaker-format";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { teamHueVar } from "@/lib/team-hues";
 import {
   Avatar,
   Badge,
@@ -104,7 +105,6 @@ import {
   RoleBadges,
   TeamCrest,
   buttonClasses,
-  teamHue,
   textLink,
 } from "@/components/ui";
 
@@ -299,15 +299,17 @@ export default async function MatchDetailPage({
         <div
           aria-hidden
           className="animate-hero-glow pointer-events-none absolute -left-10 top-0 h-40 w-40 -translate-y-1/3 rounded-full blur-3xl"
+          data-team-hue={match.homeTeamId}
           style={{
-            backgroundColor: `hsl(${teamHue(match.homeTeamId)} 70% 50% / 0.24)`,
+            backgroundColor: `hsl(${teamHueVar(match.homeTeamId)} 70% 50% / 0.24)`,
           }}
         />
         <div
           aria-hidden
           className="animate-hero-glow-alt pointer-events-none absolute -right-10 bottom-0 h-40 w-40 translate-y-1/3 rounded-full blur-3xl"
+          data-team-hue={match.awayTeamId}
           style={{
-            backgroundColor: `hsl(${teamHue(match.awayTeamId)} 70% 50% / 0.24)`,
+            backgroundColor: `hsl(${teamHueVar(match.awayTeamId)} 70% 50% / 0.24)`,
           }}
         />
         <CardBody className="relative space-y-6 px-3 py-6 sm:px-6 sm:py-8">

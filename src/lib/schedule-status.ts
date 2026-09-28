@@ -2,6 +2,7 @@
 // fully-entered regular season. DB-free so they're unit-testable.
 
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { matchResultsOpen } from "./league-lifecycle";
 
 export type WeekStatus = {
   week: number;
@@ -61,4 +62,81 @@ export function pendingResultsMessage(status: RegularStatus): string | null {
   return `${status.pending} regular-season ${m} still ${
     status.pending === 1 ? "needs" : "need"
   } results (${w} ${status.pendingWeeks.join(", ")}).`;
+}
+
+/**
+ * The Standings card's one-line caption, decided by what has been PLAYED
+ * rather than by the phase name: a table of zeros is never "final", and the
+ * table stops being a race once every regular result is in (or the playoffs
+ * have started).
+ */
+export function standingsCaption({
+  status,
+  postseason,
+  bracketSize,
+  eligibleTeams,
+}: {
+  status: RegularStatus;
+  postseason: boolean;
+  bracketSize: number;
+  eligibleTeams: number;
+}): string {
+  const places =
+    bracketSize > 0
+      ? `${bracketSize} playoff place${bracketSize === 1 ? "" : "s"}`
+      : null;
+  if (status.completed === 0)
+    return ["No results yet", places].filter(Boolean).join(" · ");
+  if (status.allComplete || postseason) return "Final regular-season table";
+  return [places, `${eligibleTeams} eligible teams`]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+type ReportableMatch = {
+  phase: string;
+  status: string;
+  scheduledAt: Date | null;
+  homeTeamId: string;
+  awayTeamId: string;
+};
+
+/**
+ * A fixture whose result never came through: it kicked off before
+ * `freshFrom` (the end of the automatic result-sync window) and not a single
+ * game is recorded. Schedule marks these "Awaiting result".
+ */
+export function resultOverdue(
+  match: Pick<ReportableMatch, "status" | "scheduledAt">,
+  freshFrom: number,
+): boolean {
+  return (
+    match.status === MATCH_STATUS.SCHEDULED &&
+    match.scheduledAt != null &&
+    match.scheduledAt.getTime() < freshFrom
+  );
+}
+
+/**
+ * The overdue fixtures a viewer should report themselves, oldest kickoff
+ * first: they captain one of the two teams, and captains can still report
+ * that match in the league's current phase (the match page's report card
+ * uses the same phase rule).
+ */
+export function captainOverdueResults<M extends ReportableMatch>(
+  matches: M[],
+  captainTeamIds: ReadonlySet<string>,
+  seasonStatus: string,
+  freshFrom: number,
+): M[] {
+  if (captainTeamIds.size === 0) return [];
+  return matches
+    .filter(
+      (m) =>
+        (captainTeamIds.has(m.homeTeamId) ||
+          captainTeamIds.has(m.awayTeamId)) &&
+        resultOverdue(m, freshFrom) &&
+        matchResultsOpen(seasonStatus, m.phase),
+    )
+    .sort((a, b) => a.scheduledAt!.getTime() - b.scheduledAt!.getTime());
 }

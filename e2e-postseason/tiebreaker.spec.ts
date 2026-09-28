@@ -166,6 +166,13 @@ test("a tied playoff place requires a BO1 weekend before the bracket starts", as
   await expect(page.getByTestId("tiebreaker-match-details")).toContainText(
     "1 of 1 series complete",
   );
+  // A finished tiebreaker folds to one line of results once the playoffs start.
+  const settledSummary = extraWeek.locator(":scope > summary");
+  await expect(settledSummary).toContainText(`${winnerName} took seed`);
+  await expect(settledSummary).toContainText(`${loserName} missed the playoffs`);
+  await expect(bracket).toBeHidden();
+  await settledSummary.click();
+  await expect(bracket).toBeVisible();
   assertNoErrors();
 });
 
@@ -405,6 +412,14 @@ for (const resetFinal of [false, true]) {
     await expect(page.locator("#playoff-bracket")).toContainText(firstPlace);
     await expect(page.locator("#playoff-bracket")).toContainText(secondPlace);
     await expect(page.locator("#playoff-bracket")).not.toContainText(thirdPlace);
+    // Settled, the bracket folds to its one-line result; open it for the screenshot.
+    const settledSummary = extraWeek.locator(":scope > summary");
+    await expect(settledSummary).toContainText(
+      `${firstPlace} took seed 3, ${secondPlace} took seed 4; ${thirdPlace} missed the playoffs.`,
+    );
+    await expect(bracket).toBeHidden();
+    await settledSummary.click();
+    await expect(bracket).toBeVisible();
     await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page, "three-team tiebreaker schedule");
     await extraWeek.screenshot({ path: testInfo.outputPath("three-team-schedule-mobile.png") });

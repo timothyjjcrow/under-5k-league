@@ -25,8 +25,12 @@ function safeCalendarFilename(value: string): string {
 }
 
 /**
- * iCalendar feed of the active season's scheduled matches. Subscribe from any
- * calendar app; `?team=<id>` narrows it to one team's matches.
+ * iCalendar feed of the league's scheduled matches. Subscribe from any
+ * calendar app. With no filter it follows whichever season is active, so one
+ * subscription carries into the next season; with none active it is a valid,
+ * empty calendar rather than an error. `?team=<id>` narrows it to one team's
+ * matches in that team's own season: teams are re-drafted every season, and a
+ * past team's link keeps syncing its finished fixtures instead of failing.
  */
 export async function GET(req: NextRequest) {
   const requestedTeamId = req.nextUrl.searchParams.get("team");
@@ -37,27 +41,44 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const season = await getActiveSeason();
-  if (!season) {
-    return new NextResponse("No active season", {
-      status: 404,
-      headers: { "cache-control": "no-store" },
-    });
-  }
-
   const teamId = requestedTeamId?.trim() || null;
-  const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
-  const selectedTeam = teamId ? teams.find((team) => team.id === teamId) : null;
-
-  // An explicit filter must resolve inside this season. Silently returning an
-  // empty, generically named feed makes a stale team link look valid forever.
-  if (requestedTeamId !== null && !selectedTeam) {
-    return new NextResponse("Team not found in the active season", {
-      status: 404,
-      headers: { "cache-control": "no-store" },
-    });
+  let selectedTeam: { id: string; name: string } | null = null;
+  let season: { id: string; name: string } | null;
+  if (requestedTeamId !== null) {
+    const team = teamId
+      ? await prisma.team.findUnique({
+          where: { id: teamId },
+          select: {
+            id: true,
+            name: true,
+            season: { select: { id: true, name: true } },
+          },
+        })
+      : null;
+    // An explicit filter must name a real team. Silently returning an empty,
+    // generically named feed makes a mistyped link look valid forever.
+    if (!team) {
+      return new NextResponse("Team not found", {
+        status: 404,
+        headers: { "cache-control": "no-store" },
+      });
+    }
+    selectedTeam = { id: team.id, name: team.name };
+    season = team.season;
+  } else {
+    season = await getActiveSeason();
   }
 
+  if (!season) {
+    // Between seasons the league feed is empty, not broken: a subscribed
+    // calendar keeps syncing and fills again when the next season starts.
+    return calendarResponse(
+      buildCalendar(`${LEAGUE_CONFIG.name} schedule`, []),
+      "league",
+    );
+  }
+
+  const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
   const matches = await prisma.match.findMany({
     where: {
       seasonId: season.id,
@@ -110,11 +131,15 @@ export async function GET(req: NextRequest) {
     })),
   );
 
+  return calendarResponse(cal, selectedTeam?.name ?? season.name);
+}
+
+function calendarResponse(cal: string, filenameBase: string) {
   return new NextResponse(cal, {
     headers: {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": `attachment; filename="${safeCalendarFilename(
-        selectedTeam?.name ?? season.name,
+        filenameBase,
       )}"`,
       // This is a live public view of league state. Intermediaries may store a
       // copy, but every reuse must revalidate so a moved match is not served as

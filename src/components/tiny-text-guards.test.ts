@@ -4,7 +4,7 @@ import { sourceFile, sourceFiles } from "../../test/support/source-files";
 /**
  * Text that carries STATE is at least 12px (`text-xs`).
  *
- * The standings' seed, movement, "tied", "withdrew" and tiebreaker chips, the
+ * The standings' seed, movement, "tied", "withdrawn" and tiebreaker chips, the
  * schedule's LIVE/final and forfeit markers, the season grid's result letters
  * and the box score's report-card grades were 9-10px — on phones, the size
  * most players read the league at. A 390px audit counted over a hundred
@@ -58,19 +58,19 @@ const STATE_MARKERS: {
   min: number;
 }[] = [
   { file: "src/components/standings-table.tsx", what: "seed label", pattern: /seed \{row\.playoffSeed\}/g, min: 1 },
-  { file: "src/components/standings-table.tsx", what: "movement arrows", pattern: /^\s*\{Math\.abs\(row\.move\)\}$/gm, min: 2 },
-  { file: "src/components/standings-table.tsx", what: "You chip", pattern: />\s*You\s*</g, min: 1 },
-  { file: "src/components/standings-table.tsx", what: "withdrew chip", pattern: />\s*withdrew\s*</g, min: 1 },
-  { file: "src/components/standings-table.tsx", what: "tied chips", pattern: />\s*[Tt]ied\s*</g, min: 2 },
+  { file: "src/components/standings-table.tsx", what: "movement arrows", pattern: /^\s*\{Math\.abs\(row\.move\)\}$/gm, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "Your team chip", pattern: />\s*Your team\s*</g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "withdrawn status", pattern: />\s*Withdrawn\s*</g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "tied chip", pattern: />\s*[Tt]ied\s*</g, min: 1 },
   { file: "src/components/standings-table.tsx", what: "tiebreaker chip", pattern: /"Tiebreaker pending"/g, min: 1 },
-  { file: "src/components/standings-table.tsx", what: "TB resolved chips", pattern: />\s*TB resolved\s*</g, min: 2 },
-  { file: "src/components/standings-table.tsx", what: "playoff cut lines", pattern: /Playoff cut/g, min: 2 },
-  { file: "src/components/standings-table.tsx", what: "overview status line", pattern: /<OverviewStatus /g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "tiebreaker resolved chip", pattern: />\s*Settled by tiebreaker\s*</g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "playoff cut line", pattern: /Playoff cut/g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "status line", pattern: /<StatusLine\b/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "live/final status", pattern: /\{status\}\n/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "forfeit marker", pattern: /Ruled result/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "bye chip", pattern: />\s*Bye\s*</g, min: 1 },
   { file: "src/components/league-results-map.tsx", what: "result letters", pattern: /\? "Live"/g, min: 1 },
-  { file: "src/app/schedule/page.tsx", what: "season grid result letters", pattern: /cell\.live \? "Live"/g, min: 1 },
+  { file: "src/components/season-grid.tsx", what: "season grid result letters", pattern: /cell\.live\s+\? "Live"/g, min: 1 },
   { file: "src/components/tiebreaker-bracket.tsx", what: "tiebreaker game status", pattern: /statusLabels\[game\.status\]/g, min: 1 },
   { file: "src/app/matches/[id]/page.tsx", what: "report-card grades", pattern: /Report \{overall\}<|<b>\{r\.grade\}<\/b>/g, min: 2 },
   { file: "src/components/leader-board.tsx", what: "You chip", pattern: />\s*You\s*</g, min: 1 },

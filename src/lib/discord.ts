@@ -430,6 +430,24 @@ export function teamWithdrewMessage(
   return `🏳️ **${name(teamName)}** have withdrawn from the season — their ${forfeited} remaining fixture(s) are forfeited to the opponents.`;
 }
 
+/** A team's captain or an admin changed its name or logo. A broadcast with no
+ *  mentions: nobody has to act on it, it keeps the channel's team names in
+ *  step with the site. */
+export function teamIdentityChangedMessage(m: {
+  teamId: string;
+  previousName: string;
+  name: string;
+  nameChanged: boolean;
+  logoChanged: boolean;
+}): string {
+  const link = `<${resolveSiteUrl()}/teams/${encodeURIComponent(m.teamId)}>`;
+  if (m.nameChanged) {
+    const logo = m.logoChanged ? ", with a new logo" : "";
+    return `✏️ **${name(m.previousName)}** is now **${name(m.name)}**${logo}: ${link}`;
+  }
+  return `🎨 **${name(m.name)}** has a new logo: ${link}`;
+}
+
 /** `<@&id>` prefix, or nothing when the league hasn't set a ping role. */
 export function rolePrefix(roleId: string | null | undefined): string {
   return roleId ? `<@&${roleId}> ` : "";
@@ -697,6 +715,8 @@ export type WeekReminderInput = {
   fixtures: WeekReminderFixture[];
   /** Pick'em is still open on at least one of these fixtures. */
   pickemOpen?: boolean;
+  /** Teams with no regular fixture this week (an odd number of teams). */
+  byeTeamNames?: string[];
 };
 
 export type WeekReminderAnnouncement = {
@@ -775,7 +795,15 @@ export function weekReminderAnnouncement(
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week} matches`
     : m.isPlayoff ? "Playoff matches" : `Week ${m.week} matches`;
+  // With an odd number of teams one rests each week. The reminder is the one
+  // post that reaches players who don't open the site, so it names them too:
+  // otherwise the resting team watches everyone else check in and wonders.
+  const byes = m.isPlayoff || m.isTiebreaker ? [] : (m.byeTeamNames ?? []);
+  const byeLine = byes.length
+    ? `💤 Bye: ${byes.map((team) => `**${name(team)}**`).join(", ")} — no match this week.\n`
+    : "";
   const footer =
+    byeLine +
     "RSVP on your match page so captains can plan standins early." +
     // The reminder is the one weekly post everyone sees; pick'em otherwise
     // relies on people remembering to visit the page before kickoff.

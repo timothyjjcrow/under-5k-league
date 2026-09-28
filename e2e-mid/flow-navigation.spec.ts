@@ -90,7 +90,7 @@ test("match return restores an opened past week and the clicked scoreboard posit
   const details = page
     .getByRole("article", { name: / · Final score$/ })
     .first()
-    .getByRole("link", { name: "details →" });
+    .getByRole("link", { name: /^Match page: / });
   await details.evaluate((link) =>
     window.scrollTo({
       top: window.scrollY + link.getBoundingClientRect().top - 350,
@@ -112,7 +112,7 @@ test("match return restores an opened past week and the clicked scoreboard posit
   await expect(week).toHaveAttribute("aria-expanded", "true");
   const restored = page
     .locator(`#fixtures a[href="${href}"]`)
-    .filter({ hasText: "details →" })
+    .filter({ hasText: "Match page" })
     .first();
   await expect(restored).toBeFocused();
   expect(Math.abs((await restored.boundingBox())!.y - anchorTop)).toBeLessThan(

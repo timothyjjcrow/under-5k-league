@@ -74,7 +74,7 @@ import { parseInhouseBox } from "@/lib/inhouse-box";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
-import { type FormResult } from "@/lib/team-matches";
+import { seriesRecordText, type FormResult } from "@/lib/team-matches";
 import { achievementsFor, gameMvp } from "@/lib/achievements";
 import {
   careerReportCard,
@@ -859,7 +859,7 @@ export default async function PlayerProfilePage({
                   value={teamRank > 0 ? `#${teamRank}` : "—"}
                   hint={
                     teamRow
-                      ? `${teamRow.wins}–${teamRow.losses} · ${teamRow.points} pts`
+                      ? `${seriesRecordText(teamRow)} · ${teamRow.points} pts`
                       : undefined
                   }
                 />

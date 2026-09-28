@@ -31,6 +31,72 @@ describe("normalizeTeamLogoUrl", () => {
     expect(normalizeTeamLogoUrl(value)).toHaveProperty("error");
   });
 
+  it("keeps plain paths to image files deployed with the site", () => {
+    for (const value of [
+      "/brand/ggd2l-logo.png",
+      "/merch/jerseys/vegan-squadron-front.PNG",
+      "/teams/logos/radiant_v2.webp",
+      "/logo.svg",
+    ]) {
+      expect(normalizeTeamLogoUrl(value)).toEqual({ logoUrl: value });
+    }
+  });
+
+  // A logo is an <img> on every team surface, and an image request to the
+  // site carries the viewer's cookies: a captain must not be able to make
+  // every visitor start a Discord link or every admin export a season.
+  it.each([
+    "/api/auth/discord",
+    "/api/admin/season-export?seasonId=abc",
+    "/api/auth/discord.png",
+    "/API/auth/discord.png",
+    "/brand/logo.png?seasonId=abc",
+    "/brand/logo.png#x",
+    "/brand/../api/auth/discord.png",
+    "/brand/./logo.png",
+    "/%61pi/auth/discord.png",
+    "/inhouse",
+    "/teams/abc",
+    "/brand/logo.html",
+  ])("refuses a site path that isn't an image file: %s", (value) => {
+    expect(normalizeTeamLogoUrl(value)).toEqual({
+      error: expect.stringMatching(/path to an image file/),
+    });
+  });
+
+  it.each([
+    "https://ggd2l.example/api/auth/discord",
+    "https://ggd2l.example/API/admin/season-export?seasonId=abc",
+    "https://ggd2l.example/%61pi/auth/discord",
+    "https://ggd2l.example/api",
+  ])("refuses the site's endpoints typed as a full address: %s", (value) => {
+    expect(normalizeTeamLogoUrl(value)).toEqual({
+      error: expect.stringMatching(/direct link to the image file/),
+    });
+  });
+
+  it.each([
+    "https://cdn.discordapp.com/attachments/1/2/logo.png?ex=66f00000&is=66ee0000&hm=abc&",
+    "https://media.discordapp.net/attachments/1/2/logo.png?ex=66f00000&is=66ee0000&hm=abc&=&format=webp",
+    "https://CDN.DISCORDAPP.COM/attachments/1/2/logo.png",
+    "https://cdn.discordapp.com/ephemeral-attachments/1/2/logo.png",
+  ])("refuses expiring Discord attachment links with a way forward: %s", (value) => {
+    const result = normalizeTeamLogoUrl(value);
+    expect(result).toHaveProperty("error");
+    expect("error" in result && result.error).toMatch(
+      /stop working after about a day.*permanent/,
+    );
+  });
+
+  it("keeps permanent Discord images such as emoji and server icons", () => {
+    for (const value of [
+      "https://cdn.discordapp.com/emojis/123456789.png",
+      "https://cdn.discordapp.com/icons/1/abc.png",
+    ]) {
+      expect(normalizeTeamLogoUrl(value)).toEqual({ logoUrl: value });
+    }
+  });
+
   it("bounds stored URLs", () => {
     expect(
       normalizeTeamLogoUrl(

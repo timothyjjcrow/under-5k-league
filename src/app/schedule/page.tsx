@@ -1,9 +1,13 @@
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
-import { calendarFeedLinks } from "@/lib/calendar-links";
-import { PlayoffOutlook, playoffPathLines } from "@/components/playoff-outlook";
+import { AddToCalendar } from "@/components/add-to-calendar";
+import { resolveSiteUrl } from "@/lib/site-url";
+import {
+  PlayoffOutlook,
+  PlayoffOutlookFootnote,
+  playoffPathLines,
+} from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
-import { RegularSeasonProgress } from "@/components/league-progress";
-import { leagueProgress } from "@/lib/league-progress";
+import { leagueProgress, progressSummary } from "@/lib/league-progress";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
@@ -16,27 +20,39 @@ import {
 } from "@/lib/playoff-field";
 import { TiebreakerNotice } from "@/components/tiebreaker-notice";
 import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
-import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
+import {
+  buildTiebreakerBrackets,
+  tiebreakerResultLine,
+} from "@/components/tiebreaker-bracket-view";
 import type { ScenarioReport } from "@/lib/scenarios";
-import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
+import { SeasonGrid } from "@/components/season-grid";
 import {
   byeTeamsByWeek,
   byKickoff,
   groupPlayoffRounds,
   matchRoundLabel,
+  orderScheduleWeeks,
   pickBracketSize,
   playoffFirstRound,
-  remainingSchedule,
   roundName,
+  teamByeWeek,
 } from "@/lib/schedule";
 import { formatMatchTime } from "@/lib/match-time";
 import { ChampionBanner } from "@/components/champion-banner";
-import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
+import { ByeWeekNote } from "@/components/bye-week-note";
+import {
+  bracketColumnCount,
+  buildBracketRounds,
+  seedsFromFirstRound,
+} from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { formByTeam } from "@/lib/team-matches";
 import {
+  captainOverdueResults,
   regularSeasonStatus,
   pendingResultsMessage,
+  resultOverdue,
+  standingsCaption,
 } from "@/lib/schedule-status";
 import {
   expectedSideSize,
@@ -46,9 +62,10 @@ import {
 } from "@/lib/availability";
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
-import { AUTO_SYNC } from "@/lib/constants";
+import { AUTO_SYNC, MATCH_SCHEDULE } from "@/lib/constants";
 import { CheckinBanner } from "@/components/checkin-banner";
 import {
+  ScheduleFold,
   ScheduleWeeks,
   type MatchView,
   type RsvpSide,
@@ -65,8 +82,8 @@ import {
   SectionTitle,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import {
   canViewAvailabilitySummary,
   hasActiveLeagueParticipation,
@@ -100,16 +117,13 @@ function pickRsvp(side: TeamAvailability, expected: number): RsvpSide {
   return { confirmed: side.confirmed, out: side.out, expected };
 }
 
+// Only shown before any fixture exists (SIGNUPS, DRAFT, REGULAR_SEASON);
+// once fixtures exist the match night rides in the page subtitle. With no
+// fixtures there are no kickoffs below it to point at, in any phase.
 function calloutDescription(status: string): string {
   if (status === "SIGNUPS")
     return "Games run weekly. Confirm this slot works before you sign up.";
-  if (status === "DRAFT")
-    return "This is the default weekly slot. Exact kickoffs appear once the schedule is published.";
-  if (status === "REGULAR_SEASON")
-    return "Use the exact kickoffs below, then check in for the next match you're playing.";
-  if (status === "PLAYOFFS")
-    return "Playoff nights may move by round. Use the exact kickoff shown for each match.";
-  return "The season is complete. The fixtures and results below are read-only history.";
+  return "This is the default weekly slot. Exact kickoffs appear once the schedule is published.";
 }
 
 function emptyScheduleCopy(status: string, draftStatus?: string | null) {
@@ -323,6 +337,28 @@ export default async function SchedulePage() {
               sideRoster(m, m.awayTeamId).includes(viewer.id)),
         )
     : undefined;
+  // A rostered viewer whose team rests this week is told so above the
+  // check-in for the match after it.
+  const viewerTeam = teams.find((t) => myTeamIds.has(t.id));
+  const viewerByeWeek =
+    viewerTeam &&
+    !viewerTeam.withdrawn &&
+    (season.status === "REGULAR_SEASON" || season.status === "DRAFT")
+      ? teamByeWeek(matches, viewerTeam.id, scheduleNow)
+      : null;
+  // A captain whose fixture outlived the automatic result check is asked to
+  // report it, on the row and at the top of the page; everyone else keeps
+  // the row's plain "Awaiting result".
+  const captainTeamIds = new Set(
+    viewer ? teams.filter((t) => t.captainId === viewer.id).map((t) => t.id) : [],
+  );
+  const reportDue = captainOverdueResults(
+    matches,
+    captainTeamIds,
+    season.status,
+    freshFrom,
+  );
+  const reportDueIds = new Set(reportDue.map((m) => m.id));
   const myRsvp = myNextMatch
     ? ((rsvpsByMatch.get(myNextMatch.id) ?? []).find(
         (r) => r.userId === viewer!.id,
@@ -362,6 +398,10 @@ export default async function SchedulePage() {
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
   );
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
+  // Before the first fixture is published there is nothing to rank or cross-
+  // reference: the standings would be every team on zero points, and the
+  // head-to-head grid a sheet of dashes.
+  const hasFixtures = regular.length > 0;
   const status = regularSeasonStatus(matches);
   const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
   const progress = leagueProgress(matches, scheduleNow);
@@ -411,10 +451,8 @@ export default async function SchedulePage() {
           }
         : undefined,
       done: m.status === "COMPLETED",
-      awaitingResult:
-        m.status === "SCHEDULED" &&
-        m.scheduledAt != null &&
-        m.scheduledAt.getTime() < freshFrom,
+      awaitingResult: resultOverdue(m, freshFrom),
+      reportResult: reportDueIds.has(m.id),
       forfeit: m.forfeit,
       live: m.status === "LIVE",
       homeWin: m.winnerTeamId === m.homeTeamId,
@@ -534,16 +572,66 @@ export default async function SchedulePage() {
     (d) => fmtWhen(d) ?? "",
     teamLogoUrl,
   );
+  const bracketFoldsOnPhones = bracketColumnCount(bracketRoundsView) > 1;
   const postseasonPhase =
     season.status === "PLAYOFFS" || season.status === "COMPLETE";
+  const showTiebreakers =
+    tiebreakers.length > 0 ||
+    (status.allComplete && playoffField.seedingDeadHeatTeamIds.length > 0);
+  // Once the playoffs start, a finished tiebreaker is history: it folds to
+  // one line of results below the standings instead of sitting mid-page.
+  const tiebreakersSettled =
+    postseasonPhase &&
+    !tiebreakerBrackets.error &&
+    tiebreakerBrackets.groups.length > 0 &&
+    tiebreakerBrackets.groups.every((bracket) => bracket.status === "resolved");
+  const tiebreakerBody = (
+    <>
+      {tiebreakerBrackets.groups.map((bracket) => (
+        <TiebreakerBracket key={bracket.key} bracket={bracket} teams={teams} postseasonStarted={postseasonPhase} />
+      ))}
+      {tiebreakerBrackets.error && season.status !== "REGULAR_SEASON" ? (
+        <p className="text-sm text-accent">The tiebreaker bracket needs an administrator’s review. Recorded matches are available below.</p>
+      ) : null}
+      {tiebreakerWeekViews.length > 0 ? (
+        <details data-testid="tiebreaker-match-details" className="rounded-xl border border-line p-4">
+          <summary className="cursor-pointer text-sm font-medium text-info">Match details &amp; check-in</summary>
+          <p className="mb-4 mt-2 text-xs text-muted">Published matches only. Later games are added as their teams are decided.</p>
+          <ScheduleWeeks
+            weeks={tiebreakerWeekViews}
+            teams={teams.map((team) => ({
+              id: team.id,
+              name: team.name,
+              logoUrl: team.logoUrl,
+            }))}
+            initialTeamId={[...myTeamIds][0]}
+          />
+        </details>
+      ) : (
+        <p className="text-sm text-muted">
+          An administrator will schedule the required tiebreaker matches
+          before the playoff bracket starts.
+        </p>
+      )}
+    </>
+  );
   const postseasonSection = postseasonPhase ? (
     <section id="playoff-bracket" className="scroll-mt-20 space-y-4">
       <SectionTitle>Playoff bracket</SectionTitle>
       {playoff.length > 0 ? (
         <>
           {/* Bracket owns horizontal scrolling; the card clips its intrinsic
-              desktop width so phones never gain document-level overflow. */}
-          <Card className="overflow-hidden">
+              desktop width so phones never gain document-level overflow.
+              A bracket with wings is wider than a phone, so below tablet
+              width the round list leads and the drawn bracket folds away
+              under it. The final alone fits, so it always shows. */}
+          <Card
+            className={
+              bracketFoldsOnPhones
+                ? "hidden overflow-hidden md:block"
+                : "overflow-hidden"
+            }
+          >
             <CardBody className="p-0 pt-4">
               <Bracket
                 rounds={bracketRoundsView}
@@ -553,6 +641,21 @@ export default async function SchedulePage() {
           </Card>
           {playoffRoundViews.length > 0 ? (
             <ScheduleWeeks weeks={playoffRoundViews} teams={[]} />
+          ) : null}
+          {bracketFoldsOnPhones ? (
+            <div className="md:hidden">
+              <AnalysisDisclosure
+                title="Full bracket"
+                description="Every round side by side. Tap a team to trace its path to the final."
+              >
+                <div className="min-w-0 overflow-hidden">
+                  <Bracket
+                    rounds={bracketRoundsView}
+                    championTeamId={championPresentation.championTeamId}
+                  />
+                </div>
+              </AnalysisDisclosure>
+            </div>
           ) : null}
         </>
       ) : (
@@ -588,6 +691,22 @@ export default async function SchedulePage() {
     </section>
   ) : null;
 
+  const sortedTeams = [...teams]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((t) => ({ id: t.id, name: t.name, logoUrl: t.logoUrl }));
+  const regularWeeks = (
+    <ScheduleWeeks
+      weeks={orderScheduleWeeks(weekViews, progress.focusWeek)}
+      initialTeamId={[...myTeamIds][0]}
+      teams={sortedTeams}
+    />
+  );
+  const hasTimes = matches.some((m) => m.scheduledAt);
+  const calendarTeams = sortedTeams.map(({ id, name }) => ({ id, name }));
+  const matchNight =
+    season.matchSchedule?.trim() ||
+    (MATCH_SCHEDULE.announced ? MATCH_SCHEDULE.label : null);
+
   return (
     <div className="space-y-6">
       <PageTitle
@@ -596,63 +715,38 @@ export default async function SchedulePage() {
             ? "Season results"
             : season.status === "PLAYOFFS"
               ? "Playoffs"
-              : "Schedule & Standings"
+              : hasFixtures
+                ? "Schedule & Standings"
+                : "Schedule"
         }
-        subtitle={`${season.name} · Local kickoff times`}
+        // The week and the series count stand in for the progress ring the
+        // home page carries: this page leads with the fixtures themselves.
+        // The weekly slot is quoted in the league's zone; each fixture's own
+        // kickoff renders in the reader's.
+        subtitle={[
+          season.name,
+          season.status === "REGULAR_SEASON" ? progressSummary(progress) : null,
+          hasTimes && season.status !== "COMPLETE" && matchNight
+            ? `Match night ${matchNight}`
+            : null,
+          hasTimes ? "Kickoffs shown in your time zone" : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         action={
-          <div className="flex flex-wrap items-center gap-3">
-            {currentWeek != null ? (
-              <a href="#this-week" className={buttonClasses("secondary", "sm")}>
-                This week ↓
-              </a>
-            ) : null}
-            {matches.some((m) => m.scheduledAt) ? (
-              <>
-                <a
-                  href={calendarFeedLinks().subscribe}
-                  className={buttonClasses("secondary", "sm")}
-                  title="Add the league calendar to your calendar app — moved matches update on their own"
-                >
-                  Subscribe ↗
-                </a>
-                <a
-                  href="/api/calendar"
-                  className={buttonClasses("secondary", "sm")}
-                  title="Download the active season's calendar feed"
-                >
-                  Calendar ↗
-                </a>
-              </>
-            ) : null}
-          </div>
+          hasTimes ? (
+            <AddToCalendar
+              site={resolveSiteUrl()}
+              teams={calendarTeams}
+              initialTeamId={[...myTeamIds][0]}
+            />
+          ) : undefined
         }
       />
 
-      {regular.length > 0 ? (
-        <Card>
-          <CardBody className="p-4 sm:p-5">
-            <RegularSeasonProgress progress={progress} />
-          </CardBody>
-        </Card>
+      {viewerByeWeek != null ? (
+        <ByeWeekNote week={viewerByeWeek} who="Your team" />
       ) : null}
-
-      <nav
-        aria-label="Schedule sections"
-        className="flex flex-wrap gap-2 rounded-xl border border-line bg-surface p-2 text-sm"
-      >
-        <a
-          href="#fixtures"
-          className="inline-flex min-h-11 items-center rounded-lg px-3 font-medium text-muted hover:bg-surface-2 hover:text-fg"
-        >
-          Matches & results
-        </a>
-        <a
-          href="#standings"
-          className="inline-flex min-h-11 items-center rounded-lg px-3 font-medium text-muted hover:bg-surface-2 hover:text-fg"
-        >
-          Standings & analysis
-        </a>
-      </nav>
 
       {myNextMatch ? (
         <CheckinBanner
@@ -664,6 +758,21 @@ export default async function SchedulePage() {
           whenTs={myNextMatch.scheduledAt?.getTime()}
           myRsvp={myRsvp}
           detailsHref={`/matches/${myNextMatch.id}`}
+        />
+      ) : null}
+
+      {reportDue.length > 0 ? (
+        <ReportResultPrompt
+          match={reportDue[0]}
+          more={reportDue.length - 1}
+          label={matchRoundLabel(reportDue[0], playoffGrouping.totalRounds)}
+          opponent={
+            teamName.get(
+              captainTeamIds.has(reportDue[0].homeTeamId)
+                ? reportDue[0].awayTeamId
+                : reportDue[0].homeTeamId,
+            ) ?? "your opponent"
+          }
         />
       ) : null}
 
@@ -730,8 +839,7 @@ export default async function SchedulePage() {
 
       {postseasonSection}
 
-      {tiebreakers.length > 0 ||
-      (status.allComplete && playoffField.seedingDeadHeatTeamIds.length > 0) ? (
+      {showTiebreakers && !tiebreakersSettled ? (
         <section id="tiebreakers" className="scroll-mt-24 space-y-4">
           <SectionTitle>Tiebreaker bracket</SectionTitle>
           {season.status === "REGULAR_SEASON" ? (
@@ -744,145 +852,138 @@ export default async function SchedulePage() {
               scheduleLink={false}
             />
           ) : null}
-          {tiebreakerBrackets.groups.map((bracket) => (
-            <TiebreakerBracket key={bracket.key} bracket={bracket} teams={teams} postseasonStarted={season.status === "PLAYOFFS" || season.status === "COMPLETE"} />
-          ))}
-          {tiebreakerBrackets.error && season.status !== "REGULAR_SEASON" ? (
-            <p className="text-sm text-accent">The tiebreaker bracket needs an administrator’s review. Recorded matches are available below.</p>
-          ) : null}
-          {tiebreakerWeekViews.length > 0 ? (
-            <details data-testid="tiebreaker-match-details" className="rounded-xl border border-line p-4">
-              <summary className="cursor-pointer text-sm font-medium text-info">Match details &amp; check-in</summary>
-              <p className="mb-4 mt-2 text-xs text-muted">Published matches only. Later games are added as their teams are decided.</p>
-              <ScheduleWeeks
-                weeks={tiebreakerWeekViews}
-                teams={teams.map((team) => ({
-                  id: team.id,
-                  name: team.name,
-                  logoUrl: team.logoUrl,
-                }))}
-                initialTeamId={[...myTeamIds][0]}
-              />
-            </details>
-          ) : (
-            <p className="text-sm text-muted">
-              An administrator will schedule the required tiebreaker matches
-              before the playoff bracket starts.
-            </p>
-          )}
+          {tiebreakerBody}
         </section>
       ) : null}
 
-      <div id="fixtures" className="scroll-mt-24 space-y-8">
-        <section className="space-y-4">
-          <SectionTitle>Regular season</SectionTitle>
-          {regular.length === 0 ? (
-            (() => {
-              const copy = emptyScheduleCopy(season.status, draft?.status);
-              return (
-                <EmptyState
-                  title={copy.title}
-                  description={copy.description}
-                  action={
-                    viewer?.role === "ADMIN" ? (
-                      <Link
-                        href="/admin#adm-schedule"
-                        className="text-sm text-info hover:underline"
-                      >
-                        Open schedule controls →
-                      </Link>
-                    ) : undefined
-                  }
-                />
-              );
-            })()
-          ) : (
-            <>
-              <ScheduleWeeks
-                weeks={[...weekViews].sort(
-                  (a, b) =>
-                    Number(b.isCurrent) - Number(a.isCurrent) ||
-                    a.week - b.week,
-                )}
-                initialTeamId={[...myTeamIds][0]}
-                teams={[...teams]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((t) => ({
-                    id: t.id,
-                    name: t.name,
-                    logoUrl: t.logoUrl,
-                  }))}
-              />
-            </>
-          )}
-        </section>
-      </div>
-
-      <AnalysisDisclosure title="Match times & calendar help">
-        <ScheduleCallout
-          label={season.matchSchedule}
-          description={calloutDescription(season.status)}
-        />
-        <p className="text-sm leading-relaxed text-muted">
-          The time on each fixture is its published kickoff. A time-change
-          request is only a proposal until accepted. Open a match for check-in,
-          rescheduling, and result details.
-        </p>
-        <p className="text-sm leading-relaxed text-muted">
-          Subscribing keeps your calendar in step when a match moves. A
-          downloaded file is a one-time copy.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <a
-            href={calendarFeedLinks().subscribe}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Subscribe in your calendar app
-          </a>
-          <a href="/api/calendar" className={buttonClasses("secondary", "sm")}>
-            Download league calendar (.ics)
-          </a>
-        </div>
-      </AnalysisDisclosure>
-
-      <Card id="standings" className="scroll-mt-24">
-        <CardHeader
-          headingLevel={2}
-          title="Standings"
-          subtitle={
-            season.status === "REGULAR_SEASON"
-              ? `${playoffField.bracketSize} playoff places · ${playoffField.eligibleTeamIds.length} eligible teams`
-              : "Final regular-season table"
-          }
-        />
-        <CardBody className="p-0">
-          <StandingsTable
-            overview
-            standings={standings}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            eligibleTeams={playoffField.eligibleTeamIds.length}
-            withdrawnIds={
-              new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
-            }
-            formByTeam={teamForm}
-            playoffCut={
-              season.status === "REGULAR_SEASON"
-                ? playoffField.bracketSize
-                : undefined
-            }
-            playoffSeedByTeam={playoffField.seedByTeam}
-            unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
-            clinch={clinchFromReport(stakesReport)}
-            playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
-            viewerTeamId={[...myTeamIds][0]}
-            movement={standingsMovement(
-              teams.map((t) => t.id),
-              matches,
+      {postseasonPhase && hasFixtures ? (
+        // The playoffs lead the page; the finished regular season folds into
+        // one closed section so the standings stay close to the bracket.
+        <ScheduleFold
+          id="fixtures"
+          title="Regular-season results"
+          description={`${weeks.length} week${weeks.length === 1 ? "" : "s"} · ${status.completed} of ${status.total} series played`}
+        >
+          {regularWeeks}
+        </ScheduleFold>
+      ) : (
+        <div id="fixtures" className="scroll-mt-24 space-y-8">
+          <section className="space-y-4">
+            <SectionTitle>Regular season</SectionTitle>
+            {!hasFixtures ? (
+              (() => {
+                const copy = emptyScheduleCopy(season.status, draft?.status);
+                const showMatchNight =
+                  season.status === "SIGNUPS" ||
+                  season.status === "DRAFT" ||
+                  season.status === "REGULAR_SEASON";
+                const links = [
+                  teams.length > 0 ? (
+                    <Link
+                      key="teams"
+                      href="/teams"
+                      className={textLink("text-sm")}
+                    >
+                      See the teams →
+                    </Link>
+                  ) : null,
+                  viewer?.role === "ADMIN" ? (
+                    <Link
+                      key="admin"
+                      href="/admin#adm-schedule"
+                      className={textLink("text-sm")}
+                    >
+                      Open schedule controls →
+                    </Link>
+                  ) : null,
+                ].filter(Boolean);
+                return (
+                  <EmptyState
+                    title={copy.title}
+                    description={copy.description}
+                    action={
+                      showMatchNight || links.length > 0 ? (
+                        <div className="flex w-full max-w-md flex-col gap-3">
+                          {showMatchNight ? (
+                            <ScheduleCallout
+                              label={season.matchSchedule}
+                              description={calloutDescription(season.status)}
+                              className="text-left"
+                            />
+                          ) : null}
+                          {links.length > 0 ? (
+                            <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
+                              {links}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : undefined
+                    }
+                  />
+                );
+              })()
+            ) : (
+              regularWeeks
             )}
+          </section>
+        </div>
+      )}
+
+      {hasFixtures ? (
+        <Card id="standings" className="scroll-mt-24">
+          <CardHeader
+            headingLevel={2}
+            title="Standings"
+            subtitle={standingsCaption({
+              status,
+              postseason: postseasonPhase,
+              bracketSize: playoffField.bracketSize,
+              eligibleTeams: playoffField.eligibleTeamIds.length,
+            })}
           />
-        </CardBody>
-      </Card>
+          <CardBody className="p-0">
+            <StandingsTable
+              standings={standings}
+              teamName={teamName}
+              teamLogoUrl={teamLogoUrl}
+              eligibleTeams={playoffField.eligibleTeamIds.length}
+              withdrawnIds={
+                new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+              }
+              formByTeam={teamForm}
+              playoffCut={
+                season.status === "REGULAR_SEASON"
+                  ? playoffField.bracketSize
+                  : undefined
+              }
+              playoffSeedByTeam={playoffField.seedByTeam}
+              unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
+              clinch={clinchFromReport(stakesReport)}
+              playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
+              viewerTeamId={[...myTeamIds][0]}
+              movement={standingsMovement(
+                teams.map((t) => t.id),
+                matches,
+              )}
+            />
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {showTiebreakers && tiebreakersSettled ? (
+        <ScheduleFold
+          id="tiebreakers"
+          title="Tiebreaker bracket"
+          description={
+            tiebreakerResultLine(tiebreakerBrackets.groups) ??
+            "Settled before the playoffs"
+          }
+          rememberParam="tiebreaker"
+          openOnFilter={false}
+        >
+          <div className="space-y-4">{tiebreakerBody}</div>
+        </ScheduleFold>
+      ) : null}
 
       {season.status === "REGULAR_SEASON" &&
       playoffField.eligibleTeamIds.length > 2 &&
@@ -900,20 +1001,16 @@ export default async function SchedulePage() {
             unresolvedTeamIds={shownDeadHeatTeamIds}
             tiebreakerError={playoffField.tiebreakers.error}
           />
-          <RunIn
-            standings={playoffField.eligibleStandings}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            remaining={remainingSchedule(playoffField.eligibleTeamIds, matches)}
-            playoffCut={playoffField.bracketSize}
-          />
         </AnalysisDisclosure>
       ) : null}
 
-      {teams.length > 1 ? (
-        <AnalysisDisclosure title="Head-to-head results grid">
+      {hasFixtures && teams.length > 1 ? (
+        <AnalysisDisclosure
+          title="Head-to-head results grid"
+          description="Each row shows that team's results"
+        >
           <SeasonGrid
-            standings={standings}
+            teamIds={standings.map((s) => s.teamId)}
             teamName={teamName}
             teamLogoUrl={teamLogoUrl}
             matches={matches}
@@ -924,174 +1021,40 @@ export default async function SchedulePage() {
   );
 }
 
-// The season at a glance: a who's-played-who grid in standings order — every
-// cell is that meeting's result from the ROW team's side, linking to the
-// match. Wide by nature, so it scrolls inside its own container on phones.
-function SeasonGrid({
-  standings,
-  teamName,
-  teamLogoUrl,
-  matches,
+// A captain's own fixture that is past the automatic result check: say
+// which one, and send them straight to the match page's report tools.
+function ReportResultPrompt({
+  match,
+  more,
+  label,
+  opponent,
 }: {
-  standings: ReturnType<typeof computeStandings>;
-  teamName: Map<string, string>;
-  teamLogoUrl: Map<string, string | null>;
-  matches: CrossMatch[];
+  match: Match;
+  more: number;
+  label: string;
+  opponent: string;
 }) {
-  const order = standings.map((s) => s.teamId);
-  const table = crossTable(order, matches);
-  const rankOf = new Map(order.map((id, i) => [id, i + 1]));
-
-  const cellChip = (rowId: string, cell: CrossCell) => {
-    const rowName = teamName.get(rowId) ?? "?";
-    const label = cell.played
-      ? `${rowName} ${
-          cell.result === "W" ? "won" : cell.result === "L" ? "lost" : "drew"
-        } ${cell.score} in week ${cell.week}`
-      : cell.live
-        ? `Week ${cell.week} — series in progress`
-        : `Week ${cell.week} — not played yet`;
-    return (
-      <Link
-        key={cell.matchId}
-        href={`/matches/${cell.matchId}`}
-        aria-label={label}
-        title={label}
-        className={cn(
-          "flex min-h-12 min-w-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-transparent px-2 py-2 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
-          cell.result === "W" &&
-            "bg-success/15 text-success hover:bg-success/25",
-          cell.result === "L" && "bg-danger/10 text-danger-soft hover:bg-danger/20",
-          cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
-          !cell.played && "text-muted hover:text-info",
-        )}
-      >
-        <span className="text-xs font-semibold uppercase">
-          {cell.played ? cell.result : cell.live ? "Live" : `W${cell.week}`}
-        </span>
-        <span>{cell.played ? cell.score : "vs"}</span>
-      </Link>
-    );
-  };
-
   return (
-    // overflow-hidden on the CARD is load-bearing: Chrome adds the inner
-    // scroller's full table width to the page's scroll area through the
-    // card otherwise, giving every phone a 100px+ horizontal page scroll
-    // (caught by the mid-season mobile e2e). It also clips the table's
-    // square corners to the card radius while scrolling.
-    <Card className="overflow-hidden">
-      <CardHeader
-        title="Head-to-head results"
-        subtitle="Each row shows that team's results"
-      />
-      <CardBody className="overflow-x-auto p-0">
-        <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
-          <caption className="sr-only">
-            W = win, D = draw, L = loss. Scores are from the row team&apos;s
-            perspective.
-          </caption>
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-10 border-b border-line bg-surface px-4 py-2" />
-              {order.map((colId) => (
-                <th
-                  key={colId}
-                  scope="col"
-                  className="border-b border-line px-1.5 py-2 text-center"
-                >
-                  <Link
-                    href={`/teams/${colId}`}
-                    title={teamName.get(colId) ?? "?"}
-                    className="inline-flex min-h-11 min-w-6 flex-col items-center justify-center gap-1 py-1 -my-1"
-                  >
-                    <TeamCrest
-                      name={teamName.get(colId) ?? "?"}
-                      seed={colId}
-                      logoUrl={teamLogoUrl.get(colId)}
-                      size={22}
-                      className="rounded"
-                    />
-                    <span className="max-w-28 whitespace-normal text-xs font-medium">
-                      {teamName.get(colId)}
-                    </span>
-                    <span
-                      aria-hidden
-                      className="font-mono text-[10px] tabular-nums text-muted"
-                    >
-                      #{rankOf.get(colId)}
-                    </span>
-                  </Link>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {order.map((rowId) => (
-              <tr key={rowId}>
-                <th
-                  scope="row"
-                  className="sticky left-0 z-10 border-b border-line/60 bg-surface px-4 py-1.5 text-left font-normal"
-                >
-                  <Link
-                    href={`/teams/${rowId}`}
-                    className="flex min-h-11 min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
-                  >
-                    <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
-                      {rankOf.get(rowId)}
-                    </span>
-                    <TeamCrest
-                      name={teamName.get(rowId) ?? "?"}
-                      seed={rowId}
-                      logoUrl={teamLogoUrl.get(rowId)}
-                      size={20}
-                      className="shrink-0 rounded"
-                    />
-                    <span className="min-w-0 whitespace-normal text-xs [overflow-wrap:anywhere]">
-                      {teamName.get(rowId) ?? "?"}
-                    </span>
-                  </Link>
-                </th>
-                {order.map((colId) => {
-                  if (colId === rowId) {
-                    return (
-                      // Stays in the accessibility tree (empty, not
-                      // aria-hidden) so screen readers keep every row's
-                      // column mapping aligned with the header row.
-                      <td
-                        key={colId}
-                        className="border-b border-line/60 bg-surface-2/60 px-1.5 py-1.5"
-                      />
-                    );
-                  }
-                  const meetings = table.cells.get(rowId)!.get(colId)!;
-                  return (
-                    <td
-                      key={colId}
-                      className="border-b border-line/60 px-1.5 py-1.5 text-center align-middle"
-                    >
-                      {meetings.length === 0 ? (
-                        <span
-                          role="img"
-                          aria-label="No meeting scheduled"
-                          className="text-xs text-muted"
-                        >
-                          <span aria-hidden>—</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex flex-col gap-0.5">
-                          {meetings.map((cell) => cellChip(rowId, cell))}
-                        </span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </CardBody>
-    </Card>
+    <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+      <div className="min-w-[14rem] flex-1">
+        <div className="font-medium [overflow-wrap:anywhere]">
+          Your {label} result against {opponent} hasn&apos;t come through
+        </div>
+        <div className="text-muted">
+          It didn&apos;t import by itself. Report it from the match page
+          (auto-fetch, or paste the Dota match ID) so it counts.
+          {more > 0
+            ? ` ${more} more of your results ${more === 1 ? "is" : "are"} missing too; each is marked “Result needed” below.`
+            : ""}
+        </div>
+      </div>
+      <Link
+        href={`/matches/${match.id}#match-tools`}
+        className={buttonClasses("primary", "sm")}
+      >
+        Report result →
+      </Link>
+    </div>
   );
 }
 
@@ -1204,11 +1167,22 @@ function PlayoffPicture({
                     {teamName.get(n.teamId) ?? "?"}
                   </Link>
                   <div className="w-full">
-                    <PlayoffOutlook scenario={n.scenario} teamNames={teamName} />
+                    <PlayoffOutlook
+                      scenario={n.scenario}
+                      teamNames={teamName}
+                      compact
+                    />
                   </div>
                 </li>
               ))}
             </ul>
+            {/* One "How this works" for the whole tracker, not one per card. */}
+            <div className="mt-2">
+              <PlayoffOutlookFootnote
+                scenarios={raceNotes.map((n) => n.scenario)}
+                teamNames={teamName}
+              />
+            </div>
           </div>
         ) : null}
       </CardBody>
@@ -1246,91 +1220,5 @@ function ProjectedSide({
       />
       <span className="min-w-0 [overflow-wrap:anywhere]">{name}</span>
     </Link>
-  );
-}
-
-// Each team's remaining opponents in week order — the run-in a playoff race
-// is decided by. Opponent chips carry their current rank; playoff-bound
-// opponents (inside the cut) read as the tough dates.
-function RunIn({
-  standings,
-  teamName,
-  teamLogoUrl,
-  remaining,
-  playoffCut,
-}: {
-  standings: ReturnType<typeof computeStandings>;
-  teamName: Map<string, string>;
-  teamLogoUrl: Map<string, string | null>;
-  remaining: Map<string, { week: number; opponentId: string }[]>;
-  playoffCut: number;
-}) {
-  const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
-  const rows = standings.filter(
-    (s) => (remaining.get(s.teamId) ?? []).length > 0,
-  );
-  if (rows.length === 0) return null;
-  return (
-    <Card>
-      <CardHeader
-        headingLevel={2}
-        title="Remaining opponents"
-        subtitle="Opponents in week order · # = current rank"
-      />
-      <CardBody className="divide-y divide-line/60 p-0">
-        {rows.map((s) => (
-          <div
-            key={s.teamId}
-            className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-2.5 text-sm"
-          >
-            <Link
-              href={`/teams/${s.teamId}`}
-              className="flex w-full min-w-0 items-center gap-2 py-1 font-medium hover:text-info"
-            >
-              <TeamCrest
-                name={teamName.get(s.teamId) ?? "?"}
-                seed={s.teamId}
-                logoUrl={teamLogoUrl.get(s.teamId)}
-                size={20}
-                className="shrink-0 rounded"
-              />
-              <span className="min-w-0 [overflow-wrap:anywhere]">
-                {teamName.get(s.teamId) ?? "?"}
-              </span>
-            </Link>
-            <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {(remaining.get(s.teamId) ?? []).map((r) => {
-                const oppRank = rankOf.get(r.opponentId);
-                const tough = oppRank != null && oppRank <= playoffCut;
-                return (
-                  <Link
-                    key={`${r.week}-${r.opponentId}`}
-                    href={`/teams/${r.opponentId}`}
-                    title={`Week ${r.week} vs ${teamName.get(r.opponentId) ?? "?"} (currently #${oppRank})`}
-                    className={cn(
-                      // min-w-0 matters: a wrap-line chip wider than the
-                      // remaining row width must truncate, not push the page
-                      // wider (CLAUDE.md mobile rules — a long team name once
-                      // gave /schedule a 26px horizontal scroll on phones).
-                      "flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors hover:border-muted/70",
-                      tough
-                        ? "border-accent/40 text-fg"
-                        : "border-line text-muted",
-                    )}
-                  >
-                    <span className="font-mono text-[10px] tabular-nums">
-                      Week {r.week} · #{oppRank}
-                    </span>
-                    <span className="min-w-0 [overflow-wrap:anywhere]">
-                      {teamName.get(r.opponentId) ?? "?"}
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </CardBody>
-    </Card>
   );
 }

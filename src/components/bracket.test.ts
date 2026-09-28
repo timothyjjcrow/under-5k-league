@@ -59,6 +59,34 @@ describe("Bracket presentation", () => {
     expect(html).toMatch(/Away Team<\/span><span[^>]*>0<\/span>/);
   });
 
+  it("lets a long team name wrap to two lines instead of cutting it off", () => {
+    const longNames: BracketRound[] = [
+      {
+        name: "Semifinals",
+        slots: [
+          {
+            ...liveFinal,
+            id: "semi-1",
+            home: { teamId: "home", name: "Radiant Raiders Reborn", seed: 1 },
+          },
+          null,
+        ],
+      },
+      { name: "Final", slots: [null] },
+    ];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { rounds: longNames, championTeamId: null }),
+    );
+
+    expect(html).toMatch(
+      /<span class="[^"]*line-clamp-2[^"]*">Radiant Raiders Reborn<\/span>/,
+    );
+    expect(html).not.toMatch(/truncate[^"]*">Radiant Raiders Reborn/);
+    // Equal rows keep a pair's midpoint on the next round's card when one
+    // slot grows to two lines.
+    expect(html).toContain("grid flex-1 auto-rows-fr");
+  });
+
   it("gives team toggles and match links complete accessible names", () => {
     const html = renderToStaticMarkup(
       createElement(Bracket, { rounds, championTeamId: null }),

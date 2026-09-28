@@ -38,3 +38,16 @@ export function leagueProgress(matches: SlateMatch[], nowMs: number) {
       : null,
   };
 }
+
+/**
+ * One line for a page subtitle: "Week 5 of 5 · 12 of 15 series played". The
+ * week names the league's current slate, so it drops out once no open fixture
+ * is still current (every result in, or only overdue results left).
+ */
+export function progressSummary(progress: ReturnType<typeof leagueProgress>) {
+  if (!progress.total) return null;
+  const played = `${progress.completed} of ${progress.total} series played`;
+  return progress.focusWeek != null
+    ? `Week ${progress.focusWeek} of ${progress.totalWeeks} · ${played}`
+    : played;
+}
