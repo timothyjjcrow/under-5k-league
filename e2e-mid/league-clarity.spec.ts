@@ -47,7 +47,7 @@ test("home and schedule agree on progress and show one standings table with game
   }
   // The fixture's live/future matches are unfinished, not overdue results.
   await expect(
-    page.getByText("Results outstanding", { exact: true }),
+    page.getByText("Overdue results", { exact: true }),
   ).toHaveCount(0);
   noErrors();
 });

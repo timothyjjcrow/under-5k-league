@@ -428,4 +428,24 @@ describe("admin copy names only controls that exist", () => {
     expect(page).toContain("hasLeagueTicket: !!season.dotaLeagueId");
     expect(page).toContain("nextStep.ticketWarning");
   });
+
+  // The next step, the Schedule card and the Playoffs card all name how many
+  // regular results are missing. Only fixtures past kickoff count; the
+  // Playoffs card once printed every unplayed fixture ("3 still needed")
+  // beside the others' "1 outstanding".
+  it("the Playoffs card counts missing results from kickoff, like the others", () => {
+    const page = read("src/app/admin/page.tsx");
+    const card = page.slice(page.indexOf("function PlayoffControls("));
+    expect(card).toContain(
+      "const dueRegular = regularSeasonStatus(regularResultsDue(data.matches, nowMs));",
+    );
+    const box = card.slice(card.indexOf("dueRegular.pending > 0 ? ("));
+    expect(box.slice(0, 900)).toMatch(/⚠ \{dueRegular\.pending\} regular-season result/);
+    expect(page).toContain(
+      "const due = regularSeasonStatus(regularResultsDue(data.matches, nowMs));",
+    );
+    expect(page).toContain(
+      "outstandingRegularResults: regularResultsDue(data.matches, nowMs).length,",
+    );
+  });
 });

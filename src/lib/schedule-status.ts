@@ -86,6 +86,25 @@ export function pendingResultsMessage(status: RegularStatus): string | null {
 }
 
 /**
+ * /schedule's public banner: regular fixtures past the automatic import
+ * window (`windowHours` after kickoff) with no result. It names that window
+ * because /admin counts results from kickoff, and two different counts both
+ * called "outstanding" read as one fact that disagrees with itself.
+ */
+export function overdueResultsMessage(
+  status: RegularStatus,
+  windowHours: number,
+): string | null {
+  if (status.pending === 0) return null;
+  const n = status.pending;
+  const days = windowHours / 24;
+  const age = Number.isInteger(days)
+    ? `${days} day${days === 1 ? "" : "s"}`
+    : `${windowHours} hours`;
+  return `${n} regular-season ${n === 1 ? "match" : "matches"} kicked off over ${age} ago and ${n === 1 ? "has" : "have"} no result yet (${weekList(status.pendingWeeks)}).`;
+}
+
+/**
  * The Standings card's one-line caption, decided by what has been PLAYED
  * rather than by the phase name: a table of zeros is never "final", and the
  * table stops being a race once every regular result is in (or the playoffs

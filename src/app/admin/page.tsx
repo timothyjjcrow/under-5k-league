@@ -3818,6 +3818,7 @@ function PlayoffControls({
   const playoffField = projectPlayoffField(data.teams, data.matches);
   const bracketSize = playoffField.bracketSize;
   const status = regularSeasonStatus(data.matches);
+  const dueRegular = regularSeasonStatus(regularResultsDue(data.matches, nowMs));
   const teamNameById = new Map(data.teams.map((t) => [t.id, t.name]));
   const tiebreakerMatches = data.matches.filter(
     (m) => m.phase === "TIEBREAKER",
@@ -3949,12 +3950,19 @@ function PlayoffControls({
           </div>
         ) : null}
         {status.pending > 0 && playoffMatches.length === 0 ? (
-          regularResultsDue(data.matches, nowMs).length > 0 ? (
+          dueRegular.pending > 0 ? (
+            // The count past kickoff, like the next step and the Schedule
+            // card above: counting every unplayed fixture here asked for
+            // scores of games that kick off later tonight.
             <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
-              ⚠ {status.pending} regular-season result
-              {status.pending === 1 ? "" : "s"} still needed — the playoffs are
-              locked until every match is entered (
-              {weekList(status.pendingWeeks)}).
+              ⚠ {dueRegular.pending} regular-season result
+              {dueRegular.pending === 1 ? "" : "s"} past kickoff still needed (
+              {weekList(dueRegular.pendingWeeks)})
+              {status.pending > dueRegular.pending
+                ? `, ${status.pending - dueRegular.pending} still to play`
+                : ""}{" "}
+              — the playoffs are locked until every regular-season result is
+              in.
             </div>
           ) : (
             // Nothing is overdue: these fixtures just haven't been played, so

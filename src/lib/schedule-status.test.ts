@@ -4,6 +4,7 @@ import {
   nextRegularKickoff,
   regularResultsDue,
   regularSeasonStatus,
+  overdueResultsMessage,
   pendingResultsMessage,
   weekList,
   resultOverdue,
@@ -83,6 +84,25 @@ describe("pendingResultsMessage", () => {
         ]),
       ),
     ).toBe("4 regular-season matches still need results (weeks 3–5).");
+  });
+});
+
+describe("overdueResultsMessage", () => {
+  it("names the window it counts from, or is null when nothing is overdue", () => {
+    expect(overdueResultsMessage(regularSeasonStatus([]), 48)).toBeNull();
+    expect(
+      overdueResultsMessage(regularSeasonStatus([m(2, "SCHEDULED")]), 48),
+    ).toBe(
+      "1 regular-season match kicked off over 2 days ago and has no result yet (week 2).",
+    );
+    expect(
+      overdueResultsMessage(
+        regularSeasonStatus([m(3, "SCHEDULED"), m(4, "SCHEDULED")]),
+        36,
+      ),
+    ).toBe(
+      "2 regular-season matches kicked off over 36 hours ago and have no result yet (weeks 3–4).",
+    );
   });
 });
 

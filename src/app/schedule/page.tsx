@@ -51,7 +51,7 @@ import { formByTeam } from "@/lib/team-matches";
 import {
   captainOverdueResults,
   regularSeasonStatus,
-  pendingResultsMessage,
+  overdueResultsMessage,
   resultOverdue,
   standingsCaption,
 } from "@/lib/schedule-status";
@@ -416,8 +416,12 @@ export default async function SchedulePage() {
   const status = regularSeasonStatus(matches);
   const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
   const progress = leagueProgress(matches, scheduleNow);
-  const pendingMsg = pendingResultsMessage(
+  // Counted from the end of the automatic import window, the same one the
+  // rows' "Awaiting result" badge uses, and the copy says so: /admin counts
+  // results from kickoff, so an unlabeled count here disagreed with it.
+  const pendingMsg = overdueResultsMessage(
     regularSeasonStatus(progress.awaiting),
+    AUTO_SYNC.WINDOW_HOURS,
   );
   const untimedOpen = matches.filter(
     (m) => m.status === "SCHEDULED" && m.scheduledAt == null,
@@ -822,7 +826,7 @@ export default async function SchedulePage() {
         <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
           <span className="text-lg leading-none">⏳</span>
           <div>
-            <div className="font-medium">Results outstanding</div>
+            <div className="font-medium">Overdue results</div>
             <div className="text-muted">
               {`${pendingMsg} Standings & playoff seeding update once they're entered.`}
             </div>
