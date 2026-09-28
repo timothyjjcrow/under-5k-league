@@ -621,6 +621,23 @@ export function playerOutMessage(m: {
   return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
 }
 
+/**
+ * The answer to playerOutMessage: the player who said they couldn't make it
+ * now can. setAvailability sends it to the same captain, and only when that
+ * OUT was announced, so a captain still hunting for cover hears to stop.
+ */
+export function playerBackInMessage(
+  m: Parameters<typeof playerOutMessage>[0],
+): string {
+  const label = m.isTiebreaker
+    ? "tiebreaker match"
+    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const when =
+    m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
+  const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
+  return `✅ **${name(m.playerName)}** can make the ${label} after all — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. No need to find cover for them; if you already booked a standin, you can cancel that on the match page.${link}`;
+}
+
 /** One fixture of an away range, in playerOutMessage's own shape. */
 export type AwayFixtureAnnouncement = Omit<
   Parameters<typeof playerOutMessage>[0],
@@ -703,6 +720,27 @@ export function standinAssignedMessage(m: {
   return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page${link}`;
 }
 
+/**
+ * Why a booking ended, in a few plain words. A fixed list rather than free
+ * text: every path that cancels cover picks one, and nothing player-typed can
+ * reach the post through it.
+ */
+const STAND_DOWN_REASON = {
+  CAPTAIN_CANCELLED: "the team's captain cancelled the booking",
+  ADMIN_CANCELLED: "an admin cancelled the booking",
+  SEAT_FILLED: "the team signed a player for that seat",
+  PLAYER_RELEASED: "the covered player was released",
+  TEAM_WITHDREW: "a team withdrew from the season",
+  FORFEIT: "the match was ruled a forfeit",
+  SCHEDULE_REGENERATED: "the schedule was redone",
+  BRACKET_REBUILT: "the playoff bracket was redone",
+  BRACKET_WITHDRAWN: "the playoff bracket was withdrawn to fix the standings",
+  TIEBREAKER_RESET: "the tiebreaker week was reset",
+  DRAFT_RESET: "the draft was reset",
+} as const;
+
+type StandDownReason = keyof typeof STAND_DOWN_REASON;
+
 export function standinRemovedMessage(m: {
   standinName: string;
   teamName: string;
@@ -711,11 +749,14 @@ export function standinRemovedMessage(m: {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** Why the booking ended; omitted, the post just says to stand down. */
+  reason?: StandDownReason;
 }): string {
   const label = m.isTiebreaker
     ? "tiebreaker match"
     : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
-  return `🧩 **${name(m.standinName)}** is no longer standing in for **${name(m.teamName)}** (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) — stand down.`;
+  const why = m.reason ? ` (${STAND_DOWN_REASON[m.reason]})` : "";
+  return `🧩 **${name(m.standinName)}** is no longer standing in for **${name(m.teamName)}** (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) — stand down${why}.`;
 }
 
 export function rescheduleProposedMessage(m: {

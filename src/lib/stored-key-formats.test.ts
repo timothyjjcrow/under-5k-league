@@ -12,7 +12,11 @@ import {
   HONORS_FAILED_PREFIX,
   HONORS_STALE_PREFIX,
 } from "./announcement-marker";
-import { outPingPrefix, outPingThrottleKey } from "./availability";
+import {
+  outBackPingThrottleKey,
+  outPingPrefix,
+  outPingThrottleKey,
+} from "./availability";
 import { honorsClaimValue } from "./honors-service";
 import {
   draftPresenceKey,
@@ -64,6 +68,10 @@ describe("stored Setting key formats", () => {
     expect(outPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1"))).toBe(
       true,
     );
+    expect(outBackPingThrottleKey("m1", "u1")).toBe("outPing:m1:u1:back");
+    expect(
+      outBackPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1")),
+    ).toBe(true);
     const fixture = fixtureImportCooldownResource("m1");
     expect(fixture).toBe("fixture:m1");
     expect(providerCooldownResourcePrefix("open-dota-match-import", fixture)).toBe(

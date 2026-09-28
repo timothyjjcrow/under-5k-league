@@ -139,6 +139,79 @@ describe("captain standin assignment (integration)", () => {
     expect(res.ok && res.mentions).toEqual({ users: ["700000000000000002"] });
   });
 
+  // The captain was the one told to line up cover (the OUT ping). When an
+  // ADMIN books or cancels it, the captain hears it's handled (or open again);
+  // a captain acting on their own team isn't pinged about their own click.
+  it("an admin's cover change also mentions the covered team's captain", async () => {
+    const { home, homePlayer, sub, match } = await setup();
+    await prisma.user.update({
+      where: { id: sub.id },
+      data: { discordId: "700000000000000003" },
+    });
+    await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "700000000000000004" },
+    });
+    const admin = await makeUser("League Admin", "ADMIN");
+
+    const assigned = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: null,
+      actingUserId: admin.id,
+    });
+    expect(assigned.ok && assigned.mentions).toEqual({
+      users: ["700000000000000003", "700000000000000004"],
+    });
+
+    const row = await prisma.standinAssignment.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+    const removed = await removeStandinGuarded({
+      assignmentId: row.id,
+      actingCaptainId: null,
+      actingUserId: admin.id,
+    });
+    expect(removed.ok && removed.mentions).toEqual({
+      users: ["700000000000000003", "700000000000000004"],
+    });
+    expect(removed.ok && removed.announcement).toMatch(
+      /stand down \(an admin cancelled the booking\)\.$/,
+    );
+  });
+
+  it("a captain's own cover change doesn't ping them, even through the admin override", async () => {
+    const { home, homePlayer, sub, match } = await setup();
+    await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "700000000000000005" },
+    });
+    // An admin who captains the team uses the override path (actingCaptainId
+    // null) but is still the captain acting on their own team.
+    const assigned = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: null,
+      actingUserId: home.captainId,
+    });
+    expect(assigned.ok && assigned.mentions).toBeUndefined();
+
+    const row = await prisma.standinAssignment.findFirstOrThrow({
+      where: { matchId: match.id },
+    });
+    const removed = await removeStandinGuarded({
+      assignmentId: row.id,
+      actingCaptainId: home.captainId,
+      actingUserId: home.captainId,
+    });
+    expect(removed.ok && removed.mentions).toBeUndefined();
+    expect(removed.ok && removed.announcement).toMatch(
+      /stand down \(the team's captain cancelled the booking\)\.$/,
+    );
+  });
+
   it("a captain cannot arrange cover for the OTHER team (admins can)", async () => {
     const { home, awayPlayer, sub, match } = await setup();
     const wrong = await assignStandinGuarded({

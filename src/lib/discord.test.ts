@@ -34,6 +34,7 @@ import {
   draftReminderAnnouncement,
   captainAssignedMessage,
   playerAwayMessage,
+  playerBackInMessage,
   playerOutMessage,
   rescheduleDeclinedMessage,
   rescheduleProposedMessage,
@@ -1032,6 +1033,35 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
     expect(msg).not.toContain("week 9");
   });
 
+  it("tells the captain a player who said OUT can make it after all", () => {
+    const msg = playerBackInMessage({
+      playerName: "Dendi",
+      homeName: "Radiant Raccoons",
+      awayName: "Dire Wolves",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+      matchId: "m1",
+    });
+    expect(msg).toContain(
+      "**Dendi** can make the week 4 match after all — **Radiant Raccoons** vs **Dire Wolves** (<t:1800000000:F>).",
+    );
+    expect(msg).toContain("No need to find cover for them");
+    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>$/);
+    // Unscheduled and hand-built: no kickoff, no link.
+    const bare = playerBackInMessage({
+      playerName: "Puppey",
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      whenMs: null,
+    });
+    expect(bare).toContain("can make the playoff match after all");
+    expect(bare).not.toContain("<t:");
+    expect(bare).not.toContain("/matches/");
+  });
+
   it("pings a fresh reschedule proposal at the proposed reader-local time", () => {
     const msg = rescheduleProposedMessage({
       homeName: "A",
@@ -1592,6 +1622,28 @@ describe("standinRemovedMessage", () => {
     });
     expect(msg).toContain("Sub Sam");
     expect(msg).toContain("no longer standing in");
+    // No reason given: the post is exactly what it always was.
+    expect(msg).toMatch(/— stand down\.$/);
+  });
+
+  it("says in a few words why the booking ended", () => {
+    const base = {
+      standinName: "Sub Sam",
+      teamName: "Dire Straits",
+      homeName: "Roshan's Rejects",
+      awayName: "Dire Straits",
+      week: 4,
+      isPlayoff: false,
+    };
+    expect(standinRemovedMessage({ ...base, reason: "TEAM_WITHDREW" })).toMatch(
+      /— stand down \(a team withdrew from the season\)\.$/,
+    );
+    expect(
+      standinRemovedMessage({ ...base, reason: "ADMIN_CANCELLED" }),
+    ).toContain("stand down (an admin cancelled the booking).");
+    expect(
+      standinRemovedMessage({ ...base, reason: "CAPTAIN_CANCELLED" }),
+    ).toContain("stand down (the team's captain cancelled the booking).");
   });
 });
 
@@ -1705,6 +1757,15 @@ describe("no message unfurls a link preview", () => {
         week: 1,
         isPlayoff: false,
         whenMs: null,
+      }),
+      playerBackInMessage({
+        playerName: "A",
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
+        whenMs: null,
+        matchId: "m1",
       }),
       standinAssignedMessage({
         standinName: "S",
@@ -1865,6 +1926,14 @@ describe("no player-supplied name can inject markdown", () => {
       logoChanged: true,
     }),
     playerOutMessage({
+      playerName: EVIL,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      whenMs: null,
+    }),
+    playerBackInMessage({
       playerName: EVIL,
       homeName: EVIL,
       awayName: EVIL,

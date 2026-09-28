@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { claimThrottle, getSetting } from "@/lib/settings";
+import { claimThrottle, claimThrottleAnswer, getSetting } from "@/lib/settings";
 import { ON_POSTGRES, raceN } from "./factories";
 
 const NOW = Date.parse("2026-09-05T12:00:00.000Z");
 const INTERVAL_SECONDS = 60;
+
+// Test seam for claimThrottleAnswer: runs once, just before its first
+// value-scoped delete, i.e. between its read and its consume.
+let beforeSettingDelete: (() => Promise<void>) | null = null;
+prisma.$use(async (params, next) => {
+  if (params.model === "Setting" && params.action === "deleteMany" && beforeSettingDelete) {
+    const run = beforeSettingDelete;
+    beforeSettingDelete = null;
+    await run();
+  }
+  return next(params);
+});
 
 describe("durable throttle claims", () => {
   it("creates one claim and leaves fresh claims untouched through the exact expiry boundary", async () => {
@@ -115,5 +127,60 @@ describe("durable throttle claims", () => {
     await expect(claimThrottle("another", INTERVAL_SECONDS, NOW)).resolves.toBe(true);
     expect(await getSetting("unrelated")).toBe("preserved");
     expect(await prisma.setting.count()).toBe(3);
+  });
+});
+
+describe("answering a throttled announcement", () => {
+  const ANNOUNCED = "outPing:m1:u1";
+  const ANSWER = "outPing:m1:u1:back";
+
+  it("answers only an announcement that went out, and consumes it", async () => {
+    await expect(
+      claimThrottleAnswer(ANNOUNCED, ANSWER, INTERVAL_SECONDS, NOW),
+    ).resolves.toBe(false);
+    expect(await getSetting(ANSWER)).toBeNull();
+
+    await claimThrottle(ANNOUNCED, INTERVAL_SECONDS, NOW - 5_000);
+    await expect(
+      claimThrottleAnswer(ANNOUNCED, ANSWER, INTERVAL_SECONDS, NOW),
+    ).resolves.toBe(true);
+    expect(await getSetting(ANNOUNCED)).toBeNull();
+    expect(await getSetting(ANSWER)).toBe(new Date(NOW).toISOString());
+
+    // Consumed: the next announcement is free to go out again...
+    await expect(
+      claimThrottle(ANNOUNCED, INTERVAL_SECONDS, NOW + 1_000),
+    ).resolves.toBe(true);
+    // ...but a second answer inside the window is not.
+    await expect(
+      claimThrottleAnswer(ANNOUNCED, ANSWER, INTERVAL_SECONDS, NOW + 2_000),
+    ).resolves.toBe(false);
+    expect(await getSetting(ANNOUNCED)).toBe(new Date(NOW + 1_000).toISOString());
+  });
+
+  it("elects one answer when answers race", async () => {
+    await claimThrottle(ANNOUNCED, INTERVAL_SECONDS, NOW - 5_000);
+    const results = await raceN(8, () =>
+      claimThrottleAnswer(ANNOUNCED, ANSWER, INTERVAL_SECONDS, NOW),
+    );
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await getSetting(ANNOUNCED)).toBeNull();
+  });
+
+  it("stays quiet and hands its throttle back when the announcement is re-stamped mid-claim", async () => {
+    await prisma.setting.create({
+      data: { key: ANNOUNCED, value: new Date(NOW - 120_000).toISOString() },
+    });
+    beforeSettingDelete = async () => {
+      // A fresh announcement (the player went OUT again) lands in the gap.
+      await claimThrottle(ANNOUNCED, INTERVAL_SECONDS, NOW - 1_000);
+    };
+    await expect(
+      claimThrottleAnswer(ANNOUNCED, ANSWER, INTERVAL_SECONDS, NOW),
+    ).resolves.toBe(false);
+    expect(beforeSettingDelete).toBeNull();
+    expect(await getSetting(ANNOUNCED)).toBe(new Date(NOW - 1_000).toISOString());
+    // The answer throttle went back, so the next real answer can go out.
+    expect(await getSetting(ANSWER)).toBeNull();
   });
 });

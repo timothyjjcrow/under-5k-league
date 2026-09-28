@@ -129,6 +129,15 @@ export function outPingThrottleKey(matchId: string, userId: string): string {
 }
 
 /**
+ * The throttle behind "can make it after all", the answer to an OUT ping
+ * (setAvailability, via claimThrottleAnswer). Under outPingPrefix, so it is
+ * swept with the match like the OUT row it answers.
+ */
+export function outBackPingThrottleKey(matchId: string, userId: string): string {
+  return `${outPingThrottleKey(matchId, userId)}:back`;
+}
+
+/**
  * Every OUT-ping throttle row of one match (settings.ts sweeps them with its
  * season). Built here, beside the key, because this module is pure and a
  * client component imports it, so it cannot import settings.ts.

@@ -471,6 +471,39 @@ export async function claimThrottle(
 }
 
 /**
+ * Claim the right to ANSWER an earlier throttled announcement, such as "can
+ * make it after all" after an OUT ping. Only an announcement whose throttle
+ * row still exists can be answered, and a successful claim deletes that row
+ * (value-scoped), so the next real announcement goes out again. The answer has
+ * its own throttle at `answerKey`, claimed FIRST: losing that race never
+ * removes the announcement row without an answer being sent, and someone
+ * flipping back and forth gets at most one answer per interval.
+ */
+export async function claimThrottleAnswer(
+  announcedKey: string,
+  answerKey: string,
+  intervalSeconds: number,
+  nowMs: number,
+): Promise<boolean> {
+  const announced = await prisma.setting.findUnique({
+    where: { key: announcedKey },
+    select: { value: true },
+  });
+  if (!announced) return false;
+  if (!(await claimThrottle(answerKey, intervalSeconds, nowMs))) return false;
+  const consumed = await prisma.setting.deleteMany({
+    where: { key: announcedKey, value: announced.value },
+  });
+  if (consumed.count === 1) return true;
+  // The announcement was re-stamped (or answered) after our read: it is news
+  // again, so say nothing and hand the answer throttle back for next time.
+  await prisma.setting.deleteMany({
+    where: { key: answerKey, value: new Date(nowMs).toISOString() },
+  });
+  return false;
+}
+
+/**
  * Bump the league change cursor. Its historical name is retained because most
  * callers are result writers, but lifecycle handoffs use the same parked-tab
  * refresh channel: changing which season is active is at least as important

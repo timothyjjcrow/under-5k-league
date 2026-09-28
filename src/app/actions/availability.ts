@@ -9,6 +9,7 @@ import { str } from "@/lib/form";
 import {
   CHECKIN_REFUSAL_MESSAGE,
   checkinClosedReason,
+  outBackPingThrottleKey,
   outPingThrottleKey,
   parseAvailabilityStatus,
 } from "@/lib/availability";
@@ -25,11 +26,12 @@ import {
 } from "@/lib/availability-service";
 import {
   playerAwayMessage,
+  playerBackInMessage,
   playerOutMessage,
   sendDiscordMessage,
 } from "@/lib/discord";
 import { mentionUsers } from "@/lib/discord-mentions";
-import { claimThrottle } from "@/lib/settings";
+import { claimThrottle, claimThrottleAnswer } from "@/lib/settings";
 import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
 import { isPlayoffPhase } from "@/lib/league-lifecycle";
 import type { ActionResult } from "@/lib/action-result";
@@ -163,7 +165,26 @@ export async function setAvailability(
   // The throttle backs up the was-it-already-OUT check: that one misses
   // OUT→IN→OUT, which is a duplicate line in the channel but a SECOND phone
   // buzz now that the message actually mentions the captain.
+  //
+  // An IN after an ANNOUNCED OUT closes the loop: the same captain hears the
+  // player can make it after all, so they stop hunting for cover. It answers
+  // the OUT ping's own throttle row (claimThrottleAnswer), so an OUT nobody
+  // announced gets no answer, and a player flipping back and forth buzzes the
+  // captain at most once more per window.
   try {
+    const fixture = {
+      playerName: user.name,
+      homeName: match.homeTeam.name,
+      awayName: match.awayTeam.name,
+      week: match.week,
+      isPlayoff: isPlayoffPhase(match.phase),
+      isTiebreaker: match.phase === "TIEBREAKER",
+      whenMs: match.scheduledAt?.getTime() ?? null,
+      // Deep link — the mentioned captain lands on the page that holds the
+      // Standins card, not on the front door.
+      matchId: match.id,
+    };
+    let content: string | null = null;
     if (
       status === "OUT" &&
       priorStatus !== "OUT" &&
@@ -173,24 +194,28 @@ export async function setAvailability(
         Date.now(),
       ))
     ) {
-      // The message ends by telling the captain to line up cover, so send it
-      // to the captain rather than to a channel and hope. Nobody else is
-      // mentioned: a withdrawal is not the rest of the league's problem.
+      content = playerOutMessage(fixture);
+    } else if (
+      status === "IN" &&
+      priorStatus === "OUT" &&
+      (await claimThrottleAnswer(
+        outPingThrottleKey(matchId, user.id),
+        outBackPingThrottleKey(matchId, user.id),
+        RSVP_OUT_PING_THROTTLE_SECONDS,
+        Date.now(),
+      ))
+    ) {
+      content = playerBackInMessage(fixture);
+    }
+    if (content) {
+      // Both messages are for the captain who has to find (or stop finding)
+      // cover, so they go to that captain rather than to a channel and hope.
+      // Nobody else is mentioned: a withdrawal is not the rest of the
+      // league's problem.
       await sendDiscordMessage(
-        playerOutMessage({
-          playerName: user.name,
-          homeName: match.homeTeam.name,
-          awayName: match.awayTeam.name,
-          week: match.week,
-          isPlayoff: isPlayoffPhase(match.phase),
-          isTiebreaker: match.phase === "TIEBREAKER",
-          whenMs: match.scheduledAt?.getTime() ?? null,
-          // Deep link — the mentioned captain lands on the page that holds the
-          // Standins card, not on the front door.
-          matchId: match.id,
-        }),
-        // Never ping the captain about their OWN withdrawal — they just
-        // clicked the button and are looking at the toast.
+        content,
+        // Never ping the captain about their OWN answer — they just clicked
+        // the button and are looking at the toast.
         await mentionUsers([
           affectedCaptainId === user.id ? null : affectedCaptainId,
         ]),

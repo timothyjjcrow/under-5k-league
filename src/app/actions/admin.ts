@@ -2746,6 +2746,7 @@ export async function abortDraftAction(
         awayName: a.awayName,
         week: a.week,
         isPlayoff: a.isPlayoff,
+        reason: "DRAFT_RESET",
       }),
       mentionsOf([a.discordId]),
     );
@@ -3201,6 +3202,7 @@ export async function generateSchedule(
         awayName: a.awayName,
         week: a.week,
         isPlayoff: false,
+        reason: "SCHEDULE_REGENERATED",
       }),
       mentionsOf([a.discordId]),
     );
@@ -3348,6 +3350,7 @@ export async function startPlayoffs(
         awayName: a.awayName,
         week: a.week,
         isPlayoff: true,
+        reason: "BRACKET_REBUILT",
       }),
       mentionsOf([a.discordId]),
     );
@@ -3455,6 +3458,7 @@ export async function returnToRegularSeasonAction(
         awayName: assignment.awayName,
         week: assignment.week,
         isPlayoff: true,
+        reason: "BRACKET_WITHDRAWN",
       }),
       mentionsOf([assignment.discordId]),
     );
@@ -3818,6 +3822,7 @@ export async function recordResult(
         week: outcome.week,
         isPlayoff: isPlayoffPhase(outcome.phase),
         isTiebreaker: outcome.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "FORFEIT",
       }),
       mentionsOf([booking.standin.discordId]),
     );
@@ -4211,6 +4216,7 @@ export async function signFreeAgent(
         week: a.match.week,
         isPlayoff: isPlayoffPhase(a.match.phase),
         isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "SEAT_FILLED",
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4499,6 +4505,7 @@ export async function releasePlayer(
         week: a.match.week,
         isPlayoff: isPlayoffPhase(a.match.phase),
         isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "PLAYER_RELEASED",
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4806,6 +4813,7 @@ export async function withdrawTeam(
         week: a.match.week,
         isPlayoff: isPlayoffPhase(a.match.phase),
         isTiebreaker: a.match.phase === MATCH_PHASE.TIEBREAKER,
+        reason: "TEAM_WITHDREW",
       }),
       mentionsOf([a.standin.discordId]),
     );
@@ -4922,8 +4930,9 @@ export async function assignStandin(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let admin: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    admin = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
@@ -4937,6 +4946,7 @@ export async function assignStandin(
     replacingUserId: seat ? null : target,
     teamId: seat ?? undefined,
     actingCaptainId: null, // admin override — either team
+    actingUserId: admin.id,
   });
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
@@ -4960,14 +4970,16 @@ export async function removeStandin(
   _prev: ActionResult,
   formData: FormData,
 ): Promise<ActionResult> {
+  let admin: Awaited<ReturnType<typeof requireAdmin>>;
   try {
-    await requireAdmin();
+    admin = await requireAdmin();
   } catch {
     return { error: "Not authorized" };
   }
   const res = await removeStandinGuarded({
     assignmentId: str(formData, "assignmentId"),
     actingCaptainId: null,
+    actingUserId: admin.id,
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
