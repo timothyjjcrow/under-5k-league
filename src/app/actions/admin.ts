@@ -5758,6 +5758,8 @@ export async function setWeekNight(
     currentRetimed: number;
     laterRetimed: number;
     retimedIds: string[];
+    /** Retimed fixtures that had no kickoff before (announced as "set"). */
+    firstTimeIds: string[];
     rsvps: number;
     proposals: number;
     hadCanonicalNight: boolean;
@@ -5855,6 +5857,7 @@ export async function setWeekNight(
             currentRetimed: 0,
             laterRetimed: 0,
             retimedIds: [],
+            firstTimeIds: [],
             rsvps: 0,
             proposals: 0,
             hadCanonicalNight: current != null,
@@ -5934,6 +5937,9 @@ export async function setWeekNight(
           currentRetimed: currentMoves.length,
           laterRetimed: laterMoves.length,
           retimedIds,
+          firstTimeIds: moves
+            .filter(({ match }) => match.scheduledAt == null)
+            .map(({ match }) => match.id),
           rsvps: rsvps.count,
           proposals: proposals.count,
           hadCanonicalNight: current != null,
@@ -6016,7 +6022,11 @@ export async function setWeekNight(
     outcome.retimedIds,
   );
   refresh();
-  const announced = await announceAdminRetime(outcome.retimedIds, outcome.rsvps);
+  const announced = await announceAdminRetime(
+    outcome.retimedIds,
+    outcome.rsvps,
+    outcome.firstTimeIds,
+  );
   return {
     ok: true,
     message:
@@ -6062,6 +6072,8 @@ export async function setMatchTime(
     seasonId: string;
     rsvps: number;
     proposals: number;
+    /** The fixture had no kickoff before: announced as "set", not "moved". */
+    firstTime: boolean;
   };
   try {
     outcome = await prisma.$transaction(
@@ -6120,6 +6132,7 @@ export async function setMatchTime(
             seasonId: currentSeason.id,
             rsvps: 0,
             proposals: 0,
+            firstTime: false,
           };
         }
         const scrimClash = scheduledAt
@@ -6171,6 +6184,7 @@ export async function setMatchTime(
           seasonId: currentSeason.id,
           rsvps: rsvps.count,
           proposals: proposals.count,
+          firstTime: before.scheduledAt == null,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -6223,7 +6237,11 @@ export async function setMatchTime(
   const clashes = scheduledAt
     ? await clashesAfterRetime(outcome.seasonId, [matchId])
     : [];
-  const announced = await announceAdminRetime([matchId], outcome.rsvps);
+  const announced = await announceAdminRetime(
+    [matchId],
+    outcome.rsvps,
+    outcome.firstTime ? [matchId] : [],
+  );
   return {
     message: `${
       scheduledAt

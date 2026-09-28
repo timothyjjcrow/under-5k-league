@@ -2534,6 +2534,40 @@ describe("adminRetimeMessage", () => {
     expect(msg).toMatch(/\/schedule>$/);
   });
 
+  it("says a first-ever kickoff is set, not moved", () => {
+    const msg = adminRetimeMessage({
+      moves: [{ ...move(1), firstTime: true }],
+      clearedRsvps: 0,
+    });
+    expect(msg).toContain(
+      "🗓️ **Kickoff set** — Week 3: **Home 1** vs **Away 1** plays <t:1800000060:F> (set by an admin).",
+    );
+    expect(msg).not.toMatch(/moved/i);
+  });
+
+  it("announces a week getting its first times as kickoffs set", () => {
+    const msg = adminRetimeMessage({
+      moves: [1, 2, 3].map((i) => ({ ...move(i), firstTime: true })),
+      clearedRsvps: 0,
+    });
+    expect(msg).toMatch(
+      /^🗓️ \*\*Kickoffs set\*\* by an admin — 3 matches now have kickoff times:\n/,
+    );
+    expect(msg).toContain("• Week 3: **Home 1** vs **Away 1** — <t:1800000060:F>\n");
+    expect(msg).not.toMatch(/moved/i);
+  });
+
+  it("marks which lines moved when a post mixes first times and moves", () => {
+    const msg = adminRetimeMessage({
+      moves: [{ ...move(1), firstTime: true }, move(2), move(3, null)],
+      clearedRsvps: 0,
+    });
+    expect(msg).toMatch(/^🗓️ \*\*Schedule updated\*\* by an admin — 1 new kickoff and 2 moved:/);
+    expect(msg).toContain("**Away 1** — <t:1800000060:F>\n");
+    expect(msg).toContain("**Away 2** — <t:1800000120:F> (moved)\n");
+    expect(msg).toContain("**Away 3** — unscheduled for now\n");
+  });
+
   it("labels playoff and tiebreaker fixtures", () => {
     expect(adminRetimeMessage({ moves: [{ ...move(1), isPlayoff: true }], clearedRsvps: 0 }))
       .toContain("Playoffs:");

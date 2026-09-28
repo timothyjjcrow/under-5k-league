@@ -11,6 +11,9 @@ import { isPlayoffPhase } from "./league-lifecycle";
 export async function announceAdminRetime(
   matchIds: string[],
   clearedRsvps: number,
+  /** Fixtures that had no kickoff before this change: their time is "set",
+   *  not "moved". Only the caller knows; the rows are read after the write. */
+  firstTimeIds: string[] = [],
 ): Promise<boolean> {
   if (matchIds.length === 0) return false;
   try {
@@ -38,6 +41,7 @@ export async function announceAdminRetime(
         isPlayoff: isPlayoffPhase(match.phase),
         isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
         whenMs: match.scheduledAt?.getTime() ?? null,
+        firstTime: firstTimeIds.includes(match.id),
       })),
     });
     // Both captains of every moved fixture, plus anyone booked to stand in:

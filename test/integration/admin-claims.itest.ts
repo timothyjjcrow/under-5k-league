@@ -801,6 +801,62 @@ describe("admin retimes announce on Discord", () => {
     expect(content.match(/<t:\d+:F>/g)?.length).toBe(2);
   });
 
+  it("setMatchTime on a fixture with no time says the kickoff is set, not moved", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const target = matches[0];
+    await prisma.match.update({
+      where: { id: target.id },
+      data: { scheduledAt: null },
+    });
+    const send = vi.mocked(sendDiscordMessage);
+    send.mockClear();
+
+    const when = new Date(Date.now() + 6 * 864e5);
+    await setMatchTime(
+      {},
+      fd({
+        matchId: target.id,
+        expectedActiveSeasonId: season.id,
+        scheduledAt: when.toISOString(),
+        scheduledAtTs: String(when.getTime()),
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const [content] = send.mock.calls[0];
+    expect(content).toContain("Kickoff set");
+    expect(content).toContain(`plays <t:${Math.floor(when.getTime() / 1000)}:F>`);
+    expect(content).not.toMatch(/moved/i);
+  });
+
+  it("setWeekNight on an untimed week says the kickoffs are set", async () => {
+    const { season, matches } = await seasonWithMatches();
+    const week = matches[0].week;
+    await prisma.match.updateMany({
+      where: { seasonId: season.id, week },
+      data: { scheduledAt: null },
+    });
+    const send = vi.mocked(sendDiscordMessage);
+    send.mockClear();
+
+    const night = new Date(Date.now() + 5 * 864e5);
+    await setWeekNight(
+      { message: "" },
+      fd({
+        expectedActiveSeasonId: season.id,
+        week: String(week),
+        night: night.toISOString(),
+        nightTs: String(night.getTime()),
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const [content] = send.mock.calls[0];
+    expect(content).toContain("Kickoffs set");
+    expect(content).toContain("2 matches now have kickoff times");
+    expect(content).not.toMatch(/moved/i);
+  });
+
   it("an unchanged kickoff posts nothing", async () => {
     const { season, matches } = await seasonWithMatches();
     const target = matches[0];

@@ -1304,6 +1304,10 @@ export type AdminRetimeMove = {
   isTiebreaker?: boolean;
   /** Epoch ms of the new kickoff; null when the admin CLEARED the time. */
   whenMs: number | null;
+  /** The fixture had no kickoff before this change, so its time is SET, not
+   *  moved: calling a first-ever time a move sends players looking for an
+   *  earlier time they never had. */
+  firstTime?: boolean;
 };
 
 const ADMIN_RETIME_MAX_LINES = 10;
@@ -1311,7 +1315,9 @@ const ADMIN_RETIME_MAX_LINES = 10;
 /**
  * An admin retime (Set time, or the week mover). Captain-agreed reschedules
  * always announced; admin moves said nothing, so the only sign a fixture had
- * moved was an empty check-in banner. Kickoffs render as `<t:…:F>`.
+ * moved was an empty check-in banner. Kickoffs render as `<t:…:F>`. A fixture
+ * getting its first time (fixtures generated without times, then a match
+ * night set) reads "Kickoff set"; "moved" is kept for a time that existed.
  */
 export function adminRetimeMessage(m: {
   moves: AdminRetimeMove[];
@@ -1329,19 +1335,38 @@ export function adminRetimeMessage(m: {
     ? ` Check-ins were reset (${m.clearedRsvps} cleared) — everyone please RSVP again.`
     : "";
   const site = resolveSiteUrl();
+  // Clearing a time is never a first time: there was one to clear.
+  const isSet = (move: AdminRetimeMove) =>
+    !!move.firstTime && move.whenMs != null;
   if (m.moves.length === 1) {
     const [move] = m.moves;
+    if (isSet(move)) {
+      return `🗓️ **Kickoff set** — ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** plays ${when(move)} (set by an admin).${reset} <${site}/matches/${move.matchId}>`;
+    }
     const what = move.whenMs == null ? "is" : "now plays";
     return `🗓️ **Kickoff moved** — ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** ${what} ${when(move)} (set by an admin).${reset} <${site}/matches/${move.matchId}>`;
   }
+  const setCount = m.moves.filter(isSet).length;
+  const movedCount = m.moves.length - setCount;
+  const mixed = setCount > 0 && movedCount > 0;
   const shown = m.moves.slice(0, ADMIN_RETIME_MAX_LINES);
   const lines = shown.map(
     (move) =>
-      `• ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** — ${when(move)}`,
+      `• ${label(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** — ${when(move)}${
+        // Only a mixed post needs to say which lines moved; in the others
+        // the header already says it for every line.
+        mixed && !isSet(move) && move.whenMs != null ? " (moved)" : ""
+      }`,
   );
   const more = m.moves.length - shown.length;
   if (more > 0) lines.push(`• …and ${more} more`);
-  return `🗓️ **Schedule moved** by an admin — ${m.moves.length} matches have new kickoffs:\n${lines.join("\n")}\n${reset.trim() ? `${reset.trim()} ` : ""}Full schedule: <${site}/schedule>`;
+  const header =
+    movedCount === 0
+      ? `🗓️ **Kickoffs set** by an admin — ${setCount} matches now have kickoff times:`
+      : setCount === 0
+        ? `🗓️ **Schedule moved** by an admin — ${m.moves.length} matches have new kickoffs:`
+        : `🗓️ **Schedule updated** by an admin — ${setCount} new kickoff${setCount === 1 ? "" : "s"} and ${movedCount} moved:`;
+  return `${header}\n${lines.join("\n")}\n${reset.trim() ? `${reset.trim()} ` : ""}Full schedule: <${site}/schedule>`;
 }
 
 export function testMessage(): string {
