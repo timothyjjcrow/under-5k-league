@@ -209,6 +209,10 @@ describe("Dota lobby authorization and settings", () => {
         serverRegion: LEAGUE_CONFIG.gameServerRegionId,
         radiant: [player.steamId],
         dire: [captain.steamId],
+        // Sides read as the captain's team; a side with no captain on the
+        // roster falls back to its number.
+        radiantName: "Team 2",
+        direName: "Captain's team",
       },
     });
     expect(
@@ -439,6 +443,45 @@ describe("Dota lobby authorization and settings", () => {
       expect((await POST(request({ kind: "inhouse", id: lobby.id, action }))).status).toBe(400);
     }
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it("words the bot's roster refusal for the kind of game", async () => {
+    const { match, home } = await fixture();
+    const season = await resolveDotaLobby(
+      asSession(home.user),
+      "season",
+      match.id,
+    );
+    const captain = await makeUser("Roster Captain");
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: "READY",
+        players: {
+          create: [{ userId: captain.id, team: 1, isCaptain: true }],
+        },
+      },
+    });
+    const inhouse = await resolveDotaLobby(
+      asSession(captain),
+      "inhouse",
+      lobby.id,
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ code: "ROSTER" }), { status: 409 }),
+      ),
+    );
+    // Inhouses have no match page or stand-ins to point at.
+    const inhouseError = await callLobbyBot(inhouse.spec, "start").catch(
+      (e: Error) => e.message,
+    );
+    expect(inhouseError).toBe(
+      "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start.",
+    );
+    await expect(callLobbyBot(season.spec, "start")).rejects.toThrow(
+      "Check stand-ins on the match page.",
+    );
   });
   it("handles unreachable workers without disclosing service credentials", async () => {
     const { match, home } = await fixture();

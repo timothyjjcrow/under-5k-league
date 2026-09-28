@@ -30,6 +30,39 @@ describe("inhousePollCadence", () => {
     })).toEqual({ skip: false, delayMs: 10000 });
   });
 
+  it("polls a READY game at the game rate once it is plausibly being played", () => {
+    // Start is optional, so a game hosted by hand is READY for its whole
+    // length. Setup (the fast rate) ends when the result scan's window opens.
+    const scanOpensAt = Date.UTC(2026, 8, 28, 20, 15);
+    const ready = { ...base, hidden: false, hasStake: true, lobbyStatus: INHOUSE_STATUS.READY, scanOpensAt };
+    expect(inhousePollCadence({ ...ready, serverNow: scanOpensAt - 1 })).toEqual({
+      skip: false, delayMs: FAST,
+    });
+    for (const serverNow of [scanOpensAt, scanOpensAt + 40 * 60_000]) {
+      expect(inhousePollCadence({ ...ready, serverNow })).toEqual({
+        skip: false, delayMs: INHOUSE.POLL_GAME_MS,
+      });
+    }
+    // An unknown window or clock keeps the setup rate.
+    expect(inhousePollCadence({ ...ready, scanOpensAt: null, serverNow: scanOpensAt })).toEqual({
+      skip: false, delayMs: FAST,
+    });
+    expect(inhousePollCadence({ ...ready, serverNow: null })).toEqual({
+      skip: false, delayMs: FAST,
+    });
+    // The window only speaks for READY: a draft past it is still a draft.
+    expect(inhousePollCadence({
+      ...ready, lobbyStatus: INHOUSE_STATUS.DRAFTING, serverNow: scanOpensAt + 1,
+    })).toEqual({ skip: false, delayMs: FAST });
+    // A spectator with no stake idles as before; a failed poll still retries fast.
+    expect(inhousePollCadence({ ...ready, hasStake: false, serverNow: scanOpensAt })).toEqual({
+      skip: false, delayMs: IDLE,
+    });
+    expect(inhousePollCadence({ ...ready, reached: false, serverNow: scanOpensAt })).toEqual({
+      skip: false, delayMs: FAST,
+    });
+  });
+
   it("phase savings never slow a failed-poll retry or change the hidden keepalive", () => {
     for (const lobbyStatus of [null, INHOUSE_STATUS.IN_PROGRESS]) {
       expect(inhousePollCadence({

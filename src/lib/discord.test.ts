@@ -1013,8 +1013,28 @@ describe("inhouse messages", () => {
     expect(msg).toContain("/inhouse");
   });
 
+  it("gives the accept deadline as live Discord timestamps", () => {
+    // Players come to this ping from a pub game or another tab: the message
+    // itself has to say how long they have, in their own time zone, with a
+    // countdown that moves without the message being edited.
+    const endsAt = new Date(Date.UTC(2026, 8, 28, 19, 1, 30, 400));
+    const epoch = Math.floor(endsAt.getTime() / 1000);
+    const msg = inhouseLobbyMessage(
+      [{ name: "A", discordId: null }],
+      null,
+      endsAt,
+    );
+    expect(msg).toContain(`<t:${epoch}:T>`);
+    expect(msg).toContain(`<t:${epoch}:R>`);
+    expect(msg).toContain("or you lose your spot");
+    // Without a deadline (older callers) it still asks them to accept.
+    const plain = inhouseLobbyMessage([{ name: "A", discordId: null }]);
+    expect(plain).toContain("Accept your game before the clock runs out");
+    expect(plain).not.toContain("<t:");
+  });
+
   it("mentions linked players by id so the ping reaches a phone", () => {
-    // A formed lobby is on a 45-second clock and the site's chime can't reach
+    // A formed lobby is on a short accept clock and the site's chime can't reach
     // a backgrounded phone. Linked players get a real mention; the rest are
     // named as plain text rather than being left out.
     const msg = inhouseLobbyMessage([

@@ -147,16 +147,16 @@ export const ROOM_ACTION_TIMEOUT_MS = 15_000;
 
 /**
  * …and the deadline for the inhouse actions that are OpenDota-bound BY DESIGN:
- * `detect` fans out ten 8s recent-match lookups and then up to six 12s match
- * fetches, and `applyResult` adds a 5s Discord send — ~25s worst case, all
- * bounded (dota.ts never retries). `record` is one 12s fetch plus the same
- * tail.
+ * `detect` first asks the lobby bot for its match id (a 3s status read, then
+ * one 12s match fetch when it has one), then fans out ten 8s recent-match
+ * lookups and up to six 12s match fetches, and `applyResult` adds a 5s
+ * Discord send — ~40s worst case, all bounded (dota.ts never retries).
+ * `record` is one 12s fetch plus the same tail.
  *
  * Deliberately NOT applied to every action. Sizing one ceiling to the slowest
  * action would punish the most time-critical one: a hung ACCEPT would sit
- * disabled for the WHOLE 45-second ready check, i.e. exactly as broken as
- * having no deadline at all. Slow paths get slack; second-sensitive ones get
- * released fast.
+ * disabled for half of the ready check. Slow paths get slack;
+ * second-sensitive ones get released fast.
  */
 export const INHOUSE_SCAN_ACTION_TIMEOUT_MS = 45_000;
 /** The inhouse actions that legitimately go to OpenDota (see above). */
@@ -230,6 +230,14 @@ export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.IN_PROGRESS,
 ];
 
+// A lobby counts as being PLAYED from the moment teams lock (READY), whether or
+// not anyone presses the optional Start: the automatic OpenDota scan, the
+// manual "Record by match ID" path and the result claim all accept both.
+export const INHOUSE_PLAYING_STATUSES: InhouseStatus[] = [
+  INHOUSE_STATUS.READY,
+  INHOUSE_STATUS.IN_PROGRESS,
+];
+
 export const INHOUSE = {
   TEAM_SIZE: 5,
   LOBBY_SIZE: 10, // players needed before a lobby forms
@@ -257,13 +265,16 @@ export const INHOUSE = {
   // it. Membership does not depend on these browser timers. It must also
   // be shorter than BOTH action windows: a lobby can form just after a queued
   // player's poll, and a long keepalive could otherwise consume the entire
-  // 45s accept window (and skip the 25s captain vote altogether). 10s leaves time
+  // accept window (and skip the 25s captain vote altogether). 10s leaves time
   // to notice and act when the browser allows background execution.
   POLL_KEEPALIVE_MS: 10000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
-  // Generous vs. the client's ~10s: web players may be in another tab — the
-  // chime + "(!)" tab title have to reach them first.
-  ACCEPT_SECONDS: 45,
+  // The queue holds a spot for hours with the tab closed, so the tenth join
+  // can land while the others are in a pub game or away from the desk: they
+  // have to see the Discord ping (which carries this deadline), open the site
+  // and press Accept. 45s was too tight for that, and a failed check wastes a
+  // lobby that took a long time to fill; no-shows are still dropped.
+  ACCEPT_SECONDS: 90,
   // Seconds players get to vote on how captains are chosen once everyone accepts.
   VOTE_SECONDS: 25,
   // Seconds a captain has to pick before the draft auto-picks the top player.
@@ -276,15 +287,31 @@ export const INHOUSE = {
   // Auto result detection (OpenDota): don't scan until a game could plausibly be
   // over, and don't scan more than once per interval (there's only ever one
   // active lobby, so this bounds API usage globally). The interval grows with
-  // the game's age — an abandoned IN_PROGRESS lobby nobody cancels must not
-  // scan every 3 minutes forever — up to the cap.
+  // the game's age — an abandoned lobby nobody cancels must not scan every 3
+  // minutes forever — up to the cap.
+  //
+  // Two clocks, one per playing status (inhouseDetectWindow in inhouse.ts):
+  // an IN_PROGRESS game is timed from Start (or the bot's launch), a READY one
+  // from lobby FORMATION. Teams lock a few minutes after formation and the
+  // group still has to host and launch the Dota lobby, so the READY floor is
+  // longer: the first scan lands a few minutes after teams lock, not while
+  // the draft is still running. A late Start never pushes the scan back: an
+  // IN_PROGRESS game keeps the formation window when that opens first.
   DETECT_MIN_MINUTES: 8,
+  DETECT_READY_MIN_MINUTES: 15,
   DETECT_INTERVAL_SECONDS: 180,
-  // Floor between MANUAL "Auto-detect result" presses. Short enough that the
+  // Floor between MANUAL "Check now" presses. Short enough that the
   // button still feels responsive, long enough that ten players spamming it
   // can't drain the shared OpenDota budget the league's result sync needs.
   DETECT_MANUAL_GAP_SECONDS: 20,
   DETECT_INTERVAL_MAX_SECONDS: 1800,
+  // When the lobby bot launched the game it knows the Dota match id, so each
+  // scan looks up that ONE match instead of ten players' histories. While
+  // OpenDota doesn't have it yet the history scan is skipped — for this long
+  // after the detect clock starts. Past it, something happened to the bot's
+  // game (a crashed launch, a remake hosted by hand), so the history scan
+  // runs again as well.
+  DETECT_BOT_MATCH_WAIT_MINUTES: 120,
   // Heartbeats describe availability; they never own queue membership. A
   // browser may suspend a hidden tab for minutes or hours without a leave.
   QUEUE_HEARTBEAT_SECONDS: 30,
@@ -303,12 +330,15 @@ export const INHOUSE = {
   // active-lobby slot indefinitely: no new lobby can form, and its own ten
   // players are refused the queue ("You're already in a live inhouse"). Only
   // an admin could recover it. These are the staleness floors for the lazy
-  // resolveAbandonedLobby teardown, deliberately far past any legitimate use:
-  // a group may sit in READY for a long time hosting the in-client lobby and
-  // waiting on a straggler (Start can be pressed late — even after the game,
-  // which is how a forgotten Start is still recoverable), and IN_PROGRESS must
-  // outlast the longest imaginable game plus OpenDota's indexing lag.
-  ABANDON_READY_HOURS: 3,
+  // resolveAbandonedLobby teardown, deliberately far past any legitimate use.
+  //
+  // Both phases are "being played" now (Start is optional), so both get the
+  // same window: the longest imaginable wait for a straggler, plus the game,
+  // plus OpenDota's indexing lag. READY is measured from lobby FORMATION and
+  // IN_PROGRESS from Start — never from `updatedAt`, which every result scan's
+  // `detectedAt` claim bumps, so an updatedAt floor would never fire while the
+  // scan keeps looking.
+  ABANDON_READY_HOURS: 6,
   ABANDON_IN_PROGRESS_HOURS: 6,
   // Discord "queue is filling" ping: fires when a join crosses this many
   // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.

@@ -14,7 +14,7 @@ import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { databaseNow } from "./database-time";
 import { draftReminderOpensAt, draftSetupOpen } from "./draft-setup";
-import { detectIntervalSeconds } from "./inhouse";
+import { detectIntervalSeconds, inhouseDetectWindow } from "./inhouse";
 import { inhouseBoardNeedsSync } from "./inhouse-board-service";
 import { prisma } from "./prisma";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "./tiebreaker-format";
@@ -159,7 +159,7 @@ export type AutomationGateInputs = {
     pickEndsAt: Date | null;
     startedAt: Date | null;
     detectedAt: Date | null;
-    updatedAt: Date;
+    createdAt: Date;
   }>;
   queue: Array<{
     joinedAt: Date;
@@ -714,30 +714,43 @@ export function computeAutomationGateSnapshot(
       lobbyDeadline(lobby.voteEndsAt, "lobby.voteEndsAt");
     } else if (lobby.status === INHOUSE_STATUS.DRAFTING) {
       lobbyDeadline(lobby.pickEndsAt, "lobby.pickEndsAt");
-    } else if (lobby.status === INHOUSE_STATUS.READY) {
-      const updatedAt = dateMs(lobby.updatedAt, "lobby.updatedAt");
-      addCandidate(
-        candidates,
-        nowMs,
-        updatedAt + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1,
-        "INHOUSE",
-      );
-    } else if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
+    } else {
+      // READY and IN_PROGRESS are both "being played": the result scan runs
+      // from either (Start is optional), on the clock inhouseDetectWindow
+      // picks, and each has an abandonment floor on the clock
+      // resolveAbandonedLobby reads — formation for READY, Start for
+      // IN_PROGRESS. The scan's clock can be formation for an IN_PROGRESS game
+      // too (a late Start), so the floor must not borrow `detect.clockMs`.
+      // Never `updatedAt`: every scan's detectedAt claim bumps it.
+      const createdAt = dateMs(lobby.createdAt, "lobby.createdAt");
       const startedAt = optionalDateMs(lobby.startedAt, "lobby.startedAt");
-      invariant(startedAt !== null, "in-progress lobby has no start time");
-      const detectOpensAt = startedAt + INHOUSE.DETECT_MIN_MINUTES * 60_000;
+      if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
+        invariant(startedAt !== null, "in-progress lobby has no start time");
+      }
+      const detect = inhouseDetectWindow({
+        status: lobby.status,
+        createdAtMs: createdAt,
+        startedAtMs: startedAt,
+      });
+      invariant(detect !== null, "playing lobby has no detection window");
       const detectedAt = optionalDateMs(lobby.detectedAt, "lobby.detectedAt");
       const detectAt =
-        nowMs < detectOpensAt
-          ? detectOpensAt
+        nowMs < detect.opensAtMs
+          ? detect.opensAtMs
           : detectedAt === null
             ? nowMs
-            : detectedAt + detectIntervalSeconds(nowMs - startedAt) * 1_000 + 1;
+            : detectedAt +
+              detectIntervalSeconds(nowMs - detect.clockMs) * 1_000 +
+              1;
       addCandidate(candidates, nowMs, detectAt, "INHOUSE");
       addCandidate(
         candidates,
         nowMs,
-        startedAt + INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 + 1,
+        lobby.status === INHOUSE_STATUS.READY
+          ? createdAt + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1
+          : (startedAt ?? createdAt) +
+              INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 +
+              1,
         "INHOUSE",
       );
     }
@@ -1248,7 +1261,7 @@ export async function loadAutomationGateSnapshot(
         pickEndsAt: true,
         startedAt: true,
         detectedAt: true,
-        updatedAt: true,
+        createdAt: true,
       },
     }),
     prisma.inhouseQueueEntry.findMany({

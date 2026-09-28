@@ -450,7 +450,8 @@ DRAFTING → READY → IN_PROGRESS → COMPLETED | CANCELLED`, one active lobby 
 time. Pure rules in `src/lib/inhouse.ts`, the engine in
 `src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery, and
 the viewer payload builder `getInhouseState`), the client in
-`src/components/inhouse-room.tsx`, one dispatch endpoint `POST /api/inhouse`.
+`src/components/inhouse-room.tsx` (poll loop and actions) with one file per
+stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`.
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
@@ -465,7 +466,7 @@ completion, and the real no-active-season offseason.
    `[joinedAt, userId]` order, snapshots `joinedAt` as each player's immutable
    `queuedAt` plus their W/L record, and Discord-mentions all ten by
    `<@discordId>`. The state payload uses the same total queue order.
-3. **Ready check** — 45s; all ten must `acceptMatch` (claim guarded on both
+3. **Ready check** — 90s; all ten must `acceptMatch` (claim guarded on both
    `acceptedAt: null` and the lobby still being in READY_CHECK). Decline or
    expiry fails the check. A decline drops the decliner, keeps accepters at the
    front, and backdates still-pending players so they must reconfirm; expiry

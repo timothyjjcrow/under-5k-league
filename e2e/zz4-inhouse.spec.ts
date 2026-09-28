@@ -82,7 +82,8 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
     "/api/auth/dev?name=IH+Observer&steamId=76561190000002000&redirect=/inhouse",
   );
 
-  // Queue view with the seeded demo entries visible but away (dimmed chips).
+  // An empty queue is one compact card (the seeded demo entries are away, so
+  // they sit on the "waiting to come back" line, never in the ten slots).
   await expect(
     page.getByRole("heading", { name: "Inhouse queue", exact: true }),
   ).toBeVisible();
@@ -190,10 +191,15 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Now it's the observer's turn — pick through the real UI.
   await expect(page.getByText("Your pick").first()).toBeVisible();
   await captureRoom(page, "draft");
-  await page
+  // Tapping a player puts the Draft button on that same row.
+  await expect(page.getByRole("button", { name: /^Draft / })).toHaveCount(0);
+  const firstRow = page
     .getByRole("button", { name: /^Select .* to draft$/ })
-    .first()
-    .click();
+    .first();
+  await firstRow.click();
+  await expect(
+    firstRow.locator("..").getByRole("button", { name: /^Draft / }),
+  ).toBeVisible();
   await page.getByRole("button", { name: /^Draft / }).click();
 
   // Administrators have a browser recovery control for a captain whose tab is
@@ -239,7 +245,19 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Teams locked — the setup card tells players how to make the Dota lobby
   // and which voice channel to join (their team's is highlighted).
   await expect(page.getByText("Teams are set!")).toBeVisible();
-  await expect(page.getByText("How to play this game")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Get into the Dota lobby" }),
+  ).toBeVisible();
+  // No lobby bot in this environment: players get the by-hand steps only,
+  // never a bot panel that can't help them, and are told who can host.
+  await expect(
+    page.getByRole("region", { name: "Steam lobby bot" }),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByLabel("Game setup", { exact: true })
+      .getByText(/host must be one of the league's ticket admins/),
+  ).toBeVisible();
   await expect(page.getByTitle("Copy lobby name")).toContainText(
     `${LEAGUE_CONFIG.name} Inhouse`,
   );
@@ -264,14 +282,28 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
   await page.setViewportSize({ width: 1280, height: 720 });
 
-  // The observer (team 1 captain) starts the game from the UI.
-  await page.getByRole("button", { name: /Start the game/ }).click();
+  // Results record from Set up too, so Start is optional: the screen says the
+  // result records itself and offers the manual paths behind one disclosure.
+  await expect(
+    page.getByText("Game over and no result yet? Record it"),
+  ).toBeVisible();
 
-  // Live view: pulsing banner, elapsed clock, auto-detect controls, rosters.
+  // The observer (team 1 captain) starts the game clock from the UI.
+  await page.getByRole("button", { name: "Start the game clock" }).click();
+
+  // Live view: pulsing banner, elapsed clock, result note, rosters. A game
+  // that just started can't be over, so the manual "Check now" scan stays
+  // hidden until the automatic scan's window opens; the match-ID path is
+  // there from the start.
   await expect(page.getByText("Game in progress")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Auto-detect result/ }),
+    page.getByText("The result records automatically after the game."),
   ).toBeVisible();
+  await expect(page.getByText(/Auto-scan starts in \d+ min\./)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Check now/ }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Record by match ID")).toBeVisible();
   await expect(page.getByText("Radiant").first()).toBeVisible();
   await expect(page.getByText("Dire").first()).toBeVisible();
   await captureRoom(page, "in-progress");
@@ -326,6 +358,15 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // The slot is free again: the room falls back to the queue view.
   await expect(
     page.getByRole("heading", { name: "Inhouse queue", exact: true }),
+  ).toBeVisible();
+  // The ten re-queued players are away until their own tabs check in. They
+  // are listed on one line under the queue, not in its slots, so the count
+  // and what is shown agree.
+  await expect(
+    page.getByRole("progressbar", { name: "Inhouse queue progress" }),
+  ).toHaveAttribute("aria-valuenow", "0");
+  await expect(
+    page.getByText(/Waiting for \d+ players to come back/),
   ).toBeVisible();
   // …and the server agrees there is no active lobby holding it.
   const after = await act(admin, { action: "state" });

@@ -23,7 +23,7 @@ describe("pollHealthAfter", () => {
 
   it("tolerates failures below the threshold", () => {
     // A blip on mobile data is normal. Disabling the room for one would be its
-    // own outage — on a 45-second ready check, a costly one.
+    // own outage — on a timed ready check, a costly one.
     const h = run(["fail", "fail"]);
     expect(h.fails).toBe(2);
     expect(h.disconnected).toBe(false);

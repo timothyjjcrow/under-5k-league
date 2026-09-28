@@ -16,14 +16,24 @@ const labels = {
   released: "Bot released",
 };
 
+/**
+ * Whether the bot can host this game, for a page that lays itself out around
+ * the panel: still asking, not set up at all, answering with a lobby state, or
+ * set up but failing (its error explains why).
+ */
+export type LobbyBotAvailability = "checking" | "off" | "on" | "unavailable";
+
 export function DotaLobbyControls({
   kind,
   id,
   recoveryOnly = false,
+  onAvailability,
 }: {
   kind: LobbyKind;
   id: string;
   recoveryOnly?: boolean;
+  /** Called whenever the bot's availability changes (see LobbyBotAvailability). */
+  onAvailability?: (availability: LobbyBotAvailability) => void;
 }) {
   const [view, setView] = useState<DotaLobbyView | null>(null);
   const [error, setError] = useState("");
@@ -71,6 +81,17 @@ export function DotaLobbyControls({
     };
   }, [request]);
   const state = view?.status?.state;
+  const availability: LobbyBotAvailability =
+    view?.enabled === false
+      ? "off"
+      : view?.enabled && state
+        ? "on"
+        : error
+          ? "unavailable"
+          : "checking";
+  useEffect(() => {
+    onAvailability?.(availability);
+  }, [availability, onAvailability]);
   useEffect(() => {
     if (!state || ["idle", "released"].includes(state)) return;
     const timer = setInterval(() => {
@@ -144,6 +165,12 @@ export function DotaLobbyControls({
             <p className="text-xs text-muted">
               After this result is imported, this page offers the next game in
               the series.
+            </p>
+          ) : null}
+          {state === "started" && kind === "inhouse" && !recoveryOnly ? (
+            <p className="text-xs text-muted">
+              The bot will record this result automatically once the game
+              ends.
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">

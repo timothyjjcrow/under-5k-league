@@ -843,7 +843,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
 
 - **Every state transition is a guarded claim (2026-07 hardening — keep it
   that way)**: `applyResult` first claims
-  `updateMany({id, status: IN_PROGRESS})` with team fixes (a cancel racing the
+  `updateMany({id, status: in [READY, IN_PROGRESS]})` with team fixes (a
+  lobby is played from team lock; Start is optional; a cancel racing the
   seconds-long OpenDota fetch must never be overwritten), then, after the Elo
   calculation, claims the same COMPLETED + `dotaMatchId` result again to stamp
   `eloDeltas` (a void that landed first makes that claim lose). No network call
@@ -889,11 +890,19 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `syncInhouse` reaches it whenever there is active/queued work. The latter is
   what reaches a lobby nobody is polling, which is how one gets abandoned. Its write guard-claims the
   status it read, so a late Start or a landed result always wins. Floors are
-  deliberately generous (`ABANDON_READY_HOURS` 3, `ABANDON_IN_PROGRESS_HOURS`
-  6 off `startedAt`): Start can be pressed after the game and the manual
-  result paths have no time gate, so a group that simply forgot still records
-  normally. It does NOT re-queue anyone — unlike `cancelLobby`, whose players
-  are present and want the next game, nobody has touched this one for hours.
+  deliberately generous (`ABANDON_READY_HOURS` 6 off lobby FORMATION,
+  `ABANDON_IN_PROGRESS_HOURS` 6 off `startedAt`; never `updatedAt`, which each
+  scan's `detectedAt` claim bumps): results record from READY too, so Start is
+  optional, and the manual result paths have no time gate inside the window.
+  It does NOT re-queue anyone — unlike `cancelLobby`, whose players are
+  present and want the next game, nobody has touched this one for hours.
+- **Every CANCELLED write stores `InhouseLobby.endReason`** (pure builders in
+  `src/lib/inhouse-end-reason.ts`): declined by X, X and Y didn't accept, an
+  admin cancel (with the phase), no result after N hours, result voided (with
+  the match id the void clears). It rides the SAME guarded claim `data` that
+  sets the status, never a second write. Admins read them in "Recent failed
+  lobbies" on /inhouse/history; older rows without one show the furthest stage
+  their columns prove (`failedLobbyReason`). A new cancel path must set it too.
 - **`InhouseLobby.eloDeltas`** (JSON userId → Elo swing) is stamped by the
   successful exact-result FINALIZATION claim; the room's post-game banner
   reads it — never re-derive the ladder on the poll path. COMPLETED is claimed
@@ -927,7 +936,8 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   the escape hatch when most players have public match data off. buildResult
   refuses 0-duration games. Auto-scan cadence: pure `detectIntervalSeconds`
   grows the `detectedAt` claim interval with game age (base 180s → cap 1800s)
-  so an abandoned IN_PROGRESS lobby scans at a trickle, not forever at rate.
+  so an abandoned READY/IN_PROGRESS lobby scans at a trickle, not forever at
+  rate.
 - **Discord result publication**: `inhouseResultMessage` (score, duration, MVP
   via the league's `gameMvp`, OpenDota link) is attempted by the guarded exact-
   result finalization above. A successful void always attempts a correction.
@@ -1011,8 +1021,9 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `votedMethod`/`votedNomineeId` for the captain vote). One active lobby at a
   time (`INHOUSE_ACTIVE_STATUSES`).
 - **Ready check (Dota-style accept gate)**: a filled lobby opens in
-  `READY_CHECK` with `acceptEndsAt` (`INHOUSE.ACCEPT_SECONDS` = 45 — web
-  players need the chime/tab-title to reach them first). All ten must
+  `READY_CHECK` with `acceptEndsAt` (`INHOUSE.ACCEPT_SECONDS` = 90 — the
+  queue holds a spot for hours, so players may be coming from a pub game via
+  the Discord ping, which carries the deadline as `<t:…:R>`). All ten must
   `acceptMatch` (idempotent claim guarded on BOTH `acceptedAt: null` AND
   `lobby: { status: READY_CHECK }` — the relation filter stops a Postgres
   race where a concurrent decline/expiry cancels the lobby between the read
@@ -1050,12 +1061,20 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   straight from READY_CHECK to DRAFTING. The keepalive is now 10s and is pinned
   shorter than both action windows, but membership remains the correct gate.
 - **Game-setup instructions**: once teams lock, the READY and IN_PROGRESS
-  views render a `GameSetupCard` — step 1 hosts the Dota 2 lobby with a shared
-  fixed name (`GGD2L Inhouse`) + password (`ggd2l`), shown as click-to-copy
-  chips; step 2 requires the `Under 5K In-House League` ticket so the private
-  game reaches OpenDota; step 3 points each player to their team's
-  Discord voice channel (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side
-  highlighted via `me.myTeam`). Lobby details and channel names are constants.
+  views render a `GameSetupCard` ("Get into the Dota lobby") straight under
+  the view's banner, and it shows ONE path. When the lobby bot answers
+  (`DotaLobbyControls`' `onAvailability` reports "on"), its panel is the path —
+  its lobby name/password and "Create Dota lobby" for captains, sides named
+  after the captains — and the by-hand steps plus the optional "Start the game
+  clock" fold under "Bot not working?" (a bot-launched game starts the clock
+  itself). Otherwise the by-hand steps show: step 1 the shared fixed name
+  (`GGD2L Inhouse`) + password (`ggd2l`) as click-to-copy chips, with a host
+  who must be one of the league's ticket admins (only they can pick the
+  ticket in Dota); step 2 the `Under 5K In-House League` ticket so the
+  private game reaches OpenDota; step 3 each team's Discord voice channel
+  (`INHOUSE.VOICE_TEAM_1`/`_2`, the viewer's side highlighted via
+  `me.myTeam`). Players never see a bot panel that can't help them; admins
+  keep its status line. Lobby details and channel names are constants.
   `inhouseLobbyCode` remains only as the short "#1234" lobby label in the
   room header.
 - **Captain-selection vote**: a filled lobby opens in `READY_CHECK`; after all
@@ -1094,11 +1113,19 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   which side was Radiant), and stores the full per-player **box score** (hero,
   KDA, net worth) as `InhouseLobby.boxScore` JSON + `winnerTeam`/`radiantTeam`/
   `durationSecs`/`radiantScore`/`direScore`/`dotaMatchId`. Two entry points:
-  `recordMatch` (paste a match ID) and `autoDetectResult` — `findInhouseGame`
+  `recordMatch` (paste a match ID) and `autoDetectResult` ("Check now") —
+  which, like the scheduled scan, goes through `lookUpLobbyGame`: the lobby
+  bot's match id first when the bot launched the game, else `findInhouseGame`
   scans the 10 players' recent matches in parallel, finds the shared game, and
   takes the most recent one that started after the lobby formed. Auto-detect also
-  runs on poll (`maybeAutoDetectResult`, gated by `DETECT_MIN_MINUTES`, throttled
+  runs on poll (`maybeAutoDetectResult`, gated by `inhouseDetectWindow`:
+  `DETECT_MIN_MINUTES` after Start, `DETECT_READY_MIN_MINUTES` after formation
+  for a READY lobby nobody started — for IN_PROGRESS whichever opens FIRST, so
+  a late Start never closes a window that was already open; throttled
   via an atomic `detectedAt` claim — one active lobby, so API usage is bounded).
+  A hand-hosted game stays READY for its whole length, so once `scanOpensAt`
+  passes the room treats READY like IN_PROGRESS (`inhouseReadyInPlay`: game
+  poll rate, no "(!) Teams locked" title).
   Needs players' "Expose Public Match Data" on. The page renders the box score as
   a `GameResultCard` (hero icons via `heroById`/`HeroIcon`, names, KDA, winner).
 - **THE PLAYED GAME IS THE TRUTH — `buildResult` reconciles the draft against
@@ -1114,7 +1141,7 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   `summarizeInhouse` history scan — do that after and the Elo lands on the
   wrong five. `isCaptain` is deliberately untouched (who captained is a fact
   about the draft). We move players rather than reject the game: rejecting
-  strands the lobby IN_PROGRESS and blocks the single active slot.
+  strands the lobby in play and blocks the single active slot.
 - **`findInhouseGame`'s `unreachable` flag is not "every fetch failed"**. A
   candidate needs 4 of the 10 recent-match lists to name it, so once enough
   lookups 429 that the survivors can't reach the threshold, detection is
@@ -1130,8 +1157,10 @@ server-authoritative, resolves lazily on poll (no cron/websocket).
   state uses 1,200/min/IP; mutations use 300/min/signed-in user (IP fallback
   only for signed-out attempts). Successful mutations return fresh viewer-
   tailored state. Polled by
-  `src/components/inhouse-room.tsx` (`"use client"`, one view per phase incl.
-  `VoteView`; syncs the vote/pick clocks via server `now` offset like
+  `src/components/inhouse-room.tsx` (`"use client"` shell: the poll loop,
+  `act()`, bell and title; one view per phase in `src/components/inhouse/`,
+  incl. `VoteView`, and `room-source-guards.test.ts` reads the shell and that
+  folder as one room; syncs the vote/pick clocks via server `now` offset like
   `draft-room.tsx`; `router.refresh()` on lobby end to update the
   server-rendered leaderboard + results). Page: `src/app/inhouse/page.tsx`.
   Nav link is always visible (season-independent).
@@ -1481,7 +1510,7 @@ reached a player who wasn't already looking at it.
   plain escaped text where they didn't. Queueing thirty seconds ago IS the
   consent — don't "fix" this with an opt-out later. This is the payoff for
   OAuth linking: `discordId` stops being a cosmetic ✓. A formed lobby is the
-  scarcest thing the league produces and `ACCEPT_SECONDS` is 45, so one
+  scarcest thing the league produces and `ACCEPT_SECONDS` is 90, so one
   tabbed-away player burns a lobby that already cleared the hard part.
 - **`INHOUSE.QUEUE_PING_AT` (4), was `LOBBY_SIZE - 2` (8).** Eight is a
   threshold the queue essentially never reaches unaided: the first person to

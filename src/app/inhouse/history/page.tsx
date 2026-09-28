@@ -10,8 +10,12 @@ import { formatMatchTime } from "@/lib/match-time";
 import {
   INHOUSE_HISTORY_PAGE_SIZE,
   inhouseHistoryPage,
+  inhouseHistorySides,
   inhousePlayedAt,
+  type InhouseHistorySidePlayer,
 } from "@/lib/inhouse-history";
+import { failedLobbyReason } from "@/lib/inhouse-end-reason";
+import { inhouseLobbyCode } from "@/lib/inhouse";
 import { voidInhouseResult } from "@/app/actions/inhouse-admin";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -96,12 +100,56 @@ export default async function InhouseHistoryPage({
   const displayedLobbies = linkedOutsidePage
     ? [expanded!, ...lobbies]
     : lobbies;
+  // Each row names its sides after the two captains and, for a signed-in
+  // player, says whether they won. Only the captains and the viewer's own row
+  // are read (at most three per game), never the full ten.
+  const sideRows = displayedLobbies.length
+    ? await prisma.inhouseLobbyPlayer.findMany({
+        where: {
+          lobbyId: { in: displayedLobbies.map((l) => l.id) },
+          OR: [
+            { isCaptain: true },
+            ...(viewer ? [{ userId: viewer.id }] : []),
+          ],
+        },
+        select: {
+          lobbyId: true,
+          userId: true,
+          team: true,
+          isCaptain: true,
+          user: { select: { name: true } },
+        },
+      })
+    : [];
+  const sidesByLobby = new Map<string, InhouseHistorySidePlayer[]>();
+  for (const row of sideRows) {
+    const list = sidesByLobby.get(row.lobbyId) ?? [];
+    list.push({
+      userId: row.userId,
+      team: row.team,
+      isCaptain: row.isCaptain,
+      name: row.user.name,
+    });
+    sidesByLobby.set(row.lobbyId, list);
+  }
   const rows = displayedLobbies.map((l) => {
     const players = parseInhouseBox(l.boxScore);
     const radiantWin = l.winnerTeam != null && l.winnerTeam === l.radiantTeam;
     const mvpId = players.length ? gameMvp(players, radiantWin) : null;
     const mvp = mvpId ? players.find((p) => p.userId === mvpId) : null;
-    return { lobby: l, players, radiantWin, mvp, playedAt: inhousePlayedAt(l) };
+    const sides = inhouseHistorySides(
+      sidesByLobby.get(l.id) ?? [],
+      l.winnerTeam,
+      viewer?.id ?? null,
+    );
+    return {
+      lobby: l,
+      players,
+      radiantWin,
+      mvp,
+      sides,
+      playedAt: inhousePlayedAt(l),
+    };
   });
   const first = total === 0 ? 0 : skip + 1;
   const last = skip + lobbies.length;
@@ -167,7 +215,9 @@ export default async function InhouseHistoryPage({
                 aria-label="Completed inhouse games"
                 className="divide-y divide-line"
               >
-                {rows.map(({ lobby, players, radiantWin, mvp, playedAt }) => {
+                {rows.map((row) => {
+                  const { lobby, players, radiantWin, mvp, sides, playedAt } =
+                    row;
                   const isExpanded = lobby.id === expanded?.id;
                   const duration = lobby.durationSecs;
                   const durationLabel =
@@ -210,6 +260,17 @@ export default async function InhouseHistoryPage({
                                 {lobby.direScore ?? "—"}
                               </span>
                             </span>
+                            {sides.viewer ? (
+                              <Badge
+                                tone={
+                                  sides.viewer === "won" ? "accent" : "neutral"
+                                }
+                              >
+                                {sides.viewer === "won"
+                                  ? "You won"
+                                  : "You lost"}
+                              </Badge>
+                            ) : null}
                             <Badge tone={radiantWin ? "success" : "danger"}>
                               {radiantWin ? "Radiant" : "Dire"} victory
                             </Badge>
@@ -226,6 +287,12 @@ export default async function InhouseHistoryPage({
                               ) : null}
                             </span>
                           </div>
+                          {sides.winnerCaptain && sides.loserCaptain ? (
+                            <p className="mt-2 break-words text-sm">
+                              {sides.winnerCaptain}&apos;s team beat{" "}
+                              {sides.loserCaptain}&apos;s team
+                            </p>
+                          ) : null}
                           {mvp?.userId ? (
                             <div className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-muted">
                               <span className="text-accent">MVP</span>
@@ -343,6 +410,86 @@ export default async function InhouseHistoryPage({
           )}
         </CardBody>
       </Card>
+
+      {isAdmin ? <RecentFailedLobbies /> : null}
     </div>
+  );
+}
+
+/** How many cancelled lobbies the admin list shows. */
+const FAILED_LOBBIES_SHOWN = 20;
+
+/**
+ * Admin-only: the lobbies that ended WITHOUT a result, newest first, each with
+ * the reason its cancelling write stored (declined, didn't accept, cancelled
+ * by an admin, timed out, result voided). Everything else on this page is
+ * completed games, so before this a failed ready check or a timed-out lobby
+ * left no trace anyone could read. Older lobbies from before reasons were
+ * stored say how far they got instead.
+ */
+async function RecentFailedLobbies() {
+  const lobbies = await prisma.inhouseLobby.findMany({
+    where: { status: INHOUSE_STATUS.CANCELLED },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: FAILED_LOBBIES_SHOWN,
+    select: {
+      id: true,
+      endReason: true,
+      createdAt: true,
+      startedAt: true,
+      completedAt: true,
+      players: {
+        orderBy: [{ queuedAt: "asc" }, { userId: "asc" }],
+        select: {
+          acceptedAt: true,
+          team: true,
+          user: { select: { name: true } },
+        },
+      },
+    },
+  });
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader
+        title="Recent failed lobbies"
+        headingLevel={2}
+        subtitle="Admins only · lobbies that ended without a result, newest first"
+      />
+      <CardBody className="p-0">
+        {lobbies.length === 0 ? (
+          <p className="px-4 py-5 text-sm text-muted sm:px-5">
+            No failed lobbies.
+          </p>
+        ) : (
+          <ol
+            aria-label="Recent failed inhouse lobbies"
+            className="divide-y divide-line"
+          >
+            {lobbies.map((lobby) => (
+              <li key={lobby.id} className="min-w-0 px-4 py-3 sm:px-5">
+                <p className="break-words text-sm font-medium">
+                  {failedLobbyReason(lobby)}
+                </p>
+                <p className="mt-1 break-words text-xs text-muted">
+                  Formed{" "}
+                  <LocalTime
+                    ts={lobby.createdAt.getTime()}
+                    variant="short"
+                    initial={formatMatchTime(lobby.createdAt, "short")}
+                  />
+                  <span className="font-mono">
+                    {" "}
+                    · #{inhouseLobbyCode(lobby.id)}
+                  </span>
+                  {lobby.players.length > 0
+                    ? ` · ${lobby.players.map((p) => p.user.name).join(", ")}`
+                    : null}
+                </p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </CardBody>
+    </Card>
   );
 }

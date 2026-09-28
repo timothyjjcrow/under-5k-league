@@ -31,6 +31,7 @@ import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
+import { lobbyBotConnection } from "@/lib/dota-lobby-service";
 import { HeroVideo } from "@/components/hero-video";
 import { LocalTime } from "@/components/local-time";
 import { SectionNav } from "@/components/section-nav";
@@ -71,35 +72,60 @@ export default async function InhousePage({
       ? "month"
       : "all";
 
-  // Seed the MMR field from the player's most recent league signup, if any,
-  // and fetch the medal so the join panel can explain the MMR check (the
-  // server clamps implausible values to the medal window's floor on join).
-  const [lastReg, dbUser] = user
-    ? await Promise.all([
-        prisma.registration.findFirst({
-          // Match joinQueue's trust rule exactly: the newest positive league
-          // MMR is the number the server will actually seed with.
-          where: { userId: user.id, mmr: { gt: 0 } },
-          orderBy: { createdAt: "desc" },
-          select: { mmr: true },
-        }),
-        prisma.user.findUnique({
-          where: { id: user.id },
-          // fhUnavailable is OpenDota's `profile.fh_unavailable` — true means
-          // "Expose Public Match Data" is OFF, the #1 reason auto-import can't
-          // see a player. It is the one signal that says who the setup guide is
-          // actually for; we already capture it and were not using it here.
-          select: { rankTier: true, fhUnavailable: true },
-        }),
-      ])
-    : [null, null];
-  const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
+  // The player's most recent league signup MMR, if any (the join panel shows
+  // it instead of an MMR field), and the medal so the join panel can explain
+  // the MMR check for everyone else (the server clamps implausible typed
+  // values to the medal window's floor on join).
+  // The completed-game count decides whether the ladder, results and the
+  // section nav have anything to show yet (an indexed count, always fresh).
+  const [viewerRows, completedGames] = await Promise.all([
+    user
+      ? Promise.all([
+          prisma.registration.findFirst({
+            // Match joinQueue's trust rule exactly: the newest positive
+            // league MMR is the number the server will actually seed with.
+            where: { userId: user.id, mmr: { gt: 0 } },
+            orderBy: { createdAt: "desc" },
+            select: { mmr: true },
+          }),
+          prisma.user.findUnique({
+            where: { id: user.id },
+            // fhUnavailable is OpenDota's `profile.fh_unavailable` — true
+            // means "Expose Public Match Data" is OFF, the #1 reason
+            // auto-import can't see a player. It is the one signal that says
+            // who the setup guide is actually for.
+            select: { rankTier: true, fhUnavailable: true },
+          }),
+          // Any completed game at all? Decides whether the room's "game
+          // plan" walkthrough starts open for this viewer.
+          prisma.inhouseLobby.findFirst({
+            where: {
+              status: INHOUSE_STATUS.COMPLETED,
+              players: { some: { userId: user.id } },
+            },
+            select: { id: true },
+          }),
+        ])
+      : null,
+    prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.COMPLETED } }),
+  ]);
+  const [lastReg, dbUser, playedLobby] = viewerRows ?? [null, null, null];
+  const firstGame = user != null && playedLobby == null;
+  // Before the first completed game the ladder and results would only be
+  // empty cards (and the section nav would jump between them), so the page is
+  // the room plus one line until then.
+  const hasGames = completedGames > 0;
+  // With a league signup the join panel shows that MMR as plain text (the
+  // server always uses it), so the medal note is only for everyone else.
+  const signupMmr = lastReg?.mmr ?? 0;
+  const mmrWindow =
+    signupMmr > 0 ? null : mmrRangeForRankTier(dbUser?.rankTier ?? null);
   const mmrHint = mmrWindow
     ? `Your ${rankMedalName(dbUser?.rankTier)} medal puts you around ${formatMmrRange(mmrWindow)} MMR — ${
         mmrWindow.min > 0
           ? `a typed value outside that range is set to ${mmrWindow.min}`
           : "a typed value outside that range is treated as unknown"
-      }. League signup MMR, when you have one, is used as-is.`
+      }. If you sign up for a league season, your signup MMR is used instead.`
     : null;
 
   return (
@@ -130,21 +156,27 @@ export default async function InhousePage({
           }
         />
 
-        <SectionNav
-          label="Inhouse sections"
-          items={[
-            { id: "live-room", label: "Live room" },
-            { id: "inhouse-ladder", label: "Ladder" },
-            { id: "recent-inhouse", label: "Results" },
-            { id: "opendota-setup", label: "Setup help" },
-          ]}
-        />
+        {hasGames ? (
+          <SectionNav
+            label="Inhouse sections"
+            items={[
+              { id: "live-room", label: "Live room" },
+              { id: "inhouse-ladder", label: "Ladder" },
+              { id: "recent-inhouse", label: "Results" },
+              { id: "opendota-setup", label: "Setup help" },
+            ]}
+          />
+        ) : null}
         <section
           id="live-room"
           className="scroll-mt-28"
           aria-label="Live inhouse room"
         >
-          <InhouseRoom defaultMmr={lastReg?.mmr ?? 0} mmrHint={mmrHint} />
+          <InhouseRoom
+            signupMmr={signupMmr}
+            mmrHint={mmrHint}
+            firstGame={firstGame}
+          />
           {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
         </section>
 
@@ -156,31 +188,47 @@ export default async function InhousePage({
             reachable content, and a returning player's own standing was the
             hardest thing on it to find. Scene stats → ladder → results → guide
             is the order of how often someone wants each. */}
-        <Suspense fallback={null}>
-          <SceneStats />
-        </Suspense>
-        <section
-          id="inhouse-ladder"
-          className="scroll-mt-28"
-          aria-label="Inhouse ladder"
-        >
-          <Suspense fallback={<CardSkeleton rows={6} />}>
-            {ladderView === "month" ? (
-              <MonthLadderCard meId={user?.id ?? null} />
-            ) : (
-              <LadderCard meId={user?.id ?? null} />
-            )}
-          </Suspense>
-        </section>
-        <section
-          id="recent-inhouse"
-          className="scroll-mt-28"
-          aria-label="Recent inhouse results"
-        >
-          <Suspense fallback={<CardSkeleton rows={5} />}>
-            <RecentResults />
-          </Suspense>
-        </section>
+        {hasGames ? (
+          <>
+            <Suspense fallback={null}>
+              <SceneStats />
+            </Suspense>
+            <section
+              id="inhouse-ladder"
+              className="scroll-mt-28"
+              aria-label="Inhouse ladder"
+            >
+              <Suspense fallback={<CardSkeleton rows={6} />}>
+                {ladderView === "month" ? (
+                  <MonthLadderCard meId={user?.id ?? null} />
+                ) : (
+                  <LadderCard meId={user?.id ?? null} />
+                )}
+              </Suspense>
+            </section>
+            <section
+              id="recent-inhouse"
+              className="scroll-mt-28"
+              aria-label="Recent inhouse results"
+            >
+              <Suspense fallback={<CardSkeleton rows={5} />}>
+                <RecentResults />
+              </Suspense>
+            </section>
+          </>
+        ) : (
+          // One line instead of an empty ladder card and an empty results
+          // card: before the first game there is nothing to rank or replay.
+          <section
+            id="inhouse-ladder"
+            className="scroll-mt-28"
+            aria-label="Inhouse ladder"
+          >
+            <p className="rounded-[var(--radius)] border border-line bg-surface/80 px-4 py-3 text-sm text-muted">
+              No games recorded yet: the ladder starts after the first game.
+            </p>
+          </section>
+        )}
 
         {/* Open ONLY for the cohort it is about: a player OpenDota reports as
             having public match data switched off. Folding it shut for everyone
@@ -190,7 +238,10 @@ export default async function InhousePage({
           className="scroll-mt-28"
           aria-label="Inhouse setup help"
         >
-          <OpenDotaGuide matchDataPrivate={dbUser?.fhUnavailable === true} />
+          <OpenDotaGuide
+            matchDataPrivate={dbUser?.fhUnavailable === true}
+            lobbyBot={lobbyBotConfigured()}
+          />
         </section>
       </div>
     </>
@@ -454,7 +505,6 @@ async function LadderCard({ meId }: { meId: string | null }) {
       <CardBody className="p-0">
         <LadderViewSwitch view="all" />
         <YourStanding rows={leaderboard} meId={meId} />
-        <LadderLeaders rows={leaderboard} />
         <Leaderboard rows={leaderboard} meId={meId} />
         <LadderKey rows={leaderboard} />
         {/* The table's marks are explained in the visible key above (see
@@ -474,85 +524,25 @@ async function LadderCard({ meId }: { meId: string | null }) {
   );
 }
 
-/** Established leaders only: a provisional first win never becomes a podium. */
-function LadderLeaders({
-  rows,
-}: {
-  rows: ReturnType<typeof summarizeInhouse>;
-}) {
-  const leaders = rankInhouse(rows).ranked.slice(0, 3);
-  if (leaders.length === 0) return null;
-  return (
-    <ol
-      aria-label="Ladder leaders"
-      className="grid grid-cols-2 gap-3 border-b border-line p-4 sm:grid-cols-3 sm:p-5"
-    >
-      {leaders.map((player, i) => (
-        <li
-          key={player.userId}
-          className={cn(
-            "min-w-0 rounded-xl border p-3 sm:p-4",
-            i === 0
-              ? "col-span-2 border-accent/35 bg-gradient-to-br from-accent/10 to-surface sm:col-span-1"
-              : "border-line bg-surface-2/35",
-          )}
-        >
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <span
-              className={cn(
-                "text-[10px] font-semibold uppercase tracking-wider",
-                i === 0 ? "text-accent" : "text-muted",
-              )}
-            >
-              {i === 0 ? "League leader" : `Rank ${i + 1}`}
-            </span>
-            <span className="font-mono text-xs text-muted">0{i + 1}</span>
-          </div>
-          <div className="flex min-w-0 items-center gap-2">
-            <Avatar name={player.name} src={player.avatar} size={30} />
-            <PlayerLink
-              userId={player.userId}
-              className="min-w-0 truncate text-sm font-semibold"
-            >
-              {player.name}
-            </PlayerLink>
-          </div>
-          <div className="mt-3 flex flex-wrap items-end justify-between gap-2">
-            <div>
-              <span className="font-display text-3xl font-bold tabular-nums">
-                {player.rating}
-              </span>
-              <span className="ml-1 text-[10px] text-muted">Elo</span>
-            </div>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
-                player.lastChange > 0
-                  ? "bg-success/10 text-success"
-                  : player.lastChange < 0
-                    ? "bg-danger/10 text-danger"
-                    : "bg-surface-2 text-muted",
-              )}
-            >
-              {player.lastChange > 0 ? "+" : ""}
-              {player.lastChange} last game
-            </span>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3">
-            <span className="text-xs tabular-nums text-muted">
-              {player.wins}W · {player.losses}L
-            </span>
-            <FormStrip form={player.form} size={4} />
-          </div>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
 // ---------- OpenDota "be findable" guide ----------
 
-function OpenDotaGuide({ matchDataPrivate }: { matchDataPrivate: boolean }) {
+/** Env-only check: is a lobby bot set up? A broken setup still counts. */
+function lobbyBotConfigured() {
+  try {
+    return lobbyBotConnection() != null;
+  } catch {
+    return true;
+  }
+}
+
+function OpenDotaGuide({
+  matchDataPrivate,
+  lobbyBot,
+}: {
+  matchDataPrivate: boolean;
+  /** A lobby bot is set up for this league (it hosts with the ticket set). */
+  lobbyBot: boolean;
+}) {
   return (
     // Not unconditionally `open` any more. This is read-once setup copy, and it
     // was costing ~200px on every visit forever — including for signed-out
@@ -626,8 +616,12 @@ function OpenDotaGuide({ matchDataPrivate }: { matchDataPrivate: boolean }) {
           </li>
           <li className="flex gap-3">
             <GuideStep n={3} />
+            {/* Dota only lets the league's ticket admins pick its ticket
+                (docs/DOTA-LOBBY-BOT.md), so "the host" is not any player. */}
             <span>
-              When teams lock, the host must select the{" "}
+              {lobbyBot
+                ? "When teams lock, a captain asks the lobby bot to host the game, with the ticket already set. If the bot is down, the host must be one of the league's ticket admins, since only they can select the "
+                : "When teams lock, the host must be one of the league's ticket admins, since only they can select the "}
               <b>{INHOUSE.LOBBY_TICKET}</b> ticket in Lobby Settings. Without
               it, the private game will not appear on OpenDota.
             </span>
@@ -672,9 +666,17 @@ function YourStanding({
 }) {
   if (!meId) return null;
   const me = rows.find((r) => r.userId === meId);
-  // No completed game yet: the one place on the page addressed to this viewer
-  // tells them how to get onto the board instead of saying nothing.
-  if (!me) return <FirstGameStrip />;
+  // No completed game yet. The walkthrough lives in ONE place, the room's
+  // "game plan" fold (open by default for this viewer); a second copy here
+  // kept saying "join the queue" to players already mid-draft.
+  if (!me) {
+    return (
+      <p className="border-b border-line bg-accent/5 px-4 py-3 text-sm text-muted sm:px-5">
+        You&apos;re not on the ladder yet. Your Elo starts at 1000 after your
+        first game, and you get a rank after {PROVISIONAL_GAMES} games.
+      </p>
+    );
+  }
   // Rank only counts among established players — provisionals are unranked.
   const { ranked } = rankInhouse(rows);
   const idx = ranked.findIndex((r) => r.userId === meId);
@@ -742,52 +744,6 @@ function YourStanding({
           provisional · {toRank} more {toRank === 1 ? "game" : "games"} to rank
         </Badge>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * For a signed-in player with no completed inhouse yet. The room above already
- * explains the current phase; this is the whole path in one glance, because a
- * first-timer can't see what "queue" leads to until they are ten minutes in.
- */
-function FirstGameStrip() {
-  const steps: React.ReactNode[] = [
-    <>
-      <a href="#live-room" className={textLink()}>
-        Join the queue
-      </a>{" "}
-      above
-    </>,
-    "Accept when ten players are in",
-    "Vote on captains, then get drafted",
-    <>
-      Play in Dota with the league ticket (
-      <a href="#opendota-setup" className={textLink()}>
-        setup help
-      </a>
-      )
-    </>,
-  ];
-  return (
-    <div className="border-b border-line bg-accent/5 px-4 py-3.5 sm:px-5">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-accent/90">
-        Your first game
-      </div>
-      <ol className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-        {steps.map((step, i) => (
-          <li key={i} className="flex min-w-0 items-baseline gap-2">
-            <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-accent/40 bg-accent/10 text-[11px] font-semibold text-accent">
-              {i + 1}
-            </span>
-            <span className="min-w-0">{step}</span>
-          </li>
-        ))}
-      </ol>
-      <p className="mt-2.5 text-xs text-muted">
-        Your Elo starts at 1000 and you get a rank after {PROVISIONAL_GAMES}{" "}
-        games.
-      </p>
     </div>
   );
 }

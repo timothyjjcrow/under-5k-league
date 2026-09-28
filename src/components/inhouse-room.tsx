@@ -1,36 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+// The inhouse room SHELL: the poll loop, act(), the alerts/title/focus
+// effects and the page-level layout. Each stage view (queue, accept, captain
+// vote, draft, set up, play) lives in its own file under
+// src/components/inhouse/; room-source-guards.test.ts reads the shell and that
+// folder together as one room.
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  Avatar,
-  Badge,
-  PlayerLink,
-  RankBadge,
-  buttonClasses,
-  textLink,
-} from "@/components/ui";
+import { Badge, buttonClasses, textLink } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
-import {
-  useBannerOffscreen,
-  usePersistedFlag,
-  usePollHealth,
-  useSecondsLeft,
-  useElapsedMs,
-} from "@/components/room-clock";
+import { usePersistedFlag, usePollHealth } from "@/components/room-clock";
 import {
   autoJoinDecision,
-  avgKnownMmr,
   inhouseAlerts,
   inhouseLobbyCode,
   inhouseTitleFlag,
-  mmrBalance,
-  orderCaptains,
-  queueSlots,
   readyCheckEndedToast,
+  shouldFocusStage,
   wasInReadyCheck,
   type InhouseAlertSnapshot,
+  type InhouseFocusSnapshot,
 } from "@/lib/inhouse";
 import { inhousePollCadence } from "@/lib/room-poll";
 import { INHOUSE_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
@@ -43,8 +34,6 @@ import {
   issueSequence,
 } from "@/lib/room-sequence";
 import {
-  INHOUSE,
-  DISCORD_INVITE_URL,
   INHOUSE_SCAN_ACTIONS,
   INHOUSE_SCAN_ACTION_TIMEOUT_MS,
   ROOM_ACTION_TIMEOUT_MS,
@@ -52,99 +41,35 @@ import {
 } from "@/lib/constants";
 import { playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
-import { DotaLobbyControls } from "@/components/dota-lobby-controls";
-
-type LobbyTeam = NonNullable<InhouseState["lobby"]>["teams"][number];
-type Player = LobbyTeam["players"][number];
-type RoomMe = InhouseState["me"] & {
-  /**
-   * A UI capability, not an attention signal. Captains on the current turn and
-   * administrators can both submit the service's `pick` action, but only the
-   * captain should receive the chime and "Your pick" title driven by
-   * `isOnClock`.
-   */
-  canPick: boolean;
-};
-
-function scrollToRoomTop() {
-  window.scrollTo({
-    top: 0,
-    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? "auto"
-      : "smooth",
-  });
-}
-
-// Radiant = green, Dire = red — matching the in-client colors so it reads fast.
-function sideMeta(isRadiant: boolean) {
-  return isRadiant
-    ? {
-        name: "Radiant",
-        badge: "success" as const,
-        ring: "border-success/50",
-        chip: "bg-success/10 text-success border-success/30",
-        dot: "bg-success",
-      }
-    : {
-        name: "Dire",
-        badge: "danger" as const,
-        ring: "border-danger/50",
-        chip: "bg-danger/10 text-danger border-danger/30",
-        dot: "bg-danger",
-      };
-}
-
-const ROOM_STAGES = [
-  { status: null, label: "Queue" },
-  { status: "READY_CHECK", label: "Accept" },
-  { status: "CAPTAIN_VOTE", label: "Captains" },
-  { status: "DRAFTING", label: "Draft" },
-  { status: "READY", label: "Set up" },
-  { status: "IN_PROGRESS", label: "Play" },
-] as const;
-
-/** A shared orientation strip, with no new state machine or extra polling. */
-function RoomStages({ lobby }: { lobby: InhouseState["lobby"] }) {
-  const current = ROOM_STAGES.findIndex(
-    (stage) => stage.status === (lobby?.status ?? null),
-  );
-  return (
-    <ol
-      aria-label="Inhouse progress"
-      className="grid grid-cols-6 gap-1 sm:gap-2"
-    >
-      {ROOM_STAGES.map((stage, i) => (
-        <li
-          key={stage.label}
-          aria-current={i === current ? "step" : undefined}
-          className={cn(
-            "min-w-0 border-t-2 pt-2.5 text-center text-[10px] font-medium sm:text-xs",
-            i === current
-              ? "border-accent text-accent"
-              : i < current
-                ? "border-success/60 text-muted"
-                : "border-line text-muted",
-          )}
-        >
-          <span className="mr-1 hidden tabular-nums sm:inline" aria-hidden>
-            {i < current ? "✓" : String(i + 1).padStart(2, "0")}
-          </span>
-          {stage.label}
-        </li>
-      ))}
-    </ol>
-  );
-}
+import type { RoomMe } from "@/components/inhouse/shared";
+import { RoomStages } from "@/components/inhouse/room-stages";
+import { NextGameQueueCard, QueueView } from "@/components/inhouse/queue-view";
+import { ReadyCheckView } from "@/components/inhouse/ready-check-view";
+import { VoteView } from "@/components/inhouse/vote-view";
+import { DraftView } from "@/components/inhouse/draft-view";
+import { ReadyView } from "@/components/inhouse/ready-view";
+import { InProgressView } from "@/components/inhouse/in-progress-view";
 
 export function InhouseRoom({
   pollMs = 1500,
-  defaultMmr = 0,
+  signupMmr = 0,
   mmrHint = null,
+  firstGame = false,
 }: {
   pollMs?: number;
-  defaultMmr?: number;
+  /**
+   * The viewer's newest league-signup MMR (0 = none). joinQueue always uses
+   * it when there is one, so the join panel shows it as plain text instead
+   * of an input whose value would be ignored.
+   */
+  signupMmr?: number;
   /** Server-computed medal→MMR window note for the queue join panel. */
   mmrHint?: string | null;
+  /**
+   * Signed in with no completed inhouse yet: the queue's "game plan" fold
+   * starts open, because it is the page's one walkthrough of what a game is.
+   */
+  firstGame?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
@@ -160,7 +85,7 @@ export function InhouseRoom({
   const pending =
     reqPending || actionReconciling || disconnected || connectionUnavailable;
   const [selected, setSelected] = useState<string | null>(null);
-  const [mmr, setMmr] = useState<number>(defaultMmr);
+  const [mmr, setMmr] = useState<number>(signupMmr);
   const [soundOn, setSoundOn] = usePersistedFlag("inhouseSound");
   // Clock skew as STATE, not a ref read during render. Reading `ref.current`
   // while rendering is unsafe under concurrent React (the value can differ
@@ -181,7 +106,7 @@ export function InhouseRoom({
   // responses cannot forget a spot or slow an active deadline.
   const hasStakeRef = useRef(false);
   // One-tap join from a Discord ping (?join=1). Fires at most ONCE per page
-  // load — queue membership has teeth (a filled lobby drags you into a 45s
+  // load — queue membership has teeth (a filled lobby drags you into a timed
   // ready check whose failure drops you from the queue), so an accidental
   // re-enqueue on a re-render would be a real cost, not a cosmetic one.
   const autoJoinedRef = useRef(false);
@@ -192,6 +117,11 @@ export function InhouseRoom({
   // what suppresses alerts for a mid-lobby page load.
   const prevAlertRef = useRef<InhouseAlertSnapshot | null>(null);
   const originalTitleRef = useRef<string | null>(null);
+  // The current stage view, and what the last poll said about it, so the
+  // room can bring a stage that needs this member to the top of the screen
+  // (shouldFocusStage decides when).
+  const stageRef = useRef<HTMLDivElement>(null);
+  const prevFocusRef = useRef<InhouseFocusSnapshot | null>(null);
   // Result banners the viewer closed — stays dismissed across the polls of
   // the 10-minute lastResult window AND across reloads (localStorage), so a
   // refresh doesn't resurrect a banner they already read.
@@ -219,7 +149,7 @@ export function InhouseRoom({
   // from a Discord ping auto-joins programmatically (?join=1), and someone who
   // queued on a previous page load and reloaded has touched nothing at all. So
   // the first tap ANYWHERE on the page primes it — otherwise "match found",
-  // the alert gating a 45-second ACCEPT window, is computed correctly and
+  // the alert gating a timed ACCEPT window, is computed correctly and
   // played into a suspended context. The draft room has had this since it
   // shipped; this room did not.
   useEffect(() => {
@@ -319,6 +249,8 @@ export function InhouseRoom({
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
         lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
+        scanOpensAt: latestStateRef.current?.lobby?.scanOpensAt ?? null,
+        serverNow: latestStateRef.current?.now ?? null,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
         // for everyone — fetch once rather than skipping forever (a tab that is
         // HIDDEN at load would otherwise never learn it had a stake).
@@ -411,6 +343,8 @@ export function InhouseRoom({
           // Keep the latest ACCEPTED state through a failed or stale poll.
           hasStake: hasStakeRef.current,
           lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
+          scanOpensAt: latestStateRef.current?.lobby?.scanOpensAt ?? null,
+          serverNow: latestStateRef.current?.now ?? null,
           rateLimited,
           reached: !!next,
           failureCount: consecutiveFailures,
@@ -505,6 +439,29 @@ export function InhouseRoom({
     prevAlertRef.current = snap;
   }, [state, soundOn]);
 
+  // On a phone the page's title, links and the stage strip sit above the
+  // room, so a member reaching a stage that needs them (accept, vote, pick,
+  // get into the Dota lobby) could see the clock but not the thing to press.
+  // Scroll that stage to the top once per stage; never for spectators.
+  useEffect(() => {
+    if (!state) return;
+    const snap: InhouseFocusSnapshot = {
+      lobbyId: state.lobby?.id ?? null,
+      status: state.lobby?.status ?? null,
+      inLobby: state.me.inLobby,
+    };
+    const focus = shouldFocusStage(prevFocusRef.current, snap);
+    prevFocusRef.current = snap;
+    if (focus) {
+      stageRef.current?.scrollIntoView({
+        block: "start",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+      });
+    }
+  }, [state]);
+
   // Flip the tab title while something needs this viewer's attention. Unlike
   // the chime this needs no sound toggle or prior-gesture audio unlock, so a
   // backgrounded tab still shows the "(!)" in the tab strip.
@@ -520,6 +477,8 @@ export function InhouseRoom({
         isOnClock: state.me.isOnClock,
         hasAccepted: state.me.hasAccepted,
         hasVoted: !!state.me.myVote?.method,
+        scanOpensAt: state.lobby?.scanOpensAt ?? null,
+        serverNow: state.now,
       },
     );
     document.title = flag ? `${flag} · ${original}` : original;
@@ -559,7 +518,7 @@ export function InhouseRoom({
           // player reloaded. The abort lands in the catch, which toasts and
           // releases them. Per-action, not one ceiling: `detect`/`record` go
           // to OpenDota and legitimately take ~25s, while ACCEPT must never
-          // sit disabled through its own 45s ready check.
+          // sit disabled through its own ready check.
           signal: AbortSignal.timeout(
             (INHOUSE_SCAN_ACTIONS as readonly string[]).includes(
               String(body.action),
@@ -719,9 +678,9 @@ export function InhouseRoom({
   // only on a successful act(), so a captain who tapped the top-MMR player and
   // then let the clock run out — resolveStalledPick auto-drafts that exact
   // player, it sorts the pool the same way — came back on the clock two picks
-  // later holding a dead id. The footer then rendered an ENABLED button
-  // reading "Draft " with no name, and every click was a "Player already
-  // drafted" toast while their real 60s clock burned.
+  // later holding a dead id. The old footer Draft button then rendered
+  // ENABLED with no name, and every click was a "Player already drafted"
+  // toast while their real 60s clock burned.
   const selectedInPool =
     selected && lobby?.pool.some((p) => p.userId === selected)
       ? selected
@@ -866,6 +825,8 @@ export function InhouseRoom({
             mmr={mmr}
             setMmr={setMmr}
             mmrHint={mmrHint}
+            signupMmr={signupMmr}
+            firstGame={firstGame}
             act={act}
             nextGame
           />
@@ -876,70 +837,76 @@ export function InhouseRoom({
             mmr={mmr}
             setMmr={setMmr}
             mmrHint={mmrHint}
+            signupMmr={signupMmr}
             act={act}
           />
         )
       ) : null}
 
-      {!lobby ? (
-        <QueueView
-          state={state}
-          pending={pending}
-          mmr={mmr}
-          setMmr={setMmr}
-          mmrHint={mmrHint}
-          act={act}
-        />
-      ) : lobby.status === "READY_CHECK" ? (
-        <ReadyCheckView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          offset={offset}
-          pending={pending}
-          act={act}
-        />
-      ) : lobby.status === "CAPTAIN_VOTE" ? (
-        <VoteView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          offset={offset}
-          pending={pending}
-          act={act}
-        />
-      ) : lobby.status === "DRAFTING" ? (
-        <DraftView
-          key={lobby.id}
-          state={state}
-          me={me}
-          lobby={lobby}
-          offset={offset}
-          selected={selectedInPool}
-          setSelected={setSelected}
-          pending={pending}
-          act={act}
-        />
-      ) : lobby.status === "READY" ? (
-        <ReadyView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          pending={pending}
-          act={act}
-        />
-      ) : (
-        <InProgressView
-          key={lobby.id}
-          lobby={lobby}
-          me={me}
-          offset={offset}
-          serverNow={state.now}
-          detectMinMinutes={state.detectMinMinutes}
-          pending={pending}
-          act={act}
-        />
-      )}
+      {/* scroll-mt clears the 80px sticky header (see shouldFocusStage). */}
+      <div ref={stageRef} className="scroll-mt-24">
+        {!lobby ? (
+          <QueueView
+            state={state}
+            pending={pending}
+            mmr={mmr}
+            setMmr={setMmr}
+            mmrHint={mmrHint}
+            signupMmr={signupMmr}
+            firstGame={firstGame}
+            act={act}
+          />
+        ) : lobby.status === "READY_CHECK" ? (
+          <ReadyCheckView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            offset={offset}
+            pending={pending}
+            act={act}
+          />
+        ) : lobby.status === "CAPTAIN_VOTE" ? (
+          <VoteView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            offset={offset}
+            pending={pending}
+            act={act}
+          />
+        ) : lobby.status === "DRAFTING" ? (
+          <DraftView
+            key={lobby.id}
+            state={state}
+            me={me}
+            lobby={lobby}
+            offset={offset}
+            selected={selectedInPool}
+            setSelected={setSelected}
+            pending={pending}
+            act={act}
+          />
+        ) : lobby.status === "READY" ? (
+          <ReadyView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            serverNow={state.now}
+            pending={pending}
+            act={act}
+          />
+        ) : (
+          <InProgressView
+            key={lobby.id}
+            lobby={lobby}
+            me={me}
+            offset={offset}
+            serverNow={state.now}
+            pending={pending}
+            act={act}
+          />
+        )}
+      </div>
 
       {me.canCancel ? (
         <div className="text-right">
@@ -996,1697 +963,6 @@ export function InhouseRoom({
           </button>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-// ---------- Queue ----------
-
-type QueueControlProps = {
-  me: InhouseState["me"];
-  pending: boolean;
-  mmr: number;
-  setMmr: (n: number) => void;
-  mmrHint: string | null;
-  act: (body: Record<string, unknown>) => void;
-  nextGame?: boolean;
-};
-
-/**
- * The single join/leave/sign-in control used by both the idle queue and the
- * compact live-lobby card. Keeping this in one component prevents the live
- * path from drifting back to a hidden API-only affordance.
- */
-function QueueControls({
-  me,
-  pending,
-  mmr,
-  setMmr,
-  mmrHint,
-  act,
-  nextGame = false,
-}: QueueControlProps) {
-  const mmrInputId = useId();
-
-  return (
-    <div>
-      <div className="flex flex-wrap items-center justify-center gap-3">
-        {!me.isLoggedIn ? (
-          <a
-            href="/login?next=/inhouse"
-            className={buttonClasses("primary", "lg")}
-          >
-            {nextGame ? "Sign in for next game" : "Sign in to queue"}
-          </a>
-        ) : me.inQueue ? (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => act({ action: "leave" })}
-            className={buttonClasses("secondary", "lg")}
-          >
-            Leave queue
-          </button>
-        ) : (
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <label htmlFor={mmrInputId} className="text-sm text-muted">
-              MMR
-            </label>
-            <input
-              id={mmrInputId}
-              type="number"
-              min={0}
-              max={12000}
-              inputMode="numeric"
-              value={mmr || ""}
-              placeholder="0"
-              onChange={(e) => setMmr(Number(e.target.value))}
-              title="Seeds captain selection and the balance meter. If you've registered for a season, your league signup MMR is used instead."
-              className="h-11 w-24 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
-            />
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => act({ action: "join", mmr })}
-              className={buttonClasses("accent", "lg")}
-            >
-              {nextGame ? "Join next-game queue →" : "Join queue →"}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Stays visible after joining — it's the explanation for why the listed
-          MMR can differ from what was typed. */}
-      {mmrHint ? (
-        <details className="mt-3 text-center text-xs text-muted">
-          <summary className="inline-flex min-h-8 cursor-pointer items-center rounded px-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-            How your MMR is set
-          </summary>
-          <p className="mt-1 text-left leading-relaxed">{mmrHint}</p>
-        </details>
-      ) : null}
-    </div>
-  );
-}
-
-/** A small entry point above a lobby for people who are not part of that game. */
-function NextGameQueueCard({
-  state,
-  pending,
-  mmr,
-  setMmr,
-  mmrHint,
-  act,
-}: Omit<QueueControlProps, "me" | "nextGame"> & { state: InhouseState }) {
-  const titleId = useId();
-  const present = state.queue.filter((q) => !q.away).length;
-
-  return (
-    <section
-      aria-labelledby={titleId}
-      className="rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-4 sm:px-5"
-    >
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 id={titleId} className="font-semibold">
-              Queue for the next game
-            </h2>
-            <Badge tone="accent">{present} queued</Badge>
-          </div>
-          <p className="mt-1 max-w-xl text-sm text-muted">
-            This lobby is already underway. The next ready check can only start
-            after it closes.
-          </p>
-        </div>
-        <div className="shrink-0">
-          <QueueControls
-            me={state.me}
-            pending={pending}
-            mmr={mmr}
-            setMmr={setMmr}
-            mmrHint={mmrHint}
-            act={act}
-            nextGame
-          />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function QueueView({
-  state,
-  pending,
-  mmr,
-  setMmr,
-  mmrHint,
-  act,
-  nextGame = false,
-}: {
-  state: InhouseState;
-  pending: boolean;
-  mmr: number;
-  setMmr: (n: number) => void;
-  mmrHint: string | null;
-  act: (body: Record<string, unknown>) => void;
-  /** The visible queue will not form until the active lobby closes. */
-  nextGame?: boolean;
-}) {
-  const { queue, lobbySize, needed, me } = state;
-  // "Away" players (heartbeat gone quiet) keep their row for a grace window
-  // but don't count toward forming — the headline number stays honest, and
-  // (via queueSlots below) they can't take a visible slot off someone who is
-  // actually here.
-  const present = queue.filter((q) => !q.away);
-  const pct = lobbySize
-    ? Math.min(100, Math.round((present.length / lobbySize) * 100))
-    : 0;
-  // Rough lobby strength while it fills. avgKnownMmr owns the "0 = unknown,
-  // excluded" rule — this only adds the sample floor, so one lone known MMR
-  // isn't presented as the room's calibre.
-  const knownMmrs = present.map((q) => q.mmr).filter((m) => m > 0);
-  const queueAvg = knownMmrs.length >= 2 ? avgKnownMmr(knownMmrs) : 0;
-  const { slots, overflow } = queueSlots(queue, lobbySize);
-
-  const myPosition = present.findIndex((q) => q.userId === me.userId) + 1;
-
-  return (
-    <div className="space-y-3">
-      <section
-        aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
-        className="overflow-hidden rounded-2xl border border-accent/25 bg-surface/90 shadow-xl shadow-black/10"
-      >
-        <div className="grid lg:grid-cols-[0.85fr_1.35fr]">
-          <div className="relative overflow-hidden border-b border-line bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] p-5 lg:border-b-0 lg:border-r lg:p-6">
-            <div className="flex items-center gap-5 lg:flex-col lg:gap-3 lg:text-center">
-              <div className="relative grid h-32 w-32 shrink-0 place-items-center lg:h-40 lg:w-40">
-                <svg
-                  viewBox="0 0 120 120"
-                  aria-hidden
-                  className="absolute inset-0 h-full w-full -rotate-90"
-                >
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="51"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="5"
-                    className="text-line"
-                  />
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="51"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="5"
-                    pathLength="100"
-                    strokeDasharray={`${pct} 100`}
-                    strokeLinecap={pct > 0 ? "round" : "butt"}
-                    className="text-accent transition-[stroke-dasharray] duration-500 motion-reduce:transition-none"
-                  />
-                </svg>
-                <div
-                  role="progressbar"
-                  aria-label={
-                    nextGame
-                      ? "Next-game queue progress"
-                      : "Inhouse queue progress"
-                  }
-                  aria-valuemin={0}
-                  aria-valuemax={lobbySize}
-                  aria-valuenow={Math.min(present.length, lobbySize)}
-                  aria-valuetext={`${present.length} players queued; ${needed} more needed`}
-                  className="text-center"
-                >
-                  <span className="block font-display text-4xl font-bold leading-none tabular-nums lg:text-5xl">
-                    {present.length}
-                  </span>
-                  <span className="mt-1 block text-[11px] text-muted">
-                    of {lobbySize} players
-                  </span>
-                </div>
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-                  {nextGame ? "Up next" : "Pick-up Dota"}
-                </p>
-                <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">
-                  {nextGame ? "Next-game queue" : "Inhouse queue"}
-                </h2>
-                <p className="mt-1.5 text-sm text-muted">
-                  {needed > 0
-                    ? `${needed} more ${needed === 1 ? "player" : "players"} to play`
-                    : nextGame
-                      ? "Full · waiting for this game to finish"
-                      : "Full · starting the ready check…"}
-                </p>
-                {queueAvg > 0 ? (
-                  <p className="mt-2 text-xs tabular-nums text-muted">
-                    {queueAvg.toLocaleString()} average MMR
-                  </p>
-                ) : null}
-              </div>
-            </div>
-            <div className="mt-5">
-              <QueueControls
-                me={me}
-                pending={pending}
-                mmr={mmr}
-                setMmr={setMmr}
-                mmrHint={mmrHint}
-                act={act}
-                nextGame={nextGame}
-              />
-            </div>
-            {me.inQueue ? (
-              <p
-                role="status"
-                className="mt-3 text-center text-xs text-success"
-              >
-                {myPosition > 0
-                  ? `You’re #${myPosition} in line`
-                  : "Your spot is saved"}
-                {nextGame ? " · next game" : " · listen for the ready check"}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="min-w-0 p-4 sm:p-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold">Who’s playing</h3>
-              <span className="text-xs text-muted">
-                {nextGame ? (
-                  "Ready check after this game"
-                ) : (
-                  <>First {lobbySize} in → ready check</>
-                )}
-              </span>
-            </div>
-            <ul className="grid grid-cols-2 gap-2">
-              {slots.map((q, i) => {
-                if (!q) {
-                  return (
-                    <li
-                      key={`open-${i}`}
-                      className="flex min-h-16 items-center gap-2 rounded-xl border border-dashed border-line/70 px-3 py-2"
-                    >
-                      <span
-                        aria-hidden
-                        className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-dashed border-line text-sm text-muted"
-                      >
-                        +
-                      </span>
-                      <span className="min-w-0 text-xs text-muted">
-                        Open slot
-                        <span className="ml-1 tabular-nums">{i + 1}</span>
-                      </span>
-                    </li>
-                  );
-                }
-                const isMe = q.userId === me.userId;
-                return (
-                  <li
-                    key={q.userId}
-                    className={cn(
-                      "flex min-h-16 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors",
-                      isMe
-                        ? "border-accent/50 bg-accent/10"
-                        : "border-line bg-surface-2/50",
-                      q.away && "opacity-60",
-                    )}
-                  >
-                    <Avatar name={q.name} src={q.avatar} size={30} />
-                    <div className="min-w-0 flex-1">
-                      <PlayerLink
-                        userId={q.userId}
-                        className="block truncate text-xs font-semibold sm:text-sm"
-                      >
-                        {q.name}
-                      </PlayerLink>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
-                        <span className="tabular-nums">#{i + 1}</span>
-                        {isMe ? <span className="text-accent">You</span> : null}
-                        {q.mmr > 0 ? (
-                          <span className="tabular-nums">
-                            {q.mmr.toLocaleString()} MMR
-                          </span>
-                        ) : null}
-                        {q.away ? (
-                          <span title="This player will rejoin lobby formation when they return">
-                            away
-                          </span>
-                        ) : null}
-                      </span>
-                    </div>
-                    <span className="hidden xl:block">
-                      <RankBadge rankTier={q.rankTier} />
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {overflow.length > 0 ? (
-              <div className="mt-3 border-t border-line/60 pt-3">
-                <div className="mb-2 text-xs text-muted">
-                  Also queued · {overflow.length}
-                </div>
-                <ul className="flex flex-wrap gap-2">
-                  {overflow.map((q) => (
-                    <li
-                      key={q.userId}
-                      className={cn(
-                        "flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 py-1 pl-1 pr-2.5 text-xs",
-                        q.away && "opacity-60",
-                      )}
-                    >
-                      <Avatar name={q.name} src={q.avatar} size={20} />
-                      <PlayerLink
-                        userId={q.userId}
-                        className="max-w-32 truncate"
-                      >
-                        {q.name}
-                      </PlayerLink>
-                      {q.away ? <span className="text-muted">away</span> : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </section>
-      <p className="px-1 text-center text-xs text-muted">
-        Tab switching keeps your spot · queue clears after{" "}
-        {INHOUSE.QUEUE_IDLE_HOURS}h without lobby activity
-      </p>
-      <details className="group rounded-xl border border-line bg-surface/60">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
-          <span>
-            New to inhouse?{" "}
-            <span className="font-medium text-fg">The game plan</span>
-          </span>
-          <span
-            aria-hidden
-            className="transition-transform group-open:rotate-180"
-          >
-            ⌄
-          </span>
-        </summary>
-        <ol className="grid gap-4 border-t border-line p-4 text-xs text-muted sm:grid-cols-2 lg:grid-cols-4">
-          <li>
-            <strong className="mb-1 block text-fg">01 · Queue & accept</strong>
-            {lobbySize} players fill the room. Accept within{" "}
-            {INHOUSE.ACCEPT_SECONDS}s or lose your spot.
-          </li>
-          <li>
-            <strong className="mb-1 block text-fg">02 · Choose captains</strong>
-            Elect players, use highest MMR, or pick by inhouse record.
-          </li>
-          <li>
-            <strong className="mb-1 block text-fg">03 · Draft your side</strong>
-            Captains pick Radiant and Dire in a snake draft: one pick, then
-            pairs.
-          </li>
-          <li>
-            <strong className="mb-1 block text-fg">04 · Play & climb</strong>
-            Host the Dota lobby, join your team in Discord, and let results
-            update your Elo.
-          </li>
-        </ol>
-      </details>
-    </div>
-  );
-}
-
-// ---------- Captain vote ----------
-
-type VoteLobby = NonNullable<InhouseState["lobby"]>;
-type Candidate = NonNullable<VoteLobby["vote"]>["candidates"][number];
-
-// ---------- Ready check ----------
-
-function ReadyCheckView({
-  lobby,
-  me,
-  offset,
-  pending,
-  act,
-}: {
-  lobby: VoteLobby;
-  me: InhouseState["me"];
-  offset: number;
-  pending: boolean;
-  act: (body: Record<string, unknown>) => void;
-}) {
-  const check = lobby.readyCheck;
-  // The accept clock must stay visible if the player scrolls — same
-  // compact-bar treatment as the vote and pick clocks.
-  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
-  if (!check) return null;
-
-  const waitingOn = check.total - check.acceptedCount;
-
-  return (
-    <div className="space-y-5">
-      {/* Compact fixed bar while the accept clock is scrolled away. top-20
-          matches the 80px header (see useBannerOffscreen). */}
-      {offscreen ? (
-        <button
-          type="button"
-          onClick={scrollToRoomTop}
-          aria-label="Back to the match accept"
-          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
-        >
-          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
-            <span className="flex min-w-0 items-center gap-2">
-              <span aria-hidden>🎮</span>
-              <span className="truncate font-medium">Match found</span>
-              <span className="shrink-0 text-xs text-muted tabular-nums">
-                {check.acceptedCount}/{check.total} accepted
-              </span>
-            </span>
-            <SecondsClock
-              endsAtMs={lobby.acceptEndsAt}
-              offsetMs={offset}
-              urgentAt={10}
-              label={(s) => `${s} seconds left to accept`}
-            />
-          </div>
-        </button>
-      ) : null}
-
-      <div
-        ref={bannerRef}
-        className="rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-surface to-surface px-5 py-5 sm:p-6"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-              Ready check
-            </p>
-            <h2 className="font-display text-2xl font-semibold">
-              {me.canAccept ? "Match found. You in?" : "A match is filling up"}
-            </h2>
-            <p className="mt-2 text-sm text-muted">
-              {check.acceptedCount}/{check.total} accepted
-              {waitingOn > 0
-                ? ` · waiting on ${waitingOn}`
-                : " · everyone’s ready"}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              {me.canAccept
-                ? me.hasAccepted
-                  ? "Your spot is confirmed."
-                  : "Accept before the timer ends to keep your spot."
-                : me.inQueue
-                  ? "You’re in line for the next game."
-                  : "Spectating · join the next-game queue above."}
-            </p>
-          </div>
-          <SecondsClock
-            prominent
-            endsAtMs={lobby.acceptEndsAt}
-            offsetMs={offset}
-            urgentAt={10}
-            label={(s) => `${s} seconds left to accept`}
-          />
-        </div>
-
-        <div aria-hidden className="mt-4 flex gap-1.5">
-          {Array.from({ length: check.total }, (_, i) => (
-            <span
-              key={i}
-              className={cn(
-                "h-2 flex-1 rounded-full transition-colors",
-                i < check.acceptedCount ? "bg-success" : "bg-line",
-              )}
-            />
-          ))}
-        </div>
-
-        {me.canAccept ? (
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            {me.hasAccepted ? (
-              <span className="inline-flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-4 py-2.5 text-sm font-semibold text-success">
-                <span aria-hidden>✓</span> Accepted — waiting for the others
-              </span>
-            ) : (
-              <button
-                disabled={pending}
-                onClick={() => act({ action: "accept" })}
-                className={cn(
-                  buttonClasses("accent", "lg"),
-                  "min-h-14 w-full font-bold sm:w-auto sm:px-12",
-                )}
-              >
-                ACCEPT MATCH
-              </button>
-            )}
-            {!me.hasAccepted ? (
-              <button
-                disabled={pending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Decline this match? The lobby is scrapped and you leave the queue. Everyone who accepted keeps their spot at the front of the queue.",
-                    )
-                  ) {
-                    act({ action: "decline" });
-                  }
-                }}
-                className="rounded text-xs text-muted hover:text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-              >
-                Decline
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-
-      {/* Who's in — pending players sort first (they're the holdup). */}
-      <ul className="grid grid-cols-2 gap-2">
-        {check.players.map((p) => (
-          <li
-            key={p.userId}
-            className={cn(
-              "flex min-w-0 items-center gap-2 rounded-xl border px-2.5 py-3",
-              p.accepted
-                ? "border-success/40 bg-success/5"
-                : "border-line bg-surface-2/40",
-            )}
-          >
-            <Avatar name={p.name} src={p.avatar} size={28} />
-            <span className="min-w-0 flex-1 truncate text-xs font-medium sm:text-sm">
-              {p.name}
-            </span>
-            {p.accepted ? (
-              <span
-                role="img"
-                aria-label={`${p.name} accepted`}
-                className="text-sm text-success"
-              >
-                <span aria-hidden>✓</span>
-              </span>
-            ) : (
-              <span
-                role="img"
-                aria-label={`${p.name} hasn't accepted yet`}
-                className="animate-pulse text-sm text-muted motion-reduce:animate-none"
-              >
-                <span aria-hidden>…</span>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function VoteView({
-  lobby,
-  me,
-  offset,
-  pending,
-  act,
-}: {
-  lobby: VoteLobby;
-  me: InhouseState["me"];
-  offset: number;
-  pending: boolean;
-  act: (body: Record<string, unknown>) => void;
-}) {
-  const vote = lobby.vote;
-  const candidatesRef = useRef<HTMLDivElement>(null);
-  // The 25s vote clock must stay visible while a player scrolls the nominate
-  // list — same compact-bar treatment as the draft's pick clock.
-  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
-  if (!vote) return null;
-
-  const myMethod = me.myVote?.method ?? null;
-  const myNominee = me.myVote?.nomineeId ?? null;
-
-  // The SAME ranking the server will install, not a hand-copy of it: these
-  // three previews are what the ten players are voting on, and the local sorts
-  // they used to run dropped orderCaptains' final earliest-queued tiebreak. On
-  // a young ladder ties are the normal case — everyone 0-0, unregistered
-  // players at MMR 0 — so the cards routinely named a different second captain
-  // than the vote would actually produce.
-  const byMmr = orderCaptains("MMR", vote.candidates);
-  const byRecord = orderCaptains("RECORD", vote.candidates);
-  const byVotes = orderCaptains("VOTE", vote.candidates);
-  const hasRecords = vote.candidates.some((c) => c.games > 0);
-  const hasNominations = vote.candidates.some((c) => c.nominations > 0);
-
-  return (
-    <div className="space-y-5">
-      {/* Compact fixed bar while the vote clock is scrolled away. top-20
-          matches the 80px header (see useBannerOffscreen). */}
-      {offscreen ? (
-        <button
-          type="button"
-          onClick={scrollToRoomTop}
-          aria-label="Back to the captain vote"
-          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
-        >
-          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
-            <span className="flex min-w-0 items-center gap-2">
-              <span aria-hidden>🗳️</span>
-              <span className="truncate font-medium">Captain vote</span>
-              <span className="shrink-0 text-xs text-muted tabular-nums">
-                {vote.votedCount}/{vote.voterCount} voted
-              </span>
-            </span>
-            <SecondsClock
-              endsAtMs={lobby.voteEndsAt}
-              offsetMs={offset}
-              urgentAt={5}
-              label={(s) => `${s} seconds left to vote`}
-            />
-          </div>
-        </button>
-      ) : null}
-
-      <div
-        ref={bannerRef}
-        className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/10 to-surface px-5 py-5"
-      >
-        <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-            Captain vote
-          </p>
-          <h2 className="font-display text-2xl font-semibold">
-            Choose your captains
-          </h2>
-          <div className="text-xs text-muted">
-            {vote.votedCount}/{vote.voterCount} voted · lobby decides by
-            majority
-          </div>
-        </div>
-        <SecondsClock
-          prominent
-          endsAtMs={lobby.voteEndsAt}
-          offsetMs={offset}
-          urgentAt={5}
-          label={(s) => `${s} seconds left to vote`}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <MethodCard
-          label="Elect captains"
-          hint="Vote for the players you want"
-          tally={vote.methodTallies.VOTE}
-          total={vote.voterCount}
-          selected={myMethod === "VOTE"}
-          disabled={!me.canVote || pending}
-          onClick={() => {
-            candidatesRef.current?.focus({ preventScroll: true });
-            candidatesRef.current?.scrollIntoView({
-              behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
-                .matches
-                ? "instant"
-                : "smooth",
-              block: "center",
-            });
-          }}
-          preview={hasNominations ? byVotes.slice(0, 2) : []}
-          previewEmpty="Tap players below to nominate"
-        />
-        <MethodCard
-          label="Highest MMR"
-          hint="Top 2 MMR captain"
-          tally={vote.methodTallies.MMR}
-          total={vote.voterCount}
-          selected={myMethod === "MMR"}
-          disabled={!me.canVote || pending}
-          onClick={() => act({ action: "vote", method: "MMR" })}
-          preview={byMmr.slice(0, 2)}
-        />
-        <MethodCard
-          label="Best record"
-          hint="Top 2 inhouse records"
-          tally={vote.methodTallies.RECORD}
-          total={vote.voterCount}
-          selected={myMethod === "RECORD"}
-          disabled={!me.canVote || pending}
-          onClick={() => act({ action: "vote", method: "RECORD" })}
-          preview={hasRecords ? byRecord.slice(0, 2) : []}
-          previewEmpty="No records yet — falls back to MMR"
-        />
-      </div>
-
-      <div
-        ref={candidatesRef}
-        tabIndex={-1}
-        aria-label="Captain nominations"
-        className="scroll-mt-36 rounded-2xl border border-line bg-surface/80 outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-      >
-        <div className="flex items-center justify-between border-b border-line px-4 py-3 text-sm">
-          <span className="font-semibold">Nominate a captain</span>
-          <span className="text-xs text-muted">
-            {me.canVote ? "tap a player to vote for them" : "spectating"}
-          </span>
-        </div>
-        <div className="grid grid-cols-1 gap-1.5 p-3 sm:grid-cols-2">
-          {vote.candidates.map((c) => {
-            const picked = myNominee === c.userId && myMethod === "VOTE";
-            return (
-              <button
-                key={c.userId}
-                disabled={!me.canVote || pending}
-                aria-pressed={picked}
-                aria-label={`Vote for ${c.name} as captain`}
-                onClick={() =>
-                  act({ action: "vote", method: "VOTE", nomineeId: c.userId })
-                }
-                className={cn(
-                  "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",
-                  me.canVote ? "hover:border-accent/50" : "cursor-default",
-                  picked
-                    ? "border-accent bg-accent/15"
-                    : "border-line bg-surface-2/40",
-                )}
-              >
-                <Avatar name={c.name} src={c.avatar} size={26} />
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {c.name}
-                </span>
-                {c.nominations > 0 ? (
-                  <Badge tone="accent">
-                    {c.nominations} {c.nominations === 1 ? "vote" : "votes"}
-                  </Badge>
-                ) : null}
-                <span className="text-xs text-muted">
-                  {c.games > 0 ? `${c.wins}-${c.losses}` : "new"}
-                </span>
-                <RankBadge rankTier={c.rankTier} />
-                {c.mmr > 0 ? (
-                  <span className="text-xs text-muted tabular-nums">
-                    {c.mmr}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {!me.isLoggedIn ? (
-        <p className="text-center text-xs text-muted">
-          Sign in to join future inhouses — this one&apos;s already drafting
-          soon.
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function MethodCard({
-  label,
-  hint,
-  tally,
-  total,
-  selected,
-  disabled,
-  onClick,
-  preview,
-  previewEmpty,
-}: {
-  label: string;
-  hint: string;
-  tally: number;
-  total: number;
-  selected: boolean;
-  disabled?: boolean;
-  onClick?: () => void;
-  preview: Candidate[];
-  previewEmpty?: string;
-}) {
-  const pct = total > 0 ? Math.round((tally / total) * 100) : 0;
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      aria-pressed={selected}
-      onClick={onClick}
-      className={cn(
-        "flex min-w-0 flex-col gap-2 rounded-2xl border bg-surface/80 p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-        selected ? "border-accent bg-accent/10" : "border-line",
-        !disabled && onClick ? "hover:border-accent/50" : "",
-        disabled && !selected ? "opacity-90" : "",
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <span className="font-semibold">{label}</span>
-        {selected ? <Badge tone="accent">your vote</Badge> : null}
-      </div>
-      <span className="text-xs text-muted">{hint}</span>
-
-      <div className="mt-1 flex items-center gap-2">
-        <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
-          <div
-            className="h-full rounded-full bg-accent transition-all"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <span className="text-xs tabular-nums text-muted">
-          {tally}/{total}
-        </span>
-      </div>
-
-      <div className="min-h-[1.75rem] pt-1">
-        {preview.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {preview.map((c) => (
-              <span
-                key={c.userId}
-                className="flex items-center gap-1 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2 text-xs"
-              >
-                <Avatar name={c.name} src={c.avatar} size={18} />
-                <span className="max-w-[6rem] truncate">{c.name}</span>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <span className="text-xs text-muted">{previewEmpty}</span>
-        )}
-      </div>
-    </button>
-  );
-}
-
-// ---------- Draft ----------
-
-function DraftView({
-  state,
-  me,
-  lobby,
-  offset,
-  selected,
-  setSelected,
-  pending,
-  act,
-}: {
-  state: InhouseState;
-  me: RoomMe;
-  lobby: NonNullable<InhouseState["lobby"]>;
-  offset: number;
-  selected: string | null;
-  setSelected: (id: string | null) => void;
-  pending: boolean;
-  act: (body: Record<string, unknown>) => void;
-}) {
-  const { teamSize } = state;
-  // Same mobile treatment as the league draft room: when the pick-clock
-  // banner scrolls away, a compact fixed bar keeps the clock visible.
-  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
-  const onClockTeam = lobby.teams.find((t) => t.team === lobby.pickTeam);
-  const onClockSide = onClockTeam ? sideMeta(onClockTeam.isRadiant) : null;
-  // "Pick 4 of 8" — captains fill one slot each, the rest are drafted.
-  const totalPicks = 2 * (teamSize - 1);
-  const picksMade = lobby.teams.reduce((s, t) => s + t.players.length, 0);
-
-  // Live balance-of-power line: how the two sides' average MMR compares as
-  // picks come in.
-  const sideMmrs = (t: LobbyTeam) =>
-    (t.captain ? [t.captain, ...t.players] : t.players).map((p) => p.mmr);
-  const balance = mmrBalance(
-    sideMmrs(lobby.teams[0]),
-    sideMmrs(lobby.teams[1]),
-  );
-  const leader =
-    balance.diff > 0
-      ? lobby.teams[0]
-      : balance.diff < 0
-        ? lobby.teams[1]
-        : null;
-  const balanceLabel =
-    balance.avg1 > 0 && balance.avg2 > 0
-      ? leader
-        ? `${sideMeta(leader.isRadiant).name} ahead by ${Math.abs(balance.diff)} avg MMR`
-        : "Teams dead even on MMR"
-      : null;
-
-  return (
-    <div className="space-y-5">
-      {/* Compact fixed bar while the pick clock is scrolled away — the 60s
-          auto-pick clock must never be invisible mid-draft. top-20 matches
-          the 80px header (see useBannerOffscreen). */}
-      {offscreen ? (
-        <button
-          type="button"
-          onClick={scrollToRoomTop}
-          aria-label="Back to the pick clock"
-          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
-        >
-          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
-            <span className="flex min-w-0 items-center gap-2">
-              <span aria-hidden>⏱</span>
-              <span className="truncate font-medium">
-                {lobby.onClockCaptain?.name ?? "—"} picking
-              </span>
-              <span className="shrink-0 text-xs text-muted tabular-nums">
-                {Math.min(picksMade + 1, totalPicks)}/{totalPicks}
-              </span>
-              {me.isOnClock ? (
-                <Badge tone="accent" className="shrink-0">
-                  You
-                </Badge>
-              ) : null}
-            </span>
-            <SecondsClock
-              endsAtMs={lobby.pickEndsAt}
-              offsetMs={offset}
-              urgentAt={10}
-              label={(s) => `${s} seconds left on the pick clock`}
-            />
-          </div>
-        </button>
-      ) : null}
-
-      {/* On the clock banner */}
-      <div
-        ref={bannerRef}
-        className={cn(
-          "flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-surface/90 px-5 py-4",
-          onClockSide?.ring ?? "border-line",
-        )}
-      >
-        <h2 className="text-sm font-normal">
-          <span className="text-muted">On the clock: </span>
-          <span className="font-semibold">
-            {lobby.onClockCaptain?.name ?? "—"}
-          </span>
-          {onClockSide ? (
-            <Badge tone={onClockSide.badge} className="ml-2">
-              {onClockSide.name}
-            </Badge>
-          ) : null}
-          <span className="ml-2 text-xs text-muted tabular-nums">
-            Pick {Math.min(picksMade + 1, totalPicks)} of {totalPicks}
-          </span>
-        </h2>
-        <div className="flex items-center gap-3">
-          {me.isOnClock ? (
-            <Badge tone="accent">Your pick</Badge>
-          ) : (
-            <span className="text-xs text-muted">Drafting…</span>
-          )}
-          <SecondsClock
-            prominent
-            endsAtMs={lobby.pickEndsAt}
-            offsetMs={offset}
-            urgentAt={10}
-            label={(s) => `${s} seconds left on the pick clock`}
-          />
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-line bg-surface/60 px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-          <span>Snake draft · 1 pick, then pairs</span>
-          <span className="tabular-nums">
-            {picksMade}/{totalPicks} drafted
-          </span>
-        </div>
-        <div
-          aria-label={`${picksMade} of ${totalPicks} players drafted`}
-          className="mt-2 flex gap-1.5"
-        >
-          {Array.from({ length: totalPicks }, (_, i) => (
-            <span
-              key={i}
-              className={cn(
-                "h-1.5 flex-1 rounded-full",
-                i < picksMade ? "bg-accent" : "bg-line",
-              )}
-            />
-          ))}
-        </div>
-        {balanceLabel ? (
-          <p className="mt-2 text-center text-xs text-muted">{balanceLabel}</p>
-        ) : null}
-      </div>
-
-      {me.isAdmin && !me.isOnClock ? (
-        <p
-          role="note"
-          className="rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-sm text-muted"
-        >
-          <strong className="text-fg">Admin recovery:</strong> you can pick for{" "}
-          {lobby.onClockCaptain?.name ?? "the current captain"} if they are
-          disconnected or unable to act. The current team, clock, and stale-turn
-          safeguards still apply.
-        </p>
-      ) : null}
-
-      {/* Pool FIRST in DOM: on phones the on-clock captain needs it now —
-          Team 1's roster card would otherwise bury it (same treatment as the
-          league draft room). lg:order-* restores the three-column desktop. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.1fr_1fr]">
-        {/* Draft pool */}
-        <div className="min-w-0 rounded-[var(--radius)] border border-line bg-surface/80 lg:order-2">
-          <div className="border-b border-line px-4 py-3 text-sm font-semibold">
-            Draft pool · {lobby.pool.length}
-          </div>
-          <div className="space-y-1.5 p-3">
-            {lobby.pool.map((p) => {
-              const pickable = me.canPick;
-              const isSel = selected === p.userId;
-              return (
-                <button
-                  key={p.userId}
-                  disabled={!pickable}
-                  aria-pressed={isSel}
-                  aria-label={`Select ${p.name} to draft`}
-                  onClick={() => setSelected(isSel ? null : p.userId)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors",
-                    pickable ? "hover:border-accent/50" : "cursor-default",
-                    isSel
-                      ? "border-accent bg-accent/15"
-                      : "border-line bg-surface-2/40",
-                  )}
-                >
-                  <Avatar name={p.name} src={p.avatar} size={26} />
-                  <span className="min-w-0 flex-1 truncate font-medium">
-                    {p.name}
-                  </span>
-                  {p.record ? (
-                    <span
-                      title={`Inhouse record ${p.record.wins}-${p.record.losses}`}
-                      className="text-xs tabular-nums text-muted"
-                    >
-                      {p.record.wins}-{p.record.losses}
-                    </span>
-                  ) : null}
-                  <RankBadge rankTier={p.rankTier} />
-                  {p.mmr > 0 ? (
-                    <span className="text-xs text-muted tabular-nums">
-                      {p.mmr}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
-            {lobby.pool.length === 0 ? (
-              <p className="p-2 text-center text-sm text-muted">
-                Everyone&apos;s drafted.
-              </p>
-            ) : null}
-          </div>
-          {me.canPick ? (
-            <div className="border-t border-line p-3">
-              <button
-                disabled={pending || !selected}
-                onClick={() =>
-                  selected && act({ action: "pick", userId: selected })
-                }
-                className={buttonClasses("accent", "md", "w-full")}
-              >
-                {selected
-                  ? me.isOnClock
-                    ? `Draft ${lobby.pool.find((p) => p.userId === selected)?.name ?? ""}`
-                    : `Admin: draft ${lobby.pool.find((p) => p.userId === selected)?.name ?? ""} for ${lobby.onClockCaptain?.name ?? "the current captain"}`
-                  : me.isOnClock
-                    ? "Select a player to draft"
-                    : `Select a player to draft for ${lobby.onClockCaptain?.name ?? "the current captain"}`}
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="min-w-0 lg:order-1">
-          <TeamColumn
-            team={lobby.teams[0]}
-            teamSize={teamSize}
-            onClock={lobby.pickTeam === lobby.teams[0].team}
-          />
-        </div>
-        <div className="min-w-0 lg:order-3">
-          <TeamColumn
-            team={lobby.teams[1]}
-            teamSize={teamSize}
-            onClock={lobby.pickTeam === lobby.teams[1].team}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TeamColumn({
-  team,
-  teamSize,
-  onClock,
-}: {
-  team: LobbyTeam;
-  teamSize: number;
-  onClock: boolean;
-}) {
-  const meta = sideMeta(team.isRadiant);
-  const roster: (Player | null)[] = [team.captain, ...team.players];
-  while (roster.length < teamSize) roster.push(null);
-  const avgMmr = avgKnownMmr(roster.map((p) => p?.mmr ?? 0));
-
-  return (
-    <div
-      className={cn(
-        "rounded-[var(--radius)] border bg-surface/80",
-        onClock ? meta.ring : "border-line",
-      )}
-    >
-      <div
-        className={cn(
-          "flex items-center justify-between gap-2 border-b border-line px-4 py-3",
-        )}
-      >
-        <div className="flex items-center gap-2">
-          <span className={cn("h-2.5 w-2.5 rounded-full", meta.dot)} />
-          <span className="font-semibold">{meta.name}</span>
-        </div>
-        <span className="flex items-center gap-2">
-          {avgMmr > 0 ? (
-            <span className="text-xs text-muted tabular-nums">
-              avg {avgMmr}
-            </span>
-          ) : null}
-          {onClock ? <Badge tone="accent">picking</Badge> : null}
-        </span>
-      </div>
-      <div className="space-y-1.5 p-3">
-        {roster.map((p, i) => (
-          <div
-            key={p?.userId ?? i}
-            className={cn(
-              "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm",
-              p
-                ? "border-line bg-surface-2/40"
-                : "border-dashed border-line/60",
-            )}
-          >
-            {p ? (
-              <>
-                <Avatar name={p.name} src={p.avatar} size={24} />
-                <PlayerLink
-                  userId={p.userId}
-                  className="min-w-6 flex-1 truncate"
-                >
-                  {p.name}
-                </PlayerLink>
-                {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}
-                {i > 0 && p.pickIndex != null ? (
-                  <span
-                    title={`Draft pick ${p.pickIndex + 1}`}
-                    className="text-[10px] tabular-nums text-muted"
-                  >
-                    #{p.pickIndex + 1}
-                  </span>
-                ) : null}
-                <RankBadge rankTier={p.rankTier} />
-              </>
-            ) : (
-              <span className="py-0.5 pl-1 text-muted">Empty slot</span>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ---------- Ready ----------
-
-function ReadyView({
-  lobby,
-  me,
-  pending,
-  act,
-}: {
-  lobby: NonNullable<InhouseState["lobby"]>;
-  me: InhouseState["me"];
-  pending: boolean;
-  act: (body: Record<string, unknown>) => void;
-}) {
-  return (
-    <div className="space-y-5">
-      <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-6 py-5 text-center">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-          Draft complete
-        </p>
-        <h2 className="mt-1 font-display text-3xl font-semibold">
-          Teams are set!
-        </h2>
-        <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-          Join the Dota lobby and your team’s voice channel. Start here once
-          everyone is in.
-        </p>
-        {me.canStart ? (
-          <button
-            disabled={pending}
-            onClick={() => {
-              // One unconfirmed tap from any of the ten would start the clock
-              // for everyone — make it deliberate.
-              if (
-                window.confirm(
-                  "Start the game for all ten players? Do this once the in-client lobby is up and everyone's in.",
-                )
-              ) {
-                act({ action: "start" });
-              }
-            }}
-            className={buttonClasses("accent", "lg", "mt-4")}
-          >
-            Start the game →
-          </button>
-        ) : (
-          <p className="mt-3 text-sm text-muted">
-            Waiting for a player to launch the lobby…
-          </p>
-        )}
-      </div>
-
-      {me.inLobby || me.isAdmin ? <GameSetupCard lobby={lobby} me={me} /> : null}
-
-      <MatchupGrid lobby={lobby} />
-    </div>
-  );
-}
-
-// ---------- In progress ----------
-
-/** "12:34" / "1:02:45" — how long the game has been running. */
-function fmtElapsed(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = String(s % 60).padStart(2, "0");
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
-}
-
-// --- Countdown leaves -------------------------------------------------------
-// Own the 250ms tick (useSecondsLeft/useElapsedMs) so only the clock text
-// re-renders each second — not the whole room or the drafting pool.
-
-// The vote & pick countdowns share one shape; urgency threshold + label vary.
-function SecondsClock({
-  endsAtMs,
-  offsetMs,
-  urgentAt,
-  label,
-  prominent = false,
-}: {
-  endsAtMs: number | null;
-  offsetMs: number;
-  urgentAt: number;
-  label: (seconds: number) => string;
-  prominent?: boolean;
-}) {
-  const seconds = useSecondsLeft(endsAtMs, offsetMs);
-  return (
-    <div
-      role="timer"
-      aria-label={label(seconds)}
-      className={cn(
-        "shrink-0 font-mono font-bold tabular-nums",
-        prominent
-          ? "rounded-xl border border-current/20 bg-bg/40 px-4 py-3 text-3xl sm:text-4xl"
-          : "text-xl",
-        seconds <= urgentAt ? "text-danger" : "text-accent",
-      )}
-    >
-      {seconds}s
-    </div>
-  );
-}
-
-// The running "12:34" game timer in the in-progress banner.
-function ElapsedClock({
-  startedAtMs,
-  offsetMs,
-}: {
-  startedAtMs: number | null;
-  offsetMs: number;
-}) {
-  const elapsedMs = useElapsedMs(startedAtMs, offsetMs);
-  if (elapsedMs == null) return null;
-  return (
-    <span
-      role="timer"
-      aria-label={`game running for ${fmtElapsed(elapsedMs)}`}
-      className="font-mono text-base font-bold tabular-nums text-info"
-    >
-      {fmtElapsed(elapsedMs)}
-    </span>
-  );
-}
-
-function InProgressView({
-  lobby,
-  me,
-  offset,
-  serverNow,
-  detectMinMinutes,
-  pending,
-  act,
-}: {
-  lobby: NonNullable<InhouseState["lobby"]>;
-  me: InhouseState["me"];
-  offset: number;
-  /** The server clock from the last poll — see the scan-window note below. */
-  serverNow: number;
-  detectMinMinutes: number;
-  pending: boolean;
-  act: (body: Record<string, unknown>) => void;
-}) {
-  const [matchId, setMatchId] = useState("");
-  // Poll-driven (not ticking) — only gates the "auto-scan is live" note, which
-  // flips once, minutes in; the visible timer ticks in <ElapsedClock>.
-  // Server clock, not `Date.now() + offset`: calling Date.now() during render
-  // makes the render non-idempotent (React may run it twice and keep either
-  // result). `state.now` is the same figure the offset is derived FROM, so
-  // this is equivalent and, if anything, more honest — the scan window is a
-  // server-side decision. It only lags by one poll, and this flag flips once,
-  // minutes in; the visible timer keeps ticking in <ElapsedClock>.
-  const elapsedMs =
-    lobby.startedAt != null ? serverNow - lobby.startedAt : null;
-  const scanLive = elapsedMs != null && elapsedMs >= detectMinMinutes * 60_000;
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-[var(--radius)] border border-info/40 bg-info/10 px-6 py-5 text-center">
-        <h2 className="flex flex-wrap items-center justify-center gap-3 font-display text-2xl font-semibold sm:text-3xl">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-info/70 motion-reduce:animate-none" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-info" />
-          </span>
-          Game in progress
-          {lobby.startedAt != null ? (
-            <ElapsedClock startedAtMs={lobby.startedAt} offsetMs={offset} />
-          ) : null}
-        </h2>
-        {lobby.startedByName ? (
-          <p className="mt-1 text-sm text-muted">
-            Hosted by {lobby.startedByName}
-          </p>
-        ) : null}
-        {me.canRecord ? (
-          <div className="mt-4 space-y-3">
-            <div>
-              <button
-                disabled={pending}
-                onClick={() => act({ action: "detect" })}
-                className={buttonClasses("accent", "md")}
-              >
-                {pending ? "Fetching from OpenDota…" : "Auto-detect result"}
-              </button>
-              <p className="mx-auto mt-2 max-w-sm text-xs text-muted">
-                {scanLive
-                  ? "Auto-scan is running · results appear after the game ends."
-                  : `Auto-scan starts ${detectMinMinutes} minutes in.`}
-              </p>
-            </div>
-            <details className="mx-auto max-w-lg border-t border-info/20 pt-2 text-left">
-              <summary className="cursor-pointer rounded py-2 text-center text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-                Have a match ID? Record it manually
-              </summary>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!pending && matchId.trim())
-                    void act({ action: "record", matchId: matchId.trim() });
-                }}
-                className="mt-2 flex flex-wrap items-end justify-center gap-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <label
-                    htmlFor="inhouse-match-id"
-                    className="mb-1 block text-xs text-muted"
-                  >
-                    Dota match ID
-                  </label>
-                  <input
-                    id="inhouse-match-id"
-                    type="text"
-                    inputMode="numeric"
-                    enterKeyHint="done"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    value={matchId}
-                    onChange={(e) => setMatchId(e.target.value)}
-                    placeholder="e.g. 7891234567"
-                    className="h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={pending || !matchId.trim()}
-                  className={buttonClasses("secondary", "md", "min-h-11")}
-                >
-                  Record
-                </button>
-              </form>
-            </details>
-          </div>
-        ) : (
-          <p className="mt-3 text-sm text-muted">
-            {scanLive
-              ? "The result is pulled from OpenDota automatically once the game ends."
-              : `The result is pulled from OpenDota automatically — auto-scan starts ${detectMinMinutes} minutes in.`}
-          </p>
-        )}
-      </div>
-
-      {me.inLobby || me.isAdmin ? <GameSetupCard lobby={lobby} me={me} /> : null}
-
-      <MatchupGrid lobby={lobby} />
-    </div>
-  );
-}
-
-// ---------- Game setup instructions (lobby + voice) ----------
-
-/** A monospace value with a click-to-copy button (name / password / etc.). */
-function CopyChip({ value, label }: { value: string; label: string }) {
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(value);
-          pushToast("success", `Copied ${label}: ${value}`);
-        } catch {
-          pushToast("error", "Couldn't copy — select it and copy manually");
-        }
-      }}
-      title={`Copy ${label}`}
-      className="inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-lg border border-line bg-surface-2/60 px-3 py-2 font-mono text-sm font-semibold text-fg transition-colors hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-    >
-      {value}
-      <span aria-hidden className="text-xs text-muted">
-        📋
-      </span>
-    </button>
-  );
-}
-
-/**
- * What the ten players do once teams lock: one hosts the Dota 2 lobby with the
- * fixed shared credentials, selects the required league ticket, and everyone
- * joins their team's Discord voice channel. Result discovery remains the
- * existing player-account scan; the ticket makes the private game available
- * to OpenDota for that scan to find.
- */
-function GameSetupCard({
-  lobby,
-  me,
-}: {
-  lobby: NonNullable<InhouseState["lobby"]>;
-  me: InhouseState["me"];
-}) {
-  const voiceByTeam = (team: number) =>
-    team === 1 ? INHOUSE.VOICE_TEAM_1 : INHOUSE.VOICE_TEAM_2;
-
-  return (
-    <section
-      aria-label="Game setup"
-      className="overflow-hidden rounded-2xl border border-line bg-surface/90"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4">
-        <h3 className="text-sm font-semibold">How to play this game</h3>
-        {DISCORD_INVITE_URL ? (
-          <a
-            href={DISCORD_INVITE_URL}
-            target="_blank"
-            rel="noreferrer"
-            className={textLink("inline-flex min-h-8 items-center text-xs")}
-          >
-            League Discord ↗
-          </a>
-        ) : null}
-      </div>
-      <div className="p-5">
-        <DotaLobbyControls key={lobby.id} kind="inhouse" id={lobby.id} />
-      </div>
-      <p className="px-5 text-xs text-muted">
-        Manual setup below is available if you are hosting without the bot.
-        For a bot lobby, use the name and password above.
-      </p>
-      <div className="grid gap-0 lg:grid-cols-3">
-        <div className="min-w-0 border-b border-line p-5 lg:border-b-0 lg:border-r">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent">
-            01 · Dota lobby
-          </p>
-          <h4 className="text-sm font-semibold">Create or join</h4>
-          <p className="mt-1 text-xs text-muted">
-            Dota 2 → Play → Custom Lobbies
-          </p>
-          <dl className="mt-4 space-y-3">
-            <div>
-              <dt className="mb-1 text-[11px] text-muted">Lobby name</dt>
-              <dd>
-                <CopyChip value={INHOUSE.LOBBY_NAME} label="lobby name" />
-              </dd>
-            </div>
-            <div>
-              <dt className="mb-1 text-[11px] text-muted">Password</dt>
-              <dd>
-                <CopyChip value={INHOUSE.LOBBY_PASSWORD} label="password" />
-              </dd>
-            </div>
-          </dl>
-          <p className="mt-3 text-xs text-muted">
-            Any player can host. Everyone else joins the lobby or asks the host
-            for an invite.
-          </p>
-        </div>
-        <div className="min-w-0 border-b border-line bg-accent/5 p-5 lg:border-b-0 lg:border-r">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent">
-            02 · Match tracking
-          </p>
-          <h4 className="text-sm font-semibold">Set the league ticket</h4>
-          <p className="mt-1 text-xs text-muted">
-            Host → Lobby Settings → League
-          </p>
-          <div className="mt-4">
-            {INHOUSE.LOBBY_TICKET_CONFIGURED ? (
-              <CopyChip value={INHOUSE.LOBBY_TICKET} label="league ticket" />
-            ) : (
-              <p className="text-xs text-muted">{INHOUSE.LOBBY_TICKET}</p>
-            )}
-          </div>
-          <p className="mt-3 text-xs text-muted">
-            {INHOUSE.LOBBY_TICKET_CONFIGURED
-              ? "Required: without this ticket, the game will not appear on OpenDota and cannot be recorded on the site."
-              : "The league administrators will provide the European ticket before tracked inhouse games begin."}
-          </p>
-          <a
-            href="#opendota-setup"
-            className={textLink(
-              "mt-3 inline-flex min-h-8 items-center text-xs",
-            )}
-          >
-            Check your match-data setup ↓
-          </a>
-        </div>
-        <div className="min-w-0 p-5">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent">
-            03 · Team voice
-          </p>
-          <h4 className="text-sm font-semibold">Meet in Discord</h4>
-          <p className="mt-1 text-xs text-muted">
-            Join your side’s voice channel.
-          </p>
-          <ul className="mt-4 space-y-2">
-            {lobby.teams.map((t) => {
-              const meta = sideMeta(t.isRadiant);
-              const mine = me.myTeam === t.team;
-              return (
-                <li
-                  key={t.team}
-                  className={cn(
-                    "rounded-xl border px-3 py-2.5",
-                    mine ? meta.chip : "border-line bg-surface-2/40",
-                  )}
-                >
-                  <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                    <span
-                      className={cn(
-                        "font-semibold",
-                        t.isRadiant ? "text-success" : "text-danger",
-                      )}
-                    >
-                      {meta.name}
-                    </span>
-                    {mine ? (
-                      <span className="font-medium">Your team</span>
-                    ) : null}
-                  </div>
-                  <span className="block break-words text-sm text-fg">
-                    {voiceByTeam(t.team)}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ---------- Shared roster grid ----------
-
-function MatchupGrid({ lobby }: { lobby: NonNullable<InhouseState["lobby"]> }) {
-  return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {lobby.teams.map((t) => {
-        const meta = sideMeta(t.isRadiant);
-        const roster = t.captain ? [t.captain, ...t.players] : t.players;
-        // Shared with the drafting columns and the balance banner — this grid
-        // used to average the unknowns in as zeroes and disagree with both.
-        const avgMmr = avgKnownMmr(roster.map((p) => p.mmr));
-        return (
-          <div
-            key={t.team}
-            className={cn(
-              "rounded-[var(--radius)] border bg-surface/80",
-              meta.ring,
-            )}
-          >
-            <div className="flex items-center justify-between border-b border-line px-4 py-3">
-              <div className="flex items-center gap-2 font-semibold">
-                <span className={cn("h-2.5 w-2.5 rounded-full", meta.dot)} />
-                {meta.name}
-              </div>
-              {avgMmr > 0 ? (
-                <span className="text-xs text-muted">avg {avgMmr} MMR</span>
-              ) : null}
-            </div>
-            <div className="space-y-1.5 p-3">
-              {roster.map((p, i) => (
-                <div key={p.userId} className="flex items-center gap-2 text-sm">
-                  <Avatar name={p.name} src={p.avatar} size={24} />
-                  <PlayerLink
-                    userId={p.userId}
-                    className="min-w-6 flex-1 truncate"
-                  >
-                    {p.name}
-                  </PlayerLink>
-                  {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}
-                  <RankBadge rankTier={p.rankTier} />
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
