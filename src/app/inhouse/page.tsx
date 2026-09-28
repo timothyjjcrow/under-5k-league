@@ -482,7 +482,6 @@ async function LadderCard({ meId }: { meId: string | null }) {
       <CardBody className="p-0">
         <LadderViewSwitch view="all" />
         <YourStanding rows={leaderboard} meId={meId} />
-        <LadderLeaders rows={leaderboard} />
         <Leaderboard rows={leaderboard} meId={meId} />
         <LadderKey rows={leaderboard} />
         {/* The table's marks are explained in the visible key above (see
@@ -499,82 +498,6 @@ async function LadderCard({ meId }: { meId: string | null }) {
         </details>
       </CardBody>
     </Card>
-  );
-}
-
-/** Established leaders only: a provisional first win never becomes a podium. */
-function LadderLeaders({
-  rows,
-}: {
-  rows: ReturnType<typeof summarizeInhouse>;
-}) {
-  const leaders = rankInhouse(rows).ranked.slice(0, 3);
-  if (leaders.length === 0) return null;
-  return (
-    <ol
-      aria-label="Ladder leaders"
-      className="grid grid-cols-2 gap-3 border-b border-line p-4 sm:grid-cols-3 sm:p-5"
-    >
-      {leaders.map((player, i) => (
-        <li
-          key={player.userId}
-          className={cn(
-            "min-w-0 rounded-xl border p-3 sm:p-4",
-            i === 0
-              ? "col-span-2 border-accent/35 bg-gradient-to-br from-accent/10 to-surface sm:col-span-1"
-              : "border-line bg-surface-2/35",
-          )}
-        >
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <span
-              className={cn(
-                "text-[10px] font-semibold uppercase tracking-wider",
-                i === 0 ? "text-accent" : "text-muted",
-              )}
-            >
-              {i === 0 ? "League leader" : `Rank ${i + 1}`}
-            </span>
-            <span className="font-mono text-xs text-muted">0{i + 1}</span>
-          </div>
-          <div className="flex min-w-0 items-center gap-2">
-            <Avatar name={player.name} src={player.avatar} size={30} />
-            <PlayerLink
-              userId={player.userId}
-              className="min-w-0 truncate text-sm font-semibold"
-            >
-              {player.name}
-            </PlayerLink>
-          </div>
-          <div className="mt-3 flex flex-wrap items-end justify-between gap-2">
-            <div>
-              <span className="font-display text-3xl font-bold tabular-nums">
-                {player.rating}
-              </span>
-              <span className="ml-1 text-[10px] text-muted">Elo</span>
-            </div>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
-                player.lastChange > 0
-                  ? "bg-success/10 text-success"
-                  : player.lastChange < 0
-                    ? "bg-danger/10 text-danger"
-                    : "bg-surface-2 text-muted",
-              )}
-            >
-              {player.lastChange > 0 ? "+" : ""}
-              {player.lastChange} last game
-            </span>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3">
-            <span className="text-xs tabular-nums text-muted">
-              {player.wins}W · {player.losses}L
-            </span>
-            <FormStrip form={player.form} size={4} />
-          </div>
-        </li>
-      ))}
-    </ol>
   );
 }
 
