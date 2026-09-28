@@ -92,7 +92,35 @@ protected claim that stops being caught (its test regressed), and a protected
 claim that has DISAPPEARED (the guard itself was removed or weakened). Claim ids
 are anchored to the ENCLOSING FUNCTION — an earlier file-wide-ordinal scheme let
 a deleted guard silently re-bind to the next claim down, so the ratchet reported
-all-clear on a sabotage; don't reintroduce positional ids.
+all-clear on a sabotage; don't reintroduce positional ids. The anchor is the
+TOP-LEVEL declaration read from the TypeScript syntax tree
+(`scripts/mutation-claims.mjs`, pinned by `scripts/mutation-claims.test.mjs`):
+the first version regex-scanned the raw text, so comment prose ("this function
+exists to…") and inner helpers (`const finish = …` inside a service) became
+anchors and rewording a comment renamed a protected claim. Moving a guarded
+function to another file, or renaming it, still changes its id; record the move
+in the baseline as `"renames": { "<old id>": "<new id>" }` instead of running a
+full Postgres `--discover`. A rename carries the classification, never the
+evidence: verify still deletes the guard at its new home and needs a test to
+fail, the static check refuses any entry that isn't an actual move (only the
+file and function part of the id may change; a different predicate signature
+or ordinal is a weakened or swapped guard, not a move), and the next full
+`--discover` folds the entries into the lists. A moved EQUIVALENT also
+needs its id renamed in the guard's `EQUIVALENT` list, reason and all.
+A full `--discover` also writes `killers` (per protected claim, the test file
+that failed first); verify runs that file alone with `--bail` (once it has
+passed alone on unmutated source) and falls back to the whole suite only if it
+passes, so the order changes and the rule does not.
+CI skips the shards when the trusted classifier reports `needs_mutation: false`
+(only pages/components, assets, docs, or tests the Postgres suite never loads
+changed), `release:both` accepts that skip only on the trusted production
+classification (or on an earlier `main` commit's passing shards when that
+classifier calls the rest of the delta mutation-neutral; README has the
+recovery when there are none), the test job's
+`node scripts/mutation-guard.mjs --static` still checks the claim inventory
+without Postgres, and
+`.github/workflows/mutation-nightly.yml` verifies the whole baseline on main at
+07:00 UTC.
 
 The current 2026-08-03 baseline has 105 live claims: 65 protected, 40 reviewed
 equivalents, and 0 unprotected. Targeted probes use
@@ -158,7 +186,7 @@ reasons were wrong in the same way — **"something upstream serializes this" on
 covers rivals from the SAME path**, and every one of these claims had a rival
 from a different path. Keep that in mind before writing another such excuse.
 
-- `result-sync-service::dueMinutes` — the excuse was the global
+- `result-sync-service::syncDueMatches` — the excuse was the global
   `rosterAutoSyncAt` throttle. It does serialize runs, which is why the `OR`
   half is genuinely belt-and-braces (nothing else writes `autoSyncedAt`, so no
   test can reach it — and it need not, since the ratchet deletes both halves at
@@ -170,7 +198,7 @@ from a different path. Keep that in mind before writing another such excuse.
   `syncLeagueGames` grew one) — and imports a late game over an admin's ruling.
   Seam `resultSync.syncDueMatches.beforeMatchClaim`; the decisive assertion is
   that OpenDota was never called at all.
-- `inhouse-board-service::exists` + `::swapState` — the excuse was "belt-and-
+- `inhouse-board-service::claimBoardRow` + `::swapState` — the excuse was "belt-and-
   braces behind explicit checks in `claimBoardRow`", which had it backwards: the
   checks are READ-time and both CASes span a Discord round trip, so the checks
   are the thing that goes stale and the CAS is the only write-time re-assertion.
@@ -3077,7 +3105,8 @@ uses `prisma db push` and has no data-loss override.
   allowlisted docs/tests are neutral companions; sensitive-path tests/docs stay
   strict, and neutral-only changes do not create a fast lane. UI/app releases
   need no release-only backup or scheduler pause. Strict always means full CI
-  and review, while `needs_db_release` and `needs_scheduler_pause` select
+  and review (the mutation shards alone follow `needs_mutation`, see the
+  ratchet paragraph), while `needs_db_release` and `needs_scheduler_pause` select
   recovery, propagation, and lease-drain procedures. GitHub's event-base use
   of the classifier is only a conservative job-selection optimization and
   never substitutes for the canonical production-to-candidate release

@@ -1074,7 +1074,10 @@ integration suite on a Postgres service container; the 4-shard mutation
 matrix; and all three Playwright suites sequentially. CI invokes the release
 classifier against the PR/push event base as a conservative job-selection
 optimization; only a narrow presentation-path allowlist may skip the Postgres
-and mutation jobs. Release authorization separately extracts the classifier
+job, and the mutation job also skips when `needs_mutation` is false (only
+pages/components, assets, docs, or tests the Postgres suite never loads
+changed; `mutation-nightly.yml` re-verifies main daily). Release
+authorization separately extracts the classifier
 blob from the resolved canonical production commit and runs it against the
 candidate, requires a fetchable ancestor base, and parses the exact
 NUL-delimited Git status stream. If the trusted blob is unavailable, every

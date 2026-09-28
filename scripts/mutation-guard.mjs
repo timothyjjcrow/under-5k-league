@@ -19,16 +19,23 @@
 //   node scripts/mutation-guard.mjs --discover   # full sweep, rewrites the baseline
 //   node scripts/mutation-guard.mjs --discover --only ID_SUBSTRING
 //   node scripts/mutation-guard.mjs              # verify the baseline (what CI runs)
+//   node scripts/mutation-guard.mjs --static     # inventory + baseline only, no Postgres
 //
 // Verify mode first requires EVERY live claim to appear exactly once in the
 // baseline as either PROTECTED or a reviewed EQUIVALENT. It then re-mutates
 // only the protected claims, so it costs ~1 suite run each rather than one per
-// claim in the repo. It fails when:
+// claim in the repo. A protected claim whose baseline `killers` entry names
+// the test file that failed in the last full --discover runs that ONE file
+// first; only when it does not fail does the whole suite run (see
+// trustedKiller and measureMutant in ./mutation-claims.mjs). It fails when:
 //   * a protected claim is no longer caught  → a test that protected it regressed
 //   * a protected claim has DISAPPEARED      → the guard itself was removed
 //   * a live claim is absent from the baseline → discovery was not reviewed
 //   * the baseline is malformed, duplicated, stale, or only partly classified
-// Raise the ratchet by writing a test and re-running --discover.
+// Raise the ratchet by writing a test and re-running --discover. A guard that
+// only MOVED (its function renamed or moved to another file) keeps its
+// classification through a baseline `renames` entry, see resolveRenames in
+// ./mutation-claims.mjs, which also holds the claim-id rules.
 //
 // MUST run against Postgres (PG_TEST_URL). Several of these claims are only
 // caught by RACED tests, and on SQLite those race calls serialize — the mutant
@@ -48,7 +55,14 @@ import {
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { assertPostgresTestUrl } from "./test-db-safety.mjs";
-import { discoverThrottleSqlClaims } from "./mutation-sql-claims.mjs";
+import {
+  discoverClaims,
+  killerFromReport,
+  measureMutant,
+  resolveKillers,
+  resolveRenames,
+  trustedKiller,
+} from "./mutation-claims.mjs";
 
 const BASELINE = "test/mutation-baseline.json";
 
@@ -113,7 +127,7 @@ const EQUIVALENT = new Set([
   // a competing close conflicts, while an already-closed row fails preflight.
   // These guards still document intent and defend inconsistent external data.
   "src/lib/roster-history.ts::closeRosterTenure::closedAt#1",
-  "src/lib/roster-history.ts::checkActor::closedAt+openKey#1",
+  "src/lib/roster-history.ts::backfillRosterTenures::closedAt+openKey#1",
   // Identity correction, its fresh administrator claim, provider-failure
   // bookkeeping and import-progress commands read the exact row before their
   // same-row write in SERIALIZABLE. Concurrent source/role/revision changes
@@ -322,228 +336,10 @@ const FILES = [
   "src/lib/users.ts",
 ];
 
-// Keys that merely IDENTIFY the row. Everything else in a WHERE is state, and
-// state is what makes the write a claim.
-const IDENTITY = new Set([
-  "id",
-  "seasonId",
-  "lobbyId",
-  "userId",
-  "matchId",
-  "teamId",
-  "key",
-  "draftId",
-  "gameId",
-  "dotaMatchId",
-  "registrationId",
-  "steamId",
-  "discordId",
-]);
-
-/**
- * Skip a `//` or block comment starting at `i`, returning the index to resume
- * scanning from (or `i` when there is no comment there).
- *
- * BOTH scanners below need this and neither had it, which cost a red CI and a
- * long diagnosis. They treat `'` as a string delimiter, so an ordinary prose
- * comment inside a claim's object literal — "the lobby's", "don't", "the
- * bettor's" — put an ODD number of apostrophes in their path, opened a phantom
- * string, and desynced brace matching. The claim did not read as weakened: it
- * vanished from discovery entirely, tripping the "a protected claim has
- * DISAPPEARED" alarm against a baseline that still listed it.
- *
- * That failure mode is worse than it sounds, because it is SILENT in the other
- * direction too. A `--discover` run after such an edit simply records the
- * smaller claim set and reports all-clear, so the guard a comment happened to
- * hide is dropped from the ratchet with nothing to say so. Comments in this
- * repo are deliberately long and prose-heavy, so this was going to recur.
- */
-function skipComment(src, i) {
-  if (src[i] !== "/") return i;
-  if (src[i + 1] === "/") {
-    const nl = src.indexOf("\n", i);
-    return nl === -1 ? src.length : nl;
-  }
-  if (src[i + 1] === "*") {
-    const end = src.indexOf("*/", i + 2);
-    return end === -1 ? src.length : end + 1;
-  }
-  return i;
-}
-
-/** The balanced {...} beginning at `open`. */
-function block(src, open) {
-  let d = 0,
-    inStr = null,
-    esc = false;
-  for (let i = open; i < src.length; i++) {
-    const c = src[i];
-    if (esc) {
-      esc = false;
-      continue;
-    }
-    if (inStr) {
-      if (c === "\\") esc = true;
-      else if (c === inStr) inStr = null;
-      continue;
-    }
-    const j = skipComment(src, i);
-    if (j !== i) {
-      i = j;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      inStr = c;
-      continue;
-    }
-    if (c === "{") d++;
-    else if (c === "}") {
-      d--;
-      if (d === 0) return [open, i + 1];
-    }
-  }
-  return null;
-}
-
-/** Top-level `key: value` spans inside an object literal. */
-function topKeys(src, s, e) {
-  const out = [];
-  let d = 0,
-    inStr = null,
-    esc = false;
-  for (let i = s + 1; i < e - 1; i++) {
-    const c = src[i];
-    if (esc) {
-      esc = false;
-      continue;
-    }
-    if (inStr) {
-      if (c === "\\") esc = true;
-      else if (c === inStr) inStr = null;
-      continue;
-    }
-    // Same reason as in `block` — and this scanner ALSO mis-read key names out
-    // of comment prose, which is how a claim in the since-removed betting
-    // service acquired a phantom `write` key that no WHERE ever contained.
-    const j = skipComment(src, i);
-    if (j !== i) {
-      i = j;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      inStr = c;
-      continue;
-    }
-    if (c === "{" || c === "[" || c === "(") d++;
-    else if (c === "}" || c === "]" || c === ")") d--;
-    else if (d === 0) {
-      const m = /^([A-Za-z_$][\w$]*)\s*:/.exec(src.slice(i, i + 40));
-      if (m && (i === s + 1 || /[\s,{]/.test(src[i - 1]))) {
-        let j = i + m[0].length,
-          dd = 0,
-          st = null,
-          es = false;
-        for (; j < e - 1; j++) {
-          const cc = src[j];
-          if (es) {
-            es = false;
-            continue;
-          }
-          if (st) {
-            if (cc === "\\") es = true;
-            else if (cc === st) st = null;
-            continue;
-          }
-          // Third scanner, same fix — and the most dangerous of the three to
-          // leave broken: this one decides where a predicate's value ENDS, i.e.
-          // the `drop` span `mutate()` physically deletes. A desync here cuts
-          // the wrong source text, so the "mutant" tested is not the mutant the
-          // report names.
-          const jj = skipComment(src, j);
-          if (jj !== j) {
-            j = jj;
-            continue;
-          }
-          if (cc === '"' || cc === "'" || cc === "`") {
-            st = cc;
-            continue;
-          }
-          if (cc === "{" || cc === "[" || cc === "(") dd++;
-          else if (cc === "}" || cc === "]" || cc === ")") {
-            if (dd === 0) break;
-            dd--;
-          } else if (cc === "," && dd === 0) break;
-        }
-        out.push({ key: m[1], start: i, end: j });
-        i = j;
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * The function a claim sits in. Anchoring IDs to this is load-bearing: a
- * file-wide ordinal SHIFTS when a claim is removed, so deleting a guard made
- * its id silently re-bind to a different claim further down and the ratchet
- * reported all-clear. (Caught by sabotage-testing the ratchet itself.)
- */
-function enclosingFn(src, offset) {
-  const decl =
-    /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g;
-  let name = "<top>";
-  for (let m; (m = decl.exec(src));) {
-    if (m.index > offset) break;
-    name = m[1] ?? m[2] ?? name;
-  }
-  return name;
-}
-
-/**
- * Claims are identified by file + enclosing function + their state-key
- * SIGNATURE + an ordinal within that function — never by line number, which
- * every unrelated edit above them would churn.
- */
+/** Every guarded claim in one source file, plus its source text. */
 function discoverFile(file) {
   const src = readFileSync(file, "utf8");
-  const found = discoverThrottleSqlClaims(file, src);
-  const seen = new Map();
-  let from = 0;
-  for (;;) {
-    const at = src.indexOf("updateMany(", from);
-    if (at === -1) break;
-    from = at + 11;
-    const argOpen = src.indexOf("{", at);
-    if (argOpen === -1) continue;
-    const arg = block(src, argOpen);
-    if (!arg) continue;
-    const where = topKeys(src, arg[0], arg[1]).find((p) => p.key === "where");
-    if (!where) continue;
-    const wOpen = src.indexOf("{", where.start + 6);
-    if (wOpen === -1 || wOpen > where.end) continue;
-    const wb = block(src, wOpen);
-    if (!wb) continue;
-    const state = topKeys(src, wb[0], wb[1]).filter(
-      (k) => !IDENTITY.has(k.key),
-    );
-    if (state.length === 0) continue;
-    const sig = state
-      .map((s) => s.key)
-      .sort()
-      .join("+");
-    const fn = enclosingFn(src, at);
-    const scope = `${fn}::${sig}`;
-    const ord = (seen.get(scope) ?? 0) + 1;
-    seen.set(scope, ord);
-    found.push({
-      id: `${file}::${fn}::${sig}#${ord}`,
-      file,
-      line: src.slice(0, at).split("\n").length,
-      drop: state.map((s) => [s.start, s.end]),
-    });
-    from = arg[1];
-  }
-  return { src, found };
+  return { src, found: discoverClaims(file, src) };
 }
 
 function discoverAll() {
@@ -611,6 +407,8 @@ function sorted(values) {
  * Validate the baseline as a closed inventory, not a best-effort scorecard.
  * Every live claim must have exactly one classification; every recorded id
  * must still be live; and "equivalent" must match the reviewed source list.
+ * The checks after the shape checks judge the lists with any `renames`
+ * applied (see resolveRenames).
  */
 function validateBaseline(base, liveClaims) {
   const problems = [];
@@ -638,18 +436,20 @@ function validateBaseline(base, liveClaims) {
     return problems;
   }
 
-  const protectedIds = base.protected;
-  const equivalentIds = base.equivalent;
+  const liveIds = liveClaims.map((claim) => claim.id);
+  const renamed = resolveRenames(base, liveIds);
+  problems.push(...renamed.problems);
+  const protectedIds = renamed.protected;
+  const equivalentIds = renamed.equivalent;
   for (const id of duplicates(protectedIds)) {
     problems.push(`protected contains a duplicate: ${id}`);
   }
   for (const id of duplicates(equivalentIds)) {
     problems.push(`equivalent contains a duplicate: ${id}`);
   }
-  if (!sorted(protectedIds)) problems.push("protected IDs are not sorted");
-  if (!sorted(equivalentIds)) problems.push("equivalent IDs are not sorted");
+  if (!sorted(base.protected)) problems.push("protected IDs are not sorted");
+  if (!sorted(base.equivalent)) problems.push("equivalent IDs are not sorted");
 
-  const liveIds = liveClaims.map((claim) => claim.id);
   const duplicateLive = duplicates(liveIds);
   for (const id of duplicateLive) {
     problems.push(`live discovery produced a duplicate ID: ${id}`);
@@ -689,6 +489,7 @@ function validateBaseline(base, liveClaims) {
         `${protectedIds.length + equivalentIds.length} entries`,
     );
   }
+  problems.push(...resolveKillers(base, protectedIds).problems);
   return problems;
 }
 
@@ -725,13 +526,17 @@ function vitestReport(result) {
   }
 }
 
-/** Run Vitest without a shell so process failures cannot masquerade as kills. */
-function runSuite({ bail = false } = {}) {
+/**
+ * Run Vitest without a shell so process failures cannot masquerade as kills.
+ * `files` narrows the run to those test files; empty runs the whole suite.
+ */
+function runSuite({ bail = false, files = [] } = {}) {
   const result = spawnSync(
     process.execPath,
     [
       VITEST,
       "run",
+      ...files,
       "--config",
       "vitest.pg.config.mts",
       ...(bail ? ["--bail=1"] : []),
@@ -746,7 +551,7 @@ function runSuite({ bail = false } = {}) {
     },
   );
   if (result.error || result.signal) {
-    return { kind: "infrastructure", result };
+    return { kind: "infrastructure", result, report: null };
   }
   const report = vitestReport(result);
   if (
@@ -755,14 +560,14 @@ function runSuite({ bail = false } = {}) {
     report.numFailedTests === 0 &&
     report.numTotalTests > 0
   ) {
-    return { kind: "pass", result };
+    return { kind: "pass", result, report };
   }
   // Vitest also exits 1 for transform/import/configuration failures. Only an
   // actual failed test is behavioral evidence that the suite killed a mutant.
   if (result.status === 1 && report && report.numFailedTests > 0) {
-    return { kind: "test-failure", result };
+    return { kind: "test-failure", result, report };
   }
-  return { kind: "infrastructure", result };
+  return { kind: "infrastructure", result, report };
 }
 
 function stopForInfrastructure(context, run) {
@@ -805,50 +610,57 @@ function stopForInvalidMutant(claim, diagnostics) {
   process.exit(2);
 }
 
-/** Whether the suite NOTICED the mutation (i.e. the guard is protected). */
-function suiteCatches(claim) {
+/**
+ * Whether the suite NOTICED the mutation (i.e. the guard is protected), and
+ * which test file killed it. `killer` (verify mode only) is the claim's
+ * recorded killer, run first; see measureMutant.
+ */
+function suiteCatches(claim, killer = null) {
   const original = readFileSync(claim.file, "utf8");
   const { found } = discoverFile(claim.file);
   const live = found.find((c) => c.id === claim.id);
-  if (!live) {
-    return {
-      caught: false,
-      missing: true,
-      infrastructure: null,
-      invalidMutation: null,
-    };
-  }
+  const outcome = {
+    caught: false,
+    missing: false,
+    infrastructure: null,
+    invalidMutation: null,
+    killer: null,
+    via: null,
+    fallback: null,
+  };
+  if (!live) return { ...outcome, missing: true };
   const mutant = mutate(original, live);
   const invalidMutation = mutationSyntaxErrors(claim.file, mutant);
-  if (invalidMutation) {
-    return {
-      caught: false,
-      missing: false,
-      infrastructure: null,
-      invalidMutation,
-    };
-  }
+  if (invalidMutation) return { ...outcome, invalidMutation };
   writeFileSync(claim.file, mutant);
   try {
-    const run = runSuite({ bail: true });
+    const measured = measureMutant(killer, {
+      run: (files) => runSuite({ bail: true, files }),
+      exists: existsSync,
+    });
+    const { run, via, fallback } = measured;
     if (run.kind === "infrastructure") {
-      return {
-        caught: false,
-        missing: false,
-        infrastructure: run,
-        invalidMutation: null,
-      };
+      return { ...outcome, infrastructure: run, via, fallback };
     }
+    const caught = run.kind === "test-failure";
     return {
-      caught: run.kind === "test-failure",
-      missing: false,
-      infrastructure: null,
-      invalidMutation: null,
+      ...outcome,
+      caught,
+      killer: caught ? killerFromReport(run.report, process.cwd()) : null,
+      via,
+      fallback,
     };
   } finally {
     writeFileSync(claim.file, original);
   }
 }
+
+// Why verify had to run the whole suite after a recorded killer.
+const FALLBACK_NOTES = {
+  missing: "is no longer on disk",
+  survived: "no longer fails with this guard deleted",
+  infrastructure: "did not finish cleanly on its own",
+};
 
 // ---------------------------------------------------------------------------
 const discover = process.argv.includes("--discover");
@@ -887,6 +699,16 @@ if (shardArg !== -1) {
 }
 if (discover && shard) {
   console.error("--shard is a verify-mode option and cannot be combined with --discover");
+  process.exit(2);
+}
+// `--static` stops after the source-inventory and baseline checks, which need
+// no database. CI's always-required test job runs it, because the mutation
+// shards skip themselves when the release classifier reports
+// needs_mutation=false, and a claim added to a page would otherwise go
+// unnoticed until the nightly verify.
+const staticOnly = process.argv.includes("--static");
+if (staticOnly && (discover || shard)) {
+  console.error("--static checks the committed baseline and takes no other mode");
   process.exit(2);
 }
 
@@ -932,10 +754,31 @@ if (!discover) {
     console.error(`${BASELINE} is not an exact guarded-claim inventory:`);
     for (const problem of baselineProblems) console.error(`  - ${problem}`);
     console.error(
-      "Review every new or changed classification, then run a full --discover.",
+      "Review every new or changed classification, then run a full --discover.\n" +
+        "A guard that only MOVED (its function was renamed or moved to another\n" +
+        'file) can carry its classification with a "renames" entry instead:\n' +
+        '  "renames": { "<old id>": "<new id>" }',
     );
     process.exit(2);
   }
+  // From here on the protected/equivalent lists name live ids only: every
+  // rename is applied, so verify re-mutates each moved guard at its new home.
+  const effective = resolveRenames(base, [...allLiveIds]);
+  base = {
+    ...base,
+    protected: effective.protected,
+    equivalent: effective.equivalent,
+    killers: resolveKillers(base, effective.protected).killers,
+  };
+}
+
+if (staticOnly) {
+  console.log(
+    `✔ ${allClaims.length} live claims in ${FILES.length} files match ${BASELINE}: ` +
+      `${base.protected.length} protected (${base.killers.size} with a recorded killer), ` +
+      `${base.equivalent.length} reviewed equivalent.`,
+  );
+  process.exit(0);
 }
 
 try {
@@ -966,12 +809,22 @@ if (discover) {
     `Sweeping ${claims.length} guarded claims (one suite run each)…\n`,
   );
   const protectedIds = [];
+  const killerById = new Map();
   let previousProtected = new Set();
   if (existsSync(BASELINE)) {
     try {
       const previous = JSON.parse(readFileSync(BASELINE, "utf8"));
       if (Array.isArray(previous.protected)) {
         previousProtected = new Set(previous.protected);
+        // A guard that only moved keeps its protected status: its renamed id
+        // is not "newly caught" and needs no second confirming run. Invalid
+        // renames are ignored rather than trusted.
+        const renamed = Array.isArray(previous.equivalent)
+          ? resolveRenames(previous, [...allLiveIds])
+          : null;
+        if (renamed && renamed.problems.length === 0) {
+          previousProtected = new Set(renamed.protected);
+        }
       }
     } catch {
       // Discovery is the repair path for a stale or malformed baseline. With
@@ -1007,14 +860,18 @@ if (discover) {
       if (!second.caught) caught = false;
     }
     console.log(
-      `  [${caught ? "PROTECTED  " : "unprotected"}] (${i + 1}/${claims.length}) ${c.id}  (${c.file}:${c.line})${caught && rechecked ? " (confirmed twice)" : ""}`,
+      `  [${caught ? "PROTECTED  " : "unprotected"}] (${i + 1}/${claims.length}) ${c.id}  (${c.file}:${c.line})${caught && rechecked ? " (confirmed twice)" : ""}` +
+        (caught && first.killer ? `  killed by ${first.killer}` : ""),
     );
     if (rechecked && !caught) {
       console.log(
         "    [FLAKY KILL] first run failed but the mutant survived confirmation; not promoted",
       );
     }
-    if (caught) protectedIds.push(c.id);
+    if (caught) {
+      protectedIds.push(c.id);
+      if (first.killer) killerById.set(c.id, first.killer);
+    }
   }
   const equivalentCount = claims.filter((c) => EQUIVALENT.has(c.id)).length;
   const unprotectedCount =
@@ -1041,6 +898,7 @@ if (discover) {
     );
     process.exit(1);
   }
+  protectedIds.sort();
   writeFileSync(
     BASELINE,
     JSON.stringify(
@@ -1050,10 +908,17 @@ if (discover) {
           "`node scripts/mutation-guard.mjs --discover` (needs PG_TEST_URL). " +
           "CI requires every live claim to be exactly classified, re-mutates " +
           "every protected claim, and fails if one regresses or disappears. " +
+          "`killers` names the test file that failed first for each protected " +
+          "claim; verify runs it before the whole suite. " +
           "Raise the ratchet by writing a race test and re-running.",
         totalClaims: claims.length,
         equivalent: [...EQUIVALENT].sort(),
-        protected: protectedIds.sort(),
+        protected: protectedIds,
+        killers: Object.fromEntries(
+          protectedIds
+            .filter((id) => killerById.has(id))
+            .map((id) => [id, killerById.get(id)]),
+        ),
       },
       null,
       2,
@@ -1080,6 +945,8 @@ console.log(
     ? `Verifying shard ${shard.i}/${shard.n}: ${mine.length} of ${base.protected.length} protected claims…\n`
     : `Verifying ${mine.length} protected claims (of ${claims.length} found; baseline saw ${base.totalClaims})…\n`,
 );
+let decidedByKiller = 0;
+const killerAlone = new Map();
 for (const id of mine) {
   const claim = byId.get(id);
   if (!claim) {
@@ -1089,17 +956,35 @@ for (const id of mine) {
     );
     continue;
   }
-  const measured = suiteCatches(claim);
+  const recorded = base.killers.get(id) ?? null;
+  // Runs before the mutant is written: the proof is on unmutated source.
+  const { killer, untrusted } = trustedKiller(recorded, {
+    run: (files) => runSuite({ bail: true, files }),
+    exists: existsSync,
+    cache: killerAlone,
+  });
+  const measured = suiteCatches(claim, killer);
+  const fallbackNote = untrusted
+    ? `    [killer untrusted] ${recorded} ${untrusted === "test-failure" ? "fails" : "does not finish cleanly"} ` +
+      "on its own against unmutated source, so the whole suite decided"
+    : measured.fallback
+      ? `    [killer ${measured.fallback}] ${killer} ${FALLBACK_NOTES[measured.fallback]}, ` +
+        "so the whole suite decided (a full --discover refreshes killers)"
+      : null;
   if (measured.invalidMutation) {
     stopForInvalidMutant(claim, measured.invalidMutation);
   }
   if (measured.infrastructure) {
+    if (fallbackNote) console.log(fallbackNote);
     stopForInfrastructure(`verifying ${id}`, measured.infrastructure);
   }
   const { caught } = measured;
+  if (measured.via === "killer") decidedByKiller++;
   console.log(
-    `  [${caught ? "ok         " : "REGRESSED  "}] ${id}  (${claim.file}:${claim.line})`,
+    `  [${caught ? "ok         " : "REGRESSED  "}] ${id}  (${claim.file}:${claim.line})` +
+      (caught && measured.killer ? `  killed by ${measured.killer}` : ""),
   );
+  if (fallbackNote) console.log(fallbackNote);
   if (!caught) {
     failures.push(
       `${id} (${claim.file}:${claim.line}) — deleting its guard no longer fails any test`,
@@ -1118,7 +1003,8 @@ console.log(
     `${unprotectedCount} unprotected; ${claims.length} total` +
     (shard
       ? ` — this shard verified ${mine.length}/${base.protected.length} protected claims.`
-      : "."),
+      : ".") +
+    ` ${decidedByKiller} of ${mine.length} were decided by their recorded killer alone.`,
 );
 
 if (failures.length) {
