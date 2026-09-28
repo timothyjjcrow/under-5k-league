@@ -120,8 +120,11 @@ import { cn } from "@/lib/utils";
 import {
   DRAFT_READINESS,
   draftReadiness,
+  owedDraftConfirmation,
   type DraftReadiness,
 } from "@/lib/draft-readiness";
+import { confirmDraftReadiness } from "@/app/actions/registration";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   resolveChampionPresentation,
   type ChampionPresentation,
@@ -268,6 +271,24 @@ export default async function Home() {
     // eslint-disable-next-line react-hooks/purity
     Date.now(),
   );
+  // A designated captain, before the auction: they get one line of their own
+  // (see CaptainLine) wherever the hero stands for the draft.
+  const captaining =
+    !!user && snapshot.teams.some((team) => team.captainId === user.id);
+  // The draft-night confirmation a signed-up player still owes, if any. It is
+  // asked in the hero's panel (SignupsAside), so it follows that panel's
+  // window: on draft night the panel gives way to the draft room and /me keeps
+  // the button.
+  const owedConfirmation =
+    season.status === "SIGNUPS" && !draftRoomSoon
+      ? owedDraftConfirmation({
+          seasonStatus: season.status,
+          draftStatus: snapshot.draftStatus,
+          draftAt: season.draftAt,
+          draftRevision: season.draftRevision,
+          registration: snapshot.myReg,
+        })
+      : null;
   if (season.status === "SIGNUPS") {
     // How it works rides along during signups: the draft, match nights and
     // who can join, on one screen, for visitors deciding whether to sign up.
@@ -304,6 +325,11 @@ export default async function Home() {
         </Link>
         {sideLink}
       </>
+    ) : captaining ? (
+      <>
+        {sideLink}
+        <CaptainLine />
+      </>
     ) : (
       sideLink
     );
@@ -313,6 +339,12 @@ export default async function Home() {
         <Link href="/draft" className={buttonClasses("accent", "lg")}>
           {draftPresentation.action}
         </Link>
+        {/* Before Start only: once the auction runs, the room is the
+            captain's whole job and the pool is inside it. Nothing else on
+            this view prints the draft time, so the line carries it. */}
+        {captaining && draftSetupOpen(season.status, snapshot.draftStatus) ? (
+          <CaptainLine draftAt={season.draftAt} />
+        ) : null}
         {standinRegistrationOpen ? (
           <>
             {standinRegistration("secondary")}
@@ -386,9 +418,11 @@ export default async function Home() {
             tone="accent"
           />
         )}
-        {season.draftAt ? (
+        {season.draftAt && !owedConfirmation ? (
           // The page's one printing of the draft date: the signup card below
-          // used to repeat it with a second countdown.
+          // used to repeat it with a second countdown. A player who still
+          // owes the draft-night confirmation reads it in the hero's panel
+          // instead, printed beside the button that confirms it.
           <span className="text-sm text-muted">
             <span aria-hidden>🗓️</span> Draft{" "}
             <strong className="font-medium text-fg">
@@ -510,7 +544,11 @@ export default async function Home() {
     ) : season.status === "SIGNUPS" && isActiveReg && !draftRoomSoon ? (
       // On draft night the aside gives way, so the hero's action column can
       // carry "Enter the draft room" to the players about to be drafted.
-      <SignupsAside snapshot={snapshot} />
+      <SignupsAside
+        snapshot={snapshot}
+        owed={owedConfirmation}
+        captaining={captaining}
+      />
     ) : null;
 
   return (
@@ -1243,36 +1281,140 @@ async function InhouseStrip() {
  * width without an `aside`, so a branch that returns null here would leave a
  * 23rem hole (the rule `MyNextMatch`'s no-match branch exists for).
  *
- * The ask is the whole point: fill the rest of the league. The numbers behind
- * it (how many signed up, how many more make the next team) sit in the hero's
- * own counts right beside this panel, so it names the ask without restating
- * them.
+ * It asks one thing at a time. A player who still owes the draft-night
+ * confirmation gets it here as one tap, beside the draft time it confirms:
+ * the only other way in was a link a screen further down that opened the top
+ * of /me, with the real button far below that. It is the same action and
+ * button name as /me, whose button stays; the hero's chip gives up the date
+ * for this viewer, so the page still prints it once. Everyone else gets the
+ * standing ask, filling the rest of the league. The numbers behind that ask
+ * sit in the hero's own counts beside this panel, so it is not restated.
  */
-function SignupsAside({ snapshot }: { snapshot: SeasonSnapshot }) {
+function SignupsAside({
+  snapshot,
+  owed,
+  captaining,
+}: {
+  snapshot: SeasonSnapshot;
+  owed: ReturnType<typeof owedDraftConfirmation>;
+  captaining: boolean;
+}) {
   const { capacity, season } = snapshot;
+  const { draftAt } = season;
+  const stale = owed === DRAFT_READINESS.STALE;
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/70 p-4 backdrop-blur-sm sm:p-5">
-      <p className="font-display text-lg font-semibold">You&apos;re in</p>
-      <p className="mt-1 text-sm text-muted">
-        Know anyone who&apos;d fit?{" "}
-        {capacity.canDraft
-          ? `Signups stay open, and every ${season.teamSize} more players makes another team.`
-          : "The draft can run once the player minimum is met."}
-      </p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <InviteLink />
-        <Link href="/how-it-works" className={textLink("text-sm")}>
-          How it works <LinkArrow />
-        </Link>
-      </div>
-      <p className="mt-2 text-xs text-muted">
-        Copies this season&apos;s link — it unfurls with the details in Discord.
-      </p>
-      {/* No draft-night line here: the hero's own chip prints the date, and a
-          second countdown beside it is the repeat this page has been cut
-          back from. This panel does one job: the ask, and the control to act
-          on it. */}
+      {owed && draftAt ? (
+        <>
+          <p className="font-display text-lg font-semibold">
+            {stale ? "The draft time changed" : "You're in"}
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            <span aria-hidden>🗓️</span> Draft night{" "}
+            <strong className="font-medium text-fg">
+              <LocalTime
+                ts={draftAt.getTime()}
+                variant="full"
+                initial={formatMatchTime(draftAt, "full")}
+              />
+            </strong>
+            <Countdown
+              targetMs={draftAt.getTime()}
+              eventLabel="Draft"
+              passedLabel={DRAFT_PASSED_LABEL}
+            />
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            {stale
+              ? "Confirm the new time so the admins know you can still make it."
+              : "Confirm you’ve seen the time and still plan to play this season."}
+          </p>
+          <ActionForm
+            action={confirmDraftReadiness}
+            className="mt-3"
+            hidden={{
+              expectedActiveSeasonId: season.id,
+              draftRevision: String(season.draftRevision),
+              draftAtTs: String(draftAt.getTime()),
+            }}
+          >
+            <SubmitButton
+              variant={stale ? "accent" : "primary"}
+              className="w-full"
+            >
+              {stale ? "Confirm updated draft time" : "Confirm I’m ready for draft"}
+            </SubmitButton>
+          </ActionForm>
+        </>
+      ) : (
+        <>
+          <p className="font-display text-lg font-semibold">You&apos;re in</p>
+          <p className="mt-1 text-sm text-muted">
+            Know anyone who&apos;d fit?{" "}
+            {capacity.canDraft
+              ? `Signups stay open, and every ${season.teamSize} more players makes another team.`
+              : "The draft can run once the player minimum is met."}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <InviteLink />
+            <Link href="/how-it-works" className={textLink("text-sm")}>
+              How it works <LinkArrow />
+            </Link>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Copies this season&apos;s link — it unfurls with the details in
+            Discord.
+          </p>
+        </>
+      )}
+      {captaining ? (
+        <CaptainLine className="mt-3 border-t border-line-soft pt-3" />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * The one captain-only line on home before the auction: what a captain can do
+ * that week is scout the pool. It deliberately carries no budget or
+ * nomination slot. Start sets the MMR-weighted budgets from the final captain
+ * pool, and the order can be re-randomised until then, so any figure shown
+ * earlier is a guess that can still change. Once the auction runs, the draft
+ * room shows the real budget, live.
+ *
+ * `draftAt` only where nothing else on the page prints the draft time; it then
+ * owns saying the time has passed, like every surface that prints it.
+ */
+function CaptainLine({
+  draftAt,
+  className,
+}: {
+  draftAt?: Date | null;
+  className?: string;
+}) {
+  return (
+    <p className={cn("text-sm text-muted", className)}>
+      <span className="font-medium text-fg">You’re captaining</span>
+      {draftAt ? (
+        <>
+          {" · "}Draft{" "}
+          <LocalTime
+            ts={draftAt.getTime()}
+            variant="short"
+            initial={formatMatchTime(draftAt, "short")}
+          />
+          <Countdown
+            targetMs={draftAt.getTime()}
+            eventLabel="Draft"
+            passedLabel={DRAFT_PASSED_LABEL}
+          />
+        </>
+      ) : null}
+      {" · "}
+      <Link href="/players" className={textLink()}>
+        Scout the pool <LinkArrow />
+      </Link>
+    </p>
   );
 }
 
@@ -1683,6 +1825,11 @@ async function DraftPulse({ seasonId }: { seasonId: string }) {
 
 function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
   const { teams, season } = snapshot;
+  // Budgets are real only once the auction starts: Start replaces every
+  // team's placeholder with its MMR-weighted budget from the final captain
+  // pool. Before that the cards showed the same flat "$100 left" for everyone,
+  // a figure no captain would actually get.
+  const budgetsSet = !draftSetupOpen(season.status, snapshot.draftStatus);
   return (
     <div className="space-y-6">
       <Suspense fallback={null}>
@@ -1719,24 +1866,30 @@ function DraftPhaseView({ snapshot }: { snapshot: SeasonSnapshot }) {
                     </PlayerLink>
                   </span>
                 }
-                action={<Badge tone="accent">${t.budget} left</Badge>}
+                action={
+                  budgetsSet ? (
+                    <Badge tone="accent">${t.budget} left</Badge>
+                  ) : undefined
+                }
               />
               <CardBody className="space-y-4">
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between text-xs text-muted">
-                    <span>
-                      Spent ${spent} of ${startingBudget}
-                    </span>
-                    <span>
-                      {t.members.length}/{season.teamSize} roster
-                    </span>
+                {budgetsSet ? (
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between text-xs text-muted">
+                      <span>
+                        Spent ${spent} of ${startingBudget}
+                      </span>
+                      <span>
+                        {t.members.length}/{season.teamSize} roster
+                      </span>
+                    </div>
+                    <Progress
+                      value={spent}
+                      max={startingBudget}
+                      label={`${t.name} draft budget spent`}
+                    />
                   </div>
-                  <Progress
-                    value={spent}
-                    max={startingBudget}
-                    label={`${t.name} draft budget spent`}
-                  />
-                </div>
+                ) : null}
                 <RosterList members={t.members} teamSize={season.teamSize} />
               </CardBody>
             </Card>

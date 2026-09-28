@@ -1,3 +1,11 @@
+import {
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+  type DraftStatus,
+  type SeasonStatus,
+} from "./constants";
+import { draftSetupOpen } from "./draft-setup";
+
 export const DRAFT_READINESS = {
   READY: "READY",
   AWAITING: "AWAITING",
@@ -25,6 +33,43 @@ export function draftReadiness(
   return registration.draftConfirmedRevision === currentRevision
     ? DRAFT_READINESS.READY
     : DRAFT_READINESS.STALE;
+}
+
+/**
+ * The confirmation a player still owes for the season's current draft time:
+ * AWAITING (never confirmed) or STALE (the time moved since), or null when
+ * there is nothing to ask. Only an active full-player signup confirms, only
+ * while a draft time is set, and only while setup is open (the same window
+ * confirmDraftReadiness accepts), so a button built from this never offers a
+ * confirmation the action would refuse.
+ */
+export function owedDraftConfirmation({
+  seasonStatus,
+  draftStatus,
+  draftAt,
+  draftRevision,
+  registration,
+}: {
+  seasonStatus: SeasonStatus | string;
+  draftStatus: DraftStatus | string | null | undefined;
+  draftAt: Date | null;
+  draftRevision: number;
+  registration:
+    | (DraftConfirmation & { status: string; type: string })
+    | null
+    | undefined;
+}): typeof DRAFT_READINESS.AWAITING | typeof DRAFT_READINESS.STALE | null {
+  if (
+    !draftAt ||
+    !registration ||
+    registration.status !== REGISTRATION_STATUS.ACTIVE ||
+    registration.type !== REGISTRATION_TYPE.PLAYER ||
+    !draftSetupOpen(seasonStatus, draftStatus)
+  ) {
+    return null;
+  }
+  const readiness = draftReadiness(registration, draftRevision);
+  return readiness === DRAFT_READINESS.READY ? null : readiness;
 }
 
 export function draftReadinessCounts(
