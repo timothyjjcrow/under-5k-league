@@ -1,9 +1,10 @@
-// Guarded-claim discovery and claim-id rules for the mutation guard
-// (scripts/mutation-guard.mjs).
+// Guarded-claim discovery, claim-id rules and baseline rules for the mutation
+// guard (scripts/mutation-guard.mjs).
 //
-// Split out of the guard so the id rules can be unit-tested without running
+// Split out of the guard so these rules can be unit-tested without running
 // the guard's CLI (`node --test scripts/mutation-claims.test.mjs`). Pure: it
 // reads no file, touches no database and writes nothing.
+import path from "node:path";
 import ts from "typescript";
 import { discoverThrottleSqlClaims } from "./mutation-sql-claims.mjs";
 
@@ -340,4 +341,105 @@ export function resolveRenames(base, liveIds) {
     protected: apply(base.protected),
     equivalent: apply(base.equivalent),
   };
+}
+
+// A KILLER is the integration test file that failed first when a full
+// --discover deleted a protected claim's guard. The baseline records them in
+// an optional `killers` object ({ "<protected id>": "<test file>" }) so verify
+// can run that one file before the whole suite. Verify passes the path to
+// Vitest, so only a file the PostgreSQL suite's include pattern selects is
+// accepted.
+const KILLER_PATH = /^test\/integration\/(?:[\w-]+\/)*[\w.-]+\.itest\.ts$/;
+
+function stringMap(value) {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.values(value).every((entry) => typeof entry === "string")
+  );
+}
+
+/**
+ * Validate a baseline's optional `killers` object and carry its keys through
+ * any `renames`, the way resolveRenames carries the lists. `protectedIds` is
+ * the protected list with renames already applied. Returns the problems plus
+ * a Map from protected claim id to its killer file.
+ */
+export function resolveKillers(base, protectedIds) {
+  const killers = new Map();
+  const raw = base.killers;
+  if (raw === undefined) return { problems: [], killers };
+  if (!stringMap(raw)) {
+    return {
+      problems: ["killers must be an object mapping protected claim ids to test files"],
+      killers,
+    };
+  }
+  const renames = stringMap(base.renames)
+    ? new Map(Object.entries(base.renames))
+    : new Map();
+  const protectedSet = new Set(protectedIds);
+  const problems = [];
+  for (const [from, file] of Object.entries(raw)) {
+    const id = renames.get(from) ?? from;
+    if (!KILLER_PATH.test(file)) {
+      problems.push(`killer for ${from} is not a test/integration/**/*.itest.ts file: ${file}`);
+    } else if (!protectedSet.has(id)) {
+      problems.push(`killer recorded for a claim that is not protected: ${from}`);
+    } else if (killers.has(id)) {
+      problems.push(`more than one killer for the same claim: ${id}`);
+    } else {
+      killers.set(id, file);
+    }
+  }
+  return { problems, killers };
+}
+
+/**
+ * The killer in a Vitest JSON report: the first test file with a FAILED test
+ * (a file that only failed to load killed nothing), relative to `cwd`. Null
+ * when the report names no such file inside the PostgreSQL suite.
+ */
+export function killerFromReport(report, cwd) {
+  const files = Array.isArray(report?.testResults) ? report.testResults : [];
+  for (const file of files) {
+    const failed =
+      Array.isArray(file?.assertionResults) &&
+      file.assertionResults.some((test) => test?.status === "failed");
+    if (!failed || typeof file.name !== "string") continue;
+    const relative = path.relative(cwd, file.name).split(path.sep).join("/");
+    return KILLER_PATH.test(relative) ? relative : null;
+  }
+  return null;
+}
+
+/**
+ * Measure one mutant, trying its recorded killer first.
+ *
+ * `run(files)` runs the PostgreSQL suite with --bail over `files` (an empty
+ * list is the whole suite) and returns { kind: "pass" | "test-failure" |
+ * "infrastructure", … }; `exists(file)` says whether the killer is on disk.
+ *
+ * The rule does not change: a mutant is caught only when a test FAILS. The
+ * killer changes the order, never the verdict — when it does not fail, for
+ * any reason (survived, gone, or its run broke), the whole suite decides
+ * exactly as it did before killers were recorded. With no killer, that is
+ * the only run. `fallback` says why the whole suite had to run after a
+ * killer.
+ */
+export function measureMutant(killer, { run, exists }) {
+  let fallback = null;
+  if (killer) {
+    if (!exists(killer)) {
+      fallback = "missing";
+    } else {
+      const first = run([killer]);
+      if (first.kind === "test-failure") {
+        return { run: first, via: "killer", fallback: null };
+      }
+      fallback = first.kind === "pass" ? "survived" : "infrastructure";
+    }
+  }
+  return { run: run([]), via: "suite", fallback };
 }
