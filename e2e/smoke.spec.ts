@@ -158,11 +158,23 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   await joinerContext.close();
 
   // Who has confirmed lives behind the preflight's "Show who" toggle (one
-  // count, not a chip on every row).
+  // count, not a chip on every row). Open it only once React has hydrated
+  // it: flipping `open` on the server HTML first is a hydration mismatch.
   const showWho = async () => {
-    await page
-      .locator("#adm-draft-confirmations")
-      .evaluate((el) => ((el as HTMLDetailsElement).open = true));
+    const who = page.locator("#adm-draft-confirmations");
+    await expect
+      .poll(() =>
+        who.evaluate((el) =>
+          Object.keys(el).some((key) => key.startsWith("__reactFiber")),
+        ),
+      )
+      .toBe(true);
+    // Hydration is time-sliced and can restart; an idle main thread means
+    // it has finished.
+    await page.evaluate(
+      () => new Promise((resolve) => requestIdleCallback(() => resolve(null))),
+    );
+    await who.evaluate((el) => ((el as HTMLDetailsElement).open = true));
   };
   await page.reload();
   await showWho();
@@ -194,10 +206,17 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   await playerContext.close();
 });
 
-test("typed confirmation actually removes a designated captain", async ({
+test("removing a captain before any fixtures exist takes one plain confirm", async ({
   page,
 }) => {
-  page.on("dialog", (dialog) => dialog.accept());
+  // With no schedule only the team goes, so a plain confirm guards it; the
+  // typed-name barrier is for once fixtures exist, when removing a captain
+  // clears every fixture in the season (danger-submit.test.ts pins that).
+  const confirms: string[] = [];
+  page.on("dialog", (dialog) => {
+    confirms.push(dialog.message());
+    void dialog.accept();
+  });
   await page.goto(
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
   );
@@ -217,16 +236,18 @@ test("typed confirmation actually removes a designated captain", async ({
   await captainSection
     .getByRole("button", { name: "remove", exact: true })
     .click();
-  const confirmation = page.getByRole("dialog");
-  await confirmation.locator("input").fill("Dendi's Team");
-  await confirmation
-    .getByRole("button", { name: "remove", exact: true })
-    .click();
 
   await expect(
     page.getByRole("heading", { name: "Captains (0)" }),
   ).toBeVisible();
   await expect(page.getByText("Dendi's Team", { exact: true })).toHaveCount(0);
+  // The confirm names the team that goes and the gentler alternative; no
+  // typed-name dialog appears.
+  const removal = confirms.filter((message) => message.startsWith("Remove "));
+  expect(removal).toHaveLength(1);
+  expect(removal[0]).toContain("delete Dendi's Team?");
+  expect(removal[0]).toContain("use Change captain instead");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 test("non-admin sees a clear restricted-access state", async ({ page }) => {

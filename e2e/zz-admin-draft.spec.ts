@@ -265,7 +265,13 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // would reset budgets over drafted rosters), no captain management — just
   // the way into the live room, plus the night-of controls.
   await page.goto("/admin");
-  await expect(page.getByRole("link", { name: /draft room/i })).toBeVisible();
+  // Both the next-step line under the title and the Captains & draft card
+  // lead into the live room.
+  for (const room of ["Open the draft room", "Go to draft room"]) {
+    const link = page.getByRole("link", { name: room });
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", "/draft");
+  }
   await expect(page.getByRole("button", { name: "Start draft" })).toHaveCount(
     0,
   );
