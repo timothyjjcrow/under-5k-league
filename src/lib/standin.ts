@@ -144,3 +144,26 @@ export function standinPickerBlock(
     ? `booked for ${clash.homeName} vs ${clash.awayName} that night`
     : null;
 }
+
+/**
+ * The captain's "Covers…" list: players who said they can't make it and have
+ * no cover yet come first, then the rest of the roster in its own order.
+ * Covered players are left out (one seat, one standin). `preselect` is set
+ * only when exactly one player is out, so the form never guesses between two.
+ */
+export function coverChoices<T extends { userId: string }>(
+  roster: readonly T[],
+  outUserIds: ReadonlySet<string>,
+  coveredUserIds: ReadonlySet<string>,
+): { choices: { member: T; out: boolean }[]; preselect: string | null } {
+  const open = roster.filter((m) => !coveredUserIds.has(m.userId));
+  const out = open.filter((m) => outUserIds.has(m.userId));
+  const rest = open.filter((m) => !outUserIds.has(m.userId));
+  return {
+    choices: [
+      ...out.map((member) => ({ member, out: true })),
+      ...rest.map((member) => ({ member, out: false })),
+    ],
+    preselect: out.length === 1 ? out[0].userId : null,
+  };
+}

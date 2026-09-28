@@ -33,4 +33,14 @@ describe("match page standins card", () => {
       /<option key=\{r\.userId\} value=\{r\.userId\} disabled=\{!!blocked\}>/,
     );
   });
+
+  it("leads the Covers list with uncovered out players, pre-selecting a lone one", () => {
+    expect(PAGE).toMatch(/const cover = coverChoices\(\s*roster,/);
+    // Remounted when the pre-selection changes: an uncontrolled select keeps
+    // its first defaultValue otherwise.
+    expect(PAGE).toMatch(
+      /<select\s+key=\{cover\.preselect \?\? ""\}\s+name="replacingUserId"[\s\S]*?defaultValue=\{cover\.preselect \?\? ""\}/,
+    );
+    expect(PAGE).toContain("(can&apos;t make it)");
+  });
 });

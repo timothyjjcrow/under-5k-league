@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  coverChoices,
   standinConflict,
   standinMmrNote,
   standinPickerBlock,
@@ -189,5 +190,46 @@ describe("standinPickerBlock", () => {
     expect(
       standinPickerBlock("bob", target, [booking({ matchId: "m1" })]),
     ).toBeNull();
+  });
+});
+
+describe("coverChoices", () => {
+  const roster = [
+    { userId: "p1", name: "Player1" },
+    { userId: "p2", name: "Player2" },
+    { userId: "p3", name: "Player3" },
+    { userId: "p4", name: "Player4" },
+  ];
+
+  it("keeps roster order when nobody is out", () => {
+    const { choices, preselect } = coverChoices(roster, new Set(), new Set());
+    expect(choices.map((c) => c.member.userId)).toEqual(["p1", "p2", "p3", "p4"]);
+    expect(choices.every((c) => !c.out)).toBe(true);
+    expect(preselect).toBeNull();
+  });
+
+  it("puts the uncovered out player first and pre-selects them", () => {
+    const { choices, preselect } = coverChoices(
+      roster,
+      new Set(["p3"]),
+      new Set(),
+    );
+    expect(choices.map((c) => c.member.userId)).toEqual(["p3", "p1", "p2", "p4"]);
+    expect(choices[0].out).toBe(true);
+    expect(preselect).toBe("p3");
+  });
+
+  it("drops covered players, even out ones, and never guesses between two", () => {
+    const { choices, preselect } = coverChoices(
+      roster,
+      new Set(["p2", "p3", "p4"]),
+      new Set(["p4"]),
+    );
+    expect(choices.map((c) => [c.member.userId, c.out])).toEqual([
+      ["p2", true],
+      ["p3", true],
+      ["p1", false],
+    ]);
+    expect(preselect).toBeNull();
   });
 });

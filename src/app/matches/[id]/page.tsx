@@ -22,7 +22,7 @@ import {
 } from "@/lib/match-hosting";
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
-import { seatValue, standinPickerBlock } from "@/lib/standin";
+import { coverChoices, seatValue, standinPickerBlock } from "@/lib/standin";
 import { roleShort } from "@/lib/roles";
 import { recentForm, headToHead } from "@/lib/team-matches";
 import { gameMvp } from "@/lib/achievements";
@@ -2074,9 +2074,8 @@ async function StandinSection({
   ];
   // One seat, one standin — players already covered leave the Covers list.
   const coveredIds = new Set(
-    assignments.map((a) => a.replaced?.id).filter(Boolean),
+    assignments.flatMap((a) => (a.replaced ? [a.replaced.id] : [])),
   );
-  const coverable = roster.filter((m) => !coveredIds.has(m.userId));
   // OPEN SEATS on this captain's own roster. A team that lost a player
   // mid-season is short, and a standin filling that seat replaces nobody — the
   // case that previously had no UI anywhere, so a 4-of-5 side could not be
@@ -2092,11 +2091,16 @@ async function StandinSection({
     teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
   // OUT-and-uncovered on MY roster: the admin card has always alerted on
   // this; the captain — who owns the assign form below — saw only the small
-  // ✗ in the preview grid.
-  const outIds = new Set(outRows.map((r) => r.userId));
-  const uncoveredOut = roster.filter(
-    (m) => outIds.has(m.userId) && !coveredIds.has(m.userId),
+  // ✗ in the preview grid. They also lead the Covers list, pre-selected when
+  // there is exactly one, so covering them stays one pick and one tap.
+  const cover = coverChoices(
+    roster,
+    new Set(outRows.map((r) => r.userId)),
+    coveredIds,
   );
+  const uncoveredOut = cover.choices
+    .filter((c) => c.out)
+    .map((c) => c.member);
 
   // A phase where assignment is closed and nothing is booked has nothing to
   // say — don't render an empty card with a disabled story.
@@ -2217,26 +2221,38 @@ async function StandinSection({
                 );
               })}
             </select>
+            {/* Keyed on the pre-selection: an uncontrolled select keeps its
+                first defaultValue, so a new "can't make it" needs a remount. */}
             <select
+              key={cover.preselect ?? ""}
               name="replacingUserId"
               required
               aria-label="Player they cover"
               className="h-10 min-w-0 max-w-full rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
-              defaultValue=""
+              defaultValue={cover.preselect ?? ""}
             >
               <option value="" disabled>
                 Covers…
               </option>
+              {cover.choices
+                .filter((c) => c.out)
+                .map(({ member: m }) => (
+                  <option key={m.userId} value={m.userId}>
+                    {m.user.name} (can&apos;t make it)
+                  </option>
+                ))}
               {openSeats > 0 ? (
                 <option value={seatValue(myTeamId)}>
                   an empty roster seat ({openSeats} unfilled)
                 </option>
               ) : null}
-              {coverable.map((m) => (
-                <option key={m.userId} value={m.userId}>
-                  {m.user.name}
-                </option>
-              ))}
+              {cover.choices
+                .filter((c) => !c.out)
+                .map(({ member: m }) => (
+                  <option key={m.userId} value={m.userId}>
+                    {m.user.name}
+                  </option>
+                ))}
             </select>
             <SubmitButton variant="secondary" size="sm">
               Assign standin
