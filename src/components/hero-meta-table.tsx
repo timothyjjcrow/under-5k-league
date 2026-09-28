@@ -83,12 +83,14 @@ export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
         </caption>
         {/* Widths live on the cols (see StandingsTable): the phone keeps
             hero, picks and win %, with the record and top player folded
-            into those cells. */}
+            into those cells. A display:none cell drops out of its row and
+            the cells after it slide one <col> left, so on phones Win % sits
+            on the THIRD col and the last two are the empty ones. */}
         <colgroup>
           <col />
           <col className="w-16 sm:w-20" />
-          <col className="w-0 sm:w-20" />
           <col className="w-[4.5rem] sm:w-20" />
+          <col className="w-0 sm:w-20" />
           <col className="w-0 sm:w-[34%]" />
         </colgroup>
         <thead className="border-b border-line bg-surface-2/60 text-xs text-muted">

@@ -1199,9 +1199,10 @@ function MonthBoard({
   return (
     <>
       <div className="overflow-x-auto">
-        {/* The career table's colgroup rule: widths live on <col>, and a
-          column hidden on phones is w-0 until the breakpoint that shows it,
-          or fixed layout hands it a share of the Player column. */}
+        {/* Widths live on <col>. A display:none cell drops out of its row
+          and the cells after it slide one <col> left, so on phones Elo ±
+          sits on the FIFTH col and the last two (GP and Win% from sm up)
+          are the empty w-0 ones. */}
         <table className="w-full table-fixed text-sm">
           <caption className="sr-only">
             Inhouse records for {month.label}: wins, losses, games, win rate
@@ -1213,9 +1214,9 @@ function MonthBoard({
             <col />
             <col className="w-9" />
             <col className="w-9" />
-            <col className="w-0 sm:w-12" />
+            <col className="w-[4.75rem] sm:w-12" />
             <col className="w-0 sm:w-14" />
-            <col className="w-[4.75rem]" />
+            <col className="w-0 sm:w-[4.75rem]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line text-left text-xs uppercase text-muted">
