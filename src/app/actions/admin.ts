@@ -174,7 +174,7 @@ import { saveTeamIdentity } from "@/lib/team-identity-service";
 import {
   carriedTeamIdentity,
   carriedTeamIdentityNote,
-  defaultTeamName,
+  uniqueDefaultTeamName,
   teamIdentitySummary,
 } from "@/lib/team-identity";
 import {
@@ -1118,7 +1118,14 @@ export async function addCaptain(
           previousTeam,
           seasonTeams.map((team) => team.name),
         );
-        const teamName = carried.name ?? defaultTeamName(user.name);
+        // The default is numbered past a name another team already took
+        // (a captain may have renamed their team to "<this captain>'s Team").
+        const teamName =
+          carried.name ??
+          uniqueDefaultTeamName(
+            user.name,
+            seasonTeams.map((team) => team.name),
+          );
         const team = await tx.team.create({
           data: {
             seasonId: currentSeason.id,

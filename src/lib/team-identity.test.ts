@@ -3,13 +3,13 @@ import {
   canEditTeamIdentity,
   carriedTeamIdentity,
   carriedTeamIdentityNote,
-  defaultTeamName,
   logoPreviewNote,
   normalizeTeamName,
   teamIdentityPostIsThrottled,
   teamIdentitySummary,
   teamNameKey,
   TEAM_NAME_MAX_LENGTH,
+  uniqueDefaultTeamName,
 } from "./team-identity";
 import { SEASON_STATUS } from "./constants";
 
@@ -45,6 +45,48 @@ describe("normalizeTeamName", () => {
     "\uFF32adiant Raccoons",
   ])("sees through invisible and look-alike characters: %j", (name) => {
     expect(teamNameKey(name)).toBe(teamNameKey("Radiant Raccoons"));
+  });
+
+  it.each([
+    ["Cyrillic а", "R\u0430diant Raccoons"],
+    ["Cyrillic о", "Radiant Racc\u043E\u043Ens"],
+    ["Cyrillic capitals", "R\u0410DI\u0410NT R\u0410CCOONS"],
+    ["Greek capital omicron", "RADIANT RACC\u039F\u039FNS"],
+    ["an accent", "R\u00E1diant Raccoons"],
+    ["a combining accent", "Ra\u0301diant Raccoons"],
+  ])("gives a name spelled with %s the Latin name's key", (_, name) => {
+    expect(teamNameKey(name)).toBe(teamNameKey("Radiant Raccoons"));
+  });
+
+  it("still tells different Latin names apart", () => {
+    expect(teamNameKey("Radiant Raccoons")).not.toBe(teamNameKey("Radiant Racoons"));
+    expect(teamNameKey("Dire Straits")).not.toBe(teamNameKey("Dire Straights"));
+  });
+
+  it("keeps a name in another script its own", () => {
+    expect(teamNameKey("Рыцари")).not.toBe(teamNameKey("Рыцарь"));
+    expect(normalizeTeamName("Рыцари Света")).toBe("Рыцари Света");
+  });
+
+  it("cuts a stack of combining marks down to three", () => {
+    expect(normalizeTeamName(`Z${"\u0301".repeat(20)}algo`)).toBe(
+      `Z${"\u0301".repeat(3)}algo`,
+    );
+  });
+
+  // A 59-character name ending in an emoji used to be cut through the
+  // emoji's surrogate pair, storing half a character.
+  it("never cuts an emoji in half at the length limit", () => {
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const cut = normalizeTeamName(`${"a".repeat(TEAM_NAME_MAX_LENGTH - 1)}\u{1F600}`);
+    expect(cut).toBe("a".repeat(TEAM_NAME_MAX_LENGTH - 1));
+    expect(cut).not.toMatch(loneSurrogate);
+    const joined = normalizeTeamName(
+      `${"a".repeat(TEAM_NAME_MAX_LENGTH - 3)}\u{1F468}\u200D\u{1F469}`,
+    );
+    expect(joined).toBe(`${"a".repeat(TEAM_NAME_MAX_LENGTH - 3)}\u{1F468}`);
+    const whole = `${"a".repeat(TEAM_NAME_MAX_LENGTH - 2)}\u{1F600}`;
+    expect(normalizeTeamName(whole)).toBe(whole);
   });
 
   it("drops invisible characters from the stored name", () => {
@@ -202,6 +244,9 @@ describe("carriedTeamIdentity", () => {
     expect(
       carriedTeamIdentity({ name: "Zai's Team", logoUrl: raccoons.logoUrl }, []),
     ).toEqual({ name: null, logoUrl: raccoons.logoUrl });
+    expect(
+      carriedTeamIdentity({ name: "Zai's Team 2", logoUrl: null }, []).name,
+    ).toBeNull();
   });
 
   it("gives way to a team this season that already uses the name", () => {
@@ -236,8 +281,31 @@ describe("carriedTeamIdentityNote", () => {
   });
 });
 
-describe("defaultTeamName", () => {
+describe("uniqueDefaultTeamName", () => {
   it("is the captain's name with 's Team", () => {
-    expect(defaultTeamName("Zai")).toBe("Zai's Team");
+    expect(uniqueDefaultTeamName("Zai", [])).toBe("Zai's Team");
+    expect(uniqueDefaultTeamName("Zai", ["Radiant Raccoons"])).toBe("Zai's Team");
+  });
+
+  // Captain B renamed their team "Alice's Team", then the admin made Alice a
+  // captain: two teams would share one name in standings and Discord.
+  it("numbers past a name another team already reads as", () => {
+    expect(uniqueDefaultTeamName("Alice", ["alice's  TEAM"])).toBe("Alice's Team 2");
+    expect(
+      uniqueDefaultTeamName("Alice", ["Alice's Team", "Alice's Team 2"]),
+    ).toBe("Alice's Team 3");
+    // A look-alike spelling is taken too (Cyrillic "А" and "е").
+    expect(uniqueDefaultTeamName("Alice", ["\u0410lic\u0435's Team"])).toBe(
+      "Alice's Team 2",
+    );
+  });
+
+  it("keeps a numbered long name within the length limit", () => {
+    const long = "x".repeat(TEAM_NAME_MAX_LENGTH);
+    const first = uniqueDefaultTeamName(long, []);
+    const second = uniqueDefaultTeamName(long, [first]);
+    expect(second.length).toBeLessThanOrEqual(TEAM_NAME_MAX_LENGTH);
+    expect(second.endsWith(" 2")).toBe(true);
+    expect(teamNameKey(second)).not.toBe(teamNameKey(first));
   });
 });

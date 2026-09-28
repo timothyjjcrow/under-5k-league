@@ -543,6 +543,24 @@ describe("addCaptain — a returning captain keeps their team's identity", () =>
     });
   });
 
+  // Captain B renamed their team "Alice's Team" before the admin made Alice
+  // a captain: two teams would have shared one name.
+  it("numbers the default name past one another team already uses", async () => {
+    await asAdmin();
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    const other = await makeCaptain(season.id, "Other", 100, 0);
+    await prisma.team.update({
+      where: { id: other.team.id },
+      data: { name: "alice's team" },
+    });
+    const alice = await makePlayer(season.id, "Alice", 4000);
+
+    const res = await designate(season.id, alice.id);
+
+    expect(res?.error).toBeUndefined();
+    expect((await newTeamOf(season.id, alice.id)).name).toBe("Alice's Team 2");
+  });
+
   it("keeps the default name when the old one is taken this season, but keeps the logo", async () => {
     await asAdmin();
     const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
