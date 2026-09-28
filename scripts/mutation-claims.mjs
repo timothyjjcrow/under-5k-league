@@ -1,0 +1,343 @@
+// Guarded-claim discovery and claim-id rules for the mutation guard
+// (scripts/mutation-guard.mjs).
+//
+// Split out of the guard so the id rules can be unit-tested without running
+// the guard's CLI (`node --test scripts/mutation-claims.test.mjs`). Pure: it
+// reads no file, touches no database and writes nothing.
+import ts from "typescript";
+import { discoverThrottleSqlClaims } from "./mutation-sql-claims.mjs";
+
+// Keys that merely IDENTIFY the row. Everything else in a WHERE is state, and
+// state is what makes the write a claim.
+const IDENTITY = new Set([
+  "id",
+  "seasonId",
+  "lobbyId",
+  "userId",
+  "matchId",
+  "teamId",
+  "key",
+  "draftId",
+  "gameId",
+  "dotaMatchId",
+  "registrationId",
+  "steamId",
+  "discordId",
+]);
+
+/**
+ * Skip a `//` or block comment starting at `i`, returning the index to resume
+ * scanning from (or `i` when there is no comment there).
+ *
+ * BOTH scanners below need this and neither had it, which cost a red CI and a
+ * long diagnosis. They treat `'` as a string delimiter, so an ordinary prose
+ * comment inside a claim's object literal — "the lobby's", "don't", "the
+ * bettor's" — put an ODD number of apostrophes in their path, opened a phantom
+ * string, and desynced brace matching. The claim did not read as weakened: it
+ * vanished from discovery entirely, tripping the "a protected claim has
+ * DISAPPEARED" alarm against a baseline that still listed it.
+ *
+ * That failure mode is worse than it sounds, because it is SILENT in the other
+ * direction too. A `--discover` run after such an edit simply records the
+ * smaller claim set and reports all-clear, so the guard a comment happened to
+ * hide is dropped from the ratchet with nothing to say so. Comments in this
+ * repo are deliberately long and prose-heavy, so this was going to recur.
+ */
+function skipComment(src, i) {
+  if (src[i] !== "/") return i;
+  if (src[i + 1] === "/") {
+    const nl = src.indexOf("\n", i);
+    return nl === -1 ? src.length : nl;
+  }
+  if (src[i + 1] === "*") {
+    const end = src.indexOf("*/", i + 2);
+    return end === -1 ? src.length : end + 1;
+  }
+  return i;
+}
+
+/** The balanced {...} beginning at `open`. */
+function block(src, open) {
+  let d = 0,
+    inStr = null,
+    esc = false;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (inStr) {
+      if (c === "\\") esc = true;
+      else if (c === inStr) inStr = null;
+      continue;
+    }
+    const j = skipComment(src, i);
+    if (j !== i) {
+      i = j;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      inStr = c;
+      continue;
+    }
+    if (c === "{") d++;
+    else if (c === "}") {
+      d--;
+      if (d === 0) return [open, i + 1];
+    }
+  }
+  return null;
+}
+
+/** Top-level `key: value` spans inside an object literal. */
+function topKeys(src, s, e) {
+  const out = [];
+  let d = 0,
+    inStr = null,
+    esc = false;
+  for (let i = s + 1; i < e - 1; i++) {
+    const c = src[i];
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (inStr) {
+      if (c === "\\") esc = true;
+      else if (c === inStr) inStr = null;
+      continue;
+    }
+    // Same reason as in `block` — and this scanner ALSO mis-read key names out
+    // of comment prose, which is how a claim in the since-removed betting
+    // service acquired a phantom `write` key that no WHERE ever contained.
+    const j = skipComment(src, i);
+    if (j !== i) {
+      i = j;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      inStr = c;
+      continue;
+    }
+    if (c === "{" || c === "[" || c === "(") d++;
+    else if (c === "}" || c === "]" || c === ")") d--;
+    else if (d === 0) {
+      const m = /^([A-Za-z_$][\w$]*)\s*:/.exec(src.slice(i, i + 40));
+      if (m && (i === s + 1 || /[\s,{]/.test(src[i - 1]))) {
+        let j = i + m[0].length,
+          dd = 0,
+          st = null,
+          es = false;
+        for (; j < e - 1; j++) {
+          const cc = src[j];
+          if (es) {
+            es = false;
+            continue;
+          }
+          if (st) {
+            if (cc === "\\") es = true;
+            else if (cc === st) st = null;
+            continue;
+          }
+          // Third scanner, same fix — and the most dangerous of the three to
+          // leave broken: this one decides where a predicate's value ENDS, i.e.
+          // the `drop` span `mutate()` physically deletes. A desync here cuts
+          // the wrong source text, so the "mutant" tested is not the mutant the
+          // report names.
+          const jj = skipComment(src, j);
+          if (jj !== j) {
+            j = jj;
+            continue;
+          }
+          if (cc === '"' || cc === "'" || cc === "`") {
+            st = cc;
+            continue;
+          }
+          if (cc === "{" || cc === "[" || cc === "(") dd++;
+          else if (cc === "}" || cc === "]" || cc === ")") {
+            if (dd === 0) break;
+            dd--;
+          } else if (cc === "," && dd === 0) break;
+        }
+        out.push({ key: m[1], start: i, end: j });
+        i = j;
+      }
+    }
+  }
+  return out;
+}
+
+function parse(file, src) {
+  return ts.createSourceFile(
+    file,
+    src,
+    ts.ScriptTarget.Latest,
+    true,
+    /\.tsx$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+}
+
+/**
+ * The TOP-LEVEL declaration a claim sits in: a function declaration's name, or
+ * the name of the top-level `const`/`let` whose initializer holds the claim
+ * (`export const POST = …`). Anchoring IDs to this is load-bearing: a
+ * file-wide ordinal SHIFTS when a claim is removed, so deleting a guard made
+ * its id silently re-bind to a different claim further down and the ratchet
+ * reported all-clear. (Caught by sabotage-testing the ratchet itself.)
+ *
+ * It reads the TypeScript syntax tree, not the raw text. The first version
+ * regex-scanned for the last `function <word>` / `const <word> = (` before the
+ * claim, which also matched COMMENT prose ("this function exists to prevent"
+ * anchored a claim to `exists`) and INNER helpers (`const finish = (…) =>`
+ * inside a service anchored every later claim in that service to `finish`).
+ * Rewording a comment or adding a local helper then renamed a protected claim:
+ * CI reported it DISAPPEARED plus a new unreviewed claim, and only a full
+ * Postgres --discover cleared it. Comments are trivia to the parser and inner
+ * helpers are not top-level statements, so neither can become an anchor now.
+ */
+function claimAnchor(source, offset) {
+  for (const statement of source.statements) {
+    if (offset < statement.getStart(source) || offset >= statement.end) continue;
+    if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) {
+      return statement.name?.text ?? "default";
+    }
+    if (ts.isVariableStatement(statement)) {
+      const declaration = statement.declarationList.declarations.find(
+        (d) => offset >= d.getStart(source) && offset < d.end,
+      );
+      if (declaration && ts.isIdentifier(declaration.name)) {
+        return declaration.name.text;
+      }
+    }
+    return "<top>";
+  }
+  return "<top>";
+}
+
+/**
+ * Every guarded claim in one source file.
+ *
+ * Claims are identified by file + enclosing top-level function + their
+ * state-key SIGNATURE + an ordinal within that function — never by line
+ * number, which every unrelated edit above them would churn.
+ */
+export function discoverClaims(file, src) {
+  const found = discoverThrottleSqlClaims(file, src);
+  const seen = new Map();
+  let source = null;
+  let from = 0;
+  for (;;) {
+    const at = src.indexOf("updateMany(", from);
+    if (at === -1) break;
+    from = at + 11;
+    const argOpen = src.indexOf("{", at);
+    if (argOpen === -1) continue;
+    const arg = block(src, argOpen);
+    if (!arg) continue;
+    const where = topKeys(src, arg[0], arg[1]).find((p) => p.key === "where");
+    if (!where) continue;
+    const wOpen = src.indexOf("{", where.start + 6);
+    if (wOpen === -1 || wOpen > where.end) continue;
+    const wb = block(src, wOpen);
+    if (!wb) continue;
+    const state = topKeys(src, wb[0], wb[1]).filter(
+      (k) => !IDENTITY.has(k.key),
+    );
+    if (state.length === 0) continue;
+    const sig = state
+      .map((s) => s.key)
+      .sort()
+      .join("+");
+    // Parse lazily: most production files the inventory sweep reads have no
+    // claim at all.
+    source ??= parse(file, src);
+    const fn = claimAnchor(source, at);
+    const scope = `${fn}::${sig}`;
+    const ord = (seen.get(scope) ?? 0) + 1;
+    seen.set(scope, ord);
+    found.push({
+      id: `${file}::${fn}::${sig}#${ord}`,
+      file,
+      line: src.slice(0, at).split("\n").length,
+      drop: state.map((s) => [s.start, s.end]),
+    });
+    from = arg[1];
+  }
+  return found;
+}
+
+function repeated(values) {
+  const seen = new Set();
+  const out = new Set();
+  for (const value of values) {
+    if (seen.has(value)) out.add(value);
+    seen.add(value);
+  }
+  return [...out].sort();
+}
+
+/**
+ * Apply a baseline's optional `renames` object ({ "<old id>": "<new id>" }).
+ *
+ * An id names its file and top-level function, so MOVING a guarded function
+ * to another file, or renaming it, changes the id while the guard itself is
+ * untouched. Without this the ratchet reads the move as a protected guard
+ * that DISAPPEARED plus a new unreviewed claim, and only a full Postgres
+ * --discover (~25 minutes) clears it. A rename entry carries the old id's
+ * classification to the new id instead.
+ *
+ * It carries the classification, never the evidence: verify mode re-mutates
+ * the NEW id like any other protected claim, so a moved guard must still be
+ * killed by a failing test at its new home. The next full --discover rewrites
+ * the lists from live ids and drops the entries.
+ *
+ * Every entry must be an actual move: the old id is classified and no longer
+ * live, the new id is live and not yet classified, and no two entries land on
+ * the same id. Expects `base.protected`/`base.equivalent` to be string arrays;
+ * returns the problems plus both lists with every rename applied and sorted.
+ */
+export function resolveRenames(base, liveIds) {
+  const unchanged = {
+    protected: [...base.protected],
+    equivalent: [...base.equivalent],
+  };
+  const raw = base.renames;
+  if (raw === undefined) return { problems: [], ...unchanged };
+  if (
+    !raw ||
+    typeof raw !== "object" ||
+    Array.isArray(raw) ||
+    Object.values(raw).some((to) => typeof to !== "string")
+  ) {
+    return {
+      problems: [
+        "renames must be an object mapping each old claim id to its new id",
+      ],
+      ...unchanged,
+    };
+  }
+  const entries = Object.entries(raw);
+  const live = new Set(liveIds);
+  const recorded = new Set([...base.protected, ...base.equivalent]);
+  const problems = [];
+  for (const [from, to] of entries) {
+    if (!recorded.has(from)) {
+      problems.push(`rename source is neither protected nor equivalent: ${from}`);
+    }
+    if (live.has(from)) {
+      problems.push(`rename source is still a live claim, so nothing moved: ${from}`);
+    }
+    if (!live.has(to)) problems.push(`rename target is not a live claim: ${to}`);
+    if (recorded.has(to)) problems.push(`rename target is already classified: ${to}`);
+  }
+  for (const to of repeated(entries.map(([, to]) => to))) {
+    problems.push(`more than one rename targets the same claim: ${to}`);
+  }
+  const map = new Map(entries);
+  const apply = (ids) => ids.map((id) => map.get(id) ?? id).sort();
+  return {
+    problems,
+    protected: apply(base.protected),
+    equivalent: apply(base.equivalent),
+  };
+}

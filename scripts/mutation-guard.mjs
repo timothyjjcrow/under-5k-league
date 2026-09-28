@@ -28,7 +28,10 @@
 //   * a protected claim has DISAPPEARED      → the guard itself was removed
 //   * a live claim is absent from the baseline → discovery was not reviewed
 //   * the baseline is malformed, duplicated, stale, or only partly classified
-// Raise the ratchet by writing a test and re-running --discover.
+// Raise the ratchet by writing a test and re-running --discover. A guard that
+// only MOVED (its function renamed or moved to another file) keeps its
+// classification through a baseline `renames` entry, see resolveRenames in
+// ./mutation-claims.mjs, which also holds the claim-id rules.
 //
 // MUST run against Postgres (PG_TEST_URL). Several of these claims are only
 // caught by RACED tests, and on SQLite those race calls serialize — the mutant
@@ -48,7 +51,7 @@ import {
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { assertPostgresTestUrl } from "./test-db-safety.mjs";
-import { discoverThrottleSqlClaims } from "./mutation-sql-claims.mjs";
+import { discoverClaims, resolveRenames } from "./mutation-claims.mjs";
 
 const BASELINE = "test/mutation-baseline.json";
 
@@ -113,7 +116,7 @@ const EQUIVALENT = new Set([
   // a competing close conflicts, while an already-closed row fails preflight.
   // These guards still document intent and defend inconsistent external data.
   "src/lib/roster-history.ts::closeRosterTenure::closedAt#1",
-  "src/lib/roster-history.ts::checkActor::closedAt+openKey#1",
+  "src/lib/roster-history.ts::backfillRosterTenures::closedAt+openKey#1",
   // Identity correction, its fresh administrator claim, provider-failure
   // bookkeeping and import-progress commands read the exact row before their
   // same-row write in SERIALIZABLE. Concurrent source/role/revision changes
@@ -322,228 +325,10 @@ const FILES = [
   "src/lib/users.ts",
 ];
 
-// Keys that merely IDENTIFY the row. Everything else in a WHERE is state, and
-// state is what makes the write a claim.
-const IDENTITY = new Set([
-  "id",
-  "seasonId",
-  "lobbyId",
-  "userId",
-  "matchId",
-  "teamId",
-  "key",
-  "draftId",
-  "gameId",
-  "dotaMatchId",
-  "registrationId",
-  "steamId",
-  "discordId",
-]);
-
-/**
- * Skip a `//` or block comment starting at `i`, returning the index to resume
- * scanning from (or `i` when there is no comment there).
- *
- * BOTH scanners below need this and neither had it, which cost a red CI and a
- * long diagnosis. They treat `'` as a string delimiter, so an ordinary prose
- * comment inside a claim's object literal — "the lobby's", "don't", "the
- * bettor's" — put an ODD number of apostrophes in their path, opened a phantom
- * string, and desynced brace matching. The claim did not read as weakened: it
- * vanished from discovery entirely, tripping the "a protected claim has
- * DISAPPEARED" alarm against a baseline that still listed it.
- *
- * That failure mode is worse than it sounds, because it is SILENT in the other
- * direction too. A `--discover` run after such an edit simply records the
- * smaller claim set and reports all-clear, so the guard a comment happened to
- * hide is dropped from the ratchet with nothing to say so. Comments in this
- * repo are deliberately long and prose-heavy, so this was going to recur.
- */
-function skipComment(src, i) {
-  if (src[i] !== "/") return i;
-  if (src[i + 1] === "/") {
-    const nl = src.indexOf("\n", i);
-    return nl === -1 ? src.length : nl;
-  }
-  if (src[i + 1] === "*") {
-    const end = src.indexOf("*/", i + 2);
-    return end === -1 ? src.length : end + 1;
-  }
-  return i;
-}
-
-/** The balanced {...} beginning at `open`. */
-function block(src, open) {
-  let d = 0,
-    inStr = null,
-    esc = false;
-  for (let i = open; i < src.length; i++) {
-    const c = src[i];
-    if (esc) {
-      esc = false;
-      continue;
-    }
-    if (inStr) {
-      if (c === "\\") esc = true;
-      else if (c === inStr) inStr = null;
-      continue;
-    }
-    const j = skipComment(src, i);
-    if (j !== i) {
-      i = j;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      inStr = c;
-      continue;
-    }
-    if (c === "{") d++;
-    else if (c === "}") {
-      d--;
-      if (d === 0) return [open, i + 1];
-    }
-  }
-  return null;
-}
-
-/** Top-level `key: value` spans inside an object literal. */
-function topKeys(src, s, e) {
-  const out = [];
-  let d = 0,
-    inStr = null,
-    esc = false;
-  for (let i = s + 1; i < e - 1; i++) {
-    const c = src[i];
-    if (esc) {
-      esc = false;
-      continue;
-    }
-    if (inStr) {
-      if (c === "\\") esc = true;
-      else if (c === inStr) inStr = null;
-      continue;
-    }
-    // Same reason as in `block` — and this scanner ALSO mis-read key names out
-    // of comment prose, which is how a claim in the since-removed betting
-    // service acquired a phantom `write` key that no WHERE ever contained.
-    const j = skipComment(src, i);
-    if (j !== i) {
-      i = j;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      inStr = c;
-      continue;
-    }
-    if (c === "{" || c === "[" || c === "(") d++;
-    else if (c === "}" || c === "]" || c === ")") d--;
-    else if (d === 0) {
-      const m = /^([A-Za-z_$][\w$]*)\s*:/.exec(src.slice(i, i + 40));
-      if (m && (i === s + 1 || /[\s,{]/.test(src[i - 1]))) {
-        let j = i + m[0].length,
-          dd = 0,
-          st = null,
-          es = false;
-        for (; j < e - 1; j++) {
-          const cc = src[j];
-          if (es) {
-            es = false;
-            continue;
-          }
-          if (st) {
-            if (cc === "\\") es = true;
-            else if (cc === st) st = null;
-            continue;
-          }
-          // Third scanner, same fix — and the most dangerous of the three to
-          // leave broken: this one decides where a predicate's value ENDS, i.e.
-          // the `drop` span `mutate()` physically deletes. A desync here cuts
-          // the wrong source text, so the "mutant" tested is not the mutant the
-          // report names.
-          const jj = skipComment(src, j);
-          if (jj !== j) {
-            j = jj;
-            continue;
-          }
-          if (cc === '"' || cc === "'" || cc === "`") {
-            st = cc;
-            continue;
-          }
-          if (cc === "{" || cc === "[" || cc === "(") dd++;
-          else if (cc === "}" || cc === "]" || cc === ")") {
-            if (dd === 0) break;
-            dd--;
-          } else if (cc === "," && dd === 0) break;
-        }
-        out.push({ key: m[1], start: i, end: j });
-        i = j;
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * The function a claim sits in. Anchoring IDs to this is load-bearing: a
- * file-wide ordinal SHIFTS when a claim is removed, so deleting a guard made
- * its id silently re-bind to a different claim further down and the ratchet
- * reported all-clear. (Caught by sabotage-testing the ratchet itself.)
- */
-function enclosingFn(src, offset) {
-  const decl =
-    /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g;
-  let name = "<top>";
-  for (let m; (m = decl.exec(src));) {
-    if (m.index > offset) break;
-    name = m[1] ?? m[2] ?? name;
-  }
-  return name;
-}
-
-/**
- * Claims are identified by file + enclosing function + their state-key
- * SIGNATURE + an ordinal within that function — never by line number, which
- * every unrelated edit above them would churn.
- */
+/** Every guarded claim in one source file, plus its source text. */
 function discoverFile(file) {
   const src = readFileSync(file, "utf8");
-  const found = discoverThrottleSqlClaims(file, src);
-  const seen = new Map();
-  let from = 0;
-  for (;;) {
-    const at = src.indexOf("updateMany(", from);
-    if (at === -1) break;
-    from = at + 11;
-    const argOpen = src.indexOf("{", at);
-    if (argOpen === -1) continue;
-    const arg = block(src, argOpen);
-    if (!arg) continue;
-    const where = topKeys(src, arg[0], arg[1]).find((p) => p.key === "where");
-    if (!where) continue;
-    const wOpen = src.indexOf("{", where.start + 6);
-    if (wOpen === -1 || wOpen > where.end) continue;
-    const wb = block(src, wOpen);
-    if (!wb) continue;
-    const state = topKeys(src, wb[0], wb[1]).filter(
-      (k) => !IDENTITY.has(k.key),
-    );
-    if (state.length === 0) continue;
-    const sig = state
-      .map((s) => s.key)
-      .sort()
-      .join("+");
-    const fn = enclosingFn(src, at);
-    const scope = `${fn}::${sig}`;
-    const ord = (seen.get(scope) ?? 0) + 1;
-    seen.set(scope, ord);
-    found.push({
-      id: `${file}::${fn}::${sig}#${ord}`,
-      file,
-      line: src.slice(0, at).split("\n").length,
-      drop: state.map((s) => [s.start, s.end]),
-    });
-    from = arg[1];
-  }
-  return { src, found };
+  return { src, found: discoverClaims(file, src) };
 }
 
 function discoverAll() {
@@ -611,6 +396,8 @@ function sorted(values) {
  * Validate the baseline as a closed inventory, not a best-effort scorecard.
  * Every live claim must have exactly one classification; every recorded id
  * must still be live; and "equivalent" must match the reviewed source list.
+ * The checks after the shape checks judge the lists with any `renames`
+ * applied (see resolveRenames).
  */
 function validateBaseline(base, liveClaims) {
   const problems = [];
@@ -638,18 +425,20 @@ function validateBaseline(base, liveClaims) {
     return problems;
   }
 
-  const protectedIds = base.protected;
-  const equivalentIds = base.equivalent;
+  const liveIds = liveClaims.map((claim) => claim.id);
+  const renamed = resolveRenames(base, liveIds);
+  problems.push(...renamed.problems);
+  const protectedIds = renamed.protected;
+  const equivalentIds = renamed.equivalent;
   for (const id of duplicates(protectedIds)) {
     problems.push(`protected contains a duplicate: ${id}`);
   }
   for (const id of duplicates(equivalentIds)) {
     problems.push(`equivalent contains a duplicate: ${id}`);
   }
-  if (!sorted(protectedIds)) problems.push("protected IDs are not sorted");
-  if (!sorted(equivalentIds)) problems.push("equivalent IDs are not sorted");
+  if (!sorted(base.protected)) problems.push("protected IDs are not sorted");
+  if (!sorted(base.equivalent)) problems.push("equivalent IDs are not sorted");
 
-  const liveIds = liveClaims.map((claim) => claim.id);
   const duplicateLive = duplicates(liveIds);
   for (const id of duplicateLive) {
     problems.push(`live discovery produced a duplicate ID: ${id}`);
@@ -932,10 +721,21 @@ if (!discover) {
     console.error(`${BASELINE} is not an exact guarded-claim inventory:`);
     for (const problem of baselineProblems) console.error(`  - ${problem}`);
     console.error(
-      "Review every new or changed classification, then run a full --discover.",
+      "Review every new or changed classification, then run a full --discover.\n" +
+        "A guard that only MOVED (its function was renamed or moved to another\n" +
+        'file) can carry its classification with a "renames" entry instead:\n' +
+        '  "renames": { "<old id>": "<new id>" }',
     );
     process.exit(2);
   }
+  // From here on the protected/equivalent lists name live ids only: every
+  // rename is applied, so verify re-mutates each moved guard at its new home.
+  const effective = resolveRenames(base, [...allLiveIds]);
+  base = {
+    ...base,
+    protected: effective.protected,
+    equivalent: effective.equivalent,
+  };
 }
 
 try {
@@ -972,6 +772,15 @@ if (discover) {
       const previous = JSON.parse(readFileSync(BASELINE, "utf8"));
       if (Array.isArray(previous.protected)) {
         previousProtected = new Set(previous.protected);
+        // A guard that only moved keeps its protected status: its renamed id
+        // is not "newly caught" and needs no second confirming run. Invalid
+        // renames are ignored rather than trusted.
+        const renamed = Array.isArray(previous.equivalent)
+          ? resolveRenames(previous, [...allLiveIds])
+          : null;
+        if (renamed && renamed.problems.length === 0) {
+          previousProtected = new Set(renamed.protected);
+        }
       }
     } catch {
       // Discovery is the repair path for a stale or malformed baseline. With
