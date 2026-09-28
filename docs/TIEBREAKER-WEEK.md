@@ -1,117 +1,144 @@
-# Playoff tiebreaker week
+# Playoff tiebreakers
 
-After every regular-season result is final, the site applies the existing
-standings rules: points, overall game differential, series wins, then the
-head-to-head mini-table (points and game differential).
+Both leagues use these rules. They match `src/lib/tiebreakers.ts`,
+`src/lib/single-elimination.ts` and the player-facing copy in
+`src/lib/tiebreaker-format.ts`. Tiebreakers that were already published before
+the 20 September 2026 change keep their original rules; see
+[Tiebreakers published before 20 September 2026](#tiebreakers-published-before-20-september-2026).
 
-If teams remain tied and their order affects playoff qualification or seeding,
-they must play an extra tiebreaker week. Ties entirely outside the playoff field
-do not need extra matches. Withdrawn teams cannot participate.
+## When a tiebreaker is needed
+
+After every regular-season result is final, the site applies the normal
+standings rules: points, overall game differential, series wins, then the tied
+teams' head-to-head points and game differential.
+
+If teams are still tied and their order affects playoff qualification or
+seeding, they play a tiebreaker in an extra league week. Ties entirely outside
+the playoff field need no extra matches. Withdrawn teams cannot take part.
 
 ## Competition rules
 
-- Two tied teams play one **best-of-three** series.
-- Three tied teams play a **best-of-one double-elimination bracket** with
-  **four or five games total**, all assigned to the same tiebreaker week.
-  The opening matchup and one opening bye are randomly drawn when the first
-  fixture is created. The saved draw appears in the admin and public notices.
-- The three-team bracket progresses as follows. Call the opening teams A and B,
-  and the team with the bye C:
-  1. A versus B.
-  2. Game 1 winner versus C.
-  3. Game 1 loser versus game 2 loser. The loser finishes third.
-  4. Game 2 winner versus game 3 winner. If the undefeated team wins, the
-     bracket is complete.
-  5. Only if the undefeated team loses game 4, the finalists play a deciding
-     BO1. Its winner finishes first and the other finalist finishes second.
-- Every team must lose twice to be eliminated. The random draw chooses the
-  opening bye, never the final order. The bracket gives a definite first,
-  second and third place without circular ties or another week of matches.
-- Groups of four or more, and previously scheduled BO3 round robins, retain
-  **best-of-three round-robin** rules: rank by series wins, then game
-  differential in that round. A subgroup still tied for a playoff place or
-  seed plays again. This larger-group format can require another week.
+- Remaining ties use **best-of-one single elimination**. One loss ends a team's
+  run, and no team plays more than three games.
+- For a qualification tie there is one bracket per available place. Three wins
+  can decide a place among at most eight teams: if more teams are tied, the
+  published draw picks the first eight per place before any game is played, and
+  the rest are eliminated without playing. Every bracket winner qualifies; no
+  team plays a bracket that cannot earn a place. A seeding-only tie uses the
+  fewest brackets needed for the same limit.
+- All tied teams are drawn once. Smaller brackets fill first in draw order, and
+  the first entrants in each bracket get any opening byes. A one-team
+  qualifying bracket is an automatic qualification. For example, three teams
+  for two places means one qualifying bye and one BO1 for the other place.
+- Bracket winners rank first. Other teams rank by how close to their bracket's
+  final they got; equal finishes use the original draw order. Teams outside an
+  oversized field's draw cutoff rank last. There is no fourth game and no
+  repeated round.
+- Every opening game that is ready shares the league's next match-night
+  kickoff. Each later game is created as soon as its own feeder games finish,
+  in the same league week, with no scheduled break. Different branches run
+  independently, so a team may wait for its next opponent but never for a whole
+  round.
 - A tiebreaker must have a winner, including an administrative forfeit ruling.
-- Tiebreaker games settle playoff order without changing regular-season points,
-  records, or regular-week honors. They appear in season performance statistics
-  like other league games.
+- Tiebreakers settle playoff order only. They never change regular-season
+  points, records or regular-week honors. Their games count in season
+  performance statistics like other league games.
 
-## Player-facing playoff tracker
+## What players see
 
 Home, Schedule, match pages and team pages use the same playoff projection.
-Near the end of the regular season, the tracker shows what a win, draw or loss
-in the team's next series can mean after points, game differential, series wins
-and head-to-head rules have been applied. Recorded live game scores remove
-outcomes that can no longer happen.
+Near the end of the regular season the tracker shows what a win, draw or loss in
+a team's next series can mean once points, game differential, series wins and
+head-to-head have been applied. Recorded live game scores remove outcomes that
+can no longer happen.
 
-The tracker distinguishes direct qualification, a tiebreaker for a playoff
-place, qualification with an unresolved seed, and elimination. Multiple possible
-outcomes are counts of feasible score combinations, not predictions or odds.
-Detailed forecasts assume normally completed series; administrative rulings or
-score corrections can change them. Larger remaining schedules retain conservative
-qualification guarantees instead of enumerating an unbounded set of scores.
+The tracker separates direct qualification, a tiebreaker for a playoff place,
+qualification with an unresolved seed, and elimination. Where several outcomes
+are possible it counts score combinations; those counts are not predictions or
+odds. Forecasts assume normally completed series, so administrative rulings or
+score corrections can change them. Longer remaining schedules keep
+conservative qualification guarantees instead of listing every score.
 
-Once regular results and tiebreakers are final, the actual resolved order replaces
-the forecast. A team already guaranteed a place keeps its qualified status while
-a seeding-only tiebreaker is pending. Both league deployments use these same rules.
+Once regular results and tiebreakers are final, the actual order replaces the
+forecast. A team already sure of a place stays qualified while a seeding-only
+tiebreaker is pending. The public schedule shows the full draw, byes and future
+match slots under **Tiebreaker bracket**.
 
 ## Admin workflow
 
-1. Finish and review all regular-season results.
-2. In **Admin → Playoffs**, review the tied teams and format, then select
-   **Schedule tiebreaker week**. The season stays in Regular season.
-3. Two-team groups use the next configured league night when available.
-   For three-team brackets, reserve enough time during the extra week for
-   up to five games. When a league night is configured, games receive planned
-   90-minute slots from the opening kickoff, with a short break if a result
-   arrives late. Review or edit these times in **Schedule & results**; without
-   a configured night, set the times there. New matchups appear after the
-   preceding result is final.
-   Round-robin groups also require individual kickoff times.
-4. Import the games or enter decisive results using the normal match controls.
-   Players can find the extra week on Home, Schedule, team pages, and calendars
-   once kickoff times are set.
-5. For a three-team bracket, each decisive result automatically creates the
-   next match in the same week. The result-sync retry can recover interrupted
-   progression; the admin **Create next tiebreaker match** control also allows
-   recovery. If a round robin leaves another relevant tie, schedule that
-   next round after all current matches finish. **Start playoffs** stays
-   unavailable until every relevant tie is settled.
+1. Finish and review every regular-season result.
+2. In **Admin → Playoffs**, review the tied teams and the format, then select
+   **Schedule tiebreaker week**. The season stays in Regular season. The draw
+   and byes are saved and published at this point.
+3. Opening games get the next configured league night as their kickoff. If the
+   season has no league night, set the times in **Admin → Tiebreakers** or
+   **Schedule & results**.
+4. Import the games or enter decisive results with the normal match controls.
+   Players find the extra week on Home, Schedule, team pages and calendars once
+   kickoff times are set.
+5. Each decisive result creates the next game in that bracket automatically.
+   If that step is interrupted, the automation loop retries it; the
+   **Create next tiebreaker match** button in the Playoffs card does the same
+   by hand. **Start playoffs** stays unavailable until every relevant tie is
+   settled.
 6. Start playoffs. The bracket uses the resolved seeds and starts in the week
-   after the final tiebreaker week.
+   after the tiebreaker week.
 
 ## Corrections
 
-Once tiebreakers exist, regular results and team withdrawal/reinstatement are
-locked. Earlier tiebreaker games lock when a dependent bracket game or a later
-round is created, including games in the same week. All
-tiebreaker results lock when playoffs are seeded.
+Once any tiebreaker exists, regular-season results and team withdrawal or
+reinstatement are locked. An earlier tiebreaker result locks as soon as a game
+that depends on it has been created. All tiebreaker results lock when the
+playoffs are seeded.
 
-Use **Reset tiebreaker week** to rebuild the extra fixtures before playoffs.
-This removes all tiebreaker fixtures and their games, check-ins, standin
-bookings, picks and reschedule requests. The original three-team draw is kept
-for the same regular-season results, so reset cannot reroll the bye.
-Imported OpenDota game IDs are
-preserved in the admin recovery list for re-import, and booked standins receive
-stand-down notifications. Review the regular results, then schedule again.
+Use **Reset tiebreaker week** in the Playoffs card to rebuild the extra
+fixtures before playoffs. It removes every tiebreaker fixture and its games,
+check-ins, standin bookings, pick'em picks and reschedule requests. The saved
+draw is kept for the same regular-season results, so a reset cannot reroll the
+byes. Imported OpenDota match IDs are kept in the admin recovery list for
+re-import, and booked standins receive stand-down messages. Review the regular
+results, then schedule again.
 
 If playoffs already exist, use **Return to regular season** first. Removing or
-resetting a playoff bracket preserves its preceding tiebreaker results.
+resetting a playoff bracket keeps the tiebreaker results that came before it.
+
+## Tiebreakers published before 20 September 2026
+
+Before 20 September 2026 the league used different tiebreaker formats. A tie
+whose fixtures were published under those rules keeps them, including for later
+rounds of the same tie, and its results keep their meaning. The US league has
+completed tiebreakers under these rules.
+
+- Two tied teams played one **best-of-three** series.
+- Three tied teams played a **best-of-one double-elimination bracket** of four
+  or five games in one week. The opening matchup and one opening bye were drawn
+  when the first game was created. Game 1 was A versus B; game 2 the game 1
+  winner versus the bye team C; game 3 the two losers so far, where the loser
+  finished third; game 4 the game 2 winner versus the game 3 winner; and a
+  deciding game 5 only if the undefeated team lost game 4.
+- Groups of four or more played a **best-of-three round robin**, ranked by
+  series wins then game differential in that round. A subgroup still tied for a
+  place or seed played again, which could need another week.
 
 ## Implementation and verification
 
-`Match.phase = TIEBREAKER` uses the existing string column, so no database schema
-migration is needed. Each fixture's `bracketSlot` identifies its round and an
-immutable fingerprint of regular results/team eligibility; three-team bracket
-slots also identify their game number. Stale, missing,
-duplicate or inconsistent tiebreaker fixtures block playoff start.
+`Match.phase = TIEBREAKER` uses the existing string column. Each fixture's
+`bracketSlot` records its draw, bracket position and an immutable fingerprint
+of the regular results and eligible teams (`TBS:` for single elimination; the
+older formats use `TB:` and `TBD:`). Stale, missing, duplicate or inconsistent
+tiebreaker fixtures block the playoff start.
 
-Scheduling, reset and playoff seeding read their authoritative inputs inside
-serializable transactions. Admin forms carry a revision of the reviewed data;
-late results, new bookings or duplicate submissions cannot silently replace it.
+Scheduling, reset and playoff seeding read their inputs inside serializable
+transactions. Admin forms carry a revision of the data the admin reviewed, so
+late results, new bookings or a duplicate submission cannot silently replace
+it. A missed post-result step is retried by the existing automation loop; there
+is no separate scheduler.
 
-Coverage lives in `src/lib/tiebreakers.test.ts`, the tiebreaker action/notice
-tests, and `test/integration/tiebreakers.itest.ts` plus the lifecycle suite.
-The isolated postseason browser suite covers two-team BO3 qualification and
-three-team BO1 brackets both with and without the fifth-game reset, through
-playoff creation.
+Coverage lives in `src/lib/tiebreakers.test.ts`,
+`src/lib/single-elimination.test.ts`, the tiebreaker component tests,
+`test/integration/tiebreakers.itest.ts` and the three
+`test/integration/tiebreaker-*lifecycle.itest.ts` suites. In the postseason
+browser suite, `e2e-postseason/tiebreaker.spec.ts` drives both the current
+knockout and a published double-elimination bracket through to playoff
+creation, and `e2e-postseason/weekend-tiebreaker.spec.ts` plays three- and
+eight-team knockouts to the end through the admin controls.

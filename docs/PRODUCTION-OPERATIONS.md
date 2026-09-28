@@ -608,7 +608,8 @@ outside this runbook rather than improvising against production data.
 1. Build a case-specific source inventory before changing or disclosing data.
    Check the live `User` identity/profile/link fields; registrations, rosters,
    captaincy, bids, stand-ins, availability, reschedules, predictions and fantasy
-   data; game and inhouse JSON; the Cred balance and relationless ledger; news,
+   data; game and inhouse JSON; the retained Cred balances and relationless
+   ledger (Cred betting was removed on 2026-09-27, but its rows remain); news,
    admin actions and announcement outboxes; hosted application logs; database
    replicas, backups and PITR; delivered Discord messages and roles; and source
    copies held by Steam, OpenDota, or Discord. Mark each source as found, not
@@ -651,8 +652,9 @@ outside this runbook rather than improvising against production data.
 ### Retention and restoration replay
 
 - The current application has no general automatic expiry for accounts, season
-  participation, game/inhouse history, admin actions, Cred ledger entries, or
-  delivered announcement rows. Season withdrawal preserves its registration.
+  participation, game/inhouse history, admin actions, retained Cred ledger
+  entries, or delivered announcement rows. Season withdrawal preserves its
+  registration.
   Do not publish or repeat a fixed deletion period for any of these categories
   unless a tested application job or provider lifecycle actually enforces it.
 - Before launch, inventory each stored category, its purpose and visibility,
@@ -790,8 +792,8 @@ Use this when data is corrupt, missing, or of uncertain integrity.
 3. Run migration baseline as appropriate, migration preflight, isolated
    migration deploy, current postflight, and representative counts/invariants
    for users, seasons, registrations, teams, matches, games, draft state,
-   inhouse/Cred ledgers, announcements, and admin actions. Start the pinned
-   application against the clone.
+   inhouse history, the retained Cred ledger, announcements, and admin actions.
+   Start the pinned application against the clone.
 4. Test both the direct migration connection and the pooled runtime connection.
    Confirm reads and a disposable transactional write/rollback through the
    runtime role. Exercise the actor/phase smoke checklist.

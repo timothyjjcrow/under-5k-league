@@ -1,7 +1,7 @@
 # Inhouse betting — recommendation and implementation plan
 
-> **Historical — this feature was removed.** Cred betting was removed in
-> September 2026 by the owner's decision. The `InhouseBet`, `InhouseCredit` and
+> **Historical — this feature was removed.** Cred betting was removed on
+> 2026-09-27 by the owner's decision. The `InhouseBet`, `InhouseCredit` and
 > `InhouseCreditEntry` tables and the `InhouseLobby` bet columns are left
 > dormant (no destructive migration), and nothing in the app reads or writes
 > them. This document is kept only as the record of the original design.

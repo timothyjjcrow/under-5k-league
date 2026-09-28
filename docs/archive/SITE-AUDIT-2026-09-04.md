@@ -1,5 +1,10 @@
 # GGD2L site audit — September 4, 2026
 
+> **Archived record (4 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md). Cred betting, which this document describes as
+> live, was removed on 2026-09-27.
+
 The highest-value improvement is to put the player's or administrator's next task ahead of the supporting analysis. The app already has rich data, useful recovery controls, and substantial lifecycle protections. Preserve those systems while improving information order, navigation, feedback, and the cost of reading data.
 
 This report records the original audit and backlog before implementation. **The audit itself changed no application code, production configuration, production data, or current-season state.** The subsequently authorized fixes and their validation are documented in [Site improvements](SITE-IMPROVEMENTS-2026-09-04.md).
@@ -40,7 +45,7 @@ These are relative estimates, not calendar commitments. Each should be a small r
 
 **Preserve:** The same fixture IDs, kickoff times, RSVP rules, cover assignments, standings math, and bracket projection. A view change must not reschedule anything.
 
-Source: [schedule composition](/Users/timothycrowley/LD2L2.0/src/app/schedule/page.tsx:653), [fixture section](/Users/timothycrowley/LD2L2.0/src/app/schedule/page.tsx:698). Evidence: [phone Schedule](audit-2026-09-04/390_schedule.png).
+Source: [schedule composition](../../src/app/schedule/page.tsx#L653), [fixture section](../../src/app/schedule/page.tsx#L698). Evidence: [phone Schedule](audit-2026-09-04/390_schedule.png).
 
 ### U2 — Home's personal task should outrank general league content
 
@@ -50,7 +55,7 @@ Source: [schedule composition](/Users/timothycrowley/LD2L2.0/src/app/schedule/pa
 
 **Preserve:** Existing role/phase policies and distinctions between full players, standins, captains, and spectators. Fixture users without registrations exposed unusual combinations; do not infer a production registration defect from those fixture combinations.
 
-Source: [home weekly slate and standings](/Users/timothycrowley/LD2L2.0/src/app/page.tsx:1976), [check-in presentation](/Users/timothycrowley/LD2L2.0/src/app/page.tsx:763).
+Source: [home weekly slate and standings](../../src/app/page.tsx#L1976), [check-in presentation](../../src/app/page.tsx#L763).
 
 ### U3 — Form errors disappear before a user can finish correcting them
 
@@ -60,7 +65,7 @@ Source: [home weekly slate and standings](/Users/timothycrowley/LD2L2.0/src/app/
 
 **Acceptance:** Submit an invalid profile or result form; wait more than five seconds; the explanation and typed values remain. A successful reschedule still reports success if revalidation removes its form.
 
-Source: [ActionForm](/Users/timothycrowley/LD2L2.0/src/components/action-form.tsx:53), [toast lifetime](/Users/timothycrowley/LD2L2.0/src/components/toaster.tsx:33).
+Source: [ActionForm](../../src/components/action-form.tsx#L53), [toast lifetime](../../src/components/toaster.tsx#L33).
 
 ### U4 — Phone controls and admin jump navigation need a second pass
 
@@ -70,7 +75,7 @@ Source: [ActionForm](/Users/timothycrowley/LD2L2.0/src/components/action-form.ts
 
 The 44px recommendation follows the [W3C enhanced target-size guidance](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html); these measured sizes alone do not establish an AA failure.
 
-Source: [AdminSection and AdminJump](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:557), [schedule chips](/Users/timothycrowley/LD2L2.0/src/components/schedule-weeks.tsx:243). Evidence: [obscured Discord heading](audit-2026-09-04/admin-discord-jump.png).
+Source: [AdminSection and AdminJump](../../src/app/admin/page.tsx#L557), [schedule chips](../../src/components/schedule-weeks.tsx#L243). Evidence: [obscured Discord heading](audit-2026-09-04/admin-discord-jump.png).
 
 ### U5 — Schedule filters are not durable or shareable
 
@@ -78,7 +83,7 @@ Source: [AdminSection and AdminJump](/Users/timothycrowley/LD2L2.0/src/app/admin
 
 **Fix:** Store selected team and optional week/view in validated query parameters. Preserve explicit selection when navigating back from a match. Clear invalid team IDs safely. Use the existing client-side history approach where possible so filtering does not introduce a database round trip. Test reload, copied URLs, Back, and switching seasons.
 
-Source: [schedule local state](/Users/timothycrowley/LD2L2.0/src/components/schedule-weeks.tsx:81), [existing player-pool pattern](/Users/timothycrowley/LD2L2.0/src/components/player-pool.tsx:88).
+Source: [schedule local state](../../src/components/schedule-weeks.tsx#L81), [existing player-pool pattern](../../src/components/player-pool.tsx#L88).
 
 ### U6 — Statistics need a way to answer a specific question quickly
 
@@ -88,7 +93,7 @@ Source: [schedule local state](/Users/timothycrowley/LD2L2.0/src/components/sche
 
 **Preserve:** Existing tie ranking, trusted 5v5 validation, eligibility thresholds, and the distinction between scenario shares and predicted chances. No recalculation of scoring is needed.
 
-Source: [Leaders](/Users/timothycrowley/LD2L2.0/src/app/leaders/page.tsx:1), [Meta truncation](/Users/timothycrowley/LD2L2.0/src/app/meta/page.tsx:353). Evidence: [phone Leaders](audit-2026-09-04/390_leaders.png).
+Source: [Leaders](../../src/app/leaders/page.tsx#L1), [Meta truncation](../../src/app/meta/page.tsx#L353). Evidence: [phone Leaders](audit-2026-09-04/390_leaders.png).
 
 ### U7 — Profile setup should distinguish required work from optional scouting details
 
@@ -98,7 +103,7 @@ Source: [Leaders](/Users/timothycrowley/LD2L2.0/src/app/leaders/page.tsx:1), [Me
 
 **Preserve:** Steam-derived identity, public-field privacy guidance, soft MMR review versus the hard ceiling, and registration/withdrawal gates. Do not turn optional profile completion into a new eligibility restriction.
 
-Source: [profile page](/Users/timothycrowley/LD2L2.0/src/app/me/page.tsx:280). Evidence: [phone profile](audit-2026-09-04/390_me.png).
+Source: [profile page](../../src/app/me/page.tsx#L280). Evidence: [phone profile](audit-2026-09-04/390_me.png).
 
 ### U8 — Invalid Scrims season selection silently displays another season
 
@@ -108,7 +113,7 @@ Source: [profile page](/Users/timothycrowley/LD2L2.0/src/app/me/page.tsx:280). E
 
 **Preserve:** Defaulting to the active/latest season when no season was requested, and the complete separation of Scrim results from league competition.
 
-Source: [Scrims season selection](/Users/timothycrowley/LD2L2.0/src/app/scrims/page.tsx:76).
+Source: [Scrims season selection](../../src/app/scrims/page.tsx#L76).
 
 ## Admin and integration findings
 
@@ -122,7 +127,7 @@ This extends the existing `adminNextStep` and health cards rather than introduci
 
 **Preserve:** Every existing action, phase guard, typed destructive confirmation, collateral warning, archive safety check, and direct link. Moving a control must not change its authority or server-side preconditions.
 
-Source: [admin composition](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:260), [existing next-step policy](/Users/timothycrowley/LD2L2.0/src/lib/admin-next-step.ts:79). Evidence: [phone admin top](audit-2026-09-04/admin-mobile-top.png).
+Source: [admin composition](../../src/app/admin/page.tsx#L260), [existing next-step policy](../../src/lib/admin-next-step.ts#L79). Evidence: [phone admin top](audit-2026-09-04/admin-mobile-top.png).
 
 ### A2 — Connect integration health to a specific recovery task
 
@@ -132,7 +137,7 @@ Source: [admin composition](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx
 
 **Preserve:** Current retry leases, backoff, outbox ownership, deduplication, and explicit actions. No retry-on-page-view or automatic destructive reimport. Copying a diagnostic summary must omit tokens, webhook URLs, and unnecessary personal information.
 
-Source: [AutoSyncHealth](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:3971), [DiscordSection](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:5016), [statistics warning](/Users/timothycrowley/LD2L2.0/src/components/stats-nav.tsx:54).
+Source: [AutoSyncHealth](../../src/app/admin/page.tsx#L3971), [DiscordSection](../../src/app/admin/page.tsx#L5016), [statistics warning](../../src/components/stats-nav.tsx#L54).
 
 ### A3 — Make the existing audit trail searchable
 
@@ -142,7 +147,7 @@ Source: [AutoSyncHealth](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:39
 
 **Preserve:** Denormalized historical actor names and best-effort logging semantics. Do not claim the current log is a complete transactional audit trail.
 
-Source: [activity display](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:5910), [log storage/query](/Users/timothycrowley/LD2L2.0/src/lib/admin-log.ts:33).
+Source: [activity display](../../src/app/admin/page.tsx#L5910), [log storage/query](../../src/lib/admin-log.ts#L33).
 
 ## Efficiency findings
 
@@ -156,7 +161,7 @@ Source: [activity display](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:
 
 **Acceptance:** The same result/ruling/import controls and warning counts render before and after. Measure query count, bytes, and response time with a large synthetic season; retain source-of-truth checks inside mutations.
 
-Source: [admin query](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:722), [displayed game fields](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:2983).
+Source: [admin query](../../src/app/admin/page.tsx#L722), [displayed game fields](../../src/app/admin/page.tsx#L2983).
 
 ### E2 — Discord membership lookup blocks the whole profile
 
@@ -164,7 +169,7 @@ Source: [admin query](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:722),
 
 **Fix:** Isolate Discord membership/ping status behind its own server component and loading/error state. Render profile and participation data immediately. Show unknown status honestly if the provider fails; preserve the existing callback-versus-current-membership reconciliation.
 
-Source: [profile blocking batch](/Users/timothycrowley/LD2L2.0/src/app/me/page.tsx:155). The approach follows [Next's guidance on streaming independent data sections](https://nextjs.org/docs/app/getting-started/fetching-data), with the installed 16.3.0 docs governing implementation.
+Source: [profile blocking batch](../../src/app/me/page.tsx#L155). The approach follows [Next's guidance on streaming independent data sections](https://nextjs.org/docs/app/getting-started/fetching-data), with the installed 16.3.0 docs governing implementation.
 
 ### E3 — Shared derived statistics can reduce repeated history work
 
@@ -174,7 +179,7 @@ Source: [profile blocking batch](/Users/timothycrowley/LD2L2.0/src/app/me/page.t
 
 **Preserve:** Full-history Elo, deterministic order/ties, trusted attribution, and current correction behavior. Never improve speed by truncating the source history or caching private viewer-specific data globally. Do not adopt new Cache Components across the whole application as part of a UI cleanup.
 
-Source: [existing query cache](/Users/timothycrowley/LD2L2.0/src/lib/cached-queries.ts:1), [uncached scouting](/Users/timothycrowley/LD2L2.0/src/app/matches/[id]/page.tsx:834), [Inhouse ladder query](/Users/timothycrowley/LD2L2.0/src/app/inhouse/page.tsx:421), [existing ladder cache](/Users/timothycrowley/LD2L2.0/src/lib/inhouse-ladder.ts:24).
+Source: [existing query cache](../../src/lib/cached-queries.ts#L1), [uncached scouting](../../src/app/matches/%5Bid%5D/page.tsx#L834), [Inhouse ladder query](../../src/app/inhouse/page.tsx#L421), [existing ladder cache](../../src/lib/inhouse-ladder.ts#L24).
 
 ### E4 — News and Scrim history grow without a page boundary
 
@@ -182,7 +187,7 @@ Source: [existing query cache](/Users/timothycrowley/LD2L2.0/src/lib/cached-quer
 
 **Fix:** Keep pinned/latest news visible, paginate older posts with stable ordering, and maintain direct permalink access. Separate upcoming Scrims from paginated history; stream/cache the practice statistics independently. Preserve all history and never mix practice aggregates with league aggregates.
 
-Source: [news query](/Users/timothycrowley/LD2L2.0/src/app/news/page.tsx:20), [admin news query](/Users/timothycrowley/LD2L2.0/src/app/admin/page.tsx:247), [Scrims query batch](/Users/timothycrowley/LD2L2.0/src/app/scrims/page.tsx:113).
+Source: [news query](../../src/app/news/page.tsx#L20), [admin news query](../../src/app/admin/page.tsx#L247), [Scrims query batch](../../src/app/scrims/page.tsx#L113).
 
 ## Complete page inventory and recommended direction
 

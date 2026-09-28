@@ -1,5 +1,10 @@
 # GGD2L product audit
 
+> **Archived record (August–September 2026).** This describes the site as it was
+> then and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md). Cred betting, which this document describes as
+> live, was removed on 2026-09-27.
+
 Started 2026-08-03. This is the working map and iteration log for the
 page-by-page UI, UX, functionality, and architecture audit. The implementation
 map in `docs/ARCHITECTURE.md` remains the detailed source-level companion; this

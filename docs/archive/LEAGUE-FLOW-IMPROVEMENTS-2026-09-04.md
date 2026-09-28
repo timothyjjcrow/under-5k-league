@@ -1,5 +1,10 @@
 # League navigation, match center and profile UI
 
+> **Archived record (4 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md). The Playing lineups card it mentions was
+> removed on 2026-09-26.
+
 This pass connects the home/schedule visual redesign to the pages players open next. It keeps league rules, season transitions, scores, permissions, integrations and mutation handlers intact.
 
 ## Changes

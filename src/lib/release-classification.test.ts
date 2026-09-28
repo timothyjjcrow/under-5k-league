@@ -292,6 +292,16 @@ describe("release classifier policy", () => {
         modified("docs/PRODUCTION-OPERATIONS.md"),
       ]).lane,
     ).toBe("strict");
+    // The release runbook and the decisions register are policy too:
+    // editing either beside a UI change must not ride the ui-only lane.
+    for (const file of ["docs/RELEASING.md", "docs/DECISIONS.md"]) {
+      expect(classifyEntries([footer, modified(file)])).toMatchObject({
+        lane: "strict",
+        needs_postgres: true,
+        needs_db_release: false,
+        needs_scheduler_pause: false,
+      });
+    }
   });
 
   it.each([

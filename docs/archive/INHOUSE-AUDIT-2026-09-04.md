@@ -1,5 +1,10 @@
 # Inhouse audit and rework — 2026-09-04
 
+> **Archived record (4 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md). Cred betting, which this document describes as
+> live, was removed on 2026-09-27.
+
 This change addresses queue retention, the live room, history, database reads,
 result detection, and the Discord board/result integration. The focus is a
 clearer player journey with fewer unnecessary requests while preserving the

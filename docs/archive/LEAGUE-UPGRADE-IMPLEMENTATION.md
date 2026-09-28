@@ -1,5 +1,11 @@
 # League systems implementation and release record
 
+> **Archived record (24 September 2026).** This describes the site as it was
+> then and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md). The confirmed lineup snapshots it records came
+> from the Playing lineups card, which was removed on 2026-09-26; the tables are
+> kept but nothing writes them.
+
 Current release scope: the user reduced the September 24 audit implementation
 to completed Stages 1–3 and requested both regional applications be released
 after successful verification. Stages 4–8 below are deferred. Existing

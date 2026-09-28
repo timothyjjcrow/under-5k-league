@@ -274,11 +274,13 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   then removes withdrawn teams from eligibility, preserving every survivor's
   played/ruled results while producing the cut, one-indexed seed map, and
   first-round pairings used by every page and the write service. Unresolved
-  qualification/seeding ties require a tiebreaker week (two teams BO3; three teams BO1 double elimination): `TIEBREAKER`
+  qualification/seeding ties require a tiebreaker week (BO1 single-elimination
+  brackets, at most three games per team; ties published before 20 September
+  2026 keep their BO3 / BO1 double-elimination rules): `TIEBREAKER`
   fixtures settle only the tied group's order without changing regular points.
   The projection applies those results, and the seeding transaction refuses
-  unresolved or stale ties. See [Tiebreaker week](TIEBREAKER-WEEK.md) for the
-  competition rules and admin recovery workflow. The playoff
+  unresolved or stale ties. See [Playoff tiebreakers](TIEBREAKER-WEEK.md) for
+  the competition rules and admin recovery workflow. The playoff
   scenario engine (`src/lib/scenarios.ts` + `src/lib/stakes.ts`) enumerates
   equal-weight result combinations for clinch and “win and in” guidance; the
   UI explicitly does not present those combinations as predictive odds. The
@@ -691,7 +693,7 @@ browsers must revalidate; room state remains personalized and `no-store`.
 
 ## 6. Database models
 
-27 models in `prisma/schema.prisma`, committed on the sqlite provider
+40 models in `prisma/schema.prisma`, committed on the sqlite provider
 (`scripts/switch-db-provider.mjs` swaps to postgresql at build). SQLite has no
 enums, so every status column is a string whose allowed values live in
 `src/lib/constants.ts`. Uniques double as concurrency guards throughout.
@@ -738,6 +740,9 @@ enums, so every status column is a string whose allowed values live in
   this row.
 - `Bid` — per-lot audit trail (swept by undo/abort; `AdminAction` is the
   surviving record).
+- `TeamStaff` — optional additive team roles (such as COACH) that can manage
+  casual scrims without touching the drafted roster; `Team.captainId` stays
+  authoritative.
 
 **Fixtures & results**
 
@@ -753,6 +758,35 @@ enums, so every status column is a string whose allowed values live in
 - `Game` — an imported Dota game; `dotaMatchId` @unique is the import dedupe;
   per-player stats live in the `players` JSON column (hence the whole-table
   scans in `cached-queries.ts`).
+- `ImportCandidate` — bounded, expiring provider evidence for the resumable
+  importer (PENDING/READY/RETRYABLE/IGNORED/NEEDS_REVIEW);
+  `@@unique([seasonId, dotaMatchId])`, and fixture eligibility is rechecked at
+  commit. A retryable failure never becomes a deliberate exclusion.
+- `ImportSuppression` — deliberate per-season exclusions (an admin-removed or
+  ignored game), `@@unique([seasonId, dotaMatchId])`; they survive retries so
+  auto-sync cannot re-import them.
+- `DotaMatchClaim` — global ownership guard keyed by `dotaMatchId`: one Dota
+  match belongs to exactly one league `Match` or `Scrim` (`kind` + `contextId`).
+
+**History** (see [Historical participation](HISTORICAL-PARTICIPATION.md))
+
+- `RosterTenure` — when each roster membership began and ended, with the
+  acquisition facts known at the time; outlives today's `TeamMember` row.
+- `DraftRun` / `DraftLot` — each draft start's frozen rules, opening budgets and
+  pool, then one row per nomination with its accepted bids and outcome. Undo
+  and abort annotate lots instead of deleting them.
+- `GameParticipant` — an indexed projection of each validated `Game.players`
+  line for player queries; the JSON stays canonical.
+- `MatchLineup` / `MatchLineupSeat` — retired. The Playing lineups card was
+  removed on 2026-09-26; nothing writes these rows, and existing ones are only
+  copied by the season export and the postseason reset receipt.
+
+**Scrims**
+
+- `Scrim` / `ScrimParticipant` / `ScrimGame` — casual team-vs-team practice.
+  A scrim belongs to a season so it can use that season's Valve league ticket,
+  but its games live in their own table so standings, fantasy, records and
+  awards never read them.
 
 **Engagement**
 
@@ -780,7 +814,7 @@ enums, so every status column is a string whose allowed values live in
   result-before-correction order, and a 30-second claim lease makes failed or
   interrupted sends retryable without holding a database transaction open.
 - `InhouseBet`, `InhouseCredit`, `InhouseCreditEntry` — dormant. Cred betting
-  was removed in September 2026 by the owner's decision; the tables were left
+  was removed on 2026-09-27 by the owner's decision; the tables were left
   in place (no destructive migration) and nothing in the app reads or writes
   them.
 

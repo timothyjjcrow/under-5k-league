@@ -13,7 +13,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 US and Europe ship the same application commit from `main`. Make feature and
 schema changes once; use `src/lib/league-config.ts` for regional presentation.
 Keep databases, Discord integrations and runtime settings isolated. Follow
-`docs/SHARED-LEAGUE-RELEASE.md` and the impact-selected production operations
-procedure. Release both projects through `npm run release:both`; do not deploy
-one regional feature branch independently. Run browser coverage for both league
+`docs/RELEASING.md` and the impact-selected production operations procedure.
+Release both projects through `npm run release:both`; do not deploy one
+regional feature branch independently. Run browser coverage for both league
 configurations when changing shared behavior.

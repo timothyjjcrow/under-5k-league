@@ -1,5 +1,9 @@
 # Home and schedule: league clarity redesign
 
+> **Archived record (4 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md).
+
 ## Findings and resulting experience
 
 The pages gave nearly equal prominence to fixtures, standings, playoff projections, scenario percentages, form symbols, and the head-to-head grid. That required players to interpret the league instead of quickly reading its current state.

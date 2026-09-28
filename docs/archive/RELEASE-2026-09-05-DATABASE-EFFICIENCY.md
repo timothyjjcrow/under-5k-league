@@ -1,5 +1,9 @@
 # Database efficiency release — 5 September 2026
 
+> **Archived record (5 September 2026).** This describes the site as it was then
+> and is no longer kept up to date. Current documentation starts at
+> [docs/README.md](../README.md).
+
 The user authorized production deployment to both regional sites. This record
 is separate from the application commits so deployment identifiers and live
 verification can be recorded after the immutable artifacts are built.

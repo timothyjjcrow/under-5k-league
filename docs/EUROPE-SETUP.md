@@ -3,7 +3,7 @@
 Both leagues run the same source code. Europe uses its own Vercel project,
 PostgreSQL database, scheduler and Discord server. Players
 use Steam to sign in separately on each site; profiles, admins, registrations,
-seasons, drafts, matches, records, inhouses and credits are separate.
+seasons, drafts, matches, records and inhouses are separate.
 
 The live site is [GGD2L Europe](https://ggd2l-europe.vercel.app). Season 1 is open
 for signups with **match night to be announced**, no draft date and no first
@@ -115,7 +115,7 @@ It inserts only:
 - `Setting.deploymentRegion = eu` and `Setting.deploymentOrigin = APP_URL`;
 - one active `GGD2L Europe Season 1` in `SIGNUPS`, with the existing 4.5K soft
   review threshold, five-player teams and match night to be announced;
-- no players, rosters, fixtures, news, credits or Discord settings.
+- no players, rosters, fixtures, news or Discord settings.
 
 Repeating bootstrap fails without modifying existing data. If a command's
 completion was uncertain, inspect the database before taking further action.
