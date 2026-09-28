@@ -207,9 +207,20 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.getByText("Series complete", { exact: true }),
   ).toBeVisible();
+  // A final series has no captain tools left: one quiet line under the
+  // games says how to get a wrong result fixed, with no jump button.
   await expect(
-    page.getByRole("heading", { name: "Need a result correction?" }),
+    page.getByText(
+      "Result wrong? Send an admin this page and the Dota match ID.",
+      { exact: true },
+    ),
   ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Result correction ↓" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Captain tools", exact: true }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Report your result" }),
   ).toHaveCount(0);

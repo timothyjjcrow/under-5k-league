@@ -208,7 +208,12 @@ export default async function MatchDetailPage({
     !!viewer &&
     (match.homeTeam.captainId === viewer.id ||
       match.awayTeam.captainId === viewer.id);
-  const showCaptainTools = isCaptain && match.season.isActive;
+  // A final series has nothing left for a captain to do here: corrections go
+  // through an admin, so it gets one line under the games, not a tools jump.
+  const showCaptainTools =
+    isCaptain && match.season.isActive && match.status !== "COMPLETED";
+  const showCorrectionNote =
+    isCaptain && match.season.isActive && match.status === "COMPLETED";
   // A finished match tells a signed-in picker how their pick'em call went,
   // so nobody has to go back to /pickem to find out.
   const pickemCalls =
@@ -444,13 +449,11 @@ export default async function MatchDetailPage({
             ) : null}
             {showCaptainTools ? (
               <a href="#match-tools" className={buttonClasses("primary", "sm")}>
-                {match.status === "COMPLETED"
-                  ? "Result correction ↓"
-                  : !matchResultsOpen(match.season.status, match.phase)
-                    ? "Captain tools ↓"
-                    : match.status === "LIVE" || games.length > 0
-                      ? "Record next game ↓"
-                      : "Set up & report ↓"}
+                {!matchResultsOpen(match.season.status, match.phase)
+                  ? "Captain tools ↓"
+                  : match.status === "LIVE" || games.length > 0
+                    ? "Record next game ↓"
+                    : "Set up & report ↓"}
               </a>
             ) : null}
           </div>
@@ -641,6 +644,11 @@ export default async function MatchDetailPage({
         )}
       </section>
 
+      {showCorrectionNote ? (
+        <p className="text-sm text-muted">
+          Result wrong? Send an admin this page and the Dota match ID.
+        </p>
+      ) : null}
       {match.status === "LIVE" && match.season.isActive ? (
         <Suspense fallback={null}>
           <LiveSeriesCheckin matchId={match.id} />
@@ -668,18 +676,16 @@ export default async function MatchDetailPage({
             <Badge className="ml-auto">Your match</Badge>
           </div>
           {/* These components keep their own write-time capability gates,
-              including read-only correction and stranded-proposal cleanup. */}
+              including locked reporting and stranded-proposal cleanup. */}
           <ReportResultSection match={match} renderedAt={renderedAt} />
-          {match.status !== "COMPLETED" ? (
-            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-              <div className="min-w-0">
-                <RescheduleSection match={match} />
-              </div>
-              <div className="min-w-0">
-                <StandinSection match={match} />
-              </div>
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+            <div className="min-w-0">
+              <RescheduleSection match={match} />
             </div>
-          ) : null}
+            <div className="min-w-0">
+              <StandinSection match={match} />
+            </div>
+          </div>
         </section>
       ) : null}
     </div>
@@ -1740,17 +1746,8 @@ async function ReportResultSection({
       />
     ) : null;
   }
-  if (!match.season.isActive) return null;
-  if (match.status === "COMPLETED") {
-    return (
-      <Card>
-        <CardHeader
-          title="Need a result correction?"
-          subtitle="Captains cannot rewrite a final series. Send an admin this match page and the incorrect Dota match ID; they can remove or re-import the game without hiding the audit trail."
-        />
-      </Card>
-    );
-  }
+  // A final series gets the page's one-line correction note instead.
+  if (!match.season.isActive || match.status === "COMPLETED") return null;
   if (!matchResultsOpen(match.season.status, match.phase)) {
     return (
       <Card>
