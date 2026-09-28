@@ -17,6 +17,7 @@ import {
   notFoundLink,
   phoneDock,
   seasonNav,
+  seasonStatsListed,
   type NavContent,
   type NavLink,
   type NavState,
@@ -191,6 +192,21 @@ describe("site navigation", () => {
     expect(
       exploreNav(state(SEASON_STATUS.REGULAR_SEASON)).map((g) => g.label),
     ).toEqual(["Play", "League"]);
+  });
+
+  // The statistics tab bar and Home's tiles link Leaders and Hero meta too;
+  // a surface with its own rule promoted boards the menus had hidden (the
+  // tab bar during a new season's signups, Home before the first game).
+  it("lists Leaders and Hero meta by one shared rule on every surface", () => {
+    for (const s of allStates()) {
+      expect(exploreHrefs(s).includes("/leaders")).toBe(seasonStatsListed(s));
+    }
+    const root = path.resolve(__dirname, "..");
+    const statsNav = readFileSync(path.join(root, "components/stats-nav.tsx"), "utf8");
+    expect(statsNav).toMatch(/seasonStatsListed\(\{ phase: season\?\.status \?\? null, hasGames \}\)/);
+    const home = readFileSync(path.join(root, "app/page.tsx"), "utf8");
+    expect(home).toMatch(/const showSeasonStats = seasonStatsListed\(/);
+    expect(home).toMatch(/\{showSeasonStats \? \(\s*<>\s*<SideGameLink\s+href="\/leaders"/);
   });
 
   it("offers Fantasy while picks are open, then only to managers who entered", () => {

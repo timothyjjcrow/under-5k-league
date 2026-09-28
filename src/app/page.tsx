@@ -15,7 +15,8 @@ import {
   getViewerFantasyEntered,
   type SeasonSnapshot,
 } from "@/lib/queries";
-import { fantasyListed } from "@/lib/site-nav";
+import { fantasyListed, seasonStatsListed } from "@/lib/site-nav";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { prisma } from "@/lib/prisma";
 import {
   computeStandings,
@@ -1892,6 +1893,14 @@ function RosterList({
 
 // ---------- REGULAR SEASON / PLAYOFFS ----------
 
+/** The side-game band's desktop columns: one per tile (2 to 5). */
+const SIDE_GAME_COLUMNS: Record<number, string> = {
+  2: "lg:grid-cols-2",
+  3: "lg:grid-cols-3",
+  4: "lg:grid-cols-4",
+  5: "lg:grid-cols-5",
+};
+
 async function SeasonView({
   snapshot,
   userId,
@@ -2035,6 +2044,15 @@ async function SeasonView({
         : false,
   });
 
+  // Leaders and Hero meta get tiles when the menus list them (site-nav.ts):
+  // before the league's first game both open onto empty boards. The content
+  // flags are the layout's shared snapshot, so this costs no query.
+  const showSeasonStats = seasonStatsListed({
+    phase: season.status,
+    hasGames: (await getPublicLeagueContent(null)).hasGames,
+  });
+  const sideGameCount = 2 + (showFantasy ? 1 : 0) + (showSeasonStats ? 2 : 0);
+
   // The side-game band renders BELOW the table now. It used to sit above both
   // the standings and This-week, so the secondary loop (pick'em, fantasy) got
   // the first full-width band on the page while the primary one — your match,
@@ -2042,8 +2060,9 @@ async function SeasonView({
   const sideGames = (
     <div
       className={cn(
-        "grid grid-cols-1 gap-3 sm:grid-cols-3",
-        showFantasy ? "lg:grid-cols-5" : "lg:grid-cols-4",
+        "grid grid-cols-1 gap-3",
+        sideGameCount === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
+        SIDE_GAME_COLUMNS[sideGameCount],
       )}
     >
       <SideGameLink
@@ -2074,18 +2093,22 @@ async function SeasonView({
         title="Inhouse"
         hint="Pick-up 5v5s, any night"
       />
-      <SideGameLink
-        href="/leaders"
-        icon="🥇"
-        title="Leaders"
-        hint="Stat boards & weekly honors"
-      />
-      <SideGameLink
-        href="/meta"
-        icon="🧪"
-        title="Hero meta"
-        hint="What the league picks & wins with"
-      />
+      {showSeasonStats ? (
+        <>
+          <SideGameLink
+            href="/leaders"
+            icon="🥇"
+            title="Leaders"
+            hint="Stat boards & weekly honors"
+          />
+          <SideGameLink
+            href="/meta"
+            icon="🧪"
+            title="Hero meta"
+            hint="What the league picks & wins with"
+          />
+        </>
+      ) : null}
     </div>
   );
 

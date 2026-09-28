@@ -105,7 +105,7 @@ const afterAuction = ({
   phase === SEASON_STATUS.PLAYOFFS ||
   phase === SEASON_STATUS.COMPLETE;
 
-const resultsPhase = ({ phase }: NavState) =>
+const resultsPhase = ({ phase }: Pick<NavState, "phase">) =>
   phase === SEASON_STATUS.REGULAR_SEASON ||
   phase === SEASON_STATUS.PLAYOFFS ||
   phase === SEASON_STATUS.COMPLETE;
@@ -114,9 +114,17 @@ const resultsPhase = ({ phase }: NavState) =>
 // each opens onto "No stats yet".
 const gamesOnRecord = ({ hasGames }: NavState) => hasGames;
 
-// Leaders and Hero meta show the active season, so they also wait for it to
-// reach the regular season (they have a switcher for past seasons).
-const seasonStats = (state: NavState) => resultsPhase(state) && state.hasGames;
+/**
+ * Leaders and Hero meta show the active season, so they also wait for it to
+ * reach the regular season (they have a switcher for past seasons). The
+ * statistics tab bar and Home's links to them use this rule too, so no
+ * surface promotes a board the menus hide.
+ */
+export function seasonStatsListed(
+  state: Pick<NavState, "phase" | "hasGames">,
+): boolean {
+  return resultsPhase(state) && state.hasGames;
+}
 
 type FantasyNavState = Pick<
   NavState,
@@ -198,8 +206,8 @@ const NAV_PAGES: readonly NavPage[] = [
   },
   { href: "/fantasy", label: "Fantasy", group: "play", visible: fantasyListed },
   { href: "/pickem", label: "Pick'em", group: "play", visible: afterAuction },
-  { href: "/leaders", label: "Leaders", group: "stats", visible: seasonStats },
-  { href: "/meta", label: "Hero meta", group: "stats", visible: seasonStats },
+  { href: "/leaders", label: "Leaders", group: "stats", visible: seasonStatsListed },
+  { href: "/meta", label: "Hero meta", group: "stats", visible: seasonStatsListed },
   // Same order as the statistics pages' own tab bar (stats-nav.tsx).
   { href: "/records", label: "Record book", group: "stats", visible: gamesOnRecord },
   {
