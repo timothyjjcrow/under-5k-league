@@ -1204,6 +1204,9 @@ export type CheckinNudgeInput = {
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` for the fixture ("Semifinal"), so a playoff match is
+   *  named by its round like every other post about it. */
+  roundLabel?: string | null;
   /** Epoch ms of the kickoff; null = unscheduled (the time is left out). */
   whenMs: number | null;
   matchId: string;
@@ -1222,9 +1225,7 @@ export function checkinNudgeAnnouncement(m: CheckinNudgeInput): {
   /** Exact linked users visibly named in `content`. */
   mentionUserIds: string[];
 } {
-  const label = m.isTiebreaker
-    ? "tiebreaker match"
-    : m.isPlayoff ? "playoff match" : `week ${m.week} match`;
+  const label = fixtureLabel(m);
   const t = m.whenMs != null ? Math.floor(m.whenMs / 1000) : null;
   const when = t != null ? ` (<t:${t}:F>, <t:${t}:R>)` : "";
   const shown = Math.min(m.waitingOn.length, WAITING_SHOWN);

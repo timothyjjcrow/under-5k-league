@@ -18,6 +18,7 @@ import {
 } from "./discord";
 import { mentionsOf } from "./discord-mentions";
 import { isPlayoffPhase } from "./league-lifecycle";
+import { roundLabelsForPost } from "./playoff-rounds";
 import { singleActiveSeason } from "./season";
 import { claimThrottle } from "./settings";
 
@@ -73,6 +74,7 @@ export async function sendCheckinNudge(opts: {
         scheduleRevision: true,
         homeTeamId: true,
         awayTeamId: true,
+        bracketSlot: true,
         homeTeam: { select: { name: true, captainId: true, withdrawn: true } },
         awayTeam: { select: { name: true, captainId: true, withdrawn: true } },
       },
@@ -155,6 +157,7 @@ export async function sendCheckinNudge(opts: {
       select: { id: true, name: true, discordId: true },
     });
     const byId = new Map(people.map((p) => [p.id, p]));
+    const roundLabel = (await roundLabelsForPost([match])).get(match.id);
     const waitingOn = waitingIds.flatMap((id) => {
       const person = byId.get(id);
       return person ? [{ name: person.name, discordId: person.discordId }] : [];
@@ -167,6 +170,7 @@ export async function sendCheckinNudge(opts: {
       week: match.week,
       isPlayoff: isPlayoffPhase(match.phase),
       isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
+      roundLabel,
       whenMs: match.scheduledAt?.getTime() ?? null,
       matchId: match.id,
       waitingOn,

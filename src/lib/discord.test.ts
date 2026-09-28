@@ -1695,6 +1695,29 @@ describe("checkinNudgeAnnouncement", () => {
     ).toContain("tiebreaker match");
   });
 
+  // The reminder, result and standin posts name a playoff fixture by its
+  // round; the check-in nudge for the same fixture used to say "playoff match".
+  it("names a playoff fixture by its round, like every other post", () => {
+    const a = checkinNudgeAnnouncement({
+      ...base,
+      isPlayoff: true,
+      roundLabel: "Semifinal",
+    });
+    expect(a.content).toContain("'s semifinal **");
+    expect(a.content).not.toContain("playoff match");
+    expect(
+      playerOutMessage({
+        playerName: "X",
+        homeName: base.homeName,
+        awayName: base.awayName,
+        week: base.week,
+        isPlayoff: true,
+        roundLabel: "Semifinal",
+        whenMs: null,
+      }),
+    ).toContain("semifinal");
+  });
+
   it("caps the named list and never allowlists a hidden player", () => {
     const waitingOn = Array.from({ length: 11 }, (_, i) => ({
       name: `P${i + 1}`,
