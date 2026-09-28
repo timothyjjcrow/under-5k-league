@@ -70,7 +70,6 @@ import {
   CardSkeleton,
   DiscordButton,
   EmptyState,
-  FormStrip,
   HeroIcon,
   LinkArrow,
   LinkifiedText,
@@ -79,7 +78,6 @@ import {
   RoleBadges,
   ScheduleCallout,
   Skeleton,
-  Stat,
   TeamCrest,
   buttonClasses,
   textLink,
@@ -124,6 +122,8 @@ import { firstMedia } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
 import { rosterOrder } from "@/lib/team-roster";
 import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
+import { playoffStatuses, type TeamPlayoffStatus } from "@/lib/playoff-status";
+import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import {
   DRAFT_READINESS,
   draftReadiness,
@@ -731,7 +731,14 @@ export default async function Home() {
           {/* MyNextMatch is NOT rendered here any more — it lives in the hero's
               control slot, which is the whole point: the RSVP a captain depends
               on used to be the lowest-contrast strip on the page. */}
-          <Suspense fallback={<SeasonViewSkeleton />}>
+          <Suspense
+            fallback={
+              <SeasonViewSkeleton
+                playoffs={season.status === "PLAYOFFS"}
+                rostered={isRostered}
+              />
+            }
+          >
             <SeasonView
               snapshot={snapshot}
               userId={user?.id}
@@ -778,20 +785,39 @@ export default async function Home() {
 }
 
 // Fallback for the mid-season dashboard. It MUST mirror the real bands — This
-// week, the standings/your-team split, the three-up deck, then the side games —
-// or the page paints one layout and then visibly rearranges into another.
-function SeasonViewSkeleton() {
+// week, then the standings (beside a rostered viewer's stakes card) or in the
+// playoffs the bracket, the Coming up / Recent results pair, then the side
+// games — or the page paints one layout and then visibly rearranges into
+// another.
+function SeasonViewSkeleton({
+  playoffs,
+  rostered,
+}: {
+  playoffs: boolean;
+  rostered: boolean;
+}) {
   return (
     <div className="space-y-6">
       <CardSkeleton rows={4} />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="min-w-0 lg:col-span-2">
-          <CardSkeleton rows={6} />
+      {playoffs ? (
+        <CardSkeleton rows={6} />
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div
+            className={cn(
+              "min-w-0",
+              rostered ? "lg:col-span-2" : "lg:col-span-3",
+            )}
+          >
+            <CardSkeleton rows={6} />
+          </div>
+          {rostered ? (
+            <div className="order-first min-w-0 lg:order-none">
+              <CardSkeleton rows={3} />
+            </div>
+          ) : null}
         </div>
-        <div className="min-w-0">
-          <CardSkeleton rows={4} />
-        </div>
-      </div>
+      )}
       <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
         {Array.from({ length: 2 }).map((_, i) => (
           <CardSkeleton key={i} rows={3} className="min-w-0" />
@@ -2330,12 +2356,6 @@ async function SeasonView({
   const myTeam = userId
     ? teams.find((t) => t.members.some((m) => m.userId === userId))
     : undefined;
-  const myRow = myTeam
-    ? standings.find((s) => s.teamId === myTeam.id)
-    : undefined;
-  const myRank = myTeam
-    ? standings.findIndex((s) => s.teamId === myTeam.id) + 1
-    : 0;
   const myScenario = myTeam ? (report?.teams.get(myTeam.id) ?? null) : null;
   // Each team's playoff outlook waits for the first final regular-season
   // series; before it every team would read "Playoff spot still open".
@@ -2504,10 +2524,83 @@ async function SeasonView({
     </div>
   );
 
+  // The viewer's own team card. Mid-season it carries only what the table
+  // beside it can't: the playoff stakes of the next series (their row is
+  // already highlighted there with rank, points and W/D/L). No stakes yet
+  // (before the first final series) means no card, and the table takes the
+  // band. In the playoffs the table is gone and the card says where the team
+  // stands in the bracket instead.
+  const myStakeCard =
+    myTeam && myScenario && myStakeLine ? (
+      <Card tone="feature">
+        <CardHeader headingLevel={2} title="Your team" subtitle={myTeam.name} />
+        <CardBody className="space-y-3">
+          {/* The stakes are about ONE match, the scenario engine's
+              nextMatchId, so the block names that opponent and links it. The
+              hero's check-in panel already shows its kickoff. */}
+          {myNextMatch ? (
+            <Link
+              href={`/matches/${myNextMatch.id}`}
+              className="block rounded-lg border border-accent/30 bg-accent/5 p-3 text-sm transition-colors hover:border-accent/50"
+            >
+              <p className="mb-2 text-xs text-muted [overflow-wrap:anywhere]">
+                Next series: vs{" "}
+                {teamName.get(
+                  myNextMatch.homeTeamId === myTeam.id
+                    ? myNextMatch.awayTeamId
+                    : myNextMatch.homeTeamId,
+                ) ?? "?"}
+              </p>
+              <PlayoffOutlook
+                scenario={myScenario}
+                teamNames={teamName}
+                matchId={myNextMatch.id}
+                compact
+              />
+            </Link>
+          ) : (
+            // Done playing, but the table can still decide something.
+            <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
+              <PlayoffOutlook scenario={myScenario} teamNames={teamName} />
+            </div>
+          )}
+          <Link
+            href={`/teams/${myTeam.id}`}
+            className={textLink("inline-block text-sm font-medium")}
+          >
+            Team page <LinkArrow />
+          </Link>
+        </CardBody>
+      </Card>
+    ) : null;
+  // Shared with /teams and the team page. No status (no bracket yet, or a
+  // title still under review) means no card: the hero's panel covers those.
+  const myPlayoffStatus =
+    season.status === "PLAYOFFS" && myTeam
+      ? (playoffStatuses(
+          [myTeam],
+          matches,
+          championTeamId,
+          seasonViewNow,
+        ).get(myTeam.id) ?? null)
+      : null;
+  const myPlayoffCard =
+    myTeam && myPlayoffStatus ? (
+      <PlayoffTeamCard
+        team={myTeam}
+        status={myPlayoffStatus}
+        seed={seedsFromFirstRound(playoffMatches).get(myTeam.id) ?? null}
+        teamName={teamName}
+      />
+    ) : null;
+  const regularSeasonTableLink = (
+    <Link href="/schedule#standings" className={textLink("text-sm")}>
+      Regular-season table <LinkArrow />
+    </Link>
+  );
+
   return (
     <div className="space-y-6">
-      {/* During playoffs the bracket IS the story — it leads, and the
-          regular-season standings drop below as context. */}
       {season.status === "REGULAR_SEASON" ? (
         <TiebreakerNotice
           report={report}
@@ -2517,51 +2610,9 @@ async function SeasonView({
           hasTiebreakers={matches.some((m) => m.phase === "TIEBREAKER")}
         />
       ) : null}
-      {showBracket ? (
-        // overflow-hidden on the CARD: Bracket's root is `overflow-x-auto` over
-        // a `min-w-max` row, and Chrome propagates that inner width into the
-        // page scroll area through the card (CLAUDE.md's SeasonGrid rule). All
-        // four <Bracket> call sites were missing it.
-        <Card className="overflow-hidden">
-          <CardHeader
-            headingLevel={2}
-            title="Playoff bracket"
-            action={
-              <Link
-                href="/schedule#playoff-bracket"
-                className={textLink("text-sm")}
-              >
-                Full bracket <LinkArrow />
-              </Link>
-            }
-          />
-          <CardBody className="p-0 pt-4">
-            <Bracket
-              rounds={bracketRoundsView}
-              championTeamId={championTeamId}
-            />
-          </CardBody>
-        </Card>
-      ) : season.status === "PLAYOFFS" ? (
-        <Card>
-          <CardHeader headingLevel={2} title="Playoff bracket" />
-          <CardBody>
-            <EmptyState
-              title="Waiting for the bracket"
-              description="The league is in Playoffs, but the first-round fixtures have not been seeded yet. Final standings remain below while administrators prepare the bracket."
-              action={
-                <Link
-                  href="/schedule#playoff-bracket"
-                  className={buttonClasses("secondary", "sm")}
-                >
-                  Open playoff schedule <LinkArrow />
-                </Link>
-              }
-            />
-          </CardBody>
-        </Card>
-      ) : null}
 
+      {/* This week's games lead in every phase; in the playoffs that is the
+          round in progress, with its check-ins, and the bracket follows. */}
       <Suspense fallback={slateIds.size > 0 ? <CardSkeleton rows={3} /> : null}>
         <ThisWeek
           season={season}
@@ -2579,207 +2630,130 @@ async function SeasonView({
         />
       </Suspense>
 
-      {/* THE DASHBOARD BAND. Two grids, not one 2/3 + 1/3 split.
-          The old layout put the standings alone in a col-span-2 column and
-          stacked four cards in the 1/3 rail; CSS grid stretched the row to the
-          taller side, so the lower-left of the page was a measured 728×790px of
-          nothing. Splitting it means each band is sized by its own contents.
-          min-w-0 on every item: grid items otherwise refuse to shrink below
-          their content, letting a long team name widen the page on mobile. */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div
-          className={cn(
-            "min-w-0",
-            // No personal card to sit beside it? Then the table takes the
-            // whole band rather than leaving a third of it empty.
-            myTeam ? "lg:col-span-2" : "lg:col-span-3",
-          )}
-        >
-          <Card>
-            <CardHeader
-              headingLevel={2}
-              title="Standings"
-              action={
+      {showBracket ? (
+        // overflow-hidden on the CARD: Bracket's root is `overflow-x-auto` over
+        // a `min-w-max` row, and Chrome propagates that inner width into the
+        // page scroll area through the card (CLAUDE.md's SeasonGrid rule). All
+        // four <Bracket> call sites were missing it.
+        <Card className="overflow-hidden">
+          <CardHeader
+            headingLevel={2}
+            title="Playoff bracket"
+            action={
+              // The regular-season table decides nothing once the bracket is
+              // drawn, so Home links it on Schedule instead of printing it.
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {regularSeasonTableLink}
                 <Link
-                  href="/schedule#standings"
+                  href="/schedule#playoff-bracket"
                   className={textLink("text-sm")}
                 >
-                  Full standings <LinkArrow />
+                  Full bracket <LinkArrow />
                 </Link>
+              </div>
+            }
+          />
+          <CardBody className="p-0 pt-4">
+            <Bracket
+              rounds={bracketRoundsView}
+              championTeamId={championTeamId}
+            />
+          </CardBody>
+        </Card>
+      ) : season.status === "PLAYOFFS" ? (
+        <Card>
+          <CardHeader headingLevel={2} title="Playoff bracket" />
+          <CardBody>
+            <EmptyState
+              title="Waiting for the bracket"
+              description="The league is in Playoffs, but the first-round fixtures haven't been drawn yet. The regular-season table decides the seeds."
+              action={
+                <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
+                  {regularSeasonTableLink}
+                  <Link
+                    href="/schedule#playoff-bracket"
+                    className={textLink("text-sm")}
+                  >
+                    Playoff schedule <LinkArrow />
+                  </Link>
+                </div>
               }
             />
-            <CardBody className="p-0">
-              <StandingsTable
-                standings={standings}
-                totalTeams={standings.length}
-                eligibleTeams={playoffField.eligibleTeamIds.length}
-                teamName={teamName}
-                teamLogoUrl={teamLogoUrl}
-                withdrawnIds={
-                  new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
-                }
-                formByTeam={teamForm}
-                playoffCut={
-                  season.status === "REGULAR_SEASON"
-                    ? playoffField.bracketSize
-                    : undefined
-                }
-                playoffSeedByTeam={playoffField.seedByTeam}
-                unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
-                  playoffField,
-                  matches,
-                )}
-                clinch={clinchFromReport(report)}
-            playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
-                viewerTeamId={myTeam?.id}
-                movement={standingsMovement(
-                  teams.map((t) => t.id),
-                  matches,
-                )}
-              />
-            </CardBody>
-          </Card>
-        </div>
-        {myTeam ? (
-          // order-first on phones: a rostered player's own team used to land
-          // ~2,500px down the mobile page, below the full standings table.
-          <div className="order-first min-w-0 lg:order-none">
-            <Card tone="feature">
+          </CardBody>
+        </Card>
+      ) : (
+        /* THE DASHBOARD BAND. The table and the viewer's stakes card, when
+           there is one; otherwise the table takes the whole band rather than
+           leaving a third of it empty. min-w-0 on every item: grid items
+           otherwise refuse to shrink below their content, letting a long
+           team name widen the page on mobile. */
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div
+            className={cn(
+              "min-w-0",
+              myStakeCard ? "lg:col-span-2" : "lg:col-span-3",
+            )}
+          >
+            <Card>
               <CardHeader
                 headingLevel={2}
-                title="Your team"
-                subtitle={myTeam.name}
-              />
-              <CardBody className="space-y-3">
-                {myRow && myRow.played > 0 ? (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-2">
-                      <Stat
-                        label="League rank"
-                        value={`#${myRank}`}
-                        hint={`of ${teams.length} teams`}
-                      />
-                      <Stat
-                        label="League points"
-                        value={String(myRow.points)}
-                      />
-                    </div>
-                    <div
-                      className="grid grid-cols-3 gap-2 text-center"
-                      aria-label={`${myRow.wins} wins, ${myRow.draws} draws, ${myRow.losses} losses`}
-                    >
-                      {[
-                        {
-                          label: "Wins",
-                          value: myRow.wins,
-                          tone: "text-success border-success/20 bg-success/5",
-                        },
-                        {
-                          label: "Draws",
-                          value: myRow.draws,
-                          tone: "text-accent border-accent/20 bg-accent/5",
-                        },
-                        {
-                          label: "Losses",
-                          value: myRow.losses,
-                          tone: "text-danger border-danger/20 bg-danger/5",
-                        },
-                      ].map((stat) => (
-                        <div
-                          key={stat.label}
-                          className={cn("rounded-lg border py-2", stat.tone)}
-                        >
-                          <div className="font-display text-2xl tabular-nums">
-                            {stat.value}
-                          </div>
-                          <div className="text-[10px] uppercase tracking-wider">
-                            {stat.label}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    {(teamForm.get(myTeam.id)?.length ?? 0) > 0 ? (
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                        <span>Recent form</span>
-                        <div title="Newest first · W = win, D = draw, L = loss">
-                          <FormStrip form={teamForm.get(myTeam.id)!} />
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {/* The stake line and the next fixture are ONE block, not two
-                    stacked boxes. They were always about the same match — the
-                    tile is aligned to the scenario engine's `nextMatchId` so
-                    "win the next series" and the fixture named underneath can
-                    never disagree — and the hero's check-in panel is already
-                    showing that fixture with its RSVP a screen above. Naming
-                    the OPPONENT rather than "us vs them" drops the third
-                    printing of the viewer's own team name on one card. */}
-                {myNextMatch ? (
+                title="Standings"
+                action={
                   <Link
-                    href={`/matches/${myNextMatch.id}`}
-                    className={cn(
-                      "block rounded-lg border p-3 text-sm transition-colors",
-                      myStakeLine
-                        ? "border-accent/30 bg-accent/5 hover:border-accent/50"
-                        : "border-line bg-surface-2/40 hover:border-muted/60",
-                    )}
+                    href="/schedule#standings"
+                    className={textLink("text-sm")}
                   >
-                    {myStakeLine ? (
-                      <div className="mb-2">
-                        <PlayoffOutlook scenario={myScenario!} teamNames={teamName} matchId={myNextMatch.id} compact />
-                      </div>
-                    ) : null}
-                    <div className="text-xs uppercase text-muted">
-                      {matchRoundLabel(myNextMatch, playoffRounds)} · next up
-                    </div>
-                    <div className="mt-1 font-medium">
-                      vs{" "}
-                      {teamName.get(
-                        myNextMatch.homeTeamId === myTeam.id
-                          ? myNextMatch.awayTeamId
-                          : myNextMatch.homeTeamId,
-                      ) ?? "?"}
-                    </div>
-                    {myNextMatch.scheduledAt ? (
-                      <div className="mt-1 text-xs text-muted">
-                        <LocalTime
-                          ts={myNextMatch.scheduledAt.getTime()}
-                          variant="full"
-                          initial={fmtWhen(myNextMatch.scheduledAt) ?? ""}
-                        />
-                      </div>
-                    ) : null}
+                    Full standings <LinkArrow />
                   </Link>
-                ) : myStakeLine ? (
-                  // Done playing, but the table can still decide something.
-                  <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
-                    <PlayoffOutlook scenario={myScenario!} teamNames={teamName} />
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted">No upcoming matches.</p>
-                )}
-                <Link
-                  href={`/teams/${myTeam.id}`}
-                  className={textLink("inline-block text-sm font-medium")}
-                >
-                  Team page <LinkArrow />
-                </Link>
+                }
+              />
+              <CardBody className="p-0">
+                <StandingsTable
+                  standings={standings}
+                  totalTeams={standings.length}
+                  eligibleTeams={playoffField.eligibleTeamIds.length}
+                  teamName={teamName}
+                  teamLogoUrl={teamLogoUrl}
+                  withdrawnIds={
+                    new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+                  }
+                  formByTeam={teamForm}
+                  playoffCut={playoffField.bracketSize}
+                  playoffSeedByTeam={playoffField.seedByTeam}
+                  unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
+                    playoffField,
+                    matches,
+                  )}
+                  clinch={clinchFromReport(report)}
+                  playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
+                  viewerTeamId={myTeam?.id}
+                  movement={standingsMovement(
+                    teams.map((t) => t.id),
+                    matches,
+                  )}
+                />
               </CardBody>
             </Card>
           </div>
-        ) : null}
-      </div>
+          {myStakeCard ? (
+            // order-first on phones: the viewer's stakes sit above the table.
+            <div className="order-first min-w-0 lg:order-none">
+              {myStakeCard}
+            </div>
+          ) : null}
+        </div>
+      )}
 
-      {/* What comes after this slate and what just finished: short plain
-          lists with a link to the rest. auto-fit, because either card can be
+      {/* In the playoffs, where the viewer's team stands in the bracket;
+          then what comes after this slate and what just finished: short plain
+          lists with a link to the rest. auto-fit, because any card can be
           missing (nothing left to play, nothing played yet), and items-start
           so the shorter card doesn't stretch into an empty box. There is no
           week-by-week results grid here: the table's form column and Recent
           results already say it, and Schedule keeps the full grid. */}
-      {upcoming.length > 0 || recentResults.length > 0 ? (
+      {myPlayoffCard || upcoming.length > 0 || recentResults.length > 0 ? (
         <div className="grid items-start gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
+          {myPlayoffCard}
           {upcoming.length > 0 ? (
             <Card className="min-w-0 overflow-hidden">
               <CardHeader
@@ -3402,6 +3376,61 @@ async function LeaguePulse({
             </span>
           </div>
         ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
+ * Home's "Your team" card in the playoffs: the seed and where the team stands
+ * in the bracket, in the words /teams and the team page use ("Semifinal vs
+ * X", "Out in the quarterfinal (lost 1–2 to Y)"), instead of regular-season
+ * rank and points, which decide nothing any more.
+ */
+function PlayoffTeamCard({
+  team,
+  status,
+  seed,
+  teamName,
+}: {
+  team: { id: string; name: string };
+  status: TeamPlayoffStatus;
+  seed: number | null;
+  teamName: Map<string, string>;
+}) {
+  const line = (
+    <>
+      {seed != null ? (
+        <p className="text-xs uppercase text-muted">Seed #{seed}</p>
+      ) : null}
+      <PlayoffStatusLine
+        status={status}
+        teamName={teamName}
+        className="mt-1 text-sm"
+      />
+    </>
+  );
+  return (
+    <Card tone="feature" className="min-w-0">
+      <CardHeader headingLevel={2} title="Your team" subtitle={team.name} />
+      <CardBody className="space-y-3">
+        {status.kind === "playing" ? (
+          // The series being played (or next) opens its match page.
+          <Link
+            href={`/matches/${status.matchId}`}
+            className="block rounded-lg border border-accent/30 bg-accent/5 p-3 transition-colors hover:border-accent/50"
+          >
+            {line}
+          </Link>
+        ) : (
+          <div>{line}</div>
+        )}
+        <Link
+          href={`/teams/${team.id}`}
+          className={textLink("inline-block text-sm font-medium")}
+        >
+          Team page <LinkArrow />
+        </Link>
       </CardBody>
     </Card>
   );

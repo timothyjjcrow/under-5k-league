@@ -134,6 +134,26 @@ test("mid-playoffs renders the real bracket and supports tracing a run", async (
   await expect(
     primaryNav.getByRole("link", { name: "Playoffs", exact: true }),
   ).toHaveCount(0);
+  // The round in progress leads and the bracket follows it. The finished
+  // regular-season table is one link to Schedule, not printed on Home.
+  const round = page.getByRole("heading", {
+    name: "The round in progress",
+    level: 2,
+  });
+  const bracketTitle = page.getByRole("heading", {
+    name: "Playoff bracket",
+    level: 2,
+  });
+  await expect(round).toBeVisible();
+  expect((await round.boundingBox())!.y).toBeLessThan(
+    (await bracketTitle.boundingBox())!.y,
+  );
+  await expect(
+    page.getByRole("table", { name: "League standings", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator("#main").getByRole("link", { name: "Regular-season table" }),
+  ).toHaveAttribute("href", "/schedule#standings");
   const bracket = page.getByRole("region", { name: "Playoff bracket" });
   await expect(bracket).toBeVisible();
   await expect(
