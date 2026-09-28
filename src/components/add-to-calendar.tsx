@@ -28,9 +28,10 @@ export function AddToCalendar({
   /** The reader's own team, offered when the URL picks none. */
   initialTeamId?: string | null;
   /**
-   * Which edge of the button the menu lines up with. "start" (below the
-   * button on phones, right-aligned from `sm` up) suits a button at the left
-   * of a phone screen; "end" suits one kept at the right edge of a card.
+   * Which edge of the button the menu lines up with. "start" follows where
+   * the button actually sits: its left edge when the button is on the left
+   * half of the screen, its right edge otherwise. "end" suits one kept at
+   * the right edge of a card.
    */
   align?: "start" | "end";
 }) {
@@ -43,6 +44,7 @@ export function AddToCalendar({
   const team = teams.find((entry) => entry.id === teamId) ?? null;
   const [wholeLeague, setWholeLeague] = useState(false);
   const [open, setOpen] = useState(false);
+  const [fromRight, setFromRight] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -80,7 +82,16 @@ export function AddToCalendar({
         type="button"
         aria-expanded={open}
         aria-controls={panelId}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          // Measure rather than trust a breakpoint: Schedule's page title
+          // keeps the button beside the heading from about 460px, well below
+          // `sm`, and a left-anchored menu there ran 167px off the screen.
+          if (!open && button.current) {
+            const box = button.current.getBoundingClientRect();
+            setFromRight(box.left + box.width / 2 > window.innerWidth / 2);
+          }
+          setOpen((value) => !value);
+        }}
         className={buttonClasses("secondary", "sm")}
       >
         Add to calendar
@@ -92,7 +103,10 @@ export function AddToCalendar({
             "absolute top-full z-30 mt-2 rounded-xl border border-line bg-surface p-2 shadow-xl shadow-black/30",
             align === "end"
               ? "right-0 w-[min(20rem,calc(100vw-4rem))]"
-              : "left-0 w-[min(20rem,calc(100vw-2rem))] sm:left-auto sm:right-0",
+              : cn(
+                  "w-[min(20rem,calc(100vw-2rem))]",
+                  fromRight ? "right-0" : "left-0",
+                ),
           )}
         >
           {team ? (

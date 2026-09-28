@@ -82,6 +82,19 @@ test("schedule renders weeks, cards, the LIVE chip, and the calendar menu", asyn
   await expect(download).toHaveAttribute("href", /^\/api\/calendar\?team=/);
   await page.getByRole("button", { name: "Whole league", exact: true }).click();
   await expect(download).toHaveAttribute("href", "/api/calendar");
+  await page.keyboard.press("Escape");
+
+  // Below `sm` the page title can still keep the button beside the heading,
+  // at the right edge (from about 460px); the menu must open back across
+  // the screen there, not off its right side.
+  for (const width of [390, 560]) {
+    await page.setViewportSize({ width, height: 844 });
+    await addToCalendar.click();
+    await expect(download).toBeVisible();
+    await expectNoHorizontalOverflow(page, `/schedule calendar menu at ${width}px`);
+    await page.keyboard.press("Escape");
+    await expect(download).toHaveCount(0);
+  }
 
   assertNoErrors();
 });
