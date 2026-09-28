@@ -125,7 +125,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   wrapped rows overlap. A caller setting vertical padding also passes `my-0`
   and must clear 24px itself.
 - **A Dota name can be one character.** `PlayerLink` carries `min-w-6`;
-  callers that truncate pass `min-w-6`, never `min-w-0`.
+  callers that truncate pass `min-w-6`, never `min-w-0` (twMerge lets the
+  caller's class replace the floor; `player-link-guards.test.ts`).
 - **An ambiguous target is worse than a small one:** overlapping hit boxes
   send the tap wherever paint order decides. `TAP_SAFE` stays at 4px a side,
   and rows whose links carry it need at least 8px between them (the pool's

@@ -304,7 +304,7 @@ export default async function InhouseHistoryPage({
                               <span className="text-accent">MVP</span>
                               <PlayerLink
                                 userId={mvp.userId}
-                                className="min-w-0 truncate"
+                                className="min-w-6 truncate"
                               >
                                 {mvp.name ?? "Unknown"}
                               </PlayerLink>

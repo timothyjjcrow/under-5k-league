@@ -162,7 +162,7 @@ function BoardRow({
             ) : (
               <PlayerLink
                 userId={r.id}
-                className="inline-flex min-h-11 min-w-0 items-center py-1 font-semibold leading-snug [overflow-wrap:anywhere]"
+                className="inline-flex min-h-11 min-w-6 items-center py-1 font-semibold leading-snug [overflow-wrap:anywhere]"
               >
                 {r.name}
               </PlayerLink>

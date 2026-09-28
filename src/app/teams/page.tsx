@@ -456,7 +456,7 @@ export default async function TeamsPage() {
                         <PlayerLink
                           key={m.id}
                           userId={m.userId}
-                          className="my-0 flex max-w-full min-w-0 items-center gap-1.5 rounded-lg border border-line-soft bg-surface-2/40 py-1 pl-1 pr-2 text-xs hover:border-muted/60 hover:no-underline"
+                          className="my-0 flex max-w-full min-w-6 items-center gap-1.5 rounded-lg border border-line-soft bg-surface-2/40 py-1 pl-1 pr-2 text-xs hover:border-muted/60 hover:no-underline"
                         >
                           <Avatar
                             name={m.user.name}

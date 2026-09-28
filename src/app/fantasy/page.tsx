@@ -409,7 +409,7 @@ export default async function FantasyPage({
                   <Avatar name={managerName.get(s.managerId) ?? "?"} src={managerAvatar.get(s.managerId) ?? null} size={32} />
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                      <PlayerLink userId={s.managerId} className="min-w-0 truncate font-semibold">{managerName.get(s.managerId) ?? "?"}</PlayerLink>
+                      <PlayerLink userId={s.managerId} className="min-w-6 truncate font-semibold">{managerName.get(s.managerId) ?? "?"}</PlayerLink>
                       {viewer?.id === s.managerId ? <Badge tone="info">You</Badge> : null}
                     </div>
                     <span className="text-xs text-muted">{s.breakdown.length} player{s.breakdown.length === 1 ? "" : "s"} scoring</span>
@@ -424,7 +424,7 @@ export default async function FantasyPage({
                   <div className="mt-2 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-5">
                     {s.breakdown.map((b) => (
                       <div key={b.userId} className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-line bg-surface-2/45 px-2.5 py-2">
-                        <PlayerLink userId={b.userId} className="min-w-0 truncate">{playerName.get(b.userId) ?? "?"}</PlayerLink>
+                        <PlayerLink userId={b.userId} className="min-w-6 truncate">{playerName.get(b.userId) ?? "?"}</PlayerLink>
                         <span className="shrink-0 font-mono tabular-nums">{b.points}</span>
                       </div>
                     ))}

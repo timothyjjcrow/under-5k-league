@@ -248,7 +248,7 @@ export default async function PickemPage({
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
                   <PlayerLink
                     userId={s.userId}
-                    className="min-w-0 truncate font-medium"
+                    className="min-w-6 truncate font-medium"
                   >
                     {userName.get(s.userId) ?? "?"}
                   </PlayerLink>

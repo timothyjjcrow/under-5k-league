@@ -165,7 +165,7 @@ export function SidePlayers({
                     {p.userId ? (
                       <PlayerLink
                         userId={p.userId}
-                        className="min-w-0 text-sm [overflow-wrap:anywhere]"
+                        className="min-w-6 text-sm [overflow-wrap:anywhere]"
                       >
                         {displayName}
                       </PlayerLink>

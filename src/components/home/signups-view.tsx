@@ -549,7 +549,7 @@ function SignupChip({
   return (
     <PlayerLink
       userId={player.userId}
-      className="flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-2.5 hover:border-muted/60 hover:no-underline sm:gap-2 sm:pr-3"
+      className="flex min-w-6 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-1 pl-1 pr-2.5 hover:border-muted/60 hover:no-underline sm:gap-2 sm:pr-3"
     >
       <Avatar name={player.name} src={player.avatar} size={22} />
       <span className="min-w-0 truncate text-sm">{player.name}</span>

@@ -573,7 +573,7 @@ export default async function SeasonArchivePage({
                             over the next row's. */}
                         <PlayerLink
                           userId={m.userId}
-                          className="my-0 inline-flex min-h-11 min-w-0 items-center [overflow-wrap:anywhere]"
+                          className="my-0 inline-flex min-h-11 min-w-6 items-center [overflow-wrap:anywhere]"
                         >
                           {m.user.name}
                         </PlayerLink>

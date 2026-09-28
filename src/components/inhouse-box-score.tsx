@@ -363,7 +363,7 @@ function RosterSummary({
               />
               <PlayerLink
                 userId={player.userId}
-                className="min-w-0 flex-1 truncate text-sm"
+                className="min-w-6 flex-1 truncate text-sm"
               >
                 {player.user.name}
               </PlayerLink>
