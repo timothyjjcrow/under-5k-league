@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { REPO_ROOT } from "../../test/support/source-files";
 import {
+  DRAFT_DONE_NEEDS_SCHEDULE_TITLE,
   adminNextStep,
   phaseAdvance,
   START_REGULAR_SEASON,
@@ -645,5 +649,34 @@ describe("phaseAdvance — the phase card's one forward button", () => {
         SEASON_PHASE_ORDER.indexOf(status) + 1,
       );
     }
+  });
+});
+
+// The draft room shows admins the finished auction's next step beside its
+// button. It said "start the Regular season" above a "Generate the schedule
+// first" button; now it takes both titles from here.
+describe("the draft room's finished-auction step", () => {
+  it("is titled from the same constants as the /admin banner", () => {
+    const page = readFileSync(
+      join(REPO_ROOT, "src/app/draft/page.tsx"),
+      "utf8",
+    );
+    const room = readFileSync(
+      join(REPO_ROOT, "src/components/draft-room.tsx"),
+      "utf8",
+    );
+    expect(page).toMatch(
+      /"needsSchedule" in regularSeasonStep\s*\?\s*\{\s*title: DRAFT_DONE_NEEDS_SCHEDULE_TITLE,/,
+    );
+    expect(page).toContain("title: DRAFT_DONE_START_SEASON_TITLE,");
+    expect(room).toContain("{adminFinish.title}");
+    expect(room).not.toMatch(/Next step: start the Regular season/);
+    expect(
+      at({
+        seasonStatus: SEASON_STATUS.DRAFT,
+        draftStatus: DRAFT_STATUS.COMPLETE,
+        regularMatchCount: 0,
+      }).title,
+    ).toBe(DRAFT_DONE_NEEDS_SCHEDULE_TITLE);
   });
 });

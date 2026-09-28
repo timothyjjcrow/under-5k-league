@@ -155,6 +155,17 @@ export type PhaseAdvance = {
 };
 
 /**
+ * The finished auction's next step, as /admin's banner and the draft room's
+ * admin panel both title it. One wording, so the two can't name different
+ * steps for the same state (the room once said "start the Regular season"
+ * over a "Generate the schedule first" button).
+ */
+export const DRAFT_DONE_NEEDS_SCHEDULE_TITLE =
+  "Next step: generate the schedule (with a first match night), then start the Regular season.";
+export const DRAFT_DONE_START_SEASON_TITLE =
+  "Next step: start the Regular season.";
+
+/**
  * The phase card's one forward button, named by what it does. Only two
  * forward moves are plain phase changes. The others belong to commands that
  * change related data in the same step (Start draft runs the auction, Start
@@ -293,8 +304,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       // without fixtures, and its Discord post lists week 1.
       if (regularMatchCount === 0) {
         return {
-          title:
-            "Next step: generate the schedule (with a first match night), then start the Regular season.",
+          title: DRAFT_DONE_NEEDS_SCHEDULE_TITLE,
           detail: `The auction is finished. Generate the round robin in Schedule & results; players can check in as soon as fixtures have match nights. Then use “${START_REGULAR_SEASON}” in phase control: it switches on automatic result sync and the weekly Discord reminder and posts week 1's fixtures to Discord.`,
           tone: "action",
           jump: JUMP.schedule,
@@ -302,7 +312,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       }
       if (untimedRegularCount > 0) return untimedStep(untimedRegularCount);
       return {
-        title: "Next step: start the Regular season.",
+        title: DRAFT_DONE_START_SEASON_TITLE,
         detail: `The schedule is ready. Until you press “${START_REGULAR_SEASON}” in phase control, automatic result sync, the weekly Discord reminder and result reporting stay off, and Discord hasn't been told the season has started.`,
         tone: "action",
         jump: JUMP.phase,

@@ -7,6 +7,10 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
+  DRAFT_DONE_NEEDS_SCHEDULE_TITLE,
+  DRAFT_DONE_START_SEASON_TITLE,
+} from "@/lib/admin-next-step";
+import {
   loadRegularSeasonStep,
   loadStartDraftPreflight,
 } from "@/lib/draft-room-admin";
@@ -115,30 +119,46 @@ export default async function DraftPage() {
   // Same action and confirm as the Regular season phase button on /admin.
   // The season waits for fixtures, so a finished auction with no schedule
   // points at the schedule card instead.
+  // Titled like /admin's next-step banner for the same state, so the room's
+  // heading and its button name the same step.
   const adminFinish =
-    regularSeasonStep && "needsSchedule" in regularSeasonStep ? (
-      <Link
-        href="/admin#adm-schedule"
-        className={buttonClasses("accent", "md")}
-      >
-        Generate the schedule first
-      </Link>
-    ) : regularSeasonStep ? (
-      <ActionForm
-        action={setSeasonPhase}
-        hidden={{
-          expectedActiveSeasonId: season.id,
-          phase: SEASON_STATUS.REGULAR_SEASON,
-        }}
-      >
-        <SubmitButton
-          variant="accent"
-          confirm={regularSeasonStep.confirmation}
-        >
-          Start the Regular season
-        </SubmitButton>
-      </ActionForm>
-    ) : undefined;
+    regularSeasonStep && "needsSchedule" in regularSeasonStep
+      ? {
+          title: DRAFT_DONE_NEEDS_SCHEDULE_TITLE,
+          detail:
+            "The Regular season can't start without fixtures. Generate them in Schedule & results on the admin page.",
+          control: (
+            <Link
+              href="/admin#adm-schedule"
+              className={buttonClasses("accent", "md")}
+            >
+              Generate the schedule first
+            </Link>
+          ),
+        }
+      : regularSeasonStep
+        ? {
+            title: DRAFT_DONE_START_SEASON_TITLE,
+            detail:
+              "Until you do, automatic result sync and the weekly Discord reminder stay off.",
+            control: (
+              <ActionForm
+                action={setSeasonPhase}
+                hidden={{
+                  expectedActiveSeasonId: season.id,
+                  phase: SEASON_STATUS.REGULAR_SEASON,
+                }}
+              >
+                <SubmitButton
+                  variant="accent"
+                  confirm={regularSeasonStep.confirmation}
+                >
+                  Start the Regular season
+                </SubmitButton>
+              </ActionForm>
+            ),
+          }
+        : undefined;
 
   return (
     <div className="space-y-4">

@@ -302,10 +302,12 @@ export function DraftRoom({
    */
   adminStart?: { control: ReactNode; blocker: string | null };
   /**
-   * Admins only, in the Draft phase: the finished auction's next step (the
-   * Regular season phase button from /admin, same action and confirm).
+   * Admins only, in the Draft phase: the finished auction's next step, titled
+   * as /admin's banner titles it, with its control (the Regular season phase
+   * button from /admin, same action and confirm, or the way to the schedule
+   * when there are no fixtures yet).
    */
-  adminFinish?: ReactNode;
+  adminFinish?: { title: string; detail: string; control: ReactNode };
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
@@ -1244,15 +1246,10 @@ export function DraftRoom({
             className="flex flex-col items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-4 text-center"
           >
             <p className="text-sm">
-              <span className="font-semibold">
-                Next step: start the Regular season.
-              </span>{" "}
-              <span className="text-muted">
-                Until you do, automatic result sync and the weekly Discord
-                reminder stay off.
-              </span>
+              <span className="font-semibold">{adminFinish.title}</span>{" "}
+              <span className="text-muted">{adminFinish.detail}</span>
             </p>
-            {adminFinish}
+            {adminFinish.control}
           </section>
         ) : null}
         {state.recap ? <DraftRecapCard recap={state.recap} /> : null}
