@@ -51,6 +51,10 @@ import {
 } from "@/lib/league-lifecycle";
 import { parseSeatTarget, pendingCoverWhere } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
+import {
+  CARRIED_SEASON_SELECT,
+  carriedSeasonSettings,
+} from "@/lib/season-handoff";
 import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
 import {
   captainTransferOpen,
@@ -383,11 +387,10 @@ export async function createSeason(
   // first request changes the active id, so the stale second request cannot
   // archive the season it just created and open another copy.
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
-  const teamSize = clampInt(formData, "teamSize", 5, 2, 10);
-  const minTeams = clampInt(formData, "minTeams", 4, 2, 32);
-  const draftBudget = clampInt(formData, "draftBudget", 100, 10, 100000);
-  const budgetMmrWeight = clampInt(formData, "budgetMmrWeight", 20, 0, 50);
-  const maxMmr = clampInt(formData, "maxMmr", 0, 0, HARD_MMR_CEILING);
+  // Every other setting is CARRIED from the season before (read inside the
+  // transaction below), never posted: the handoff form states them in one
+  // line and the new season's phase card changes them. Series lengths and the
+  // league id used to reset silently to the defaults here.
 
   // SERIALIZABLE, matching the same zero-or-one-active invariant enforced by
   // offseason-only `reactivateSeason` (season.ts). Production's partial unique
@@ -440,6 +443,14 @@ export async function createSeason(
             throw new SeasonArchiveBlockedError(readiness.reason);
           }
         }
+        // The season this one follows: the one being closed, or from the
+        // offseason the most recent season (the same row the form described).
+        const previous =
+          active ??
+          (await tx.season.findFirst({
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            select: CARRIED_SEASON_SELECT,
+          }));
         await tx.season.updateMany({
           where: { isActive: true },
           data: { isActive: false },
@@ -447,11 +458,7 @@ export async function createSeason(
         const created = await tx.season.create({
           data: {
             name,
-            teamSize,
-            minTeams,
-            draftBudget,
-            budgetMmrWeight,
-            maxMmr,
+            ...carriedSeasonSettings(previous),
             status: SEASON_STATUS.SIGNUPS,
             isActive: true,
           },

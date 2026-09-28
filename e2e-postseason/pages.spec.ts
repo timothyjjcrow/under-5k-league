@@ -595,7 +595,7 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.getByRole("heading", { name: "Open a new season" }),
   ).toBeVisible();
-  await page.getByLabel("Season name").fill("Season 10 (audit)");
+  await page.getByLabel("New season name").fill("Season 10 (audit)");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Create season" }).click();
   await expect(page.getByText(/Created Season 10 \(audit\)/)).toBeVisible();

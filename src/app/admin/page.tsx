@@ -26,6 +26,11 @@ import { HistoryCoverage } from "@/components/history-coverage";
 import { seatValue, standinConflict } from "@/lib/standin";
 import { ADMIN_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
 import {
+  carriedSeasonSettings,
+  carriedSettingsLine,
+  nextSeasonName,
+} from "@/lib/season-handoff";
+import {
   createSeason,
   archiveCompletedSeasonAction,
   archiveIncompleteSeasonAction,
@@ -190,7 +195,6 @@ import {
 } from "@/lib/draft-setup";
 import {
   MATCH_SCHEDULE,
-  SOFT_MMR_LIMIT,
   HARD_MMR_CEILING,
 } from "@/lib/constants";
 import {
@@ -277,11 +281,13 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           data.teams.map((team) => team.id),
         )
       : null;
+  // The season a new one follows: the active one, or from the offseason the
+  // most recent (createSeason carries its settings the same way).
   const newSeasonDefaults =
     season ??
     (await prisma.season.findFirst({
       where: { isActive: false },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     }));
 
   const setupControls = season && data ? <>
@@ -517,95 +523,44 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           {!season || handoffReadiness?.ready ? (
             <ActionForm
               action={createSeason}
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
+              className="space-y-3"
               hidden={{ expectedActiveSeasonId: season?.id ?? "" }}
             >
-              <Field label="Season name" htmlFor="name">
+              <Field label="New season name" htmlFor="name">
                 <input
                   id="name"
                   name="name"
                   required
                   maxLength={60}
+                  defaultValue={nextSeasonName(newSeasonDefaults?.name ?? null)}
                   placeholder="Season 1"
-                  className={inputCls}
+                  className={cn(inputCls, "sm:max-w-sm")}
                 />
               </Field>
-              <Field label="Team size" htmlFor="teamSize">
-                <input
-                  id="teamSize"
-                  name="teamSize"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.teamSize ?? 5}
-                  min={2}
-                  max={10}
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Min teams to start" htmlFor="minTeams">
-                <input
-                  id="minTeams"
-                  name="minTeams"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.minTeams ?? 4}
-                  min={2}
-                  max={32}
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Draft budget ($)" htmlFor="draftBudget">
-                <input
-                  id="draftBudget"
-                  name="draftBudget"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.draftBudget ?? 100}
-                  min={10}
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Soft MMR limit (0 = none)" htmlFor="maxMmr">
-                <input
-                  id="maxMmr"
-                  name="maxMmr"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.maxMmr ?? SOFT_MMR_LIMIT}
-                  min={0}
-                  max={HARD_MMR_CEILING}
-                  className={inputCls}
-                />
-              </Field>
-              <Field
-                label="Budget MMR weighting % (0 = flat)"
-                htmlFor="budgetMmrWeight"
+              <p className="text-sm text-muted">
+                {newSeasonDefaults
+                  ? `Carried over from ${newSeasonDefaults.name}: `
+                  : "Starts with: "}
+                <span className="text-fg">
+                  {carriedSettingsLine(carriedSeasonSettings(newSeasonDefaults))}
+                </span>
+                . You can change any of them once the season is open.
+              </p>
+              <p className="text-sm text-muted">
+                {season
+                  ? `This archives ${season.name} and immediately opens signups for the new season.`
+                  : "Creating the season immediately opens its signup phase."}
+              </p>
+              <SubmitButton
+                variant="accent"
+                confirm={
+                  season
+                    ? `Archive completed ${season.name} and open a new signup season? All history remains available.`
+                    : "Open this season's signup window now?"
+                }
               >
-                <input
-                  id="budgetMmrWeight"
-                  name="budgetMmrWeight"
-                  type="number"
-                  defaultValue={newSeasonDefaults?.budgetMmrWeight ?? 20}
-                  min={0}
-                  max={50}
-                  className={inputCls}
-                />
-              </Field>
-              <div className="sm:col-span-2 lg:col-span-4">
-                <p className="mb-3 text-sm text-muted">
-                  {season
-                    ? `This archives ${season.name} and immediately opens signups for the new season.`
-                    : newSeasonDefaults
-                      ? `There is no active season. Values are prefilled from ${newSeasonDefaults.name}; review them before opening signups.`
-                      : "There is no active season. Creating one immediately opens its signup phase."}
-                </p>
-                <SubmitButton
-                  variant="accent"
-                  confirm={
-                    season
-                      ? `Archive completed ${season.name} and open a new signup season? All history remains available.`
-                      : "Open this season's signup window now?"
-                  }
-                >
-                  {season ? "Create next season" : "Create season"}
-                </SubmitButton>
-              </div>
+                {season ? "Create next season" : "Create season"}
+              </SubmitButton>
             </ActionForm>
           ) : null}
         </CardBody>
