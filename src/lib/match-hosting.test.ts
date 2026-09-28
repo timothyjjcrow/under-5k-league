@@ -1,13 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   howToHostParts,
+  leagueResultCopy,
   MISSING_LEAGUE_TICKET_WARNING,
   NO_TICKET_REPORT_SUBTITLE,
   NO_TICKET_RESULT_NOTE,
   seriesLobbyRule,
 } from "./match-hosting";
 import { createLeagueConfig } from "./league-config";
-import { LEAGUE_GAME_MODE } from "./constants";
+import { AUTO_SYNC, LEAGUE_GAME_MODE } from "./constants";
 
 describe("seriesLobbyRule", () => {
   it("phrases each series length the way it is played", () => {
@@ -76,5 +77,41 @@ describe("ticket copy", () => {
     expect(NO_TICKET_REPORT_SUBTITLE).not.toMatch(/no admin needed/i);
     // Each step is said once: the note points at the card, the card says how.
     expect(NO_TICKET_RESULT_NOTE).not.toMatch(/admin|match ID/i);
+  });
+});
+
+describe("leagueResultCopy", () => {
+  const every = Math.round(AUTO_SYNC.LEAGUE_INTERVAL_SECONDS / 60);
+
+  it("counts from the scheduled kickoff, with result sync's own timings", () => {
+    const { lead, recovery } = leagueResultCopy({ live: false });
+    expect(lead).toContain(
+      `from ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after kickoff`,
+    );
+    expect(lead).toContain(`about every ${every} minutes`);
+    // Never "25 minutes after each game": the wait runs from kickoff.
+    expect(lead).not.toMatch(/after each game/);
+    expect(recovery).toContain(
+      `${Math.round(AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF / 60)} hours after kickoff`,
+    );
+  });
+
+  it("drops the kickoff wait once a series is under way", () => {
+    // A live series is scanned right away, both ways.
+    const { lead, recovery } = leagueResultCopy({ live: true });
+    expect(lead).toContain(`about every ${every} minutes`);
+    expect(lead).not.toContain("after kickoff");
+    expect(recovery).not.toContain("after kickoff");
+  });
+
+  it("says the recovery advice once, naming the controls it points at", () => {
+    for (const live of [false, true]) {
+      const { lead, recovery } = leagueResultCopy({ live });
+      expect(recovery).toMatch(/wrong ticket/);
+      expect(lead).not.toMatch(/wrong ticket|Auto-fetch/);
+      // The buttons' real names (MatchImportControls).
+      expect(recovery).toContain("Auto-fetch games");
+      expect(recovery).toContain("Dota match ID");
+    }
   });
 });

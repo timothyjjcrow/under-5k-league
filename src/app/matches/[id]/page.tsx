@@ -15,13 +15,13 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { matchMetadata } from "@/lib/link-preview-metadata";
 import {
-  AUTO_SYNC,
   LEAGUE_GAME_MODE,
   MATCH_STATUS,
   REGISTRATION_STATUS,
 } from "@/lib/constants";
 import {
   howToHostParts,
+  leagueResultCopy,
   NO_TICKET_REPORT_SUBTITLE,
   NO_TICKET_RESULT_NOTE,
 } from "@/lib/match-hosting";
@@ -2104,19 +2104,19 @@ async function ReportResultSection({
   const afterScheduledTime =
     match.scheduledAt != null && match.scheduledAt.getTime() <= renderedAt;
   const gamesRecorded = match.homeScore + match.awayScore;
-  const leagueCheckMinutes = Math.round(AUTO_SYNC.LEAGUE_INTERVAL_SECONDS / 60);
-  const leagueTitle =
-    match.status === "LIVE"
-      ? `Game ${gamesRecorded} recorded — series ${match.homeScore}–${match.awayScore}`
-      : afterScheduledTime
-        ? "Waiting for league result"
-        : "Result recording";
-  const leagueSubtitle =
-    match.status === "LIVE"
-      ? `The series stays open for the next lobby. The league feed keeps checking about every ${leagueCheckMinutes} minutes, and player-account recovery is already available if the next lobby uses the wrong ticket.`
-      : afterScheduledTime
-        ? `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. If the whole series is still missing ${Math.round(AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF / 60)} hours after the scheduled match time, player-account recovery starts automatically.`
-        : `League-feed checks begin ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after the scheduled match time and repeat about every ${leagueCheckMinutes} minutes. Player-account recovery protects the result if an old or incorrect ticket is used.`;
+  const live = match.status === "LIVE";
+  const leagueTitle = live
+    ? `Game ${gamesRecorded} recorded — series ${match.homeScore}–${match.awayScore}`
+    : afterScheduledTime
+      ? "Waiting for league result"
+      : "Result recording";
+  // One sentence on when games show up, and the wrong-ticket advice said
+  // once, both from AUTO_SYNC (leagueResultCopy).
+  const leagueCopy = leagueResultCopy({ live });
+  // Before kickoff (or with no time set) nobody has played yet, so the import
+  // form stays one tap away under a disclosure instead of leading the card.
+  const foldImport =
+    !!match.season.dotaLeagueId && !live && !afterScheduledTime;
   const hostParts = howToHostParts({
     homeTeamName: match.homeTeam.name,
     bestOf: match.bestOf,
@@ -2148,22 +2148,37 @@ async function ReportResultSection({
           title={match.season.dotaLeagueId ? leagueTitle : "Report your result"}
           subtitle={
             match.season.dotaLeagueId
-              ? leagueSubtitle
+              ? leagueCopy.lead
               : NO_TICKET_REPORT_SUBTITLE
           }
         />
         <CardBody className="space-y-3">
-          {match.season.dotaLeagueId ? (
-            <p className="text-xs text-muted">
-              Need recovery now? Auto-fetch checks the linked player accounts,
-              or add either lobby&apos;s Dota match id directly.
-            </p>
-          ) : null}
-          <MatchImportControls
-            matchId={match.id}
-            importAction={captainImportGame}
-            detectAction={captainAutoDetect}
-          />
+          {foldImport ? (
+            <details>
+              <summary className="cursor-pointer py-2 text-sm font-medium text-fg">
+                Result didn&apos;t show up?
+              </summary>
+              <div className="mt-2 space-y-3">
+                <p className="text-xs text-muted">{leagueCopy.recovery}</p>
+                <MatchImportControls
+                  matchId={match.id}
+                  importAction={captainImportGame}
+                  detectAction={captainAutoDetect}
+                />
+              </div>
+            </details>
+          ) : (
+            <>
+              {match.season.dotaLeagueId ? (
+                <p className="text-xs text-muted">{leagueCopy.recovery}</p>
+              ) : null}
+              <MatchImportControls
+                matchId={match.id}
+                importAction={captainImportGame}
+                detectAction={captainAutoDetect}
+              />
+            </>
+          )}
         </CardBody>
       </Card>
     </div>

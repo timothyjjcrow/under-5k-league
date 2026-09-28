@@ -1,3 +1,5 @@
+import { AUTO_SYNC } from "./constants";
+
 /**
  * Match-night hosting copy, built from the league's own settings so it can't
  * drift from the rules it describes.
@@ -73,4 +75,38 @@ export function howToHostParts({
     mode,
     seriesLobbyRule(bestOf),
   ];
+}
+
+/**
+ * The ticketed season's result-card copy, built from AUTO_SYNC so it can't
+ * drift from what result sync actually does. `lead` says when a game shows
+ * up by itself; `recovery` is the one place the wrong-ticket advice is given
+ * (the lobby checklist no longer repeats it).
+ *
+ * Timings are counted from the SCHEDULED kickoff, not from a game's end: the
+ * league feed is first read MIN_MINUTES_AFTER_KICKOFF after kickoff and then
+ * about every LEAGUE_INTERVAL_SECONDS. Roster scanning of the players' own
+ * match histories starts LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF after kickoff,
+ * or at once in a series that already has a game.
+ */
+export function leagueResultCopy(opts: { live: boolean }): {
+  lead: string;
+  recovery: string;
+} {
+  const every = Math.round(AUTO_SYNC.LEAGUE_INTERVAL_SECONDS / 60);
+  const fallbackHours = Math.round(
+    AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF / 60,
+  );
+  const sooner =
+    "To add a game sooner, press Auto-fetch games or paste its Dota match ID.";
+  if (opts.live) {
+    return {
+      lead: `The next game shows up here by itself a few minutes after it ends; the league feed is checked about every ${every} minutes.`,
+      recovery: `If the next lobby used the wrong ticket, we also look through the players' own recent matches. ${sooner}`,
+    };
+  }
+  return {
+    lead: `Games show up here by themselves: from ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after kickoff the league feed is checked about every ${every} minutes, so a game usually appears a few minutes after it ends.`,
+    recovery: `If a lobby used the wrong ticket, we look through the players' own recent matches ${fallbackHours} ${fallbackHours === 1 ? "hour" : "hours"} after kickoff. ${sooner}`,
+  };
 }

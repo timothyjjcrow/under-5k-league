@@ -100,3 +100,20 @@ describe("match page reschedule form", () => {
   });
 });
 
+describe("match page result card", () => {
+  it("takes its timings from AUTO_SYNC via leagueResultCopy, said once", () => {
+    expect(PAGE).toContain("const leagueCopy = leagueResultCopy({ live });");
+    // No hand-written copy of the sync schedule beside it.
+    expect(PAGE).not.toMatch(/AUTO_SYNC\.|League-feed checks begin/);
+  });
+
+  it("folds the import form before kickoff instead of removing it", () => {
+    expect(PAGE).toMatch(
+      /const foldImport =\s*!!match\.season\.dotaLeagueId && !live && !afterScheduledTime;/,
+    );
+    expect(PAGE).toMatch(
+      /foldImport \? \(\s*<details>[\s\S]*?Result didn&apos;t show up\?[\s\S]*?<MatchImportControls/,
+    );
+  });
+});
+

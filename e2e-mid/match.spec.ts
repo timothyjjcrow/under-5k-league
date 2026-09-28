@@ -159,7 +159,7 @@ test("captains can report an open series and get a clear correction handoff once
   ).toBeVisible();
   await expect(
     page.getByText(
-      /League-feed checks begin 25 minutes .* repeat about every 3 minutes/,
+      /from 25 minutes after kickoff the league feed is checked about every 3 minutes/,
     ),
   ).toBeVisible();
   await expect(
@@ -177,9 +177,22 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.getByRole("button", { name: "Copy league id" }),
   ).toBeVisible();
+  // The step-by-step list is folded for captains who have hosted before.
+  const lobbySteps = page.getByText("Lobby setup, step by step", {
+    exact: true,
+  });
+  await expect(lobbySteps).toBeVisible();
+  await expect(page.getByText(/creates the private lobby/)).toBeHidden();
+  await lobbySteps.click();
+  await expect(page.getByText(/creates the private lobby/)).toBeVisible();
+  // Nobody has played before kickoff, so the import form is folded too, one
+  // tap away, with the wrong-ticket advice said once inside it.
   const matchRef = page.getByRole("textbox", {
     name: "Dota match ID or URL",
   });
+  await expect(matchRef).toBeHidden();
+  await page.getByText("Result didn't show up?", { exact: true }).click();
+  await expect(page.getByText(/used the wrong ticket/)).toHaveCount(1);
   await expect(matchRef).toBeVisible();
   await expect(
     page.getByText(
