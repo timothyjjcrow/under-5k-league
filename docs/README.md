@@ -13,6 +13,8 @@ setup and deployment. To release, start at [RELEASING.md](RELEASING.md).
 
 ## Code
 
+- [DECISIONS.md](DECISIONS.md) — settled decisions and deliberate deferrals,
+  one line each; check it before proposing a change.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — map of the codebase: routes, services,
   database models and background work.
 - [REFACTORING-2026-07.md](REFACTORING-2026-07.md) — the July 2026 refactor, with

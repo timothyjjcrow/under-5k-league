@@ -13,6 +13,11 @@ is orientation for future work in the codebase.
 > history. Historical notes below must never override those guarded
 > procedures.
 
+Settled decisions and deliberate deferrals (Tim's product calls, rejected
+refactors, deferred races) are one line each in `docs/DECISIONS.md`; check it
+before proposing a change. Where a note below disagrees, the register is
+current.
+
 ## Mental model
 
 Everything hangs off a **Season** and its `status` (the state machine):

@@ -159,6 +159,8 @@ Risk: low. R23 is the only one with subtle semantics; its verification steps
 - `nominatePlayer` claim pinning `nominatorTeamId` (undo-vs-nominate race): real
   but low-severity (a legal lot opens; only a toast's promise is overridden);
   costs a claim-id change + a Postgres-only seam. Do as its own change if ever.
+  *Done 2026-08-01:* the claim now re-asserts `nominatorTeamId` and
+  `nominationEndsAt` (see [DECISIONS.md](DECISIONS.md), "Closed since").
 - The `src/app` status-literal sweep (R29's second half).
 - Per-account session revocation, admin-page/actions splits, lib subfolders —
   see the reject list.
@@ -166,7 +168,8 @@ Risk: low. R23 is the only one with subtle semantics; its verification steps
 ## Rejected — decisions of record
 
 Each was investigated and rejected for cause; do not re-propose without new
-evidence:
+evidence. [DECISIONS.md](DECISIONS.md) carries these one line each with the
+other settled decisions, and is the list kept current:
 
 1. **Split `src/app/actions/admin.ts` by domain** — it is thin wrappers over
    already-extracted services; a split moves 5 protected claims between files
