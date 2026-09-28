@@ -73,6 +73,27 @@ test("signed-out visitors sign in first, with the standin signup as a line", asy
   assertNoErrors();
 });
 
+// A pinned post rides the strip under the hero and the League news card lists
+// the latest of the rest, so the pinned one is printed once, not twice.
+test("home shows a pinned post once, with the latest news below", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/");
+  const main = page.locator("#main");
+  await expect(
+    main.getByRole("link", { name: /Pinned notice: Match night reminder/ }),
+  ).toBeVisible();
+  await expect(main.getByText(/Match night reminder/)).toHaveCount(1);
+  await expect(
+    main.getByRole("heading", { name: "League news", level: 2 }),
+  ).toBeVisible();
+  await expect(
+    main.getByRole("link", { name: "Week schedule published", exact: true }),
+  ).toBeVisible();
+  assertNoErrors();
+});
+
 // The dashboard is the widest page in the app — standings table, bracket, the
 // This-week grid — and it was the one page with no overflow tripwire at all.
 test("dashboard has no horizontal page overflow on a phone", async ({

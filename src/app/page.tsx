@@ -234,6 +234,11 @@ export default async function Home() {
             </Link>
           ) : null}
         </div>
+        {/* News has no season, and between seasons is when the next one gets
+            announced: the pinned strip and the latest posts show here too. */}
+        <Suspense fallback={null}>
+          <PinnedNotices className="mt-5" />
+        </Suspense>
         {/* Inhouse is the only live play surface during the offseason. Keep its
             actual queue/lobby state visible here too, rather than replacing a
             useful "4/10 queued" signal with a generic hero button. */}
@@ -245,6 +250,9 @@ export default async function Home() {
           <div className="mt-5">
             <InhouseStrip />
           </div>
+        </Suspense>
+        <Suspense fallback={null}>
+          <LeagueNews className="mt-6" />
         </Suspense>
       </div>
     );
@@ -836,22 +844,38 @@ function currentRoundLabel(playoff: Match[]): string | null {
   return `${roundName(round, total)} underway`;
 }
 
-// Latest admin announcements — pinned first, capped at three with a link to
-// the full /news archive. Renders nothing when the league has no news.
-const loadHomeNews = cache(() =>
-  prisma.newsPost.findMany({
-    orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-    take: 3,
-  }),
-);
+// Admin announcements, in two parts: the pinned posts ride the strip under
+// the hero, and the League news card lists the latest of the rest, so a pinned
+// post is never shown twice. Each part is capped at three; /news has them all.
+// News has no season, so the offseason view renders both too.
+const loadHomeNews = cache(async () => {
+  const newest = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+  const [pinned, latest] = await Promise.all([
+    prisma.newsPost.findMany({
+      where: { pinned: true },
+      orderBy: newest,
+      take: 3,
+      select: { id: true, title: true },
+    }),
+    prisma.newsPost.findMany({
+      where: { pinned: false },
+      orderBy: newest,
+      take: 3,
+    }),
+  ]);
+  return { pinned, latest };
+});
 
-async function PinnedNotices() {
-  const posts = (await loadHomeNews()).filter((post) => post.pinned);
+async function PinnedNotices({ className }: { className?: string }) {
+  const { pinned: posts } = await loadHomeNews();
   if (!posts.length) return null;
   return (
     <aside
       aria-label="Pinned announcements"
-      className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-sm"
+      className={cn(
+        "rounded-lg border border-accent/30 bg-accent/5 px-4 py-2 text-sm",
+        className,
+      )}
     >
       {posts.map((post) => (
         <Link
@@ -867,12 +891,12 @@ async function PinnedNotices() {
   );
 }
 
-async function LeagueNews() {
-  const posts = await loadHomeNews();
+async function LeagueNews({ className }: { className?: string }) {
+  const { latest: posts } = await loadHomeNews();
   if (posts.length === 0) return null;
 
   return (
-    <Card>
+    <Card className={className}>
       <CardHeader
         headingLevel={2}
         title="League news"
@@ -897,12 +921,6 @@ async function LeagueNews() {
                     href={`/news?${new URLSearchParams({ post: p.id })}#${p.id}`}
                     className="hover:text-info"
                   >
-                    {p.pinned ? (
-                      <>
-                        <span aria-hidden="true">📌 </span>
-                        <span className="sr-only">Pinned: </span>
-                      </>
-                    ) : null}
                     {p.title}
                   </Link>
                 </h3>
