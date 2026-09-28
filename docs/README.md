@@ -2,7 +2,8 @@
 
 Start with the repository [README](../README.md) for the product overview,
 setup and deployment. To release, start at [RELEASING.md](RELEASING.md).
-`CLAUDE.md` holds the working notes for changing the code.
+[CLAUDE.md](../CLAUDE.md) holds the working rules for changing the code; each
+area's own rules are in a feature note below.
 
 ## League rules and records
 
@@ -19,6 +20,37 @@ setup and deployment. To release, start at [RELEASING.md](RELEASING.md).
   database models and background work.
 - [REFACTORING-2026-07.md](REFACTORING-2026-07.md) — the July 2026 refactor, with
   the changes it deliberately deferred or rejected.
+
+## Feature notes
+
+Read the note for an area before changing it.
+
+- [concurrency-and-testing.md](features/concurrency-and-testing.md) — guarded
+  writes, race tests and seams, and the mutation ratchet.
+- [draft.md](features/draft.md) — the live auction, its room and the admin
+  tools that start, pause, repair and abort it.
+- [rosters-and-standins.md](features/rosters-and-standins.md) — signings,
+  releases, promotions, withdrawals, standin cover and match-night check-ins.
+- [results-and-opendota.md](features/results-and-opendota.md) — the OpenDota
+  client, the import funnel, the league feed, the automation worker and player
+  data refreshes.
+- [inhouse.md](features/inhouse.md) — the inhouse queue, ready check, captain
+  vote, draft, results and Elo ladder.
+- [discord.md](features/discord.md) — announcements and the outbox, inhouse
+  alerts and the queue board, the ping role bot and account linking.
+- [season-schedule-playoffs.md](features/season-schedule-playoffs.md) — phases,
+  fixtures and kickoff times, reschedules, standings and tiebreakers, playoffs
+  and season history.
+- [pages-and-ui.md](features/pages-and-ui.md) — navigation, the UI kit, page
+  layouts, mobile and tap-target rules, and the fixture servers.
+- [players-and-registration.md](features/players-and-registration.md) —
+  signup and MMR rules, the player pool and scouting, profiles, compare and
+  team identity.
+- [stats-and-side-games.md](features/stats-and-side-games.md) — impact points,
+  honors and the stats pages, fantasy, pick'em, scrims and news.
+- [admin-and-operations.md](features/admin-and-operations.md) — admin actions
+  and the panel's safety rails, caching and streaming, room connection handling,
+  migrations and backups.
 
 ## Releases and operations
 

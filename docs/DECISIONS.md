@@ -7,8 +7,9 @@ for, or ask Tim (the league owner).
 
 Keep it current. When a decision changes, edit its row and its date. When a
 deferral is done, move it to [Closed since](#closed-since) with what closed it.
-The longer reasoning lives in the linked docs and in `CLAUDE.md`; where a note
-there disagrees with this list, this list is current.
+The longer reasoning lives in the linked docs, `CLAUDE.md` and the feature notes
+in `docs/features/`; where a note there disagrees with this list, this list is
+current.
 
 ## Product decisions
 
@@ -51,6 +52,8 @@ usage figures are the US site's as of 2026-09-26.
 | 2026-08-02 | Putting the standin MMR advisory in the Discord announcement. | It is a toast for the person booking only. | The other captain needs to see it too. |
 | 2026-08-02 | Auto-cancelling surplus standin bookings after a partial roster refill. | The signing toast reports the surplus, and the captain chooses which booking goes. | Captains ask for it. |
 | 2026-07-31 | An exclusion or ban layer (no inhouse queue ban, no points-dock tool). | Deferred until the league actually has a griefer. Standin removal, the urgent case, is fixed. | The league has a griefer. |
+| 2026-07-31 | A captain-initiated forfeit claim. | `Match.forfeit` exists, but only the admin `recordResult` sets it, so an admin rules on every forfeit. An open product question; nobody has asked for it. | Captains ask to concede a match themselves. |
+| 2026-07-31 | A player-visible rules page (series length, tiebreakers, forfeits, standin rules). | `/how-it-works` covers joining and match night only. An open product question; nobody has asked for it. | Players ask where the rules are written down. |
 | 2026-07-30 | Replacing raw status strings in `src/app` with `MATCH_STATUS` / `MATCH_PHASE` (the second half of refactor R29). | Three times the churn, in display code where a wrong string shows up on screen. | Someone is already editing those files. |
 | 2026-07-30 | Signing out one account's sessions. | The only revocation is the global session epoch (`src/lib/session-epoch.ts`), a break-glass that signs everyone out. | One account must be signed out without signing out everyone. |
 
@@ -84,8 +87,8 @@ the current shape, not tidiness.
 
 ## Closed since
 
-Deferrals that have been done. Don't cite them as open; some older notes in
-`CLAUDE.md` still do. Checked against the code on 2026-09-28.
+Deferrals that have been done. Don't cite them as open. Checked against the
+code on 2026-09-28.
 
 | Deferred | What | How it was closed |
 | --- | --- | --- |
@@ -94,3 +97,9 @@ Deferrals that have been done. Don't cite them as open; some older notes in
 | 2026-08-01 | Two concurrent `addCaptain` calls could give two teams the same draft order. | `addCaptain` runs Serializable and `startDraft` refuses duplicates. The unique constraint was decided against (see Code and schema). |
 | 2026-08-01 | `setSeasonPhase` couldn't see a same-value DRAFT rival from `startDraft`. | `setSeasonPhase` re-judges the season and draft in one Serializable transaction. |
 | 2026-08-01 | `signFreeAgent` and `releasePlayer` checked "draft complete" only before their transaction, racing an Undo that reopens the draft. | Both re-read the draft status inside their Serializable transaction. |
+| 2026-07-31 | The champion announcement had no failure retry. | `retryFailedChampionAnnouncements` (`result-sync-service.ts`) retries it, as series results already were. |
+| 2026-07-31 | Fantasy and pick'em were keyed to the active season, so their final standings vanished once the next season began. | Both pages take `?season=` through `resolveSeasonScope`. |
+| 2026-07-31 | A Divine 3+ or Immortal medal learned after signup locked the admitted player's `/me` form. | `registrationGate` judges the medal only at admission; ACTIVE registrations are exempt. |
+| 2026-07-31 | `seasonScenarioReport` recomputed uncached on four hot pages. | `src/lib/stakes.ts` memoizes the report, keyed by the engine's inputs. |
+| 2026-07-31 | Syncing results from a Valve league id. | Built: `setLeagueId` stores the id and `syncLeagueGames` imports the feed. |
+| 2026-07-31 | Production deploy config (Postgres instead of SQLite, a real Steam key). | Production runs on Postgres (`npm run build:vercel`), and the environment check requires `STEAM_API_KEY`. |
