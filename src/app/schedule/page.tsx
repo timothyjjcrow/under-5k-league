@@ -65,6 +65,7 @@ import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { AUTO_SYNC } from "@/lib/constants";
 import { CheckinBanner } from "@/components/checkin-banner";
+import { loadCheckinSide } from "@/lib/checkin-side-service";
 import {
   ScheduleFold,
   ScheduleWeeks,
@@ -365,6 +366,13 @@ export default async function SchedulePage() {
         (r) => r.userId === viewer!.id,
       )?.status ?? null)
     : null;
+  // The banner's side line: who the viewer is in that match and how their
+  // side stands (the counts phones don't get on the fixture rows), with the
+  // names for a captain.
+  const mySide =
+    myNextMatch && viewer
+      ? await loadCheckinSide({ matchId: myNextMatch.id, viewer })
+      : null;
   const standinsByMatch = new Map<string, MatchStandin[]>();
   for (const a of assignments) {
     const arr = standinsByMatch.get(a.matchId) ?? [];
@@ -762,6 +770,7 @@ export default async function SchedulePage() {
             captainTeamIds.has(myNextMatch.homeTeamId) ||
             captainTeamIds.has(myNextMatch.awayTeamId)
           }
+          side={mySide}
           detailsHref={`/matches/${myNextMatch.id}`}
         />
       ) : null}

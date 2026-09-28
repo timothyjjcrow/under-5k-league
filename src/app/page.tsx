@@ -117,6 +117,7 @@ import { firstMedia } from "@/lib/linkify";
 import { cn } from "@/lib/utils";
 import { rosterOrder } from "@/lib/team-roster";
 import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
+import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { playoffStatuses, type TeamPlayoffStatus } from "@/lib/playoff-status";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import {
@@ -1135,7 +1136,7 @@ async function MyNextMatch({
 
   const homeTeam = teamById.get(next.homeTeamId);
   const awayTeam = teamById.get(next.awayTeamId);
-  const [myRsvp, pendingReschedule] = await Promise.all([
+  const [myRsvp, pendingReschedule, side] = await Promise.all([
     prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: next.id, userId }, scheduleRevision: next.scheduleRevision },
       select: { status: true },
@@ -1144,6 +1145,10 @@ async function MyNextMatch({
       where: { matchId: next.id, status: "PENDING" },
       include: { proposedBy: { select: { name: true } } },
     }),
+    // Who the viewer is in this match and how their side stands. A captain
+    // gets the names behind the count right under the buttons, so chasing
+    // the no-replies starts here rather than on the match page.
+    loadCheckinSide({ matchId: next.id, viewer }),
   ]);
 
   // A proposal awaiting THIS viewer's answer gets a strip right on the
@@ -1168,6 +1173,7 @@ async function MyNextMatch({
         viewerIsCaptain={
           homeTeam?.captainId === userId || awayTeam?.captainId === userId
         }
+        side={side}
         detailsHref={`/matches/${next.id}`}
       />
       {awaitingMyAnswer ? (

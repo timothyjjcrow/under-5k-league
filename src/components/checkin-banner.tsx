@@ -2,12 +2,24 @@ import Link from "next/link";
 import { setAvailability } from "@/app/actions/availability";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Countdown } from "@/components/countdown";
+import { DiscordTag } from "@/components/discord-tag";
 import { LocalTime } from "@/components/local-time";
+import { LinkArrow, textLink } from "@/components/ui";
+import {
+  checkinCountsText,
+  checkinPrompt,
+  sideNeedsCover,
+  standinSeatText,
+  type CheckinSideView,
+} from "@/lib/checkin-side";
+import { cn } from "@/lib/utils";
 
 /**
  * The match-night RSVP banner ("Your next match — … ✓ I'm in / ✗ Can't make
  * it"), shared by the dashboard, /schedule, and match pages so a player can
- * check in wherever they land first.
+ * check in wherever they land first. With a `side` it also says who the
+ * viewer is here (captain, standin or player) and how many of their side have
+ * answered; captains and admins get the names behind that count.
  */
 export function CheckinBanner({
   matchId,
@@ -19,6 +31,7 @@ export function CheckinBanner({
   whenTs,
   myRsvp,
   viewerIsCaptain = false,
+  side = null,
   detailsHref,
   variant = "strip",
 }: {
@@ -39,6 +52,12 @@ export function CheckinBanner({
   myRsvp: string | null;
   /** The viewer captains a side in this match: nobody to "let know" above them. */
   viewerIsCaptain?: boolean;
+  /**
+   * The viewer's side (lib/checkin-side-service's loadCheckinSide): their
+   * role, the side's count, and names only when the loader allowed them.
+   * Without it the banner reads as it always has.
+   */
+  side?: CheckinSideView | null;
   detailsHref?: string;
   /**
    * `strip` (the default, and byte-for-byte what /schedule and /matches/[id]
@@ -50,6 +69,13 @@ export function CheckinBanner({
   variant?: "strip" | "panel";
 }) {
   const panel = variant === "panel";
+  const prompt = checkinPrompt({
+    myRsvp,
+    remainingGames,
+    role: side?.role ?? (viewerIsCaptain ? "captain" : "player"),
+    teamName: side?.teamName,
+    captainName: side?.captainName,
+  });
   return (
     <div
       className={
@@ -130,14 +156,29 @@ export function CheckinBanner({
             ) : null}
           </div>
         ) : null}
+        {side?.role === "standin" ? (
+          // A standin may not know the side they turn up for: the seat, the
+          // team, and who to tell.
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-x-2 gap-y-1 [overflow-wrap:anywhere]",
+              panel ? "mt-1 text-xs" : "mt-0.5",
+            )}
+          >
+            <span>
+              {standinSeatText(side.teamName, side.standinFor ?? null)}
+              {side.captainName ? ` Captain: ${side.captainName}` : null}
+            </span>
+            {side.captainContact ? (
+              <DiscordTag
+                name={side.captainContact.discordName}
+                verified={!!side.captainContact.discordId}
+              />
+            ) : null}
+          </div>
+        ) : null}
         <div className={panel ? "mt-1 text-xs text-muted" : "text-muted"}>
-          {myRsvp === "IN"
-            ? remainingGames ? "You're ready for the remaining games ✓ — change it here if plans shift." : "You're confirmed ✓ — change it here if plans shift."
-            : myRsvp === "OUT"
-              ? "You're marked unavailable — a standin can be lined up."
-              : viewerIsCaptain
-                ? "Can you make it? Let your team know."
-                : "Can you make it? Let your captain know."}
+          {prompt}
         </div>
       </div>
       <div
@@ -167,6 +208,78 @@ export function CheckinBanner({
           </SubmitButton>
         </ActionForm>
       </div>
+      {side ? (
+        <SideSummary
+          side={side}
+          matchId={matchId}
+          remainingGames={remainingGames}
+          className={panel ? "mt-3" : "basis-full"}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The viewer's side under the buttons: the count for every participant, and
+ * for captains and admins the names behind it. Display only: a captain's
+ * cover link jumps to the match page's Captain tools, where the Standins card
+ * they already use lives.
+ */
+function SideSummary({
+  side,
+  matchId,
+  remainingGames,
+  className,
+}: {
+  side: CheckinSideView;
+  matchId: string;
+  remainingGames: boolean;
+  className?: string;
+}) {
+  const { names } = side;
+  const rows = names
+    ? [
+        { label: remainingGames ? "Ready" : "In", tone: "text-success", list: names.in },
+        { label: "Out", tone: "text-danger-soft", list: names.out },
+        {
+          label: "Covered",
+          tone: "text-muted",
+          list: names.covered.map((c) => `${c.name} by ${c.by}`),
+        },
+        { label: "No reply", tone: "text-accent", list: names.noReply },
+      ].filter((row) => row.list.length > 0)
+    : [];
+  return (
+    <div className={cn("border-t border-info/20 pt-2 text-xs", className)}>
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="[overflow-wrap:anywhere]">
+          <span className="font-medium">Your side:</span>{" "}
+          <span className="text-muted">
+            {checkinCountsText(side.counts, remainingGames)}
+          </span>
+        </span>
+        {side.role === "captain" && sideNeedsCover(side.counts) ? (
+          <Link
+            href={`/matches/${matchId}#match-tools`}
+            className={textLink("whitespace-nowrap")}
+          >
+            Line up cover <LinkArrow />
+          </Link>
+        ) : null}
+      </p>
+      {rows.length > 0 ? (
+        <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+          {rows.map((row) => (
+            <div key={row.label} className="contents">
+              <dt className={cn("font-medium", row.tone)}>{row.label}</dt>
+              <dd className="text-muted [overflow-wrap:anywhere]">
+                {row.list.join(", ")}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
     </div>
   );
 }
