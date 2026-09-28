@@ -82,7 +82,8 @@ export default async function SeasonsPage() {
         }
       />
 
-      {isAdmin && activeSeason ? (
+      {/* Only when there is an archived season to bring back. */}
+      {isAdmin && activeSeason && seasons.some((season) => !season.isActive) ? (
         <Card>
           <CardBody className="space-y-2">
             <p className="font-semibold">
