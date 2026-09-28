@@ -598,7 +598,7 @@ export function StandinMatchBlock({
           {asg.map((a) => (
             <li
               key={a.id}
-              className="flex items-center justify-between text-xs text-muted"
+              className="flex flex-wrap items-center justify-between gap-x-2 text-xs text-muted"
             >
               <span>
                 {/* A null `replaced` is an EMPTY-SEAT cover, not missing data —
@@ -611,7 +611,7 @@ export function StandinMatchBlock({
               {seriesStarted ? (
                 // The same note as the captain's card: removal mid-series is
                 // refused by the service, so offer no button that can only fail.
-                <span className="shrink-0 text-xs text-muted">
+                <span className="ml-auto text-xs text-muted">
                   Locked: series already started
                 </span>
               ) : (
