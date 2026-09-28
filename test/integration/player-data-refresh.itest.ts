@@ -259,6 +259,49 @@ describe("the hourly player data refresh", () => {
     });
     expect(JSON.parse(enriched.players)[0]).toMatchObject({ xpm: 500 });
   });
+
+  it("marks a game OpenDota no longer has as done instead of backing off every pass", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const fixture = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: home.id,
+        awayTeamId: away.id,
+      },
+    });
+    const line = { accountId: 111, heroId: 7, isRadiant: true, kills: 1 };
+    await prisma.game.create({
+      data: {
+        matchId: fixture.id,
+        dotaMatchId: "9201",
+        radiantWin: true,
+        winnerTeamId: home.id,
+        players: JSON.stringify([line]),
+      },
+    });
+    await prisma.user.updateMany({ data: { pubStatsAt: new Date() } });
+    // OpenDota answers 404: it has aged the game out.
+    match.mockImplementation(async (_id, _o, report) => {
+      if (report) report.missing = true;
+      return null;
+    });
+    const before = Date.now();
+
+    const out = await refreshPlayerDataAutomatically();
+
+    expect(out).toMatchObject({ ran: true, games: 0, backedOff: false });
+    const stamp = await getSetting(SETTING_KEYS.PLAYER_DATA_REFRESH_AT);
+    expect(new Date(stamp ?? 0).getTime()).toBeLessThan(before + 60_000);
+    // The next pass has nothing left to fetch.
+    await lastPassAgo(1);
+    match.mockClear();
+    await refreshPlayerDataAutomatically();
+    expect(match).not.toHaveBeenCalled();
+  });
 });
 
 describe("the worker runs the refresh last, and only when result sync is idle", () => {

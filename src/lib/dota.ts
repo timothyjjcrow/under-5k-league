@@ -160,9 +160,16 @@ export type OpenDotaMatch = {
   players: OpenDotaPlayer[];
 };
 
+/**
+ * One match's full payload, or null. When `report` is passed, a null that
+ * came from OpenDota's 404 (it has no such match, so asking again won't help)
+ * sets `report.missing`; every other null (rate limit, outage, timeout, an
+ * unusable body) leaves it false and is worth retrying later.
+ */
 export async function fetchOpenDotaMatch(
   dotaMatchId: string,
   options: OpenDotaFetchOptions = {},
+  report?: { missing: boolean },
 ): Promise<OpenDotaMatch | null> {
   const signal = boundedSignal(OPEN_DOTA_MATCH_TIMEOUT_MS, options);
   if (!signal) return null;
@@ -175,7 +182,10 @@ export async function fetchOpenDotaMatch(
       // inhouse poll) indefinitely — the sibling fetchers all time out too.
       signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (res.status === 404 && report) report.missing = true;
+      return null;
+    }
     const data = await res.json();
     if (!data || data.error || !Array.isArray(data.players)) return null;
     success = true;
