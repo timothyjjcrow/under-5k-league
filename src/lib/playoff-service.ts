@@ -44,7 +44,7 @@ import {
   type OfficialFixtureScrimClash,
 } from "./scrim-service";
 import { playoffRoundLabel, scrimYieldedMessage } from "./scrim-discord";
-import { mentionUsers } from "./discord-mentions";
+import { mentionsOf, mentionUsers } from "./discord-mentions";
 import { announcePlayoffRoundOnce } from "./playoff-round-announcement";
 import { logAdminAction } from "./admin-log";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
@@ -708,7 +708,14 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
   const champion = presentedChampionTeamId
     ? await prisma.team.findFirst({
         where: { id: presentedChampionTeamId, seasonId },
-        select: { name: true },
+        select: {
+          name: true,
+          // The roster is congratulated, and its linked players mentioned.
+          members: {
+            orderBy: [{ isCaptain: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+            select: { user: { select: { name: true, discordId: true } } },
+          },
+        },
       })
     : null;
   // Un-crowned since (Reset playoffs) or the season is gone: there is nothing
@@ -720,9 +727,12 @@ export async function announceChampionOnce(seasonId: string): Promise<boolean> {
     await releaseAnnouncementClaim(claim);
     return false;
   }
+  const roster = champion.members.map((member) => member.user);
   const sent = await sendDiscordMessage(
-    championMessage(season.name, champion.name, seasonId),
-    undefined,
+    championMessage(season.name, champion.name, seasonId, roster),
+    // Every linked player on the winning roster: exactly the mentions the
+    // post shows. Nobody else.
+    mentionsOf(roster.map((player) => player.discordId)),
     {
       dedupeKey: announcementDedupeKey("champion", claim),
       marker: { key: claim.key, eventId: claim.eventId },

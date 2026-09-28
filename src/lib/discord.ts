@@ -490,15 +490,33 @@ export function playoffsReturnedToRegularMessage(seasonName: string): string {
   return `↩️ **${name(seasonName)} playoffs have been withdrawn for a standings correction.** The current bracket is void and the league is back in the Regular season phase. A fresh bracket will be posted after the results are corrected: <${resolveSiteUrl()}/schedule>`;
 }
 
+/**
+ * The season's champions. The roster is congratulated by name, and each
+ * player who linked Discord is mentioned: one of the few pings the league
+ * sends that praises rather than asks. The caller's allowlist is the linked
+ * roster (mentionsOf), which is exactly the mentions this text shows; a
+ * roster is one team, so nothing is ever left out for length.
+ */
 export function championMessage(
   seasonName: string,
   teamName: string,
   seasonId: string,
+  /** The champion team's roster, captain first. Empty names nobody. */
+  roster: DraftReminderPerson[] = [],
 ): string {
   // The season's own page holds the champion, bracket and awards. Older posts
   // link /recap?season=, which redirects there.
   const recap = `${resolveSiteUrl()}/seasons/${encodeURIComponent(seasonId)}`;
-  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions! GG everyone — season recap at <${recap}>`;
+  const people = roster.map(personLabel);
+  const cheers =
+    people.length === 0
+      ? ""
+      : ` Congratulations ${
+          people.length === 1
+            ? people[0]
+            : `${people.slice(0, -1).join(", ")} and ${people[people.length - 1]}`
+        }!`;
+  return `👑 **${name(teamName)}** are the **${name(seasonName)}** champions!${cheers} GG everyone — season recap at <${recap}>`;
 }
 
 export function freeAgentSignedMessage(
@@ -1165,6 +1183,10 @@ export function weeklyHonorsMessage(honors: {
   seasonId: string;
   week: number;
   playerName: string | null;
+  /** The Player of the Week's linked Discord id. On the first post it
+   *  replaces the name with a mention (the send allowlists the same id); a
+   *  correction never mentions anyone, so it can't ping twice. */
+  playerDiscordId?: string | null;
   playerPoints: number;
   heroName: string | null;
   teamName: string | null;
@@ -1181,8 +1203,13 @@ export function weeklyHonorsMessage(honors: {
       : `🏅 **Week ${honors.week} honors are in!**`,
   ];
   if (honors.playerName) {
+    const player = { name: honors.playerName, discordId: honors.playerDiscordId ?? null };
+    const who =
+      !honors.corrected && mentionableId(player)
+        ? personLabel(player)
+        : `**${name(honors.playerName)}**`;
     lines.push(
-      `⭐ Player of the Week: **${name(honors.playerName)}** — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+      `⭐ Player of the Week: ${who} — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
     );
   }
   if (honors.teamName) {

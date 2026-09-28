@@ -24,6 +24,7 @@ import {
   HONORS_STALE_PREFIX,
 } from "./announcement-marker";
 import { singleActiveSeason } from "./season";
+import { mentionsOf } from "./discord-mentions";
 import { raceHook } from "./race-hook";
 import { MATCH_PHASE } from "./constants";
 import { weekOracles } from "./pickem";
@@ -265,6 +266,7 @@ export async function maybeAnnounceWeekHonors(
       seasonId,
       week,
       playerName: playerUser?.name ?? null,
+      playerDiscordId: playerUser?.discordId ?? null,
       playerPoints: honors.player?.points ?? 0,
       heroName:
         honors.player?.heroId != null
@@ -275,7 +277,12 @@ export async function maybeAnnounceWeekHonors(
       corrected: claim.mode === "corrected",
       oracle,
     }),
-    undefined,
+    // A cheerful ping for the Player of the Week, if they linked Discord, on
+    // the first post only: a correction must not ping anyone a second time
+    // (the formatter drops the mention from a correction's text to match).
+    claim.mode === "initial"
+      ? mentionsOf([playerUser?.discordId])
+      : undefined,
     {
       dedupeKey: announcementDedupeKey("honors", {
         key: marker,

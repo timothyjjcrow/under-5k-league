@@ -459,6 +459,27 @@ describe("discord message formatters", () => {
     expect(msg).not.toContain("/recap");
   });
 
+  it("congratulates the champion roster, mentioning only linked players", () => {
+    const msg = championMessage("Season 1", "Zai's Team", "s1", [
+      { name: "Captain", discordId: "123456789012345678" },
+      { name: "Unlinked *Star*", discordId: null },
+      { name: "Bad id", discordId: "not-a-snowflake" },
+      { name: "Support", discordId: "223456789012345678" },
+    ]);
+    expect(msg).toContain(
+      "champions! Congratulations <@123456789012345678>, Unlinked \\*Star\\*, Bad id and <@223456789012345678>! GG everyone",
+    );
+    expect(msg).toMatch(/season recap at <[^>]+\/seasons\/s1>$/);
+  });
+
+  it("names nobody when no roster is given", () => {
+    const msg = championMessage("Season 1", "T", "s1");
+    expect(msg).not.toContain("Congratulations");
+    expect(msg).toContain("champions! GG everyone");
+    expect(championMessage("Season 1", "T", "s1", [{ name: "Solo", discordId: null }]))
+      .toContain("Congratulations Solo! GG");
+  });
+
   it("escapes a season name in the champion announcement", () => {
     const msg = championMessage(
       "[Season](https://evil.test)",
@@ -1937,7 +1958,10 @@ describe("no player-supplied name can inject markdown", () => {
     playoffsStartedMessage("Season 1", "s1", [
       { home: EVIL, away: EVIL, homeSeed: 1, awaySeed: 4, whenMs: 1_800_000_000_000 },
     ]),
-    championMessage("Season 1", EVIL, "s1"),
+    championMessage("Season 1", EVIL, "s1", [
+      { name: EVIL, discordId: null },
+      { name: EVIL, discordId: "123456789012345678" },
+    ]),
     playoffRoundSetMessage({
       seasonName: EVIL,
       seasonId: "s1",
@@ -2366,6 +2390,43 @@ describe("weeklyHonorsMessage", () => {
     expect(
       weeklyHonorsMessage({ ...base, oracle: { names: [], correct: 0, graded: 0 } }),
     ).not.toMatch(/Oracle/);
+  });
+});
+
+describe("weeklyHonorsMessage mentions", () => {
+  const base = {
+    seasonId: "s1",
+    week: 4,
+    playerName: "Winner",
+    playerPoints: 50,
+    heroName: "Lina",
+    teamName: "Team",
+    teamGameWins: 2,
+  };
+
+  it("mentions a linked Player of the Week on the first post", () => {
+    expect(
+      weeklyHonorsMessage({ ...base, playerDiscordId: "123456789012345678" }),
+    ).toContain("⭐ Player of the Week: <@123456789012345678> — 50 impact points on Lina");
+  });
+
+  it("names an unlinked player, or one with a malformed id, in plain text", () => {
+    expect(weeklyHonorsMessage(base)).toContain(
+      "⭐ Player of the Week: **Winner** — 50",
+    );
+    expect(
+      weeklyHonorsMessage({ ...base, playerDiscordId: "<@everyone>" }),
+    ).toContain("⭐ Player of the Week: **Winner** — 50");
+  });
+
+  it("never mentions anyone in a correction", () => {
+    const message = weeklyHonorsMessage({
+      ...base,
+      playerDiscordId: "123456789012345678",
+      corrected: true,
+    });
+    expect(message).toContain("⭐ Player of the Week: **Winner** — 50");
+    expect(message).not.toContain("<@");
   });
 });
 
