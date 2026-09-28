@@ -118,8 +118,9 @@ export type BoardRender = { digest: string; embed: BoardEmbed };
  * grey is the colour of a disabled button, and this is the state that has to
  * sell the league. READY_CHECK deliberately breaks the gold ramp with the
  * client's own accept green — it is the one state demanding a click inside
- * the short accept window. LIVE red means "broadcast", never Dire: which side is Radiant isn't
- * known until the match imports, so nothing here is ever side-labelled.
+ * the short accept window. LIVE red means "broadcast", never Dire: which
+ * side is Radiant isn't known until the match imports, so nothing here is
+ * ever side-labelled.
  */
 const COLOR = {
   EMPTY: 0x4e6e8e,
