@@ -82,8 +82,9 @@ path onto the retry URL.
 plus the OpenDota medal — the hard ceiling `HARD_MMR_CEILING` and a
 Divine-3+/Immortal medal reject outright; `Season.maxMmr` is a **soft review
 threshold that blocks nobody** (a recurring documentation trap — see
-CLAUDE.md). Only gate-approved claims are then clamped to the medal's
-plausibility window (`clampMmrToRank`, `src/lib/rank.ts`). Registrations carry
+`docs/features/players-and-registration.md`). Only gate-approved claims are
+then clamped to the medal's plausibility window (`clampMmrToRank`,
+`src/lib/rank.ts`). Registrations carry
 a questionnaire (roles via `src/lib/roles.ts`, favorite heroes, statement,
 captain note) surfaced publicly in the pool/profile and again in the draft
 room. `type` is `PLAYER` or
@@ -1066,7 +1067,8 @@ they must not be described as outbox-exact.
 
 ## 10. Testing model
 
-Five layers (depth and the doctrine behind each in CLAUDE.md):
+Five layers (depth and the doctrine behind each in CLAUDE.md and
+`docs/features/concurrency-and-testing.md`):
 
 1. **Unit** — `npm test` (`vitest.config.mts`, node environment, no jsdom):
    `src/**/*.test.ts` beside every pure lib. Because components can't render,

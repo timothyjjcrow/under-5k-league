@@ -253,12 +253,12 @@ export default async function InhousePage({
  *
  * A bare "0 / 10" over ten dashed rows reads as a dead league, which is exactly
  * why the pinned Discord board leads its empty state with these same figures
- * (CLAUDE.md: "The EMPTY state is the product"). This calls the SAME memoised
- * loader the board uses, so the channel and the site can never disagree about
- * when the last game was — and every figure is monotonic or
- * completes-with-a-state-change, never a trailing window that rots in a quiet
- * stretch. Renders nothing at all before the first game: an empty stat row is
- * worse than none.
+ * (docs/features/discord.md, queue board: "The empty state is the product").
+ * This calls the SAME memoised loader the board uses, so the channel and the
+ * site can never disagree about when the last game was — and every figure is
+ * monotonic or completes-with-a-state-change, never a trailing window that
+ * rots in a quiet stretch. Renders nothing at all before the first game: an
+ * empty stat row is worse than none.
  */
 async function SceneStats() {
   const stats = await loadBoardStats();
@@ -484,7 +484,7 @@ function ResultSummaryLine({
 }
 
 // The full-history Elo ladder (no take window — Elo accumulates over ALL
-// games, per CLAUDE.md).
+// games, per docs/features/inhouse.md, ladder).
 async function LadderCard({ meId }: { meId: string | null }) {
   // Shares the complete-history snapshot with the Discord board and room.
   const summary = await loadInhouseLadderSummary();
@@ -771,7 +771,7 @@ function Leaderboard({
   const ordered = [...ranked, ...provisional];
   return (
     <div className="overflow-x-auto">
-      {/* table-fixed + widths on <col>, per CLAUDE.md's StandingsTable rule: with
+      {/* table-fixed + widths on <col>, per CLAUDE.md's mobile layout rule: with
         fixed layout a `hidden` column STILL takes an equal share of the leftover
         width unless its <col> is w-0 until the breakpoint that shows it. Without
         this the nine mostly-1-character columns starved the Player name. */}

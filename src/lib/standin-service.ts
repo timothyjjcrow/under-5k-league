@@ -651,15 +651,15 @@ export async function removeStandinGuarded(opts: {
   // series can acquire its first game (or complete outright) in the gap, and
   // this delete is exactly the mid-series removal the checks above refuse.
   //
-  // KNOWN RESIDUAL WINDOW, stated rather than implied closed: the WHERE only
-  // sees COMMITTED games, and importGameForMatch reads the assignment set
-  // (gatherTeamAccounts) before its own write transaction — so a delete
-  // landing inside the import's few-ms read-to-write gap still strands the
-  // rest of the series, and closing it for real needs the IMPORT side to
-  // re-assert the assignment set it classified with. Accepted for now: the
-  // window excludes the OpenDota fetch (it's DB round trips only), game 1
-  // keeps correct attribution, and re-assigning the same standin (legal even
-  // with games imported) repairs the remaining games.
+  // The import is the other half of a write-skew pair, and both halves are
+  // Serializable: importGameForMatch re-reads the assignment set
+  // (gatherTeamAccounts(fresh, tx)) inside the transaction that writes the
+  // Game, and this delete reads the match's games through the relation filter
+  // below. Each side reads the table the other writes, so Postgres SSI aborts
+  // one of them: the removal then reports "The match just changed"
+  // (isSerializationConflict) or a zero count. No raced test pins this pair
+  // yet (standins-raced.itest.ts covers the assign pairs only); if one is
+  // added it needs `npm run test:pg`, since SQLite runs the two in sequence.
   let gone;
   try {
     gone = await prisma.$transaction(async (tx) => {
