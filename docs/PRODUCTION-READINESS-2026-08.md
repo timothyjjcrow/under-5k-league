@@ -1,5 +1,10 @@
 # Production readiness audit — August 2026
 
+> **History (August 2026).** This is the dated log of the launch-readiness
+> audit, kept for the reasoning behind the release gates. It is not a runbook
+> and is no longer kept up to date; its verdict describes the August launch,
+> not today. To release, start at [RELEASING.md](RELEASING.md).
+
 This is the release-focused continuation of
 [`PRODUCT-AUDIT-2026-08.md`](./archive/PRODUCT-AUDIT-2026-08.md). Each iteration is a
 separate gate. Passing an early gate does **not** authorize deployment while a

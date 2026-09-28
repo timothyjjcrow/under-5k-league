@@ -3,12 +3,15 @@
 A Learn Dota 2 League site. Read the README for the product overview. This file
 is orientation for future work in the codebase.
 
-> **Release-operations notice (August 2026):** this is a long-lived engineering
-> notebook, not a deployment runbook. For production builds, migrations,
-> backups, schedulers, rollback, and launch approval, the source of truth is the
-> current `README.md` deployment section and
-> `docs/PRODUCTION-READINESS-2026-08.md`. Historical notes below must never
-> override those guarded procedures.
+> **Release-operations notice (September 2026):** this is a long-lived
+> engineering notebook, not a deployment runbook. Every release starts at
+> `docs/RELEASING.md`: the routine two-league release first, then appendices
+> that link the guarded build, migration, backup, scheduler, rollback, approval
+> and incident procedures in the `README.md` deployment section and
+> `docs/PRODUCTION-OPERATIONS.md`. Those are the source of truth.
+> `docs/PRODUCTION-READINESS-2026-08.md` is the August launch audit, kept as
+> history. Historical notes below must never override those guarded
+> procedures.
 
 ## Mental model
 

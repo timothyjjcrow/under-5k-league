@@ -34,4 +34,4 @@ Resetting playoffs or returning to the regular season records each removed fixtu
 
 ## Release compatibility
 
-This is an additive schema release for both regions. Follow `SHARED-LEAGUE-RELEASE.md` and `PRODUCTION-OPERATIONS.md`; promote the same commit to both projects through the paired release command. An application rollback can read its old tables. Historical readers explicitly detect older writes rather than trusting stale projections. Do not undo the additive schema as an application rollback.
+This is an additive schema release for both regions. Follow `RELEASING.md` and `PRODUCTION-OPERATIONS.md`; promote the same commit to both projects through the paired release command. An application rollback can read its old tables. Historical readers explicitly detect older writes rather than trusting stale projections. Do not undo the additive schema as an application rollback.

@@ -1,7 +1,8 @@
 # GGD2L docs
 
 Start with the repository [README](../README.md) for the product overview,
-setup and deployment. `CLAUDE.md` holds the working notes for changing the code.
+setup and deployment. To release, start at [RELEASING.md](RELEASING.md).
+`CLAUDE.md` holds the working notes for changing the code.
 
 ## League rules and records
 
@@ -19,8 +20,9 @@ setup and deployment. `CLAUDE.md` holds the working notes for changing the code.
 
 ## Releases and operations
 
-- [SHARED-LEAGUE-RELEASE.md](SHARED-LEAGUE-RELEASE.md) — releasing one commit to
-  both the US and Europe sites.
+- [RELEASING.md](RELEASING.md) — start here to release: the routine release of
+  one commit to both the US and Europe sites, then the database, scheduler and
+  incident procedures.
 - [PRODUCTION-OPERATIONS.md](PRODUCTION-OPERATIONS.md) — production release
   evidence, the scheduler runbook, rollback, recovery, and data correction.
 - [PRODUCTION-READINESS-2026-08.md](PRODUCTION-READINESS-2026-08.md) — the
