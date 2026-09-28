@@ -23,6 +23,7 @@ import { roleLabels } from "@/lib/roles";
 export function ProfileHeader({
   user,
   isSelf,
+  poolListed,
   canSeeLeagueContact,
   comparable,
   signatureHero,
@@ -52,6 +53,9 @@ export function ProfileHeader({
     fhUnavailable: boolean | null;
   };
   isSelf: boolean;
+  /** An active season exists, so the menus list /players (site-nav). With
+   *  none, the pool is empty and the menus hide it; so does the back link. */
+  poolListed: boolean;
   /** The shared league-contact policy (canViewLeagueContact): the Discord
    *  tokens and the private-match-data flag are members-only. */
   canSeeLeagueContact: boolean;
@@ -82,22 +86,26 @@ export function ProfileHeader({
   const roles = roleLabels(signup?.roles);
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <ContextBackLink href="/players" className={textLink("text-sm")}>
-          ← All players
-        </ContextBackLink>
-        {/* Compare lists players with an imported league game (the same
-            trusted lines as gameRows); anyone else, such as a standin who
-            never played, would open onto "Player unavailable". */}
-        {comparable ? (
-          <Link
-            href={`/players/compare?a=${user.id}`}
-            className={textLink("text-sm")}
-          >
-            Compare vs… <LinkArrow />
-          </Link>
-        ) : null}
-      </div>
+      {poolListed || comparable ? (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          {poolListed ? (
+            <ContextBackLink href="/players" className={textLink("text-sm")}>
+              ← All players
+            </ContextBackLink>
+          ) : null}
+          {/* Compare lists players with an imported league game (the same
+              trusted lines as gameRows); anyone else, such as a standin who
+              never played, would open onto "Player unavailable". */}
+          {comparable ? (
+            <Link
+              href={`/players/compare?a=${user.id}`}
+              className={textLink("ml-auto text-sm")}
+            >
+              Compare vs… <LinkArrow />
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
       <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
         {/* Signature hero portrait fading in from the right. */}
         {signatureHero ? (
@@ -330,18 +338,23 @@ export function ProfileHeader({
 export function UnjoinedProfile({
   user,
   isSelf,
+  poolListed,
 }: {
   user: { name: string; avatar: string | null; role: string };
   isSelf: boolean;
+  /** As ProfileHeader's: no back link to a pool the menus hide. */
+  poolListed: boolean;
 }) {
   return (
     <div className="space-y-6">
       <div>
-        <div className="mb-3">
-          <ContextBackLink href="/players" className={textLink("text-sm")}>
-            ← All players
-          </ContextBackLink>
-        </div>
+        {poolListed ? (
+          <div className="mb-3">
+            <ContextBackLink href="/players" className={textLink("text-sm")}>
+              ← All players
+            </ContextBackLink>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-5 rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 p-6 shadow-sm">
           <Avatar
             name={user.name}

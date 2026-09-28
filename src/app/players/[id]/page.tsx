@@ -154,7 +154,9 @@ export default async function PlayerProfilePage({
   // medal, pub numbers or outbound links. The sign-in medal fetch stays; the
   // inhouse queue uses it to sanity-check typed MMR.
   if (!joined) {
-    return <UnjoinedProfile user={user} isSelf={isSelf} />;
+    return (
+      <UnjoinedProfile user={user} isSelf={isSelf} poolListed={!!season} />
+    );
   }
 
   const [
@@ -640,6 +642,7 @@ export default async function PlayerProfilePage({
       <ProfileHeader
         user={user}
         isSelf={isSelf}
+        poolListed={!!season}
         canSeeLeagueContact={canSeeLeagueContact}
         comparable={hasLeagueGames}
         signatureHero={signatureHero}

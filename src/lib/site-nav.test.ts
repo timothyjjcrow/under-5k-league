@@ -708,3 +708,27 @@ describe("navigation surfaces", () => {
     expect(header).not.toContain('id="mobile-nav"');
   });
 });
+
+// With no active season the menus hide Players (its pool is empty), so the
+// profile's "← All players" back link must hide too, or every offseason
+// profile links prominently to a page the navigation deliberately leaves out.
+describe("links to the player pool", () => {
+  it("the profile back link follows the Players menu entry", () => {
+    const read = (p: string) =>
+      readFileSync(path.join(__dirname, "..", "..", p), "utf8");
+    const header = read("src/components/profile-header.tsx");
+    const backLinks = header.match(/<ContextBackLink href="\/players"/g) ?? [];
+    expect(backLinks.length).toBe(2);
+    expect(
+      header.match(/\{poolListed \? \(\s*(<div className="mb-3">\s*)?<ContextBackLink href="\/players"/g)
+        ?.length ?? 0,
+    ).toBe(2);
+    const page = read("src/app/players/[id]/page.tsx");
+    expect(page.match(/poolListed=\{!!season\}/g)?.length ?? 0).toBe(2);
+    // The same condition as the menu entry: an active season exists.
+    expect(everyHref(state(null)).includes("/players")).toBe(false);
+    expect(everyHref(state(SEASON_STATUS.SIGNUPS)).includes("/players")).toBe(
+      true,
+    );
+  });
+});
