@@ -1639,7 +1639,9 @@ function VoteView({
   const byMmr = orderCaptains("MMR", vote.candidates);
   const byRecord = orderCaptains("RECORD", vote.candidates);
   const byVotes = orderCaptains("VOTE", vote.candidates);
-  const hasRecords = vote.candidates.some((c) => c.games > 0);
+  // RECORD only ranks players with an inhouse win; with none in the lobby it
+  // is the MMR order, so the card says so instead of repeating that preview.
+  const hasWinners = vote.candidates.some((c) => c.wins > 0);
   const hasNominations = vote.candidates.some((c) => c.nominations > 0);
 
   return (
@@ -1729,14 +1731,14 @@ function VoteView({
         />
         <MethodCard
           label="Best record"
-          hint="Top 2 inhouse records"
+          hint="Most inhouse wins, then MMR"
           tally={vote.methodTallies.RECORD}
           total={vote.voterCount}
           selected={myMethod === "RECORD"}
           disabled={!me.canVote || pending}
           onClick={() => act({ action: "vote", method: "RECORD" })}
-          preview={hasRecords ? byRecord.slice(0, 2) : []}
-          previewEmpty="No records yet — falls back to MMR"
+          preview={hasWinners ? byRecord.slice(0, 2) : []}
+          previewEmpty="No inhouse wins yet — falls back to MMR"
         />
       </div>
 

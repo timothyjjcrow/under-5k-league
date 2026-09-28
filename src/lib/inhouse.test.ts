@@ -91,9 +91,63 @@ describe("orderCaptains", () => {
     const ordered = orderCaptains("RECORD", [
       cand("a", { wins: 1, winRate: 0.5, games: 2, mmr: 5000 }),
       cand("b", { wins: 3, winRate: 0.6, games: 5, mmr: 1000 }),
-      cand("c", { wins: 0, winRate: 0, games: 0, mmr: 9000 }), // no games → last
+      cand("c", { wins: 0, winRate: 0, games: 0, mmr: 9000 }), // no wins → last
     ]);
     expect(ordered.map((x) => x.userId)).toEqual(["b", "a", "c"]);
+  });
+
+  it("RECORD never ranks a winless player above a newcomer on games played", () => {
+    // The bug: a 0-3 player tied every newcomer on wins and win rate, then
+    // won the tie on games played, so "Best record" named the one player who
+    // had lost every game. Winless players now follow plain MMR order.
+    const ordered = orderCaptains("RECORD", [
+      cand("loser", { wins: 0, winRate: 0, games: 3, mmr: 2000 }),
+      cand("newHigh", { mmr: 4000 }),
+      cand("newLow", { mmr: 1000 }),
+    ]);
+    expect(ordered.map((x) => x.userId)).toEqual([
+      "newHigh",
+      "loser",
+      "newLow",
+    ]);
+  });
+
+  it("RECORD puts every player with a win ahead of the winless, then MMR", () => {
+    const ordered = orderCaptains("RECORD", [
+      cand("new9k", { mmr: 9000 }),
+      cand("oneWin", { wins: 1, winRate: 0.25, games: 4, mmr: 1000 }),
+      cand("zeroThree", { wins: 0, winRate: 0, games: 3, mmr: 5000 }),
+      cand("new3k", { mmr: 3000 }),
+    ]);
+    // One player has a win and captains; the second captain is the highest
+    // MMR of everyone else, whatever their games played.
+    expect(ordered.map((x) => x.userId)).toEqual([
+      "oneWin",
+      "new9k",
+      "zeroThree",
+      "new3k",
+    ]);
+  });
+
+  it("RECORD with no wins in the lobby is exactly the MMR order", () => {
+    const lobby = [
+      cand("zeroThree", { games: 3, mmr: 2500, joinedAt: 1 }),
+      cand("zeroOne", { games: 1, mmr: 2500, joinedAt: 2 }),
+      cand("fresh", { mmr: 6000, joinedAt: 3 }),
+      cand("unknown", { mmr: 0, joinedAt: 4 }),
+      cand("tieA", { mmr: 0, joinedAt: 4 }),
+    ];
+    const ids = (xs: CaptainCandidate[]) => xs.map((x) => x.userId);
+    expect(ids(orderCaptains("RECORD", lobby))).toEqual(
+      ids(orderCaptains("MMR", lobby)),
+    );
+    expect(ids(orderCaptains("RECORD", lobby))).toEqual([
+      "fresh",
+      "zeroThree",
+      "zeroOne",
+      "tieA",
+      "unknown",
+    ]);
   });
 
   it("VOTE ranks by nominations, breaking ties by MMR", () => {
@@ -127,6 +181,16 @@ describe("orderCaptains", () => {
       expect(orderCaptains(method, [...tied].reverse()).map((x) => x.userId)).toEqual(
         ["alpha", "mid", "zeta"],
       );
+    }
+    // RECORD's winners are sorted separately from the winless; that half
+    // must be total too.
+    const tiedWinners = tied.map((c) => ({ ...c, wins: 1, winRate: 1, games: 1 }));
+    for (const input of [tiedWinners, [...tiedWinners].reverse()]) {
+      expect(orderCaptains("RECORD", input).map((x) => x.userId)).toEqual([
+        "alpha",
+        "mid",
+        "zeta",
+      ]);
     }
   });
 

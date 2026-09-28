@@ -77,6 +77,12 @@ export function tallyMethod(votes: CaptainMethod[]): CaptainMethod {
  * Rank candidates for captaincy by the winning method. The top two become
  * captains (index 0 = team 1 / Radiant, index 1 = team 2 / Dire). Every method
  * falls back to MMR then earliest-queued so the order is always total.
+ *
+ * RECORD ranks ONLY players with at least one inhouse win by their record;
+ * everyone else follows in plain MMR order. Ranking the whole lobby by record
+ * put a 0-3 player ahead of every newcomer (more games broke the 0-win tie),
+ * so "Best record" could name the one player who had lost every game. A lobby
+ * with no wins at all therefore picks exactly what "Highest MMR" would.
  */
 export function orderCaptains<T extends CaptainCandidate>(
   method: CaptainMethod,
@@ -84,15 +90,19 @@ export function orderCaptains<T extends CaptainCandidate>(
 ): T[] {
   const arr = [...candidates];
   if (method === "RECORD") {
-    return arr.sort(
-      (a, b) =>
-        b.wins - a.wins ||
-        b.winRate - a.winRate ||
-        b.games - a.games ||
-        b.mmr - a.mmr ||
-        joinMs(a.joinedAt) - joinMs(b.joinedAt) ||
-        byUserId(a, b),
-    );
+    const winners = arr
+      .filter((c) => c.wins > 0)
+      .sort(
+        (a, b) =>
+          b.wins - a.wins ||
+          b.winRate - a.winRate ||
+          b.games - a.games ||
+          b.mmr - a.mmr ||
+          joinMs(a.joinedAt) - joinMs(b.joinedAt) ||
+          byUserId(a, b),
+      );
+    const rest = seedOrder(arr.filter((c) => !(c.wins > 0)));
+    return [...winners, ...rest];
   }
   if (method === "VOTE") {
     return arr.sort(
