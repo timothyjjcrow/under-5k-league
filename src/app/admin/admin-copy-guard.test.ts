@@ -351,6 +351,24 @@ describe("admin copy names only controls that exist", () => {
     expect(page).toContain("<a href={item.href} className={textLink()}>");
   });
 
+  // A jump (chip, next-step link, Needs attention link, news pager) opens
+  // the card it lands on. Opening the card's FIRST nested disclosure, the
+  // default elsewhere, unfolded Fix the phase, Fix the bracket's reset
+  // buttons, Assign any match and a news post's Edit form. On /admin only a
+  // folded AdminSection opens with a jump.
+  it("a jump opens only a folded section, never a card's own disclosures", () => {
+    const page = read("src/app/admin/page.tsx");
+    const nav = read("src/components/section-nav.tsx");
+    expect(page).toContain('openNested="marked"');
+    expect(nav).toContain('"details[data-section-jump]"');
+    const adminSection = page.slice(page.indexOf("function AdminSection("));
+    expect(adminSection.slice(0, adminSection.indexOf("\n}\n"))).toContain(
+      "data-section-jump",
+    );
+    // AdminSection is the only element that carries the attribute.
+    expect(page.match(/^\s*data-section-jump$/gm)).toHaveLength(1);
+  });
+
   // The start-of-season step quotes the phase button by name. The label is
   // phaseAdvance's, so the check is that both pages render that name.
   it("the start-of-season step names the button the phase card and draft room render", () => {

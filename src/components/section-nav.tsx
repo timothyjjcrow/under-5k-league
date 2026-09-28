@@ -9,7 +9,15 @@ import {
 } from "@/lib/chip-bar";
 import { cn } from "@/lib/utils";
 
-function revealSection(id: string, focus: boolean) {
+/**
+ * Which disclosure inside a jump target opens with it. "first" opens the first
+ * `<details>` in the target (a card wrapping a folded body). "marked" opens
+ * only a nested `<details data-section-jump>`, so every other disclosure in
+ * the card (a danger fold, an edit form, a list) stays as the page rendered it.
+ */
+type NestedReveal = "first" | "marked";
+
+function revealSection(id: string, focus: boolean, nestedReveal: NestedReveal) {
   const target = document.getElementById(id);
   if (!target) return false;
   const details =
@@ -28,10 +36,8 @@ function revealSection(id: string, focus: boolean) {
     if (parent instanceof HTMLDetailsElement) parent.open = true;
     parent = parent.parentElement;
   }
-  // A secondary disclosure inside a card (data-jump-stays-closed) is not
-  // the destination: jumping to the card leaves it shut.
   const nested = target.querySelector<HTMLDetailsElement>(
-    "details:not([data-jump-stays-closed])",
+    nestedReveal === "marked" ? "details[data-section-jump]" : "details",
   );
   if (nested) nested.open = true;
   if (focus) {
@@ -81,10 +87,13 @@ export function SectionNav({
   items,
   label,
   sticky = false,
+  openNested = "first",
 }: {
   items: { id: string; label: string }[];
   label: string;
   sticky?: boolean;
+  /** Which disclosure inside a target opens on a jump (see NestedReveal). */
+  openNested?: NestedReveal;
 }) {
   const [active, setActive] = useState("");
   const resolvedHash = useRef("");
@@ -142,7 +151,7 @@ export function SectionNav({
         id &&
         id !== resolvedHash.current &&
         items.some((item) => item.id === id) &&
-        revealSection(id, false)
+        revealSection(id, false, openNested)
       ) {
         resolvedHash.current = id;
         setActive(id);
@@ -177,7 +186,7 @@ export function SectionNav({
         if (!mounted) return;
         const id = window.location.hash.slice(1);
         if (id === initialHash && items.some((item) => item.id === id))
-          revealSection(id, false);
+          revealSection(id, false, openNested);
       }));
     };
     if (document.readyState === "complete") revealAfterPaint();
@@ -199,7 +208,7 @@ export function SectionNav({
       window.removeEventListener("popstate", onHashChange);
       window.removeEventListener("section-ready", observeSections);
     };
-  }, [items]);
+  }, [items, openNested]);
 
   return (
     <nav
@@ -232,7 +241,7 @@ export function SectionNav({
                 if (!document.getElementById(item.id)) return;
                 event.preventDefault();
                 history.pushState(null, "", `#${item.id}`);
-                if (revealSection(item.id, true))
+                if (revealSection(item.id, true, openNested))
                   resolvedHash.current = item.id;
                 setActive(item.id);
               }}

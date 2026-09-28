@@ -761,10 +761,7 @@ function OpenNextSeason({
           </SubmitButton>
         </ActionForm>
         {season ? (
-          <details
-            data-jump-stays-closed
-            className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm"
-          >
+          <details className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm">
             <summary className="flex min-h-11 cursor-pointer items-center font-medium text-fg">
               Archive without opening the next season
             </summary>
@@ -883,9 +880,22 @@ function AdminAnchor({
  * reachable however far down the page an admin has scrolled. On a phone it
  * scrolls away with the page like every section bar (see SectionNav): pinned,
  * it cost a fifth of the screen on top of the header and the tab bar.
+ *
+ * A jump opens the section and, inside it, only a folded AdminSection
+ * (`data-section-jump`). Every other disclosure in a card (Fix the phase,
+ * Fix the bracket, Assign any match, a news Edit form, the handoff's archive
+ * option) stays as the page rendered it, so a jump to a card never unfolds
+ * its danger controls or an edit form.
  */
 function AdminJump({ items }: { items: { id: string; label: string }[] }) {
-  return <SectionNav items={items} label="Admin sections" sticky />;
+  return (
+    <SectionNav
+      items={items}
+      label="Admin sections"
+      sticky
+      openNested="marked"
+    />
+  );
 }
 
 /**
