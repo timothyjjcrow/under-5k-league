@@ -1,5 +1,6 @@
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
+import { MATCH_ANCHOR, matchAnchorPath } from "./match-anchors";
 import { splitLinks } from "./linkify";
 import { escapeDiscordText } from "./discord-escape";
 import {
@@ -549,8 +550,10 @@ export function playerOutMessage(m: {
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   // The mentioned captain is by definition NOT on the site — land them on the
-  // page with the assign form, not on the front door (the week-reminder shape).
-  const link = m.matchId ? ` <${resolveSiteUrl()}/matches/${m.matchId}>` : "";
+  // Standins card itself, not the top of the page or the front door.
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`
+    : "";
   return `🚑 **${name(m.playerName)}** can't make the ${label} — **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Captains/admin: time to line up a standin.${link}`;
 }
 
@@ -589,7 +592,9 @@ export function playerAwayMessage(
       ? "Tiebreaker match"
       : f.isPlayoff ? "Playoff match" : `Week ${f.week} match`;
     const when = f.whenMs != null ? ` (<t:${Math.floor(f.whenMs / 1000)}:F>)` : "";
-    const link = f.matchId ? ` <${resolveSiteUrl()}/matches/${f.matchId}>` : "";
+    const link = f.matchId
+      ? ` <${resolveSiteUrl()}${matchAnchorPath(f.matchId, MATCH_ANCHOR.standins)}>`
+      : "";
     const line = `• ${label}: **${name(f.homeName)}** vs **${name(f.awayName)}**${when}${link}`;
     const rest = fixtures.length - i;
     // Leave room for the "and N more" line whenever anything could follow.

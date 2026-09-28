@@ -1007,7 +1007,7 @@ describe("playerAwayMessage", () => {
     expect(lines[0]).toContain("3 matches");
     expect(lines[1]).toContain("Week 3 match");
     expect(lines[1]).toContain("<t:1800000000:F>");
-    expect(lines[1]).toMatch(/<[^<>\s]*\/matches\/m3>/);
+    expect(lines[1]).toMatch(/<[^<>\s]*\/matches\/m3#match-standins>/);
     expect(lines[2]).toContain("<t:1800604800:F>");
     expect(lines[3]).toContain("Playoff match");
     expect(lines[3]).not.toContain("<t:");
@@ -2014,7 +2014,8 @@ describe("match-page deep links", () => {
       whenMs: null,
       matchId: "m1",
     });
-    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>/);
+    // Straight to the Standins card, where the captain lines up cover.
+    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1#match-standins>/);
   });
 
   it("playerOutMessage stays link-free without one — hand-built calls", () => {

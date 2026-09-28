@@ -75,7 +75,7 @@ describe("ScheduleWeeks match cards", () => {
     const html = render({ awaitingResult: true, reportResult: true });
     expect(html).toContain('aria-label="Radiant Raiders vs Dire Wolves · Result needed"');
     expect(html).not.toContain("Awaiting result");
-    expect(hrefs(html)).toEqual(["/matches/m1#match-tools", "/matches/m1"]);
+    expect(hrefs(html)).toEqual(["/matches/m1#match-report", "/matches/m1"]);
     expect(html).toContain("Report result");
   });
 

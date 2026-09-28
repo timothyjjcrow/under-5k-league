@@ -130,11 +130,22 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(
     page.getByRole("heading", { name: "Matchup", exact: true }),
   ).toBeFocused();
-  await captainJump.click();
+  // The section bar's chip opens Captain tools at its heading, where the
+  // reschedule and standin cards come first; the scoreboard's jump goes
+  // past them to lobby setup and reporting.
+  await matchSections
+    .getByRole("link", { name: "Captain tools", exact: true })
+    .click();
   await expect(page).toHaveURL(/#match-tools$/);
   await expect(
     page.getByRole("heading", { name: "Captain tools", exact: true }),
   ).toBeInViewport();
+  await expect(
+    page.getByRole("heading", { name: "Reschedule", exact: true }),
+  ).toBeVisible();
+  await captainJump.click();
+  await expect(page).toHaveURL(/#match-report$/);
+  await expect(page.locator("#match-report")).toBeInViewport();
   await expect(
     page.getByRole("heading", { name: "Official lobby checklist" }),
   ).toBeVisible();

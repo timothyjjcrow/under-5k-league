@@ -44,3 +44,29 @@ describe("match page standins card", () => {
     expect(PAGE).toContain("(can&apos;t make it)");
   });
 });
+
+describe("match page captain tools order and anchors", () => {
+  const tools = PAGE.slice(PAGE.indexOf("id={MATCH_ANCHOR.tools}"));
+
+  it("puts the cards that need an answer before lobby setup and reporting", () => {
+    const reschedule = tools.indexOf("<RescheduleSection match={match} />");
+    const standins = tools.indexOf("<StandinSection");
+    const report = tools.indexOf("<ReportResultSection");
+    expect(reschedule).toBeGreaterThan(-1);
+    expect(standins).toBeGreaterThan(reschedule);
+    expect(report).toBeGreaterThan(standins);
+    expect(tools).toMatch(
+      /<div id=\{MATCH_ANCHOR\.report\} className="scroll-mt-24">\s*<ReportResultSection/,
+    );
+  });
+
+  it("gives every card a deep link lands on its own id", () => {
+    // Discord's player-out message and the dashboard's Respond link land here.
+    expect(PAGE).toContain("<Card id={MATCH_ANCHOR.standins}");
+    // The editable card, the locked card and the spectator strip.
+    expect(PAGE.match(/id=\{MATCH_ANCHOR\.reschedule\}/g)).toHaveLength(3);
+    expect(PAGE).toContain("href={`#${MATCH_ANCHOR.standins}`}");
+    expect(PAGE).toContain("href={`#${MATCH_ANCHOR.reschedule}`}");
+  });
+});
+

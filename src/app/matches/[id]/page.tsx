@@ -92,6 +92,7 @@ import {
   playoffMatchContextText,
 } from "@/lib/playoff-match-context";
 import { teamHueVar } from "@/lib/team-hues";
+import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import {
   Avatar,
   Badge,
@@ -267,7 +268,7 @@ export default async function MatchDetailPage({
         ]
       : []),
     ...(showCaptainTools
-      ? [{ id: "match-tools", label: "Captain tools" }]
+      ? [{ id: MATCH_ANCHOR.tools, label: "Captain tools" }]
       : []),
   ];
 
@@ -492,7 +493,17 @@ export default async function MatchDetailPage({
               />
             ) : null}
             {showCaptainTools ? (
-              <a href="#match-tools" className={buttonClasses("primary", "sm")}>
+              // Lands on lobby setup and reporting, which now follow the
+              // reschedule and standin cards; anything waiting on the
+              // captain there gets its own line under the scoreboard.
+              <a
+                href={`#${
+                  matchResultsOpen(match.season.status, match.phase)
+                    ? MATCH_ANCHOR.report
+                    : MATCH_ANCHOR.tools
+                }`}
+                className={buttonClasses("primary", "sm")}
+              >
                 {!matchResultsOpen(match.season.status, match.phase)
                   ? "Captain tools ↓"
                   : match.status === "LIVE" || games.length > 0
@@ -550,6 +561,15 @@ export default async function MatchDetailPage({
       {match.status === "LIVE" && match.season.isActive ? (
         <Suspense fallback={null}>
           <LiveSeriesCheckin matchId={match.id} />
+        </Suspense>
+      ) : null}
+
+      {/* What is waiting on this captain, one line each, linking to the card
+          that answers it: those cards sit below the scoreboard and every
+          box score, about a phone-height or more down the page. */}
+      {showCaptainTools ? (
+        <Suspense fallback={null}>
+          <CaptainTodos match={match} viewerId={viewer!.id} />
         </Suspense>
       ) : null}
 
@@ -710,7 +730,7 @@ export default async function MatchDetailPage({
       ) : null}
       {showCaptainTools ? (
         <section
-          id="match-tools"
+          id={MATCH_ANCHOR.tools}
           className="scroll-mt-24 space-y-4"
           aria-labelledby="match-tools-title"
         >
@@ -730,22 +750,158 @@ export default async function MatchDetailPage({
             <Badge className="ml-auto">Your match</Badge>
           </div>
           {/* These components keep their own write-time capability gates,
-              including locked reporting and stranded-proposal cleanup. */}
-          <ReportResultSection match={match} renderedAt={renderedAt} />
+              including locked reporting and stranded-proposal cleanup. The
+              cards that may need an answer (a proposed time, a player who
+              can't make it) come first; lobby setup and reporting follow,
+              with their own anchor for the scoreboard's jump. */}
           <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-            <div className="min-w-0">
+            <div className="min-w-0 empty:hidden">
               <RescheduleSection match={match} />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 empty:hidden">
               <StandinSection
                 match={match}
                 seriesStarted={games.length > 0}
               />
             </div>
           </div>
+          <div id={MATCH_ANCHOR.report} className="scroll-mt-24">
+            <ReportResultSection match={match} renderedAt={renderedAt} />
+          </div>
         </section>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * One line per thing waiting on this captain, each linking to the card that
+ * answers it: a player on their roster who can't make it and has no cover, and
+ * a time the other captain proposed. Both cards sit inside Captain tools,
+ * below the scoreboard and any box scores; without this a captain arriving
+ * from a Discord ping had to scroll a phone-height or more to learn anything
+ * was waiting. Each line uses the same capability gate as its card, so it
+ * never points at a card that isn't there.
+ */
+async function CaptainTodos({
+  match,
+  viewerId,
+}: {
+  match: {
+    id: string;
+    seasonId: string;
+    status: string;
+    scheduleRevision: number;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeam: { captainId: string };
+    awayTeam: { captainId: string };
+    season: { isActive: boolean; status: string };
+    standins: { replaced: { id: string } | null }[];
+  };
+  viewerId: string;
+}) {
+  const myTeamId =
+    match.homeTeam.captainId === viewerId
+      ? match.homeTeamId
+      : match.awayTeam.captainId === viewerId
+        ? match.awayTeamId
+        : null;
+  if (!myTeamId || !match.season.isActive) return null;
+  const [draft, roster, outRows, pending] = await Promise.all([
+    prisma.draft.findUnique({
+      where: { seasonId: match.seasonId },
+      select: { status: true },
+    }),
+    prisma.teamMember.findMany({
+      where: { seasonId: match.seasonId, teamId: myTeamId },
+      select: { userId: true, user: { select: { name: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.matchAvailability.findMany({
+      where: {
+        matchId: match.id,
+        status: "OUT",
+        scheduleRevision: match.scheduleRevision,
+      },
+      select: { userId: true },
+    }),
+    prisma.rescheduleRequest.findFirst({
+      where: {
+        matchId: match.id,
+        status: "PENDING",
+        proposedById: { not: viewerId },
+      },
+      select: { proposedTime: true, proposedBy: { select: { name: true } } },
+    }),
+  ]);
+  const uncoveredOut = standinAssignmentOpen(
+    match.season.status,
+    draft?.status,
+    match.status,
+  )
+    ? coverChoices(
+        roster,
+        new Set(outRows.map((r) => r.userId)),
+        new Set(
+          match.standins.flatMap((s) => (s.replaced ? [s.replaced.id] : [])),
+        ),
+      )
+        .choices.filter((c) => c.out)
+        .map((c) => c.member.user.name)
+    : [];
+  const answer =
+    pending &&
+    matchLogisticsOpen(match.season.status, draft?.status, match.status)
+      ? pending
+      : null;
+  if (uncoveredOut.length === 0 && !answer) return null;
+  return (
+    <ul
+      aria-label="Waiting on you"
+      className="space-y-2 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-4 py-3 text-sm"
+    >
+      {uncoveredOut.length > 0 ? (
+        <li className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+            <span aria-hidden>✗ </span>
+            <strong>{uncoveredOut.join(", ")}</strong>{" "}
+            {uncoveredOut.length === 1
+              ? "can't make it and has no cover yet."
+              : "can't make it and have no cover yet."}
+          </span>
+          <a
+            href={`#${MATCH_ANCHOR.standins}`}
+            className={textLink("shrink-0 font-medium")}
+          >
+            Find a standin <span aria-hidden>↓</span>
+          </a>
+        </li>
+      ) : null}
+      {answer ? (
+        <li className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+            <span aria-hidden>⏳ </span>
+            <strong>{answer.proposedBy.name}</strong> proposed moving this
+            match to{" "}
+            <strong>
+              <LocalTime
+                ts={answer.proposedTime.getTime()}
+                variant="full"
+                initial={formatMatchTime(answer.proposedTime, "full")}
+              />
+            </strong>
+            .
+          </span>
+          <a
+            href={`#${MATCH_ANCHOR.reschedule}`}
+            className={textLink("shrink-0 font-medium")}
+          >
+            Answer <span aria-hidden>↓</span>
+          </a>
+        </li>
+      ) : null}
+    </ul>
   );
 }
 
@@ -2107,7 +2263,7 @@ async function StandinSection({
   if (!assignOpen && assignments.length === 0) return null;
 
   return (
-    <Card>
+    <Card id={MATCH_ANCHOR.standins} className="scroll-mt-24">
       <CardHeader
         title="Standins"
         subtitle="Someone can't make it? Line up cover from the standin pool yourself — the assignment announces to Discord."
@@ -2308,7 +2464,7 @@ async function RescheduleSection({
   if (isCaptain && pending) {
     const mine = pending.proposedById === viewer!.id;
     return (
-      <Card>
+      <Card id={MATCH_ANCHOR.reschedule} className="scroll-mt-24">
         <CardHeader
           title="Reschedule locked"
           subtitle="This match can no longer be moved. You can close the stranded proposal so it does not look actionable."
@@ -2345,7 +2501,10 @@ async function RescheduleSection({
   // spectators/scouts aren't blindsided by a moved match.
   if (!pending) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted">
+    <div
+      id={MATCH_ANCHOR.reschedule}
+      className="flex scroll-mt-24 flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted"
+    >
       <span aria-hidden>⏳</span>
       <span>
         Reschedule proposed —{" "}
@@ -2398,7 +2557,7 @@ async function RescheduleCard({
   const mine = pending?.proposedById === viewerId;
 
   return (
-    <Card>
+    <Card id={MATCH_ANCHOR.reschedule} className="scroll-mt-24">
       <CardHeader
         title="Reschedule"
         subtitle={
