@@ -108,6 +108,41 @@ export function shortTeams<T extends { withdrawn: boolean; members: readonly unk
     .map((team) => ({ team, missing: teamSize - team.members.length }));
 }
 
+/**
+ * The people match-night pings are for who haven't linked Discord: players on
+ * teams still in the season, plus standins booked on an unplayed match. A
+ * withdrawn team plays no more fixtures, and a played booking needs no ping.
+ * Anyone counted twice (a released player now booked as cover) counts once.
+ */
+export function unlinkedRosterCount(
+  teams: readonly {
+    withdrawn: boolean;
+    members: readonly { userId: string; user: { discordId: string | null } }[];
+  }[],
+  assignments: readonly {
+    matchId: string;
+    standinUserId: string;
+    standin: { discordId: string | null };
+  }[],
+  openMatchIds: ReadonlySet<string>,
+): number {
+  return new Set([
+    ...teams
+      .filter((team) => !team.withdrawn)
+      .flatMap((team) =>
+        team.members
+          .filter((member) => member.user.discordId == null)
+          .map((member) => member.userId),
+      ),
+    ...assignments
+      .filter(
+        (booking) =>
+          openMatchIds.has(booking.matchId) && booking.standin.discordId == null,
+      )
+      .map((booking) => booking.standinUserId),
+  ]).size;
+}
+
 /** One Needs attention line and the /admin section that fixes it. */
 export type AttentionItem = { key: string; text: string; href: string };
 
@@ -155,13 +190,13 @@ export function adminAttention(input: AdminAttentionInput): AttentionItem[] {
       input.seasonStatus === SEASON_STATUS.REGULAR_SEASON ||
       input.seasonStatus === SEASON_STATUS.PLAYOFFS);
   if (rostersLive) {
-    for (const team of input.shortTeams) {
+    input.shortTeams.forEach((team, index) => {
       items.push({
-        key: `short-${team.name}`,
+        key: `short-${index}`,
         text: `${team.name} ${team.missing === 1 ? "is a player" : `is ${team.missing} players`} short. Sign a free agent, or book a standin for the empty seat.`,
         href: "#adm-roster",
       });
-    }
+    });
   }
   input.standinClashes.forEach((clash, index) =>
     items.push({

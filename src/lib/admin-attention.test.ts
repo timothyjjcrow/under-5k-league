@@ -7,6 +7,7 @@ import {
   outStandins,
   shortTeams,
   standinClashes,
+  unlinkedRosterCount,
   type AdminAttentionInput,
 } from "./admin-attention";
 
@@ -172,6 +173,42 @@ describe("shortTeams", () => {
   });
 });
 
+describe("unlinkedRosterCount", () => {
+  const member = (userId: string, discordId: string | null = null) => ({
+    userId,
+    user: { discordId },
+  });
+  const booking = (
+    matchId: string,
+    standinUserId: string,
+    discordId: string | null = null,
+  ) => ({ matchId, standinUserId, standin: { discordId } });
+
+  it("counts unlinked players on live teams and standins owed on an open match, once each", () => {
+    expect(
+      unlinkedRosterCount(
+        [
+          {
+            withdrawn: false,
+            members: [member("p1"), member("p2", "d2"), member("p3")],
+          },
+          // A withdrawn team plays no more fixtures, so nobody pings it.
+          { withdrawn: true, members: [member("gone")] },
+        ],
+        [
+          booking("open", "s1"),
+          booking("open", "s2", "d-s2"),
+          // Cover on a played match needs no ping.
+          booking("played", "s3"),
+          // A released player now booked as cover counts once.
+          booking("open", "p1"),
+        ],
+        new Set(["open"]),
+      ),
+    ).toBe(3);
+  });
+});
+
 describe("adminAttention", () => {
   const base: AdminAttentionInput = {
     seasonStatus: "REGULAR_SEASON",
@@ -251,6 +288,18 @@ describe("adminAttention", () => {
     expect(drafted.map((item) => item.text)).toEqual([
       "1 rostered player or standin hasn't linked Discord, so pings can't reach them.",
     ]);
+  });
+
+  it("keys short-team lines uniquely even when two teams share a name", () => {
+    const items = adminAttention({
+      ...base,
+      shortTeams: [
+        { name: "Couriers", missing: 1 },
+        { name: "Couriers", missing: 2 },
+      ],
+    });
+    expect(items).toHaveLength(2);
+    expect(new Set(items.map((item) => item.key)).size).toBe(2);
   });
 
   it("drops roster and Discord chasing once the season is complete, keeping champion problems", () => {

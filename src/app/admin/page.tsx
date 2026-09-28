@@ -6,6 +6,7 @@ import {
   outStandins,
   shortTeams,
   standinClashes,
+  unlinkedRosterCount,
 } from "@/lib/admin-attention";
 import { cache, Suspense } from "react";
 import { SectionNav, SectionReady } from "@/components/section-nav";
@@ -1240,21 +1241,6 @@ function AdminAttention({
     season.status === SEASON_STATUS.REGULAR_SEASON ||
     season.status === SEASON_STATUS.PLAYOFFS ||
     season.status === SEASON_STATUS.COMPLETE;
-  // Rostered players plus standins still owed on an unplayed match: the
-  // people match-night pings are for.
-  const unlinkedRostered = new Set([
-    ...data.teams.flatMap((team) =>
-      team.members
-        .filter((member) => member.user.discordId == null)
-        .map((member) => member.userId),
-    ),
-    ...data.assignments
-      .filter(
-        (booking) =>
-          openIds.has(booking.matchId) && booking.standin.discordId == null,
-      )
-      .map((booking) => booking.standinUserId),
-  ]).size;
   const items = adminAttention({
     seasonStatus: season.status,
     draftComplete: rostersLive,
@@ -1278,7 +1264,7 @@ function AdminAttention({
     ),
     championIssue: resolveChampionPresentation(season, data.matches).issue,
     unlinkedSignups: data.unlinkedDiscord,
-    unlinkedRostered,
+    unlinkedRostered: unlinkedRosterCount(data.teams, data.assignments, openIds),
   });
   const matches = matchAttention(data.matches);
   // A section folded into the season record, or not shown this phase, has no
@@ -5047,7 +5033,7 @@ function AutomationRunnerDetails({
         />
       </StatStrip>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-line bg-surface-2/30 p-4">
           <h4 className="font-medium text-fg">Latest run</h4>
           {health.signals.length > 0 ? (
@@ -5826,18 +5812,6 @@ async function MembershipChip({
 }
 
 /**
- * The denominator under every notification the league sends. Personal
- * mentions, the un-RSVP'd ping and the opt-in role all silently skip anyone
- * who never linked Discord — so this is the number that says whether that
- * machinery reaches the league or a handful of people.
- *
- * With a bot configured it also renders the step linking cannot prove: who is
- * actually IN the server. A linked non-member is the deceptive cohort — they
- * wear the verified ✓ on every roster while every mention misses them — and
- * chasing them BEFORE the draft is the whole point of the funnel, because
- * after it they're on rosters that need to schedule with them.
- */
-/**
  * Who league announcements and pings can reach, who they can't, and one post
  * that chases the rest. Only the webhooks and bot setup stay in the collapsed
  * Discord notifications section.
@@ -5864,6 +5838,18 @@ async function DiscordReachCard({ seasonId }: { seasonId: string }) {
   );
 }
 
+/**
+ * The denominator under every notification the league sends. Personal
+ * mentions, the un-RSVP'd ping and the opt-in role all silently skip anyone
+ * who never linked Discord — so this is the number that says whether that
+ * machinery reaches the league or a handful of people.
+ *
+ * With a bot configured it also renders the step linking cannot prove: who is
+ * actually IN the server. A linked non-member is the deceptive cohort — they
+ * wear the verified ✓ on every roster while every mention misses them — and
+ * chasing them BEFORE the draft is the whole point of the funnel, because
+ * after it they're on rosters that need to schedule with them.
+ */
 function DiscordReachLine({ reach }: { reach: DiscordReachFunnel }) {
   const pct = Math.round((reach.linked / reach.registered) * 100);
   // Below half, the useful next move is chasing links rather than building
