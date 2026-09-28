@@ -93,9 +93,11 @@ export function ProfilePerformance({
                 ) : null}
               </div>
               {kdaByGame.length >= 2 ? (
-                /* max-w-md: full width, justify-between held ~700px of
-                   dead middle between label and sparkline at desktop. */
-                <div className="flex max-w-md items-center justify-between gap-4 rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
+                /* Full width, like the tiles above and the Standout game
+                   below (a max-w-md box left a ragged right edge), with the
+                   sparkline beside its label rather than justify-between,
+                   which held ~700px of dead middle at desktop. */
+                <div className="flex items-center gap-6 rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
                   <div>
                     <div className="text-xs font-medium uppercase tracking-wide text-muted">
                       KDA by game
