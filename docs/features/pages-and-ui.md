@@ -309,6 +309,11 @@ the league is already draftable and many visitors have joined. Write for both.
   the gap colour, so an empty cell showed as a grey block.
 - **The section title and the team filter share a row** (`ScheduleWeeks
   heading`); each card names its status in words, so there is no dot legend.
+- **The team filter holds a pick until the URL catches up.** The URL is the
+  source of truth, but the router applies `pushState` in a transition and a
+  controlled `<select>` snapped back to its old value meanwhile (the pick
+  flickered to "All teams"; `e2e-mid/quality-of-life.spec.ts` reads it back
+  at once).
 - **The jump bar** (`SectionNav`, in page order) lists what the phase renders
   when there are three or more sections; the regular season hides it from
   `xl`, where the rail shows the standings.
@@ -436,6 +441,24 @@ the league is already draftable and many visitors have joined. Write for both.
   Create/Start in Captain tools; other players, booked standins and admins get
   `lobby-panel.tsx` (`seesPlayerLobbyPanel`, `lobby-access.ts`, matching who
   `resolveDotaLobby` lets view it).
+- **The scoreboard is one row from `lg`:** name, crest, score, crest, name
+  (`TeamSide side`, the crest beside the score). Below `lg` each crest sits
+  over its name, as long names need the width.
+- **A box score line is `BoxScoreLine`** (`box-score-line.tsx`, the page's
+  one client piece of a box score): the server renders every part and the
+  line lays them out. Each side is an `@container`; from `@lg` a player is
+  one line (hero, name, gpm, lh, net worth, KDA at a fixed width so the bars
+  line up). The report chip sits on the hero line and is a button whose
+  metrics open as a row under the whole line; a `<details>` kept chip and
+  metrics in one box, so the chip needed a line of its own.
+- **The recorded net-worth bar sits between the two totals from `sm`** (grid
+  placement, so the reading order stays Radiant, bar, Dire); a phone stacks
+  the totals over a full-width bar.
+- **The preview's Matchup and Scouting report stay full width, one above the
+  other.** Each is split home | away inside, and their heights follow the
+  data (check-ins, comfort picks), so side by side from `xl` left a hole
+  under whichever was shorter. A team header lets its form strip wrap under
+  a long name.
 - **Both captains always get a "How to host" line built from data**
   (`src/lib/match-hosting.ts`, tested): the home captain hosts,
   `LEAGUE_CONFIG.gameServerRegion`, `LEAGUE_GAME_MODE` (the mode the lobby bot

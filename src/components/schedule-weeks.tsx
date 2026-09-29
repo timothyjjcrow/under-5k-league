@@ -106,12 +106,23 @@ export function ScheduleWeeks({
   heading?: ReactNode;
 }) {
   const params = useSearchParams();
-  const filterTeam = scheduleFilterTeamId(
+  const urlTeam = scheduleFilterTeamId(
     params.get("team"),
     initialTeamId,
     teams.map((team) => team.id),
   );
+  // The URL is the source of truth, but the router applies a pushState in a
+  // transition, and a controlled <select> snaps back to its old value until
+  // then: the pick flickered to "All teams" first. Hold the pick until the
+  // URL moves off the value it was made from (it caught up, or Back).
+  const [picked, setPicked] = useState<{
+    team: string | null;
+    from: string | null;
+  } | null>(null);
+  if (picked && picked.from !== urlTeam) setPicked(null);
+  const filterTeam = picked ? picked.team : urlTeam;
   const setFilterTeam = (team: string | null) => {
+    setPicked({ team, from: urlTeam });
     const url = new URL(window.location.href);
     url.searchParams.set("team", team ?? "all");
     window.history.pushState(null, "", url.pathname + url.search + url.hash);

@@ -149,13 +149,14 @@ export async function MatchGames({
               id={`game-${g.id}`}
               className="group/game scroll-mt-24"
             >
-              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-4 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
                 <div className="min-w-0 flex-1 basis-48">
-                  <h2 className="text-base font-semibold leading-snug text-fg">
+                  {/* Sized like a CardHeader title, as Game 1's is. */}
+                  <h2 className="text-[0.9375rem] font-semibold leading-snug text-fg">
                     Game {i + 1}
                   </h2>
                   {gameLine ? (
-                    <p className="mt-1.5 text-sm text-muted">{gameLine}</p>
+                    <p className="mt-0.5 text-[13px] text-muted">{gameLine}</p>
                   ) : null}
                 </div>
                 <span className="flex min-w-0 items-center gap-3">
@@ -171,7 +172,7 @@ export async function MatchGames({
                 </span>
               </summary>
               <div className="border-t border-line-soft">
-                <p className="flex justify-end px-5 pt-4">{openDota}</p>
+                <p className="flex justify-end px-4 pt-3">{openDota}</p>
                 {boxScore}
               </div>
             </AutoOpenDetails>

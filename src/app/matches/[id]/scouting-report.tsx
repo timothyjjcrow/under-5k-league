@@ -109,12 +109,12 @@ export async function ScoutingReport({
         openFromWidth="64rem"
         className="group/scouting scroll-mt-24"
       >
-        <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-4 py-3 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold leading-snug text-fg">
+            <h2 className="text-[0.9375rem] font-semibold leading-snug text-fg">
               Scouting report
             </h2>
-            <p className="mt-1.5 text-sm leading-relaxed text-muted">
+            <p className="mt-0.5 text-[13px] leading-relaxed text-muted">
               Heroes played twice or more in league games
             </p>
           </div>

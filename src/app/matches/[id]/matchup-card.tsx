@@ -88,7 +88,9 @@ export function MatchupCard({
       <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {sides.map((s) => (
           <div key={s.teamId} className="rounded-lg border border-line p-3">
-            <div className="mb-2.5 flex items-center justify-between gap-2">
+            {/* flex-wrap: a long name keeps its line and the form drops
+                under it, rather than both squeezing. */}
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
               <Link
                 href={`/teams/${s.teamId}`}
                 className="flex min-w-0 items-center gap-2 font-display text-base font-semibold hover:text-info"
@@ -104,7 +106,9 @@ export function MatchupCard({
                   {s.name}
                 </span>
               </Link>
-              {s.form.length > 0 ? <FormStrip form={s.form} /> : null}
+              {s.form.length > 0 ? (
+                <FormStrip form={s.form} size={5} className="ml-auto" />
+              ) : null}
             </div>
             {/* Its own line, not squeezed into the captain's roster row,
                 which already truncates the name on a phone. */}
@@ -259,7 +263,7 @@ export function MatchupCard({
             logoUrl: match.awayTeam.logoUrl,
           }}
           locksAt={match.scheduledAt?.getTime() ?? null}
-          className="border-t border-line-soft px-5 py-4"
+          className="border-t border-line-soft px-4 py-3"
         />
       ) : null}
     </Card>

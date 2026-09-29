@@ -98,7 +98,7 @@ export default async function MatchDetailPage({
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* A small back link, not a title block: the scoreboard below is the
           page's visible title, so a phone reaches it without scrolling past
           the team names printed twice. The destination still follows how
@@ -225,7 +225,7 @@ export default async function MatchDetailPage({
 
       <section
         id="match-games"
-        className="scroll-mt-24 space-y-6"
+        className="scroll-mt-24 space-y-5"
         aria-label={hasPreview ? "Match preview" : "Match games"}
       >
         {games.length === 0 && match.status !== "COMPLETED" ? (

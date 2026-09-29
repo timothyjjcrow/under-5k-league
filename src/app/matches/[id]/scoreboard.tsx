@@ -89,7 +89,7 @@ export async function MatchScoreboard({
           backgroundColor: `hsl(${teamHueVar(match.awayTeamId)} 70% 50% / 0.24)`,
         }}
       />
-      <CardBody className="relative space-y-6 px-3 py-6 sm:px-6 sm:py-8">
+      <CardBody className="relative space-y-4 px-3 py-5 sm:space-y-5 sm:px-6 sm:py-6">
         {/* The page's h1 names the fixture, like its tab title and link
             preview, so someone moving by headings knows which match this
             is. On screen the team names right below say the same. */}
@@ -129,6 +129,7 @@ export async function MatchScoreboard({
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-8">
           <TeamSide
+            side="home"
             name={match.homeTeam.name}
             teamId={match.homeTeamId}
             logoUrl={match.homeTeam.logoUrl}
@@ -182,6 +183,7 @@ export async function MatchScoreboard({
             </span>
           </div>
           <TeamSide
+            side="away"
             name={match.awayTeam.name}
             teamId={match.awayTeamId}
             logoUrl={match.awayTeam.logoUrl}
@@ -282,22 +284,36 @@ export async function MatchScoreboard({
   );
 }
 
+/**
+ * A team's crest and name. Stacked (crest over name) up to lg; from lg they
+ * sit side by side with the crest next to the score, mirrored for the away
+ * side, so the scoreboard is one row of name, crest, score, crest, name.
+ */
 function TeamSide({
+  side,
   name,
   teamId,
   logoUrl,
   win,
 }: {
+  side: "home" | "away";
   name: string;
   teamId: string;
   logoUrl: string | null;
   win: boolean;
 }) {
   return (
-    <div className="flex min-w-0 flex-col items-center gap-3 self-stretch text-center">
+    <div
+      className={cn(
+        "flex min-w-0 flex-col items-center gap-3 self-stretch text-center lg:gap-4 lg:self-center",
+        side === "home"
+          ? "lg:flex-row-reverse lg:text-right"
+          : "lg:flex-row lg:text-left",
+      )}
+    >
       <div
         className={cn(
-          "rounded-2xl border p-2 shadow-lg shadow-black/15",
+          "shrink-0 rounded-2xl border p-2 shadow-lg shadow-black/15",
           win ? "border-accent/40 bg-accent/5" : "border-line/60 bg-surface/60",
         )}
       >
@@ -312,7 +328,7 @@ function TeamSide({
       </div>
       <Link
         href={`/teams/${teamId}`}
-        className="min-h-11 max-w-full content-center font-display text-base font-semibold leading-tight text-fg [overflow-wrap:anywhere] hover:text-info sm:text-2xl"
+        className="min-h-11 min-w-0 max-w-full content-center font-display text-base font-semibold leading-tight text-fg [overflow-wrap:anywhere] hover:text-info sm:text-2xl"
       >
         {name}
       </Link>
