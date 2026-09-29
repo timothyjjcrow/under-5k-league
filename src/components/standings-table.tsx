@@ -98,7 +98,7 @@ export function StandingsTableView({
         {STANDINGS_RULES}
       </caption>
       <colgroup>
-        <col className="w-10 sm:w-14" />
+        <col className="w-10 sm:w-[4.5rem]" />
         <col />
         <col className="w-14 sm:w-20" />
         <col className="w-10 sm:w-14" />
@@ -149,31 +149,35 @@ export function StandingsTableView({
                   isViewer && "bg-info/[0.07]",
                 )}
               >
-                <td className="py-3 pl-4 pr-1 sm:pl-5 sm:pr-2">
-                  <span
-                    className={cn(
-                      "block font-display text-lg leading-none tabular-nums",
-                      inCut ? "font-medium text-success" : "text-muted",
-                    )}
-                  >
-                    {row.rank}
-                  </span>
-                  {row.move !== 0 ? (
+                <td className="py-2.5 pl-4 pr-1 sm:py-2 sm:pl-5 sm:pr-2">
+                  {/* From sm the movement sits beside the rank, not under
+                      it, so a team that moved keeps a one-line row. */}
+                  <span className="flex flex-col sm:flex-row sm:items-baseline sm:gap-1.5">
                     <span
-                      role="img"
-                      aria-label={`${row.move > 0 ? "up" : "down"} ${Math.abs(row.move)} from last week`}
-                      title={`${row.move > 0 ? "Up" : "Down"} ${Math.abs(row.move)} from last week`}
                       className={cn(
-                        "mt-1.5 block whitespace-nowrap text-xs font-semibold",
-                        row.move > 0 ? "text-success" : "text-danger",
+                        "block font-display text-lg leading-none tabular-nums",
+                        inCut ? "font-medium text-success" : "text-muted",
                       )}
                     >
-                      <span aria-hidden>
-                        {row.move > 0 ? "▲" : "▼"}
-                        {Math.abs(row.move)}
-                      </span>
+                      {row.rank}
                     </span>
-                  ) : null}
+                    {row.move !== 0 ? (
+                      <span
+                        role="img"
+                        aria-label={`${row.move > 0 ? "up" : "down"} ${Math.abs(row.move)} from last week`}
+                        title={`${row.move > 0 ? "Up" : "Down"} ${Math.abs(row.move)} from last week`}
+                        className={cn(
+                          "mt-1.5 block whitespace-nowrap text-xs font-semibold sm:mt-0",
+                          row.move > 0 ? "text-success" : "text-danger",
+                        )}
+                      >
+                        <span aria-hidden>
+                          {row.move > 0 ? "▲" : "▼"}
+                          {Math.abs(row.move)}
+                        </span>
+                      </span>
+                    ) : null}
+                  </span>
                   {hasSeedProjection ? (
                     <span className="sr-only">
                       {row.tiebreakerPending
@@ -186,7 +190,7 @@ export function StandingsTableView({
                     </span>
                   ) : null}
                 </td>
-                <th scope="row" className="px-2 py-3 text-left font-normal">
+                <th scope="row" className="px-2 py-2.5 text-left font-normal sm:py-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <TeamCrest
                       name={row.name}
@@ -195,7 +199,10 @@ export function StandingsTableView({
                       size={24}
                       className="shrink-0 rounded-md"
                     />
-                    <div className="min-w-0 flex-1">
+                    {/* From sm the status rides beside the name while
+                        both fit, and wraps under it when they don't: one
+                        line per team on a desktop table instead of two. */}
+                    <div className="min-w-0 flex-1 sm:flex sm:flex-wrap sm:items-center sm:gap-x-3">
                       {/* One line, truncated: on a phone the fixed columns
                           leave the name ~90px, and a wrapping name stacked a
                           long team onto five lines. The full name is the
@@ -215,7 +222,7 @@ export function StandingsTableView({
                     </div>
                   </div>
                 </th>
-                <td className="px-1 py-3 text-center font-mono text-xs tabular-nums sm:px-2">
+                <td className="px-1 py-2.5 text-center font-mono text-xs tabular-nums sm:px-2 sm:py-2">
                   <span
                     role="img"
                     aria-label={`${row.wins} won, ${row.draws} drawn, ${row.losses} lost`}
@@ -226,19 +233,19 @@ export function StandingsTableView({
                     </span>
                   </span>
                 </td>
-                <td className="px-1 py-3 text-center font-mono text-xs tabular-nums text-muted sm:px-2">
+                <td className="px-1 py-2.5 text-center font-mono text-xs tabular-nums text-muted sm:px-2 sm:py-2">
                   {row.gameDiff > 0 ? `+${row.gameDiff}` : row.gameDiff}
                 </td>
                 <td
                   className={cn(
-                    "py-3 text-right font-display text-xl font-semibold tabular-nums",
+                    "py-2.5 text-right font-display text-xl font-semibold tabular-nums sm:py-2",
                     pointsPad,
                   )}
                 >
                   {row.points}
                 </td>
                 {hasForm ? (
-                  <td className="hidden py-3 pl-2 pr-4 sm:table-cell sm:pr-5">
+                  <td className="hidden py-2 pl-2 pr-4 sm:table-cell sm:pr-5">
                     <span className="flex justify-center">
                       {row.form?.length ? (
                         <FormStrip form={row.form.slice(0, 5)} size={4} />
@@ -310,7 +317,7 @@ function StatusLine({
   const tied = row.idDecided && !row.tiebreakerPending;
   if (!status && !isViewer && !tied && !row.tiebreakerResolved) return null;
   return (
-    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium leading-tight">
+    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium leading-tight sm:my-0.5">
       {status}
       {isViewer ? (
         // Neutral on purpose: blue text reads as a link on this site.

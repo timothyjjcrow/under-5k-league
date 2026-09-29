@@ -92,8 +92,17 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **A fixed two-column split sizes its row to the TALLER column,** leaving a
   hole under the shorter one that looks fine in review. Use one of:
 - **Known card count: an explicit grid, and never a short card beside a tall
-  one.** Home's standings take the full width. Where a short card must sit by a
-  taller one (the COMPLETE view), use `items-start` so it does not stretch.
+  one.** Where a short card must sit by a taller one (the COMPLETE view), use
+  `items-start` so it does not stretch.
+- **A page column plus a rail** (Home from `xl`:
+  `xl:grid-cols-[minmax(0,1fr)_21rem]`) is two STACKS, not two cards: each
+  column is a `space-y-*` list, the grid is `items-start`, and a block that
+  must follow the first column on desktop but the rail on a phone uses
+  `xl:grid-rows-[auto_1fr]` with the rail `xl:row-span-2`, so a tall rail's
+  extra height lands under the last block instead of between two.
+- **Let a list card size its own columns with a container query** (`@container`
+  on the card, `@xl:grid-cols-2` on the list) when the same card sits in a
+  21rem rail and a full-width band: one column in the rail, two when wide.
 - **Unknown card count: auto-fit,**
   `grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]`.
   Empty tracks collapse, so no conditional spans. Use it for odd or varying
@@ -114,7 +123,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   (`StandingsTableView`, `src/components/standings-table.tsx`) is
   `table-fixed` with a responsive `<colgroup>` so Team truncates. Fixed layout
   still gives a `hidden sm:table-cell` column a share of leftover width, so
-  hidden columns get `w-0 sm:w-*` cols.
+  hidden columns get `w-0 sm:w-*` cols. From `sm` a row's status chips wrap
+  beside the name (flex-wrap, so they drop under it only when both don't fit)
+  and the movement arrow sits beside the rank: one line per team on a
+  desktop, two on a phone.
 - **Every flex level between a container and a `truncate` span needs
   `min-w-0`,** and so do flex-wrap chips, or a long name widens the page.
 - **`CheckinBanner`'s strip text has `min-w-[14rem]`** so RSVP buttons wrap
@@ -205,23 +217,37 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   identity column takes the full width. **Anything passed as `aside` must
   render something** (a present-but-empty aside leaves a 23rem hole), which is
   why `MyNextMatch` has a no-match branch and `SignupsAside` always renders. In
-  the regular season, meta takes the right column and the aside the row below.
+  the regular season the aside takes the right half and the progress (meta)
+  rides under the title; with no aside, meta takes the right half.
 - **The slot addresses the viewer.** Mid-season: `MyNextMatch` (their next
   check-in, `<CheckinBanner variant="panel">`), or for someone with no team and
   no signup, the late standin signup plus the inhouse queue. COMPLETE: only
   "Relive the season"; the champion card below is the page's one champion
   block.
-- **`SeasonViewSkeleton` mirrors the season bands;** change both together or
-  the page rearranges after streaming.
+- **The regular season is two columns from `xl`:** This week and the
+  standings, then the honors line and the news under them; the rail holds the
+  Your team / Coming up / Recent results band and the side games. The
+  playoffs stay one column, because the two-sided bracket needs the full
+  width. Below `xl` everything is one column in that order, rail before the
+  honors and news.
+- **`SeasonViewSkeleton` mirrors the season bands** (`playoffs` picks the
+  one-column shape); change both together or the page rearranges after
+  streaming.
+- **The inhouse queue is a side-game tile mid-season** (`InhouseStrip
+  variant="tile"`, the live line), and ends the COMPLETE view's rail; the
+  other phases keep the full-width strip after the view.
 - **Show a fixture once per job.** `focusSlate` (`schedule.ts`) is This week's
   slate; "Coming up" is the open matches minus that slate, so no match is in
   both.
 - **This week** shows kickoffs, standin-aware check-in counts (shared
   `matchNightRoster`, as on `/schedule`) and a compact `PlayoffOutlook` for a
   side whose `nextMatchId` is that fixture.
+- **This week faces a lone fixture's sides off** (home left, away right,
+  "vs" or the live score between) instead of stretching one card built for a
+  third of the width across all of it.
 - **The Your team card** shows only the stakes of the next series (the table
   already highlights rank and record), aligned to the engine's `nextMatchId`
-  and naming the opponent. It sits in the auto-fit band under the standings
+  and naming the opponent. It sits in the auto-fit band (the rail from `xl`)
   and stands down when This week already prints that series.
   `dashboard-guards.test.ts` pins both.
 - **`WeeklyHonorsLine`** renders only official honors (the readiness rows
@@ -231,8 +257,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   plus the Needs attention count (`adminHomeLine`). Feed `adminNextStep` and
   `matchAttention` the same inputs as `/admin` or they drift. Database reads
   only, never Discord.
-- **PLAYOFFS shows a compact bracket; COMPLETE a champion card and "How it was
-  won".** Round grouping is pure `slotRound`/`groupPlayoffRounds`
+- **PLAYOFFS shows a compact bracket; COMPLETE a champion banner (crest beside
+  the story) and "How it was won".** `<Bracket>` centres itself when its card
+  is wider than it. Round grouping is pure `slotRound`/`groupPlayoffRounds`
   (`schedule.ts`), shared with `/schedule`.
 
 ### The SIGNUPS view

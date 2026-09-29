@@ -93,7 +93,10 @@ export function Bracket({
       }}
       className="overflow-x-auto rounded-lg pb-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
     >
-      <div className="flex min-w-max items-stretch">
+      {/* Centred when the card is wider than the bracket (auto margins
+          fall to zero when it is narrower, so it still scrolls from its
+          first round). */}
+      <div className="mx-auto flex w-max min-w-max items-stretch">
         {left.map((round, c) => (
           <WingColumn
             key={`L${c}`}

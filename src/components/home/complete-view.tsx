@@ -1,5 +1,6 @@
 import type { Match } from "@prisma/client";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Bracket } from "@/components/bracket";
 import { SeriesRecord } from "@/components/series-record";
 import { StandingsTable } from "@/components/standings-table-server";
@@ -46,10 +47,13 @@ export async function CompleteView({
   snapshot,
   matches,
   championPresentation,
+  rail,
 }: {
   snapshot: SeasonSnapshot;
   matches: Match[];
   championPresentation: ChampionPresentation;
+  /** Home's own sections that end the rail (news, the inhouse queue). */
+  rail?: ReactNode;
 }) {
   const { teams, season } = snapshot;
   const champion = teams.find(
@@ -91,20 +95,17 @@ export async function CompleteView({
     : undefined;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* The champion as a banner: the crest beside the story rather than
+          stacked over it, which stood about 310px tall on a desktop. */}
       <Card className="relative overflow-hidden">
         <div
           aria-hidden
-          className="pointer-events-none absolute left-1/2 top-0 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-400/15 blur-3xl"
+          className="pointer-events-none absolute left-1/2 top-0 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-400/15 blur-3xl sm:left-16 sm:translate-x-0"
         />
-        <CardBody className="relative flex flex-col items-center gap-3 py-10 text-center">
-          <div className="text-xs font-medium uppercase tracking-[0.2em] text-amber-300/90">
-            {champion
-              ? `${season.name} Champion`
-              : `${season.name} · review needed`}
-          </div>
+        <CardBody className="relative flex flex-col items-center gap-3 py-6 text-center sm:flex-row sm:items-center sm:gap-6 sm:px-6 sm:text-left">
           {champion ? (
-            <div className="relative">
+            <div className="relative shrink-0">
               <TeamCrest
                 name={champion.name}
                 seed={champion.id}
@@ -120,60 +121,76 @@ export async function CompleteView({
               </span>
             </div>
           ) : (
-            <div aria-hidden className="text-4xl">
+            <div aria-hidden className="shrink-0 text-4xl">
               ⚠️
             </div>
           )}
-          <div className="text-2xl font-bold">
-            {champion ? (
-              <Link href={`/teams/${champion.id}`} className="hover:text-info">
-                {champion.name}
-              </Link>
-            ) : (
-              "Champion needs review"
-            )}
+          <div className="flex min-w-0 flex-col items-center gap-1.5 sm:items-start">
+            <div className="text-xs font-medium uppercase tracking-[0.2em] text-amber-300/90">
+              {champion
+                ? `${season.name} Champion`
+                : `${season.name} · review needed`}
+            </div>
+            <div className="text-2xl font-bold [overflow-wrap:anywhere]">
+              {champion ? (
+                <Link href={`/teams/${champion.id}`} className="hover:text-info">
+                  {champion.name}
+                </Link>
+              ) : (
+                "Champion needs review"
+              )}
+            </div>
+            {!champion ? (
+              <p className="max-w-xl text-sm text-muted">
+                This season is marked complete without an authoritative champion.
+                {hasPostseason
+                  ? " League administrators need to return it to Playoffs and reconcile the existing grand final before a title is shown."
+                  : " No playoff bracket exists, so league administrators need to return it to Regular season, verify the table, and start a newly seeded bracket before a title is shown."}
+              </p>
+            ) : null}
+            {finalLine || championRow ? (
+              <p className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-sm text-muted sm:justify-start">
+                {finalLine ? (
+                  <span>
+                    Won the grand final{" "}
+                    <span className="font-medium text-fg">{finalLine.score}</span>
+                    {finalLine.loser ? ` over ${finalLine.loser}` : ""}
+                  </span>
+                ) : null}
+                {finalLine && championRow ? (
+                  <span aria-hidden className="text-line">
+                    •
+                  </span>
+                ) : null}
+                {championRow ? (
+                  <span>
+                    <span className="font-medium text-fg">
+                      <SeriesRecord record={championRow} />
+                    </span>{" "}
+                    regular season · {championRow.points} pts
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
+            {champion && champion.members.length > 0 ? (
+              // my-0 on the chips below: the py-0.5 orphans TAP_SAFE's -my-1
+              // through twMerge, so the chip reserves 8px less than it occupies
+              // (see teams/page.tsx for the measurement). The winning five's
+              // chips wrap on every phone, and this is the champion card.
+              <div className="mt-1 flex flex-wrap justify-center gap-1.5 sm:justify-start">
+                {champion.members.map((m) => (
+                  <PlayerLink
+                    key={m.id}
+                    userId={m.userId}
+                    className="my-0 flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
+                  >
+                    <Avatar name={m.user.name} src={m.user.avatar} size={20} />
+                    <span>{m.user.name}</span>
+                  </PlayerLink>
+                ))}
+              </div>
+            ) : null}
           </div>
-          {!champion ? (
-            <p className="max-w-xl text-sm text-muted">
-              This season is marked complete without an authoritative champion.
-              {hasPostseason
-                ? " League administrators need to return it to Playoffs and reconcile the existing grand final before a title is shown."
-                : " No playoff bracket exists, so league administrators need to return it to Regular season, verify the table, and start a newly seeded bracket before a title is shown."}
-            </p>
-          ) : null}
-          {finalLine ? (
-            <div className="text-sm text-muted">
-              Won the grand final{" "}
-              <span className="font-medium text-fg">{finalLine.score}</span>
-              {finalLine.loser ? ` over ${finalLine.loser}` : ""}
-            </div>
-          ) : null}
-          {championRow ? (
-            <div className="text-sm text-muted">
-              <span className="font-medium text-fg">
-                <SeriesRecord record={championRow} />
-              </span>{" "}
-              regular season · {championRow.points} pts
-            </div>
-          ) : null}
-          {champion && champion.members.length > 0 ? (
-            // my-0 on the chips below: the py-0.5 orphans TAP_SAFE's -my-1
-            // through twMerge, so the chip reserves 8px less than it occupies
-            // (see teams/page.tsx for the measurement). Centred chips for the
-            // winning five wrap on every phone, and this is the champion card.
-            <div className="mt-1 flex flex-wrap justify-center gap-1.5">
-              {champion.members.map((m) => (
-                <PlayerLink
-                  key={m.id}
-                  userId={m.userId}
-                  className="my-0 flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
-                >
-                  <Avatar name={m.user.name} src={m.user.avatar} size={20} />
-                  <span>{m.user.name}</span>
-                </PlayerLink>
-              ))}
-            </div>
-          ) : null}
         </CardBody>
       </Card>
 
@@ -187,9 +204,11 @@ export async function CompleteView({
       {/* items-start, not the default stretch: the "season lives on" card is a
           short list of links and the final table is the full league, so
           stretching the row drew a 1/3-width box of empty border beside it —
-          the COMPLETE twin of the void the mid-season deck used to have. */}
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
-        <div className="min-w-0 lg:col-span-2">
+          the COMPLETE twin of the void the mid-season deck used to have. The
+          rail matches the mid-season dashboard's, and carries Home's news
+          and the inhouse queue. */}
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_21rem]">
+        <div className="min-w-0">
           <Card>
             <CardHeader
               headingLevel={2}
@@ -213,7 +232,7 @@ export async function CompleteView({
             </CardBody>
           </Card>
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 space-y-5">
           <Card>
             <CardHeader
               headingLevel={2}
@@ -241,6 +260,7 @@ export async function CompleteView({
               </div>
             </CardBody>
           </Card>
+          {rail}
         </div>
       </div>
     </div>
