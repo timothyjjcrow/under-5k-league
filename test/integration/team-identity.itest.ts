@@ -324,7 +324,12 @@ describe("editTeamIdentity — the captain's own team page", () => {
       fd({ teamId: home.team.id, name: "Radiant Raccoons" }),
     );
     expect(first).toEqual({ message: "Saved Radiant Raccoons" });
-    // A second rename inside the window is announced too: every rename is.
+    // Captain renames are limited to one per team every couple of minutes;
+    // once that passes, the next rename is announced too: every rename is.
+    await prisma.setting.update({
+      where: { key: `teamRename:${home.team.id}` },
+      data: { value: new Date(Date.now() - 3 * 60_000).toISOString() },
+    });
     const second = await editTeamIdentity(
       empty,
       fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/d.png" }),
@@ -370,6 +375,81 @@ describe("editTeamIdentity — the captain's own team page", () => {
     expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(4);
   });
 
+  it("lets a captain rename once every couple of minutes, without holding anyone else back", async () => {
+    const { season, home, away } = await league();
+    signIn(home.user);
+    expect(
+      await editTeamIdentity(empty, fd({ teamId: home.team.id, name: "Radiant Raccoons" })),
+    ).toEqual({ message: "Saved Radiant Raccoons" });
+
+    // A second rename right away is refused: nothing saved, logged or posted.
+    const again = await editTeamIdentity(
+      empty,
+      fd({ teamId: home.team.id, name: "Dire Raccoons" }),
+    );
+    expect(again).toEqual({
+      error: "Your team was renamed a moment ago. Try again in a couple of minutes.",
+    });
+    expect((await teamRow(home.team.id)).name).toBe("Radiant Raccoons");
+    expect(await prisma.adminAction.count()).toBe(1);
+    expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(1);
+
+    // A logo-only change keeps its own path: saved (its post waits on the
+    // logo throttle, as before).
+    const logo = await editTeamIdentity(
+      empty,
+      fd({ teamId: home.team.id, name: "Radiant Raccoons", logoUrl: "/teams/zai.png" }),
+    );
+    expect(logo?.error).toBeUndefined();
+    expect((await teamRow(home.team.id)).logoUrl).toBe("/teams/zai.png");
+
+    // The other captain's team has its own window, and an admin has none.
+    // Someone who can't edit this team is refused as that, not told to wait.
+    signIn(away.user);
+    expect(
+      (await editTeamIdentity(empty, fd({ teamId: home.team.id, name: "Hijacked" })))?.error,
+    ).toMatch(/Only this team's captain or an admin/);
+    expect(
+      await editTeamIdentity(empty, fd({ teamId: away.team.id, name: "Fearless" })),
+    ).toEqual({ message: "Saved Fearless" });
+    const admin = await makeUser("Tim", "ADMIN");
+    signIn(admin);
+    expect(
+      await editTeamIdentity(empty, fd({ teamId: home.team.id, name: "Clean Name" })),
+    ).toEqual({ message: "Saved Clean Name" });
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    expect(
+      await renameTeam(
+        empty,
+        fd({ expectedActiveSeasonId: season.id, teamId: home.team.id, name: "Cleaner Name" }),
+      ),
+    ).toEqual({ message: "Saved Cleaner Name" });
+  });
+
+  it("gives the rename window back when no rename happened", async () => {
+    const { home, away } = await league();
+    // Refused: the name is taken. The window stays open for a real rename.
+    signIn(home.user);
+    const taken = await editTeamIdentity(
+      empty,
+      fd({ teamId: home.team.id, name: "Fear's Team" }),
+    );
+    expect(taken?.error).toMatch(/Another team is already called/);
+    // Someone who can't edit the team never holds its window.
+    signIn(away.user);
+    expect(
+      (await editTeamIdentity(empty, fd({ teamId: home.team.id, name: "Hijacked" })))?.error,
+    ).toMatch(/Only this team's captain or an admin/);
+    expect(
+      await prisma.setting.findUnique({ where: { key: `teamRename:${home.team.id}` } }),
+    ).toBeNull();
+
+    signIn(home.user);
+    expect(
+      await editTeamIdentity(empty, fd({ teamId: home.team.id, name: "Radiant Raccoons" })),
+    ).toEqual({ message: "Saved Radiant Raccoons" });
+  });
+
   it("refuses the outgoing captain when captaincy moves mid-save", async () => {
     const { season, home } = await league();
     const incoming = await makeUser("Incoming");
@@ -399,6 +479,10 @@ describe("editTeamIdentity — the captain's own team page", () => {
     expect(res?.error).toMatch(/Only this team's captain or an admin/);
     expect((await teamRow(home.team.id)).name).toBe("Zai's Team");
     expect(await prisma.adminAction.count()).toBe(0);
+    // The refused rename gives its window back for the new captain.
+    expect(
+      await prisma.setting.findUnique({ where: { key: `teamRename:${home.team.id}` } }),
+    ).toBeNull();
   });
 });
 

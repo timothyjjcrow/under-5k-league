@@ -165,6 +165,14 @@ Grid, filter and URL rules: `pages-and-ui.md`.
 - **Log every change and post every rename;** expire `"games"` and stamp the
   result cursor (record matchups embed names). Only a captain's logo-only
   change is throttled (`TEAM_IDENTITY_PING_THROTTLE_SECONDS`), and says so.
+- **Limit how often a captain renames, not which renames post:** a captain's
+  rename first claims `teamRename:<team>` (`TEAM_RENAME_THROTTLE_SECONDS`,
+  2 minutes, `claimThrottle`) and is refused with a plain error inside it.
+  Every rename that saves still posts; without the limit, one captain flipping
+  names queues a post per submit ahead of every result and reminder in the
+  ordered league outbox. Only the team's own captain claims (anyone else is
+  refused by the service anyway), the claim is given back (value-scoped) when
+  no rename happens, and logo-only edits and admins never take it.
 - **Crest colours** (`team-hues.ts`) split each season's wheel evenly in
   creation order, published as one layout stylesheet keyed by team id
   (`getTeamHueStyleSheet`), so no caller passes a hue. A failure or a newer

@@ -139,6 +139,22 @@ export function teamIdentityPingKey(teamId: string): string {
 }
 
 /**
+ * A captain may rename their team at most once per team in this window.
+ * Every rename is announced (Tim's rule), so this is what stops a captain
+ * flipping between two names from queueing a post per submit: the league
+ * channel's outbox delivers in order, and a burst would hold every result and
+ * reminder behind it. Admins are never held to it.
+ */
+export const TEAM_RENAME_THROTTLE_SECONDS = 2 * 60;
+
+export function teamRenameThrottleKey(teamId: string): string {
+  return `teamRename:${teamId}`;
+}
+
+export const TEAM_RENAME_THROTTLED_ERROR =
+  "Your team was renamed a moment ago. Try again in a couple of minutes.";
+
+/**
  * Whether the post for this change waits on the throttle. Only a captain's
  * change that keeps the name does; a rename always posts, and so does
  * anything an admin saves.

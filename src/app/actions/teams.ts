@@ -16,13 +16,18 @@ import {
 } from "@/lib/team-identity-service";
 import {
   TEAM_IDENTITY_PING_THROTTLE_SECONDS,
+  TEAM_RENAME_THROTTLE_SECONDS,
+  TEAM_RENAME_THROTTLED_ERROR,
+  normalizeTeamName,
   teamIdentityNotPostedMessage,
   teamIdentityPingKey,
   teamIdentityPostIsThrottled,
   teamIdentitySummary,
+  teamRenameThrottleKey,
 } from "@/lib/team-identity";
 import { logAdminAction } from "@/lib/admin-log";
 import { claimThrottle } from "@/lib/settings";
+import { prisma } from "@/lib/prisma";
 import { sendDiscordMessage, teamIdentityChangedMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 
@@ -60,6 +65,34 @@ async function announceIdentityChange(saved: SavedTeamIdentity): Promise<boolean
   return true;
 }
 
+/**
+ * Take the per-team rename window before a captain's rename is saved. Only
+ * for the team's own captain submitting a different name: a logo-only edit
+ * keeps its own path, and anyone else is refused by saveTeamIdentity, so they
+ * must not hold the captain's window even for a moment. Null means no claim
+ * was needed; the returned row is what to delete to give the window back.
+ */
+async function claimCaptainRename(
+  teamId: string,
+  userId: string,
+  rawName: string,
+): Promise<{ key: string; value: string } | "throttled" | null> {
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    select: { name: true, captainId: true },
+  });
+  const name = normalizeTeamName(rawName);
+  if (!team || team.captainId !== userId || !name || name === team.name) {
+    return null;
+  }
+  const nowMs = Date.now();
+  const key = teamRenameThrottleKey(teamId);
+  if (!(await claimThrottle(key, TEAM_RENAME_THROTTLE_SECONDS, nowMs))) {
+    return "throttled";
+  }
+  return { key, value: new Date(nowMs).toISOString() };
+}
+
 export async function editTeamIdentity(
   _prev: ActionResult,
   formData: FormData,
@@ -70,12 +103,26 @@ export async function editTeamIdentity(
   } catch {
     return { error: "Sign in required" };
   }
-  const saved = await saveTeamIdentity({
-    editor: { userId: user.id, isAdmin: user.role === "ADMIN" },
-    teamId: str(formData, "teamId"),
-    name: str(formData, "name"),
-    logoUrl: formData.has("logoUrl") ? str(formData, "logoUrl") : undefined,
-  });
+  const isAdmin = user.role === "ADMIN";
+  const teamId = str(formData, "teamId");
+  const name = str(formData, "name");
+  const renameClaim = isAdmin ? null : await claimCaptainRename(teamId, user.id, name);
+  if (renameClaim === "throttled") return { error: TEAM_RENAME_THROTTLED_ERROR };
+  let saved: Awaited<ReturnType<typeof saveTeamIdentity>> | undefined;
+  try {
+    saved = await saveTeamIdentity({
+      editor: { userId: user.id, isAdmin },
+      teamId,
+      name,
+      logoUrl: formData.has("logoUrl") ? str(formData, "logoUrl") : undefined,
+    });
+  } finally {
+    // Give the window back when no rename happened (refused, threw, or the
+    // name came out the same), but only the claim this request wrote.
+    if (renameClaim && !(saved?.ok && saved.nameChanged)) {
+      await prisma.setting.deleteMany({ where: renameClaim });
+    }
+  }
   if (!saved.ok) return { error: saved.error };
   let posted = true;
   if (saved.nameChanged || saved.logoChanged) {
