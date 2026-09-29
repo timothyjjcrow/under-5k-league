@@ -354,7 +354,7 @@ export function MatchResultRow({
     <div
       id={id}
       className={cn(
-        "space-y-2 rounded-lg border border-line p-3",
+        "space-y-2 rounded-lg border border-line px-3 py-2.5",
         // /admin's wrapped sticky jump bar is taller at lg (see AdminJump).
         id && "scroll-mt-40 lg:scroll-mt-56",
       )}
@@ -513,24 +513,24 @@ export function MatchResultRow({
       {logisticsOpen ? (
         <ActionForm
           action={setMatchTime}
-          className="flex flex-wrap items-end gap-2 text-xs text-muted"
+          className="flex flex-wrap items-center gap-2 text-xs text-muted"
           hidden={{ matchId: m.id, expectedActiveSeasonId }}
         >
           {/* The label sits BESIDE the field, not around it: the field now
               carries its zone name and "your time" hint, and a wrapping label
               folds both into the box's accessible name ("Kickoff time Pacific
-              time = 9:57 AM your time"). They are its description instead. */}
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`${idPrefix}scheduledAt-${m.id}`}>Kickoff time</label>
-            <LocalDatetimeField
-              id={`${idPrefix}scheduledAt-${m.id}`}
-              name="scheduledAt"
-              tsName="scheduledAtTs"
-              defaultTs={m.scheduledAt?.getTime()}
-              timeZone={LEAGUE_CONFIG.timeZone}
-              className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-            />
-          </div>
+              time = 9:57 AM your time"). They are its description instead.
+              Beside it on the same line, too: above it, it cost each row a
+              line. */}
+          <label htmlFor={`${idPrefix}scheduledAt-${m.id}`}>Kickoff time</label>
+          <LocalDatetimeField
+            id={`${idPrefix}scheduledAt-${m.id}`}
+            name="scheduledAt"
+            tsName="scheduledAtTs"
+            defaultTs={m.scheduledAt?.getTime()}
+            timeZone={LEAGUE_CONFIG.timeZone}
+            className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+          />
           <SubmitButton variant="secondary" size="sm">
             {m.scheduledAt ? "Update time" : "Set time"}
           </SubmitButton>
@@ -1016,12 +1016,13 @@ export async function AdminMatchTools({
         id={MATCH_ANCHOR.admin}
         className="group/admin scroll-mt-24"
       >
-        <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+        {/* Set like CardHeader, as the match page's other cards are. */}
+        <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-4 py-3 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold leading-snug text-fg">
+            <h2 className="text-[0.9375rem] font-semibold leading-snug text-fg">
               Admin tools
             </h2>
-            <p className="mt-1.5 text-sm text-muted">
+            <p className="mt-0.5 text-[13px] leading-relaxed text-muted">
               Kickoff, result, games and standins for this match. Only admins
               see this.
             </p>
@@ -1033,7 +1034,7 @@ export async function AdminMatchTools({
             ▾
           </span>
         </summary>
-        <div className="space-y-3 border-t border-line-soft px-4 py-4 sm:px-5">
+        <div className="space-y-3 border-t border-line-soft p-4">
           <MatchRowsHelp
             id={importHelpId}
             seasonStatus={season.status}

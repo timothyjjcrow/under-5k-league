@@ -419,6 +419,18 @@ the league is already draftable and many visitors have joined. Write for both.
   submitting.
 - **The jump bar and cards share one visibility predicate**
   (`rosterMovesVisible` and friends), so no chip points at a missing card.
+- **Density:** cards sit 20px apart, and a folded `AdminSection` summary is
+  set like `CardHeader` (`px-4 py-3`, same title and subtitle sizes), so a
+  folded section and an open card share one left edge. The phase card's
+  counts and the phase stepper share one `StatStrip` band.
+- **A row's disclosures share a line, and the opened one takes the width**
+  (`flex flex-wrap` plus `[&>details[open]]:basis-full`): a captain's Edit
+  team and Hand over captaincy, and a signup's chips beside Edit medal & MMR.
+  Stacked, each summary cost the row a line.
+- **Result rows put each label on its field's line** (Kickoff time; Dota
+  match ID or URL from `sm`), and a phone keeps the match id field beside
+  Add game. `MatchResultRow` and `MatchImportControls` are shared with the
+  match page, which gets the same rows.
 
 ## The match page (`/matches/[id]`)
 
