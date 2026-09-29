@@ -529,20 +529,24 @@ export default async function SeasonArchivePage({
       {season.teams.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Teams &amp; rosters</SectionTitle>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {/* Four to a row on a wide screen, one player per 36px line: the
+              rosters were a column of 370px cards, about 3,000px on a
+              phone. The captain is marked in the list, so the header only
+              names them when they aren't on it. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {season.teams.map((t) => (
-              <Card key={t.id} interactive>
+              <Card key={t.id} interactive className="min-w-0">
                 <CardHeader
                   title={
                     <Link
                       href={`/teams/${t.id}`}
-                      className="flex min-h-11 min-w-0 flex-wrap items-center gap-2 hover:text-info"
+                      className="-my-1 flex min-w-0 flex-wrap items-center gap-2 py-1 hover:text-info"
                     >
                       <TeamCrest
                         name={t.name}
                         seed={t.id}
                         logoUrl={t.logoUrl}
-                        size={24}
+                        size={22}
                         className="rounded-md"
                       />
                       <span className="min-w-0 [overflow-wrap:anywhere]">
@@ -554,39 +558,44 @@ export default async function SeasonArchivePage({
                       {t.withdrawn ? <Badge>Withdrawn</Badge> : null}
                     </Link>
                   }
-                  subtitle={`Captain: ${t.captain.name}`}
+                  subtitle={
+                    t.members.some((m) => m.isCaptain)
+                      ? undefined
+                      : `Captain: ${t.captain.name}`
+                  }
                 />
-                <CardBody className="space-y-1.5">
-                  {t.members.map((m) => (
-                    <div
-                      key={m.id}
-                      className="flex min-w-0 items-center justify-between gap-3 rounded-lg px-1.5 text-sm hover:bg-surface-2/40"
-                    >
-                      <span className="flex min-w-0 flex-wrap items-center gap-2">
-                        <Avatar
-                          name={m.user.name}
-                          src={m.user.avatar}
-                          size={24}
-                        />
-                        {/* my-0 keeps the whole 44px target in the row's
-                            height; with TAP_SAFE's -my-1 each hit box hung
-                            over the next row's. */}
-                        <PlayerLink
-                          userId={m.userId}
-                          className="my-0 inline-flex min-h-11 min-w-6 items-center [overflow-wrap:anywhere]"
-                        >
-                          {m.user.name}
-                        </PlayerLink>
-                        {m.isCaptain ? (
-                          <Badge tone="accent">Captain</Badge>
-                        ) : null}
-                        <RankBadge rankTier={m.user.rankTier} />
-                      </span>
-                      <span className="shrink-0 text-muted">
-                        {m.isCaptain ? "—" : `$${m.price}`}
-                      </span>
-                    </div>
-                  ))}
+                <CardBody className="p-0">
+                  <ul className="divide-y divide-line-soft">
+                    {t.members.map((m) => (
+                      // py-1.5 around a 24px avatar: 36px lines, so each
+                      // name's 28px tap box keeps 8px from the next one.
+                      <li
+                        key={m.id}
+                        className="flex min-w-0 items-center justify-between gap-3 px-4 py-1.5 text-sm"
+                      >
+                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <Avatar
+                            name={m.user.name}
+                            src={m.user.avatar}
+                            size={24}
+                          />
+                          <PlayerLink
+                            userId={m.userId}
+                            className="min-w-6 leading-snug [overflow-wrap:anywhere]"
+                          >
+                            {m.user.name}
+                          </PlayerLink>
+                          {m.isCaptain ? (
+                            <Badge tone="accent">Captain</Badge>
+                          ) : null}
+                          <RankBadge rankTier={m.user.rankTier} />
+                        </span>
+                        <span className="shrink-0 tabular-nums text-muted">
+                          {m.isCaptain ? "—" : `$${m.price}`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </CardBody>
               </Card>
             ))}

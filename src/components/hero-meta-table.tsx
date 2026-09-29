@@ -70,10 +70,29 @@ function SortHeader({
   );
 }
 
+/**
+ * A thin bar beside a figure, from sm (a phone's columns have no room).
+ * Decorative: the figure beside it is the value.
+ */
+function CellBar({ percent, tone }: { percent: number; tone: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="hidden h-1.5 w-full max-w-20 shrink overflow-hidden rounded-full bg-surface-3/65 sm:block"
+    >
+      <span
+        className={`block h-full rounded-full ${tone}`}
+        style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
+      />
+    </span>
+  );
+}
+
 /** Every picked hero in one short table, sortable by picks, win % or name. */
 export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
   const [sort, setSort] = useState<SortKey>("picks");
   const sorted = [...rows].sort((a, b) => compare(sort, a, b));
+  const maxPicks = Math.max(1, ...rows.map((row) => row.picks));
 
   return (
     <div className="overflow-hidden rounded-[var(--radius)] border border-line bg-surface">
@@ -88,10 +107,10 @@ export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
             on the THIRD col and the last two are the empty ones. */}
         <colgroup>
           <col />
-          <col className="w-16 sm:w-20" />
+          <col className="w-16 sm:w-36" />
           <col className="w-[4.5rem] sm:w-20" />
-          <col className="w-0 sm:w-20" />
-          <col className="w-0 sm:w-[34%]" />
+          <col className="w-0 sm:w-36" />
+          <col className="w-0 sm:w-[30%]" />
         </colgroup>
         <thead className="border-b border-line bg-surface-2/60 text-xs text-muted">
           <tr>
@@ -109,10 +128,10 @@ export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
         <tbody className="divide-y divide-line-soft">
           {sorted.map((row) => (
             <tr key={row.hero.id}>
-              <th scope="row" className="py-2 pl-4 pr-2 text-left font-normal">
+              <th scope="row" className="py-1.5 pl-4 pr-2 text-left font-normal">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <span aria-hidden="true" className="flex shrink-0">
-                    <HeroIcon hero={row.hero} size={28} className="rounded" />
+                    <HeroIcon hero={row.hero} size={26} className="rounded" />
                   </span>
                   <div className="min-w-0">
                     <p className="truncate font-medium text-fg">{row.hero.name}</p>
@@ -124,17 +143,35 @@ export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
                   </div>
                 </div>
               </th>
-              <td className="px-2 py-2 text-right tabular-nums">{row.picks}</td>
-              <td className="hidden px-2 py-2 text-right tabular-nums text-muted sm:table-cell">
-                {`${row.wins}–${row.losses}`}
-              </td>
-              <td className="px-2 py-2 text-right tabular-nums">
-                {row.winRate}%
-                <span className="block text-xs text-muted sm:hidden">
-                  {`${row.wins}–${row.losses}`}
+              <td className="px-2 py-1.5 text-right tabular-nums">
+                <span className="flex items-center justify-end gap-2.5">
+                  <CellBar
+                    percent={(row.picks / maxPicks) * 100}
+                    tone="bg-accent/70"
+                  />
+                  {/* A fixed width, so every bar starts in one column
+                      whatever the number's digits. */}
+                  <span className="sm:w-7">{row.picks}</span>
                 </span>
               </td>
-              <td className="hidden px-4 py-2 sm:table-cell">
+              <td className="hidden px-2 py-1.5 text-right tabular-nums text-muted sm:table-cell">
+                {`${row.wins}–${row.losses}`}
+              </td>
+              <td className="px-2 py-1.5 text-right tabular-nums">
+                <span className="flex items-center justify-end gap-2.5">
+                  <CellBar
+                    percent={row.winRate}
+                    tone={row.winRate >= 50 ? "bg-success/70" : "bg-danger/60"}
+                  />
+                  <span className="sm:w-10">
+                    {row.winRate}%
+                    <span className="block text-xs text-muted sm:hidden">
+                      {`${row.wins}–${row.losses}`}
+                    </span>
+                  </span>
+                </span>
+              </td>
+              <td className="hidden px-4 py-1.5 sm:table-cell">
                 {row.topPlayer ? (
                   <span className="flex min-w-0 items-center gap-1.5">
                     {row.topPlayer.userId ? (

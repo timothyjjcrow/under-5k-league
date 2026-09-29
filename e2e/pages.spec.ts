@@ -1,5 +1,6 @@
 import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { test, expect } from "@playwright/test";
+import { trackPageErrors } from "../e2e-mid/helpers";
 
 // Read-only render checks for the enhanced UI — these catch client-render /
 // hydration errors a browser sees but a raw HTML fetch would not. They must not
@@ -84,6 +85,36 @@ test("players page renders the pool scouting tools", async ({ page }) => {
   await expect(
     page.getByRole("group", { name: "Filter by role" }),
   ).toBeVisible();
+});
+
+// Row density is the reader's own choice, kept on their device: one line a
+// player, or the scouting line and the player's own words under each name.
+// Signups open detailed; the reload is the assertion that matters.
+test("the pool's scouting details toggle folds rows and survives a reload", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/players");
+  const toggle = page.getByRole("button", { name: "Scouting details" });
+  // A seeded signup's "about you" line, shown only in detailed rows.
+  const quote = page.getByText("Reliable — rarely misses games.", {
+    exact: false,
+  });
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(quote.first()).toBeVisible();
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(quote).toHaveCount(0);
+
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(quote).toHaveCount(0);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(quote.first()).toBeVisible();
+  assertNoErrors();
 });
 
 // The pool's filters live in the URL, so a captain can send someone "the pos-1

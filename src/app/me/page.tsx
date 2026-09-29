@@ -340,7 +340,7 @@ export default async function MePage({
       : Promise.resolve(null);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="space-y-6">
       <PageTitle title="My account" />
       {signupLive ? null : (
         <AccountNextStepBanner
@@ -348,20 +348,25 @@ export default async function MePage({
         />
       )}
 
+      {/* Two columns from lg: the season (signup, away dates) on the left and
+          the accounts it relies on (Discord, Steam and Dota) in a rail. The
+          one narrow column this used to be left two thirds of a desktop
+          screen empty and ran about 2,000px. Phones keep the same order. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
+      <div className="min-w-0 space-y-6">
       <section id="profile-signup" className="scroll-mt-24">
       {!season ? (
         // Between seasons: a cancelled season, or an admin reactivating an old
         // one. Say where the next signup window will be announced. The Discord
-        // card further down carries the join and link buttons, so this card
-        // doesn't add a second one.
+        // card (below on phones, beside on desktops) carries the join and link
+        // buttons, so this card doesn't add a second one.
         <Card>
           <CardBody className="space-y-2 text-center text-muted">
             <p>No season is open for signups right now.</p>
             {DISCORD_INVITE_URL ? (
               <p>
                 The next season&apos;s signups are announced in the league
-                Discord. Join it or link your account in the Discord card
-                below.
+                Discord. Join it or link your account in the Discord card.
               </p>
             ) : (
               <p>
@@ -722,8 +727,8 @@ export default async function MePage({
                 <p className="font-medium text-fg">Registration is closed.</p>
                 <p className="mt-1 text-muted">
                   {isRegistered
-                    ? "Your final signup details stay attached to this season's history. Your Discord, Steam and Dota settings below remain editable."
-                    : "This season has finished. Watch the dashboard for the next season; your Discord, Steam and Dota settings below are ready to carry forward."}
+                    ? "Your final signup details stay attached to this season's history. Your Discord, Steam and Dota settings on this page remain editable."
+                    : "This season has finished. Watch the dashboard for the next season; your Discord, Steam and Dota settings on this page are ready to carry forward."}
                 </p>
               </div>
             ) : rejoinPaused ? (
@@ -893,6 +898,9 @@ export default async function MePage({
                         {mmrLead}
                       </p>
                     ) : null}
+                    {/* A four-digit number: stretched across the wide
+                        column the box read like a paragraph field. */}
+                    <div className="sm:max-w-sm">
                     <MmrField
                       // Remount when the saved number changes, so the preview
                       // starts from what the server stored.
@@ -909,6 +917,7 @@ export default async function MePage({
                       }
                       describedBy={medalBlocked || mmrLead ? "mmr-lead" : undefined}
                     />
+                    </div>
                     <p className="mt-1 text-xs text-muted">
                       {mmrRulesLine(season.maxMmr)}
                     </p>
@@ -946,9 +955,11 @@ export default async function MePage({
                     </p>
                   </fieldset>
 
-                  <details className="rounded-lg border border-line p-3">
-                    <summary className="min-h-11 cursor-pointer font-medium">Optional scouting profile</summary>
-                    <div className="space-y-5 pt-3">
+                  {/* Padding on the summary, not the box: a 44px summary
+                      inside p-3 left an empty band under the closed label. */}
+                  <details className="rounded-lg border border-line px-3">
+                    <summary className="cursor-pointer py-2.5 font-medium">Optional scouting profile</summary>
+                    <div className="space-y-5 pb-3 pt-2">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium">
                       Favorite heroes
@@ -1064,7 +1075,9 @@ export default async function MePage({
       <Suspense fallback={null}>
         <AwayDatesSection userId={user.id} />
       </Suspense>
+      </div>
 
+      <div className="min-w-0 space-y-6">
       <Suspense fallback={<section id="profile-discord" className="scroll-mt-24"><Card><CardBody><p role="status">Checking your Discord…</p></CardBody></Card></section>}>
         <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} guildCfg={guildCfg} memberInfo={memberInfo} />
       </Suspense>
@@ -1090,6 +1103,8 @@ export default async function MePage({
         rankTier={dbUser?.rankTier ?? null}
         fhUnavailable={dbUser?.fhUnavailable ?? null}
       />
+      </div>
+      </div>
     </div>
   );
 }

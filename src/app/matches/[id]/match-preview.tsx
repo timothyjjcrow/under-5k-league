@@ -238,7 +238,7 @@ export async function MatchPreview({
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {isParticipant ? (
         <CheckinBanner
           matchId={match.id}
@@ -271,6 +271,9 @@ export async function MatchPreview({
 
       <StakesBanner match={match} seasonMatches={seasonMatches} />
 
+      {/* Full width, one above the other: each card is split home | away
+          inside, and their heights follow the data (check-ins, how many
+          comfort picks), so side by side left a hole under one of them. */}
       <MatchupCard
         match={match}
         roundLabel={roundLabel}

@@ -54,6 +54,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   narrow column where text-3xl wraps a W-L-D record; never an inline
   override); `EmptyState compact` (a routinely empty section that is not the
   point of the page; two full dashed boxes make a full page look broken);
+  `EmptyState inline` (one left-aligned line, about 56px, for an empty list
+  inside a card whose header already names it; wins over `compact`);
   `CheckinBanner variant` (`strip` on `/schedule` and the match page, `panel`
   stacked for a narrow column); `StatStrip`/`StatCell` (the one-line summary
   band under a page title).
@@ -92,8 +94,17 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **A fixed two-column split sizes its row to the TALLER column,** leaving a
   hole under the shorter one that looks fine in review. Use one of:
 - **Known card count: an explicit grid, and never a short card beside a tall
-  one.** Home's standings take the full width. Where a short card must sit by a
-  taller one (the COMPLETE view), use `items-start` so it does not stretch.
+  one.** Where a short card must sit by a taller one (the COMPLETE view), use
+  `items-start` so it does not stretch.
+- **A page column plus a rail** (Home from `xl`:
+  `xl:grid-cols-[minmax(0,1fr)_21rem]`) is two STACKS, not two cards: each
+  column is a `space-y-*` list, the grid is `items-start`, and a block that
+  must follow the first column on desktop but the rail on a phone uses
+  `xl:grid-rows-[auto_1fr]` with the rail `xl:row-span-2`, so a tall rail's
+  extra height lands under the last block instead of between two.
+- **Let a list card size its own columns with a container query** (`@container`
+  on the card, `@xl:grid-cols-2` on the list) when the same card sits in a
+  21rem rail and a full-width band: one column in the rail, two when wide.
 - **Unknown card count: auto-fit,**
   `grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]`.
   Empty tracks collapse, so no conditional spans. Use it for odd or varying
@@ -113,8 +124,15 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Put table column widths on `<col>`, not cells.** The standings table
   (`StandingsTableView`, `src/components/standings-table.tsx`) is
   `table-fixed` with a responsive `<colgroup>` so Team truncates. Fixed layout
-  still gives a `hidden sm:table-cell` column a share of leftover width, so
-  hidden columns get `w-0 sm:w-*` cols.
+  still gives a `hidden @xl:table-cell` column a share of leftover width, so
+  hidden columns get `w-0 @xl:w-*` cols.
+- **The standings table breaks on its OWN width** (an `@container` wrapper),
+  not the viewport's: the same table fills a phone, Home's main column and
+  `/schedule`'s 30rem rail. From `@md` (28rem) the movement arrow sits beside
+  the rank, from `@lg` (32rem) the desktop column widths and one-line rows,
+  and Last 5 from `@xl` (36rem), so it hides in the rail as on a phone. A
+  row's status chips wrap beside the name (flex-wrap, so they drop under it
+  only when both don't fit).
 - **Every flex level between a container and a `truncate` span needs
   `min-w-0`,** and so do flex-wrap chips, or a long name widens the page.
 - **`CheckinBanner`'s strip text has `min-w-[14rem]`** so RSVP buttons wrap
@@ -122,12 +140,14 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Put `overflow-hidden` on the card around an `overflow-x-auto` scroller**
   (`SeasonGrid`, every card wrapping `<Bracket>`, whose root scrolls a
   `min-w-max` row). Chrome otherwise pushes the inner width into the page.
-- **The header is `h-20` (80px); move every offset under it together:** the
-  compact clock bars' `top-20` (`draft-room.tsx`,
+- **The header is `h-16` (64px); move every offset under it together:** the
+  compact clock bars' `top-16` (`draft-room.tsx`,
   `src/components/inhouse/*-view.tsx`), `useBannerOffscreen`'s
-  `rootMargin: "-80px ..."` (`room-clock.tsx`), the `lg:top-20` sticky
+  `rootMargin: "-64px ..."` (`room-clock.tsx`), the `lg:top-16` sticky
   `SectionNav`/`AdminJump`, and anchor `scroll-mt-*` values (the draft pool's
   `scroll-mt-32` is header plus clock bar). A resize once clipped the clock bar.
+  It was 80px until the 2026-09 overhaul, which gave the height back to
+  content on every page.
   Section bars pin only from `lg` up: on a phone, header plus tab bar plus
   chips took a quarter of the screen.
 - **The draft room puts the player pool FIRST in the DOM** for captains on a
@@ -203,23 +223,37 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   identity column takes the full width. **Anything passed as `aside` must
   render something** (a present-but-empty aside leaves a 23rem hole), which is
   why `MyNextMatch` has a no-match branch and `SignupsAside` always renders. In
-  the regular season, meta takes the right column and the aside the row below.
+  the regular season the aside takes the right half and the progress (meta)
+  rides under the title; with no aside, meta takes the right half.
 - **The slot addresses the viewer.** Mid-season: `MyNextMatch` (their next
   check-in, `<CheckinBanner variant="panel">`), or for someone with no team and
   no signup, the late standin signup plus the inhouse queue. COMPLETE: only
   "Relive the season"; the champion card below is the page's one champion
   block.
-- **`SeasonViewSkeleton` mirrors the season bands;** change both together or
-  the page rearranges after streaming.
+- **The regular season is two columns from `xl`:** This week and the
+  standings, then the honors line and the news under them; the rail holds the
+  Your team / Coming up / Recent results band and the side games. The
+  playoffs stay one column, because the two-sided bracket needs the full
+  width. Below `xl` everything is one column in that order, rail before the
+  honors and news.
+- **`SeasonViewSkeleton` mirrors the season bands** (`playoffs` picks the
+  one-column shape); change both together or the page rearranges after
+  streaming.
+- **The inhouse queue is a side-game tile mid-season** (`InhouseStrip
+  variant="tile"`, the live line), and ends the COMPLETE view's rail; the
+  other phases keep the full-width strip after the view.
 - **Show a fixture once per job.** `focusSlate` (`schedule.ts`) is This week's
   slate; "Coming up" is the open matches minus that slate, so no match is in
   both.
 - **This week** shows kickoffs, standin-aware check-in counts (shared
   `matchNightRoster`, as on `/schedule`) and a compact `PlayoffOutlook` for a
   side whose `nextMatchId` is that fixture.
+- **This week faces a lone fixture's sides off** (home left, away right,
+  "vs" or the live score between) instead of stretching one card built for a
+  third of the width across all of it.
 - **The Your team card** shows only the stakes of the next series (the table
   already highlights rank and record), aligned to the engine's `nextMatchId`
-  and naming the opponent. It sits in the auto-fit band under the standings
+  and naming the opponent. It sits in the auto-fit band (the rail from `xl`)
   and stands down when This week already prints that series.
   `dashboard-guards.test.ts` pins both.
 - **`WeeklyHonorsLine`** renders only official honors (the readiness rows
@@ -229,8 +263,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   plus the Needs attention count (`adminHomeLine`). Feed `adminNextStep` and
   `matchAttention` the same inputs as `/admin` or they drift. Database reads
   only, never Discord.
-- **PLAYOFFS shows a compact bracket; COMPLETE a champion card and "How it was
-  won".** Round grouping is pure `slotRound`/`groupPlayoffRounds`
+- **PLAYOFFS shows a compact bracket; COMPLETE a champion banner (crest beside
+  the story) and "How it was won".** `<Bracket>` centres itself when its card
+  is wider than it. Round grouping is pure `slotRound`/`groupPlayoffRounds`
   (`schedule.ts`), shared with `/schedule`.
 
 ### The SIGNUPS view
@@ -261,6 +296,57 @@ the league is already draftable and many visitors have joined. Write for both.
 - **"Who's in" lists captains first and names its cap** ("Latest 12 of 30
   players") instead of silently hiding the rest.
 
+## Schedule (`/schedule`)
+
+- **The regular season is two columns from `xl`:** the weeks, and a 30rem
+  rail with the standings and the analysis folds. The rail stretches to the
+  weeks' height and its inner block is `xl:sticky xl:top-20` with a
+  viewport-high `max-h` and its own scroll, so the table stays in view down
+  the weeks and an opened fold never hides its end below the screen. The
+  playoffs and COMPLETE keep one column (the bracket leads, the finished
+  weeks fold away).
+- **A week's cards go two and three across by the week's own width**
+  (`@container`, `@2xl`/`@5xl`), and `GridFillers` paints the empty cells of a
+  part-filled last row the surface colour; the grid draws its hairlines as
+  the gap colour, so an empty cell showed as a grey block.
+- **The section title and the team filter share a row** (`ScheduleWeeks
+  heading`); each card names its status in words, so there is no dot legend.
+- **The team filter holds a pick until the URL catches up.** The URL is the
+  source of truth, but the router applies `pushState` in a transition and a
+  controlled `<select>` snapped back to its old value meanwhile (the pick
+  flickered to "All teams"; `e2e-mid/quality-of-life.spec.ts` reads it back
+  at once).
+- **The jump bar** (`SectionNav`, in page order) lists what the phase renders
+  when there are three or more sections; the regular season hides it from
+  `xl`, where the rail shows the standings.
+- **The jump bar leaves the hash to the page** (`followHash={false}`,
+  `openNested="marked"`): the browser scrolls to `#fixtures` or
+  `#tiebreakers` and `ScheduleFold` opens itself, as before the bar existed.
+  A bar that also followed the hash re-scrolled the page after load and
+  fonts, and a re-scroll between the press and release of a click swallowed
+  it (the tiebreaker folds stayed shut in `e2e-postseason/tiebreaker.spec.ts`).
+  A chip opens only its own section, never a card's inner disclosures.
+  `schedule-jump-bar.test.ts` pins both props.
+- **A side's playoff stakes flow as one wrapping line of outcome pairs**
+  (Win, Draw, Loss, each with its result), not a row per outcome.
+
+## Teams (`/teams`, `/teams/[id]`)
+
+- **The index is three across from `xl`** (two from `md`), each card a
+  compact header (56px crest, name, one summary line) over the roster chips.
+- **A team page is two columns from `lg` when it has a rail:** the main
+  column is the next series, the roster and every fixture; the rail (22rem,
+  24rem from `xl`) holds the hero pool, rematches and the playoff outlook.
+  A phone reads them in that order, so the overview, roster and matches
+  still lead. With nothing for the rail the page stays one column. The
+  jersey keeps the full width below.
+- **Both columns are `@container`s:** the roster goes two across and the
+  draft-phase overview splits at `@2xl` of the main column, and the hero
+  pool (`HeroPool columns="container"`) steps two, three, four across with
+  the rail's width, so it is two in the rail and wider on a tablet.
+- **A roster row keeps its chips on the name's line** (flex-wrap), so most
+  rows are one 44px line instead of a name over an empty badge row.
+
 ## The player pool (`/players`)
 
 - **One grid string for header and rows:** `rowGrid(withInhouse)` in
@@ -285,6 +371,26 @@ the league is already draftable and many visitors have joined. Write for both.
   `replaceState`). React is the source of truth. `sort` is not a filter, so
   `resetFilters` and `filtersActive` ignore it. `e2e/pages.spec.ts` reopens the
   URL cold, because seeding from it is the half that rots.
+- **"Scouting details" sets row density, not a filter:** on, each row carries
+  the scouting line (last season, pubs, Dotabuff, Discord) and the player's
+  own words; off, a row is one line. The default is `poolDetailsByDefault`
+  (on until the auction ends, when the pool turns into "who is where"), and
+  the viewer's choice persists on their device (`usePersistedFlag
+  "playerPoolDetails"`). It stays out of the URL and "Clear filters".
+
+## Player profile and compare (`/players/[id]`, `/players/compare`)
+
+- **A profile is two columns from `xl`:** form, match history and "How they
+  play" in the main column, and a 24rem rail with the hero pool, records,
+  achievements and seasons. A phone reads them in that order. Both columns
+  are `@container`s: the overview's stats and spotlight split at `@2xl`, a
+  series row puts its games beside the opponent at `@2xl`, and the hero pool
+  (`columns="container"`) and achievements step with the rail's width.
+- **Compare is two columns from `lg`:** career numbers on the left, the
+  head-to-head and both hero cards on the right, by grid placement, so the
+  DOM and a phone keep head-to-head, numbers, heroes. The rows are
+  `auto_1fr`, so a taller numbers card grows the heroes' row, never the
+  head-to-head's. Player B's name heads the right-hand column of figures.
 
 ## The inhouse page (`/inhouse`)
 
@@ -321,6 +427,18 @@ the league is already draftable and many visitors have joined. Write for both.
   submitting.
 - **The jump bar and cards share one visibility predicate**
   (`rosterMovesVisible` and friends), so no chip points at a missing card.
+- **Density:** cards sit 20px apart, and a folded `AdminSection` summary is
+  set like `CardHeader` (`px-4 py-3`, same title and subtitle sizes), so a
+  folded section and an open card share one left edge. The phase card's
+  counts and the phase stepper share one `StatStrip` band.
+- **A row's disclosures share a line, and the opened one takes the width**
+  (`flex flex-wrap` plus `[&>details[open]]:basis-full`): a captain's Edit
+  team and Hand over captaincy, and a signup's chips beside Edit medal & MMR.
+  Stacked, each summary cost the row a line.
+- **Result rows put each label on its field's line** (Kickoff time; Dota
+  match ID or URL from `sm`), and a phone keeps the match id field beside
+  Add game. `MatchResultRow` and `MatchImportControls` are shared with the
+  match page, which gets the same rows.
 
 ## The match page (`/matches/[id]`)
 
@@ -345,6 +463,24 @@ the league is already draftable and many visitors have joined. Write for both.
   Create/Start in Captain tools; other players, booked standins and admins get
   `lobby-panel.tsx` (`seesPlayerLobbyPanel`, `lobby-access.ts`, matching who
   `resolveDotaLobby` lets view it).
+- **The scoreboard is one row from `lg`:** name, crest, score, crest, name
+  (`TeamSide side`, the crest beside the score). Below `lg` each crest sits
+  over its name, as long names need the width.
+- **A box score line is `BoxScoreLine`** (`box-score-line.tsx`, the page's
+  one client piece of a box score): the server renders every part and the
+  line lays them out. Each side is an `@container`; from `@lg` a player is
+  one line (hero, name, gpm, lh, net worth, KDA at a fixed width so the bars
+  line up). The report chip sits on the hero line and is a button whose
+  metrics open as a row under the whole line; a `<details>` kept chip and
+  metrics in one box, so the chip needed a line of its own.
+- **The recorded net-worth bar sits between the two totals from `sm`** (grid
+  placement, so the reading order stays Radiant, bar, Dire); a phone stacks
+  the totals over a full-width bar.
+- **The preview's Matchup and Scouting report stay full width, one above the
+  other.** Each is split home | away inside, and their heights follow the
+  data (check-ins, comfort picks), so side by side from `xl` left a hole
+  under whichever was shorter. A team header lets its form strip wrap under
+  a long name.
 - **Both captains always get a "How to host" line built from data**
   (`src/lib/match-hosting.ts`, tested): the home captain hosts,
   `LEAGUE_CONFIG.gameServerRegion`, `LEAGUE_GAME_MODE` (the mode the lobby bot
@@ -359,6 +495,58 @@ the league is already draftable and many visitors have joined. Write for both.
   renders only once the bot answers with a lobby (`lobbyPanelVisible`): those
   viewers can't fix the bot or the ticket, and the manual steps are not on
   their page.
+
+## Stats pages (`/leaders`, `/meta`, `/records`, `/hall-of-fame`, `/seasons/[id]`)
+
+- **The stats tab bar is one row at every width** (`stats-nav.tsx`): the tabs
+  share it as equal tracks (`grid-flow-col auto-cols-fr`) and a long label
+  takes two short lines on a phone. A 2x2 grid spent a second 44px row on the
+  same four links.
+- **A leader row is one grid** (`leader-board.tsx`): rank, avatar, the name
+  over "team · hint", the value on the right and the bar under the name (about
+  64px; it was 118). "Team · hint" is split into one part per "·" segment;
+  each part carries its dot in its own left padding and the line is pulled
+  left by that width and clipped, so a line never ends in "·" and a part too
+  long for one line wraps without losing its first letters under the clip.
+- **Boards side by side line up.** A `LeaderBoard` card is a two-row subgrid
+  (`row-span-2 grid-rows-subgrid gap-0`): boards in one grid row share a
+  header height, and "Show all" sits at the foot (`mt-auto`). Outside a grid
+  it is an ordinary two-row grid (Fantasy).
+- **`/leaders` boards go two across from `lg` and three from `xl`.**
+  `BOARD_GRID` has six tracks from `xl` and a board takes two; a last row of
+  one or two boards stretches to fill it, so the data-dependent count (Team
+  sustain) never leaves an empty cell. `leaders-guards.test.ts` pins it.
+- **The season recap packs its long lists.** Award cards fill their rows
+  (`flex-wrap`, each `flex-[1_1_16rem]`): however many awards a season
+  produced, the last row has no empty cell. Rosters go four across from `xl`,
+  one player per 36px line (a 24px avatar, so each name's 28px tap box keeps
+  8px from the next), and the header names the captain only when they are not
+  in the list. The head-to-head grid's chips are one line ("W 2–0").
+- **Hero meta draws the shape of the meta:** from `sm`, picks (against the
+  most-picked hero) and win % each get a thin bar beside the figure, with the
+  figure at a fixed width so the bars share a column. Decorative
+  (`aria-hidden`): the figure beside it is the value.
+- **Hall of Fame boards use the Leaders shape:** the card header, then one
+  ruled line per place. Its section links are the site's `SectionNav`, and a
+  lone last champion card takes the whole row.
+
+## Side games and account (`/scrims`, `/fantasy`, `/me`)
+
+- **`/me` is two columns from `lg`:** the season (signup, away dates) on the
+  left and a 24rem rail with the accounts it relies on (Discord, Steam and
+  Dota). Phones keep the same order. Copy says "the Discord card", never
+  "below", because it is below on a phone and beside on a desktop. Short
+  inputs keep a short width (MMR `sm:max-w-sm`; the Discord handle grows
+  beside Save up to `max-w-xs`).
+- **Scrims pairs its lists.** Open and booked sit side by side from `lg`;
+  history, team records and leaders go three across from `xl` as two-row
+  subgrids, so the three lists start on one line whatever their subtitles
+  wrap to. Empty lists are `EmptyState inline`.
+- **A label around `LocalDatetimeField` is a flex column (`gap`), never
+  `space-y`:** the field's hidden twin is the last child, so `space-y` put a
+  margin under the visible box and lifted it off the row's baseline.
+- **The fantasy scoring guide is one divided box** (rows on phones, three
+  columns from `md`), not three padded cards.
 
 ## Checking UI against a fixture
 

@@ -79,10 +79,10 @@ export function SectionReady() {
 /**
  * Native anchors remain usable before hydration; enhanced jumps open details.
  *
- * `sticky` pins the bar under the 80px header from desktop width (`lg`) up.
+ * `sticky` pins the bar under the 64px header from desktop width (`lg`) up.
  * Below that it scrolls away with the page: on a phone the header, the tab bar
  * and a pinned chip bar together took a quarter of the screen while reading a
- * match. The header offsets (`top-20`, the draft/inhouse clock bars and their
+ * match. The header offsets (`top-16`, the draft/inhouse clock bars and their
  * observers) are untouched; only this bar stops pinning.
  */
 export function SectionNav({
@@ -91,12 +91,22 @@ export function SectionNav({
   sticky = false,
   openNested = "first",
   wrap = false,
+  followHash = true,
 }: {
   items: { id: string; label: string }[];
   label: string;
   sticky?: boolean;
   /** Which disclosure inside a target opens on a jump (see NestedReveal). */
   openNested?: NestedReveal;
+  /**
+   * Reveal the section the URL's hash names on arrival, after load and
+   * fonts, and on back and forward. A page whose sections already answer
+   * the hash themselves (/schedule's folds) turns it off, so the bar never
+   * scrolls the page on its own: a late re-scroll landed between the press
+   * and release of a click on the page and swallowed it. Chips still open
+   * and scroll to their section.
+   */
+  followHash?: boolean;
   /**
    * From desktop width (`lg`) the chips wrap onto more rows instead of
    * scrolling sideways: most desktop mice can't scroll sideways, so a bar
@@ -163,6 +173,7 @@ export function SectionNav({
     let mounted = true;
     resolvedHash.current = "";
     const resolveHash = () => {
+      if (!followHash) return;
       const id = window.location.hash.slice(1);
       if (
         id &&
@@ -200,7 +211,7 @@ export function SectionNav({
           setActive("");
       },
       {
-        rootMargin: `-145px 0px -${Math.round((1 - SECTION_BAND_BOTTOM) * 100)}% 0px`,
+        rootMargin: `-129px 0px -${Math.round((1 - SECTION_BAND_BOTTOM) * 100)}% 0px`,
       },
     );
     const observeSections = () => {
@@ -228,9 +239,11 @@ export function SectionNav({
           revealSection(id, false, openNested);
       }));
     };
-    if (document.readyState === "complete") revealAfterPaint();
-    else window.addEventListener("load", revealAfterPaint, { once: true });
-    void document.fonts.ready.then(revealAfterPaint);
+    if (followHash) {
+      if (document.readyState === "complete") revealAfterPaint();
+      else window.addEventListener("load", revealAfterPaint, { once: true });
+      void document.fonts.ready.then(revealAfterPaint);
+    }
     const onHashChange = () => {
       resolvedHash.current = "";
       resolveHash();
@@ -247,25 +260,29 @@ export function SectionNav({
       window.removeEventListener("popstate", onHashChange);
       window.removeEventListener("section-ready", observeSections);
     };
-  }, [items, openNested]);
+  }, [items, openNested, followHash]);
 
   return (
     <nav
       aria-label={label}
       className={cn(
-        // From sm the box hugs its chips: four chips in a full-width box
-        // read as an empty card between the page's hero and its first
-        // section. max-w-full keeps a longer bar at the page width, where
-        // it scrolls (or wraps, with `wrap`) as before.
-        "max-w-full rounded-xl border border-line bg-bg/95 px-2 py-2 sm:w-fit",
-        sticky && "lg:sticky lg:top-20 lg:z-20 lg:backdrop-blur",
+        // An underlined tab row on the page's own rule, not a boxed card:
+        // four chips in a bordered box read as an empty card between the
+        // page's hero and its first section. A bar too long for the width
+        // scrolls sideways (or wraps into chips from lg, with `wrap`).
+        wrap
+          ? "max-w-full rounded-xl border border-line bg-bg/95 px-2 py-2 sm:w-fit"
+          : "max-w-full border-b border-line-soft bg-bg/95",
+        sticky && "lg:sticky lg:top-16 lg:z-20 lg:backdrop-blur",
       )}
     >
       <ul
         ref={listRef}
         className={cn(
-          "flex gap-1 overflow-x-auto pb-1",
-          wrap && "lg:flex-wrap lg:overflow-visible lg:pb-0",
+          "flex overflow-x-auto",
+          wrap
+            ? "gap-1 pb-1 lg:flex-wrap lg:overflow-visible lg:pb-0"
+            : "-mb-px gap-0.5 sm:gap-1",
         )}
         style={{
           maskImage: chipBarMask(edges),
@@ -278,11 +295,19 @@ export function SectionNav({
               href={`#${item.id}`}
               aria-current={active === item.id ? "location" : undefined}
               className={cn(
-                "inline-flex min-h-11 items-center whitespace-nowrap rounded-lg border px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                wrap && "lg:min-h-9",
-                active === item.id
-                  ? "border-accent/60 bg-accent/10 text-fg"
-                  : "border-transparent text-muted hover:bg-surface-2 hover:text-fg",
+                wrap
+                  ? cn(
+                      "inline-flex min-h-11 items-center whitespace-nowrap rounded-lg border px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:min-h-9",
+                      active === item.id
+                        ? "border-accent/60 bg-accent/10 text-fg"
+                        : "border-transparent text-muted hover:bg-surface-2 hover:text-fg",
+                    )
+                  : cn(
+                      "inline-flex min-h-11 items-center whitespace-nowrap border-b-2 px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 lg:min-h-10",
+                      active === item.id
+                        ? "border-accent text-fg"
+                        : "border-transparent text-muted hover:border-line hover:text-fg",
+                    ),
               )}
               onClick={(event) => {
                 if (!document.getElementById(item.id)) return;

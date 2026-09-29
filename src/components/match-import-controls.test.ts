@@ -41,10 +41,13 @@ describe("MatchImportControls source contract", () => {
     expect(SRC).toContain("<p id={helpId}");
   });
 
-  it("stacks the field and actions on narrow screens", () => {
-    expect(SRC).toContain("flex min-w-0 flex-col");
-    expect(SRC).toContain("sm:flex-row");
-    expect(SRC).toContain("w-full min-w-0");
-    expect(SRC).toContain("w-full shrink-0 sm:w-auto");
+  it("never squeezes the field on narrow screens", () => {
+    // One wrapping row: the field keeps a 10rem floor, so on a screen too
+    // narrow for it and Add game side by side the button wraps under it
+    // instead of crushing it. The label takes its own line below sm.
+    expect(SRC).toContain("flex min-w-0 flex-wrap items-center");
+    expect(SRC).toContain("min-w-0 flex-1 basis-40");
+    expect(SRC).toContain("basis-full text-xs font-medium text-muted sm:shrink-0 sm:basis-auto");
+    expect(SRC).toMatch(/value="import"[\s\S]*?className="shrink-0"/);
   });
 });

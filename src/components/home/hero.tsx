@@ -153,9 +153,12 @@ export function Hero({
       />
       <div
         className={cn(
-          "relative grid gap-6 p-5 sm:p-8",
+          // p-4/p-6: the 2026-09 overhaul's density. The hero was the tallest
+          // thing on every phase's first screen, and most of its height was
+          // padding around a badge, a title and one control.
+          "relative grid gap-5 p-4 sm:p-6",
           leagueDashboard
-            ? "grid-cols-1 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-center lg:gap-x-12"
+            ? "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-center lg:gap-x-10"
             : control
               ? "lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-center lg:gap-10"
               : "text-center",
@@ -187,30 +190,40 @@ export function Hero({
             {/* Persistent league fact: the Dota region every game is played on.
                 It rode its own centred row before, costing a whole line for a
                 value that never changes. */}
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/60 px-3 py-1 text-xs font-medium text-muted">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/60 px-2.5 py-1 text-xs font-medium text-muted">
               <span aria-hidden>🌐</span>
-              Game servers:{" "}
+              {/* The label hides visually on a phone, so the badge row stays
+                  one line beside the phase badge; screen readers keep it. */}
+              <span className="max-sm:sr-only">Game servers:</span>
               <span className="font-semibold text-fg">
                 {GAME_SERVER_REGION}
               </span>
             </span>
           </div>
-          <h1 className="mt-3 font-display text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl">
+          <h1 className="mt-2.5 font-display text-3xl font-bold tracking-tight sm:text-4xl xl:text-[2.75rem]">
             {title}
           </h1>
           {!leagueDashboard && subtitle ? (
-            <p className="mt-2 max-w-xl text-muted sm:text-lg">{subtitle}</p>
+            <p className="mt-1.5 max-w-xl text-muted sm:text-[1.0625rem]">
+              {subtitle}
+            </p>
           ) : null}
           {!leagueDashboard ? pitch : null}
           {leagueDashboard && action ? (
-            <div className="mt-5 flex flex-wrap gap-2 [&>a]:min-h-11 [&>a]:px-4 [&>a]:py-2 [&>a]:text-sm">
+            <div className="mt-4 flex flex-wrap gap-2 [&>a]:min-h-11 [&>a]:px-4 [&>a]:py-2 [&>a]:text-sm">
               {action}
             </div>
+          ) : null}
+          {/* Mid-season with a panel of the viewer's own, the progress rides
+              under the title and the panel takes the right half. It used to
+              span a third row of its own below both. */}
+          {leagueDashboard && aside && meta ? (
+            <div className="mt-4">{meta}</div>
           ) : null}
           {meta && !leagueDashboard ? (
             <div
               className={cn(
-                "mt-5 flex flex-wrap items-center gap-x-6 gap-y-2",
+                "mt-4 flex flex-wrap items-center gap-x-6 gap-y-2",
                 control ? "" : "justify-center",
               )}
             >
@@ -219,19 +232,18 @@ export function Hero({
           ) : null}
         </div>
         {leagueDashboard ? (
-          <div className="min-w-0">{meta}</div>
+          aside || meta ? (
+            <div className="min-w-0">{aside ?? meta}</div>
+          ) : null
         ) : control ? (
           <div className="min-w-0">{control}</div>
-        ) : null}
-        {leagueDashboard && aside ? (
-          <div className="min-w-0 lg:col-span-2">{aside}</div>
         ) : null}
       </div>
       {/* The season stepper used to be its own full-width band restating the
           phase badge two rows above it. As the hero's footer rail it costs no
           extra band and reads as part of the same object. */}
       {rail ? (
-        <div className="relative border-t border-line/70 bg-bg/30 px-4 py-3 sm:px-8">
+        <div className="relative border-t border-line/70 bg-bg/30 px-4 py-2.5 sm:px-6">
           {rail}
         </div>
       ) : null}
@@ -392,8 +404,10 @@ export function DefendingChampionLine({
 export function LeaguePitch({ matchNight }: { matchNight: string | null }) {
   return (
     <>
-      <p className="mt-2 max-w-xl text-muted sm:text-lg">{leaguePitch()}</p>
-      <p className="mt-2 max-w-xl text-sm text-muted">
+      <p className="mt-1.5 max-w-xl text-muted sm:text-[1.0625rem]">
+        {leaguePitch()}
+      </p>
+      <p className="mt-1.5 max-w-xl text-sm text-muted">
         {leagueEligibilityLine(matchNight)}
       </p>
     </>

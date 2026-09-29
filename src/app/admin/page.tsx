@@ -299,7 +299,6 @@ import {
   PlayerLink,
   RankMedal,
   RoleBadges,
-  Stat,
   StatCell,
   StatStrip,
   TeamCrest,
@@ -434,7 +433,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   // the anchor, a jump to Auto-sync would unfold it too.
   const syncCards = season ? (
     <>
-      <AdminAnchor id="adm-sync" className="space-y-8 empty:hidden">
+      <AdminAnchor id="adm-sync" className="space-y-5 empty:hidden">
         <AutoSyncHealth season={season} />
         <Suspense fallback={<CardSkeleton rows={3} />}>
           <ImportProgress seasonId={season.id} page={importQuery.importPage} query={importQuery} />
@@ -515,7 +514,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   ];
 
   return (
-    <div className="space-y-8">
+    // 20px between cards (was 32): about twenty cards stack here.
+    <div className="space-y-5">
       <PageTitle
         title="Admin"
         subtitle="Run the league — create seasons, pick captains, run the draft, enter results."
@@ -907,16 +907,17 @@ function AdminSection({
       open={defaultOpen}
       className="group scroll-mt-40 lg:scroll-mt-56 rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
     >
-      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-4 py-3 [&::-webkit-details-marker]:hidden">
         <SectionReady />
-        {/* Set like CardHeader's title and subtitle, so a folded section and
-            an open card read as the same kind of heading. */}
+        {/* Set like CardHeader's title and subtitle (padding, sizes), so a
+            folded section and an open card read as the same kind of heading
+            and their titles share one left edge. */}
         <div className="min-w-0">
-          <Heading className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
+          <Heading className="text-[0.9375rem] font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
             {title}
           </Heading>
           {subtitle ? (
-            <p className="mt-1.5 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
+            <p className="mt-0.5 text-[13px] leading-relaxed text-muted [overflow-wrap:anywhere]">
               {subtitle}
             </p>
           ) : null}
@@ -952,8 +953,8 @@ function AdminAnchor({
 }
 
 /**
- * The jump bar. From desktop width it is sticky under the 80px header
- * (`top-20`, the same offset the draft room's clock bar uses) so it stays
+ * The jump bar. From desktop width it is sticky under the 64px header
+ * (`top-16`, the same offset the draft room's clock bar uses) so it stays
  * reachable however far down the page an admin has scrolled. On a phone it
  * scrolls away with the page like every section bar (see SectionNav): pinned,
  * it cost a fifth of the screen on top of the header and the tab bar.
@@ -1430,7 +1431,7 @@ function AdminAttention({
               return (
                 <li
                   key={item.key}
-                  className="rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm"
+                  className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm"
                 >
                   {item.text}
                   {label ? (
@@ -1452,11 +1453,12 @@ function AdminAttention({
               {matches.length} match{matches.length === 1 ? "" : "es"} to
               review
             </summary>
-            <ul className="space-y-2">
+            {/* One ruled list, not a box per match. */}
+            <ul className="divide-y divide-line-soft rounded-lg border border-line">
               {matches.map((item) => (
                 <li
                   key={item.id}
-                  className="rounded-lg border border-line p-3 text-sm"
+                  className="px-3 py-2 text-sm"
                 >
                   {/* The fixture opens the match page's Admin tools, where
                       it can be fixed; its row in Schedule & results or
@@ -1472,7 +1474,7 @@ function AdminAttention({
                       Result controls ↓
                     </a>
                   </span>
-                  <p className="mt-1 text-muted">
+                  <p className="mt-0.5 text-muted">
                     {item.reasons.join(" · ")}
                     {item.uncovered > 0 && standinsLabel ? (
                       <>
@@ -1685,65 +1687,61 @@ function SeasonControls({
       <CardBody className="space-y-5">
         {/* The signup counters only mean something while signups can still
             change the draft; once it has run, the league is teams and
-            fixtures. */}
-        <div
-          className={cn(
-            "grid grid-cols-2 gap-3",
-            configLocked ? "" : "sm:grid-cols-4",
-          )}
-        >
+            fixtures. One band with the phase stepper, not a tile each: four
+            tiles took two rows on a phone. */}
+        <StatStrip className="bg-surface-2/30">
           {configLocked ? null : (
             <>
-              <Stat label="Players" value={data.players.length} />
-              <Stat
+              <StatCell label="Players" value={data.players.length} />
+              <StatCell
                 label="To start"
                 value={cap.minPlayers}
                 hint={cap.canDraft ? "reached" : `${cap.needed} more`}
               />
             </>
           )}
-          <Stat label="Teams" value={data.teams.length} />
-          <Stat label="Matches" value={data.matches.length} />
-        </div>
-
-        {/* Read-only: where the league is. Moving it is the one button below. */}
-        <ol
-          aria-label="Season phases"
-          className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-xs"
-        >
-          {SEASON_PHASE_ORDER.map((phase, index) => (
-            <li
-              key={phase}
-              aria-current={phase === season.status ? "step" : undefined}
-              className="flex items-center gap-1.5"
-            >
-              {index > 0 ? (
-                <span aria-hidden="true" className="text-muted">
-                  →
-                </span>
-              ) : null}
-              <span
-                className={cn(
-                  "rounded-full border px-2.5 py-1",
-                  phase === season.status
-                    ? "border-accent/60 bg-accent/15 font-semibold text-fg"
-                    : index < currentIndex
-                      ? "border-line text-muted"
-                      : "border-dashed border-line text-muted",
-                )}
+          <StatCell label="Teams" value={data.teams.length} />
+          <StatCell label="Matches" value={data.matches.length} />
+          {/* Read-only: where the league is (moving it is the one button
+              below), in the same band as the counts. */}
+          <ol
+            aria-label="Season phases"
+            className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-xs sm:ml-auto"
+          >
+            {SEASON_PHASE_ORDER.map((phase, index) => (
+              <li
+                key={phase}
+                aria-current={phase === season.status ? "step" : undefined}
+                className="flex items-center gap-1.5"
               >
-                {PHASE_LABEL[phase]}
-                <span className="sr-only">
-                  {phase === season.status
-                    ? " (current)"
-                    : index < currentIndex
-                      ? " (done)"
-                      : ""}
+                {index > 0 ? (
+                  <span aria-hidden="true" className="text-muted">
+                    →
+                  </span>
+                ) : null}
+                <span
+                  className={cn(
+                    "rounded-full border px-2.5 py-1",
+                    phase === season.status
+                      ? "border-accent/60 bg-accent/15 font-semibold text-fg"
+                      : index < currentIndex
+                        ? "border-line text-muted"
+                        : "border-dashed border-line text-muted",
+                  )}
+                >
+                  {PHASE_LABEL[phase]}
+                  <span className="sr-only">
+                    {phase === season.status
+                      ? " (current)"
+                      : index < currentIndex
+                        ? " (done)"
+                        : ""}
+                  </span>
                 </span>
-              </span>
-            </li>
-          ))}
-        </ol>
+              </li>
+            ))}
+          </ol>
+        </StatStrip>
 
         <div className="space-y-1.5">
           {advance && advanceState ? (
@@ -1787,9 +1785,11 @@ function SeasonControls({
           </p>
         </div>
 
+        {/* The two folded tools share one ruled box. */}
+        <div className="divide-y divide-line rounded-lg border border-line">
         <details
           open={fixNeeded}
-          className="rounded-lg border border-line px-3 py-1 text-sm"
+          className="px-3 py-1 text-sm"
         >
           <summary className="flex min-h-11 cursor-pointer items-center font-medium">
             Fix the phase
@@ -1881,7 +1881,7 @@ function SeasonControls({
             standing between the phase controls and the rest of the page. */}
         <details
           id="adm-season-settings"
-          className="rounded-lg border border-line px-3 py-1 text-sm"
+          className="px-3 py-1 text-sm"
         >
           <summary className="flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2 font-medium">
             Season settings
@@ -2082,6 +2082,7 @@ function SeasonControls({
             </ActionForm>
           </div>
         </details>
+        </div>
       </CardBody>
     </Card>
   );
@@ -2781,6 +2782,10 @@ function CaptainControls({
                         </span>
                       </p>
                     ) : null}
+                    {/* The row's disclosures share one line, and the one
+                        opened takes the full width under it: stacked, their
+                        summaries took up to four lines a team. */}
+                    <div className="mt-1.5 flex flex-wrap items-start gap-x-4 gap-y-1.5 empty:hidden [&>details]:mt-0 [&>details[open]]:basis-full">
                     {season.status !== SEASON_STATUS.COMPLETE ? (
                       <details className="mt-1.5">
                         <summary className="cursor-pointer text-xs text-muted hover:text-fg">
@@ -2912,6 +2917,7 @@ function CaptainControls({
                         </p>
                       </details>
                     ) : null}
+                    </div>
                     {t.withdrawn ? (
                       <div className="mt-1.5 flex flex-wrap items-center gap-2">
                         <Badge>withdrew</Badge>
@@ -3167,6 +3173,10 @@ function CaptainControls({
                         ) : null}
                       </span>
                     </div>
+                    {/* The chips and the medal editor's summary share a
+                        line (the editor, opened, takes the full width): a
+                        line each made every row about 24px taller. */}
+                    <div className={ROW_META_LINE}>
                     <SignupRowMeta
                       reg={p}
                       sweep={membershipSweep}
@@ -3198,6 +3208,7 @@ function CaptainControls({
                         mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
                       />
                     ) : null}
+                    </div>
                   </>
                 ),
               }))}
@@ -3274,6 +3285,7 @@ function CaptainControls({
                           )
                         ) : null}
                       </div>
+                      <div className={ROW_META_LINE}>
                       <SignupRowMeta
                         reg={s}
                         sweep={membershipSweep}
@@ -3289,6 +3301,7 @@ function CaptainControls({
                           rankTierManual={s.user.rankTierManual}
                         />
                       ) : null}
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -3741,7 +3754,10 @@ function ScheduleControls({
               ) : null;
             })()}
             {/* Regular season, grouped by week — completed weeks collapse so
-                the enter-scores workflow starts at the week that needs it. */}
+                the enter-scores workflow starts at the week that needs it.
+                One ruled box: a bordered box per week spent a gap on each. */}
+            {status.weeks.length > 0 ? (
+            <div className="divide-y divide-line rounded-lg border border-line">
             {status.weeks.map((w) => {
               const weekMatches = data.matches.filter(
                 (m) => m.phase === "REGULAR" && m.week === w.week,
@@ -3750,7 +3766,6 @@ function ScheduleControls({
                 <details
                   key={`w${w.week}`}
                   open={w.pending > 0}
-                  className="rounded-lg border border-line"
                 >
                   <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
                     Week {w.week}
@@ -3793,6 +3808,8 @@ function ScheduleControls({
                 </details>
               );
             })}
+            </div>
+            ) : null}
           </div>
         )}
       </CardBody>
@@ -5499,6 +5516,11 @@ function regSignupFlags(reg: AdminData["players"][number], maxMmr: number) {
     { maxMmr },
   );
 }
+
+/** A signup row's chip line and medal editor on one line; the editor,
+ *  opened, takes the full width under it. */
+const ROW_META_LINE =
+  "mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 [&>div]:mt-0 [&>details]:mt-0 [&>details[open]]:basis-full";
 
 /**
  * The readiness line under each row of the signup-moderation lists — the

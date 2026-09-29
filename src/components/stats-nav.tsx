@@ -47,14 +47,17 @@ export async function StatsNav({
 
   return (
     <nav aria-label="Statistics" className="mb-6">
-      <div className="grid grid-cols-2 gap-1 rounded-xl border border-line bg-surface p-1 sm:flex sm:flex-wrap">
+      {/* One row at every width: on a phone the four tabs share it and a
+          long label ("Compare players") takes two short lines, where a 2x2
+          grid spent a second 44px row on the same four links. */}
+      <div className="grid auto-cols-fr grid-flow-col gap-1 rounded-xl border border-line bg-surface p-1 sm:flex sm:flex-wrap">
         {items.map((item) => (
           <Link
             key={item.key}
             href={item.href}
             aria-current={item.key === active ? "page" : undefined}
             className={cn(
-              "inline-flex min-h-11 flex-1 items-center justify-center rounded-lg px-3 py-2 text-center text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:min-h-10 sm:flex-none",
+              "inline-flex min-h-11 min-w-0 flex-1 items-center justify-center rounded-lg px-1.5 py-1 text-center text-[13px] font-medium leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 sm:min-h-10 sm:flex-none sm:px-3 sm:py-2 sm:text-sm",
               item.key === active
                 ? "bg-surface-3 text-fg shadow-sm ring-1 ring-inset ring-accent/50"
                 : "text-muted hover:bg-surface-2/70 hover:text-fg",

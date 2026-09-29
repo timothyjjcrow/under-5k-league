@@ -36,7 +36,9 @@ export function ProfileCareer({
               description used to live only in a hover tooltip, which a
               phone never shows. */}
           <CardBody>
-            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {/* Container-sized: one column in the xl rail, two once the
+                rail stacks under the main column on a tablet. */}
+            <ul className="grid grid-cols-1 gap-2 @lg:grid-cols-2">
               {badges.map((b) => (
                 <li
                   key={b.key}

@@ -74,16 +74,16 @@ export function DraftView({
   return (
     <div className="space-y-5">
       {/* Compact fixed bar while the pick clock is scrolled away — the 60s
-          auto-pick clock must never be invisible mid-draft. top-20 matches
-          the 80px header (see useBannerOffscreen). */}
+          auto-pick clock must never be invisible mid-draft. top-16 matches
+          the 64px header (see useBannerOffscreen). */}
       {offscreen ? (
         <button
           type="button"
           onClick={scrollToRoomTop}
           aria-label="Back to the pick clock"
-          className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
+          className="fixed inset-x-0 top-16 z-20 border-b border-line bg-bg/90 text-left backdrop-blur"
         >
-          <div className="mx-auto flex h-11 w-full max-w-6xl items-center justify-between gap-3 px-4 text-sm sm:px-6">
+          <div className="mx-auto flex h-11 w-full max-w-7xl items-center justify-between gap-3 px-4 text-sm sm:px-6 lg:px-8">
             <span className="flex min-w-0 items-center gap-2">
               <span aria-hidden>⏱</span>
               <span className="truncate font-medium">

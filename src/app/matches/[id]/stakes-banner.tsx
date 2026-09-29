@@ -93,7 +93,7 @@ export async function StakesBanner({
                 className="shrink-0 rounded-md"
               />
               <div className="min-w-0 flex-1">
-                <p className="mb-2 font-medium">
+                <p className="mb-1 font-medium">
                   {nameOf.get(s.teamId) ?? "?"}
                 </p>
                 <PlayoffOutlook scenario={s.scenario} teamNames={teamNames} matchId={match.id} />

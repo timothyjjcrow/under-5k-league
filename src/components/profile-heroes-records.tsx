@@ -47,7 +47,7 @@ export function ProfileHeroesAndRecords({
   return (
     <section id="player-about" className="scroll-mt-40 space-y-3">
       <SectionTitle>Player profile</SectionTitle>
-      <div className="space-y-6">
+      <div className="space-y-5">
         {showHeroes ? (
           <Card id="player-heroes" className="min-w-0 scroll-mt-40">
             <CardHeader
@@ -63,6 +63,7 @@ export function ProfileHeroesAndRecords({
                   <HeroPool
                     heroes={leagueHeroes}
                     minGamesForRate={HERO_RATE_MIN_GAMES}
+                    columns="container"
                   />
                 </div>
               ) : null}
@@ -89,6 +90,7 @@ export function ProfileHeroesAndRecords({
                     heroes={pubHeroes}
                     limit={5}
                     minGamesForRate={HERO_RATE_MIN_GAMES}
+                    columns="container"
                   />
                 </div>
               ) : null}

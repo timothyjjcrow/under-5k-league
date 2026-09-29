@@ -385,9 +385,11 @@ export default async function TeamPage({
       : []),
     ...(jersey ? [{ id: "team-jersey", label: "Jersey" }] : []),
   ];
+  const hasRail =
+    teamHeroes.length > 0 || h2h.length > 0 || (showOutlookCard && !!myScenario);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           {/* An archived team belongs to its season's archive — /teams and
@@ -462,7 +464,7 @@ export default async function TeamPage({
             aria-hidden
             className="animate-hero-glow-alt pointer-events-none absolute -right-8 bottom-0 h-40 w-40 translate-y-1/3 rounded-full bg-accent/15 blur-3xl"
           />
-          <div className="relative flex items-center gap-4 p-4 sm:gap-5 sm:p-6">
+          <div className="relative flex items-center gap-4 p-4 sm:gap-5 sm:p-5">
             {/* A smaller crest on phones leaves the names room to breathe. */}
             <TeamCrest
               name={team.name}
@@ -476,7 +478,7 @@ export default async function TeamPage({
               name={team.name}
               seed={team.id}
               logoUrl={team.logoUrl}
-              size={112}
+              size={96}
               imageFit="cover"
               className="hidden rounded-2xl shadow-lg sm:grid"
             />
@@ -622,412 +624,432 @@ export default async function TeamPage({
 
       <SectionNav items={sectionItems} label="Team sections" sticky />
 
-      {showOverview ? (
-        <section
-          id="team-overview"
-          aria-label="Team overview"
-          className={cn(
-            "scroll-mt-40 grid grid-cols-1 gap-4",
-            !played && featuredMatch && "lg:grid-cols-2",
-          )}
-        >
-          {/* Record, points and rank sit in the header once results exist;
-              before that the draft numbers are what this team is about. */}
-          {!played ? (
-            <div className="grid min-w-0 grid-cols-2 gap-3">
-              <Stat
-                label={
-                  displayBudgets.isProjected ? "Projected budget" : "Budget left"
-                }
-                value={`$${displayBudget}`}
-                hint={
-                  displayBudgets.isProjected
-                    ? "Finalized when the auction starts"
-                    : undefined
-                }
-              />
-              <Stat
-                label="Roster"
-                value={`${team.members.length}/${team.season.teamSize}`}
-              />
-              <Stat label="Avg MMR" value={avgMmr ?? "—"} />
-              {/* Nothing is spent before the auction opens. */}
-              {auctionStarted || spent > 0 ? (
-                <Stat label="Spent" value={`$${spent}`} />
-              ) : null}
-            </div>
-          ) : null}
-
-          {featuredMatch ? (
-            <ProfileMatchSpotlight
-              match={featuredMatch}
-              teams={allTeams}
-              playoffRounds={playoffRounds}
-              nowMs={nowMs}
-            />
-          ) : null}
-        </section>
-      ) : null}
-
-      <section
-        id="team-roster"
-        aria-label="Team roster"
-        className="scroll-mt-40 space-y-4"
+      {/* From lg, two columns: what the team is and plays (the next
+          series, the roster, every fixture) and a rail of its numbers (hero
+          pool, rematches, playoff outlook). A phone reads them in that
+          order. The jersey keeps the full width below. */}
+      <div
+        className={cn(
+          "grid grid-cols-1 items-start gap-5",
+          hasRail &&
+            "lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]",
+        )}
       >
-        <Card>
-          <CardHeader
-            title="Roster"
-            headingLevel={2}
-            subtitle={[
-              `${team.members.length} of ${team.season.teamSize} players`,
-              ...(spent > 0
-                ? [
-                    displayBudgets.isProjected
-                      ? `Recorded $${spent} · projected start $${displayBudget}`
-                      : `Spent $${spent} · $${displayBudget} left`,
-                  ]
-                : []),
-            ].join(" · ")}
-          />
-          <CardBody className="space-y-1.5">
-            {team.members.length === 0 ? (
-              <p className="text-sm text-muted">No players yet.</p>
-            ) : (
-              rosterOrder(team.members).map((m) => (
-                <div
-                  key={m.id}
-                  className="flex items-center gap-3 rounded-lg border border-line/60 bg-surface-2/20 px-3 py-2 text-sm"
-                >
-                  <Avatar
-                    name={m.user.name}
-                    src={m.user.avatar}
-                    size={36}
-                    className="shrink-0"
+        <div className="@container min-w-0 space-y-5">
+          {showOverview ? (
+            <section
+              id="team-overview"
+              aria-label="Team overview"
+              className={cn(
+                "scroll-mt-40 grid grid-cols-1 gap-4",
+                !played && featuredMatch && "@2xl:grid-cols-2",
+              )}
+            >
+              {/* Record, points and rank sit in the header once results exist;
+                  before that the draft numbers are what this team is about. */}
+              {!played ? (
+                <div className="grid min-w-0 grid-cols-2 gap-3">
+                  <Stat
+                    label={
+                      displayBudgets.isProjected ? "Projected budget" : "Budget left"
+                    }
+                    value={`$${displayBudget}`}
+                    hint={
+                      displayBudgets.isProjected
+                        ? "Finalized when the auction starts"
+                        : undefined
+                    }
                   />
-                  <div className="min-w-0 flex-1">
-                    <PlayerLink
-                      userId={m.userId}
-                      className="my-0 inline-flex min-h-11 items-center font-medium [overflow-wrap:anywhere]"
-                    >
-                      {m.user.name}
-                    </PlayerLink>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {m.isCaptain ? (
-                        <Badge tone="accent">Captain</Badge>
-                      ) : null}
-                      <RankBadge rankTier={m.user.rankTier} />
-                      {canViewLeagueContact(
-                        viewer,
-                        m.userId,
-                        viewerHasActiveRegistration,
-                      ) ? (
-                        // Shown on phones too: match night is when teammates
-                        // look each other up. Still members-only.
-                        <DiscordTag
-                          name={m.user.discordName}
-                          verified={!!m.user.discordId}
-                        />
-                      ) : null}
-                      <RoleBadges roles={rolesByUser.get(m.userId)} />
-                    </div>
-                  </div>
-                  {/* Prices matter while the draft is ahead; after it, phones
-                      give the room to the name and contact chips. */}
-                  <span
-                    className={cn(
-                      "shrink-0 font-mono text-muted",
-                      !draftAhead && "hidden sm:inline",
-                    )}
-                  >
-                    {m.isCaptain ? "—" : `$${m.price}`}
-                  </span>
-                </div>
-              ))
-            )}
-          </CardBody>
-        </Card>
-
-        {showCoverage ? (
-          <Card>
-            <CardHeader
-              title="Role coverage"
-              subtitle="Positions the roster prefers to play"
-            />
-            <CardBody>
-              <div className="grid grid-cols-5 gap-2">
-                {coverage.map((r) => (
-                  <div
-                    key={r.key}
-                    className={cn(
-                      "rounded-lg border px-2 py-3 text-center",
-                      r.count > 0
-                        ? "border-line bg-surface-2/40"
-                        : "border-dashed border-danger/40 bg-danger/5",
-                    )}
-                    title={r.label}
-                  >
-                    <div className="text-xs font-medium text-muted">
-                      {r.short}
-                    </div>
-                    <div
-                      className={cn(
-                        "mt-1 text-lg font-semibold tabular-nums",
-                        r.count === 0 ? "text-danger" : "text-fg",
-                      )}
-                    >
-                      {r.count}
-                    </div>
-                    <div className="text-[10px] uppercase tracking-wide text-muted">
-                      {r.count === 0
-                        ? "gap"
-                        : r.count === 1
-                          ? "player"
-                          : "players"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardBody>
-          </Card>
-        ) : null}
-      </section>
-
-      {myMatches.length === 0 ? (
-        // No fixtures yet: one line saying when they come, not an empty card.
-        <p className="rounded-[var(--radius)] border border-line-soft bg-surface/50 px-4 py-3 text-sm text-muted">
-          {draftAhead ? (
-            <>
-              No matches until after the draft.
-              {team.season.draftAt && !auctionStarted ? (
-                <>
-                  {" "}
-                  🗓️ Draft night:{" "}
-                  <strong className="text-fg">
-                    <LocalTime
-                      ts={team.season.draftAt.getTime()}
-                      variant="full"
-                      initial={formatMatchTime(team.season.draftAt, "full")}
-                    />
-                  </strong>{" "}
-                  <Countdown
-                    targetMs={team.season.draftAt.getTime()}
-                    eventLabel="Draft"
-                    passedLabel={DRAFT_PASSED_LABEL}
+                  <Stat
+                    label="Roster"
+                    value={`${team.members.length}/${team.season.teamSize}`}
                   />
-                </>
-              ) : null}
-            </>
-          ) : team.season.isActive ? (
-            "No matches scheduled yet."
-          ) : (
-            "No matches were scheduled for this team."
-          )}
-        </p>
-      ) : (
-        // No overflow-hidden on the card: it would clip the calendar menu.
-        // The body clips the rows' hover background to the corners instead.
-        <Card id="team-matches" className="scroll-mt-40">
-          <CardHeader
-            title="Matches"
-            headingLevel={2}
-            action={
-              team.season.isActive ? (
-                // Full width on phones so the calendar button, and the menu
-                // under it, keep to the card's right edge.
-                <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 sm:w-auto">
-                  <Link
-                    href={`/schedule?team=${team.id}#fixtures`}
-                    className={textLink("text-sm")}
-                  >
-                    Team schedule <LinkArrow />
-                  </Link>
-                  {showCalendar ? (
-                    <div className="ml-auto">
-                      <AddToCalendar
-                        site={resolveSiteUrl()}
-                        teams={[{ id: team.id, name: team.name }]}
-                        initialTeamId={team.id}
-                        align="end"
-                      />
-                    </div>
+                  <Stat label="Avg MMR" value={avgMmr ?? "—"} />
+                  {/* Nothing is spent before the auction opens. */}
+                  {auctionStarted || spent > 0 ? (
+                    <Stat label="Spent" value={`$${spent}`} />
                   ) : null}
                 </div>
-              ) : undefined
-            }
-          />
-          <CardBody className="overflow-hidden rounded-b-[var(--radius)] p-0">
-            <ul className="divide-y divide-line/60">
-              {fixtureList.map((m) => {
-                const isHome = m.homeTeamId === id;
-                const oppId = isHome ? m.awayTeamId : m.homeTeamId;
-                const oppName = teamName.get(oppId) ?? "?";
-                const myScore = isHome ? m.homeScore : m.awayScore;
-                const oppScore = isHome ? m.awayScore : m.homeScore;
-                const done = m.status === "COMPLETED";
-                const live = m.status === "LIVE";
-                const result =
-                  m.winnerTeamId === id
-                    ? "W"
-                    : m.winnerTeamId === null
-                      ? "D"
-                      : "L";
-                const matchState = profileMatchState(m, nowMs);
-                return (
-                  <li key={m.id}>
-                    <Link
-                      href={`/matches/${m.id}`}
-                      className="group flex min-h-14 min-w-0 items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2 sm:px-5"
+              ) : null}
+
+              {featuredMatch ? (
+                <ProfileMatchSpotlight
+                  match={featuredMatch}
+                  teams={allTeams}
+                  playoffRounds={playoffRounds}
+                  nowMs={nowMs}
+                />
+              ) : null}
+            </section>
+          ) : null}
+
+          <section
+            id="team-roster"
+            aria-label="Team roster"
+            className="scroll-mt-40 space-y-4"
+          >
+            <Card>
+              <CardHeader
+                title="Roster"
+                headingLevel={2}
+                subtitle={[
+                  `${team.members.length} of ${team.season.teamSize} players`,
+                  ...(spent > 0
+                    ? [
+                        displayBudgets.isProjected
+                          ? `Recorded $${spent} · projected start $${displayBudget}`
+                          : `Spent $${spent} · $${displayBudget} left`,
+                      ]
+                    : []),
+                ].join(" · ")}
+              />
+              {/* Two across once the column is 42rem wide: five rows of a
+                  wide band each were most of a desktop screen. */}
+              <CardBody className="grid grid-cols-1 gap-1.5 @2xl:grid-cols-2">
+                {team.members.length === 0 ? (
+                  <p className="text-sm text-muted">No players yet.</p>
+                ) : (
+                  rosterOrder(team.members).map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex items-center gap-3 rounded-lg border border-line/60 bg-surface-2/20 px-3 py-1 text-sm"
                     >
-                      <TeamCrest
-                        name={oppName}
-                        seed={oppId}
-                        logoUrl={teamLogoUrl.get(oppId)}
-                        size={28}
-                        imageFit="cover"
-                        className="shrink-0 rounded-lg"
+                      <Avatar
+                        name={m.user.name}
+                        src={m.user.avatar}
+                        size={32}
+                        className="shrink-0"
                       />
-                      <span className="min-w-0 flex-1">
-                        <span className="block font-medium leading-snug [overflow-wrap:anywhere] group-hover:underline">
-                          <span className="font-normal text-muted">vs </span>
-                          {oppName}
-                        </span>
-                        <span className="mt-0.5 block text-xs text-muted">
-                          {matchRoundLabel(m, playoffRounds)}
-                          {" · "}
-                          {m.scheduledAt ? (
-                            <LocalTime
-                              ts={m.scheduledAt.getTime()}
-                              variant="short"
-                              initial={formatMatchTime(m.scheduledAt, "short")}
-                            />
-                          ) : done ? (
-                            "Time not recorded"
-                          ) : (
-                            "Time TBD"
+                      {/* The chips follow the name on its line and wrap
+                          under it only when they don't fit, so most rows
+                          are one line. */}
+                      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5 py-0.5">
+                        <PlayerLink
+                          userId={m.userId}
+                          className="my-0 inline-flex min-h-11 items-center font-medium [overflow-wrap:anywhere]"
+                        >
+                          {m.user.name}
+                        </PlayerLink>
+                        {m.isCaptain ? (
+                          <Badge tone="accent">Captain</Badge>
+                        ) : null}
+                        <RankBadge rankTier={m.user.rankTier} />
+                        {canViewLeagueContact(
+                          viewer,
+                          m.userId,
+                          viewerHasActiveRegistration,
+                        ) ? (
+                          // Shown on phones too: match night is when teammates
+                          // look each other up. Still members-only.
+                          <DiscordTag
+                            name={m.user.discordName}
+                            verified={!!m.user.discordId}
+                          />
+                        ) : null}
+                        <RoleBadges roles={rolesByUser.get(m.userId)} />
+                      </div>
+                      {/* Prices matter while the draft is ahead; after it, phones
+                          give the room to the name and contact chips. */}
+                      <span
+                        className={cn(
+                          "shrink-0 font-mono text-muted",
+                          !draftAhead && "hidden sm:inline",
+                        )}
+                      >
+                        {m.isCaptain ? "—" : `$${m.price}`}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </CardBody>
+            </Card>
+
+            {showCoverage ? (
+              <Card>
+                <CardHeader
+                  title="Role coverage"
+                  subtitle="Positions the roster prefers to play"
+                />
+                <CardBody>
+                  <div className="grid grid-cols-5 gap-2">
+                    {coverage.map((r) => (
+                      <div
+                        key={r.key}
+                        className={cn(
+                          "rounded-lg border px-2 py-3 text-center",
+                          r.count > 0
+                            ? "border-line bg-surface-2/40"
+                            : "border-dashed border-danger/40 bg-danger/5",
+                        )}
+                        title={r.label}
+                      >
+                        <div className="text-xs font-medium text-muted">
+                          {r.short}
+                        </div>
+                        <div
+                          className={cn(
+                            "mt-1 text-lg font-semibold tabular-nums",
+                            r.count === 0 ? "text-danger" : "text-fg",
                           )}
-                          {done && m.forfeit ? " · Forfeit" : ""}
-                        </span>
-                      </span>
-                      {done || live ? (
-                        <span className="shrink-0 font-display text-lg font-semibold tabular-nums">
-                          {myScore}–{oppScore}
-                        </span>
-                      ) : null}
-                      {done ? (
-                        <Badge
-                          tone={
-                            result === "W"
-                              ? "success"
-                              : result === "L"
-                                ? "danger"
-                                : "neutral"
-                          }
-                          className="w-7 shrink-0 justify-center px-0"
                         >
-                          <span aria-hidden>{result}</span>
-                          <span className="sr-only">
-                            {result === "W"
-                              ? "Won"
-                              : result === "L"
-                                ? "Lost"
-                                : "Draw"}
-                          </span>
-                        </Badge>
-                      ) : (
-                        <Badge
-                          tone={live ? "danger" : "neutral"}
-                          className="shrink-0"
-                        >
-                          {live
-                            ? "Live"
-                            : matchState === "Awaiting result"
-                              ? "Awaiting result"
-                              : "Upcoming"}
-                        </Badge>
-                      )}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </CardBody>
-        </Card>
-      )}
+                          {r.count}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-wide text-muted">
+                          {r.count === 0
+                            ? "gap"
+                            : r.count === 1
+                              ? "player"
+                              : "players"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardBody>
+              </Card>
+            ) : null}
+          </section>
 
-      {teamHeroes.length > 0 ? (
-        <Card id="team-heroes" className="scroll-mt-40">
-          <CardHeader
-            title="Team hero pool"
-            headingLevel={2}
-            subtitle="Most-played heroes across the roster, with win rate"
-          />
-          <CardBody>
-            <HeroPool heroes={teamHeroes} />
-          </CardBody>
-        </Card>
-      ) : null}
-
-      {h2h.length > 0 ? (
-        <Card id="team-rivals" className="scroll-mt-40">
-          <CardHeader
-            title="Head-to-head"
-            headingLevel={2}
-            subtitle="Opponents met more than once"
-          />
-          <CardBody className="p-0">
-            <ul className="divide-y divide-line/60">
-              {h2h.map((r) => {
-                const edge =
-                  r.wins > r.losses
-                    ? "success"
-                    : r.losses > r.wins
-                      ? "danger"
-                      : "neutral";
-                return (
-                  <li
-                    key={r.opponentId}
-                    className="flex items-center justify-between gap-3 px-5 py-2.5 text-sm transition-colors hover:bg-surface-2/40"
-                  >
-                    <Link
-                      href={`/teams/${r.opponentId}`}
-                      className="flex min-w-0 flex-1 items-center gap-2 font-medium hover:text-info"
-                    >
-                      <TeamCrest
-                        name={teamName.get(r.opponentId) ?? "?"}
-                        seed={r.opponentId}
-                        logoUrl={teamLogoUrl.get(r.opponentId)}
-                        size={20}
-                        className="shrink-0 rounded"
+          {myMatches.length === 0 ? (
+            // No fixtures yet: one line saying when they come, not an empty card.
+            <p className="rounded-[var(--radius)] border border-line-soft bg-surface/50 px-4 py-3 text-sm text-muted">
+              {draftAhead ? (
+                <>
+                  No matches until after the draft.
+                  {team.season.draftAt && !auctionStarted ? (
+                    <>
+                      {" "}
+                      🗓️ Draft night:{" "}
+                      <strong className="text-fg">
+                        <LocalTime
+                          ts={team.season.draftAt.getTime()}
+                          variant="full"
+                          initial={formatMatchTime(team.season.draftAt, "full")}
+                        />
+                      </strong>{" "}
+                      <Countdown
+                        targetMs={team.season.draftAt.getTime()}
+                        eventLabel="Draft"
+                        passedLabel={DRAFT_PASSED_LABEL}
                       />
-                      <span className="[overflow-wrap:anywhere]">
-                        {teamName.get(r.opponentId) ?? "?"}
-                      </span>
-                    </Link>
-                    <span className="flex shrink-0 items-center gap-3">
-                      <span className="text-xs text-muted">
-                        {r.gamesFor}–{r.gamesAgainst} games
-                      </span>
-                      <Badge tone={edge}>
-                        <SeriesRecord record={r} />
-                      </Badge>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </CardBody>
-        </Card>
-      ) : null}
+                    </>
+                  ) : null}
+                </>
+              ) : team.season.isActive ? (
+                "No matches scheduled yet."
+              ) : (
+                "No matches were scheduled for this team."
+              )}
+            </p>
+          ) : (
+            // No overflow-hidden on the card: it would clip the calendar menu.
+            // The body clips the rows' hover background to the corners instead.
+            <Card id="team-matches" className="scroll-mt-40">
+              <CardHeader
+                title="Matches"
+                headingLevel={2}
+                action={
+                  team.season.isActive ? (
+                    // Full width on phones so the calendar button, and the menu
+                    // under it, keep to the card's right edge.
+                    <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 sm:w-auto">
+                      <Link
+                        href={`/schedule?team=${team.id}#fixtures`}
+                        className={textLink("text-sm")}
+                      >
+                        Team schedule <LinkArrow />
+                      </Link>
+                      {showCalendar ? (
+                        <div className="ml-auto">
+                          <AddToCalendar
+                            site={resolveSiteUrl()}
+                            teams={[{ id: team.id, name: team.name }]}
+                            initialTeamId={team.id}
+                            align="end"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : undefined
+                }
+              />
+              <CardBody className="overflow-hidden rounded-b-[var(--radius)] p-0">
+                <ul className="divide-y divide-line/60">
+                  {fixtureList.map((m) => {
+                    const isHome = m.homeTeamId === id;
+                    const oppId = isHome ? m.awayTeamId : m.homeTeamId;
+                    const oppName = teamName.get(oppId) ?? "?";
+                    const myScore = isHome ? m.homeScore : m.awayScore;
+                    const oppScore = isHome ? m.awayScore : m.homeScore;
+                    const done = m.status === "COMPLETED";
+                    const live = m.status === "LIVE";
+                    const result =
+                      m.winnerTeamId === id
+                        ? "W"
+                        : m.winnerTeamId === null
+                          ? "D"
+                          : "L";
+                    const matchState = profileMatchState(m, nowMs);
+                    return (
+                      <li key={m.id}>
+                        <Link
+                          href={`/matches/${m.id}`}
+                          className="group flex min-h-14 min-w-0 items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2 sm:px-5"
+                        >
+                          <TeamCrest
+                            name={oppName}
+                            seed={oppId}
+                            logoUrl={teamLogoUrl.get(oppId)}
+                            size={28}
+                            imageFit="cover"
+                            className="shrink-0 rounded-lg"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block font-medium leading-snug [overflow-wrap:anywhere] group-hover:underline">
+                              <span className="font-normal text-muted">vs </span>
+                              {oppName}
+                            </span>
+                            <span className="mt-0.5 block text-xs text-muted">
+                              {matchRoundLabel(m, playoffRounds)}
+                              {" · "}
+                              {m.scheduledAt ? (
+                                <LocalTime
+                                  ts={m.scheduledAt.getTime()}
+                                  variant="short"
+                                  initial={formatMatchTime(m.scheduledAt, "short")}
+                                />
+                              ) : done ? (
+                                "Time not recorded"
+                              ) : (
+                                "Time TBD"
+                              )}
+                              {done && m.forfeit ? " · Forfeit" : ""}
+                            </span>
+                          </span>
+                          {done || live ? (
+                            <span className="shrink-0 font-display text-lg font-semibold tabular-nums">
+                              {myScore}–{oppScore}
+                            </span>
+                          ) : null}
+                          {done ? (
+                            <Badge
+                              tone={
+                                result === "W"
+                                  ? "success"
+                                  : result === "L"
+                                    ? "danger"
+                                    : "neutral"
+                              }
+                              className="w-7 shrink-0 justify-center px-0"
+                            >
+                              <span aria-hidden>{result}</span>
+                              <span className="sr-only">
+                                {result === "W"
+                                  ? "Won"
+                                  : result === "L"
+                                    ? "Lost"
+                                    : "Draw"}
+                              </span>
+                            </Badge>
+                          ) : (
+                            <Badge
+                              tone={live ? "danger" : "neutral"}
+                              className="shrink-0"
+                            >
+                              {live
+                                ? "Live"
+                                : matchState === "Awaiting result"
+                                  ? "Awaiting result"
+                                  : "Upcoming"}
+                            </Badge>
+                          )}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </CardBody>
+            </Card>
+          )}
+        </div>
+        {hasRail ? (
+          <div className="@container min-w-0 space-y-5">
+          {teamHeroes.length > 0 ? (
+            <Card id="team-heroes" className="scroll-mt-40">
+              <CardHeader
+                title="Team hero pool"
+                headingLevel={2}
+                subtitle="Most-played heroes across the roster, with win rate"
+              />
+              <CardBody>
+                <HeroPool heroes={teamHeroes} columns="container" />
+              </CardBody>
+            </Card>
+          ) : null}
 
-      {showOutlookCard && myScenario ? (
-        <section
-          id="team-outlook"
-          aria-label="Playoff outlook"
-          className="scroll-mt-40"
-        >
-          <WhatWeNeed scenario={myScenario} teamNames={teamName} />
-        </section>
-      ) : null}
+          {h2h.length > 0 ? (
+            <Card id="team-rivals" className="scroll-mt-40">
+              <CardHeader
+                title="Head-to-head"
+                headingLevel={2}
+                subtitle="Opponents met more than once"
+              />
+              <CardBody className="p-0">
+                <ul className="divide-y divide-line/60">
+                  {h2h.map((r) => {
+                    const edge =
+                      r.wins > r.losses
+                        ? "success"
+                        : r.losses > r.wins
+                          ? "danger"
+                          : "neutral";
+                    return (
+                      <li
+                        key={r.opponentId}
+                        className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2/40"
+                      >
+                        <Link
+                          href={`/teams/${r.opponentId}`}
+                          className="flex min-w-0 flex-1 items-center gap-2 font-medium hover:text-info"
+                        >
+                          <TeamCrest
+                            name={teamName.get(r.opponentId) ?? "?"}
+                            seed={r.opponentId}
+                            logoUrl={teamLogoUrl.get(r.opponentId)}
+                            size={20}
+                            className="shrink-0 rounded"
+                          />
+                          <span className="[overflow-wrap:anywhere]">
+                            {teamName.get(r.opponentId) ?? "?"}
+                          </span>
+                        </Link>
+                        <span className="flex shrink-0 items-center gap-3">
+                          <span className="text-xs text-muted">
+                            {r.gamesFor}–{r.gamesAgainst} games
+                          </span>
+                          <Badge tone={edge}>
+                            <SeriesRecord record={r} />
+                          </Badge>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {showOutlookCard && myScenario ? (
+            <section
+              id="team-outlook"
+              aria-label="Playoff outlook"
+              className="scroll-mt-40"
+            >
+              <WhatWeNeed scenario={myScenario} teamNames={teamName} />
+            </section>
+          ) : null}
+          </div>
+        ) : null}
+      </div>
 
       {jersey ? (
         <section

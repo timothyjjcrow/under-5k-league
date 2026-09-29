@@ -44,7 +44,9 @@ export function SeasonGrid({
         aria-label={label}
         title={label}
         className={cn(
-          "flex min-h-12 min-w-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-transparent px-2 py-2 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
+          // One line ("W 2–0"), not a letter stacked over the score: the
+          // stacked chip made every row 60px.
+          "flex min-h-9 min-w-14 items-center justify-center gap-1 whitespace-nowrap rounded-md border border-transparent px-1.5 py-1 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
           cell.result === "W" &&
             "bg-success/15 text-success hover:bg-success/25",
           cell.result === "L" &&
@@ -119,12 +121,12 @@ export function SeasonGrid({
               <tr key={rowId}>
                 <th
                   scope="row"
-                  className="sticky left-0 z-10 border-b border-line/60 bg-surface px-3 py-1.5 text-left font-normal sm:px-4"
+                  className="sticky left-0 z-10 border-b border-line/60 bg-surface px-3 py-1 text-left font-normal sm:px-4"
                 >
                   <Link
                     href={`/teams/${rowId}`}
                     title={teamName.get(rowId) ?? "?"}
-                    className="flex min-h-11 min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
+                    className="flex min-h-9 min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
                   >
                     <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
                       {rankOf.get(rowId)}
@@ -152,7 +154,7 @@ export function SeasonGrid({
                       // column mapping aligned with the header row.
                       <td
                         key={colId}
-                        className="border-b border-line/60 bg-surface-2/60 px-1.5 py-1.5"
+                        className="border-b border-line/60 bg-surface-2/60 px-1.5 py-1"
                       />
                     );
                   }
@@ -160,7 +162,7 @@ export function SeasonGrid({
                   return (
                     <td
                       key={colId}
-                      className="border-b border-line/60 px-1.5 py-1.5 text-center align-middle"
+                      className="border-b border-line/60 px-1.5 py-1 text-center align-middle"
                     >
                       {meetings.length === 0 ? (
                         <span

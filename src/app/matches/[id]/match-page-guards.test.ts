@@ -196,21 +196,24 @@ describe("match page box scores", () => {
   });
 
   it("shows one report-card chip per player that opens the named metrics", () => {
-    const BOX = CARD("box-score.tsx");
-    const strip = BOX.slice(BOX.indexOf("function ReportCardStrip"));
-    expect(strip).toMatch(
-      /<details[\s\S]*?<summary[\s\S]*?Report \{overall\}[\s\S]*?<\/summary>/,
+    // One toggle per line (a real button naming what it opens), and the
+    // metrics by their full names in the panel it controls.
+    const LINE = CARD("box-score-line.tsx");
+    expect(LINE).toMatch(
+      /<button\s+type="button"\s+aria-expanded=\{open\}\s+aria-controls=\{panelId\}[\s\S]*?Report \{report\.overall\}[\s\S]*?<\/button>/,
     );
-    expect(strip).toContain("{r.label}");
+    expect(LINE).toMatch(/<div id=\{panelId\} hidden=\{!open\}/);
+    expect(LINE).toContain("{r.label}");
     // No abbreviated per-metric chips ("HD/min", "TD").
-    expect(strip).not.toContain("r.short");
+    expect(LINE).not.toContain("short");
+    expect(CARD("box-score.tsx")).toContain("report={lineReport(p)}");
   });
 
   it("prints each game's team net worth once, in the panel", () => {
     const BOX = CARD("box-score.tsx");
     const side = BOX.slice(
       BOX.indexOf("function SidePlayers"),
-      BOX.indexOf("function ReportCardStrip"),
+      BOX.indexOf("function lineReport"),
     );
     expect(side.length).toBeGreaterThan(0);
     expect(side).not.toMatch(/formatNetWorth\(totalNet\)|Net worth\{" "\}/);

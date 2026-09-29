@@ -1,5 +1,6 @@
 import type { Match } from "@prisma/client";
 import Link from "next/link";
+import { Fragment } from "react";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
@@ -124,6 +125,11 @@ export async function ThisWeek({
           blank block under the score. */}
       <CardBody className="grid items-start gap-3 p-3 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))] sm:p-4">
         {focus.map((m) => {
+          // A slate of one (a playoff round down to its last series, the
+          // grand final) stretched a card built for a third of the width
+          // across all of it: two short rows and a sea of blank. Alone, the
+          // sides face each other instead, home left and away right.
+          const solo = focus.length === 1;
           const pick = pickemControlFor(m, {
             signedIn: myPicks != null,
             canPlay: pickemPlayable,
@@ -177,8 +183,14 @@ export async function ThisWeek({
                     <span>Kickoff time not set</span>
                   )}
                 </div>
-                <div className="my-4 flex-1 space-y-3">
-                  {[m.homeTeamId, m.awayTeamId].map((teamId) => {
+                <div
+                  className={cn(
+                    "my-4 flex-1 space-y-3",
+                    solo &&
+                      "sm:grid sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center sm:gap-x-6 sm:space-y-0",
+                  )}
+                >
+                  {[m.homeTeamId, m.awayTeamId].map((teamId, sideIndex) => {
                     const c = checkins(m.id, teamId);
                     const scenario = report?.teams.get(teamId);
                     // The outlook sits UNDER the row, not inside the name's
@@ -187,17 +199,30 @@ export async function ThisWeek({
                     // beside "Win Qualify" instead of the team name.
                     const outlook =
                       scenario && scenario.nextMatchId === m.id ? scenario : null;
-                    return (
+                    // The away side of a lone fixture mirrors the home side.
+                    const mirrored = solo && sideIndex === 1;
+                    const row = (
                       <div key={teamId} className="min-w-0">
-                        <div className="flex min-w-0 items-center gap-2">
+                        <div
+                          className={cn(
+                            "flex min-w-0 items-center gap-2",
+                            solo && "sm:gap-3",
+                            mirrored && "sm:flex-row-reverse sm:text-right",
+                          )}
+                        >
                           <TeamCrest
                             name={teamName.get(teamId) ?? "?"}
                             seed={teamId}
                             logoUrl={teamLogoUrl.get(teamId)}
-                            size={34}
+                            size={solo ? 40 : 34}
                             className="shrink-0 rounded-lg"
                           />
-                          <p className="min-w-0 flex-1 font-semibold leading-snug [overflow-wrap:anywhere]">
+                          <p
+                            className={cn(
+                              "min-w-0 flex-1 font-semibold leading-snug [overflow-wrap:anywhere]",
+                              solo && "sm:text-base",
+                            )}
+                          >
                             {teamName.get(teamId) ?? "?"}
                           </p>
                           {c ? (
@@ -224,7 +249,10 @@ export async function ThisWeek({
                             >
                               <span
                                 aria-hidden
-                                className="flex flex-col items-end gap-1"
+                                className={cn(
+                                  "flex flex-col items-end gap-1",
+                                  mirrored && "sm:items-start",
+                                )}
                               >
                                 <span className="flex gap-0.5">
                                   {Array.from(
@@ -251,20 +279,55 @@ export async function ThisWeek({
                           {m.status === "LIVE" ? (
                             <span
                               aria-hidden
-                              className="ml-1 font-display text-3xl tabular-nums text-fg"
+                              className={cn(
+                                "ml-1 font-display text-3xl tabular-nums text-fg",
+                                // Alone, the score sits between the sides.
+                                solo && "sm:hidden",
+                              )}
                             >
                               {teamId === m.homeTeamId ? m.homeScore : m.awayScore}
                             </span>
                           ) : null}
                         </div>
                         {outlook ? (
-                          // Indented by the crest (34px) plus the gap, so it
-                          // lines up under the team name.
-                          <div className="mt-1 pl-[2.625rem]">
+                          // Indented by the crest plus the gap, so it lines
+                          // up under the team name (mirrored for the away
+                          // side of a lone fixture).
+                          <div
+                            className={cn(
+                              "mt-1",
+                              solo
+                                ? "pl-12 sm:pl-[3.25rem]"
+                                : "pl-[2.625rem]",
+                              mirrored &&
+                                "sm:flex sm:justify-end sm:pl-0 sm:pr-[3.25rem]",
+                            )}
+                          >
                             <PlayoffOutlook scenario={outlook} teamNames={teamName} matchId={m.id} compact />
                           </div>
                         ) : null}
                       </div>
+                    );
+                    return sideIndex === 0 && solo ? (
+                      <Fragment key={teamId}>
+                        {row}
+                        <span
+                          aria-hidden
+                          className="hidden text-center font-display text-2xl tabular-nums text-muted sm:block"
+                        >
+                          {m.status === "LIVE" ? (
+                            <span className="text-fg">
+                              {m.homeScore}
+                              <span className="mx-1.5 text-muted">–</span>
+                              {m.awayScore}
+                            </span>
+                          ) : (
+                            "vs"
+                          )}
+                        </span>
+                      </Fragment>
+                    ) : (
+                      row
                     );
                   })}
                 </div>

@@ -250,23 +250,28 @@ export default async function MetaPage({
       />
       {switcher}
       {dataNotice}
-      <div className="space-y-2 rounded-xl border border-line bg-surface p-4 text-sm sm:p-5">
+      <div className="rounded-xl border border-line bg-surface px-4 py-3 text-sm">
         <p id="meta-sample" className="text-muted">
           {`${meta.rows.length} of ${HEROES.length} heroes picked across ${meta.games} complete ${meta.games === 1 ? "game" : "games"}.`}
         </p>
-        {mostPicked ? (
-          <Headline
-            label="Most picked"
-            hero={heroOf.get(mostPicked.heroId)}
-            text={`${heroName(mostPicked.heroId)}, ${mostPicked.picks} ${mostPicked.picks === 1 ? "pick" : "picks"} (in ${mostPicked.pickRate}% of games)`}
-          />
-        ) : null}
-        {bestWinRate ? (
-          <Headline
-            label={`Best win rate, ${META_HEADLINE_MIN_PICKS}+ picks`}
-            hero={heroOf.get(bestWinRate.heroId)}
-            text={`${heroName(bestWinRate.heroId)}, ${bestWinRate.winRate}% (${bestWinRate.wins}–${bestWinRate.losses})`}
-          />
+        {mostPicked || bestWinRate ? (
+          // Side by side from sm: two headlines, one line.
+          <div className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+            {mostPicked ? (
+              <Headline
+                label="Most picked"
+                hero={heroOf.get(mostPicked.heroId)}
+                text={`${heroName(mostPicked.heroId)}, ${mostPicked.picks} ${mostPicked.picks === 1 ? "pick" : "picks"} (in ${mostPicked.pickRate}% of games)`}
+              />
+            ) : null}
+            {bestWinRate ? (
+              <Headline
+                label={`Best win rate, ${META_HEADLINE_MIN_PICKS}+ picks`}
+                hero={heroOf.get(bestWinRate.heroId)}
+                text={`${heroName(bestWinRate.heroId)}, ${bestWinRate.winRate}% (${bestWinRate.wins}–${bestWinRate.losses})`}
+              />
+            ) : null}
+          </div>
         ) : null}
       </div>
       <HeroMetaTable rows={tableRows} />

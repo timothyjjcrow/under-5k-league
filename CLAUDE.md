@@ -245,9 +245,9 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   (`<Bracket>`, `SeasonGrid`), or Chrome pushes the inner width into the page.
 - **Give every flex level between a container and a `truncate` span `min-w-0`.**
   Table column widths go on `<col>`, never on responsive-hidden cells.
-- **The site header is `h-20` (80px): move every offset under it together**
-  (`top-20` clock bars, the `-80px` rootMargin in `useBannerOffscreen`,
-  `lg:top-20` section bars, `scroll-mt-*` anchors).
+- **The site header is `h-16` (64px): move every offset under it together**
+  (`top-16` clock bars, the `-64px` rootMargin in `useBannerOffscreen`,
+  `lg:top-16` section bars, `scroll-mt-*` anchors).
 
 ### Tap targets and accessibility
 

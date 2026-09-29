@@ -67,23 +67,25 @@ function ScoringGuide() {
         subtitle="Fantasy scores impact points, the same per-game score behind match MVPs and Player of the Week. Each of your five earns them in every league game they play, and your fantasy score adds all five together."
         headingLevel={2}
       />
-      <CardBody className="space-y-4">
-        <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm">
+      <CardBody className="space-y-3">
+        <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-2.5 text-sm">
           <span className="font-semibold">Every game</span>
           <span className="ml-2 text-muted">+{FANTASY.KILL} / kill · +{FANTASY.ASSIST} / assist · {FANTASY.DEATH} / death · +{FANTASY.WIN} / win</span>
         </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-lg border border-line bg-surface/70 p-4">
+        {/* The three bonuses as one divided box (rows on phones, columns
+            from md): three separate padded boxes took a phone screen. */}
+        <div className="grid grid-cols-1 divide-y divide-line rounded-lg border border-line bg-surface/70 md:grid-cols-3 md:divide-x md:divide-y-0">
+          <div className="min-w-0 px-4 py-2.5">
             <div className="text-sm font-semibold">Farm</div>
-            <p className="mt-1 text-xs leading-relaxed text-muted">Gold per minute above {FANTASY.ECONOMY_GPM_FLOOR} × {FANTASY.ECONOMY_GPM}, plus last hits × {FANTASY.ECONOMY_LAST_HIT}.</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted">Gold per minute above {FANTASY.ECONOMY_GPM_FLOOR} × {FANTASY.ECONOMY_GPM}, plus last hits × {FANTASY.ECONOMY_LAST_HIT}.</p>
           </div>
-          <div className="rounded-lg border border-line bg-surface/70 p-4">
+          <div className="min-w-0 px-4 py-2.5">
             <div className="text-sm font-semibold">Playmaking</div>
-            <p className="mt-1 text-xs leading-relaxed text-muted">Assists × {FANTASY.PLAYMAKING_ASSIST}, plus hero healing × {FANTASY.PLAYMAKING_HEALING}.</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted">Assists × {FANTASY.PLAYMAKING_ASSIST}, plus hero healing × {FANTASY.PLAYMAKING_HEALING}.</p>
           </div>
-          <div className="rounded-lg border border-line bg-surface/70 p-4">
+          <div className="min-w-0 px-4 py-2.5">
             <div className="text-sm font-semibold">Pressure</div>
-            <p className="mt-1 text-xs leading-relaxed text-muted">Hero damage × {FANTASY.PRESSURE_HERO_DAMAGE}, tower damage × {FANTASY.PRESSURE_TOWER_DAMAGE}, plus denies × {FANTASY.PRESSURE_DENY}.</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted">Hero damage × {FANTASY.PRESSURE_HERO_DAMAGE}, tower damage × {FANTASY.PRESSURE_TOWER_DAMAGE}, plus denies × {FANTASY.PRESSURE_DENY}.</p>
           </div>
         </div>
         <p className="text-xs leading-relaxed text-muted">Only the highest of these three bonuses is added, up to +{FANTASY.BONUS_CAP} per game, so farm and damage cannot stack. A player scores only in games they play, so a night a standin covers for them earns nothing. Scores use complete imported 5v5 box scores. Preferred positions help browse the draft pool; they do not change scoring.</p>
@@ -354,7 +356,7 @@ export default async function FantasyPage({
   });
 
   return (
-    <div className="space-y-7">
+    <div className="space-y-6">
       <PageTitle
         title="Fantasy"
         subtitle={`${season.name}${readOnly ? " · archived" : ""}${status ? `. ${status}` : ""}`}
@@ -379,10 +381,10 @@ export default async function FantasyPage({
       {switcher}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Entries</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{rosters.length}</div><p className="mt-1 text-xs text-muted">{locked ? "Locked fantasy fives" : "Saved fantasy fives"}</p></CardBody></Card>
-        <Card><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">Games scored</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{scoredGameCount}</div><p className="mt-1 text-xs text-muted">Complete imported games</p></CardBody></Card>
+        <Card><CardBody className="py-3"><div className="text-xs uppercase tracking-wide text-muted">Entries</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{rosters.length}</div><p className="mt-1 text-xs text-muted">{locked ? "Locked fantasy fives" : "Saved fantasy fives"}</p></CardBody></Card>
+        <Card><CardBody className="py-3"><div className="text-xs uppercase tracking-wide text-muted">Games scored</div><div className="mt-1 font-display text-2xl font-semibold tabular-nums">{scoredGameCount}</div><p className="mt-1 text-xs text-muted">Complete imported games</p></CardBody></Card>
         {windowTiles.map((tile) => (
-          <Card key={tile.label}><CardBody className="py-4"><div className="text-xs uppercase tracking-wide text-muted">{tile.label}</div><div className="mt-1 truncate font-display text-2xl font-semibold tabular-nums">{tile.value}</div><p className="mt-1 text-xs text-muted [overflow-wrap:anywhere]">{tile.hint}</p></CardBody></Card>
+          <Card key={tile.label}><CardBody className="py-3"><div className="text-xs uppercase tracking-wide text-muted">{tile.label}</div><div className="mt-1 truncate font-display text-2xl font-semibold tabular-nums">{tile.value}</div><p className="mt-1 text-xs text-muted [overflow-wrap:anywhere]">{tile.hint}</p></CardBody></Card>
         ))}
       </div>
 
@@ -399,7 +401,7 @@ export default async function FantasyPage({
               <li
                 key={s.managerId}
                 className={cn(
-                  "px-4 py-3 text-sm sm:px-5",
+                  "px-4 py-2.5 text-sm",
                   i === 0 && "bg-accent/[0.04]",
                   viewer?.id === s.managerId && "bg-info/[0.07]",
                 )}
@@ -439,7 +441,7 @@ export default async function FantasyPage({
 
       {locked && rosters.length === 0 ? (
         <EmptyState
-          compact
+          inline
           title={isFinal ? "Nobody played fantasy this season" : "No fantasy fives this season"}
           description={`Nobody saved a five before rosters locked.${topScorers.length > 0 ? " Player scores below still show who earned the most impact points." : ""}`}
         />

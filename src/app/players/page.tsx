@@ -19,7 +19,10 @@ import {
 } from "@/lib/player-pool";
 import { poolPubRecord } from "@/lib/pub-stats";
 import { REGISTRATION_STATUS, SEASON_STATUS } from "@/lib/constants";
-import { playerDirectoryPresentation } from "@/lib/player-directory-lifecycle";
+import {
+  playerDirectoryPresentation,
+  poolDetailsByDefault,
+} from "@/lib/player-directory-lifecycle";
 import {
   canViewLeagueContact,
   canViewLeagueDirectoryContact,
@@ -223,7 +226,7 @@ export default async function PlayersPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       <PageTitle
         title="Players"
         subtitle={`${season.name} · every signup and standin in one place`}
@@ -291,7 +294,7 @@ export default async function PlayersPage() {
       {/* The pool is the page: this page is named Players, and post-draft
           "who is still available" is the question that brings a captain
           here. Rosters are /teams' job — each row already chips its team. */}
-      <section className="space-y-4">
+      <section className="space-y-3">
         <SectionTitle aside={directory.poolAside}>
           {directory.poolTitle}
         </SectionTitle>
@@ -315,6 +318,7 @@ export default async function PlayersPage() {
               scout={scout}
               now={nowMs}
               showContact={viewerCanViewLeagueDirectory}
+              detailsByDefault={poolDetailsByDefault(directory.stage)}
             />
           </Suspense>
         )}
