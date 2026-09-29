@@ -78,12 +78,14 @@ type DisplayUser = {
 };
 
 /**
- * Two boards to a row on desktop, and a lone last board (an odd count, which
- * depends on the data: Team sustain is conditional) takes the whole row
- * instead of leaving an empty half-width cell beside it.
+ * Two boards to a row from lg, three from xl, and the last row never leaves
+ * an empty cell (the count depends on the data: Team sustain is
+ * conditional). From lg a lone last board takes the whole row. From xl the
+ * grid has six tracks and a board takes two: a last row of two boards splits
+ * the row in halves, and a lone last board takes all of it.
  */
 const BOARD_GRID =
-  "grid grid-cols-1 gap-4 lg:grid-cols-2 lg:[&>:last-child:nth-child(odd)]:col-span-2";
+  "grid grid-cols-1 gap-4 lg:grid-cols-2 lg:[&>:last-child:nth-child(odd)]:col-span-2 xl:grid-cols-6 xl:[&>*]:col-span-2 xl:[&>:nth-child(3n+1):last-child]:col-span-6 xl:[&>:nth-child(3n+1):nth-last-child(2)]:col-span-3 xl:[&>:nth-child(3n+2):last-child]:col-span-3";
 
 function CategoryHeading({
   category,
@@ -529,13 +531,13 @@ export default async function LeadersPage({
       />
       <CardBody className="divide-y divide-line/60 p-0">
         {inProgressWeeks.length > 0 ? (
-          <p className="px-5 py-3 text-sm text-muted">
+          <p className="px-4 py-2.5 text-sm text-muted">
             Week {inProgressWeeks[0].week} is still in progress. Its honors
             will appear after the full slate is final.
           </p>
         ) : null}
         {awaitingBoxScoreWeeks.length > 0 ? (
-          <p className="px-5 py-3 text-sm text-muted">
+          <p className="px-4 py-2.5 text-sm text-muted">
             Week {awaitingBoxScoreWeeks[0].week} is final, but honors are
             waiting for complete, valid 5v5 box scores from every played
             series.
@@ -543,7 +545,7 @@ export default async function LeadersPage({
         ) : null}
         {honorsByWeek.map(({ week, honors }) =>
           !honors.player && !honors.team ? (
-            <p key={week} className="px-5 py-3 text-sm text-muted">
+            <p key={week} className="px-4 py-2.5 text-sm text-muted">
               Week {week} is final with no played games, so no performance
               honors were awarded.
             </p>
@@ -554,7 +556,7 @@ export default async function LeadersPage({
               // Team of the Week ~3px below Player of the Week whenever the
               // two sat on one line. Wrapped, the rows keep the 10px the
               // stacked links need.
-              className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-5 py-3 text-sm"
+              className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-4 py-2.5 text-sm"
             >
               <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
                 Week {week}

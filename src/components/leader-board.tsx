@@ -71,15 +71,21 @@ export function LeaderBoard({
     !showAll && viewerIdx >= previewCount ? rows[viewerIdx] : undefined;
 
   return (
-    <Card id={id} className="min-w-0 scroll-mt-24 overflow-hidden">
+    // A subgrid of two rows (header, list): boards side by side in the
+    // leaders grid share one header height, so their first rows and their
+    // "Show all" buttons line up. Outside a grid it is a plain two-row grid.
+    <Card
+      id={id}
+      className="row-span-2 grid min-w-0 scroll-mt-24 grid-rows-subgrid gap-0 overflow-hidden"
+    >
       <CardHeader
         title={title}
         subtitle={subtitle}
         headingLevel={headingLevel}
       />
-      <CardBody className="p-0">
+      <CardBody className="flex flex-col p-0">
         {rows.length === 0 ? (
-          <p className="px-5 py-4 text-sm text-muted">
+          <p className="px-4 py-3 text-sm text-muted">
             No eligible players for this metric yet.
           </p>
         ) : (
@@ -98,7 +104,7 @@ export function LeaderBoard({
                 <>
                   <li
                     aria-hidden
-                    className="bg-surface-2/25 px-5 py-1 text-center text-[10px] tracking-[0.3em] text-muted"
+                    className="bg-surface-2/25 px-4 py-1 text-center text-[10px] tracking-[0.3em] text-muted"
                   >
                     ⋯
                   </li>
@@ -118,7 +124,7 @@ export function LeaderBoard({
                 aria-controls={listId}
                 aria-label={`${showAll ? `Show top ${previewCount}` : `Show all ${rows.length}`} ${title} leaders`}
                 onClick={() => setShowAll((v) => !v)}
-                className="min-h-11 w-full border-t border-line-soft bg-surface-2/20 px-5 py-2 text-center text-xs font-medium text-muted transition-colors hover:bg-surface-2/60 hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+                className="mt-auto min-h-10 w-full border-t border-line-soft bg-surface-2/20 px-4 py-2 text-center text-xs font-medium text-muted transition-colors hover:bg-surface-2/60 hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
               >
                 {showAll ? `Show top ${previewCount} ↑` : `Show all ${rows.length} ↓`}
               </button>
@@ -130,6 +136,11 @@ export function LeaderBoard({
   );
 }
 
+/**
+ * One leader on one line: rank, avatar, name over "team · hint", the value
+ * on the right, and the bar under the name. The bar and the hint used to take
+ * two more lines each (about 118px a row, now about 64px).
+ */
 function BoardRow({
   row: r,
   rank,
@@ -145,61 +156,69 @@ function BoardRow({
   return (
     <li
       className={cn(
-        "group/leader min-w-0 px-4 py-3 text-sm transition-colors hover:bg-surface-2/45 sm:px-5",
+        "group/leader grid min-w-0 grid-cols-[1.5rem_1.75rem_minmax(0,1fr)_auto] items-center gap-x-2 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2/45",
         rank === 1 && "bg-accent/[0.035]",
         r.isViewer && "bg-info/[0.07]",
       )}
     >
-      <div className="grid min-w-0 grid-cols-[1.5rem_1.75rem_minmax(0,1fr)_auto] items-center gap-x-2">
-        <LeaderRank rank={rank} />
-        <Avatar name={r.name} src={r.avatar} size={28} />
-        <div className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5">
-            {r.hasProfile === false ? (
-              <span className="inline-flex min-h-11 min-w-0 items-center py-1 font-semibold leading-snug [overflow-wrap:anywhere]">
-                {r.name}
-              </span>
-            ) : (
-              <PlayerLink
-                userId={r.id}
-                className="inline-flex min-h-11 min-w-6 items-center py-1 font-semibold leading-snug [overflow-wrap:anywhere]"
-              >
-                {r.name}
-              </PlayerLink>
-            )}
-            {r.isViewer ? (
-              <span className="rounded bg-info/15 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-info-soft">
-                You
-              </span>
-            ) : null}
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            {r.team ? (
-              <span className="min-w-0 text-[11px] leading-snug text-muted [overflow-wrap:anywhere]">
-                {r.team}
-              </span>
-            ) : null}
-            <RankBadge rankTier={r.rankTier} />
-          </div>
-        </div>
-        <span className="min-w-0 pl-1 text-right">
-          <span
-            className={cn(
-              "font-display text-2xl font-semibold leading-none tabular-nums",
-              rank === 1 && "text-accent",
-            )}
-          >
-            {r.valueLabel}
-          </span>
-          {valueUnit ? (
-            <span className="mt-0.5 block text-[10px] leading-tight text-muted">
-              {valueUnit}
+      <LeaderRank rank={rank} />
+      <Avatar name={r.name} src={r.avatar} size={28} />
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+          {r.hasProfile === false ? (
+            <span className="min-w-0 font-semibold leading-snug [overflow-wrap:anywhere]">
+              {r.name}
+            </span>
+          ) : (
+            <PlayerLink
+              userId={r.id}
+              className="min-w-6 font-semibold leading-snug [overflow-wrap:anywhere]"
+            >
+              {r.name}
+            </PlayerLink>
+          )}
+          {r.isViewer ? (
+            <span className="rounded bg-info/15 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-info-soft">
+              You
             </span>
           ) : null}
-        </span>
+          <RankBadge rankTier={r.rankTier} />
+        </div>
+        {/* "Team · hint". Each part opens with its own dot and the line is
+            pulled left by one dot's width and clipped, so a part that wraps
+            to the next line starts clean instead of a line ending in "·". */}
+        <div className="mt-0.5 overflow-hidden text-[11px] leading-snug text-muted">
+          <div className="-ml-3 flex flex-wrap">
+            {[r.team, r.hint].map((part, index) =>
+              part ? (
+                <span
+                  key={index}
+                  className="min-w-0 tabular-nums [overflow-wrap:anywhere] before:inline-block before:w-3 before:text-center before:content-['·']"
+                >
+                  {part}
+                </span>
+              ) : null,
+            )}
+          </div>
+        </div>
       </div>
+      <span className="min-w-0 pl-1 text-right">
+        <span
+          className={cn(
+            "font-display text-xl font-semibold leading-none tabular-nums",
+            rank === 1 && "text-accent",
+          )}
+        >
+          {r.valueLabel}
+        </span>
+        {valueUnit ? (
+          <span className="mt-0.5 block text-[10px] leading-tight text-muted">
+            {valueUnit}
+          </span>
+        ) : null}
+      </span>
       <div
-        className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-3/65"
+        className="col-start-3 col-end-5 mt-2 h-1 overflow-hidden rounded-full bg-surface-3/65"
         aria-hidden
       >
         <div
@@ -212,9 +231,6 @@ function BoardRow({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <p className="mt-1.5 text-right text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
-        {r.hint}
-      </p>
     </li>
   );
 }

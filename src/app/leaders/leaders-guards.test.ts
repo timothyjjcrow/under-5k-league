@@ -49,7 +49,14 @@ describe("/leaders section layout", () => {
   });
 
   it("lets a lone last board take the whole row", () => {
-    expect(PAGE).toMatch(/const BOARD_GRID =\s*"[^"]*lg:grid-cols-2 lg:\[&>:last-child:nth-child\(odd\)\]:col-span-2"/);
+    const grid = PAGE.match(/const BOARD_GRID =\s*"([^"]*)"/)?.[1] ?? "";
+    expect(grid).toContain("lg:grid-cols-2 lg:[&>:last-child:nth-child(odd)]:col-span-2");
+    // Three to a row from xl: six tracks, two per board, and the last row
+    // (one board or two) stretches to fill it.
+    expect(grid).toContain("xl:grid-cols-6 xl:[&>*]:col-span-2");
+    expect(grid).toContain("xl:[&>:nth-child(3n+1):last-child]:col-span-6");
+    expect(grid).toContain("xl:[&>:nth-child(3n+1):nth-last-child(2)]:col-span-3");
+    expect(grid).toContain("xl:[&>:nth-child(3n+2):last-child]:col-span-3");
   });
 
   it("keeps both weekly honors on one baseline when they share a line", () => {

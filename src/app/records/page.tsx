@@ -69,7 +69,7 @@ function reportsExtendedStats(game: RecordGame): boolean {
 // and the match link on the second. sm and up: one line per record, with the
 // title track wide enough for the longest titles ("Most tower damage",
 // "Most kills in defeat") beside their emoji.
-const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:grid-cols-[13rem_7rem_minmax(0,1fr)_auto]";
+const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-2.5 sm:grid-cols-[13rem_7rem_minmax(0,1fr)_auto] sm:py-2";
 const TITLE = "min-w-0 truncate text-sm font-semibold";
 const VALUE = "text-right font-display text-lg font-bold tabular-nums sm:text-left";
 const WHO = "flex min-w-0 items-center gap-2 text-sm";

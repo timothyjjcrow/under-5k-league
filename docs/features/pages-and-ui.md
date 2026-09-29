@@ -474,6 +474,39 @@ the league is already draftable and many visitors have joined. Write for both.
   viewers can't fix the bot or the ticket, and the manual steps are not on
   their page.
 
+## Stats pages (`/leaders`, `/meta`, `/records`, `/hall-of-fame`, `/seasons/[id]`)
+
+- **The stats tab bar is one row at every width** (`stats-nav.tsx`): the tabs
+  share it as equal tracks (`grid-flow-col auto-cols-fr`) and a long label
+  takes two short lines on a phone. A 2x2 grid spent a second 44px row on the
+  same four links.
+- **A leader row is one grid** (`leader-board.tsx`): rank, avatar, the name
+  over "team · hint", the value on the right and the bar under the name (about
+  64px; it was 118). Each part of "team · hint" opens with its own dot and the
+  line is pulled left by one dot's width and clipped, so a part that wraps
+  never leaves a line ending in "·".
+- **Boards side by side line up.** A `LeaderBoard` card is a two-row subgrid
+  (`row-span-2 grid-rows-subgrid gap-0`): boards in one grid row share a
+  header height, and "Show all" sits at the foot (`mt-auto`). Outside a grid
+  it is an ordinary two-row grid (Fantasy).
+- **`/leaders` boards go two across from `lg` and three from `xl`.**
+  `BOARD_GRID` has six tracks from `xl` and a board takes two; a last row of
+  one or two boards stretches to fill it, so the data-dependent count (Team
+  sustain) never leaves an empty cell. `leaders-guards.test.ts` pins it.
+- **The season recap packs its long lists.** Award cards fill their rows
+  (`flex-wrap`, each `flex-[1_1_16rem]`): however many awards a season
+  produced, the last row has no empty cell. Rosters go four across from `xl`,
+  one player per 36px line (a 24px avatar, so each name's 28px tap box keeps
+  8px from the next), and the header names the captain only when they are not
+  in the list. The head-to-head grid's chips are one line ("W 2–0").
+- **Hero meta draws the shape of the meta:** from `sm`, picks (against the
+  most-picked hero) and win % each get a thin bar beside the figure, with the
+  figure at a fixed width so the bars share a column. Decorative
+  (`aria-hidden`): the figure beside it is the value.
+- **Hall of Fame boards use the Leaders shape:** the card header, then one
+  ruled line per place. Its section links are the site's `SectionNav`, and a
+  lone last champion card takes the whole row.
+
 ## Checking UI against a fixture
 
 - **One command per league state,** each with its own port, database and
