@@ -1778,10 +1778,10 @@ export async function removeGame(
     corrected.uncrownedFinal && !corrected.projection.decided
       ? "Champion retracted and game removed — the grand final is open until the corrected series is decided."
       : corrected.uncrownedFinal && finalChampionConfirmed
-        ? "Game removed — series recomputed; the corrected grand final is still decided, so the champion was re-crowned. Automatic sync won't re-import it; press \u201cAuto-fetch games\u201d on this match to add it back."
+        ? "Game removed — series recomputed; the corrected grand final is still decided, so the champion was re-crowned. No sync or captain can re-import it; press \u201cAuto-fetch games\u201d on this match to add it back."
         : corrected.uncrownedFinal
-          ? "Game removed — series recomputed; the corrected grand final is still decided, but champion re-crowning could not be confirmed. Automatic sync won't re-import it; press \u201cAuto-fetch games\u201d on this match to add it back."
-          : "Game removed — series recomputed. Automatic sync won't re-import it; press \u201cAuto-fetch games\u201d on this match to add it back.";
+          ? "Game removed — series recomputed; the corrected grand final is still decided, but champion re-crowning could not be confirmed. No sync or captain can re-import it; press \u201cAuto-fetch games\u201d on this match to add it back."
+          : "Game removed — series recomputed. No sync or captain can re-import it; press \u201cAuto-fetch games\u201d on this match to add it back.";
   // Follow-ups can advance the bracket or create retryable announcements after
   // the early signal above. Queue another expiry before returning; an
   // in-flight cache fill is still bounded by the immutable hard wake.
@@ -2335,7 +2335,13 @@ export async function syncLeagueAction(
   const res = await syncLeagueGames(season.id);
   if (res.error) return { error: res.error };
   refreshGames();
+  // Removed games stay removed here too; say how many, and the way back.
+  const removed = res.removedSkipped ?? 0;
   return {
-    message: `League sync · imported ${res.imported} of ${res.scanned} league games`,
+    message: `League sync · imported ${res.imported} of ${res.scanned} league games${
+      removed > 0
+        ? ` · skipped ${removed} ${removed === 1 ? "game" : "games"} an admin removed. To bring one back, open its match and press “Add game” with its match ID, or “Auto-fetch games”`
+        : ""
+    }`,
   };
 }

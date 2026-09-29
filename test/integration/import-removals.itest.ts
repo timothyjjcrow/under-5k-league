@@ -2,9 +2,11 @@
  * A game an admin removes stays removed on every path except the admin's own
  * overrides ("Add game" and "Auto-fetch games" on the match).
  *
- * A captain pasting a removed game's id on the match page used to bring it
- * straight back. The test runs the real removeGame action so the suppression
- * under test is exactly the one an admin's click writes.
+ * Two paths used to bring a removed game straight back: a captain pasting its
+ * id on the match page, and the admin's manual "Sync league games", which
+ * refetched every removed game still in the Valve league feed and imported it
+ * again. Both run the real removeGame action so the suppression under test is
+ * exactly the one an admin's click writes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,13 +38,22 @@ vi.mock("@/lib/dota", async (importOriginal) => {
 
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
-import { fetchOpenDotaMatch, steamIdToAccountId } from "@/lib/dota";
+import {
+  fetchLeagueMatchIds,
+  fetchOpenDotaMatch,
+  steamIdToAccountId,
+} from "@/lib/dota";
 import { reportImportGame } from "@/lib/match-report-service";
-import { importGameAction, removeGame } from "@/app/actions/admin-schedule-results";
+import {
+  importGameAction,
+  removeGame,
+  syncLeagueAction,
+} from "@/app/actions/admin-schedule-results";
 import type { ActionResult } from "@/lib/action-result";
 import { makeSeason, makeTeam, makeUser } from "./factories";
 
 const mockMatch = vi.mocked(fetchOpenDotaMatch);
+const mockLeague = vi.mocked(fetchLeagueMatchIds);
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -55,6 +66,8 @@ const HOUR = 3600_000;
 beforeEach(() => {
   mockMatch.mockReset();
   mockMatch.mockResolvedValue(null);
+  mockLeague.mockReset();
+  mockLeague.mockResolvedValue([]);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -150,6 +163,43 @@ describe("a removed game stays removed", () => {
       fd({ matchId: match.id, dotaMatchRef: "8810001" }),
     );
     expect(readded).toMatchObject({ ok: true });
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
+  });
+
+  it("manual Sync league games skips a removed game and says how to bring it back", async () => {
+    const { season, match, game } = await setupNight();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "44001" },
+    });
+    mockLeague.mockResolvedValue([8820001]);
+    mockMatch.mockResolvedValue(game(8820001));
+
+    const first = await syncLeagueAction(empty, fd({}));
+    expect(first?.message).toMatch(/imported 1 of 1/);
+    expect(first?.message).not.toMatch(/removed/i);
+    await removeOnlyGame(match.id);
+    mockMatch.mockClear();
+
+    const second = await syncLeagueAction(empty, fd({}));
+    expect(second?.error).toBeUndefined();
+    expect(second?.message).toMatch(/imported 0 of 1/);
+    expect(second?.message).toMatch(/skipped 1 game an admin removed/i);
+    expect(second?.message).toContain("“Add game”");
+    expect(second?.message).toContain("“Auto-fetch games”");
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+    // Not even refetched: the removal is decided before any provider call.
+    expect(mockMatch).not.toHaveBeenCalled();
+
+    // Once the admin adds it back by hand, a later sync stops calling it
+    // removed — it is simply already recorded.
+    mockMatch.mockResolvedValue(game(8820001));
+    expect(
+      await importGameAction(empty, fd({ matchId: match.id, dotaMatchRef: "8820001" })),
+    ).toMatchObject({ ok: true });
+    const third = await syncLeagueAction(empty, fd({}));
+    expect(third?.message).toMatch(/imported 0 of 1/);
+    expect(third?.message).not.toMatch(/removed/i);
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
   });
 });

@@ -1861,6 +1861,8 @@ export type LeagueSyncResult = {
   unreachable?: boolean;
   /** The unattended worker stopped before starting more network work. */
   deadlineReached?: boolean;
+  /** Feed games left out because an admin removed them (not re-added since). */
+  removedSkipped?: number;
 };
 
 // Stay below SQLite's conservative bind-parameter ceiling while also keeping
@@ -1882,8 +1884,10 @@ const LEAGUE_GAME_LOOKUP_BATCH_SIZE = 500;
  * only missing provider evidence backs off, then enters administrator review.
  * The legacy scanner skip list remains readable for compatibility, while new
  * decisions use revision-fenced candidate rows. Intentional administrator
- * exclusions are separate and never expire. Manual sync can retry provider
- * failures and reconsider legacy scan decisions.
+ * exclusions (a removed game) are separate, never expire and bind BOTH modes:
+ * manual sync can retry provider failures and reconsider legacy scan
+ * decisions, but it never brings back a removed game — that is the per-match
+ * admin Add game / Auto-fetch games override. It counts the ones it skipped.
  */
 export async function syncLeagueGames(
   seasonId: string,
@@ -1966,12 +1970,25 @@ export async function syncLeagueGames(
     }
   }
   const skip = new Set(skipList);
-  // Legacy automated exclusions remain a distinct compatibility input.
-  // Intentional removals are independently protected by durable unique rows
-  // and are rechecked in the final automatic-import transaction.
-  if (opts.auto) {
-    for (const id of await loadImportSkips(seasonId)) skip.add(id);
-  }
+  // The legacy scan skip list above is an automatic-only compatibility input.
+  // Admin removals bind BOTH modes: they are durable unique rows, skipped here
+  // before any provider call and rechecked in the import transaction. Manual
+  // mode counts the ones it passes over so the admin's toast can say so.
+  const removed = await loadImportSkips(seasonId);
+  for (const id of removed) skip.add(id);
+  const removedInFeed = new Set<string>();
+  const removedSkipped = async (): Promise<{ removedSkipped?: number }> => {
+    if (opts.auto || removedInFeed.size === 0) return {};
+    const ids = [...removedInFeed];
+    // A game the admin has since added back is recorded, not skipped.
+    const [games, claims] = await Promise.all([
+      prisma.game.findMany({ where: { dotaMatchId: { in: ids } }, select: { dotaMatchId: true } }),
+      prisma.dotaMatchClaim.findMany({ where: { dotaMatchId: { in: ids } }, select: { dotaMatchId: true } }),
+    ]);
+    const back = new Set([...games, ...claims].map((row) => row.dotaMatchId));
+    const count = ids.filter((id) => !back.has(id)).length;
+    return count > 0 ? { removedSkipped: count } : {};
+  };
   const newlySkipped: string[] = [];
   const evidenceById = new Map<string, ImportCandidateSnapshot>();
 
@@ -2110,7 +2127,10 @@ export async function syncLeagueGames(
     for (const row of cached.values()) evidenceById.set(row.dotaMatchId, row);
     for (const dotaId of new Set(batch)) {
       const idStr = String(dotaId);
-      if (skip.has(idStr)) continue;
+      if (skip.has(idStr)) {
+        if (removed.has(idStr)) removedInFeed.add(idStr);
+        continue;
+      }
       if (recorded.has(idStr)) continue;
       const saved = cached.get(idStr);
       if (opts.auto && saved?.status === "NEEDS_REVIEW") {
@@ -2297,6 +2317,7 @@ export async function syncLeagueGames(
     }
     return {
       imported: 0, scanned: leagueMatchIds.length, pending: true,
+      ...(await removedSkipped()),
       ...(reviewRequired ? { reviewRequired: true, error: "Some game details need administrator review before automatic feed assignment can continue" } : {}),
       ...(deadlineReached ? { deadlineReached: true } : {}),
     };
@@ -2322,7 +2343,7 @@ export async function syncLeagueGames(
         ...fetchOptions,
         prefetchedLeagueMatch: c.details,
         enforceFixtureWindow: true,
-        respectImportSkips: !!opts.auto,
+        respectImportSkips: true,
       });
       if (r.ok) {
         imported++;
@@ -2358,5 +2379,6 @@ export async function syncLeagueGames(
     scanned: leagueMatchIds.length,
     ...(!discoveryComplete ? { pending: true } : {}),
     ...(deadlineReached ? { deadlineReached: true } : {}),
+    ...(await removedSkipped()),
   };
 }
