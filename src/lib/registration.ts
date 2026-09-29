@@ -1,5 +1,6 @@
 import {
   HARD_MMR_CEILING,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_STATUS,
@@ -120,6 +121,52 @@ export function withdrawGateError({
       : "They're standing in for an unplayed match — remove that assignment first.";
   }
   return null;
+}
+
+/** Why a signup row has no "remove": a short note, and what to do instead. */
+export type SignupRemovalBlocker = { note: string; fix: string };
+
+/**
+ * Which signups the admin lists must NOT offer "remove" on, and what to show
+ * in its place. It mirrors the two `withdrawGateError` refusals a whole
+ * season's rows can hit (rostered, then owing cover on an unplayed match, in
+ * the gate's order) from data the admin page already loads, so a button is
+ * never rendered where the server can only refuse it. Mid-season that was
+ * every drafted player's row. The server gate stays authoritative; this only
+ * decides what to render.
+ */
+export function signupRemovalBlockers({
+  teams,
+  assignments,
+  matches,
+}: {
+  teams: ReadonlyArray<{
+    name: string;
+    members: ReadonlyArray<{ userId: string }>;
+  }>;
+  assignments: ReadonlyArray<{ standinUserId: string; matchId: string }>;
+  matches: ReadonlyArray<{ id: string; status: string }>;
+}): Map<string, SignupRemovalBlocker> {
+  const blockers = new Map<string, SignupRemovalBlocker>();
+  for (const team of teams) {
+    for (const member of team.members) {
+      blockers.set(member.userId, {
+        note: `on ${team.name}`,
+        fix: "Release them from the team in Roster moves first, then remove the signup.",
+      });
+    }
+  }
+  // pendingCoverWhere: a booking on any match of the season not COMPLETED.
+  const statusOf = new Map(matches.map((match) => [match.id, match.status]));
+  for (const assignment of assignments) {
+    if (blockers.has(assignment.standinUserId)) continue;
+    if (statusOf.get(assignment.matchId) === MATCH_STATUS.COMPLETED) continue;
+    blockers.set(assignment.standinUserId, {
+      note: "covering a match",
+      fix: "They're standing in for an unplayed match. Remove that assignment first, then the signup.",
+    });
+  }
+  return blockers;
 }
 
 /**

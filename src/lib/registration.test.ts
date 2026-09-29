@@ -3,6 +3,7 @@ import {
   medalProvesIneligible,
   promoteGateError,
   registrationGate,
+  signupRemovalBlockers,
   withdrawGateError,
 } from "./registration";
 
@@ -443,5 +444,69 @@ describe("registrationGate — the medal rule runs at ADMISSION only", () => {
         existingType: "PLAYER",
       }),
     ).toMatch(/over 5000/);
+  });
+});
+
+describe("signupRemovalBlockers", () => {
+  const teams = [
+    { name: "Radiant Rejects", members: [{ userId: "cap" }, { userId: "drafted" }] },
+    { name: "Dire Straits", members: [{ userId: "cap2" }] },
+  ];
+  const matches = [
+    { id: "m-open", status: "SCHEDULED" },
+    { id: "m-live", status: "LIVE" },
+    { id: "m-done", status: "COMPLETED" },
+  ];
+
+  it("hides remove on every rostered player, naming their team", () => {
+    const blockers = signupRemovalBlockers({ teams, assignments: [], matches });
+    expect(blockers.get("drafted")?.note).toBe("on Radiant Rejects");
+    expect(blockers.get("cap2")?.note).toBe("on Dire Straits");
+    expect(blockers.get("drafted")?.fix).toMatch(/Roster moves/);
+    // withdrawGateError agrees: a rostered row can only be refused.
+    expect(
+      withdrawGateError({ status: "ACTIVE", isCaptain: false, isRostered: true }),
+    ).not.toBeNull();
+  });
+
+  it("hides remove on anyone owing cover on an unplayed match (pendingCoverWhere)", () => {
+    const blockers = signupRemovalBlockers({
+      teams,
+      assignments: [
+        { standinUserId: "sub-open", matchId: "m-open" },
+        { standinUserId: "sub-live", matchId: "m-live" },
+      ],
+      matches,
+    });
+    expect(blockers.get("sub-open")?.note).toBe("covering a match");
+    expect(blockers.get("sub-open")?.fix).toMatch(/remove that assignment first/i);
+    expect(blockers.get("sub-live")?.note).toBe("covering a match");
+  });
+
+  it("keeps remove for a free signup and for cover that is already history", () => {
+    const blockers = signupRemovalBlockers({
+      teams,
+      assignments: [{ standinUserId: "sub-done", matchId: "m-done" }],
+      matches,
+    });
+    expect(blockers.has("free-agent")).toBe(false);
+    expect(blockers.has("sub-done")).toBe(false);
+    expect(
+      withdrawGateError({
+        status: "ACTIVE",
+        isCaptain: false,
+        isRostered: false,
+        pendingAssignments: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it("names the roster first when a player is both rostered and owing cover", () => {
+    const blockers = signupRemovalBlockers({
+      teams,
+      assignments: [{ standinUserId: "drafted", matchId: "m-open" }],
+      matches,
+    });
+    expect(blockers.get("drafted")?.note).toBe("on Radiant Rejects");
   });
 });

@@ -86,7 +86,11 @@ standin cover, and match-night check-ins. Main files:
   (`admin-flow-audit.itest.ts` does). Both paths re-check in the transaction.
   `audience: "self"` (`leaveLeague`) speaks to the player and names only what they
   can do ("ask that team's captain or an admin"); the default is `"admin"`. Use it
-  for any new player-facing surface.
+  for any new player-facing surface. The admin signup lists render "remove" only
+  where the gate can pass: `signupRemovalBlockers` (`registration.ts`, tested)
+  mirrors its roster and pending-cover refusals from the page's own data, and
+  those rows show "on <team>" or "covering a match" instead. Mid-season that is
+  every drafted player; the server gate stays authoritative.
 - **Record roster tenure in the winning transaction:** `captureRosterTenure` on a
   signing, `closeRosterTenure` on a release (`src/lib/roster-history.ts`).
 - **The admin Roster moves card shows only forms that would work**

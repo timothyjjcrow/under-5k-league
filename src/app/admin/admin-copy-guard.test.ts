@@ -193,6 +193,33 @@ describe("admin copy names only controls that exist", () => {
     expect(page.match(/maxMmr=\{season\.maxMmr\}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
+  // withdrawGateError refuses a rostered signup and one owing cover on an
+  // unplayed match. Both lists used to render "remove" on every such row
+  // (mid-season, every drafted player) and every press ended in the refusal.
+  // signupRemovalBlockers is unit-tested; this pins that both remove forms
+  // sit behind it, and that the confirms no longer describe the refusal.
+  it("the signup lists offer remove only where withdrawSignup can take it", () => {
+    const page = read("src/app/admin/page.tsx");
+    const card = page.slice(page.indexOf("function CaptainControls("));
+    expect(card).toMatch(
+      /const removalBlockers = signupRemovalBlockers\(\{\s*teams: data\.teams,\s*assignments: data\.assignments,\s*matches: data\.matches,\s*\}\)/,
+    );
+    let from = 0;
+    let forms = 0;
+    for (;;) {
+      const at = card.indexOf("action={withdrawSignup}", from);
+      if (at < 0) break;
+      expect(card.slice(Math.max(0, at - 500), at)).toMatch(
+        /removalBlockers\.has\([ps]\.userId\) \? \(/,
+      );
+      from = at + 1;
+      forms += 1;
+    }
+    expect(forms).toBe(2);
+    expect(card).not.toContain("Rostered players must be released first");
+    expect(card).not.toContain("are refused (remove the assignment first)");
+  });
+
   // The Standins card opens on cover problems only, but the admin's any-team
   // booking (the path for a match whose captains aren't around) must stay
   // one click away: every other open match's assign form lives under this

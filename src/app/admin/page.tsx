@@ -190,6 +190,10 @@ import {
   signupFlags,
   signupNeedsReview,
 } from "@/lib/signup-readiness";
+import {
+  signupRemovalBlockers,
+  type SignupRemovalBlocker,
+} from "@/lib/registration";
 import { AdminSignupReview } from "@/components/admin-signup-review";
 import {
   DRAFT_READINESS,
@@ -2086,6 +2090,18 @@ function SeasonControls({
   );
 }
 
+/**
+ * Stands in for a signup row's "remove" when withdrawSignup would only refuse
+ * it (see signupRemovalBlockers): says why, and the title says what to do.
+ */
+function RemovalBlockedNote({ blocker }: { blocker: SignupRemovalBlocker }) {
+  return (
+    <span className="text-xs text-muted" title={blocker.fix}>
+      {blocker.note}
+    </span>
+  );
+}
+
 function CaptainControls({
   season,
   data,
@@ -2114,6 +2130,14 @@ function CaptainControls({
   const standinRegs = data.standins.filter(
     (s) => s.type === REGISTRATION_TYPE.STANDIN,
   );
+  // Rows withdrawSignup can only refuse (rostered, or owing cover on an
+  // unplayed match) get a note instead of a "remove" button. Mid-season that
+  // is every drafted player in the list below.
+  const removalBlockers = signupRemovalBlockers({
+    teams: data.teams,
+    assignments: data.assignments,
+    matches: data.matches,
+  });
   // The signup lists' "is this player actually IN the Discord server?" chips.
   // STARTED here, never awaited: this card is on /admin's blocking path, which
   // must stay Discord-free (the DiscordSection rule) — each row's chip
@@ -3118,25 +3142,31 @@ function CaptainControls({
                             and afterwards in the free-agent and standin dropdowns
                             for the rest of the season. `withdrawGateError` is the
                             real gate — it refuses a captain, a rostered player, a
-                            standin who still owes cover, and a non-ACTIVE row. */}
+                            standin who still owes cover, and a non-ACTIVE row.
+                            Rows it can only refuse (removalBlockers) show why
+                            instead of a button that can only error. */}
                         {season.status !== SEASON_STATUS.COMPLETE ? (
-                          <ActionForm
-                            action={withdrawSignup}
-                            hidden={{ registrationId: p.id }}
-                          >
-                            <SubmitButton
-                              variant="ghost"
-                              size="sm"
-                              className="text-danger-soft hover:underline"
-                              confirm={
-                                season.status === "SIGNUPS"
-                                  ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
-                                  : `Remove ${p.user.name}'s signup? They leave the draft pool and the free-agent and standin lists. Rostered players must be released first — you can reinstate them below.`
-                              }
+                          removalBlockers.has(p.userId) ? (
+                            <RemovalBlockedNote blocker={removalBlockers.get(p.userId)!} />
+                          ) : (
+                            <ActionForm
+                              action={withdrawSignup}
+                              hidden={{ registrationId: p.id }}
                             >
-                              remove
-                            </SubmitButton>
-                          </ActionForm>
+                              <SubmitButton
+                                variant="ghost"
+                                size="sm"
+                                className="text-danger-soft hover:underline"
+                                confirm={
+                                  season.status === "SIGNUPS"
+                                    ? `Remove ${p.user.name}'s signup? They leave the player pool and can't re-add themselves — you can reinstate them below.`
+                                    : `Remove ${p.user.name}'s signup? They leave the draft pool and the free-agent and standin lists — you can reinstate them below.`
+                                }
+                              >
+                                remove
+                              </SubmitButton>
+                            </ActionForm>
+                          )
                         ) : null}
                       </span>
                     </div>
@@ -3225,20 +3255,26 @@ function CaptainControls({
                           </span>
                         </span>
                         {season.status !== SEASON_STATUS.COMPLETE ? (
-                          <ActionForm
-                            action={withdrawSignup}
-                            hidden={{ registrationId: s.id }}
-                            className="ml-auto shrink-0"
-                          >
-                            <SubmitButton
-                              variant="ghost"
-                              size="sm"
-                              className="text-danger-soft hover:underline"
-                              confirm={`Remove ${s.user.name}'s standin signup? They leave the standin lists and can't re-add themselves — you can reinstate them below. Standins still owing cover on an unplayed match are refused (remove the assignment first).`}
+                          removalBlockers.has(s.userId) ? (
+                            <span className="ml-auto shrink-0">
+                              <RemovalBlockedNote blocker={removalBlockers.get(s.userId)!} />
+                            </span>
+                          ) : (
+                            <ActionForm
+                              action={withdrawSignup}
+                              hidden={{ registrationId: s.id }}
+                              className="ml-auto shrink-0"
                             >
-                              remove
-                            </SubmitButton>
-                          </ActionForm>
+                              <SubmitButton
+                                variant="ghost"
+                                size="sm"
+                                className="text-danger-soft hover:underline"
+                                confirm={`Remove ${s.user.name}'s standin signup? They leave the standin lists and can't re-add themselves — you can reinstate them below.`}
+                              >
+                                remove
+                              </SubmitButton>
+                            </ActionForm>
+                          )
                         ) : null}
                       </div>
                       <SignupRowMeta
