@@ -184,16 +184,20 @@ function BoardRow({
           ) : null}
           <RankBadge rankTier={r.rankTier} />
         </div>
-        {/* "Team · hint". Each part opens with its own dot and the line is
-            pulled left by one dot's width and clipped, so a part that wraps
-            to the next line starts clean instead of a line ending in "·". */}
+        {/* "Team · hint", one part per "·" segment. Each part carries its
+            dot in its own left padding and the line is pulled left by that
+            width and clipped, so a part that starts a line starts clean
+            instead of the line above ending in "·". Padding, not an inline
+            dot: a part too long for one line wraps inside itself, and its
+            second line then starts in the visible area, not under the clip
+            (that cut the first letters off "pressure bonus most often"). */}
         <div className="mt-0.5 overflow-hidden text-[11px] leading-snug text-muted">
           <div className="-ml-3 flex flex-wrap">
-            {[r.team, r.hint].map((part, index) =>
+            {[r.team, ...r.hint.split(" · ")].map((part, index) =>
               part ? (
                 <span
                   key={index}
-                  className="min-w-0 tabular-nums [overflow-wrap:anywhere] before:inline-block before:w-3 before:text-center before:content-['·']"
+                  className="relative min-w-0 pl-3 tabular-nums [overflow-wrap:anywhere] before:absolute before:left-0 before:w-3 before:text-center before:content-['·']"
                 >
                   {part}
                 </span>

@@ -698,6 +698,7 @@ export function EmptyState({
   icon,
   action,
   compact,
+  inline,
 }: {
   title: string;
   description?: string;
@@ -710,7 +711,29 @@ export function EmptyState({
    * populated page read as a broken one.
    */
   compact?: boolean;
+  /**
+   * One left-aligned line (glyph, title, description, action) for an empty
+   * list inside a card that already carries a header: about 56px where the
+   * compact box is about 125. Wins over `compact`.
+   */
+  inline?: boolean;
 }) {
+  if (inline) {
+    return (
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius)] border border-line-soft bg-surface/50 px-4 py-3">
+        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-line bg-surface-2/60 text-muted">
+          {icon ?? <EmptyGlyph />}
+        </div>
+        <div className="min-w-0 flex-1 basis-40">
+          <p className="text-sm font-semibold text-fg">{title}</p>
+          {description ? (
+            <p className="mt-0.5 text-xs text-muted">{description}</p>
+          ) : null}
+        </div>
+        {action}
+      </div>
+    );
+  }
   return (
     <div
       className={cn(

@@ -54,6 +54,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   narrow column where text-3xl wraps a W-L-D record; never an inline
   override); `EmptyState compact` (a routinely empty section that is not the
   point of the page; two full dashed boxes make a full page look broken);
+  `EmptyState inline` (one left-aligned line, about 56px, for an empty list
+  inside a card whose header already names it; wins over `compact`);
   `CheckinBanner variant` (`strip` on `/schedule` and the match page, `panel`
   stacked for a narrow column); `StatStrip`/`StatCell` (the one-line summary
   band under a page title).
@@ -482,9 +484,10 @@ the league is already draftable and many visitors have joined. Write for both.
   same four links.
 - **A leader row is one grid** (`leader-board.tsx`): rank, avatar, the name
   over "team · hint", the value on the right and the bar under the name (about
-  64px; it was 118). Each part of "team · hint" opens with its own dot and the
-  line is pulled left by one dot's width and clipped, so a part that wraps
-  never leaves a line ending in "·".
+  64px; it was 118). "Team · hint" is split into one part per "·" segment;
+  each part carries its dot in its own left padding and the line is pulled
+  left by that width and clipped, so a line never ends in "·" and a part too
+  long for one line wraps without losing its first letters under the clip.
 - **Boards side by side line up.** A `LeaderBoard` card is a two-row subgrid
   (`row-span-2 grid-rows-subgrid gap-0`): boards in one grid row share a
   header height, and "Show all" sits at the foot (`mt-auto`). Outside a grid
@@ -506,6 +509,24 @@ the league is already draftable and many visitors have joined. Write for both.
 - **Hall of Fame boards use the Leaders shape:** the card header, then one
   ruled line per place. Its section links are the site's `SectionNav`, and a
   lone last champion card takes the whole row.
+
+## Side games and account (`/scrims`, `/fantasy`, `/me`)
+
+- **`/me` is two columns from `lg`:** the season (signup, away dates) on the
+  left and a 24rem rail with the accounts it relies on (Discord, Steam and
+  Dota). Phones keep the same order. Copy says "the Discord card", never
+  "below", because it is below on a phone and beside on a desktop. Short
+  inputs keep a short width (MMR `sm:max-w-sm`; the Discord handle grows
+  beside Save up to `max-w-xs`).
+- **Scrims pairs its lists.** Open and booked sit side by side from `lg`;
+  history, team records and leaders go three across from `xl` as two-row
+  subgrids, so the three lists start on one line whatever their subtitles
+  wrap to. Empty lists are `EmptyState inline`.
+- **A label around `LocalDatetimeField` is a flex column (`gap`), never
+  `space-y`:** the field's hidden twin is the last child, so `space-y` put a
+  margin under the visible box and lifted it off the row's baseline.
+- **The fantasy scoring guide is one divided box** (rows on phones, three
+  columns from `md`), not three padded cards.
 
 ## Checking UI against a fixture
 

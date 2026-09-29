@@ -116,7 +116,9 @@ export function AccountDiscordCard({
           defaultValue={discordName ?? ""}
           placeholder="e.g. dendi_official"
           maxLength={40}
-          className="h-10 w-full max-w-xs rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+          // Grows beside Save instead of a fixed 20rem that pushed Save to
+          // its own line in the account page's rail.
+          className="h-10 min-w-0 max-w-xs flex-1 basis-48 rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
         />
         <SubmitButton variant="secondary" size="sm">
           Save
