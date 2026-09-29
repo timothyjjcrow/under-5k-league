@@ -91,14 +91,14 @@ describe("editTeamIdentity — the captain's own team page", () => {
       fd({
         teamId: home.team.id,
         name: "  Radiant   Raccoons ",
-        logoUrl: "https://cdn.example/raccoon.png",
+        logoUrl: "https://i.imgur.com/raccoon.png",
       }),
     );
 
     expect(res).toEqual({ message: "Saved Radiant Raccoons" });
     expect(await teamRow(home.team.id)).toMatchObject({
       name: "Radiant Raccoons",
-      logoUrl: "https://cdn.example/raccoon.png",
+      logoUrl: "https://i.imgur.com/raccoon.png",
     });
     const log = await prisma.adminAction.findMany();
     expect(log).toHaveLength(1);
@@ -141,7 +141,7 @@ describe("editTeamIdentity — the captain's own team page", () => {
       signIn(intruder);
       const res = await editTeamIdentity(
         empty,
-        fd({ teamId: home.team.id, name: "Hijacked", logoUrl: "https://cdn.example/x.png" }),
+        fd({ teamId: home.team.id, name: "Hijacked", logoUrl: "https://i.imgur.com/x.png" }),
       );
       expect(res?.error).toMatch(/Only this team's captain or an admin/);
     }
@@ -223,6 +223,51 @@ describe("editTeamIdentity — the captain's own team page", () => {
       name: "Zai's Team",
       logoUrl: null,
     });
+  });
+
+  it("keeps a captain's new logo on Imgur or the site, and leaves an admin's alone", async () => {
+    const { season, home } = await league();
+    signIn(home.user);
+    // A server the captain runs would log every visitor who sees the crest.
+    const tracker = await editTeamIdentity(
+      empty,
+      fd({ teamId: home.team.id, name: "Radiant Raccoons", logoUrl: "https://tracker.example/x.png" }),
+    );
+    expect(tracker).toEqual({
+      error:
+        "Captains can use an Imgur image link (https://i.imgur.com/…). For another host, ask an admin.",
+    });
+    expect(await teamRow(home.team.id)).toMatchObject({ name: "Zai's Team", logoUrl: null });
+    expect(await prisma.adminAction.count()).toBe(0);
+    expect(vi.mocked(sendDiscordMessage)).not.toHaveBeenCalled();
+
+    // An admin may use any HTTPS host.
+    const admin = await makeUser("Tim", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    expect(
+      await renameTeam(
+        empty,
+        fd({
+          expectedActiveSeasonId: season.id,
+          teamId: home.team.id,
+          name: "Zai's Team",
+          logoUrl: "https://cdn.example/official.png",
+        }),
+      ),
+    ).toEqual({ message: "Saved Zai's Team" });
+
+    // The captain's form re-posts that logo unchanged, so a rename still saves.
+    expect(
+      await editTeamIdentity(
+        empty,
+        fd({
+          teamId: home.team.id,
+          name: "Radiant Raccoons",
+          logoUrl: "https://cdn.example/official.png",
+        }),
+      ),
+    ).toEqual({ message: "Saved Radiant Raccoons" });
+    expect((await teamRow(home.team.id)).logoUrl).toBe("https://cdn.example/official.png");
   });
 
   it("refuses a logo that points at one of the site's own endpoints", async () => {
@@ -332,7 +377,7 @@ describe("editTeamIdentity — the captain's own team page", () => {
     });
     const second = await editTeamIdentity(
       empty,
-      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/d.png" }),
+      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://i.imgur.com/d.png" }),
     );
     expect(second).toEqual({ message: "Saved Dire Raccoons" });
     expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(2);
@@ -342,13 +387,13 @@ describe("editTeamIdentity — the captain's own team page", () => {
     // A logo-only change inside the window is saved and logged, not posted.
     const third = await editTeamIdentity(
       empty,
-      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/e.png" }),
+      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://i.imgur.com/e.png" }),
     );
     expect(third).toEqual({
       message:
         "Saved Dire Raccoons. Discord already heard about a change to this team in the last 15 minutes, so this logo change wasn't posted there.",
     });
-    expect((await teamRow(home.team.id)).logoUrl).toBe("https://cdn.example/e.png");
+    expect((await teamRow(home.team.id)).logoUrl).toBe("https://i.imgur.com/e.png");
     expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(2);
     expect(await prisma.adminAction.count()).toBe(3);
 
@@ -369,7 +414,7 @@ describe("editTeamIdentity — the captain's own team page", () => {
     signIn(home.user);
     const later = await editTeamIdentity(
       empty,
-      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://cdn.example/g.png" }),
+      fd({ teamId: home.team.id, name: "Dire Raccoons", logoUrl: "https://i.imgur.com/g.png" }),
     );
     expect(later).toEqual({ message: "Saved Dire Raccoons" });
     expect(vi.mocked(sendDiscordMessage)).toHaveBeenCalledTimes(4);

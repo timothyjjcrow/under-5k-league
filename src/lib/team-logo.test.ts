@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isCaptainLogoHost,
   normalizeTeamLogoUrl,
   TEAM_LOGO_URL_MAX_LENGTH,
 } from "./team-logo";
@@ -108,5 +109,33 @@ describe("normalizeTeamLogoUrl", () => {
     expect(
       normalizeTeamLogoUrl(`https://cdn.example/${"é".repeat(400)}`),
     ).toHaveProperty("error");
+  });
+});
+
+describe("isCaptainLogoHost", () => {
+  it("allows Imgur image links and the site's own artwork", () => {
+    expect(isCaptainLogoHost("https://i.imgur.com/abc.png")).toBe(true);
+    expect(isCaptainLogoHost("/brand/logo.png")).toBe(true);
+  });
+
+  it("refuses any other host, including look-alikes of Imgur", () => {
+    for (const url of [
+      "https://tracker.example/x.png",
+      "https://imgur.com/abc",
+      "https://i.imgur.com.tracker.example/x.png",
+      "https://tracker.example/i.imgur.com/x.png",
+      "http://i.imgur.com/abc.png",
+      "//i.imgur.com/abc.png",
+      "not a url",
+    ]) {
+      expect(isCaptainLogoHost(url), url).toBe(false);
+    }
+  });
+
+  it("agrees with the normalizer on what a site path is", () => {
+    // It is only ever handed normalized logos; a path the normalizer would
+    // refuse must not count as site artwork either.
+    expect(isCaptainLogoHost("/api/admin/season-export")).toBe(false);
+    expect(isCaptainLogoHost("/brand/../api/x.png")).toBe(false);
   });
 });

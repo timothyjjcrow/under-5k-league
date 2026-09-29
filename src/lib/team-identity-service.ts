@@ -1,7 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { SEASON_STATUS } from "./constants";
-import { normalizeTeamLogoUrl } from "./team-logo";
+import {
+  CAPTAIN_LOGO_HOST_ERROR,
+  isCaptainLogoHost,
+  normalizeTeamLogoUrl,
+} from "./team-logo";
 import {
   normalizeTeamName,
   teamNameKey,
@@ -133,6 +137,19 @@ export async function saveTeamIdentity(input: {
             });
         // The first write, so nothing is committed yet: refusing is safe.
         if (changed.count === 0) throw new TeamIdentityRefused(NOT_ALLOWED);
+        // A captain's NEW logo must be on a host they don't control. Checked
+        // once the claim has shown this is the team's captain, and thrown,
+        // so the write above rolls back. Only a change is checked: the form
+        // re-posts the current logo, which may be one an admin set on another
+        // host, and a rename must still save.
+        if (
+          !input.editor.isAdmin &&
+          logo?.logoUrl &&
+          logo.logoUrl !== team.logoUrl &&
+          !isCaptainLogoHost(logo.logoUrl)
+        ) {
+          throw new TeamIdentityRefused(CAPTAIN_LOGO_HOST_ERROR);
+        }
         const nameChanged = name !== team.name;
         const logoChanged = logo !== undefined && logo.logoUrl !== team.logoUrl;
         // Record snapshots embed team names; fence older in-flight refreshes.

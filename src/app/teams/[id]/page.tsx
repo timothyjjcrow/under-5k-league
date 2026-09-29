@@ -583,6 +583,9 @@ export default async function TeamPage({
             <div className="space-y-3 pb-4">
               <p className="text-xs text-muted">
                 Changes save right away and are posted in the league Discord.
+                {viewer?.role === "ADMIN"
+                  ? null
+                  : " For a logo, upload the image to Imgur and paste its direct link (https://i.imgur.com/…)."}
               </p>
               <TeamIdentityForm
                 // Remount on a saved change so the fields start from it.

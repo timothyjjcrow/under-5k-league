@@ -168,6 +168,13 @@ Grid, filter and URL rules: `pages-and-ui.md`.
 - **Names are unique by how they read** (`teamNameKey` ignores case,
   invisibles, accents and look-alike letters). Logos must be permanent images
   (`normalizeTeamLogoUrl` refuses expiring Discord attachments and `/api`).
+- **A captain's new logo must be on Imgur or the site** (`isCaptainLogoHost`,
+  checked in `saveTeamIdentity` after the captain claim). Every visitor's
+  browser loads the crest, so a captain's own server would see their IPs and
+  could swap the image with no save to log. Only a CHANGED logo is checked (the
+  form re-posts the current one, which an admin may have set elsewhere), and
+  admins may use any HTTPS host. No CSP `img-src`: it would block admin logos,
+  news media, Steam avatars and hero art.
 - **Log every change and post every rename;** expire `"games"` and stamp the
   result cursor (record matchups embed names). Only a captain's logo-only
   change is throttled (`TEAM_IDENTITY_PING_THROTTLE_SECONDS`), and says so.

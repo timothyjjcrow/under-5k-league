@@ -56,6 +56,31 @@ function isAppEndpoint(pathname: string): boolean {
   return /^\/+api(\/|$)/i.test(decoded);
 }
 
+/** The image hosts a captain may point their crest at. */
+const CAPTAIN_LOGO_HOSTS = new Set(["i.imgur.com"]);
+
+export const CAPTAIN_LOGO_HOST_ERROR =
+  "Captains can use an Imgur image link (https://i.imgur.com/…). For another host, ask an admin.";
+
+/**
+ * Whether a captain may set this (already normalized) logo. A crest is loaded
+ * by every visitor's browser on standings, schedule, team and match pages, so
+ * a logo on a server the captain runs would show them every visitor's IP
+ * address, and could change what it shows with no new save. Captains get
+ * Imgur and the site's own artwork; admins may still use any HTTPS host.
+ */
+export function isCaptainLogoHost(logoUrl: string): boolean {
+  if (logoUrl.startsWith("/") && !logoUrl.startsWith("//")) {
+    return SITE_IMAGE_PATH.test(logoUrl);
+  }
+  try {
+    const url = new URL(logoUrl);
+    return url.protocol === "https:" && CAPTAIN_LOGO_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Normalize a team logo location typed by an admin or the team's captain.
  *
