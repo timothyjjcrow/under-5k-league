@@ -319,6 +319,14 @@ the league is already draftable and many visitors have joined. Write for both.
 - **The jump bar** (`SectionNav`, in page order) lists what the phase renders
   when there are three or more sections; the regular season hides it from
   `xl`, where the rail shows the standings.
+- **The jump bar leaves the hash to the page** (`followHash={false}`,
+  `openNested="marked"`): the browser scrolls to `#fixtures` or
+  `#tiebreakers` and `ScheduleFold` opens itself, as before the bar existed.
+  A bar that also followed the hash re-scrolled the page after load and
+  fonts, and a re-scroll between the press and release of a click swallowed
+  it (the tiebreaker folds stayed shut in `e2e-postseason/tiebreaker.spec.ts`).
+  A chip opens only its own section, never a card's inner disclosures.
+  `schedule-jump-bar.test.ts` pins both props.
 - **A side's playoff stakes flow as one wrapping line of outcome pairs**
   (Win, Draw, Loss, each with its result), not a row per outcome.
 

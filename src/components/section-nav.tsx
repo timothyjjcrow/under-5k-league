@@ -91,12 +91,22 @@ export function SectionNav({
   sticky = false,
   openNested = "first",
   wrap = false,
+  followHash = true,
 }: {
   items: { id: string; label: string }[];
   label: string;
   sticky?: boolean;
   /** Which disclosure inside a target opens on a jump (see NestedReveal). */
   openNested?: NestedReveal;
+  /**
+   * Reveal the section the URL's hash names on arrival, after load and
+   * fonts, and on back and forward. A page whose sections already answer
+   * the hash themselves (/schedule's folds) turns it off, so the bar never
+   * scrolls the page on its own: a late re-scroll landed between the press
+   * and release of a click on the page and swallowed it. Chips still open
+   * and scroll to their section.
+   */
+  followHash?: boolean;
   /**
    * From desktop width (`lg`) the chips wrap onto more rows instead of
    * scrolling sideways: most desktop mice can't scroll sideways, so a bar
@@ -163,6 +173,7 @@ export function SectionNav({
     let mounted = true;
     resolvedHash.current = "";
     const resolveHash = () => {
+      if (!followHash) return;
       const id = window.location.hash.slice(1);
       if (
         id &&
@@ -228,9 +239,11 @@ export function SectionNav({
           revealSection(id, false, openNested);
       }));
     };
-    if (document.readyState === "complete") revealAfterPaint();
-    else window.addEventListener("load", revealAfterPaint, { once: true });
-    void document.fonts.ready.then(revealAfterPaint);
+    if (followHash) {
+      if (document.readyState === "complete") revealAfterPaint();
+      else window.addEventListener("load", revealAfterPaint, { once: true });
+      void document.fonts.ready.then(revealAfterPaint);
+    }
     const onHashChange = () => {
       resolvedHash.current = "";
       resolveHash();
@@ -247,7 +260,7 @@ export function SectionNav({
       window.removeEventListener("popstate", onHashChange);
       window.removeEventListener("section-ready", observeSections);
     };
-  }, [items, openNested]);
+  }, [items, openNested, followHash]);
 
   return (
     <nav

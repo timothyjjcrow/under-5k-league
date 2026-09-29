@@ -905,6 +905,9 @@ export default async function SchedulePage() {
   // A jump bar to each section, in page order, for the phone and tablet
   // reader: mid-season the standings sat under every week, about 3,000px
   // down a phone. From xl the regular season's rail already shows them.
+  // The bar leaves the URL's hash to the page (the browser's own anchor
+  // scroll and each fold's opener), and a chip opens only its own section,
+  // never a card's inner disclosures.
   const tiebreakerJump = showTiebreakers
     ? { id: "tiebreakers", label: "Tiebreakers" }
     : null;
@@ -966,7 +969,12 @@ export default async function SchedulePage() {
 
       {jumpItems.length >= 3 ? (
         <div className={standingsRail ? "xl:hidden" : undefined}>
-          <SectionNav items={jumpItems} label="Schedule sections" />
+          <SectionNav
+            items={jumpItems}
+            label="Schedule sections"
+            followHash={false}
+            openNested="marked"
+          />
         </div>
       ) : null}
 
