@@ -95,10 +95,13 @@ Captain report, admin import, league feed and roster scan all end in
 - **Admin controls are the override.** Admin Add game skips the fixture-window
   check, and admin Auto-fetch passes `ignoreSkips`, so a game removed by
   mistake is one click from coming back. Automatic sync, the automatic league
-  feed and a captain's Auto-fetch honor removals (`respectImportSkips`). Two
-  more paths do NOT, and no test pins either: the admin's manual "Sync league
-  games" (`respectImportSkips: !!opts.auto`) re-imports every removed game still
-  in the feed, and a captain's pasted id (`reportImportGame`) can bring one back.
+  feed, a captain's Auto-fetch and a captain's pasted id (`reportImportGame`)
+  honor removals (`respectImportSkips`); a pasted removed id is refused before
+  any OpenDota call or cooldown, telling the captain to ask an admin
+  (`test/integration/import-removals.itest.ts`). One more path does NOT, and no
+  test pins it: the admin's manual "Sync league games"
+  (`respectImportSkips: !!opts.auto`) re-imports every removed game still in
+  the feed.
 - **Bust the caches after an import.** Both action files call `refreshGames()`,
   which expires `"games"` and `AUTOMATION_GATE_TAG` and revalidates the layout.
 

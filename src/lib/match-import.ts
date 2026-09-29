@@ -885,9 +885,17 @@ export type ImportGameOptions = {
   signal?: AbortSignal;
   /** Internal league-scan handoff: a finalized provider row already fetched. */
   prefetchedLeagueMatch?: OpenDotaMatch;
-  /** Automatic scans recheck intentional exclusions in the write snapshot. */
+  /**
+   * Refuse a game an admin removed (an ImportSuppression row), re-checked in
+   * the write snapshot. Every path sets it except the admin's own overrides
+   * (Add game, Auto-fetch games).
+   */
   respectImportSkips?: boolean;
 };
+
+/** Shown when a removed game is pasted again; only an admin can add it back. */
+const ADMIN_REMOVED_GAME_ERROR =
+  "An admin removed this game from the results, so it can't be imported again here. If it should count, ask an admin to add it back.";
 
 /** Re-run in the decisive Serializable snapshot; no transaction spans provider IO. */
 async function fixtureWindowFailure(
@@ -1015,6 +1023,15 @@ export async function importGameForMatch(
           ? "That game is already recorded as a scrim"
           : "That game is already reserved for another scheduled event",
     };
+  }
+  // Refuse a removed game before spending an OpenDota call or a captain's
+  // lookup cooldown on it. Only a fast path: the write transaction below
+  // re-checks, because an admin can remove the game during provider IO.
+  if (
+    options.respectImportSkips &&
+    (await loadImportSuppressions(match.seasonId)).has(dotaMatchId)
+  ) {
+    return { ok: false, error: ADMIN_REMOVED_GAME_ERROR, code: "ADMIN_SUPPRESSED" };
   }
 
   const fetchOptions: OpenDotaFetchOptions = {
@@ -1178,7 +1195,7 @@ export async function importGameForMatch(
           }
           if (options.respectImportSkips &&
               (await loadImportSuppressions(fresh.seasonId, tx)).has(dotaMatchId)) {
-            throw new ImportRaceError("An administrator excluded this game from automatic import", "ADMIN_SUPPRESSED");
+            throw new ImportRaceError(ADMIN_REMOVED_GAME_ERROR, "ADMIN_SUPPRESSED");
           }
           // Classification/attribution belongs to the write snapshot too:
           // roster and standin changes during provider IO must not be stamped
