@@ -1879,18 +1879,28 @@ export async function setDraftNight(
             draftReminderPrefix(expectedActiveSeasonId),
             { prefix: true },
           );
-          // Only DELIVERED reminders survive the line above. If one already
-          // pinged everyone and the new time is inside the reminder window,
+          // Only DELIVERED (or covered) reminders survive the line above. If
+          // the reminder for the time being replaced was delivered, that time
+          // is still ahead, and the new time is inside the reminder window,
           // the new revision is recorded as covered, so it does NOT re-arm:
           // the "draft rescheduled" post below carries the change. Without
           // this, every tweak on draft day would ping every captain again.
+          // Only the REPLACED revision counts: a reminder for an older time,
+          // or for a night that already slipped past, says nothing about the
+          // new one, whose reminder must still ping the captains. A same-day
+          // chain of tweaks stays quiet, since each covered revision is the
+          // replaced one for the next move.
           const nowMs = Date.now();
+          const replacedAtMs = currentSeason.draftAt?.getTime() ?? null;
           if (
             when &&
+            replacedAtMs != null &&
+            replacedAtMs > nowMs &&
             draftReminderDue(currentSeason.status, draft?.status, when.getTime(), nowMs) &&
-            (await tx.setting.count({
-              where: { key: { startsWith: draftReminderPrefix(expectedActiveSeasonId) } },
-            })) > 0
+            (await tx.setting.findUnique({
+              where: { key: draftReminderKey(expectedActiveSeasonId, currentSeason.draftRevision) },
+              select: { key: true },
+            }))
           ) {
             await recordAnnouncementCovered(
               tx,

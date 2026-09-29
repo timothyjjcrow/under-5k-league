@@ -277,6 +277,85 @@ describe("draft-night reminder (integration)", () => {
     ).toMatch(/^sent:v2:/);
   });
 
+  it("a chain of draft-day tweaks after a delivered reminder stays quiet", async () => {
+    const { season } = await setupDraftNight(4);
+    expect(await maybeAnnounceDraftNight(season)).toBe(true);
+    const admin = await makeUser("Admin", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    for (const hours of [5, 6]) {
+      const result = await setDraftNight(
+        {},
+        fd({
+          expectedActiveSeasonId: season.id,
+          draftAt: `+${hours}h`,
+          draftAtTs: Date.now() + hours * HOUR,
+        }),
+      );
+      expect(result?.error).toBeUndefined();
+    }
+    const current = await reload(season.id);
+    expect(current.draftRevision).toBe(3);
+    expect(await maybeAnnounceDraftNight(current)).toBe(false);
+    expect(reminderCalls()).toHaveLength(1);
+  });
+
+  // The covered rule asks only about the reminder for the time being
+  // replaced. An older reminder — for a night that slipped past, or one
+  // separated from the new time by a move out of the window or a clear —
+  // says nothing about the new time, whose reminder must still ping the
+  // captains and the unconfirmed players.
+  it.each([
+    {
+      name: "the reminded night slipped past before the move",
+      moves: [] as number[],
+      slip: true,
+    },
+    {
+      name: "a move out of the window came between",
+      moves: [7 * 24],
+      slip: false,
+    },
+    { name: "the draft night was cleared between", moves: [0], slip: false },
+  ])(
+    "a new time inside the window re-arms when $name",
+    async ({ moves, slip }) => {
+      const { season, ids } = await setupDraftNight(4);
+      expect(await maybeAnnounceDraftNight(season)).toBe(true);
+      const admin = await makeUser("Admin", "ADMIN");
+      vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+      const move = async (hours: number) => {
+        const result = await setDraftNight(
+          {},
+          fd({
+            expectedActiveSeasonId: season.id,
+            draftAt: hours === 0 ? "" : `+${hours}h`,
+            draftAtTs: hours === 0 ? "" : Date.now() + hours * HOUR,
+          }),
+        );
+        expect(result?.error).toBeUndefined();
+      };
+      if (slip) {
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { draftAt: new Date(Date.now() - HOUR) },
+        });
+      }
+      for (const hours of moves) await move(hours);
+      await move(6);
+
+      const current = await reload(season.id);
+      expect(current.draftRevision).toBe(2 + moves.length);
+      expect(await maybeAnnounceDraftNight(current)).toBe(true);
+      const reminders = reminderCalls();
+      expect(reminders).toHaveLength(2);
+      const [content, mentions] = reminders[1];
+      expect(String(content)).toContain(
+        `<t:${Math.floor(current.draftAt!.getTime() / 1000)}:F>`,
+      );
+      expect(mentions?.users).toEqual(expect.arrayContaining([ids.capA, ids.linkedLate]));
+    },
+  );
+
   it("re-arms when the draft moves out of the window, quoting the new time once it is close", async () => {
     const { season } = await setupDraftNight(4);
     expect(await maybeAnnounceDraftNight(season)).toBe(true);

@@ -279,8 +279,12 @@ In the Captains & draft card on `/admin` and inside the room
   reminder's claim machinery; after its claim the service re-reads the season,
   draft and pool and releases the claim if any of them moved.
   `setDraftNight` invalidates the older revisions' in-flight markers, so a
-  moved draft re-arms under its new key, except when a reminder was already
-  delivered and the new time is still inside the window: then it records the
-  new revision as covered (`recordAnnouncementCovered`) and the "draft
-  rescheduled" post carries the change. `startDraft` invalidates any pending
-  reminder; deleting a season sweeps `draftReminderPrefix`.
+  moved draft re-arms under its new key, except when a reminder was delivered
+  for the time being replaced, while that time is still ahead, and the new
+  time is inside the window: then it records the new revision as covered
+  (`recordAnnouncementCovered`) and the "draft rescheduled" post carries the
+  change. Only the replaced revision's own marker counts, so a same-day chain
+  of tweaks stays quiet, but a reminder for a night that slipped past, or one
+  followed by a move out of the window or a clear, never silences the real
+  draft night's reminder (`draft-reminder.itest.ts`). `startDraft` invalidates
+  any pending reminder; deleting a season sweeps `draftReminderPrefix`.
