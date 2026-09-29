@@ -886,6 +886,12 @@ describe("enrichStoredGames", () => {
     dotaMatchId: string,
     lines: unknown[] = [LEGACY_LINE],
   ) {
+    // Each game gets its own season, and only one season can be active.
+    // Backfill reads every season's games, so the earlier ones are archived.
+    await prisma.season.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
+    });
     const season = await makeSeason();
     const home = await makeTeam(season.id, "Home", 0);
     const away = await makeTeam(season.id, "Away", 1);
@@ -1114,10 +1120,6 @@ describe("enrichStoredGames", () => {
     await prisma.game.update({
       where: { id: dead.id },
       data: { fetchedAt: new Date(Date.now() - 60_000) },
-    });
-    await prisma.season.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
     });
     const alive9005 = await legacyGame("9005");
     await prisma.game.update({

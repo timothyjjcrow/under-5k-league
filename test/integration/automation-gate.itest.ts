@@ -195,6 +195,10 @@ describe("automation gate database reads", () => {
         status: "COMPLETED",
         homeScore: 1,
         winnerTeamId: home.id,
+        // Decided a week earlier. Left unset, Postgres's completion trigger
+        // stamps the real clock, which is weeks after NOW, and week 1's
+        // honors then read as freshly completed and due for recovery.
+        completedAt: new Date(NOW - 7 * 24 * HOUR),
       },
     });
     await prisma.setting.create({

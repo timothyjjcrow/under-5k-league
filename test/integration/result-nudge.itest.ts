@@ -40,9 +40,11 @@ async function setup(opts: {
   status?: string;
   bestOf?: number;
   homeScore?: number;
+  seasonActive?: boolean;
 }) {
   const season = await makeSeason({
     status: opts.seasonStatus ?? SEASON_STATUS.REGULAR_SEASON,
+    isActive: opts.seasonActive ?? true,
   });
   const home = await makeTeam(season.id, "Alpha", 0);
   const away = await makeTeam(season.id, "Delta", 1);
@@ -158,18 +160,26 @@ describe("result nudge — the captains hear when a fixture's games can't be fou
   });
 
   it("leaves alone what isn't the captains' to report", async () => {
+    // Only one season can be active, so each fixture gets an archived season
+    // and the check runs once per fixture with just that season active.
     const early = await setup({
       kickoffHoursAgo: RESULT_NUDGE.HOURS_AFTER_KICKOFF - 0.5,
+      seasonActive: false,
     });
-    const stale = await setup({ kickoffHoursAgo: AUTO_SYNC.WINDOW_HOURS + 1 });
+    const stale = await setup({
+      kickoffHoursAgo: AUTO_SYNC.WINDOW_HOURS + 1,
+      seasonActive: false,
+    });
     const done = await setup({
       kickoffHoursAgo: 5,
       status: MATCH_STATUS.COMPLETED,
+      seasonActive: false,
     });
-    const unscheduled = await setup({ kickoffHoursAgo: null });
+    const unscheduled = await setup({
+      kickoffHoursAgo: null,
+      seasonActive: false,
+    });
     const ids = [early, stale, done, unscheduled].map((s) => s.match.id);
-    // Only one season can be active; each setup made a new active one, so
-    // run the check once per fixture's season.
     for (const s of [early, stale, done, unscheduled]) {
       await prisma.season.updateMany({ data: { isActive: false } });
       await prisma.season.update({

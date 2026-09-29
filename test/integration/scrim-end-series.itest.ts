@@ -25,6 +25,12 @@ async function series(options: {
   awayScore: number;
   status?: string;
 }) {
+  // A test that needs a second series is done with the first by then, and
+  // only one season can be active.
+  await prisma.season.updateMany({
+    where: { isActive: true },
+    data: { isActive: false },
+  });
   const season = await makeSeason({
     status: SEASON_STATUS.REGULAR_SEASON,
     teamSize: 5,

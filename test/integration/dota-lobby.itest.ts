@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
+  allowLegacyDuplicateActives,
   sessionFor as asSession,
   makeCaptain,
   makeSeason,
@@ -441,6 +442,7 @@ describe("Dota lobby authorization and settings", () => {
         .rejects.toMatchObject({ code: "P2002" });
       return;
     }
+    await allowLegacyDuplicateActives();
     await prisma.inhouseLobby.create({ data: { status: "READY_CHECK" } });
     vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
     const fetch = vi.fn();
