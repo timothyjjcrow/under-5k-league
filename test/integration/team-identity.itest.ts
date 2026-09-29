@@ -450,6 +450,68 @@ describe("editTeamIdentity — the captain's own team page", () => {
     ).toEqual({ message: "Saved Radiant Raccoons" });
   });
 
+  it("refuses a save from a form opened before someone else's edit", async () => {
+    const { season, home } = await league();
+    // The captain's tab renders the form with the name and logo of the moment.
+    const shown = { expectedName: "Zai's Team", expectedLogoUrl: "" };
+    // An admin then renames the team, say to replace an offensive name.
+    const admin = await makeUser("Tim", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    expect(
+      await renameTeam(
+        empty,
+        fd({ expectedActiveSeasonId: season.id, teamId: home.team.id, name: "Clean Name", ...shown }),
+      ),
+    ).toEqual({ message: "Saved Clean Name" });
+    vi.mocked(sendDiscordMessage).mockClear();
+    await prisma.adminAction.deleteMany();
+
+    // The captain changes only the logo in the old tab. The form still posts
+    // the old name, which would rename the team back.
+    signIn(home.user);
+    const stale = await editTeamIdentity(
+      empty,
+      fd({ teamId: home.team.id, name: "Zai's Team", logoUrl: "/teams/zai.png", ...shown }),
+    );
+    expect(stale).toEqual({
+      error:
+        "This team's name or logo changed since you opened this form. Reload to see the current one, then save again.",
+    });
+    expect(await teamRow(home.team.id)).toMatchObject({ name: "Clean Name", logoUrl: null });
+    expect(await prisma.adminAction.count()).toBe(0);
+    expect(vi.mocked(sendDiscordMessage)).not.toHaveBeenCalled();
+
+    // After a reload the form shows the new identity, and the save goes through.
+    expect(
+      await editTeamIdentity(
+        empty,
+        fd({
+          teamId: home.team.id,
+          name: "Clean Name",
+          logoUrl: "/teams/zai.png",
+          expectedName: "Clean Name",
+          expectedLogoUrl: "",
+        }),
+      ),
+    ).toEqual({ message: "Saved Clean Name" });
+
+    // The other way round: an admin's /admin tab from before the logo change
+    // can't clear it by saving an unrelated edit.
+    const adminStale = await renameTeam(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        teamId: home.team.id,
+        name: "Clean Name",
+        logoUrl: "",
+        expectedName: "Clean Name",
+        expectedLogoUrl: "",
+      }),
+    );
+    expect(adminStale?.error).toMatch(/changed since you opened this form/);
+    expect((await teamRow(home.team.id)).logoUrl).toBe("/teams/zai.png");
+  });
+
   it("refuses the outgoing captain when captaincy moves mid-save", async () => {
     const { season, home } = await league();
     const incoming = await makeUser("Incoming");

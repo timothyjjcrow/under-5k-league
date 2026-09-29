@@ -93,7 +93,14 @@ export function TeamIdentityForm({
   return (
     <ActionForm
       action={action}
-      hidden={{ teamId, ...hidden }}
+      // What this form was showing, so a save from a tab opened before
+      // someone else's edit is refused instead of reverting that edit.
+      hidden={{
+        teamId,
+        expectedName: name,
+        expectedLogoUrl: logoUrl ?? "",
+        ...hidden,
+      }}
       className="grid max-w-md grid-cols-1 gap-3"
     >
       <div className="flex min-w-0 items-start gap-3">

@@ -32,6 +32,9 @@ export type TeamIdentityResult = SavedTeamIdentity | { ok: false; error: string 
 const NOT_ALLOWED =
   "Only this team's captain or an admin can edit it. If the captaincy just changed, reload the page.";
 
+const STALE_FORM =
+  "This team's name or logo changed since you opened this form. Reload to see the current one, then save again.";
+
 /** An expected refusal; its message is shown to the editor as-is. */
 class TeamIdentityRefused extends Error {}
 
@@ -43,6 +46,13 @@ export async function saveTeamIdentity(input: {
   name: string;
   /** The raw logo field. Undefined leaves the logo as it is. */
   logoUrl?: string;
+  /**
+   * The name and logo ("" for none) the form was showing. When given, a save
+   * from a form opened before someone else's edit is refused instead of
+   * silently reverting that edit. Undefined skips the check (a form rendered
+   * before this field existed).
+   */
+  expected?: { name: string; logoUrl: string };
 }): Promise<TeamIdentityResult> {
   const name = normalizeTeamName(input.name);
   if (!name) return { ok: false, error: "Enter a team name" };
@@ -78,6 +88,17 @@ export async function saveTeamIdentity(input: {
           throw new TeamIdentityRefused(
             "The season is complete — team details are historical and read-only.",
           );
+        }
+        // The form posts the whole identity, so a tab opened before another
+        // edit would write the old name or logo back over it. This reads the
+        // same row the transaction then writes: a rival committing in between
+        // makes the Serializable save fail (the "just changed" refusal).
+        if (
+          input.expected &&
+          (input.expected.name !== team.name ||
+            input.expected.logoUrl !== (team.logoUrl ?? ""))
+        ) {
+          throw new TeamIdentityRefused(STALE_FORM);
         }
         // Standings, fixtures and Discord lines tell teams apart by name, and a
         // captain must not be able to pass their team off as another one.

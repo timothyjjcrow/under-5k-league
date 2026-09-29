@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canEditTeamIdentity,
+  expectedTeamIdentity,
   carriedTeamIdentity,
   carriedTeamIdentityNote,
   logoPreviewNote,
@@ -358,5 +361,36 @@ describe("teamNameAfterCaptainChange", () => {
     expect(teamNameAfterCaptainChange(numbered, long, "Mira", [])).toBe(
       "Mira's Team",
     );
+  });
+});
+
+describe("expectedTeamIdentity — the stale-form check's input", () => {
+  const form = (fields: Record<string, string>) => {
+    const fd = new FormData();
+    for (const [key, value] of Object.entries(fields)) fd.set(key, value);
+    return fd;
+  };
+
+  it("reads what the form was showing, an empty logo included", () => {
+    expect(
+      expectedTeamIdentity(form({ expectedName: "Zai's Team", expectedLogoUrl: "" })),
+    ).toEqual({ name: "Zai's Team", logoUrl: "" });
+  });
+
+  it("skips the check unless the form sent both fields", () => {
+    // A tab rendered before the fields existed must keep saving.
+    expect(expectedTeamIdentity(form({ name: "Zai's Team" }))).toBeUndefined();
+    expect(expectedTeamIdentity(form({ expectedName: "Zai's Team" }))).toBeUndefined();
+  });
+
+  it("[source] the identity form sends what it was rendered with", () => {
+    // No jsdom here, so pin the hidden fields the check depends on. Without
+    // them every save goes through unchecked and a stale tab reverts edits.
+    const source = readFileSync(
+      path.join(process.cwd(), "src/components/team-identity-form.tsx"),
+      "utf8",
+    );
+    expect(source).toContain("expectedName: name,");
+    expect(source).toContain('expectedLogoUrl: logoUrl ?? "",');
   });
 });

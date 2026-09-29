@@ -69,7 +69,7 @@ import {
 import type { ActionResult } from "@/lib/action-result";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
 import { saveTeamIdentity } from "@/lib/team-identity-service";
-import { teamIdentitySummary } from "@/lib/team-identity";
+import { expectedTeamIdentity, teamIdentitySummary } from "@/lib/team-identity";
 import {
   isSerializationConflict,
   isUniqueViolation,
@@ -158,6 +158,7 @@ export async function renameTeam(
     expectedSeasonId: expectedActiveSeasonId,
     name: str(formData, "name"),
     logoUrl: formData.has("logoUrl") ? str(formData, "logoUrl") : undefined,
+    expected: expectedTeamIdentity(formData),
   });
   if (!saved.ok) return { error: saved.error };
   if (saved.nameChanged || saved.logoChanged) {

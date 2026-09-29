@@ -159,6 +159,12 @@ Grid, filter and URL rules: `pages-and-ui.md`.
 - **Authorize in the WHERE:** the captain's `updateMany` re-asserts
   `captainId`, so a captain who lost the armband mid-edit can't rename. The
   admin write is a separate `updateMany` so the ratchet can gate the captain's.
+- **A stale form can't revert a newer edit.** The form posts the whole
+  identity, so `TeamIdentityForm` also sends the name and logo it was rendered
+  with (`expectedName`, `expectedLogoUrl`), and `saveTeamIdentity` refuses
+  ("changed since you opened this form") when they no longer match the row it
+  reads and then writes in the same Serializable transaction. Both doors send
+  them; a post without both (a tab from before the fields) is unchecked.
 - **Names are unique by how they read** (`teamNameKey` ignores case,
   invisibles, accents and look-alike letters). Logos must be permanent images
   (`normalizeTeamLogoUrl` refuses expiring Discord attachments and `/api`).

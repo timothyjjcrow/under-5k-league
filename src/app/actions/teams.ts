@@ -18,6 +18,7 @@ import {
   TEAM_IDENTITY_PING_THROTTLE_SECONDS,
   TEAM_RENAME_THROTTLE_SECONDS,
   TEAM_RENAME_THROTTLED_ERROR,
+  expectedTeamIdentity,
   normalizeTeamName,
   teamIdentityNotPostedMessage,
   teamIdentityPingKey,
@@ -115,6 +116,7 @@ export async function editTeamIdentity(
       teamId,
       name,
       logoUrl: formData.has("logoUrl") ? str(formData, "logoUrl") : undefined,
+      expected: expectedTeamIdentity(formData),
     });
   } finally {
     // Give the window back when no rename happened (refused, threw, or the

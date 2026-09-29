@@ -125,6 +125,22 @@ export type TeamIdentityChange = {
 };
 
 /**
+ * The name and logo the identity form was showing (its expectedName and
+ * expectedLogoUrl hidden fields), for saveTeamIdentity's stale-form check.
+ * Undefined when the form didn't send both, e.g. a tab rendered before the
+ * fields existed: that save goes through unchecked, as it always did.
+ */
+export function expectedTeamIdentity(
+  formData: FormData,
+): { name: string; logoUrl: string } | undefined {
+  const name = formData.get("expectedName");
+  const logoUrl = formData.get("expectedLogoUrl");
+  return typeof name === "string" && typeof logoUrl === "string"
+    ? { name, logoUrl }
+    : undefined;
+}
+
+/**
  * A captain's logo-only changes post to the league channel at most once per
  * team in this window. Renames are never held back: the league announces
  * every rename, from a captain or an admin. Every change is still saved and
