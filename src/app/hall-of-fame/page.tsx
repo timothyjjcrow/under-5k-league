@@ -13,6 +13,7 @@ import { impactPointsRule, pointsByPlayer } from "@/lib/fantasy";
 import { PICKEM_RANKING_NOTE, pickemStandings } from "@/lib/pickem";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
   Avatar,
@@ -100,10 +101,13 @@ function BoardCard({ board, userOf }: { board: Board; userOf: Map<string, User> 
 }
 
 export default async function HallOfFamePage() {
-  const [seasons, matches] = await Promise.all([
+  const [seasons, matches, activeDraft] = await Promise.all([
     prisma.season.findMany({
       orderBy: { createdAt: "desc" },
-      select: { id: true, name: true, status: true, championTeamId: true },
+      select: {
+        id: true, name: true, status: true, championTeamId: true,
+        isActive: true,
+      },
     }),
     prisma.match.findMany({
       select: {
@@ -112,7 +116,18 @@ export default async function HallOfFamePage() {
         awayTeamId: true, scheduledAt: true,
       },
     }),
+    prisma.draft.findFirst({
+      where: { season: { isActive: true } },
+      select: { status: true },
+    }),
   ]);
+  // The same gate /pickem plays under: between seasons (rest-in-COMPLETE,
+  // the offseason) and before the auction finishes, it opens read-only, so
+  // the call to action only asks for a pick when one can be made.
+  const activeSeason = seasons.find((season) => season.isActive);
+  const pickemPlayable =
+    !!activeSeason &&
+    postAuctionWorkOpen(activeSeason.status, activeDraft?.status);
   const matchesBySeason = new Map<string, typeof matches>();
   for (const match of matches) {
     const seasonMatches = matchesBySeason.get(match.seasonId) ?? [];
@@ -363,7 +378,7 @@ export default async function HallOfFamePage() {
                 <p className="mt-2 text-sm leading-relaxed text-muted">
                   {PICKEM_RANKING_NOTE} It is the same rule as each season&apos;s oracle board on Pick&apos;em, with every season counted together. Draws and unfinished matches aren&apos;t graded.
                 </p>
-                <Link href="/pickem" className="mt-4 inline-block text-sm font-semibold text-info hover:underline">Make a pick →</Link>
+                <Link href="/pickem" className={textLink("mt-4 inline-block text-sm font-semibold")}>{pickemPlayable ? "Make a pick" : "Open Pick'em"} <LinkArrow /></Link>
               </CardBody>
             </Card>
           </div>

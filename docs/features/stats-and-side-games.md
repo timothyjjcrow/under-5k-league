@@ -80,7 +80,9 @@ tested in `src/lib/` (`fantasy.ts`, `achievements.ts`, `honors*.ts`,
   wins. Game boards (`careerGameCounts`, `pointsByPlayer`) appear only once
   trusted games span two seasons, since one season would repeat Leaders.
   "Pick'em calls" places by `pickemStandings` (row `rankValue`) and skips zero
-  correct. Empty sections are left out.
+  correct. Empty sections are left out. Its link says "Make a pick" only when
+  /pickem can take one (active season, `postAuctionWorkOpen`), else "Open
+  Pick'em": the board shows all year, pick'em is closed between seasons.
 - **Equal scores share a place, and ties at the cutoff show** (`topPlaces`:
   1, 1, 3; top 5 by place, capped at 10 rows plus "+N more tied"). Decimal
   boards place on the shown precision (`placeKey`).

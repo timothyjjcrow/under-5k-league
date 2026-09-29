@@ -40,6 +40,7 @@ const MATCH =
   read("matches", "[id]", "match-preview.tsx") +
   read("matches", "[id]", "matchup-card.tsx");
 const SEASON_ARCHIVE = read("seasons", "[id]", "page.tsx");
+const HALL_OF_FAME = read("hall-of-fame", "page.tsx");
 const SEASON_SCOPE = read("..", "lib", "season-scope.ts");
 
 describe("side-game archive: both pages resolve ?season=", () => {
@@ -240,6 +241,19 @@ describe("pick'em control: one implementation, gated like /pickem", () => {
     expect(MATCH).toMatch(
       /canPlay:\s*match\.season\.isActive &&\s*postAuctionWorkOpen\(/,
     );
+  });
+
+  it("the Hall of Fame asks for a pick only while /pickem can take one", () => {
+    // Between seasons (rest-in-COMPLETE, the offseason) and before the
+    // auction finishes, /pickem opens read-only, so an unconditional
+    // "Make a pick" there leads to a page where no pick can be made.
+    expect(HALL_OF_FAME).toMatch(
+      /const pickemPlayable =\s*!!activeSeason &&\s*postAuctionWorkOpen\(activeSeason\.status, activeDraft\?\.status\)/,
+    );
+    expect(HALL_OF_FAME).toMatch(
+      /\{pickemPlayable \? "Make a pick" : "Open Pick'em"\}/,
+    );
+    expect(HALL_OF_FAME.match(/Make a pick/g)).toHaveLength(1);
   });
 
   it("signed-out dashboard viewers get no picks map, so no tray", () => {
