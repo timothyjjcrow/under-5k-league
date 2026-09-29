@@ -10,7 +10,7 @@
 import { useId, useRef, useState } from "react";
 import Link from "next/link";
 import { TeamCrest } from "@/components/ui";
-import { LocalTime } from "@/components/local-time";
+import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { MATCH_STATUS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import {
@@ -306,12 +306,17 @@ function MatchCard({
   const live = m.status === MATCH_STATUS.LIVE;
   const homeName = m.home?.name ?? "TBD";
   const awayName = m.away?.name ?? "TBD";
+  // The link's aria-label replaces its content as the accessible name, so the
+  // <LocalTime> below never reaches a screen reader. m.when was formatted on
+  // the server (UTC in production); read the kickoff in the viewer's zone
+  // here too. Called unconditionally (a hook); the server snapshot is m.when.
+  const localWhen = useLocalTimeText(m.whenTs ?? 0, "full", m.when ?? "");
   const matchState = live
     ? `live at ${m.homeScore} to ${m.awayScore}`
     : m.completed
       ? `final at ${m.homeScore} to ${m.awayScore}`
       : m.when
-        ? `scheduled for ${m.when}`
+        ? `scheduled for ${m.whenTs != null ? localWhen : m.when}`
         : "details available";
   const matchLinkLabel = `${isFinal ? "Grand final" : "Playoff match"}: ${homeName} versus ${awayName}, ${matchState}, best of ${m.bestOf}. View match details`;
   return (

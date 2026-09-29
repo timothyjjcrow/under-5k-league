@@ -256,7 +256,10 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
 - **Show times in the viewer's zone.** `<LocalTime ts initial>` uses the server
   string as the hydration snapshot and the browser zone after, both via
   `formatMatchTime`. Server `toLocaleString` alone is wrong in production (UTC
-  host). `<Countdown>` (`countdownLabel`) runs to "happening now".
+  host). `<Countdown>` (`countdownLabel`) runs to "happening now". A time
+  inside an attribute (an `aria-label` replaces the element's content, so a
+  `<LocalTime>` inside never reaches a screen reader) uses `useLocalTimeText`,
+  as the bracket's match links and the schedule rows do.
 
 ## Forfeits and team withdrawal
 
