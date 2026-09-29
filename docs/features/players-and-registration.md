@@ -132,7 +132,10 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   (`appearanceCareers`), roster tenures (`getRosterHistory`), and cover on
   COMPLETED matches. One row per season and team; the record counts only
   series the player appeared in. Voided tenures (`DRAFT_UNDO`, `DRAFT_ABORT`,
-  `PRE_DRAFT_TEAM_REMOVED`) never make a row. The trophy needs the resolved
+  `PRE_DRAFT_TEAM_REMOVED`, `PRE_DRAFT_CAPTAIN_CHANGED`) never make a row and
+  never decide a row's role, so a captain swapped out before the draft shows
+  no Captain badge for that team. Add any new end reason that means "never
+  really on this team" to `VOID_TENURE_ENDS`. The trophy needs the resolved
   champion (`resolveChampionPresentation`) and a real part in it.
 
 ## Player comparison (`/players/compare`)

@@ -8,13 +8,23 @@
 import { seriesRecordText } from "./team-matches";
 
 /** Tenures ended by these never made a real season with that team: the sale
- *  was undone, the draft was aborted and re-run, or the team was dissolved
- *  before the draft. Shown only if the player somehow also played for it. */
+ *  was undone, the draft was aborted and re-run, the team was dissolved
+ *  before the draft, or an admin handed the team to another captain before
+ *  the draft (changeCaptain). Shown only if the player somehow also played
+ *  for it, and never the source of the row's role. */
 const VOID_TENURE_ENDS = new Set([
   "DRAFT_UNDO",
   "DRAFT_ABORT",
   "PRE_DRAFT_TEAM_REMOVED",
+  "PRE_DRAFT_CAPTAIN_CHANGED",
 ]);
+
+function isVoidTenure(t: { teamId: string | null; endReason: string | null }) {
+  return (
+    (t.endReason !== null && VOID_TENURE_ENDS.has(t.endReason)) ||
+    t.teamId === null
+  );
+}
 
 export type ProfileSeasonRole =
   | { kind: "captain" }
@@ -121,12 +131,9 @@ export function profileSeasonRows(input: {
   }
   for (const t of input.tenures) {
     const key = JSON.stringify([t.seasonId, t.teamId ?? `name:${t.teamName}`]);
-    const voided =
-      (t.endReason !== null && VOID_TENURE_ENDS.has(t.endReason)) ||
-      t.teamId === null;
     // A voided tenure only adds detail to a row that exists for another
     // reason; it never creates one.
-    if (voided && !rows.has(key)) continue;
+    if (isVoidTenure(t) && !rows.has(key)) continue;
     const row = slot(t.seasonId, t.teamId, t.teamName);
     row.teamName ??= t.teamName;
     row.tenures.push(t);
@@ -155,7 +162,10 @@ export function profileSeasonRows(input: {
         seasonName: season.name,
         teamId: row.teamId,
         teamName,
-        role: roleOf(tenures),
+        // A voided tenure never says how they joined: a captain swapped out
+        // before the draft and later auctioned back onto the same team was
+        // "Drafted for $X", not its captain.
+        role: roleOf(tenures.filter((t) => !isVoidTenure(t))),
         games: row.games,
         series:
           row.wins + row.losses + row.draws > 0

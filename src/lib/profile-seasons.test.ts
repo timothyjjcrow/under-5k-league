@@ -161,7 +161,7 @@ describe("profileSeasonRows", () => {
     expect(profileSeasonRecord(row)).toBeNull();
   });
 
-  it("drops rosters that never became a season: undone sales, aborted drafts, dissolved teams", () => {
+  it("drops rosters that never became a season: undone sales, aborted drafts, dissolved teams, swapped-out captains", () => {
     expect(
       rows({
         tenures: [
@@ -173,6 +173,16 @@ describe("profileSeasonRows", () => {
             active: false,
             endReason: "PRE_DRAFT_TEAM_REMOVED",
           }),
+          // changeCaptain keeps the team, so the tenure keeps its teamId.
+          tenure({
+            teamId: "c",
+            teamName: "Charlie",
+            active: false,
+            acquisitionKind: "CAPTAIN_DESIGNATION",
+            price: 0,
+            captain: true,
+            endReason: "PRE_DRAFT_CAPTAIN_CHANGED",
+          }),
         ],
       }),
     ).toEqual([]);
@@ -181,6 +191,25 @@ describe("profileSeasonRows", () => {
       tenures: [tenure({ active: false, endReason: "RELEASE" })],
     });
     expect(released.role).toEqual({ kind: "drafted", price: 12 });
+  });
+
+  it("never takes the role from a voided tenure on a row that exists anyway", () => {
+    // Swapped out as captain before the draft, then bought back by the same
+    // team in the auction: they were drafted, not its captain.
+    const [rebought] = rows({
+      tenures: [
+        tenure({
+          joinedAt: new Date("2026-01-01"),
+          active: false,
+          acquisitionKind: "CAPTAIN_DESIGNATION",
+          price: 0,
+          captain: true,
+          endReason: "PRE_DRAFT_CAPTAIN_CHANGED",
+        }),
+        tenure({ price: 9 }),
+      ],
+    });
+    expect(rebought.role).toEqual({ kind: "drafted", price: 9 });
   });
 
   it("only hands the trophy to players who were part of the title team", () => {
