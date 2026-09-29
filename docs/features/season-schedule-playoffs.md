@@ -232,16 +232,20 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   `finalBestOf` when it is created, so a save that wrote only the Season left a
   grand final built as Bo5 at Bo5 under a "Bo3" setting (live, 2026-09-29).
   `setSeriesLengths` now claims the rendered Season and, in the same
-  Serializable transaction, moves each phase's fixtures that are SCHEDULED, 0-0
-  and gameless (`syncUnstartedSeriesLengths`); TIEBREAKER fixtures keep their
-  format's length. Completed series and series under way keep theirs, and the
-  toast names what moved and what was under way (`seriesLengthSyncNote`,
-  `series-lengths.ts`). Serializable is load-bearing: `advancePlayoffBracket`
-  reads `finalBestOf` inside its build, so a save landing after that read
-  must abort one side (seam `playoffs.advance.afterConfigRead`, pinned in
-  `series-lengths.itest.ts`). Result writers re-read `bestOf` and write the
-  same Match row Serializably, so a score judged against the old length
-  cannot land on the new one.
+  Serializable transaction, moves each phase's fixtures that are SCHEDULED,
+  0-0, gameless and before kickoff (`syncUnstartedSeriesLengths`); TIEBREAKER
+  fixtures keep their format's length. A fixture past kickoff with nothing
+  imported may have been played (the feed reads 25 minutes after kickoff), and
+  a Bo5's games imported into a Bo3 stop at the first 2-0, so it keeps its
+  length. Completed series, series under way and past-kickoff fixtures keep
+  theirs, and the toast names what moved and what it left
+  (`seriesLengthSyncNote`, `series-lengths.ts`). Serializable is
+  load-bearing: `advancePlayoffBracket` reads `finalBestOf` inside its build,
+  so a save landing after that read must abort one side (seam
+  `playoffs.advance.afterConfigRead`). `recordResult` re-reads `bestOf` in its
+  Serializable transaction, so a score judged against the old length cannot
+  land on the new one (seam `recordResult.beforeSwap`). Both are pinned in
+  `series-lengths.itest.ts`.
 - **Crown only a real final.** The sole latest-round row must be phase FINAL; the
   crown re-proves it (same row, completed, same winner) and claims Season
   PLAYOFFS to COMPLETE. `announceChampionOnce` posts after commit behind a

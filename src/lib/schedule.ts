@@ -321,8 +321,9 @@ export function playoffTotalRounds(
  * "Grand final" — the word "Final" belongs to that match alone.
  *
  * `bestOf: true` appends the series length ("Semifinal · Bo3") for postseason
- * fixtures; a regular week's series length is a season-wide constant, so it
- * is left off there.
+ * fixtures and leaves it off regular weeks, which are created at the season's
+ * `regularBestOf`. A mid-season series-length save moves only regular fixtures
+ * that have not started, so played weeks can keep an older length.
  */
 export function matchRoundLabel(
   match: RoundLabelMatch,

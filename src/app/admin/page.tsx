@@ -2073,11 +2073,11 @@ function SeasonControls({
                   created. Saving once wrote only the Season, so an existing
                   grand final stayed Bo5 under a "Bo3" setting; setSeriesLengths
                   now moves every fixture that has not started, and its toast
-                  names what moved and what was already under way. */}
+                  names what moved and what it left. */}
               <span className="text-xs text-muted">
                 games per match — saving also updates every match that hasn&apos;t
-                started. Finished series and series already under way keep
-                their length.
+                kicked off yet. Matches already played or under way keep their
+                length, and tiebreakers keep theirs.
               </span>
             </ActionForm>
           </div>

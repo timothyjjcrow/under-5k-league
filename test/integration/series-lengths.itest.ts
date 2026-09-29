@@ -43,6 +43,8 @@ import {
 
 afterEach(() => setRaceHook(null));
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 function fd(fields: Record<string, string>): FormData {
   const f = new FormData();
   for (const [k, v] of Object.entries(fields)) f.set(k, v);
@@ -117,10 +119,15 @@ describe("setSeriesLengths — existing fixtures", () => {
     });
     const { semis, final } = await builtFinal(season.id);
     expect(final.bestOf).toBe(5);
-    // The admin saved Bo3 once already: the Season says Bo3, the final Bo5.
+    // The admin saved Bo3 once already: the Season says Bo3, the final Bo5,
+    // and the final is days away (the live US final on 2026-09-29).
     await prisma.season.update({
       where: { id: season.id },
       data: { finalBestOf: 3 },
+    });
+    await prisma.match.update({
+      where: { id: final.id },
+      data: { scheduledAt: new Date(Date.now() + 4 * DAY_MS) },
     });
 
     const result = await saveLengths(season.id, {
@@ -169,6 +176,7 @@ describe("setSeriesLengths — existing fixtures", () => {
         homeScore: number;
         winnerTeamId: string;
         bestOf: number;
+        scheduledAt: Date;
       }> = {},
     ) =>
       prisma.match.create({
@@ -196,6 +204,13 @@ describe("setSeriesLengths — existing fixtures", () => {
       phase: MATCH_PHASE.TIEBREAKER,
       bestOf: 1,
     });
+    // Kicked off yesterday with nothing imported: it may have been played.
+    const pastKickoff = await fixture(7, {
+      scheduledAt: new Date(Date.now() - DAY_MS),
+    });
+    const nextWeek = await fixture(8, {
+      scheduledAt: new Date(Date.now() + 7 * DAY_MS),
+    });
     const elsewhere = await prisma.match.create({
       data: {
         seasonId: other.id,
@@ -214,10 +229,13 @@ describe("setSeriesLengths — existing fixtures", () => {
 
     expect(result?.message).toBe(
       "Series lengths saved · regular Bo3, playoffs Bo3, final Bo5" +
-        " · 1 regular-season match is now Bo3" +
-        " · 3 regular-season matches are already under way and keep their length",
+        " · 2 regular-season matches are now Bo3" +
+        " · 3 regular-season matches are already under way and keep their length" +
+        " · 1 regular-season match is past its kickoff with no result yet and keeps its length",
     );
     expect(await bestOf(unstarted.id)).toBe(3);
+    expect(await bestOf(nextWeek.id)).toBe(3);
+    expect(await bestOf(pastKickoff.id)).toBe(2);
     expect(await bestOf(finished.id)).toBe(2);
     expect(await bestOf(scored.id)).toBe(2);
     expect(await bestOf(withGame.id)).toBe(2);
@@ -320,6 +338,89 @@ describe("setSeriesLengths — races", () => {
         data: { isActive: false },
       });
     }
+  });
+
+  it("refuses a result judged against the old length when a save lands first", async () => {
+    const season = await makeSeason({
+      teamSize: 3,
+      minTeams: 4,
+      regularBestOf: 2,
+      playoffBestOf: 3,
+      finalBestOf: 5,
+    });
+    const { final } = await builtFinal(season.id);
+    // recordResult has validated 3-1 against Bo5; the Bo3 save commits before
+    // its transaction re-reads the match.
+    let fired = false;
+    setRaceHook(
+      onceAt("recordResult.beforeSwap", async () => {
+        fired = true;
+        await saveLengths(season.id, { regular: 2, playoff: 3, final: 3 });
+      }),
+    );
+
+    const result = await recordResult(
+      {},
+      fd({
+        matchId: final.id,
+        homeScore: "3",
+        awayScore: "1",
+        expectedActiveSeasonId: season.id,
+      }),
+    );
+
+    expect(fired).toBe(true);
+    expect(result?.error).toMatch(/best-of-3/i);
+    expect(
+      await prisma.match.findUniqueOrThrow({ where: { id: final.id } }),
+    ).toMatchObject({ status: MATCH_STATUS.SCHEDULED, bestOf: 3 });
+  });
+
+  it("moves nothing when another settings save lands before its transaction", async () => {
+    const season = await makeSeason({
+      status: SEASON_STATUS.PLAYOFFS,
+      finalBestOf: 5,
+    });
+    const [a, b] = [
+      await makeTeam(season.id, "Alpha", 0),
+      await makeTeam(season.id, "Bravo", 1),
+    ];
+    const final = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 8,
+        phase: MATCH_PHASE.FINAL,
+        bracketSlot: "R1M0",
+        homeTeamId: a.id,
+        awayTeamId: b.id,
+        bestOf: 5,
+      },
+    });
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.setSeriesLengths.beforeTransaction", async () => {
+        fired = true;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await prisma.season.update({
+          where: { id: season.id },
+          data: { name: "Renamed meanwhile" },
+        });
+      }),
+    );
+
+    const result = await saveLengths(season.id, {
+      regular: 2,
+      playoff: 3,
+      final: 3,
+    });
+
+    expect(fired).toBe(true);
+    expect(result?.error).toMatch(/season changed before this setting/i);
+    expect(await bestOf(final.id)).toBe(5);
+    expect(
+      (await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
+        .finalBestOf,
+    ).toBe(5);
   });
 
   describe.skipIf(!ON_POSTGRES)("Postgres interleavings", () => {

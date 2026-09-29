@@ -16,8 +16,8 @@ describe("seriesLengthSyncNote", () => {
   it("says nothing when no existing fixture was touched or left behind", () => {
     expect(
       seriesLengthSyncNote([
-        { phase: MATCH_PHASE.REGULAR, bestOf: 2, updated: 0, underWay: 0 },
-        { phase: MATCH_PHASE.FINAL, bestOf: 3, updated: 0, underWay: 0 },
+        { phase: MATCH_PHASE.REGULAR, bestOf: 2, updated: 0, underWay: 0, kickedOff: 0 },
+        { phase: MATCH_PHASE.FINAL, bestOf: 3, updated: 0, underWay: 0, kickedOff: 0 },
       ]),
     ).toBe("");
   });
@@ -25,7 +25,7 @@ describe("seriesLengthSyncNote", () => {
   it("names the grand final it moved", () => {
     expect(
       seriesLengthSyncNote([
-        { phase: MATCH_PHASE.FINAL, bestOf: 3, updated: 1, underWay: 0 },
+        { phase: MATCH_PHASE.FINAL, bestOf: 3, updated: 1, underWay: 0, kickedOff: 0 },
       ]),
     ).toBe(" · the grand final is now Bo3");
   });
@@ -33,16 +33,27 @@ describe("seriesLengthSyncNote", () => {
   it("counts plural fixtures and reports the ones already under way", () => {
     expect(
       seriesLengthSyncNote([
-        { phase: MATCH_PHASE.REGULAR, bestOf: 3, updated: 12, underWay: 1 },
-        { phase: MATCH_PHASE.PLAYOFF, bestOf: 5, updated: 1, underWay: 2 },
-        { phase: MATCH_PHASE.FINAL, bestOf: 5, updated: 0, underWay: 1 },
+        { phase: MATCH_PHASE.REGULAR, bestOf: 3, updated: 12, underWay: 1, kickedOff: 2 },
+        { phase: MATCH_PHASE.PLAYOFF, bestOf: 5, updated: 1, underWay: 2, kickedOff: 0 },
+        { phase: MATCH_PHASE.FINAL, bestOf: 5, updated: 0, underWay: 1, kickedOff: 0 },
       ]),
     ).toBe(
       " · 12 regular-season matches are now Bo3" +
         " · 1 playoff match is now Bo5" +
         " · 1 regular-season match is already under way and keeps its length" +
         " · 2 playoff matches are already under way and keep their length" +
-        " · the grand final is already under way and keeps its length",
+        " · the grand final is already under way and keeps its length" +
+        " · 2 regular-season matches are past their kickoff with no result yet and keep their length",
+    );
+  });
+
+  it("names a grand final past its kickoff that it left alone", () => {
+    expect(
+      seriesLengthSyncNote([
+        { phase: MATCH_PHASE.FINAL, bestOf: 3, updated: 0, underWay: 0, kickedOff: 1 },
+      ]),
+    ).toBe(
+      " · the grand final is past its kickoff with no result yet and keeps its length",
     );
   });
 });

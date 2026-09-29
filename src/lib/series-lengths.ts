@@ -26,6 +26,9 @@ export type SeriesLengthSync = {
   updated: number;
   /** Fixtures under way (a game or score, no result yet) left at their old length. */
   underWay: number;
+  /** Fixtures past kickoff with no game or score yet, left at their old length:
+   * they may have been played with the games not imported yet. */
+  kickedOff: number;
 };
 
 function fixtures(phase: SeriesLengthPhase, count: number): string {
@@ -39,8 +42,9 @@ function fixtures(phase: SeriesLengthPhase, count: number): string {
 
 /**
  * The toast's report of existing fixtures: which ones the save moved to the
- * new length, and which it left because they are already being played.
- * Completed fixtures always keep their length and go unmentioned.
+ * new length, and which it left because they are being played or are past
+ * their kickoff. Completed fixtures always keep their length and go
+ * unmentioned.
  */
 export function seriesLengthSyncNote(syncs: SeriesLengthSync[]): string {
   const parts: string[] = [];
@@ -57,6 +61,15 @@ export function seriesLengthSyncNote(syncs: SeriesLengthSync[]): string {
         sync.underWay === 1
           ? `${fixtures(sync.phase, 1)} is already under way and keeps its length`
           : `${fixtures(sync.phase, sync.underWay)} are already under way and keep their length`,
+      );
+    }
+  }
+  for (const sync of syncs) {
+    if (sync.kickedOff > 0) {
+      parts.push(
+        sync.kickedOff === 1
+          ? `${fixtures(sync.phase, 1)} is past its kickoff with no result yet and keeps its length`
+          : `${fixtures(sync.phase, sync.kickedOff)} are past their kickoff with no result yet and keep their length`,
       );
     }
   }

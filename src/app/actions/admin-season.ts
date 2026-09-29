@@ -118,7 +118,9 @@ async function updateRenderedSeason(
   // Test seam for the real stale-form race: the rendered claim can be fresh at
   // read time and become stale before this write. The updateMany predicate is
   // the protection; keeping the seam here (rather than in each caller) covers
-  // every settings form that shares this helper.
+  // every settings form that shares this helper. setSeriesLengths calls it
+  // inside its transaction, where a rival write from this seam needs Postgres
+  // (SQLite's single connection waits out the transaction timeout).
   await raceHook("admin.updateRenderedSeason.beforeWrite");
   const updated = await db.season.updateMany({
     where: {
@@ -1021,8 +1023,8 @@ export async function setDraftSettings(
  * may be even (a Bo2 can draw 1-1); playoff & final are forced odd so they can't
  * tie. Each fixture carries its own length (copied when it is created), so the
  * save also moves every existing fixture of that phase that has not started
- * (see syncUnstartedSeriesLengths). Completed series and series already under
- * way keep theirs, and the toast names both.
+ * (see syncUnstartedSeriesLengths). Completed series, series under way and
+ * fixtures past their kickoff keep theirs, and the toast names what it left.
  */
 export async function setSeriesLengths(
   _prev: ActionResult,
@@ -1057,6 +1059,12 @@ export async function setSeriesLengths(
   if (playoffBestOf % 2 === 0) playoffBestOf += 1;
   if (finalBestOf % 2 === 0) finalBestOf += 1;
   const lengths: SeriesLengths = { regularBestOf, playoffBestOf, finalBestOf };
+  // One clock for every attempt: a fixture judged "not kicked off" is judged
+  // against the moment the admin pressed Save.
+  const now = new Date();
+  // Test seam: another settings save landing between the rendered claim's
+  // read and this transaction must refuse inside it, before any fixture moves.
+  await raceHook("admin.setSeriesLengths.beforeTransaction");
   let syncs: SeriesLengthSync[] | null = null;
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -1072,7 +1080,12 @@ export async function setSeriesLengths(
           // The first write: a stale form may still refuse here without
           // leaving anything half-done.
           if (!(await updateRenderedSeason(claim, lengths, tx))) return null;
-          return syncUnstartedSeriesLengths(tx, claim.expectedId, lengths);
+          return syncUnstartedSeriesLengths(
+            tx,
+            claim.expectedId,
+            lengths,
+            now,
+          );
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
@@ -1103,15 +1116,18 @@ export async function setSeriesLengths(
 
 /**
  * Move every fixture of the season that has not started to its phase's saved
- * length. "Not started" is claimed in the WHERE (SCHEDULED, 0-0, no game), so
- * a series that picks up its first game or result concurrently keeps the
- * length it is being played at. Counts the unfinished fixtures left at another
- * length afterwards: those are under way, and the admin is told.
+ * length. "Not started" is claimed in the WHERE: SCHEDULED, 0-0, no game, and
+ * a kickoff still ahead (or unset). A fixture past its kickoff may have been
+ * played with its games not imported yet (the feed reads 25 minutes after
+ * kickoff, the roster fallback after three hours), and importing a Bo5's games
+ * into a Bo3 stops at the first 2-0. Counts, afterwards, the unfinished
+ * fixtures left at another length, so the admin is told about each.
  */
 async function syncUnstartedSeriesLengths(
   tx: Prisma.TransactionClient,
   seasonId: string,
   lengths: SeriesLengths,
+  now: Date,
 ): Promise<SeriesLengthSync[]> {
   const syncs: SeriesLengthSync[] = [];
   for (const { phase, field } of SERIES_LENGTH_PHASES) {
@@ -1125,18 +1141,39 @@ async function syncUnstartedSeriesLengths(
         awayScore: 0,
         games: { none: {} },
         bestOf: { not: bestOf },
+        OR: [{ scheduledAt: null }, { scheduledAt: { gt: now } }],
       },
       data: { bestOf },
     });
-    const underWay = await tx.match.count({
-      where: {
-        seasonId,
-        phase,
-        status: { not: MATCH_STATUS.COMPLETED },
-        bestOf: { not: bestOf },
-      },
+    const [left, kickedOff] = await Promise.all([
+      tx.match.count({
+        where: {
+          seasonId,
+          phase,
+          status: { not: MATCH_STATUS.COMPLETED },
+          bestOf: { not: bestOf },
+        },
+      }),
+      tx.match.count({
+        where: {
+          seasonId,
+          phase,
+          status: MATCH_STATUS.SCHEDULED,
+          homeScore: 0,
+          awayScore: 0,
+          games: { none: {} },
+          bestOf: { not: bestOf },
+          scheduledAt: { lte: now },
+        },
+      }),
+    ]);
+    syncs.push({
+      phase,
+      bestOf,
+      updated: moved.count,
+      underWay: left - kickedOff,
+      kickedOff,
     });
-    syncs.push({ phase, bestOf, updated: moved.count, underWay });
   }
   return syncs;
 }
