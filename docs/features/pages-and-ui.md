@@ -122,11 +122,15 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Put table column widths on `<col>`, not cells.** The standings table
   (`StandingsTableView`, `src/components/standings-table.tsx`) is
   `table-fixed` with a responsive `<colgroup>` so Team truncates. Fixed layout
-  still gives a `hidden sm:table-cell` column a share of leftover width, so
-  hidden columns get `w-0 sm:w-*` cols. From `sm` a row's status chips wrap
-  beside the name (flex-wrap, so they drop under it only when both don't fit)
-  and the movement arrow sits beside the rank: one line per team on a
-  desktop, two on a phone.
+  still gives a `hidden @xl:table-cell` column a share of leftover width, so
+  hidden columns get `w-0 @xl:w-*` cols.
+- **The standings table breaks on its OWN width** (an `@container` wrapper),
+  not the viewport's: the same table fills a phone, Home's main column and
+  `/schedule`'s 30rem rail. From `@md` (28rem) the movement arrow sits beside
+  the rank, from `@lg` (32rem) the desktop column widths and one-line rows,
+  and Last 5 from `@xl` (36rem), so it hides in the rail as on a phone. A
+  row's status chips wrap beside the name (flex-wrap, so they drop under it
+  only when both don't fit).
 - **Every flex level between a container and a `truncate` span needs
   `min-w-0`,** and so do flex-wrap chips, or a long name widens the page.
 - **`CheckinBanner`'s strip text has `min-w-[14rem]`** so RSVP buttons wrap
@@ -289,6 +293,27 @@ the league is already draftable and many visitors have joined. Write for both.
   only for viewers it cannot cover.
 - **"Who's in" lists captains first and names its cap** ("Latest 12 of 30
   players") instead of silently hiding the rest.
+
+## Schedule (`/schedule`)
+
+- **The regular season is two columns from `xl`:** the weeks, and a 30rem
+  rail with the standings and the analysis folds. The rail stretches to the
+  weeks' height and its inner block is `xl:sticky xl:top-20` with a
+  viewport-high `max-h` and its own scroll, so the table stays in view down
+  the weeks and an opened fold never hides its end below the screen. The
+  playoffs and COMPLETE keep one column (the bracket leads, the finished
+  weeks fold away).
+- **A week's cards go two and three across by the week's own width**
+  (`@container`, `@2xl`/`@5xl`), and `GridFillers` paints the empty cells of a
+  part-filled last row the surface colour; the grid draws its hairlines as
+  the gap colour, so an empty cell showed as a grey block.
+- **The section title and the team filter share a row** (`ScheduleWeeks
+  heading`); each card names its status in words, so there is no dot legend.
+- **The jump bar** (`SectionNav`, in page order) lists what the phase renders
+  when there are three or more sections; the regular season hides it from
+  `xl`, where the rail shows the standings.
+- **A side's playoff stakes flow as one wrapping line of outcome pairs**
+  (Win, Draw, Loss, each with its result), not a row per outcome.
 
 ## The player pool (`/players`)
 

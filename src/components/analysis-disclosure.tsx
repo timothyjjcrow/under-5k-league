@@ -17,7 +17,7 @@ export function AnalysisDisclosure({
       id={id}
       className="group scroll-mt-24 rounded-xl border border-line bg-surface/40 open:bg-surface/60"
     >
-      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-5 py-4 text-sm font-semibold transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-4 py-3 text-sm font-semibold transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
         <span>
           {title}
           {description ? (
@@ -37,7 +37,7 @@ export function AnalysisDisclosure({
           <path d="m6 9 6 6 6-6" />
         </svg>
       </summary>
-      <div className="space-y-4 border-t border-line-soft p-3 sm:p-5">
+      <div className="space-y-4 border-t border-line-soft p-3 sm:p-4">
         {children}
       </div>
     </details>
