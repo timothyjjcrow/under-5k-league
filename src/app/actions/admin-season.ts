@@ -27,6 +27,12 @@ import {
 } from "@/lib/constants";
 import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
 import {
+  SERIES_LENGTH_PHASES,
+  seriesLengthSyncNote,
+  type SeriesLengths,
+  type SeriesLengthSync,
+} from "@/lib/series-lengths";
+import {
   CARRIED_SEASON_SELECT,
   carriedSeasonSettings,
 } from "@/lib/season-handoff";
@@ -107,13 +113,14 @@ async function renderedSeasonClaim(
 async function updateRenderedSeason(
   claim: RenderedSeasonClaim,
   data: Prisma.SeasonUpdateManyMutationInput,
+  db: Pick<Prisma.TransactionClient, "season"> = prisma,
 ): Promise<boolean> {
   // Test seam for the real stale-form race: the rendered claim can be fresh at
   // read time and become stale before this write. The updateMany predicate is
   // the protection; keeping the seam here (rather than in each caller) covers
   // every settings form that shares this helper.
   await raceHook("admin.updateRenderedSeason.beforeWrite");
-  const updated = await prisma.season.updateMany({
+  const updated = await db.season.updateMany({
     where: {
       id: claim.expectedId,
       isActive: true,
@@ -1012,7 +1019,10 @@ export async function setDraftSettings(
 /**
  * Set the best-of series lengths for regular / playoff / final matches. Regular
  * may be even (a Bo2 can draw 1-1); playoff & final are forced odd so they can't
- * tie. Applied to schedules/brackets created after this — set before generating.
+ * tie. Each fixture carries its own length (copied when it is created), so the
+ * save also moves every existing fixture of that phase that has not started
+ * (see syncUnstartedSeriesLengths). Completed series and series already under
+ * way keep theirs, and the toast names both.
  */
 export async function setSeriesLengths(
   _prev: ActionResult,
@@ -1046,24 +1056,89 @@ export async function setSeriesLengths(
   );
   if (playoffBestOf % 2 === 0) playoffBestOf += 1;
   if (finalBestOf % 2 === 0) finalBestOf += 1;
-  if (
-    !(await updateRenderedSeason(claim, {
-      regularBestOf,
-      playoffBestOf,
-      finalBestOf,
-    }))
-  ) {
-    return staleSeasonSettingsError;
+  const lengths: SeriesLengths = { regularBestOf, playoffBestOf, finalBestOf };
+  let syncs: SeriesLengthSync[] | null = null;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      // Serializable, because the bracket and the schedule create fixtures
+      // from these settings in their own Serializable transactions: a round
+      // built from the old length either commits first (and this sync moves
+      // it) or conflicts. Result writers (recordResult, imports, withdrawals)
+      // re-read bestOf and write the same Match row in Serializable
+      // transactions, so a score judged against the old length cannot land on
+      // the new one.
+      syncs = await prisma.$transaction(
+        async (tx) => {
+          // The first write: a stale form may still refuse here without
+          // leaving anything half-done.
+          if (!(await updateRenderedSeason(claim, lengths, tx))) return null;
+          return syncUnstartedSeriesLengths(tx, claim.expectedId, lengths);
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+      break;
+    } catch (error) {
+      if (!isSerializationConflict(error)) throw error;
+      // The worker's result scan touches fixture rows every minute; a fresh
+      // attempt re-claims the rendered season, so a real change still refuses.
+      if (attempt < 3) continue;
+      return {
+        error:
+          "A match or the season changed while saving — reload and try again.",
+      };
+    }
   }
+  if (!syncs) return staleSeasonSettingsError;
+  const note = seriesLengthSyncNote(syncs);
   await logAdminAction({
     action: "setSeriesLengths",
-    summary: `Set series lengths to regular Bo${regularBestOf}, playoffs Bo${playoffBestOf}, final Bo${finalBestOf}`,
+    summary: `Set series lengths to regular Bo${regularBestOf}, playoffs Bo${playoffBestOf}, final Bo${finalBestOf}${note}`,
     seasonId: season.id,
   });
   refresh();
   return {
-    message: `Series lengths saved · regular Bo${regularBestOf}, playoffs Bo${playoffBestOf}, final Bo${finalBestOf}`,
+    message: `Series lengths saved · regular Bo${regularBestOf}, playoffs Bo${playoffBestOf}, final Bo${finalBestOf}${note}`,
   };
+}
+
+/**
+ * Move every fixture of the season that has not started to its phase's saved
+ * length. "Not started" is claimed in the WHERE (SCHEDULED, 0-0, no game), so
+ * a series that picks up its first game or result concurrently keeps the
+ * length it is being played at. Counts the unfinished fixtures left at another
+ * length afterwards: those are under way, and the admin is told.
+ */
+async function syncUnstartedSeriesLengths(
+  tx: Prisma.TransactionClient,
+  seasonId: string,
+  lengths: SeriesLengths,
+): Promise<SeriesLengthSync[]> {
+  const syncs: SeriesLengthSync[] = [];
+  for (const { phase, field } of SERIES_LENGTH_PHASES) {
+    const bestOf = lengths[field];
+    const moved = await tx.match.updateMany({
+      where: {
+        seasonId,
+        phase: phase,
+        status: MATCH_STATUS.SCHEDULED,
+        homeScore: 0,
+        awayScore: 0,
+        games: { none: {} },
+        bestOf: { not: bestOf },
+      },
+      data: { bestOf },
+    });
+    const underWay = await tx.match.count({
+      where: {
+        seasonId,
+        phase,
+        status: { not: MATCH_STATUS.COMPLETED },
+        bestOf: { not: bestOf },
+      },
+    });
+    syncs.push({ phase, bestOf, updated: moved.count, underWay });
+  }
+  return syncs;
 }
 
 /** Set (or clear) the season's Valve league id for in-client league games. */

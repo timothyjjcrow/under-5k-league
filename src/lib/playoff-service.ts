@@ -971,6 +971,9 @@ export async function advancePlayoffBracket(
               m.winnerTeamId === winnerById.get(m.id),
           );
         if (!inputsHold) throw new StaleBracketError();
+        // Test seam (Postgres-only): a series-length save committing after
+        // this read must not leave the new round at the old length.
+        await raceHook("playoffs.advance.afterConfigRead");
         await tx.setting.create({
           data: {
             key: playoffRoundBuiltKey(seasonId, nextRound),

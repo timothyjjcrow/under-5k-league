@@ -227,6 +227,21 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   the season is active in PLAYOFFS and the current round's rows still exist with
   the same winners; otherwise a stale advance after a reset built a phantom round
   that `maxRound` points at forever (pinned in `playoffs.itest.ts`).
+- **Saving series lengths moves every fixture that has not started.** Each
+  Match copies its `bestOf` from `regularBestOf` / `playoffBestOf` /
+  `finalBestOf` when it is created, so a save that wrote only the Season left a
+  grand final built as Bo5 at Bo5 under a "Bo3" setting (live, 2026-09-29).
+  `setSeriesLengths` now claims the rendered Season and, in the same
+  Serializable transaction, moves each phase's fixtures that are SCHEDULED, 0-0
+  and gameless (`syncUnstartedSeriesLengths`); TIEBREAKER fixtures keep their
+  format's length. Completed series and series under way keep theirs, and the
+  toast names what moved and what was under way (`seriesLengthSyncNote`,
+  `series-lengths.ts`). Serializable is load-bearing: `advancePlayoffBracket`
+  reads `finalBestOf` inside its build, so a save landing after that read
+  must abort one side (seam `playoffs.advance.afterConfigRead`, pinned in
+  `series-lengths.itest.ts`). Result writers re-read `bestOf` and write the
+  same Match row Serializably, so a score judged against the old length
+  cannot land on the new one.
 - **Crown only a real final.** The sole latest-round row must be phase FINAL; the
   crown re-proves it (same row, completed, same winner) and claims Season
   PLAYOFFS to COMPLETE. `announceChampionOnce` posts after commit behind a
