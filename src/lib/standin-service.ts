@@ -1,3 +1,4 @@
+import { fixtureLogLabel } from "./admin-log-copy";
 import { isPlayoffPhase } from "./league-lifecycle";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
@@ -16,7 +17,8 @@ import {
 } from "./discord";
 import { mentionsOf } from "./discord-mentions";
 import { standinConflict, standinMmrNote } from "./standin";
-import { invalidateMatchLineups } from "./match-lineups";
+import { isSerializationConflict } from "./prisma-errors";
+import { roundLabelsForPost } from "./playoff-rounds";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -36,6 +38,11 @@ export type StandinServiceResult =
   | {
       ok: true;
       message: string;
+      /**
+       * One line for the admin activity log, with the names spelled out: the
+       * log has no foreign keys, so an id written there can never be read back.
+       */
+      summary: string;
       announcement: string;
       /** Who the announcement is FOR — the action passes it to the send. */
       mentions?: MentionAllowlist;
@@ -154,6 +161,11 @@ export async function assignStandinGuarded(opts: {
   teamId?: string;
   /** null = admin (either team); a userId must captain the covered team. */
   actingCaptainId: string | null;
+  /**
+   * Who pressed the button (defaults to actingCaptainId). The covered team's
+   * captain is mentioned unless they are the one acting.
+   */
+  actingUserId?: string;
 }): Promise<StandinServiceResult> {
   const { matchId, standinUserId, replacingUserId, actingCaptainId } = opts;
   if (!matchId || !standinUserId)
@@ -507,13 +519,12 @@ export async function assignStandinGuarded(opts: {
             replacingUserId,
           },
         });
-        await invalidateMatchLineups(tx, matchId, "Standin cover changed", new Date(), coverTeamId);
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
     if (e instanceof StandinRaceError) return { ok: false, error: e.message };
-    if ((e as { code?: string }).code === "P2034")
+    if (isSerializationConflict(e))
       return {
         ok: false,
         error: "That standin's signup just changed — check it and try again",
@@ -537,12 +548,28 @@ export async function assignStandinGuarded(opts: {
         ? " — heads up: already-imported games keep their original attribution"
         : "") +
       (mmrNote ? ` — ${mmrNote}` : ""),
+    summary: `Assigned ${standinUser?.name ?? "a standin"} to cover ${
+      replacedName ?? "an open seat"
+    } for ${coverTeamName} in ${fixtureLogLabel({
+      ...match,
+      homeName: match.homeTeam.name,
+      awayName: match.awayTeam.name,
+    })}${mmrNote ? ` — ${mmrNote}` : ""}`,
     // Being assigned is the single most action-demanding event a standin can
     // get — the action layer posts this so they hear about it without
     // happening to visit the site. Which is why it MENTIONS them: a plain
     // channel line about a game they're now expected at is exactly the
     // message that must not depend on them scrolling back.
-    mentions: mentionsOf([standinUser?.discordId]),
+    // When someone else booked it (an admin), the captain who was told to
+    // line up cover is mentioned too, so they know it's handled. A captain
+    // booking their own cover isn't pinged about their own click.
+    mentions: mentionsOf([
+      standinUser?.discordId,
+      await captainToNotify(
+        coverTeamCaptainId,
+        opts.actingUserId ?? actingCaptainId,
+      ),
+    ]),
     announcement: standinAssignedMessage({
       standinName: standinUser?.name ?? "A standin",
       replacedName,
@@ -552,6 +579,8 @@ export async function assignStandinGuarded(opts: {
       week: match.week,
       isPlayoff: isPlayoffPhase(match.phase),
       isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
+      // Named by its round, like the OUT ping the booking answers.
+      roundLabel: (await roundLabelsForPost([match])).get(match.id),
       whenMs: match.scheduledAt?.getTime() ?? null,
       matchId: match.id,
     }),
@@ -570,6 +599,11 @@ export async function removeStandinGuarded(opts: {
   assignmentId: string;
   /** null = admin; a userId must captain the assignment's team. */
   actingCaptainId: string | null;
+  /**
+   * Who pressed the button (defaults to actingCaptainId). The covered team's
+   * captain is mentioned unless they are the one acting.
+   */
+  actingUserId?: string;
 }): Promise<StandinServiceResult> {
   const assignment = await prisma.standinAssignment.findUnique({
     where: { id: opts.assignmentId },
@@ -617,15 +651,15 @@ export async function removeStandinGuarded(opts: {
   // series can acquire its first game (or complete outright) in the gap, and
   // this delete is exactly the mid-series removal the checks above refuse.
   //
-  // KNOWN RESIDUAL WINDOW, stated rather than implied closed: the WHERE only
-  // sees COMMITTED games, and importGameForMatch reads the assignment set
-  // (gatherTeamAccounts) before its own write transaction — so a delete
-  // landing inside the import's few-ms read-to-write gap still strands the
-  // rest of the series, and closing it for real needs the IMPORT side to
-  // re-assert the assignment set it classified with. Accepted for now: the
-  // window excludes the OpenDota fetch (it's DB round trips only), game 1
-  // keeps correct attribution, and re-assigning the same standin (legal even
-  // with games imported) repairs the remaining games.
+  // The import is the other half of a write-skew pair, and both halves are
+  // Serializable: importGameForMatch re-reads the assignment set
+  // (gatherTeamAccounts(fresh, tx)) inside the transaction that writes the
+  // Game, and this delete reads the match's games through the relation filter
+  // below. Each side reads the table the other writes, so Postgres SSI aborts
+  // one of them: the removal then reports "The match just changed"
+  // (isSerializationConflict) or a zero count. No raced test pins this pair
+  // yet (standins-raced.itest.ts covers the assign pairs only); if one is
+  // added it needs `npm run test:pg`, since SQLite runs the two in sequence.
   let gone;
   try {
     gone = await prisma.$transaction(async (tx) => {
@@ -639,12 +673,11 @@ export async function removeStandinGuarded(opts: {
           match: { status: { not: MATCH_STATUS.COMPLETED }, games: { none: {} } },
         },
       });
-      if (deleted.count) await invalidateMatchLineups(tx, assignment.matchId, "Standin cover was removed", new Date(), assignment.teamId);
       return deleted;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
     if (error instanceof StandinRaceError) return { ok: false, error: error.message };
-    if ((error as { code?: string }).code === "P2034") return { ok: false, error: "The match just changed — reload before removing this cover." };
+    if (isSerializationConflict(error)) return { ok: false, error: "The match just changed — reload before removing this cover." };
     throw error;
   }
   if (gone.count === 0) {
@@ -654,11 +687,24 @@ export async function removeStandinGuarded(opts: {
         "A game was just imported for this match — the assignment has to stay, or the standin drops out of the rest of the series",
     };
   }
+  const byCaptain =
+    team.captainId === (opts.actingUserId ?? opts.actingCaptainId);
   return {
     ok: true,
     message: "Standin assignment removed",
+    summary: `Removed ${assignment.standin.name}'s cover for ${team.name} in ${fixtureLogLabel(
+      {
+        ...assignment.match,
+        homeName: assignment.match.homeTeam.name,
+        awayName: assignment.match.awayTeam.name,
+      },
+    )}`,
     // They were told to show up; they need to hear that they no longer are.
-    mentions: mentionsOf([assignment.standin.discordId]),
+    // An admin's removal also reaches the captain, whose seat is open again.
+    mentions: mentionsOf([
+      assignment.standin.discordId,
+      byCaptain ? null : await captainToNotify(team.captainId, null),
+    ]),
     announcement: standinRemovedMessage({
       standinName: assignment.standin.name,
       teamName: team.name,
@@ -667,6 +713,26 @@ export async function removeStandinGuarded(opts: {
       week: assignment.match.week,
       isPlayoff: isPlayoffPhase(assignment.match.phase),
       isTiebreaker: assignment.match.phase === MATCH_PHASE.TIEBREAKER,
+      roundLabel: (await roundLabelsForPost([assignment.match])).get(
+        assignment.match.id,
+      ),
+      reason: byCaptain ? "CAPTAIN_CANCELLED" : "ADMIN_CANCELLED",
     }),
   };
+}
+
+/**
+ * The covered team's captain's Discord id when someone other than the captain
+ * changed their cover, else null. Only a linked account is mentionable.
+ */
+async function captainToNotify(
+  captainId: string,
+  actorId: string | null,
+): Promise<string | null> {
+  if (captainId === actorId) return null;
+  const captain = await prisma.user.findUnique({
+    where: { id: captainId },
+    select: { discordId: true },
+  });
+  return captain?.discordId ?? null;
 }

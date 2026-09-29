@@ -80,6 +80,25 @@ export function fantasyPoints(stat: FantasyStatLine, won: boolean): number {
 }
 
 /**
+ * The public name for that per-game score is "impact points": Player of the
+ * Week, match MVPs and the season MVP all rank by it, and most readers never
+ * open /fantasy, which used to be the only page that said what it counts.
+ * This is the one-line definition every surface quotes. It is built from the
+ * FANTASY weights, so a reweight can never leave the explainer quoting old
+ * numbers.
+ */
+export function impactPointsRule(): string {
+  const signed = (value: number) =>
+    value < 0 ? `\u2212${Math.abs(value)}` : `+${value}`;
+  return (
+    `${signed(FANTASY.KILL)} per kill, ${signed(FANTASY.ASSIST)} per assist, ` +
+    `${signed(FANTASY.DEATH)} per death and ${signed(FANTASY.WIN)} for a win, ` +
+    `plus the best of a farm, playmaking or pressure bonus ` +
+    `(up to ${signed(FANTASY.BONUS_CAP)}) each game`
+  );
+}
+
+/**
  * The MMR salary cap: league-average rostered MMR × slots, with a little
  * slack — so a cap-legal five can be above average, but not the top five.
  * Unknown (0) MMRs are excluded from the average. Rounded to 50.

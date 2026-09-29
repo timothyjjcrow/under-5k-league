@@ -3,12 +3,14 @@ import {
   Badge,
   HeroIcon,
   KDA,
+  LinkArrow,
   PlayerLink,
   textLink,
 } from "@/components/ui";
 import { type InhouseBoxPlayer as BoxPlayer } from "@/lib/inhouse-box";
 import { heroById } from "@/lib/heroes";
 import { gameMvp } from "@/lib/achievements";
+import { parseEloDeltas } from "@/lib/inhouse-stats";
 import { cn, formatNetWorth } from "@/lib/utils";
 
 export function InhouseBoxScore({
@@ -37,7 +39,7 @@ export function InhouseBoxScore({
     user: { name: string; avatar: string | null };
   }[];
 }) {
-  const deltas = storedEloDeltas(eloDeltas);
+  const deltas = parseEloDeltas(eloDeltas);
   const radiantWin =
     lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
   const radiant = players.filter((p) => p.isRadiant);
@@ -112,7 +114,7 @@ export function InhouseBoxScore({
             rel="noreferrer"
             className={textLink()}
           >
-            Full match on OpenDota ↗
+            Full match on OpenDota <LinkArrow out />
           </a>
         ) : null}
       </div>
@@ -313,21 +315,6 @@ function SideBox({
   );
 }
 
-function storedEloDeltas(json?: string): Record<string, number> {
-  try {
-    const value: unknown = JSON.parse(json ?? "{}");
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    return Object.fromEntries(
-      Object.entries(value).filter(
-        (entry): entry is [string, number] =>
-          typeof entry[1] === "number" && Number.isFinite(entry[1]),
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
-
 function EloChange({ value }: { value: number }) {
   return (
     <span
@@ -376,7 +363,7 @@ function RosterSummary({
               />
               <PlayerLink
                 userId={player.userId}
-                className="min-w-0 flex-1 truncate text-sm"
+                className="min-w-6 flex-1 truncate text-sm"
               >
                 {player.user.name}
               </PlayerLink>

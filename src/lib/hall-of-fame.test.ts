@@ -1,46 +1,78 @@
 import { describe, it, expect } from "vitest";
-import { careerCounts, careerGameCounts, topCounts } from "./hall-of-fame";
+import { careerGameCounts, rankCounts, topPlaces } from "./hall-of-fame";
 
-describe("careerCounts", () => {
-  const memberships = [
-    { userId: "u1", teamId: "s1-A" },
-    { userId: "u2", teamId: "s1-A" },
-    { userId: "u3", teamId: "s1-B" },
-    // season 2: u1 changes teams, u3 stays on a B-team
-    { userId: "u1", teamId: "s2-C" },
-    { userId: "u3", teamId: "s2-B" },
-  ];
-
-  it("credits every member of each counted team, across seasons", () => {
-    // Champions: s1-A (u1, u2) and s2-C (u1) → u1 has 2 titles.
-    const titles = careerCounts(memberships, ["s1-A", "s2-C"]);
-    expect(titles.get("u1")).toBe(2);
-    expect(titles.get("u2")).toBe(1);
-    expect(titles.has("u3")).toBe(false);
-  });
-
-  it("counts repeated wins and skips null winners (draws)", () => {
-    const wins = careerCounts(memberships, ["s1-B", "s1-B", null, undefined, "s2-B"]);
-    expect(wins.get("u3")).toBe(3);
-    expect(wins.has("u1")).toBe(false);
+describe("rankCounts", () => {
+  it("drops values under the floor and sorts best first", () => {
+    expect(
+      rankCounts(
+        new Map([
+          ["a", 3],
+          ["b", 1],
+          ["c", 5],
+          ["d", 0],
+        ]),
+      ),
+    ).toEqual([
+      { userId: "c", value: 5 },
+      { userId: "a", value: 3 },
+      { userId: "b", value: 1 },
+    ]);
   });
 });
 
-describe("topCounts", () => {
-  it("ranks, floors, and limits", () => {
-    const rows = topCounts(
-      new Map([
-        ["a", 3],
-        ["b", 1],
-        ["c", 5],
-        ["d", 0],
-      ]),
-      2,
+describe("topPlaces", () => {
+  const rows = (values: number[]) =>
+    values.map((value, i) => ({ userId: `u${i}`, value }));
+
+  it("gives equal values a shared place", () => {
+    expect(topPlaces(rows([9, 9, 7, 5, 4, 2])).rows.map((r) => r.place)).toEqual(
+      [1, 1, 3, 4, 5],
     );
-    expect(rows).toEqual([
-      { userId: "c", value: 5 },
-      { userId: "a", value: 3 },
+  });
+
+  it("keeps everyone tied at the cutoff instead of dropping them by id", () => {
+    // Two five-player rosters on 4 series wins: all ten share first place.
+    const board = topPlaces(rows([4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3]));
+    expect(board.rows).toHaveLength(10);
+    expect(board.rows.every((r) => r.place === 1)).toBe(true);
+    expect(board.moreTied).toBe(0);
+    const fifthTied = topPlaces(rows([9, 8, 7, 6, 5, 5, 5, 4]));
+    expect(fifthTied.rows.map((r) => r.place)).toEqual([1, 2, 3, 4, 5, 5, 5]);
+  });
+
+  it("caps a huge tie and counts the rest", () => {
+    const board = topPlaces(rows(Array(14).fill(1)));
+    expect(board.rows).toHaveLength(10);
+    expect(board.moreTied).toBe(4);
+  });
+
+  it("ties values that read the same at the board's precision", () => {
+    const board = topPlaces(rows([66.9, 66.7, 60]), {
+      placeKey: (value) => Math.round(value),
+    });
+    expect(board.rows.map((r) => r.place)).toEqual([1, 1, 3]);
+  });
+
+  it("places by rankValue when the shown value isn't the whole record", () => {
+    // Pick'em shows correct picks but places the record: 3/4 and 3/5 read
+    // "3" yet do not share a place; two 3/4s do.
+    const board = topPlaces([
+      { userId: "a", value: 3, rankValue: -1 },
+      { userId: "b", value: 3, rankValue: -1 },
+      { userId: "c", value: 3, rankValue: -3 },
+      { userId: "d", value: 1, rankValue: -4 },
     ]);
+    expect(board.rows.map((r) => [r.userId, r.value, r.place])).toEqual([
+      ["a", 3, 1],
+      ["b", 3, 1],
+      ["c", 3, 3],
+      ["d", 1, 4],
+    ]);
+  });
+
+  it("handles short and empty boards", () => {
+    expect(topPlaces([])).toEqual({ rows: [], moreTied: 0 });
+    expect(topPlaces(rows([3, 1])).rows).toHaveLength(2);
   });
 });
 

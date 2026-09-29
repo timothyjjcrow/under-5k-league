@@ -7,6 +7,7 @@ import {
 } from "./constants";
 import {
   matchCheckinOpen,
+  matchCorrectionContext,
   matchLogisticsOpen,
   matchResultsOpen,
   isPlayoffPhase,
@@ -191,5 +192,88 @@ describe("isPlayoffPhase", () => {
     expect(isPlayoffPhase(MATCH_PHASE.PLAYOFF)).toBe(true);
     expect(isPlayoffPhase(MATCH_PHASE.FINAL)).toBe(true);
     expect(isPlayoffPhase("UNKNOWN")).toBe(false);
+  });
+});
+
+describe("matchCorrectionContext", () => {
+  const fixture = (
+    id: string,
+    phase: string,
+    week: number,
+    bracketSlot: string | null = null,
+  ) => ({ id, phase, week, bracketSlot });
+  const regular = [
+    fixture("r1", MATCH_PHASE.REGULAR, 1),
+    fixture("r2", MATCH_PHASE.REGULAR, 2),
+  ];
+
+  it("leaves a regular result open until a tiebreaker exists", () => {
+    expect(matchCorrectionContext(regular[0], regular)).toEqual({
+      correctionBlockedByLaterRound: false,
+      isSoleLatestPlayoffSeries: false,
+    });
+    const withTiebreaker = [
+      ...regular,
+      fixture("t1", MATCH_PHASE.TIEBREAKER, 3),
+    ];
+    expect(
+      matchCorrectionContext(regular[1], withTiebreaker)
+        .correctionBlockedByLaterRound,
+    ).toBe(true);
+  });
+
+  it("blocks a tiebreaker only once a later tiebreaker game exists", () => {
+    const first = fixture("t1", MATCH_PHASE.TIEBREAKER, 3);
+    expect(
+      matchCorrectionContext(first, [...regular, first])
+        .correctionBlockedByLaterRound,
+    ).toBe(false);
+    const later = fixture("t2", MATCH_PHASE.TIEBREAKER, 4);
+    const all = [...regular, first, later];
+    expect(matchCorrectionContext(first, all).correctionBlockedByLaterRound).toBe(
+      true,
+    );
+    expect(matchCorrectionContext(later, all)).toEqual({
+      correctionBlockedByLaterRound: false,
+      isSoleLatestPlayoffSeries: false,
+    });
+  });
+
+  it("blocks a playoff series once a later round exists, and finds the sole final", () => {
+    const semis = [
+      fixture("s1", MATCH_PHASE.PLAYOFF, 6, "R1M1"),
+      fixture("s2", MATCH_PHASE.PLAYOFF, 6, "R1M2"),
+    ];
+    // Semifinals only: neither is blocked, and two series share the latest
+    // round, so neither is "the" final.
+    for (const semi of semis) {
+      expect(matchCorrectionContext(semi, [...regular, ...semis])).toEqual({
+        correctionBlockedByLaterRound: false,
+        isSoleLatestPlayoffSeries: false,
+      });
+    }
+    const final = fixture("f", MATCH_PHASE.FINAL, 7, "R2M1");
+    const all = [...regular, ...semis, final];
+    expect(matchCorrectionContext(semis[0], all)).toEqual({
+      correctionBlockedByLaterRound: true,
+      isSoleLatestPlayoffSeries: false,
+    });
+    expect(matchCorrectionContext(final, all)).toEqual({
+      correctionBlockedByLaterRound: false,
+      isSoleLatestPlayoffSeries: true,
+    });
+  });
+
+  it("ignores regular and tiebreaker fixtures when judging the bracket", () => {
+    const final = fixture("f", MATCH_PHASE.FINAL, 7, "R1M1");
+    const all = [
+      ...regular,
+      fixture("t1", MATCH_PHASE.TIEBREAKER, 5),
+      final,
+    ];
+    expect(matchCorrectionContext(final, all)).toEqual({
+      correctionBlockedByLaterRound: false,
+      isSoleLatestPlayoffSeries: true,
+    });
   });
 });

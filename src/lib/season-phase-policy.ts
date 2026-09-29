@@ -10,6 +10,8 @@ export type SeasonPhasePolicyInput = {
   target: SeasonStatus;
   draftStatus: string | null | undefined;
   matchCount: number;
+  /** Regular-season fixtures: the Regular season waits for a schedule. */
+  regularMatchCount: number;
   hasPlayedResult: boolean;
   hasImportedGame: boolean;
   postseasonMatchCount: number;
@@ -92,6 +94,7 @@ export function seasonPhasePolicy({
   target,
   draftStatus,
   matchCount,
+  regularMatchCount,
   hasPlayedResult,
   hasImportedGame,
   postseasonMatchCount,
@@ -193,8 +196,17 @@ export function seasonPhasePolicy({
           "Postseason data already exists. Recover or remove that bracket before starting the Regular season.",
         );
       }
+      // Starting with no fixtures only ever produced broken pages: a Discord
+      // "season is live" post with nothing to play, /schedule saying the
+      // schedule is missing, and every rostered player told they have no
+      // fixture. Fixtures can be generated in Draft once the auction is done.
+      if (regularMatchCount === 0) {
+        return blocked(
+          "Generate the schedule first, with a first match night, in Schedule & results. The Regular season starts once there are fixtures to play.",
+        );
+      }
       return allowed(
-        "Start the Regular season? League navigation and match tools update immediately, and Discord receives a league-start announcement.",
+        "Start the Regular season? Automatic result sync and the weekly Discord reminder switch on, captains can report results, and Discord gets a season-start post listing week 1's fixtures.",
       );
     }
   }

@@ -16,6 +16,10 @@ import {
  * Opens with the same "How to host" line a ticketless season gets on its own
  * (`howToHostParts`: who hosts, region, mode, how many lobbies), so the steps
  * below don't repeat the host or the Bo2 rule. Each fact appears once.
+ *
+ * Captains who have hosted before need two things: the host line and the id
+ * to paste. The step-by-step list is folded under a disclosure, and the
+ * wrong-ticket advice lives once, in the result card below (leagueResultCopy).
  */
 export function LeagueLobbyChecklist({
   leagueId,
@@ -28,30 +32,23 @@ export function LeagueLobbyChecklist({
   const [copied, setCopied] = useState(false);
   return (
     <Card tone="feature">
+      {/* The badge rides in the title: in the action slot it sat beside the
+          title column and squeezed the subtitle into a narrow strip on
+          phones. */}
       <CardHeader
-        title="Official lobby checklist"
-        subtitle="Use the current league ticket in every lobby so the result reaches the league feed."
-        action={<Badge tone="accent">Captain check</Badge>}
+        title={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            Official lobby checklist
+            <Badge tone="accent">Captain check</Badge>
+          </span>
+        }
+        subtitle="Set League to the id below in every lobby, so each result imports by itself."
       />
       <CardBody className="space-y-3 text-sm">
         <p className="[overflow-wrap:anywhere]">
           <b className="text-fg">How to host:</b>{" "}
           <span className="text-muted">{hostParts.join(" · ")}</span>
         </p>
-        <ol className="list-decimal space-y-1.5 pl-5 text-muted">
-          <li>
-            The host creates the private lobby; the away captain is the backup
-            host.
-          </li>
-          <li>
-            Set the lobby&apos;s <strong className="text-fg">League</strong>{" "}
-            field to the current league id below.
-          </li>
-          <li>The away captain verifies the league name and both rosters.</li>
-          <li>
-            Do that again for every new lobby before anyone starts the game.
-          </li>
-        </ol>
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/50 p-3">
           <span className="text-xs text-muted">Current league id</span>
           <code className="rounded bg-black/20 px-2 py-1 font-mono font-semibold text-fg">
@@ -78,11 +75,27 @@ export function LeagueLobbyChecklist({
             {copied ? "Copied" : "Copy league id"}
           </button>
         </div>
-        <p className="text-xs text-muted">
-          If a lobby uses an old or incorrect ticket, automatic recovery checks
-          the teams&apos; linked player accounts. You can also add the Dota
-          match id below.
-        </p>
+        <details>
+          <summary className="cursor-pointer py-2 font-medium text-fg">
+            Lobby setup, step by step
+          </summary>
+          <ol className="mt-1 list-decimal space-y-1.5 pl-5 text-muted">
+            <li>
+              The host creates the private lobby; the away captain is the
+              backup host.
+            </li>
+            <li>
+              Set the lobby&apos;s <strong className="text-fg">League</strong>{" "}
+              field to the current league id above.
+            </li>
+            <li>
+              The away captain verifies the league name and both rosters.
+            </li>
+            <li>
+              Do that again for every new lobby before anyone starts the game.
+            </li>
+          </ol>
+        </details>
       </CardBody>
     </Card>
   );

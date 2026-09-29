@@ -12,6 +12,7 @@ import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 import { runResultSync } from "@/lib/result-sync-service";
 import { announceChampionOnce } from "@/lib/playoff-service";
 import { championAnnouncedKey } from "@/lib/settings";
+import { heroById } from "@/lib/heroes";
 import {
   makeSeason,
   makeTeam,
@@ -181,6 +182,89 @@ describe("series-result announcement retry", () => {
         new RegExp(`Box score: <[^>]+/matches/${semi.id}>$`),
       );
     }
+  });
+
+  describe("broken league record line", () => {
+    // Ten real players and complete 5v5 box scores, so the lines count in
+    // the record book exactly as they would on /records.
+    async function setupRecordBook(baseGames: number) {
+      const match = await setupDecidedMatch();
+      const users = await Promise.all(
+        Array.from({ length: 10 }, (_, i) => makeUser(`Record player ${i}`)),
+      );
+      const boxScore = (kills: (i: number) => number) =>
+        JSON.stringify(
+          users.map((user, i) => ({
+            userId: user.id,
+            heroId: i + 1,
+            isRadiant: i < 5,
+            kills: kills(i),
+            deaths: 3,
+            assists: 8,
+            netWorth: 12000,
+            gpm: 450,
+            lastHits: 150,
+          })),
+        );
+      const season = await prisma.match.findUniqueOrThrow({
+        where: { id: match.id },
+        select: { seasonId: true },
+      });
+      const earlier = await prisma.match.create({
+        data: {
+          seasonId: season.seasonId, week: 0, phase: MATCH_PHASE.REGULAR,
+          homeTeamId: match.homeTeamId, awayTeamId: match.awayTeamId,
+          status: MATCH_STATUS.COMPLETED, homeScore: 1, awayScore: 0,
+          winnerTeamId: match.homeTeamId,
+        },
+      });
+      for (let g = 0; g < baseGames; g++) {
+        await prisma.game.create({
+          data: {
+            matchId: earlier.id, dotaMatchId: `record-base-${g}`,
+            radiantWin: true, durationSecs: 2400, startTime: 1_700_000_000 + g,
+            radiantScore: 30, direScore: 20,
+            // Player 3 holds the kills mark at 14.
+            players: boxScore((i) => (i === 3 ? 14 : 6)),
+          },
+        });
+      }
+      await prisma.game.create({
+        data: {
+          matchId: match.id, dotaMatchId: "record-series-1",
+          radiantWin: true, durationSecs: 2400, startTime: 1_800_000_000,
+          radiantScore: 30, direScore: 20,
+          // Player 7 (hero 8) breaks it with 17.
+          players: boxScore((i) => (i === 7 ? 17 : 6)),
+        },
+      });
+      return { match, holder: users[7] };
+    }
+
+    it("adds one line to the series result post once the book has 20 games", async () => {
+      const { match, holder } = await setupRecordBook(20);
+      expect(await announceSeriesResultOnce(match)).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      const [content] = mockSend.mock.calls[0] ?? [];
+      const lines = String(content).split("\n");
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatch(new RegExp(`Box score: <[^>]+/matches/${match.id}>$`));
+      expect(lines[1]).toBe(
+        `🔪 New league record: **${holder.name}**, 17 kills on ${heroById(8)!.name} (old mark 14 kills)`,
+      );
+      // Still one post, one marker: the line never sends on its own.
+      expect(await announceSeriesResultOnce(match)).toBe(false);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(await markerCount(`resultAnnounced:${match.id}`)).toBe(1);
+    });
+
+    it("stays out of the post while the book is under 20 games", async () => {
+      const { match } = await setupRecordBook(19);
+      expect(await announceSeriesResultOnce(match)).toBe(true);
+      const [content] = mockSend.mock.calls[0] ?? [];
+      expect(content).not.toContain("New league record");
+      expect(content).not.toContain("\n");
+    });
   });
 
   it("links the match page, not a box score, for a manual score with no games", async () => {
@@ -640,8 +724,78 @@ describe("weekly-honors announcement retry", () => {
         ]),
       },
     });
-    return { season, match };
+    return { season, match, star };
   }
+
+  describe("pick'em Oracle of the Week line", () => {
+    const honorsPosts = () =>
+      mockSend.mock.calls
+        .map((call) => String(call[0]))
+        .filter((content) => content.includes("honors are in"));
+
+    it("names the best record inside the one honors post and marker", async () => {
+      const { season, match } = await setupCompletedWeek();
+      const seer = await makeUser("Seer");
+      const doubter = await makeUser("Doubter");
+      await prisma.prediction.createMany({
+        data: [
+          { matchId: match.id, userId: seer.id, pickedTeamId: match.homeTeamId },
+          { matchId: match.id, userId: doubter.id, pickedTeamId: match.awayTeamId },
+        ],
+      });
+
+      await maybeAnnounceWeekHonors(season.id, 1);
+      await maybeAnnounceWeekHonors(season.id, 1);
+
+      const posts = honorsPosts();
+      expect(posts).toHaveLength(1);
+      expect(posts[0]).toContain(
+        "🔮 Pick'em Oracle of the Week: **Seer** (1 of 1 picks right)",
+      );
+      expect(posts[0]).not.toContain("Doubter");
+      expect(await markerCount(`honorsAnnounced:${season.id}:1`)).toBe(1);
+    });
+
+    it("leaves the line out when nobody called a match", async () => {
+      const { season, match } = await setupCompletedWeek();
+      const doubter = await makeUser("Doubter");
+      await prisma.prediction.create({
+        data: { matchId: match.id, userId: doubter.id, pickedTeamId: match.awayTeamId },
+      });
+
+      await maybeAnnounceWeekHonors(season.id, 1);
+
+      const posts = honorsPosts();
+      expect(posts).toHaveLength(1);
+      expect(posts[0]).not.toMatch(/Oracle/);
+    });
+
+    it("posts without the line when the pick read fails, logging only a fixed tag", async () => {
+      const { season } = await setupCompletedWeek();
+      const read = vi
+        .spyOn(prisma.prediction, "findMany")
+        .mockRejectedValueOnce(
+          new Error("connect failed: postgresql://league:hunter2@db.internal/ld2l"),
+        );
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await maybeAnnounceWeekHonors(season.id, 1);
+
+        const posts = honorsPosts();
+        expect(posts).toHaveLength(1);
+        expect(posts[0]).not.toMatch(/Oracle/);
+        expect(read).toHaveBeenCalled();
+        expect(logged).toHaveBeenCalledWith("[honors] ORACLE_LINE_SKIPPED");
+        const everything = JSON.stringify(
+          logged.mock.calls.map((call) => call.map((arg) => String(arg))),
+        );
+        expect(everything).not.toContain("hunter2");
+      } finally {
+        read.mockRestore();
+        logged.mockRestore();
+      }
+    });
+  });
 
   it("retries after a failed send, then stays once-only", async () => {
     const { season } = await setupCompletedWeek();
@@ -675,6 +829,29 @@ describe("weekly-honors announcement retry", () => {
     mockHook.mockResolvedValue("https://discord.test/hook");
     await maybeAnnounceWeekHonors(season.id, 1);
     expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("mentions a linked Player of the Week on the first post, never on a correction", async () => {
+    const { season, star } = await setupCompletedWeek();
+    const discordId = "123456789012345678";
+    await prisma.user.update({ where: { id: star.id }, data: { discordId } });
+
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const [first, firstMentions] = mockSend.mock.calls[0];
+    expect(first).toContain(`⭐ Player of the Week: <@${discordId}> —`);
+    expect(firstMentions).toEqual({ users: [discordId] });
+
+    // A result repair re-opens the week; the correction names the player in
+    // plain text and pings nobody, so nobody is buzzed twice for one award.
+    await prisma.$transaction((tx) => markWeekHonorsStale(tx, season.id, 1));
+    await maybeAnnounceWeekHonors(season.id, 1);
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    const [correction, correctionMentions] = mockSend.mock.calls[1];
+    expect(correction).toMatch(/Correction: Week 1 honors have been updated/);
+    expect(correction).toContain("⭐ Player of the Week: **Star Carry** —");
+    expect(correction).not.toContain("<@");
+    expect(correctionMentions).toBeUndefined();
   });
 
   it("a result correction survives an in-flight silent-mode suppression", async () => {
@@ -1203,6 +1380,43 @@ describe("champion announcement retry", () => {
       where: { key: championAnnouncedKey(season.id) },
     });
     expect(after.value).not.toMatch(/^failed:/);
+  });
+
+  it("congratulates the champion roster and mentions only its linked players", async () => {
+    const { season, champ } = await crownedSeason();
+    const star = await makeUser("Star");
+    const quiet = await makeUser("Quiet");
+    const outsider = await makeUser("Outsider");
+    const captainId = "123456789012345678";
+    const starId = "223456789012345678";
+    await prisma.user.update({
+      where: { id: champ.captainId },
+      data: { discordId: captainId },
+    });
+    await prisma.user.update({ where: { id: star.id }, data: { discordId: starId } });
+    await prisma.user.update({
+      where: { id: outsider.id },
+      data: { discordId: "323456789012345678" },
+    });
+    const at = (s: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, s));
+    await prisma.teamMember.createMany({
+      data: [
+        { seasonId: season.id, teamId: champ.id, userId: star.id, price: 10, createdAt: at(2) },
+        { seasonId: season.id, teamId: champ.id, userId: champ.captainId, isCaptain: true, createdAt: at(3) },
+        { seasonId: season.id, teamId: champ.id, userId: quiet.id, price: 5, createdAt: at(4) },
+      ],
+    });
+
+    expect(await announceChampionOnce(season.id)).toBe(true);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const [content, mentions] = mockSend.mock.calls[0];
+    // Captain first, then the roster in signing order; the unlinked player is
+    // named, and a linked player on another team is nowhere.
+    expect(content).toContain(
+      `Congratulations <@${captainId}>, <@${starId}> and Quiet!`,
+    );
+    expect(new Set(mentions?.users)).toEqual(new Set([captainId, starId]));
+    expect(content).not.toContain("323456789012345678");
   });
 
   it("the sync sweep reclaims an expired champion lease with its event id", async () => {

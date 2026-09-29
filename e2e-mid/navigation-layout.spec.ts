@@ -34,7 +34,7 @@ test.beforeEach(async ({ page }) => {
   // Expire the previous fixture before asserting archived-season navigation.
   expect((await page.request.post("/api/test/cache")).ok()).toBe(true);
   await page.goto(
-    `/api/auth/dev?name=${encodeURIComponent(displayName)}&steamId=76561190000991001&admin=1&redirect=/features`,
+    `/api/auth/dev?name=${encodeURIComponent(displayName)}&steamId=76561190000991001&admin=1&redirect=/how-it-works`,
   );
 });
 
@@ -94,7 +94,6 @@ async function expectHeaderFits(page: Page) {
     return problems;
   });
   expect(issues).toEqual([]);
-  await expect(page.getByRole("button", { name: "Open menu" })).toBeHidden();
   await expect(
     page.getByRole("navigation", { name: "Quick navigation" }),
   ).toBeHidden();
@@ -135,7 +134,7 @@ for (const phase of [
       where: { id: season.id },
       data: { status: phase ?? season.status, isActive: phase !== null },
     });
-    await page.goto("/features");
+    await page.goto("/how-it-works");
 
     for (const width of desktopWidths) {
       await test.step(`${width}px`, async () => {
@@ -152,10 +151,10 @@ for (const phase of [
         });
         await expectPanelFits(explore);
         await expect(
-          explore.getByRole("link", { name: "Past seasons" }),
+          explore.getByRole("link", { name: "Season history" }),
         ).toBeVisible();
         await expect(
-          explore.getByRole("link", { name: "Feature tour" }),
+          explore.getByRole("link", { name: "How it works" }),
         ).toHaveAttribute("aria-current", "page");
         await page.keyboard.press("Escape");
         await expect(exploreButton).toBeFocused();
@@ -173,7 +172,7 @@ for (const phase of [
           account.getByRole("link", { name: "Admin", exact: true }),
         ).toBeVisible();
         await expect(
-          account.getByRole("link", { name: "My profile", exact: true }),
+          account.getByRole("link", { name: "My account", exact: true }),
         ).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(accountButton).toBeFocused();
@@ -215,14 +214,14 @@ test("desktop disclosures work by keyboard, dismiss each other, and follow links
   await exploreButton.click();
   await expect(account).toHaveCount(0);
   await expect(explore).toBeVisible();
-  await explore.getByRole("link", { name: "Feature tour" }).click();
+  await explore.getByRole("link", { name: "How it works" }).click();
   await expect(explore).toHaveCount(0);
 
   await accountButton.click();
   await page.locator("h1").click();
   await expect(account).toHaveCount(0);
   await accountButton.click();
-  await account.getByRole("link", { name: "My profile" }).click();
+  await account.getByRole("link", { name: "My account" }).click();
   await expect(page).toHaveURL(/\/me$/);
   await expect(account).toHaveCount(0);
 
@@ -246,16 +245,23 @@ test("switching layouts clears hidden panels and keeps phone navigation reachabl
   await expect(page.locator("#desktop-explore-nav")).toHaveCount(0);
   await page.goto("/");
 
+  // Phones have one menu: the sheet behind the tab bar's last slot. It
+  // carries every page the tab bar doesn't, then Explore, then Merch.
   for (const width of [320, 375, 768, 1023]) {
     await page.setViewportSize({ width, height: 812 });
-    const menuButton = page.getByRole("button", { name: "Open menu" });
-    await menuButton.click();
-    const menu = page.locator("#mobile-nav");
-    const merch = menu.getByRole("link", { name: /Merch/ });
+    await expect(page.getByRole("button", { name: "Open menu" })).toHaveCount(
+      0,
+    );
+    await page
+      .getByRole("button", { name: "Explore league", exact: true })
+      .click();
+    const sheet = page.locator("#mobile-discovery");
+    const merch = sheet.getByRole("link", { name: /Merch/ });
     await expect(merch).toBeVisible();
     await expect(merch).toHaveCSS("min-height", "44px");
-    await menu.getByRole("link", { name: "Home", exact: true }).click();
-    await expect(menu).toHaveCount(0);
+    await sheet.getByRole("link", { name: "Players", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page).toHaveURL(/\/players$/);
     await expect(
       page.getByRole("navigation", { name: "Quick navigation" }),
     ).toBeVisible();
@@ -264,6 +270,25 @@ test("switching layouts clears hidden panels and keeps phone navigation reachabl
     ).toBe(width);
   }
 
+  // The avatar opens the same account menu on a phone as on a desktop.
+  const accountButton = page.getByRole("button", {
+    name: `Account — ${displayName}`,
+  });
+  await accountButton.click();
+  const account = page.getByRole("navigation", {
+    name: "Account",
+    exact: true,
+  });
+  await expectPanelFits(account);
+  await expect(
+    account.getByRole("link", { name: "Admin", exact: true }),
+  ).toBeVisible();
+  await expect(
+    account.getByRole("link", { name: "My account", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(accountButton).toBeFocused();
+
   await page
     .getByRole("button", { name: "Explore league", exact: true })
     .click();
@@ -271,10 +296,10 @@ test("switching layouts clears hidden panels and keeps phone navigation reachabl
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect(page.locator("#mobile-discovery")).toHaveCount(0);
   await expectHeaderFits(page);
-  await page.getByRole("button", { name: `Account — ${displayName}` }).click();
+  await accountButton.click();
+  await expect(page.locator("#account-nav")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
-  await expect(page.locator("#desktop-account-nav")).toHaveCount(0);
-  await expect(page.locator("#mobile-nav")).toHaveCount(0);
+  await expect(page.locator("#account-nav")).toHaveCount(0);
 });
 
 test("signed-out desktop and merch stay usable at the laptop breakpoint", async ({

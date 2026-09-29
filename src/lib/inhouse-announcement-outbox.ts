@@ -1,13 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import {
-  INHOUSE_BET_STATUS,
-  INHOUSE_STATUS,
-} from "./constants";
+import { INHOUSE_STATUS } from "./constants";
 import {
   inhouseResultMessage,
+  inhouseResultVoidedMessage,
   sendInhouseDiscordMessage,
-  type InhouseBetSlip,
 } from "./discord";
 import { parseInhouseBox, type InhouseBoxPlayer } from "./inhouse-box";
 import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
@@ -55,7 +52,6 @@ type InhouseResultAnnouncementSource = {
 /** The single result renderer used by both the live path and crash recovery. */
 export function inhouseResultAnnouncementContent(
   result: InhouseResultAnnouncementSource,
-  slips?: InhouseBetSlip[] | null,
 ): string {
   const radiantWin = result.winnerTeam === result.radiantTeam;
   const mvpId = gameMvp(result.boxScore, radiantWin);
@@ -70,7 +66,6 @@ export function inhouseResultAnnouncementContent(
     mvpName: mvp?.name ?? null,
     mvpHero: mvp ? (heroById(mvp.heroId)?.name ?? null) : null,
     dotaMatchId: result.dotaMatchId,
-    slips,
   });
 }
 
@@ -104,48 +99,6 @@ export type InhouseResultReconciliation = {
   created: number;
 };
 
-const RECOVERABLE_BET_OUTCOMES = new Set([
-  "WON",
-  "LOST",
-  "VOID_LINEUP",
-  "VOID_LATE",
-]);
-
-function persistedBetSlips(source: {
-  betSettlement: string | null;
-  bets: {
-    userId: string;
-    stake: number;
-    matched: number | null;
-    outcome: string | null;
-    payout: number | null;
-    user: { name: string };
-  }[];
-}): InhouseBetSlip[] | null {
-  if (source.betSettlement !== INHOUSE_BET_STATUS.SETTLED) return null;
-  const slips: InhouseBetSlip[] = [];
-  for (const bet of source.bets) {
-    if (
-      !bet.outcome ||
-      !RECOVERABLE_BET_OUTCOMES.has(bet.outcome) ||
-      bet.matched === null ||
-      bet.payout === null
-    ) {
-      // A partial settlement must never be rendered as if it were the whole
-      // pot. The money sweeper can finish it and a later heartbeat can retry.
-      return null;
-    }
-    slips.push({
-      name: bet.user.name,
-      stake: bet.stake,
-      matched: bet.matched,
-      outcome: bet.outcome as InhouseBetSlip["outcome"],
-      delta: bet.payout,
-    });
-  }
-  return slips;
-}
-
 async function reconcileOneResult(
   lobbyId: string,
   cutoff: Date,
@@ -162,17 +115,6 @@ async function reconcileOneResult(
                   userId: true,
                   team: true,
                   user: { select: { name: true, avatar: true } },
-                },
-              },
-              bets: {
-                where: { confirmedAt: { not: null } },
-                select: {
-                  userId: true,
-                  stake: true,
-                  matched: true,
-                  outcome: true,
-                  payout: true,
-                  user: { select: { name: true } },
                 },
               },
               announcements: {
@@ -261,22 +203,19 @@ async function reconcileOneResult(
           }
 
           const boxScore = parseInhouseBox(source.boxScore);
-          const content = inhouseResultAnnouncementContent(
-            {
-              winnerTeam: source.winnerTeam,
-              radiantTeam: source.radiantTeam,
-              radiantScore: source.radiantScore,
-              direScore: source.direScore,
-              durationSecs: source.durationSecs,
-              dotaMatchId: source.dotaMatchId,
-              boxScore,
-            },
-            persistedBetSlips(source),
-          );
+          const content = inhouseResultAnnouncementContent({
+            winnerTeam: source.winnerTeam,
+            radiantTeam: source.radiantTeam,
+            radiantScore: source.radiantScore,
+            direScore: source.direScore,
+            durationSecs: source.durationSecs,
+            dotaMatchId: source.dotaMatchId,
+            boxScore,
+          });
 
           // Re-assert both the exact source result and the missing/current
-          // event at the write. Serializable makes a concurrent void, bet
-          // settlement or rival reconciler either win first or retry cleanly.
+          // event at the write. Serializable makes a concurrent void or rival
+          // reconciler either win first or retry cleanly.
           const claim = await tx.inhouseLobby.updateMany({
             where: {
               id: source.id,
@@ -289,7 +228,6 @@ async function reconcileOneResult(
               radiantScore: source.radiantScore,
               direScore: source.direScore,
               boxScore: source.boxScore,
-              betSettlement: source.betSettlement,
               ...(resultEvent
                 ? { announcements: { some: { id: resultEvent.id } } }
                 : {
@@ -310,8 +248,9 @@ async function reconcileOneResult(
           if (claim.count === 0) return "skipped";
 
           if (resultEvent) {
-            // Never rewrite a payload a worker may already have in flight. A
-            // sent/base result is still truthful; Elo recovery remains useful.
+            // Re-render a still-PENDING payload from the committed columns,
+            // but never rewrite one a worker may already have in flight. A
+            // sent result is still truthful; Elo recovery remains useful.
             await tx.inhouseAnnouncement.updateMany({
               where: {
                 id: resultEvent.id,
@@ -448,6 +387,40 @@ function stillDescribesCurrentState(event: Candidate): boolean {
   return false;
 }
 
+// The retired Cred block always started on its own line under the one-line
+// result: the pot line when any stake was live, otherwise the refunded line.
+const RETIRED_CRED_RESULT_BLOCK = /\n(?:\*\*Pot \d+ Cred\*\*|-# Refunded: )/;
+
+/**
+ * The text to post for an event, without copy from the retired Cred betting
+ * feature.
+ *
+ * Events store their text already rendered, and a row written before Cred was
+ * removed can still be unsent: a RESULT with the pot and stake lines under the
+ * result, or a RESULT_VOIDED saying the wagers reverse. Unsent rows retry with
+ * no attempt cap or age cutoff (a missing alert webhook parks them for as long
+ * as it stays missing), so without this they would post the retired copy
+ * whenever delivery resumes. Rows written since never carry it and come back
+ * unchanged.
+ */
+function deliverableInhouseContent(event: {
+  kind: string;
+  content: string;
+  resultMatchId: string | null;
+}): string {
+  if (event.kind === INHOUSE_ANNOUNCEMENT_KIND.RESULT) {
+    const block = RETIRED_CRED_RESULT_BLOCK.exec(event.content);
+    return block ? event.content.slice(0, block.index) : event.content;
+  }
+  if (
+    event.kind === INHOUSE_ANNOUNCEMENT_KIND.RESULT_VOIDED &&
+    /\bCred\b/.test(event.content)
+  ) {
+    return inhouseResultVoidedMessage({ dotaMatchId: event.resultMatchId });
+  }
+  return event.content;
+}
+
 async function cancelIfEligible(event: Candidate, now: Date): Promise<boolean> {
   const cancelled = await prisma.inhouseAnnouncement.updateMany({
     where: { id: event.id, ...eligibleWhere(now) },
@@ -557,7 +530,7 @@ export async function deliverInhouseAnnouncements(
 
       let accepted = false;
       try {
-        accepted = await send(event.content);
+        accepted = await send(deliverableInhouseContent(event));
       } catch {
         // The canonical sender resolves false, but keep the outbox safe for an
         // injected/custom sender that rejects. Never serialize an error here:

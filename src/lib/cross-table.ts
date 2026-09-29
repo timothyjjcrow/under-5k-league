@@ -1,6 +1,6 @@
 // Season cross table ("who's played who"): teams × teams, one cell per
 // meeting, from the ROW team's perspective. Pure + DB-free — the schedule
-// page feeds it prisma Match rows, this does the pairing math.
+// and season pages feed it prisma Match rows, this does the pairing math.
 
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 
@@ -14,6 +14,8 @@ export type CrossMatch = {
   homeScore: number;
   awayScore: number;
   winnerTeamId: string | null;
+  /** Ruled result: the score was awarded, not played. */
+  forfeit?: boolean;
 };
 
 export type CrossCell = {
@@ -24,8 +26,11 @@ export type CrossCell = {
   live: boolean;
   /** Row team's result — null until the match is COMPLETED. */
   result: "W" | "L" | "D" | null;
-  /** Row team's games first, e.g. "2–0"; null until played. */
+  /** Row team's games first, e.g. "2–0": the final score once played, the
+   *  running score while live, null before the first game. */
   score: string | null;
+  /** A ruled (forfeit) result — only ever set on a played meeting. */
+  forfeit: boolean;
 };
 
 export type CrossTable = {
@@ -70,11 +75,12 @@ export function crossTable(
       const mine = row === m.homeTeamId ? m.homeScore : m.awayScore;
       const theirs = row === m.homeTeamId ? m.awayScore : m.homeScore;
       const played = m.status === MATCH_STATUS.COMPLETED;
+      const live = m.status === MATCH_STATUS.LIVE;
       cells.get(row)!.get(col)!.push({
         matchId: m.id,
         week: m.week,
         played,
-        live: m.status === MATCH_STATUS.LIVE,
+        live,
         result: !played
           ? null
           : m.winnerTeamId === row
@@ -82,7 +88,8 @@ export function crossTable(
             : m.winnerTeamId === null
               ? "D"
               : "L",
-        score: played ? `${mine}–${theirs}` : null,
+        score: played || live ? `${mine}–${theirs}` : null,
+        forfeit: played && m.forfeit === true,
       });
     }
   }

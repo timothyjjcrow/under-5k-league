@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  brokenPlayerRecord,
   formatGameDuration,
+  formatRecordMark,
   analyzeRecordGames,
   leagueRecords,
   recordGameMetricsValid,
@@ -149,6 +151,14 @@ describe("leagueRecords", () => {
     expect(book.players.find((r) => r.key === "heroDamage")).toMatchObject({ userId: "pusher", value: 25000 });
   });
 
+  it("never names a player for their worst game", () => {
+    const book = leagueRecords([
+      game({ lines: [line({ userId: "a", deaths: 25 }), line({ userId: "b", deaths: 1 })] }),
+    ]);
+    expect(book.players.map((r) => r.key)).not.toContain("deaths");
+    expect(book.players.some((r) => /death/i.test(r.title))).toBe(false);
+  });
+
   it("keeps game-story records grounded in a reported score", () => {
     const book = leagueRecords([
       game({ matchId: "close", radiantWin: true, radiantScore: 21, direScore: 20 }),
@@ -157,6 +167,63 @@ describe("leagueRecords", () => {
     ]);
     expect(book.games.find((r) => r.key === "closest")).toMatchObject({ matchId: "close", value: 1 });
     expect(book.games.find((r) => r.key === "losingKills")).toMatchObject({ matchId: "loss", value: 35 });
+  });
+});
+
+describe("brokenPlayerRecord", () => {
+  // `count` complete-enough base games, each with one line on `kills`.
+  const base = (count: number, kills = 14) =>
+    Array.from({ length: count }, (_, i) =>
+      game({ matchId: `old-${i}`, lines: [line({ userId: `p${i}`, kills, assists: 5 })] }),
+    );
+
+  it("reports the mark a series beat, with the old holder", () => {
+    const series = game({
+      matchId: "series",
+      lines: [line({ userId: "star", heroId: 42, kills: 17, assists: 5 })],
+    });
+    const broken = brokenPlayerRecord([...base(20), series], "series");
+    expect(broken?.record).toMatchObject({ key: "kills", value: 17, userId: "star", heroId: 42 });
+    expect(broken?.previous).toMatchObject({ key: "kills", value: 14, userId: "p0" });
+  });
+
+  it("stays quiet until 20 complete games stood before the series", () => {
+    const series = game({ matchId: "series", lines: [line({ userId: "star", kills: 30 })] });
+    expect(brokenPlayerRecord([...base(19), series], "series")).toBeNull();
+    expect(brokenPlayerRecord([...base(20), series], "series")).not.toBeNull();
+  });
+
+  it("ignores an equalled mark and a series with no games in the book", () => {
+    const equal = game({ matchId: "series", lines: [line({ userId: "star", kills: 14, assists: 5 })] });
+    expect(brokenPlayerRecord([...base(20), equal], "series")).toBeNull();
+    expect(brokenPlayerRecord(base(25), "missing")).toBeNull();
+  });
+
+  it("names one record, kills first, when a series breaks several", () => {
+    const series = game({
+      matchId: "series",
+      lines: [line({ userId: "star", kills: 20, assists: 40 })],
+    });
+    expect(brokenPlayerRecord([...base(20), series], "series")?.record.key).toBe("kills");
+  });
+
+  it("counts a later series game as the series, not the old mark", () => {
+    const series = [
+      game({ matchId: "series", lines: [line({ userId: "a", kills: 16, assists: 5 })] }),
+      game({ matchId: "series", lines: [line({ userId: "b", kills: 18, assists: 5 })] }),
+    ];
+    const broken = brokenPlayerRecord([...base(20), ...series], "series");
+    expect(broken?.record).toMatchObject({ userId: "b", value: 18 });
+    expect(broken?.previous.value).toBe(14);
+  });
+});
+
+describe("formatRecordMark", () => {
+  it("adds the unit to each kind of mark", () => {
+    expect(formatRecordMark("kills", 17)).toBe("17 kills");
+    expect(formatRecordMark("netWorth", 32100)).toBe("32.1k net worth");
+    expect(formatRecordMark("gpm", 812)).toBe("812 GPM");
+    expect(formatRecordMark("heroDamage", 45210)).toBe("45,210 hero damage");
   });
 });
 

@@ -4,6 +4,7 @@ import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { resumeDraft } from "@/lib/draft-service";
 import { getActiveSeason, reactivateSeason } from "@/lib/season";
 import {
+  allowLegacyDuplicateActives,
   makeSeason,
   makeUser,
   ON_POSTGRES,
@@ -108,6 +109,7 @@ describe("reactivateSeason (integration)", () => {
   it.skipIf(ON_POSTGRES)(
     "refuses legacy multiple-active corruption",
     async () => {
+      await allowLegacyDuplicateActives();
       const target = await makeSeason({ isActive: false });
       await makeSeason({ name: "Current A", isActive: true });
       await makeSeason({ name: "Current B", isActive: true });

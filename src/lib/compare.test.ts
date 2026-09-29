@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareDefaults,
   meetings,
-  topAffinities,
+  sharedSeries,
   type MeetingGame,
 } from "./compare";
 
@@ -68,95 +68,53 @@ describe("meetings", () => {
   });
 });
 
-describe("topAffinities", () => {
-  it("returns null slots when nothing clears the meeting floor", () => {
-    const a = topAffinities(
-      [game(true, [["a", true], ["b", false]])],
-      "a",
-      3,
-    );
-    expect(a.nemesis).toBeNull();
-    expect(a.duo).toBeNull();
+describe("sharedSeries", () => {
+  const at = (matchId: string, startTime: number, g: MeetingGame) => ({
+    ...g,
+    matchId,
+    startTime,
   });
 
-  it("classifies sides exactly like meetings() and counts self's record", () => {
-    const games = [
-      game(true, [["a", true], ["b", false], ["c", true]]), // a wins: vs b, with c
-      game(false, [["a", true], ["b", false], ["c", true]]), // a loses: vs b, with c
-      game(true, [["a", false], ["b", true], ["c", false]]), // a loses: vs b, with c
-    ];
-    const aff = topAffinities(games, "a", 3);
-    const m = meetings(games, "a", "b");
-    expect(aff.nemesis).toEqual({ userId: "b", games: 3, wins: 1, losses: 2 });
-    expect(aff.nemesis?.games).toBe(m.opposite.games);
-    expect(aff.nemesis?.wins).toBe(m.opposite.aWins);
-    expect(aff.duo).toEqual({ userId: "c", games: 3, wins: 1, losses: 2 });
-    expect(aff.duo?.games).toBe(meetings(games, "a", "c").together.games);
-  });
-
-  it("skips games where self has no mapped line, and unmapped lines", () => {
-    const aff = topAffinities(
+  it("groups the games both played by series, newest first", () => {
+    const series = sharedSeries(
       [
-        game(true, [["b", true], ["c", false]]), // self absent — no meeting
-        game(true, [["a", true], [null, false]]), // unmapped rival — no meeting
+        at("m1", 100, game(true, [["a", true], ["b", false]])),
+        at("m1", 200, game(false, [["a", true], ["b", false]])),
+        at("m2", 500, game(true, [["a", true], ["b", true]])),
+        at("m3", 900, game(true, [["a", true], ["c", false]])), // no b
       ],
       "a",
-      1,
+      "b",
     );
-    expect(aff.nemesis).toBeNull();
-    expect(aff.duo).toBeNull();
+    expect(series.map((s) => s.matchId)).toEqual(["m2", "m1"]);
+    expect(series[1]).toEqual({
+      matchId: "m1",
+      startTime: 100,
+      meetings: {
+        opposite: { games: 2, aWins: 1, bWins: 1 },
+        together: { games: 0, wins: 0, losses: 0 },
+      },
+    });
+    expect(series[0].meetings.together).toEqual({
+      games: 1,
+      wins: 1,
+      losses: 0,
+    });
   });
 
-  it("never counts self as their own duo or nemesis", () => {
-    const aff = topAffinities(
-      [game(true, [["a", true], ["a", true], ["b", true]])],
-      "a",
-      1,
-    );
-    expect(aff.duo?.userId).toBe("b");
-    expect(aff.nemesis).toBeNull();
-  });
-
-  it("counts a duplicated userId once per game", () => {
-    const aff = topAffinities(
-      [game(true, [["a", true], ["b", false], ["b", false]])],
-      "a",
-      1,
-    );
-    expect(aff.nemesis).toEqual({ userId: "b", games: 1, wins: 1, losses: 0 });
-  });
-
-  it("picks the most-met player first, whatever the record", () => {
-    const aff = topAffinities(
+  it("puts series with no known start time last", () => {
+    const series = sharedSeries(
       [
-        game(true, [["a", true], ["b", false]]), // beat b
-        game(true, [["a", true], ["b", false]]), // beat b again
-        game(false, [["a", true], ["c", false]]), // lost to c once
+        at("old", 0, game(true, [["a", true], ["b", false]])),
+        at("new", 50, game(true, [["a", true], ["b", false]])),
       ],
       "a",
-      1,
+      "b",
     );
-    expect(aff.nemesis?.userId).toBe("b"); // met 2x beats lost-to-1x
-  });
-
-  it("breaks meeting-count ties toward the rival self loses to, the duo self wins with, then userId", () => {
-    const tied = topAffinities(
-      [
-        game(true, [["a", true], ["b", false], ["z", true]]), // beat b, won with z
-        game(false, [["a", true], ["c", false], ["y", true]]), // lost to c, lost with y
-      ],
-      "a",
-      1,
-    );
-    expect(tied.nemesis?.userId).toBe("c"); // 1 game each; self 0-1 vs c beats 1-0 vs b
-    expect(tied.duo?.userId).toBe("z"); // 1 game each; 1-0 with z beats 0-1 with y
-
-    const dead = topAffinities(
-      [game(true, [["a", true], ["m", false], ["k", false]])],
-      "a",
-      1,
-    );
-    expect(dead.nemesis?.userId).toBe("k"); // identical rows — userId decides
+    expect(series.map((s) => [s.matchId, s.startTime])).toEqual([
+      ["new", 50],
+      ["old", 0],
+    ]);
   });
 });
 

@@ -1,19 +1,40 @@
 import { describe, it, expect } from "vitest";
+import { DEFAULTS } from "./constants";
 import {
+  adminNominationTeam,
+  bidAllowanceLine,
+  bidClockSeconds,
+  lotContested,
+  captainStatusLine,
+  uncoveredRoles,
   teamNeed,
   maxBid,
   canBid,
   canNominate,
+  draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
+  keepsLinedUpPick,
+  lineUpHint,
+  lotHeadingLead,
+  lotWatcherLine,
   nextNominatorIndex,
+  nominationTurnTeamId,
+  nominationWaitLine,
+  upcomingNominatorTeamId,
+  upNextLine,
+  outbidLine,
+  outbidders,
   mmrWeightedBudgets,
+  openSeatsLabel,
+  rosterDisplayOrder,
   outbidLatchAfter,
   stripDraftTitleFlag,
   type DraftTeam,
   wasOutbid,
   shuffle,
   DRAFT_TITLE_PREFIXES,
+  nominationOrderLabel,
 } from "./draft";
 
 const team = (rosterCount: number, budget = 100): DraftTeam => ({
@@ -385,6 +406,40 @@ describe("draftViewerStake", () => {
   });
 });
 
+describe("draftAlertsReachViewer", () => {
+  const view = (
+    me: { userId: string | null; myTeamId: string | null },
+    available: { userId: string }[] = [],
+  ) => ({ me, available });
+
+  it("a captain always can — their turn to nominate, and being outbid", () => {
+    expect(draftAlertsReachViewer(view({ userId: "c1", myTeamId: "t1" }))).toBe(true);
+  });
+
+  it("so can a player still in the pool — on the block, then drafted", () => {
+    expect(
+      draftAlertsReachViewer(view({ userId: "u1", myTeamId: null }, [{ userId: "u1" }])),
+    ).toBe(true);
+  });
+
+  it("a drafted player, a signed-out visitor and a bare admin cannot", () => {
+    // Nothing in the room rings for any of them, so offering a sound toggle
+    // is a control that does nothing.
+    expect(
+      draftAlertsReachViewer(view({ userId: "u1", myTeamId: null }, [{ userId: "u2" }])),
+    ).toBe(false);
+    expect(
+      draftAlertsReachViewer(view({ userId: null, myTeamId: null }, [{ userId: "u1" }])),
+    ).toBe(false);
+  });
+
+  it("stays narrower than draftViewerStake, which also keeps an admin polling", () => {
+    const admin = { userId: "a1", myTeamId: null, isAdmin: true };
+    expect(draftViewerStake({ me: admin, available: [] })).toBe(true);
+    expect(draftAlertsReachViewer({ me: admin, available: [] })).toBe(false);
+  });
+});
+
 describe("mmrWeightedBudgets — unknown-MMR captains (stored 0 mapped to null)", () => {
   it("gives an unknown captain the base budget without skewing the others", () => {
     // Call sites map a stored 0 ("unknown") to null via `|| null` — this is
@@ -451,5 +506,529 @@ describe("shuffle", () => {
   it("handles empty and single-element lists", () => {
     expect(shuffle([])).toEqual([]);
     expect(shuffle(["only"])).toEqual(["only"]);
+  });
+});
+
+describe("rosterDisplayOrder", () => {
+  const m = (userId: string, isCaptain: boolean, price: number) => ({
+    userId,
+    isCaptain,
+    price,
+  });
+
+  it("puts the $0 captain above the players the team bought", () => {
+    // The payload arrives price-desc, which used to list the captain last.
+    const rows = [m("p30", false, 12), m("p8", false, 3), m("cap", true, 0)];
+    expect(rosterDisplayOrder(rows).map((r) => r.userId)).toEqual([
+      "cap",
+      "p30",
+      "p8",
+    ]);
+  });
+
+  it("keys on the captain flag, not the price — a transferred captain keeps theirs", () => {
+    // transferCaptaincy promotes a bought player (price stays 9) and demotes
+    // the old captain to a $0 member. Sorting by price would bury neither
+    // correctly; the flag is the only honest key.
+    const rows = [m("newcap", true, 9), m("p1", false, 4), m("oldcap", false, 0)];
+    expect(rosterDisplayOrder(rows).map((r) => r.userId)).toEqual([
+      "newcap",
+      "p1",
+      "oldcap",
+    ]);
+  });
+
+  it("leaves the non-captain order exactly as given, and never drops a row", () => {
+    const rows = [m("a", false, 5), m("b", false, 5), m("c", false, 1)];
+    expect(rosterDisplayOrder(rows)).toEqual(rows);
+    expect(rosterDisplayOrder([])).toEqual([]);
+  });
+});
+
+describe("openSeatsLabel", () => {
+  it("folds every open seat into one line", () => {
+    expect(openSeatsLabel(3)).toBe("3 open seats");
+    expect(openSeatsLabel(1)).toBe("1 open seat");
+  });
+
+  it("says nothing for a full roster", () => {
+    expect(openSeatsLabel(0)).toBeNull();
+    expect(openSeatsLabel(-1)).toBeNull();
+  });
+});
+
+describe("bidAllowanceLine", () => {
+  it("says how high the captain can go and what the cap keeps back", () => {
+    expect(bidAllowanceLine({ maxBid: 101, need: 4, minBid: 1 })).toBe(
+      "You can bid up to $101 (keeps $1 for each of 3 more seats).",
+    );
+    expect(bidAllowanceLine({ maxBid: 50, need: 2, minBid: 2 })).toBe(
+      "You can bid up to $50 (keeps $2 for 1 more seat).",
+    );
+  });
+
+  it("names the last seat instead of reserving for nothing", () => {
+    expect(bidAllowanceLine({ maxBid: 104, need: 1, minBid: 1 })).toBe(
+      "You can bid up to $104. This is your last open seat.",
+    );
+  });
+
+  it("agrees with maxBid about what is kept back", () => {
+    // The line explains the cap, so the two must never tell different
+    // stories: budget - kept-back reserve === the number the line quotes.
+    const budget = 104;
+    const rosterCount = 2; // captain + one purchase, 5-seat roster
+    const cap = maxBid({ id: "t", budget, rosterCount }, 5, 1);
+    expect(bidAllowanceLine({ maxBid: cap, need: 3, minBid: 1 })).toBe(
+      "You can bid up to $102 (keeps $1 for each of 2 more seats).",
+    );
+  });
+});
+
+describe("nominationTurnTeamId", () => {
+  const lot = { userId: "p1" };
+  it("names the nominator while they still have a nomination to make", () => {
+    expect(
+      nominationTurnTeamId({
+        status: "IN_PROGRESS",
+        nominatorTeamId: "t2",
+        nominatedPlayer: null,
+      }),
+    ).toBe("t2");
+  });
+
+  it("names nobody once their player is on the block", () => {
+    // The countdown is the bidding clock now; a gold "on clock" badge on the
+    // nominator read as though they held the lot.
+    expect(
+      nominationTurnTeamId({
+        status: "IN_PROGRESS",
+        nominatorTeamId: "t2",
+        nominatedPlayer: lot,
+      }),
+    ).toBeNull();
+  });
+
+  it("names nobody while paused, before the start, or after the end", () => {
+    for (const status of ["PAUSED", "NOT_STARTED", "COMPLETE"]) {
+      expect(
+        nominationTurnTeamId({
+          status,
+          nominatorTeamId: "t2",
+          nominatedPlayer: null,
+        }),
+      ).toBeNull();
+    }
+  });
+});
+
+describe("lotHeadingLead", () => {
+  it("says 'On the clock' only for a nomination turn", () => {
+    expect(lotHeadingLead({ lotLive: false })).toBe("On the clock:");
+    expect(lotHeadingLead({ lotLive: true })).toBe("Nominated by");
+  });
+
+  it("says when the clock, not the captain, opened the lot", () => {
+    expect(lotHeadingLead({ lotLive: true, autoNominated: true })).toBe(
+      "Clock ran out: auto-picked for",
+    );
+    // Nothing is on the block, so there is no pick to explain.
+    expect(lotHeadingLead({ lotLive: false, autoNominated: true })).toBe(
+      "On the clock:",
+    );
+  });
+});
+
+describe("outbidders / outbidLine", () => {
+  // teamSize 3 (captain + 2 buys), $1 minimum.
+  const t = (id: string, budget: number, rostered: number) => ({
+    id,
+    name: id.toUpperCase(),
+    budget,
+    members: Array.from({ length: rostered }, (_, i) => ({ i })),
+  });
+  const lot = (over: Partial<Parameters<typeof outbidLine>[0]> = {}) => ({
+    teams: [t("a", 50, 1), t("b", 30, 2), t("c", 10, 1), t("d", 90, 3)],
+    teamSize: 3,
+    minBid: 1,
+    currentBid: 8,
+    currentBidTeamId: "a",
+    myTeamId: null,
+    ...over,
+  });
+
+  it("lists the teams that can top the price, with the cap each can reach", () => {
+    // b: one seat left, whole budget ($30). c: two seats, keeps $1 back ($9).
+    // d: full. a: holds the bid.
+    expect(outbidders(lot())).toEqual([
+      { id: "b", name: "B", cap: 30 },
+      { id: "c", name: "C", cap: 9 },
+    ]);
+    expect(outbidLine(lot())).toBe(
+      "Can still outbid: B (up to $30), C (up to $9).",
+    );
+  });
+
+  it("uses the same cap as maxBid, so a team AT its cap is out", () => {
+    // c keeps $1 back for its other seat: cap $9 — in at $8, out at $9.
+    expect(maxBid({ id: "c", budget: 10, rosterCount: 1 }, 3, 1)).toBe(9);
+    expect(outbidders(lot({ currentBid: 9 })).map((x) => x.id)).toEqual(["b"]);
+  });
+
+  it("calls the viewer's own team 'you'", () => {
+    expect(outbidLine(lot({ myTeamId: "c" }))).toBe(
+      "Can still outbid: B (up to $30), you (up to $9).",
+    );
+  });
+
+  it("says when nobody can respond, naming who takes the player", () => {
+    expect(outbidLine(lot({ currentBid: 30 }))).toBe(
+      "No one can outbid A: sells at $30 when the clock runs out.",
+    );
+    expect(outbidLine(lot({ currentBid: 30, myTeamId: "a" }))).toBe(
+      "No one can outbid you: you win at $30 when the clock runs out.",
+    );
+  });
+
+  it("says nothing without a high bid", () => {
+    expect(outbidLine(lot({ currentBidTeamId: null }))).toBeNull();
+  });
+});
+
+describe("lotContested / bidClockSeconds", () => {
+  // teamSize 3 (captain + 2 buys), $1 minimum. Same teams as the outbidders
+  // block above, as the server sees them (roster counts, not member lists).
+  const t = (id: string, budget: number, rosterCount: number): DraftTeam => ({
+    id,
+    budget,
+    rosterCount,
+  });
+  const teams = [t("a", 50, 1), t("b", 30, 2), t("c", 10, 1), t("d", 90, 3)];
+  const lot = (price: number, highBidderTeamId: string | null = "a") => ({
+    teams,
+    teamSize: 3,
+    minBid: 1,
+    price,
+    highBidderTeamId,
+  });
+
+  it("keeps the full clock while another team can top the price", () => {
+    // b can go to $30, c to $9.
+    expect(lotContested(lot(8))).toBe(true);
+    expect(bidClockSeconds(lot(8))).toBe(DEFAULTS.BID_TIMER_SECONDS);
+    expect(bidClockSeconds(lot(29))).toBe(DEFAULTS.BID_TIMER_SECONDS);
+  });
+
+  it("drops to the short clock once nobody else can top it", () => {
+    // $30: b is at its cap, c is priced out, d is full.
+    expect(lotContested(lot(30))).toBe(false);
+    expect(bidClockSeconds(lot(30))).toBe(
+      DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
+    );
+  });
+
+  it("never counts the high bidder as a rival", () => {
+    // b holds the bid: a (cap $49) is the rival that can still top it, and b's
+    // own $30 cap is irrelevant. At $49 a is out too.
+    expect(lotContested(lot(10, "b"))).toBe(true);
+    expect(lotContested(lot(30, "b"))).toBe(true);
+    expect(lotContested(lot(49, "b"))).toBe(false);
+    // a holds the bid: at $29 b (cap $30) can still top it, at $30 nobody.
+    expect(lotContested(lot(29, "a"))).toBe(true);
+    expect(lotContested(lot(30, "a"))).toBe(false);
+  });
+
+  it("is the same rule as the room's 'Can still outbid' list", () => {
+    const roomTeams = teams.map((x) => ({
+      id: x.id,
+      name: x.id,
+      budget: x.budget,
+      members: Array.from({ length: x.rosterCount }, () => null),
+    }));
+    for (const holder of ["a", "b", "c", "d"]) {
+      for (let price = 1; price <= 60; price++) {
+        expect(lotContested(lot(price, holder))).toBe(
+          outbidders({
+            teams: roomTeams,
+            teamSize: 3,
+            minBid: 1,
+            currentBid: price,
+            currentBidTeamId: holder,
+          }).length > 0,
+        );
+      }
+    }
+  });
+
+  it("the last team with seats bidding against nobody gets the short clock", () => {
+    // Late draft: everyone else is full, the one short team opens at $1.
+    const late = [t("a", 40, 2), t("b", 3, 3), t("c", 0, 3)];
+    expect(
+      bidClockSeconds({
+        teams: late,
+        teamSize: 3,
+        price: 1,
+        highBidderTeamId: "a",
+      }),
+    ).toBe(DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS);
+  });
+});
+
+describe("lotWatcherLine", () => {
+  const pool = [{ userId: "p1" }, { userId: "me" }, { userId: "p3" }];
+  const live = (me: { userId: string | null; myTeamId: string | null }) => ({
+    me,
+    nominatedPlayer: { userId: "p1" },
+    available: pool,
+    currentBid: 8,
+    highBidderName: "Team 3",
+  });
+
+  it("talks to the player on the block about their own lot", () => {
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "p1", myTeamId: null }),
+      }),
+    ).toBe("Captains are bidding on you: Team 3 leads at $8.");
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "p1", myTeamId: null }),
+        highBidderName: null,
+      }),
+    ).toBe("Captains are bidding on you.");
+  });
+
+  it("tells a player still in the pool how many are left", () => {
+    expect(lotWatcherLine(live({ userId: "me", myTeamId: null }))).toBe(
+      "You're still available: 3 players left in the pool.",
+    );
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "me", myTeamId: null }),
+        available: [{ userId: "me" }],
+      }),
+    ).toBe("You're still available: 1 player left in the pool.");
+  });
+
+  it("says nothing to visitors, drafted players or captains", () => {
+    // Signed out, signed in but not in the pool (drafted, admin), a captain.
+    expect(lotWatcherLine(live({ userId: null, myTeamId: null }))).toBeNull();
+    expect(lotWatcherLine(live({ userId: "x", myTeamId: null }))).toBeNull();
+    expect(lotWatcherLine(live({ userId: "me", myTeamId: "t1" }))).toBeNull();
+  });
+
+  it("says nothing without a live lot", () => {
+    expect(
+      lotWatcherLine({
+        ...live({ userId: "me", myTeamId: null }),
+        nominatedPlayer: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("captainStatusLine", () => {
+  it("gives money left, seats to fill and the bid cap in one line", () => {
+    expect(captainStatusLine({ budget: 92, need: 3, maxBid: 90 })).toBe(
+      "$92 left · 3 open seats · max bid $90",
+    );
+    expect(captainStatusLine({ budget: 40, need: 1, maxBid: 40 })).toBe(
+      "$40 left · 1 open seat · max bid $40",
+    );
+  });
+
+  it("drops the cap once the roster is full", () => {
+    expect(captainStatusLine({ budget: 12, need: 0, maxBid: 0 })).toBe(
+      "$12 left · roster full",
+    );
+  });
+});
+
+describe("uncoveredRoles", () => {
+  it("lists the positions nobody on the roster plays, in position order", () => {
+    expect(uncoveredRoles([{ roles: "3,1" }, { roles: "1" }])).toEqual([
+      "2",
+      "4",
+      "5",
+    ]);
+  });
+
+  it("is empty when every position is covered", () => {
+    expect(uncoveredRoles([{ roles: "1,2,3" }, { roles: "4,5" }])).toEqual([]);
+  });
+
+  it("is empty when nobody has listed a role at all", () => {
+    // A captain who skipped the question would otherwise get five chips.
+    expect(uncoveredRoles([{ roles: "" }, { roles: null }])).toEqual([]);
+    expect(uncoveredRoles([])).toEqual([]);
+  });
+
+  it("ignores junk in the stored string", () => {
+    expect(uncoveredRoles([{ roles: "1, 2,9,x,3,4" }])).toEqual(["5"]);
+  });
+});
+
+describe("upcomingNominatorTeamId", () => {
+  // teamSize 3 (captain + 2 buys), $1 minimum. Draft order a, b, c.
+  const t = (id: string, rostered: number, budget = 50) => ({
+    id,
+    budget,
+    members: Array.from({ length: rostered }, (_, i) => ({ i })),
+  });
+  const draft = (over: Partial<Parameters<typeof upcomingNominatorTeamId>[0]> = {}) => ({
+    status: "IN_PROGRESS",
+    teams: [t("a", 1), t("b", 1), t("c", 1)],
+    teamSize: 3,
+    nominatorTeamId: "a",
+    available: [1, 2, 3, 4],
+    ...over,
+  });
+
+  it("names the team after the one nominating now, in draft order", () => {
+    expect(upcomingNominatorTeamId(draft())).toBe("b");
+    expect(upcomingNominatorTeamId(draft({ nominatorTeamId: "c" }))).toBe("a");
+  });
+
+  it("skips full and broke teams, like the server's rotation", () => {
+    expect(
+      upcomingNominatorTeamId(draft({ teams: [t("a", 1), t("b", 3), t("c", 1)] })),
+    ).toBe("c");
+    // b needs two players but has $1: it can't pay the minimum for both.
+    expect(
+      upcomingNominatorTeamId(draft({ teams: [t("a", 1), t("b", 1, 1), t("c", 1)] })),
+    ).toBe("c");
+  });
+
+  it("still answers during a pause", () => {
+    expect(upcomingNominatorTeamId(draft({ status: "PAUSED" }))).toBe("b");
+  });
+
+  it("is null when there is no next turn to announce", () => {
+    // Not running.
+    for (const status of ["NOT_STARTED", "COMPLETE"]) {
+      expect(upcomingNominatorTeamId(draft({ status }))).toBeNull();
+    }
+    // This turn takes the last player in the pool.
+    expect(upcomingNominatorTeamId(draft({ available: [1] }))).toBeNull();
+    // Only the team on the clock still needs players: it goes again.
+    expect(
+      upcomingNominatorTeamId(draft({ teams: [t("a", 1), t("b", 3), t("c", 3)] })),
+    ).toBeNull();
+    expect(upcomingNominatorTeamId(draft({ nominatorTeamId: null }))).toBeNull();
+  });
+});
+
+describe("keepsLinedUpPick", () => {
+  it("keeps a lined-up pick only when the turn passes to that captain", () => {
+    expect(keepsLinedUpPick({ nominatorTeamId: "t2", myTeamId: "t2" })).toBe(true);
+    expect(keepsLinedUpPick({ nominatorTeamId: "t3", myTeamId: "t2" })).toBe(false);
+    expect(keepsLinedUpPick({ nominatorTeamId: null, myTeamId: "t2" })).toBe(false);
+    // Not a captain: nothing to keep, even on a null-vs-null match.
+    expect(keepsLinedUpPick({ nominatorTeamId: null, myTeamId: null })).toBe(false);
+  });
+});
+
+describe("lineUpHint / upNextLine", () => {
+  it("names the lined-up player, or says how to line one up", () => {
+    expect(lineUpHint("Topson")).toBe("Lined up: Topson.");
+    expect(lineUpHint(null)).toBe("Tap a player in the pool to line them up.");
+    expect(upNextLine(null)).toBe(
+      "You're next to nominate. Tap a player in the pool to line them up.",
+    );
+    expect(upNextLine("Topson")).toBe("You're next to nominate. Lined up: Topson.");
+  });
+});
+
+describe("nominationWaitLine", () => {
+  it("tells a paused captain on the clock that the turn is theirs", () => {
+    expect(
+      nominationWaitLine({ paused: true, myTurn: true, nominatorName: "Team 4" }),
+    ).toBe(
+      "It's your turn to nominate. Your clock restarts when the admin unpauses the auction.",
+    );
+  });
+
+  it("names the team on the clock for everyone else", () => {
+    expect(
+      nominationWaitLine({ paused: true, myTurn: false, nominatorName: "Team 4" }),
+    ).toBe("Team 4 nominates when the admin unpauses the auction.");
+    expect(
+      nominationWaitLine({ paused: false, myTurn: false, nominatorName: "Team 4" }),
+    ).toBe("Waiting for Team 4 to nominate a player…");
+  });
+});
+
+describe("adminNominationTeam", () => {
+  const live = {
+    status: "IN_PROGRESS",
+    seasonStatus: "DRAFT",
+    nominatedUserId: null,
+    nominatorTeamId: "t2",
+    teams: [
+      { id: "t1", name: "Team 1", budget: 100, members: [{}] },
+      // Captain + 1 bought: 3 open seats at teamSize 5, so $2 stays reserved.
+      { id: "t2", name: "Team 2", budget: 40, members: [{}, {}] },
+    ],
+    teamSize: 5,
+    minBid: 1,
+    me: { isAdmin: true, canNominate: false },
+  };
+
+  it("offers the team on the clock, capped at THAT team's max bid", () => {
+    expect(adminNominationTeam(live)).toEqual({
+      id: "t2",
+      name: "Team 2",
+      maxBid: 38,
+    });
+  });
+
+  it("is only for admins who aren't nominating for their own team", () => {
+    expect(
+      adminNominationTeam({ ...live, me: { isAdmin: false, canNominate: false } }),
+    ).toBeNull();
+    // The admin IS the captain on the clock: their own nominate bar covers it.
+    expect(
+      adminNominationTeam({ ...live, me: { isAdmin: true, canNominate: true } }),
+    ).toBeNull();
+  });
+
+  it("needs a running nomination turn", () => {
+    expect(adminNominationTeam({ ...live, status: "PAUSED" })).toBeNull();
+    expect(adminNominationTeam({ ...live, status: "COMPLETE" })).toBeNull();
+    expect(
+      adminNominationTeam({ ...live, seasonStatus: "REGULAR_SEASON" }),
+    ).toBeNull();
+    expect(adminNominationTeam({ ...live, nominatedUserId: "p1" })).toBeNull();
+    expect(adminNominationTeam({ ...live, nominatorTeamId: null })).toBeNull();
+    expect(adminNominationTeam({ ...live, nominatorTeamId: "gone" })).toBeNull();
+  });
+
+  it("is withheld when the team on the clock can't open a lot", () => {
+    const broke = {
+      ...live,
+      teams: [{ id: "t2", name: "Team 2", budget: 2, members: [{}, {}] }],
+    };
+    expect(adminNominationTeam(broke)).toBeNull();
+  });
+});
+
+describe("nominationOrderLabel", () => {
+  it("numbers the opening nomination order from a 0-based index", () => {
+    expect([0, 1, 2, 3, 4, 5].map(nominationOrderLabel)).toEqual([
+      "Nominates 1st",
+      "Nominates 2nd",
+      "Nominates 3rd",
+      "Nominates 4th",
+      "Nominates 5th",
+      "Nominates 6th",
+    ]);
+  });
+
+  it("uses th for 11th to 13th and st/nd/rd after them", () => {
+    expect(nominationOrderLabel(10)).toBe("Nominates 11th");
+    expect(nominationOrderLabel(11)).toBe("Nominates 12th");
+    expect(nominationOrderLabel(12)).toBe("Nominates 13th");
+    expect(nominationOrderLabel(20)).toBe("Nominates 21st");
+    expect(nominationOrderLabel(21)).toBe("Nominates 22nd");
   });
 });

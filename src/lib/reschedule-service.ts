@@ -9,19 +9,29 @@ import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { clashesAfterRetime } from "./standin-service";
 import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
 import { weekReminderKey } from "./settings";
-import { invalidateMatchLineups } from "./match-lineups";
+import { invalidateMatchNudges } from "./announcement-marker";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
-import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import {
+  describeScrimConflict,
+  findConfirmedScrimConflict,
+  scrimConflictFix,
+} from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
 import { rescheduleDeadline } from "./schedule";
+import { roundLabelsForPost } from "./playoff-rounds";
+import { isSerializationConflict } from "./prisma-errors";
 
 export type AcceptedReschedule = {
+  /** For the announcement's match-page link. */
+  matchId: string;
   homeName: string;
   awayName: string;
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` ("Semifinal"), so the post names a playoff round. */
+  roundLabel: string | null;
   newTime: Date;
   /** The captain who PROPOSED it — they asked and have been waiting. */
   notifyUserId: string | null;
@@ -42,11 +52,15 @@ export type AcceptedReschedule = {
 // action layer does the Discord send, so a webhook failure can never affect
 // the proposal write itself.
 export type ProposedReschedule = {
+  /** For the announcement's link to the Reschedule card. */
+  matchId: string;
   homeName: string;
   awayName: string;
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` ("Semifinal"), so the post names a playoff round. */
+  roundLabel: string | null;
   proposedTime: Date;
   /**
    * The captain who owes an answer (the OTHER one). A proposal is a question
@@ -58,11 +72,15 @@ export type ProposedReschedule = {
 };
 
 export type DeclinedReschedule = {
+  /** For the announcement's link to the Reschedule card. */
+  matchId: string;
   homeName: string;
   awayName: string;
   week: number;
   isPlayoff: boolean;
   isTiebreaker?: boolean;
+  /** `matchRoundLabel` ("Semifinal"), so the post names a playoff round. */
+  roundLabel: string | null;
   /** The time that was refused — named so a channel that has seen several
    *  proposals go by can tell WHICH one this closes. */
   proposedTime: Date;
@@ -132,13 +150,36 @@ async function assertFitsLeagueCalendar(
     throw new UserFacingError(
       `That is within four hours of ${clash.homeName} vs ${clash.awayName} (${clash.label}) — pick another time`,
     );
-  if (match.phase !== MATCH_PHASE.REGULAR) return;
+  const deadline = await loadRescheduleDeadline(
+    tx,
+    match,
+    firstMatchNight,
+    Date.now(),
+  );
+  if (deadline && proposedTime.getTime() >= deadline.getTime())
+    throw new UserFacingError(
+      "Regular-season matches must be played before the playoffs start — pick an earlier time, or ask an admin",
+    );
+}
+
+/**
+ * The instant a regular-season match must move to BEFORE (exclusive), or null
+ * when there is no limit. One read for both the propose/accept check above
+ * and the match page's form hint, so the two can't disagree.
+ */
+export async function loadRescheduleDeadline(
+  db: Pick<Prisma.TransactionClient, "match">,
+  match: { seasonId: string; phase: string },
+  firstMatchNight: Date | null,
+  nowMs: number,
+): Promise<Date | null> {
+  if (match.phase !== MATCH_PHASE.REGULAR) return null;
   const [lastRegular, firstPostseason] = await Promise.all([
-    tx.match.aggregate({
+    db.match.aggregate({
       where: { seasonId: match.seasonId, phase: MATCH_PHASE.REGULAR },
       _max: { week: true },
     }),
-    tx.match.findFirst({
+    db.match.findFirst({
       where: {
         seasonId: match.seasonId,
         phase: { not: MATCH_PHASE.REGULAR },
@@ -148,17 +189,28 @@ async function assertFitsLeagueCalendar(
       select: { scheduledAt: true },
     }),
   ]);
-  const deadline = rescheduleDeadline({
+  return rescheduleDeadline({
     phase: match.phase,
     firstMatchNight,
     lastRegularWeek: lastRegular._max.week ?? 0,
     earliestPostseasonKickoffMs: firstPostseason?.scheduledAt?.getTime() ?? null,
-    nowMs: Date.now(),
+    nowMs,
   });
-  if (deadline && proposedTime.getTime() >= deadline.getTime())
-    throw new UserFacingError(
-      "Regular-season matches must be played before the playoffs start — pick an earlier time, or ask an admin",
-    );
+}
+
+/**
+ * The fixture's round name for a post (`matchRoundLabel`, "Semifinal"). Read
+ * after the write commits, never inside the SERIALIZABLE transaction: a
+ * display label has no business in its read set.
+ */
+async function postRoundLabel(match: {
+  id: string;
+  seasonId: string;
+  phase: string;
+  week: number;
+  bracketSlot: string | null;
+}): Promise<string | null> {
+  return (await roundLabelsForPost([match])).get(match.id) ?? null;
 }
 
 /** Create (or supersede) the match's open proposal. Captains only. */
@@ -175,8 +227,9 @@ export async function proposeReschedule(
   // the same instant each cancel what they can see and then both insert,
   // leaving TWO open proposals. The loser was a zombie the other captain could
   // accept days later, retiming the match out from under everyone.
+  let proposed;
   try {
-    return await prisma.$transaction(
+    proposed = await prisma.$transaction(
       async (tx) => {
         // These are authority reads, not presentation data: season turnover,
         // a phase advance, a result sync, or a captain replacement between a
@@ -233,15 +286,14 @@ export async function proposeReschedule(
         // a notification and approval task that cannot change anything.
         if (match.scheduledAt?.getTime() === proposedTime.getTime())
           throw new UserFacingError("That is already this match's kickoff");
-        if (
-          await hasConfirmedScrimConflict(tx, {
-            seasonId: match.seasonId,
-            teamIds: [match.homeTeamId, match.awayTeamId],
-            scheduledAt: proposedTime,
-          })
-        ) {
+        const scrimClash = await findConfirmedScrimConflict(tx, {
+          seasonId: match.seasonId,
+          teamIds: [match.homeTeamId, match.awayTeamId],
+          scheduledAt: proposedTime,
+        });
+        if (scrimClash) {
           throw new UserFacingError(
-            "One of these teams has a booked scrim within four hours of that time",
+            `That time is within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} first, or pick another time.`,
           );
         }
         await assertFitsLeagueCalendar(
@@ -260,6 +312,14 @@ export async function proposeReschedule(
         });
 
         return {
+          fixture: {
+            id: match.id,
+            seasonId: match.seasonId,
+            phase: match.phase,
+            week: match.week,
+            bracketSlot: match.bracketSlot,
+          },
+          matchId: match.id,
           homeName: match.homeTeam.name,
           awayName: match.awayTeam.name,
           week: match.week,
@@ -277,12 +337,14 @@ export async function proposeReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That match just changed — reload and try again",
       );
     throw error;
   }
+  const { fixture, ...announcement } = proposed;
+  return { ...announcement, roundLabel: await postRoundLabel(fixture) };
 }
 
 /**
@@ -325,6 +387,14 @@ export async function respondReschedule(
             throw new UserFacingError("That proposal is no longer open");
           return {
             accepted: false as const,
+            fixture: {
+              id: match.id,
+              seasonId: match.seasonId,
+              phase: match.phase,
+              week: match.week,
+              bracketSlot: match.bracketSlot,
+            },
+            matchId: match.id,
             homeName: match.homeTeam.name,
             awayName: match.awayTeam.name,
             week: match.week,
@@ -375,15 +445,14 @@ export async function respondReschedule(
         assertSaneProposedTime(request.proposedTime);
         if (match.scheduledAt?.getTime() === request.proposedTime.getTime())
           throw new UserFacingError("That is already this match's kickoff");
-        if (
-          await hasConfirmedScrimConflict(tx, {
-            seasonId: match.seasonId,
-            teamIds: [match.homeTeamId, match.awayTeamId],
-            scheduledAt: request.proposedTime,
-          })
-        ) {
+        const scrimClash = await findConfirmedScrimConflict(tx, {
+          seasonId: match.seasonId,
+          teamIds: [match.homeTeamId, match.awayTeamId],
+          scheduledAt: request.proposedTime,
+        });
+        if (scrimClash) {
           throw new UserFacingError(
-            "One of these teams now has a booked scrim within four hours of that time",
+            `That time is now within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} first, or propose another time.`,
           );
         }
         await assertFitsLeagueCalendar(
@@ -414,7 +483,9 @@ export async function respondReschedule(
           throw new UserFacingError(
             "That match is no longer awaiting play",
           );
-        await invalidateMatchLineups(tx, match.id, "The kickoff was rescheduled");
+        // A "we couldn't find your games" nudge queued for the old kickoff
+        // must not post about it.
+        await invalidateMatchNudges(tx, match.id);
 
         // Every RSVP answered the OLD night. Clear them and release the old
         // reminder marker atomically with the retime.
@@ -451,19 +522,24 @@ export async function respondReschedule(
           standinUserIds: standins.map((s) => s.standinUserId),
           matchId: match.id,
           seasonId: match.seasonId,
+          phase: match.phase,
+          bracketSlot: match.bracketSlot,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That proposal or match just changed — reload and try again",
       );
     throw error;
   }
 
-  if (!outcome.accepted) return outcome;
+  if (!outcome.accepted) {
+    const { fixture, ...declined } = outcome;
+    return { ...declined, roundLabel: await postRoundLabel(fixture) };
+  }
   try {
     options.onAcceptedCommit?.();
   } catch {
@@ -476,13 +552,23 @@ export async function respondReschedule(
   const standinClashes = await clashesAfterRetime(outcome.seasonId, [
     outcome.matchId,
   ]);
+  // The round's name for the post, read outside the SERIALIZABLE write.
+  const roundLabel = await postRoundLabel({
+    id: outcome.matchId,
+    seasonId: outcome.seasonId,
+    phase: outcome.phase,
+    week: outcome.week,
+    bracketSlot: outcome.bracketSlot,
+  });
   return {
     accepted: true,
+    matchId: outcome.matchId,
     homeName: outcome.homeName,
     awayName: outcome.awayName,
     week: outcome.week,
     isPlayoff: outcome.isPlayoff,
     isTiebreaker: outcome.isTiebreaker,
+    roundLabel,
     newTime: outcome.newTime,
     notifyUserId: outcome.notifyUserId,
     clearedRsvps: outcome.clearedRsvps,
@@ -517,7 +603,7 @@ export async function cancelReschedule(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034")
+    if (isSerializationConflict(error))
       throw new UserFacingError(
         "That proposal just changed — reload and try again",
       );

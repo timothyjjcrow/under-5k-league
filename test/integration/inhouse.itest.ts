@@ -73,6 +73,19 @@ vi.mock("@/lib/discord", async (importOriginal) => {
 // keep pick-up traffic out of the league-announcement channel.
 import { sendInhouseDiscordMessage } from "@/lib/discord";
 
+// `logAdminAction` resolves the actor from the session rather than a parameter,
+// and there is no cookie jar here to read — without this, the audit write fails
+// and is swallowed (best-effort by design), so no AdminAction row would exist
+// to assert on. Everything else in auth stays real; the inhouse service only
+// imports the SessionUser TYPE from it.
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  return {
+    ...actual,
+    getSessionUser: vi.fn(async () => ({ id: "admin-session", name: "Boss" })),
+  };
+});
+
 const mockRecent = vi.mocked(fetchRecentMatchIds);
 const mockMatch = vi.mocked(fetchOpenDotaMatch);
 const mockSend = vi.mocked(sendInhouseDiscordMessage);
@@ -548,6 +561,172 @@ describe("inhouse — starting the game", () => {
     const lobby = await lobbyByStatus(INHOUSE_STATUS.IN_PROGRESS);
     expect(lobby.startedById).toBe(players[3].user.id);
     expect(lobby.startedAt).not.toBeNull();
+  });
+});
+
+describe("inhouse — a game nobody pressed Start on", () => {
+  /** Queue → captains → draft, and STOP: teams are locked, nobody presses Start. */
+  async function runToReady(admin: SessionUser) {
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(players, "MMR");
+    await driveDraftToReady(admin);
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY);
+    return { players, lobby };
+  }
+
+  /** Move formation back so the READY scan window is open. */
+  const formedMinutesAgo = (lobbyId: string, minutes: number) =>
+    prisma.inhouseLobby.update({
+      where: { id: lobbyId },
+      data: { createdAt: new Date(Date.now() - minutes * 60_000) },
+    });
+
+  it("the background scan records it from READY, a few minutes after teams lock", async () => {
+    const admin = sessionFor(await makeUser("AdminNS1", "ADMIN"));
+    const { lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const MATCH_ID = 7100000101;
+    mockRecent.mockResolvedValue([MATCH_ID]);
+
+    // Fresh from the draft: the group is still hosting, so no scan yet.
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(mockRecent).not.toHaveBeenCalled();
+
+    await formedMinutesAgo(lobby.id, INHOUSE.DETECT_READY_MIN_MINUTES + 30);
+    const formed = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: MATCH_ID,
+        team1,
+        team2,
+        radiantWin: false,
+        startTime: Math.floor(formed.createdAt.getTime() / 1000) + 600,
+      }) as never,
+    );
+
+    expect(await maybeAutoDetectResult()).toBe(true);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    // Straight from READY to COMPLETED: Start was never pressed.
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.startedAt).toBeNull();
+    expect(done.winnerTeam).toBe(2);
+    expect(done.dotaMatchId).toBe(String(MATCH_ID));
+    // Elo landed exactly as it does for a started game.
+    expect(Object.keys(JSON.parse(done.eloDeltas))).toHaveLength(
+      INHOUSE.LOBBY_SIZE,
+    );
+  });
+
+  it("keeps the READY scan to the game's own window (never a game from before formation)", async () => {
+    const admin = sessionFor(await makeUser("AdminNS2", "ADMIN"));
+    const { lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    await formedMinutesAgo(lobby.id, INHOUSE.DETECT_READY_MIN_MINUTES + 5);
+    const formed = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    // Yesterday's game between the same ten is the only shared candidate.
+    mockRecent.mockResolvedValue([7100000102]);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100000102,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(formed.createdAt.getTime() / 1000) - 86_400,
+      }) as never,
+    );
+
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.READY);
+  });
+
+  it("a player can record it by match ID, or auto-detect it, without pressing Start", async () => {
+    const admin = sessionFor(await makeUser("AdminNS3", "ADMIN"));
+    const { players, lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+
+    // The room offers the manual result paths on the Set up screen.
+    const view = await getInhouseState(players[4].session, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
+    expect(view.me.canRecord).toBe(true);
+    expect(view.me.canStart).toBe(true);
+    expect(view.lobby?.scanOpensAt).toBe(
+      lobby.createdAt.getTime() + INHOUSE.DETECT_READY_MIN_MINUTES * 60_000,
+    );
+
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100000103,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }) as never,
+    );
+    expect((await recordMatch(players[4].session, "7100000103")).ok).toBe(true);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.winnerTeam).toBe(1);
+
+    // A late Start press after the result landed is told the truth.
+    const late = await startGame(players[0].session);
+    expect(late).toEqual({ ok: false, error: "No lobby is ready to start" });
+  });
+
+  it("the manual auto-detect works from READY too", async () => {
+    const admin = sessionFor(await makeUser("AdminNS4", "ADMIN"));
+    const { players, lobby } = await runToReady(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockRecent.mockResolvedValue([7100000104]);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7100000104,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 300,
+      }) as never,
+    );
+    expect((await autoDetectResult(players[1].session)).ok).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.COMPLETED);
+  });
+
+  it("an outsider still can't record a READY game", async () => {
+    const admin = sessionFor(await makeUser("AdminNS5", "ADMIN"));
+    await runToReady(admin);
+    const outsider = sessionFor(await makeUser("OutsiderNS5"));
+    expect(await recordMatch(outsider, "7100000105")).toEqual({
+      ok: false,
+      error: "Only players in the game can do that",
+    });
+    expect(mockMatch).not.toHaveBeenCalled();
+  });
+
+  it("with nothing being played, the record paths say so", async () => {
+    const session = sessionFor(await makeUser("NobodyNS6"));
+    expect(await recordMatch(session, "7100000106")).toEqual({
+      ok: false,
+      error: "There's no game to record right now",
+    });
+    expect(await autoDetectResult(session)).toEqual({
+      ok: false,
+      error: "There's no game to record right now",
+    });
   });
 });
 
@@ -1060,6 +1239,32 @@ describe("inhouse — misc guards", () => {
   });
 });
 
+describe("inhouse — cancelling a live game", () => {
+  it("needs no override, frees the slot, and logs the phase and players", async () => {
+    // A live game is cancelled with the same plain control as any other
+    // phase, and every successful admin cancel leaves an audit row.
+    const admin = sessionFor(await makeUser("Live Cancel Admin", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+
+    expect((await cancelLobby(admin)).ok).toBe(true);
+    const cancelled = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(cancelled.status).toBe(INHOUSE_STATUS.CANCELLED);
+    // The lobby itself says why it ended, for the admin list on history.
+    expect(cancelled.endReason).toBe(
+      "Cancelled by admin Live Cancel Admin during the game",
+    );
+
+    const log = await prisma.adminAction.findMany({
+      where: { action: "cancelLobby" },
+    });
+    expect(log).toHaveLength(1);
+    expect(log[0].summary).toContain(INHOUSE_STATUS.IN_PROGRESS);
+    expect(log[0].summary).toContain(`${INHOUSE.LOBBY_SIZE} player(s)`);
+  });
+});
+
 describe("inhouse — discord announcements", () => {
   const queuePings = () =>
     mockSend.mock.calls.filter(([m]) => m.includes("Inhouse queue")).length;
@@ -1073,6 +1278,14 @@ describe("inhouse — discord announcements", () => {
     expect(lobbyPings[0][0]).toContain("IH0");
     expect(lobbyPings[0][0]).toContain("IH9");
     expect(lobbyPings[0][0]).toContain("/inhouse");
+    // The ping carries this lobby's own accept deadline as a live countdown.
+    const lobby = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    expect(lobby.acceptEndsAt).not.toBeNull();
+    const epoch = Math.floor(lobby.acceptEndsAt!.getTime() / 1000);
+    expect(lobbyPings[0][0]).toContain(`<t:${epoch}:R>`);
+    expect(
+      lobby.acceptEndsAt!.getTime() - lobby.createdAt.getTime(),
+    ).toBeGreaterThanOrEqual(INHOUSE.ACCEPT_SECONDS * 1000 - 1000);
   });
 
   it("pings the milestone once — leave/rejoin churn can't spam it", async () => {
@@ -1615,6 +1828,7 @@ describe("inhouse — ready check", () => {
     expect((await declineMatch(players[8].session)).ok).toBe(true);
     const lobby = await prisma.inhouseLobby.findFirstOrThrow();
     expect(lobby.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(lobby.endReason).toBe("Declined by IH8");
 
     const queued = await prisma.inhouseQueueEntry.findMany();
     const byId = new Map(queued.map((q) => [q.userId, q]));
@@ -1709,9 +1923,10 @@ describe("inhouse — ready check", () => {
 
     // Any poll resolves it lazily.
     await getInhouseState(players[0].session);
-    expect((await prisma.inhouseLobby.findFirstOrThrow()).status).toBe(
-      INHOUSE_STATUS.CANCELLED,
-    );
+    const expired = await prisma.inhouseLobby.findFirstOrThrow();
+    expect(expired.status).toBe(INHOUSE_STATUS.CANCELLED);
+    // Named in queue order, so an admin can see who keeps missing checks.
+    expect(expired.endReason).toBe("IH7, IH8 and IH9 didn't accept in time");
 
     // Only the seven accepters are back in the queue, present.
     const queued = await prisma.inhouseQueueEntry.findMany();
@@ -1807,8 +2022,10 @@ describe("inhouse — ready check", () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
     await acceptMatch(players[0].session);
     expect((await cancelLobby(admin)).ok).toBe(true);
-    expect((await prisma.inhouseLobby.findFirstOrThrow()).status).toBe(
-      INHOUSE_STATUS.CANCELLED,
+    const cancelled = await prisma.inhouseLobby.findFirstOrThrow();
+    expect(cancelled.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(cancelled.endReason).toBe(
+      "Cancelled by admin Admin during the ready check",
     );
     const queued = await prisma.inhouseQueueEntry.findMany();
     expect(queued).toHaveLength(INHOUSE.LOBBY_SIZE);
@@ -2121,6 +2338,75 @@ describe("inhouse — Elo deltas + result announcement", () => {
     expect(state.lastResult).not.toBeNull();
     expect(state.lastResult!.myTeamWon).toBe(true);
     expect(state.lastResult!.eloDelta).toBe(deltas[winner.userId]);
+  });
+
+  it("keeps the newest game on the post-game banner when an older game's row is written later", async () => {
+    const admin = sessionFor(await makeUser("AdminRecency", "ADMIN"));
+
+    // Game A, recorded end to end.
+    const first = await runToInProgress(admin);
+    const firstSides = await teamAccounts(first.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000030,
+        ...firstSides,
+        radiantWin: true,
+        startTime: Math.floor(first.lobby.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    expect(
+      (await recordMatch(first.players[0].session, "7000000030")).ok,
+    ).toBe(true);
+
+    // Game B: the same ten run it back.
+    const users = first.players.map((p) => p.user);
+    for (const u of users) await joinQueue(sessionFor(u), 3000);
+    const sessById = new Map(users.map((u) => [u.id, sessionFor(u)]));
+    const formed = await lobbyByStatus(INHOUSE_STATUS.READY_CHECK);
+    for (const p of formed.players) await acceptMatch(sessById.get(p.userId)!);
+    for (const p of formed.players) {
+      await castVote(sessById.get(p.userId)!, "MMR");
+    }
+    await driveDraftToReady(admin);
+    await startGame(sessionFor(users[0]));
+    const second = await lobbyByStatus(INHOUSE_STATUS.IN_PROGRESS);
+    const secondSides = await teamAccounts(second.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000031,
+        ...secondSides,
+        radiantWin: false,
+        startTime: Math.floor(second.createdAt.getTime() / 1000) + 120,
+      }),
+    );
+    expect((await recordMatch(sessionFor(users[0]), "7000000031")).ok).toBe(
+      true,
+    );
+
+    const now = Date.now();
+    await prisma.inhouseLobby.update({
+      where: { id: first.lobby.id },
+      data: { completedAt: new Date(now - 60_000) },
+    });
+    await prisma.inhouseLobby.update({
+      where: { id: second.id },
+      data: { completedAt: new Date(now) },
+    });
+    // Any later write to a finished game (the Elo stamp, the result
+    // reconciler, a void) moves its updatedAt. Make the OLDER game provably
+    // newest by that mutable clock; the banner must still follow completedAt.
+    await prisma.inhouseLobby.update({
+      where: { id: first.lobby.id },
+      data: {
+        detectedAt: new Date(now + 1_000),
+        updatedAt: new Date(now + 60_000),
+      },
+    });
+
+    const state = await getInhouseState(sessionFor(users[0]), {
+      syncBoard: false,
+    });
+    expect(state.lastResult?.lobbyId).toBe(second.id);
   });
 
   it("announces the result to Discord exactly once, with the score and MVP", async () => {
@@ -2759,6 +3045,79 @@ describe("inhouse — an admin can void a wrong result", () => {
     ).toBe(INHOUSE_STATUS.CANCELLED);
   });
 
+  it("leaves an audit record and corrects the Discord result", async () => {
+    // The lobby reads CANCELLED like any abandoned game and the claim nulls the
+    // match id, so the AdminAction row is the only record naming the game.
+    const admin = sessionFor(await makeUser("Audit Void Admin", "ADMIN"));
+    const g = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(g.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7200000002,
+        team1,
+        team2,
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    expect((await recordMatch(g.players[0].session, "7200000002")).ok).toBe(
+      true,
+    );
+
+    mockSend.mockClear();
+    expect((await voidLastResult(admin)).ok).toBe(true);
+
+    const log = await prisma.adminAction.findMany({
+      where: { action: "voidLastResult" },
+    });
+    expect(log).toHaveLength(1);
+    expect(log[0].summary).toContain("7200000002");
+    // The lobby's own end reason keeps the match id the claim just cleared.
+    const voided = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: g.lobby.id },
+    });
+    expect(voided.dotaMatchId).toBeNull();
+    expect(voided.endReason).toBe(
+      "Result voided by admin Audit Void Admin (match 7200000002)",
+    );
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const msg = mockSend.mock.calls[0][0];
+    expect(msg).toContain("result has been voided");
+    // The anchor back to the post it corrects.
+    expect(msg).toContain("opendota.com/matches/7200000002");
+    // Nobody is being asked to do anything, so nothing may ring a phone.
+    expect(mockSend.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("a losing concurrent void writes no record and sends nothing", async () => {
+    // Post-claim ordering: two admins pressing Void must not produce two audit
+    // rows and two corrections for one voided game.
+    const admin = sessionFor(await makeUser("Race Void Admin", "ADMIN"));
+    const g = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(g.lobby.id);
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7200000003,
+        team1,
+        team2,
+        radiantWin: false,
+        startTime: Math.floor(Date.now() / 1000),
+      }),
+    );
+    expect((await recordMatch(g.players[0].session, "7200000003")).ok).toBe(
+      true,
+    );
+
+    mockSend.mockClear();
+    const results = await raceN(3, () => voidLastResult(admin));
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(
+      await prisma.adminAction.count({ where: { action: "voidLastResult" } }),
+    ).toBe(1);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
   it("voids the NAMED game when a lobbyId is given, not the newest", async () => {
     // The /inhouse/history control targets a specific row — a result landing
     // between the admin's look and their click must never redirect the void.
@@ -2797,7 +3156,7 @@ describe("inhouse — abandoned lobby teardown", () => {
   /** Backdate the field the abandonment floor is measured from. */
   const age = (
     lobbyId: string,
-    field: "updatedAt" | "startedAt",
+    field: "createdAt" | "startedAt",
     hours: number,
   ) =>
     prisma.inhouseLobby.update({
@@ -2843,13 +3202,25 @@ describe("inhouse — abandoned lobby teardown", () => {
     // …and its players are still locked out of the queue, correctly.
     expect((await joinQueue(players[0].session, 3000)).ok).toBe(false);
 
-    await age(ready.id, "updatedAt", INHOUSE.ABANDON_READY_HOURS + 1);
-    await getInhouseState(null); // any page view, by anyone, signed out included
-
+    // Past the old three-hour floor but inside the window a game being
+    // played gets: Start is optional, so this may be a game in progress.
+    await age(ready.id, "createdAt", 4);
+    await getInhouseState(null);
     expect(
       (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ready.id } }))
         .status,
-    ).toBe(INHOUSE_STATUS.CANCELLED);
+    ).toBe(INHOUSE_STATUS.READY);
+
+    await age(ready.id, "createdAt", INHOUSE.ABANDON_READY_HOURS + 1);
+    await getInhouseState(null); // any page view, by anyone, signed out included
+
+    const scrapped = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: ready.id },
+    });
+    expect(scrapped.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(scrapped.endReason).toBe(
+      `No result ${INHOUSE.ABANDON_READY_HOURS}h after the lobby formed`,
+    );
     // The single active-lobby slot is free again, so the feature works: the
     // ten who were stranded can queue, and a fresh lobby can form.
     expect(
@@ -2858,6 +3229,31 @@ describe("inhouse — abandoned lobby teardown", () => {
       }),
     ).toBe(0);
     expect((await joinQueue(players[0].session, 3000)).ok).toBe(true);
+  });
+
+  it("still scraps a READY lobby the result scan keeps touching", async () => {
+    // Every scan stamps detectedAt, which bumps updatedAt. The floor runs off
+    // formation, so a lobby that is scanned forever is still torn down.
+    const admin = sessionFor(await makeUser("AdminAB5", "ADMIN"));
+    const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 4000 - i * 50);
+    await voteAll(players, "MMR");
+    await driveDraftToReady(admin);
+    const ready = await lobbyByStatus(INHOUSE_STATUS.READY);
+    await prisma.inhouseLobby.update({
+      where: { id: ready.id },
+      data: {
+        createdAt: new Date(
+          Date.now() - (INHOUSE.ABANDON_READY_HOURS + 1) * 3_600_000,
+        ),
+        detectedAt: new Date(),
+      },
+    });
+
+    expect(await resolveAbandonedLobby()).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: ready.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
   });
 
   it("scraps an IN_PROGRESS lobby whose result never landed", async () => {
@@ -2879,6 +3275,9 @@ describe("inhouse — abandoned lobby teardown", () => {
       where: { id: lobby.id },
     });
     expect(after.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(after.endReason).toBe(
+      `No result ${INHOUSE.ABANDON_IN_PROGRESS_HOURS}h after the game started`,
+    );
     // Cancelled, not COMPLETED: there is no result, so nothing may reach the
     // ladder and no Discord result may be announced.
     expect(after.winnerTeam).toBeNull();
@@ -3099,6 +3498,87 @@ describe("inhouse — the played game is the truth", () => {
     const deltas = JSON.parse(done.eloDeltas) as Record<string, number>;
     expect(deltas[rowFor(swappedIn).userId]).toBeGreaterThan(0);
     expect(deltas[rowFor(swappedOut).userId]).toBeLessThan(0);
+  });
+
+  it("a request dying between the claim and the side fixes commits neither", async () => {
+    // The COMPLETED claim and the teamFixes loop are one transaction: a
+    // COMPLETED lobby still carrying the DRAFT roster must never be visible,
+    // because the result reconciler stamps Elo off InhouseLobbyPlayer.team and
+    // would credit a slot-swapped player with the side they did not play.
+    const admin = sessionFor(await makeUser("AdminSeam", "ADMIN"));
+    const { lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const swapper = team1[4]; // drafted team 1, actually plays Dire
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 992004,
+        team1: [...team1.slice(0, 4), team2[0]],
+        team2: [...team2.slice(1), swapper],
+        radiantWin: true,
+        startTime: Math.floor(Date.now() / 1000),
+      }) as never,
+    );
+
+    // Serverless, a dropped connection, a deploy mid-write: the request that
+    // won the claim is allowed to die before the loop under it lands.
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.applyResult.beforeTeamFixes", async () => {
+        fired = true;
+        throw new Error("the request died mid-claim");
+      }),
+    );
+    await expect(recordMatch(admin, "992004")).rejects.toThrow(
+      "the request died mid-claim",
+    );
+    expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+    setRaceHook(null);
+
+    // Everything rolled back together: no result, no announcement, and every
+    // player still on the side the draft put them.
+    const rolledBack = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: { include: { user: true } } },
+    });
+    expect(rolledBack.status).toBe(INHOUSE_STATUS.IN_PROGRESS);
+    expect(rolledBack.winnerTeam).toBeNull();
+    expect(rolledBack.completedAt).toBeNull();
+    expect(
+      rolledBack.players.find((p) => effectiveDotaAccountId(p.user) === swapper)
+        ?.team,
+    ).toBe(1);
+    expect(
+      await prisma.inhouseAnnouncement.count({ where: { lobbyId: lobby.id } }),
+    ).toBe(0);
+
+    // The OpenDota request already happened, so an immediate retry stays
+    // bounded by the provider cooldown even though the write rolled back.
+    await expect(recordMatch(admin, "992004")).resolves.toEqual({
+      ok: false,
+      error: expect.stringMatching(/wait about a minute/i),
+    });
+    await prisma.setting.update({
+      where: {
+        key: providerCooldownKey(
+          "open-dota-match-import",
+          admin.id,
+          `inhouse:${lobby.id}`,
+        ),
+      },
+      data: { value: new Date(0).toISOString() },
+    });
+
+    // Once it expires, the retry is byte-identical to the happy path.
+    expect((await recordMatch(admin, "992004")).ok).toBe(true);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      include: { players: { include: { user: true } } },
+    });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(
+      done.players.find((p) => effectiveDotaAccountId(p.user) === swapper)
+        ?.team,
+    ).toBe(2);
   });
 
   it("leaves an unswapped game's rosters exactly as drafted", async () => {

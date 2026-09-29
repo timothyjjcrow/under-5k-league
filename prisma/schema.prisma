@@ -96,6 +96,9 @@ model NewsPost {
   pinned    Boolean  @default(false)
   authorId  String?
   createdAt DateTime @default(now())
+  // Id of the Discord webhook message that announced this post, so an edit
+  // can update that copy and a delete can remove it. Null = never posted.
+  discordMessageId String?
 
   author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
 
@@ -607,6 +610,9 @@ model LeagueAnnouncement {
   markerEventId String?
   lastErrorCode String?
   sentAt        DateTime?
+  // Time-bound posts (a match-night reminder, a draft-night post) are dropped
+  // instead of sent once this passes. Null = the post never goes stale.
+  expiresAt     DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -742,10 +748,17 @@ model InhouseLobby {
   // JSON userId → Elo change, stamped once when the result lands — the room's
   // post-game banner reads this instead of re-deriving the ladder per poll.
   eloDeltas    String    @default("{}")
+  // Short plain-words reason a lobby ended without a result ("declined by X",
+  // "not started after 3h"), shown to admins. Null for completed games.
+  endReason    String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  // --- Betting (see the "Inhouse betting" section in CLAUDE.md) ---
+  // --- Betting: REMOVED (docs/features/inhouse.md, "Cred betting (removed)";
+  // the design is docs/archive/inhouse-betting-design.md). Nothing in src
+  // reads or writes betsCloseAt, betSettlement or betDeltas; they stay as
+  // history. matchStartTime, in the middle of them, is LIVE. The comments
+  // below describe the removed feature. ---
   // When wagering closes. Written ONCE, in the same data block as
   // `status: READY`, and by no other path — unlike `startedAt`, which an
   // interested party can push forward by simply pressing Start later. The
@@ -754,6 +767,7 @@ model InhouseLobby {
   // null = this lobby has no bets and will never be swept.
   // PENDING (set by the first bet) | SETTLED | REFUNDED | REVERSED
   betSettlement  String?
+  // LIVE: the played game's start time on result pages and in the archive.
   // The PLAYED game's own start, straight from OpenDota. Stamped inside
   // applyResult's existing COMPLETED claim so the lazy settlement resolver can
   // enforce the late-bet void from COLUMNS ALONE — the request that held the
@@ -852,6 +866,9 @@ model InhouseLobbyPlayer {
   @@index([userId])
 }
 
+// REMOVED feature, kept as history (see the betting note on InhouseLobby):
+// nothing in src reads or writes the three Cred models below; only database
+// resets delete their rows.
 // One wager, on the bettor's OWN team, in the 45s after teams lock. IMMUTABLE
 // once placed — no raise, no withdraw, no side switch. That immutability is
 // what lets @@unique([lobbyId, userId]) be the double-spend guard: there is

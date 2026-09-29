@@ -152,8 +152,10 @@ test("a tied playoff place requires a BO1 weekend before the bracket starts", as
   await expectFinalTracker(page, [winnerName], [loserName]);
   await page.goto("/admin#playoffs");
   await start.click();
+  // Once seeded, the card's repairs (Reset playoffs among them) fold into
+  // "Fix the bracket" under the series.
   await expect(
-    page.getByRole("button", { name: "Reset playoffs", exact: true }),
+    page.locator("#playoffs summary", { hasText: "Fix the bracket" }),
   ).toBeVisible();
   await page.goto("/schedule#playoff-bracket");
   await expect(
@@ -166,6 +168,13 @@ test("a tied playoff place requires a BO1 weekend before the bracket starts", as
   await expect(page.getByTestId("tiebreaker-match-details")).toContainText(
     "1 of 1 series complete",
   );
+  // A finished tiebreaker folds to one line of results once the playoffs start.
+  const settledSummary = extraWeek.locator(":scope > summary");
+  await expect(settledSummary).toContainText(`${winnerName} took seed`);
+  await expect(settledSummary).toContainText(`${loserName} missed the playoffs`);
+  await expect(bracket).toBeHidden();
+  await settledSummary.click();
+  await expect(bracket).toBeVisible();
   assertNoErrors();
 });
 
@@ -245,7 +254,7 @@ for (const resetFinal of [false, true]) {
     await bracket.screenshot({ path: testInfo.outputPath("three-team-bracket-opening-mobile.png") });
     await opening.click();
     await expect(page.getByText("Playoff tiebreaker · Best of 1.", { exact: true })).toBeVisible();
-    const fullBracketLink = page.getByRole("link", { name: "View full tiebreaker bracket →", exact: true });
+    const fullBracketLink = page.getByRole("link", { name: "View full tiebreaker bracket", exact: true });
     await expect(fullBracketLink).toHaveAttribute("href", "/schedule#tiebreakers");
     await expect(fullBracketLink).toBeVisible();
     await expectNoHorizontalOverflow(page, "three-team opening match context");
@@ -388,7 +397,7 @@ for (const resetFinal of [false, true]) {
     await expectFinalTracker(page, [firstPlace, secondPlace], [thirdPlace]);
     await page.goto("/admin#playoffs");
     await start.click();
-    await expect(page.getByRole("button", { name: "Reset playoffs", exact: true })).toBeVisible();
+    await expect(page.locator("#playoffs summary", { hasText: "Fix the bracket" })).toBeVisible();
     await page.goto("/schedule#playoff-bracket");
     await expect(matchDetails).toContainText(`${totalGames} of ${totalGames} series complete`);
     await expect(matchDetails).not.toContainText("Week 7");
@@ -405,6 +414,14 @@ for (const resetFinal of [false, true]) {
     await expect(page.locator("#playoff-bracket")).toContainText(firstPlace);
     await expect(page.locator("#playoff-bracket")).toContainText(secondPlace);
     await expect(page.locator("#playoff-bracket")).not.toContainText(thirdPlace);
+    // Settled, the bracket folds to its one-line result; open it for the screenshot.
+    const settledSummary = extraWeek.locator(":scope > summary");
+    await expect(settledSummary).toContainText(
+      `${firstPlace} took seed 3, ${secondPlace} took seed 4; ${thirdPlace} missed the playoffs.`,
+    );
+    await expect(bracket).toBeHidden();
+    await settledSummary.click();
+    await expect(bracket).toBeVisible();
     await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page, "three-team tiebreaker schedule");
     await extraWeek.screenshot({ path: testInfo.outputPath("three-team-schedule-mobile.png") });

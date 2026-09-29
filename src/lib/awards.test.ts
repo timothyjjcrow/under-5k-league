@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeSeasonAwards, type AwardGame } from "./awards";
 import { fantasyPoints } from "./fantasy";
+import { PER_GAME_MIN_GAMES, summarizePlayerGames, topBy } from "./player-stats";
 
 // Helper to build a game line.
 function line(
@@ -45,6 +46,7 @@ describe("computeSeasonAwards", () => {
     expect(mvp?.detail).toBe("over 4 games");
     expect(mvp?.blurb).toContain("per game");
     expect(mvp?.blurb).toContain("Player of the Week");
+    expect(mvp?.blurb).toContain("impact points");
     expect(mvp?.blurb).not.toMatch(/most wins/i);
   });
 
@@ -121,14 +123,88 @@ describe("computeSeasonAwards", () => {
     expect(keys).toContain("mvp");
   });
 
-  it("awards Kill Leader by total kills", () => {
-    const games: AwardGame[] = [
-      game("m1", true, 20, 10, [line("alice", 1, true, 10, 2, 3), line("bob", 2, false, 4, 8, 1)]),
-      game("m2", false, 10, 20, [line("alice", 1, true, 12, 3, 2), line("bob", 2, false, 5, 4, 6)]),
-    ];
-    const kl = computeSeasonAwards(games).find((a) => a.key === "killLeader");
-    expect(kl?.userId).toBe("alice");
-    expect(kl?.value).toBe("22 kills");
+  // /leaders ranks kills and assists PER GAME with a flat 3-game minimum; the
+  // recap's awards must name the same players. On totals, "volume" (more
+  // series played) won both.
+  it("awards Kill Leader and Playmaker per game, not on season totals", () => {
+    const games: AwardGame[] = [1, 2, 3, 4, 5].map((i) =>
+      game(`m${i}`, true, 20, 10, [
+        line("volume", 1, true, 8, 2, 8), // 5 games: 40 kills, 40 assists
+        ...(i <= 3 ? [line("sharp", 2, false, 10, 2, 11)] : []), // 3 games: 30, 33
+      ]),
+    );
+    const awards = computeSeasonAwards(games);
+    const kl = awards.find((a) => a.key === "killLeader");
+    expect(kl?.userId).toBe("sharp");
+    expect(kl?.value).toBe("10.0 kills/game");
+    expect(kl?.detail).toBe("30 kills in 3 games");
+    expect(kl?.blurb).toBe("Most kills per game (min 3 games)");
+    const pm = awards.find((a) => a.key === "playmaker");
+    expect(pm?.userId).toBe("sharp");
+    expect(pm?.value).toBe("11.0 assists/game");
+    expect(pm?.detail).toBe("33 assists in 3 games");
+  });
+
+  it("needs 3 games for Kill Leader and Playmaker, however early in the season", () => {
+    const twoGames: AwardGame[] = [1, 2].map((i) =>
+      game(`m${i}`, true, 20, 10, [line("early", 1, true, 20, 1, 20)]),
+    );
+    const keys = computeSeasonAwards(twoGames).map((a) => a.key);
+    expect(keys).not.toContain("killLeader");
+    expect(keys).not.toContain("playmaker");
+    // A 2-game monster can't outrank a qualified player either.
+    const games: AwardGame[] = [1, 2, 3].map((i) =>
+      game(`m${i}`, true, 20, 10, [
+        line("steady", 1, true, 4, 2, 4),
+        ...(i <= 2 ? [line("cameo", 2, false, 25, 0, 25)] : []),
+      ]),
+    );
+    const awards = computeSeasonAwards(games);
+    expect(awards.find((a) => a.key === "killLeader")?.userId).toBe("steady");
+    expect(awards.find((a) => a.key === "playmaker")?.userId).toBe("steady");
+  });
+
+  it("names the same kills and assists leaders as the /leaders boards", () => {
+    // A tie on the one-decimal average the boards show (10/3 and 13/4 both
+    // read 3.3) goes to more games, as on the boards; a float comparison
+    // would hand it to "ann".
+    const kills: Record<string, number[]> = {
+      ann: [3, 3, 4],
+      ben: [3, 3, 3, 4],
+      cat: [9, 1],
+    };
+    const games: AwardGame[] = [0, 1, 2, 3].map((i) =>
+      game(
+        `m${i}`,
+        true,
+        20,
+        10,
+        Object.entries(kills)
+          .filter(([, perGame]) => i < perGame.length)
+          .map(([id, perGame], slot) =>
+            line(id, slot + 1, true, perGame[i], 2, perGame[i]),
+          ),
+      ),
+    );
+    const entries = Object.keys(kills).map((id) => ({
+      id,
+      summary: summarizePlayerGames(
+        games.flatMap((g) =>
+          g.lines
+            .filter((l) => l.userId === id)
+            .map((l) => ({ ...l, radiantWin: g.radiantWin })),
+        ),
+      ),
+    }));
+    const awards = computeSeasonAwards(games);
+    for (const [key, board] of [
+      ["killLeader", "killsPerGame"],
+      ["playmaker", "assistsPerGame"],
+    ] as const) {
+      const [top] = topBy(entries, board, { minGames: PER_GAME_MIN_GAMES });
+      expect(top.id).toBe("ben");
+      expect(awards.find((a) => a.key === key)?.userId).toBe(top.id);
+    }
   });
 
   it("picks the most-picked hero as Signature Hero", () => {

@@ -19,16 +19,23 @@
 //   node scripts/mutation-guard.mjs --discover   # full sweep, rewrites the baseline
 //   node scripts/mutation-guard.mjs --discover --only ID_SUBSTRING
 //   node scripts/mutation-guard.mjs              # verify the baseline (what CI runs)
+//   node scripts/mutation-guard.mjs --static     # inventory + baseline only, no Postgres
 //
 // Verify mode first requires EVERY live claim to appear exactly once in the
 // baseline as either PROTECTED or a reviewed EQUIVALENT. It then re-mutates
 // only the protected claims, so it costs ~1 suite run each rather than one per
-// claim in the repo. It fails when:
+// claim in the repo. A protected claim whose baseline `killers` entry names
+// the test file that failed in the last full --discover runs that ONE file
+// first; only when it does not fail does the whole suite run (see
+// trustedKiller and measureMutant in ./mutation-claims.mjs). It fails when:
 //   * a protected claim is no longer caught  → a test that protected it regressed
 //   * a protected claim has DISAPPEARED      → the guard itself was removed
 //   * a live claim is absent from the baseline → discovery was not reviewed
 //   * the baseline is malformed, duplicated, stale, or only partly classified
-// Raise the ratchet by writing a test and re-running --discover.
+// Raise the ratchet by writing a test and re-running --discover. A guard that
+// only MOVED (its function renamed or moved to another file) keeps its
+// classification through a baseline `renames` entry, see resolveRenames in
+// ./mutation-claims.mjs, which also holds the claim-id rules.
 //
 // MUST run against Postgres (PG_TEST_URL). Several of these claims are only
 // caught by RACED tests, and on SQLite those race calls serialize — the mutant
@@ -48,7 +55,14 @@ import {
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { assertPostgresTestUrl } from "./test-db-safety.mjs";
-import { discoverThrottleSqlClaims } from "./mutation-sql-claims.mjs";
+import {
+  discoverClaims,
+  killerFromReport,
+  measureMutant,
+  resolveKillers,
+  resolveRenames,
+  trustedKiller,
+} from "./mutation-claims.mjs";
 
 const BASELINE = "test/mutation-baseline.json";
 
@@ -65,7 +79,7 @@ const EQUIVALENT = new Set([
   // createSeason's broad archive runs after the transaction has read the full
   // active set. Dropping `isActive: true` merely writes false over rows already
   // archived; its one newly created row does not exist until the next statement.
-  "src/app/actions/admin.ts::createSeason::isActive#1",
+  "src/app/actions/admin-season.ts::createSeason::isActive#1",
   // importGameForMatch reads Season.fantasyLockedAt through the fresh Match
   // graph and stamps that same Season row in its SERIALIZABLE import. A rival
   // lock either precedes the snapshot or forces P2034, so the null predicate
@@ -78,7 +92,7 @@ const EQUIVALENT = new Set([
   // guarded WHERE stays as defense in depth and documents the transition; the
   // two-start test (including the existing-row/after-abort branch) pins the
   // actual one-winner invariant and its one Discord announcement.
-  "src/app/actions/admin.ts::startDraft::status#1",
+  "src/app/actions/admin-captains-draft.ts::startDraft::status#1",
   // undoLastSale reads Draft.status and nominatedUserId, performs its refund,
   // and reopens that same Draft row inside one SERIALIZABLE transaction. A
   // poller opening a lot in the gap changes the row and forces Undo to abort
@@ -113,17 +127,16 @@ const EQUIVALENT = new Set([
   // a competing close conflicts, while an already-closed row fails preflight.
   // These guards still document intent and defend inconsistent external data.
   "src/lib/roster-history.ts::closeRosterTenure::closedAt#1",
-  "src/lib/roster-history.ts::checkActor::closedAt+openKey#1",
-  // Identity correction, its fresh administrator claim, lineup confirmation,
-  // provider-failure bookkeeping and import-progress commands read the exact
-  // row before their same-row write in SERIALIZABLE. Concurrent source/role/
-  // revision changes therefore force rollback without the copied predicates.
+  "src/lib/roster-history.ts::backfillRosterTenures::closedAt+openKey#1",
+  // Identity correction, its fresh administrator claim, provider-failure
+  // bookkeeping and import-progress commands read the exact row before their
+  // same-row write in SERIALIZABLE. Concurrent source/role/revision changes
+  // therefore force rollback without the copied predicates.
   // Their write locks and fresh reads remain essential. In contrast, detached
   // provider success/decision snapshots and participant backfill source checks
   // are independently protected predicates, not covered by this equivalence.
   "src/lib/game-identity-correction.ts::correctGameIdentity::players#1",
   "src/lib/participant-admin.ts::claimParticipantAdmin::role#1",
-  "src/lib/match-lineups.ts::confirmMatchLineup::logisticsRevision+scheduleRevision+status#1",
   "src/lib/import-candidates.ts::recordImportFetchFailure::revision#1",
   "src/app/actions/import-progress.ts::changeImportCandidate::isActive+status#1",
   "src/app/actions/import-progress.ts::changeImportCandidate::attempts+payload+revision+status#1",
@@ -156,6 +169,14 @@ const EQUIVALENT = new Set([
   // deleting the copied status predicate cannot make a stale cancellation
   // commit. The predicate remains explicit state-machine documentation.
   "src/lib/scrim-service.ts::cancelScrim::status#1",
+  // yieldScrimsToOfficialFixture runs inside the playoff build's SERIALIZABLE
+  // transaction and cancels exactly the ids it just read as SCHEDULED there.
+  // A rival that moves one of them (a game import making it LIVE, a captain
+  // cancelling) either commits before the snapshot, so the read never selects
+  // it, or after it, so the UPDATE of that row fails with P2034 whether or not
+  // it carries the status predicate. SQLite serializes the whole transaction.
+  // The count check stays as the explicit rollback if that ever changes.
+  "src/lib/scrim-service.ts::yieldScrimsToOfficialFixture::status#1",
   // respondReschedule and cancelReschedule now read the PENDING request and
   // conditionally write that same row inside one SERIALIZABLE transaction.
   // Their same-row write conflicts make the copied `status: PENDING` WHERE
@@ -175,49 +196,54 @@ const EQUIVALENT = new Set([
   // change forces P2034 even when the copied WHERE fields are removed. Their
   // deterministic seam/race tests assert rollback and the final state; keeping
   // the predicates in production still documents the exact transition.
-  "src/app/actions/admin.ts::recordResult::awayScore+forfeit+homeScore+status+winnerTeamId#1",
-  "src/app/actions/admin.ts::reopenMatch::games+season+status#1",
-  "src/app/actions/admin.ts::setSeasonPhase::isActive+status#1",
-  "src/app/actions/admin.ts::setWeekNight::scheduledAt+status#1",
+  "src/app/actions/admin-schedule-results.ts::recordResult::awayScore+forfeit+homeScore+status+winnerTeamId#1",
+  "src/app/actions/admin-schedule-results.ts::reopenMatch::games+season+status#1",
+  "src/app/actions/admin-season.ts::setSeasonPhase::isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::setWeekNight::scheduledAt+status#1",
   // These actions likewise read the authoritative Season, Match, Registration
   // or Team rows and write those same rows inside SERIALIZABLE transactions.
   // Pre-snapshot changes fail the fresh checks; post-read changes force P2034,
   // so copied state fields cannot change a committed outcome. Count checks
   // still detect missing identity rows. The predicates remain useful
   // transition documentation and defense in depth.
-  "src/app/actions/admin.ts::reinstateSignup::status+type#1",
-  "src/app/actions/admin.ts::setRegistrationMmr::status+type#1",
-  "src/app/actions/admin.ts::randomizeDraftOrder::draftOrder#1",
-  "src/app/actions/admin.ts::startDraft::captainId+draftOrder#1",
-  "src/app/actions/admin.ts::startDraft::isActive+status#1",
-  "src/app/actions/admin.ts::generateSchedule::isActive#1",
-  "src/app/actions/admin.ts::reopenMatch::championTeamId+isActive+status#1",
-  "src/app/actions/admin.ts::setWeekNight::isActive#1",
-  "src/app/actions/admin.ts::setMatchTime::scheduledAt+status#1",
-  "src/app/actions/admin.ts::setDraftSettings::isActive+status+updatedAt#1",
-  "src/app/actions/admin.ts::setDraftNight::isActive+status#1",
+  "src/app/actions/admin-roster.ts::reinstateSignup::status+type#1",
+  "src/app/actions/admin-roster.ts::setRegistrationMmr::status+type#1",
+  "src/app/actions/admin-captains-draft.ts::randomizeDraftOrder::draftOrder#1",
+  "src/app/actions/admin-captains-draft.ts::startDraft::captainId+draftOrder#1",
+  "src/app/actions/admin-captains-draft.ts::startDraft::isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::generateSchedule::isActive#1",
+  "src/app/actions/admin-schedule-results.ts::reopenMatch::championTeamId+isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::setWeekNight::isActive#1",
+  "src/app/actions/admin-schedule-results.ts::setMatchTime::scheduledAt+status#1",
+  "src/app/actions/admin-season.ts::setDraftSettings::isActive+status+updatedAt#1",
+  "src/app/actions/admin-captains-draft.ts::setDraftNight::isActive+status#1",
+  // changeCaptain re-reads the Team, Season and Draft inside its SERIALIZABLE
+  // transaction before this write (seam test in change-captain.itest.ts), so a
+  // rival Start draft or captain change either fails those fresh checks or
+  // forces a serialization failure. The WHERE is defense in depth.
+  "src/app/actions/admin-captains-draft.ts::changeCaptain::captainId+season#1",
   // transferCaptaincy's Team captain predicate has the same same-row
   // SERIALIZABLE protection. Its first flag write merely writes false over
   // already-false members (the count is discarded and TeamMember has no
   // updatedAt); its second re-asserts the false state established immediately
   // beforehand. All three predicates remain as repair intent/defense in depth.
-  "src/app/actions/admin.ts::transferCaptaincy::captainId#1",
-  "src/app/actions/admin.ts::transferCaptaincy::isCaptain#1",
-  "src/app/actions/admin.ts::transferCaptaincy::isCaptain#2",
+  "src/app/actions/admin-captains-draft.ts::transferCaptaincy::captainId#1",
+  "src/app/actions/admin-captains-draft.ts::transferCaptaincy::isCaptain#1",
+  "src/app/actions/admin-captains-draft.ts::transferCaptaincy::isCaptain#2",
   // removeGame reads Season (including fantasy/champion state) through the
   // fresh Game graph and writes that same Season row in its SERIALIZABLE
   // transaction. Repeat mutation verification proved discovery's apparent
   // kills were incidental: both mutants survive without weakening the actual
   // correction/uncrown invariants. The predicates remain defense in depth.
-  "src/app/actions/admin.ts::removeGame::fantasyLockedAt#1",
-  "src/app/actions/admin.ts::removeGame::championTeamId+isActive+status#1",
+  "src/app/actions/admin-schedule-results.ts::removeGame::fantasyLockedAt#1",
+  "src/app/actions/admin-schedule-results.ts::removeGame::championTeamId+isActive+status#1",
   // These completion/offseason claims all read the same Season row and then
   // write it inside one SERIALIZABLE transaction. A pre-snapshot lifecycle
   // change fails the fresh checks; a post-read change forces P2034 even if the
   // copied fields are removed. Their guards remain explicit state-machine
   // documentation. Separate tests pin cancellation-vs-Resume, cancellation-
   // vs-bracket-build/crown, one-winner reactivation, and completed handoffs.
-  "src/app/actions/admin.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
+  "src/app/actions/admin-season.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
   "src/lib/season.ts::archiveCompletedSeason::championTeamId+isActive+status#1",
   "src/lib/season.ts::reactivateSeason::isActive+updatedAt#1",
   // advancePlayoffBracket's crown likewise performs a fresh Season read plus
@@ -245,13 +271,13 @@ const EQUIVALENT = new Set([
   "src/lib/inhouse-announcement-outbox.ts::deliverInhouseAnnouncements::status#2",
   // reconcileOneResult reads the exact InhouseLobby source and performs this
   // claim in one SERIALIZABLE transaction. Any change to the copied result,
-  // completion, box-score or settlement fields is either visible to the fresh
-  // preflight or creates a same-row write conflict and P2034; the retry then
-  // re-reads and skips or rebuilds. Removing these copied predicates therefore
-  // cannot commit stale Elo or content. The separate RESULT-row claim is NOT
+  // completion or box-score fields is either visible to the fresh preflight or
+  // creates a same-row write conflict and P2034; the retry then re-reads and
+  // skips or rebuilds. Removing these copied predicates therefore cannot
+  // commit stale Elo or content. The separate RESULT-row claim is NOT
   // equivalent: an already-SENDING row is valid at a fresh snapshot, and its
   // PENDING guard is what keeps the leased payload immutable.
-  "src/lib/inhouse-announcement-outbox.ts::reconcileOneResult::betSettlement+boxScore+completedAt+direScore+durationSecs+radiantScore+radiantTeam+status+winnerTeam#1",
+  "src/lib/inhouse-announcement-outbox.ts::reconcileOneResult::boxScore+completedAt+direScore+durationSecs+radiantScore+radiantTeam+status+winnerTeam#1",
   // Every league-outbox transition below retains the exact random claimToken
   // created atomically with SENDING. Success, retry, source cancellation and
   // lease recovery always clear or replace that token; no reachable row in a
@@ -263,6 +289,12 @@ const EQUIVALENT = new Set([
   "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#3",
   "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#4",
   "src/lib/league-announcement-outbox.ts::deliverLeagueAnnouncements::status#5",
+  // resumeLeagueAnnouncements makes waiting posts due now after an admin saves
+  // a webhook. availableAt is read only for PENDING rows (the outbox's
+  // eligibility and the automation gate's wake time); a SENDING row is timed
+  // by claimedAt and a terminal row is never read again. Stamping availableAt
+  // onto those rows with the predicate deleted therefore changes nothing.
+  "src/lib/league-announcement-outbox.ts::resumeLeagueAnnouncements::status#1",
   // applyPick's ADVANCE claim re-asserts `status: DRAFTING`. It cannot be
   // falsified: the TURN claim a few statements earlier UPDATEs the same lobby
   // row inside the same interactive transaction, so Postgres holds that row's
@@ -276,28 +308,6 @@ const EQUIVALENT = new Set([
   // that test ever goes red this entry has expired — the claim is a real gap
   // again and needs a real test.
   "src/lib/inhouse-service.ts::applyPick::status#1",
-  // placeInhouseBet's WRITE 4 arms the sweeper with
-  // `where: { id, betSettlement: null }`. Deleting `betSettlement: null`
-  // cannot be observed, because WRITE 4 is UNREACHABLE unless WRITE 3 — the
-  // confirm claim, three statements earlier — matched, and WRITE 3 requires
-  // `status: { in: [READY, IN_PROGRESS] }`. That excludes every value the
-  // column could hold besides null and PENDING: SETTLED is only written for a
-  // COMPLETED lobby, REFUNDED/REVERSED only for a CANCELLED one, and both
-  // statuses make WRITE 3 match zero rows and THROW. So the blind write is
-  // either PENDING over null (identical) or PENDING over PENDING (a no-op).
-  //
-  // The one interleaving worth ruling out explicitly, since Postgres
-  // re-snapshots per statement even inside one transaction and WRITE 3 locks
-  // the BET row, not the lobby: an admin cancel committing between WRITE 3 and
-  // WRITE 4, followed by the sweeper stamping REFUNDED. It cannot happen —
-  // the sweeper only touches lobbies already at PENDING, which is the very
-  // thing WRITE 4 sets, and if an EARLIER bettor had armed it then this
-  // bettor's WRITE 3 would have failed on the CANCELLED status first.
-  //
-  // Unlike applyPick::status#1 this rests on static control flow rather than a
-  // lock, so it needs no pinning test — but if WRITE 3's status filter is ever
-  // widened, this entry has expired and the claim is a real gap again.
-  "src/lib/inhouse-bet-service.ts::placeInhouseBet::betSettlement#1",
 ]);
 
 // Every production file that holds a guarded updateMany claim. A read-only
@@ -312,7 +322,6 @@ const FILES = [
   "src/lib/game-participants.ts",
   "src/lib/game-identity-correction.ts",
   "src/lib/participant-admin.ts",
-  "src/lib/match-lineups.ts",
   "src/lib/import-candidates.ts",
   "src/lib/inhouse-service.ts",
   "src/lib/match-import.ts",
@@ -322,12 +331,15 @@ const FILES = [
   "src/lib/playoff-service.ts",
   "src/lib/result-sync-service.ts",
   "src/lib/inhouse-board-service.ts",
-  "src/lib/inhouse-bet-service.ts",
   "src/lib/settings.ts",
   "src/lib/season.ts",
-  "src/app/actions/admin.ts",
+  "src/app/actions/admin-season.ts",
+  "src/app/actions/admin-captains-draft.ts",
+  "src/app/actions/admin-roster.ts",
+  "src/app/actions/admin-schedule-results.ts",
   "src/app/actions/import-progress.ts",
   "src/app/actions/news.ts",
+  "src/lib/news-rollover.ts",
   "src/app/actions/registration.ts",
   "src/lib/honors-service.ts",
   "src/lib/announcement-marker.ts",
@@ -335,231 +347,15 @@ const FILES = [
   "src/lib/inhouse-announcement-outbox.ts",
   "src/lib/league-announcement-outbox.ts",
   "src/lib/side-game-claims.ts",
+  "src/lib/team-identity-service.ts",
   "src/lib/users.ts",
+  "src/lib/player-data-refresh.ts",
 ];
 
-// Keys that merely IDENTIFY the row. Everything else in a WHERE is state, and
-// state is what makes the write a claim.
-const IDENTITY = new Set([
-  "id",
-  "seasonId",
-  "lobbyId",
-  "userId",
-  "matchId",
-  "teamId",
-  "key",
-  "draftId",
-  "gameId",
-  "dotaMatchId",
-  "registrationId",
-  "steamId",
-  "discordId",
-]);
-
-/**
- * Skip a `//` or block comment starting at `i`, returning the index to resume
- * scanning from (or `i` when there is no comment there).
- *
- * BOTH scanners below need this and neither had it, which cost a red CI and a
- * long diagnosis. They treat `'` as a string delimiter, so an ordinary prose
- * comment inside a claim's object literal — "the lobby's", "don't", "the
- * bettor's" — put an ODD number of apostrophes in their path, opened a phantom
- * string, and desynced brace matching. The claim did not read as weakened: it
- * vanished from discovery entirely, tripping the "a protected claim has
- * DISAPPEARED" alarm against a baseline that still listed it.
- *
- * That failure mode is worse than it sounds, because it is SILENT in the other
- * direction too. A `--discover` run after such an edit simply records the
- * smaller claim set and reports all-clear, so the guard a comment happened to
- * hide is dropped from the ratchet with nothing to say so. Comments in this
- * repo are deliberately long and prose-heavy, so this was going to recur.
- */
-function skipComment(src, i) {
-  if (src[i] !== "/") return i;
-  if (src[i + 1] === "/") {
-    const nl = src.indexOf("\n", i);
-    return nl === -1 ? src.length : nl;
-  }
-  if (src[i + 1] === "*") {
-    const end = src.indexOf("*/", i + 2);
-    return end === -1 ? src.length : end + 1;
-  }
-  return i;
-}
-
-/** The balanced {...} beginning at `open`. */
-function block(src, open) {
-  let d = 0,
-    inStr = null,
-    esc = false;
-  for (let i = open; i < src.length; i++) {
-    const c = src[i];
-    if (esc) {
-      esc = false;
-      continue;
-    }
-    if (inStr) {
-      if (c === "\\") esc = true;
-      else if (c === inStr) inStr = null;
-      continue;
-    }
-    const j = skipComment(src, i);
-    if (j !== i) {
-      i = j;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      inStr = c;
-      continue;
-    }
-    if (c === "{") d++;
-    else if (c === "}") {
-      d--;
-      if (d === 0) return [open, i + 1];
-    }
-  }
-  return null;
-}
-
-/** Top-level `key: value` spans inside an object literal. */
-function topKeys(src, s, e) {
-  const out = [];
-  let d = 0,
-    inStr = null,
-    esc = false;
-  for (let i = s + 1; i < e - 1; i++) {
-    const c = src[i];
-    if (esc) {
-      esc = false;
-      continue;
-    }
-    if (inStr) {
-      if (c === "\\") esc = true;
-      else if (c === inStr) inStr = null;
-      continue;
-    }
-    // Same reason as in `block` — and this scanner ALSO mis-read key names out
-    // of comment prose, which is how `refundLobbyBets`' signature acquired a
-    // phantom `write` key that no WHERE ever contained.
-    const j = skipComment(src, i);
-    if (j !== i) {
-      i = j;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      inStr = c;
-      continue;
-    }
-    if (c === "{" || c === "[" || c === "(") d++;
-    else if (c === "}" || c === "]" || c === ")") d--;
-    else if (d === 0) {
-      const m = /^([A-Za-z_$][\w$]*)\s*:/.exec(src.slice(i, i + 40));
-      if (m && (i === s + 1 || /[\s,{]/.test(src[i - 1]))) {
-        let j = i + m[0].length,
-          dd = 0,
-          st = null,
-          es = false;
-        for (; j < e - 1; j++) {
-          const cc = src[j];
-          if (es) {
-            es = false;
-            continue;
-          }
-          if (st) {
-            if (cc === "\\") es = true;
-            else if (cc === st) st = null;
-            continue;
-          }
-          // Third scanner, same fix — and the most dangerous of the three to
-          // leave broken: this one decides where a predicate's value ENDS, i.e.
-          // the `drop` span `mutate()` physically deletes. A desync here cuts
-          // the wrong source text, so the "mutant" tested is not the mutant the
-          // report names.
-          const jj = skipComment(src, j);
-          if (jj !== j) {
-            j = jj;
-            continue;
-          }
-          if (cc === '"' || cc === "'" || cc === "`") {
-            st = cc;
-            continue;
-          }
-          if (cc === "{" || cc === "[" || cc === "(") dd++;
-          else if (cc === "}" || cc === "]" || cc === ")") {
-            if (dd === 0) break;
-            dd--;
-          } else if (cc === "," && dd === 0) break;
-        }
-        out.push({ key: m[1], start: i, end: j });
-        i = j;
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * The function a claim sits in. Anchoring IDs to this is load-bearing: a
- * file-wide ordinal SHIFTS when a claim is removed, so deleting a guard made
- * its id silently re-bind to a different claim further down and the ratchet
- * reported all-clear. (Caught by sabotage-testing the ratchet itself.)
- */
-function enclosingFn(src, offset) {
-  const decl =
-    /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g;
-  let name = "<top>";
-  for (let m; (m = decl.exec(src));) {
-    if (m.index > offset) break;
-    name = m[1] ?? m[2] ?? name;
-  }
-  return name;
-}
-
-/**
- * Claims are identified by file + enclosing function + their state-key
- * SIGNATURE + an ordinal within that function — never by line number, which
- * every unrelated edit above them would churn.
- */
+/** Every guarded claim in one source file, plus its source text. */
 function discoverFile(file) {
   const src = readFileSync(file, "utf8");
-  const found = discoverThrottleSqlClaims(file, src);
-  const seen = new Map();
-  let from = 0;
-  for (;;) {
-    const at = src.indexOf("updateMany(", from);
-    if (at === -1) break;
-    from = at + 11;
-    const argOpen = src.indexOf("{", at);
-    if (argOpen === -1) continue;
-    const arg = block(src, argOpen);
-    if (!arg) continue;
-    const where = topKeys(src, arg[0], arg[1]).find((p) => p.key === "where");
-    if (!where) continue;
-    const wOpen = src.indexOf("{", where.start + 6);
-    if (wOpen === -1 || wOpen > where.end) continue;
-    const wb = block(src, wOpen);
-    if (!wb) continue;
-    const state = topKeys(src, wb[0], wb[1]).filter(
-      (k) => !IDENTITY.has(k.key),
-    );
-    if (state.length === 0) continue;
-    const sig = state
-      .map((s) => s.key)
-      .sort()
-      .join("+");
-    const fn = enclosingFn(src, at);
-    const scope = `${fn}::${sig}`;
-    const ord = (seen.get(scope) ?? 0) + 1;
-    seen.set(scope, ord);
-    found.push({
-      id: `${file}::${fn}::${sig}#${ord}`,
-      file,
-      line: src.slice(0, at).split("\n").length,
-      drop: state.map((s) => [s.start, s.end]),
-    });
-    from = arg[1];
-  }
-  return { src, found };
+  return { src, found: discoverClaims(file, src) };
 }
 
 function discoverAll() {
@@ -627,6 +423,8 @@ function sorted(values) {
  * Validate the baseline as a closed inventory, not a best-effort scorecard.
  * Every live claim must have exactly one classification; every recorded id
  * must still be live; and "equivalent" must match the reviewed source list.
+ * The checks after the shape checks judge the lists with any `renames`
+ * applied (see resolveRenames).
  */
 function validateBaseline(base, liveClaims) {
   const problems = [];
@@ -654,18 +452,20 @@ function validateBaseline(base, liveClaims) {
     return problems;
   }
 
-  const protectedIds = base.protected;
-  const equivalentIds = base.equivalent;
+  const liveIds = liveClaims.map((claim) => claim.id);
+  const renamed = resolveRenames(base, liveIds);
+  problems.push(...renamed.problems);
+  const protectedIds = renamed.protected;
+  const equivalentIds = renamed.equivalent;
   for (const id of duplicates(protectedIds)) {
     problems.push(`protected contains a duplicate: ${id}`);
   }
   for (const id of duplicates(equivalentIds)) {
     problems.push(`equivalent contains a duplicate: ${id}`);
   }
-  if (!sorted(protectedIds)) problems.push("protected IDs are not sorted");
-  if (!sorted(equivalentIds)) problems.push("equivalent IDs are not sorted");
+  if (!sorted(base.protected)) problems.push("protected IDs are not sorted");
+  if (!sorted(base.equivalent)) problems.push("equivalent IDs are not sorted");
 
-  const liveIds = liveClaims.map((claim) => claim.id);
   const duplicateLive = duplicates(liveIds);
   for (const id of duplicateLive) {
     problems.push(`live discovery produced a duplicate ID: ${id}`);
@@ -705,6 +505,7 @@ function validateBaseline(base, liveClaims) {
         `${protectedIds.length + equivalentIds.length} entries`,
     );
   }
+  problems.push(...resolveKillers(base, protectedIds).problems);
   return problems;
 }
 
@@ -741,13 +542,17 @@ function vitestReport(result) {
   }
 }
 
-/** Run Vitest without a shell so process failures cannot masquerade as kills. */
-function runSuite({ bail = false } = {}) {
+/**
+ * Run Vitest without a shell so process failures cannot masquerade as kills.
+ * `files` narrows the run to those test files; empty runs the whole suite.
+ */
+function runSuite({ bail = false, files = [] } = {}) {
   const result = spawnSync(
     process.execPath,
     [
       VITEST,
       "run",
+      ...files,
       "--config",
       "vitest.pg.config.mts",
       ...(bail ? ["--bail=1"] : []),
@@ -762,7 +567,7 @@ function runSuite({ bail = false } = {}) {
     },
   );
   if (result.error || result.signal) {
-    return { kind: "infrastructure", result };
+    return { kind: "infrastructure", result, report: null };
   }
   const report = vitestReport(result);
   if (
@@ -771,14 +576,14 @@ function runSuite({ bail = false } = {}) {
     report.numFailedTests === 0 &&
     report.numTotalTests > 0
   ) {
-    return { kind: "pass", result };
+    return { kind: "pass", result, report };
   }
   // Vitest also exits 1 for transform/import/configuration failures. Only an
   // actual failed test is behavioral evidence that the suite killed a mutant.
   if (result.status === 1 && report && report.numFailedTests > 0) {
-    return { kind: "test-failure", result };
+    return { kind: "test-failure", result, report };
   }
-  return { kind: "infrastructure", result };
+  return { kind: "infrastructure", result, report };
 }
 
 function stopForInfrastructure(context, run) {
@@ -821,50 +626,57 @@ function stopForInvalidMutant(claim, diagnostics) {
   process.exit(2);
 }
 
-/** Whether the suite NOTICED the mutation (i.e. the guard is protected). */
-function suiteCatches(claim) {
+/**
+ * Whether the suite NOTICED the mutation (i.e. the guard is protected), and
+ * which test file killed it. `killer` (verify mode only) is the claim's
+ * recorded killer, run first; see measureMutant.
+ */
+function suiteCatches(claim, killer = null) {
   const original = readFileSync(claim.file, "utf8");
   const { found } = discoverFile(claim.file);
   const live = found.find((c) => c.id === claim.id);
-  if (!live) {
-    return {
-      caught: false,
-      missing: true,
-      infrastructure: null,
-      invalidMutation: null,
-    };
-  }
+  const outcome = {
+    caught: false,
+    missing: false,
+    infrastructure: null,
+    invalidMutation: null,
+    killer: null,
+    via: null,
+    fallback: null,
+  };
+  if (!live) return { ...outcome, missing: true };
   const mutant = mutate(original, live);
   const invalidMutation = mutationSyntaxErrors(claim.file, mutant);
-  if (invalidMutation) {
-    return {
-      caught: false,
-      missing: false,
-      infrastructure: null,
-      invalidMutation,
-    };
-  }
+  if (invalidMutation) return { ...outcome, invalidMutation };
   writeFileSync(claim.file, mutant);
   try {
-    const run = runSuite({ bail: true });
+    const measured = measureMutant(killer, {
+      run: (files) => runSuite({ bail: true, files }),
+      exists: existsSync,
+    });
+    const { run, via, fallback } = measured;
     if (run.kind === "infrastructure") {
-      return {
-        caught: false,
-        missing: false,
-        infrastructure: run,
-        invalidMutation: null,
-      };
+      return { ...outcome, infrastructure: run, via, fallback };
     }
+    const caught = run.kind === "test-failure";
     return {
-      caught: run.kind === "test-failure",
-      missing: false,
-      infrastructure: null,
-      invalidMutation: null,
+      ...outcome,
+      caught,
+      killer: caught ? killerFromReport(run.report, process.cwd()) : null,
+      via,
+      fallback,
     };
   } finally {
     writeFileSync(claim.file, original);
   }
 }
+
+// Why verify had to run the whole suite after a recorded killer.
+const FALLBACK_NOTES = {
+  missing: "is no longer on disk",
+  survived: "no longer fails with this guard deleted",
+  infrastructure: "did not finish cleanly on its own",
+};
 
 // ---------------------------------------------------------------------------
 const discover = process.argv.includes("--discover");
@@ -903,6 +715,16 @@ if (shardArg !== -1) {
 }
 if (discover && shard) {
   console.error("--shard is a verify-mode option and cannot be combined with --discover");
+  process.exit(2);
+}
+// `--static` stops after the source-inventory and baseline checks, which need
+// no database. CI's always-required test job runs it, because the mutation
+// shards skip themselves when the release classifier reports
+// needs_mutation=false, and a claim added to a page would otherwise go
+// unnoticed until the nightly verify.
+const staticOnly = process.argv.includes("--static");
+if (staticOnly && (discover || shard)) {
+  console.error("--static checks the committed baseline and takes no other mode");
   process.exit(2);
 }
 
@@ -948,10 +770,31 @@ if (!discover) {
     console.error(`${BASELINE} is not an exact guarded-claim inventory:`);
     for (const problem of baselineProblems) console.error(`  - ${problem}`);
     console.error(
-      "Review every new or changed classification, then run a full --discover.",
+      "Review every new or changed classification, then run a full --discover.\n" +
+        "A guard that only MOVED (its function was renamed or moved to another\n" +
+        'file) can carry its classification with a "renames" entry instead:\n' +
+        '  "renames": { "<old id>": "<new id>" }',
     );
     process.exit(2);
   }
+  // From here on the protected/equivalent lists name live ids only: every
+  // rename is applied, so verify re-mutates each moved guard at its new home.
+  const effective = resolveRenames(base, [...allLiveIds]);
+  base = {
+    ...base,
+    protected: effective.protected,
+    equivalent: effective.equivalent,
+    killers: resolveKillers(base, effective.protected).killers,
+  };
+}
+
+if (staticOnly) {
+  console.log(
+    `✔ ${allClaims.length} live claims in ${FILES.length} files match ${BASELINE}: ` +
+      `${base.protected.length} protected (${base.killers.size} with a recorded killer), ` +
+      `${base.equivalent.length} reviewed equivalent.`,
+  );
+  process.exit(0);
 }
 
 try {
@@ -982,12 +825,22 @@ if (discover) {
     `Sweeping ${claims.length} guarded claims (one suite run each)…\n`,
   );
   const protectedIds = [];
+  const killerById = new Map();
   let previousProtected = new Set();
   if (existsSync(BASELINE)) {
     try {
       const previous = JSON.parse(readFileSync(BASELINE, "utf8"));
       if (Array.isArray(previous.protected)) {
         previousProtected = new Set(previous.protected);
+        // A guard that only moved keeps its protected status: its renamed id
+        // is not "newly caught" and needs no second confirming run. Invalid
+        // renames are ignored rather than trusted.
+        const renamed = Array.isArray(previous.equivalent)
+          ? resolveRenames(previous, [...allLiveIds])
+          : null;
+        if (renamed && renamed.problems.length === 0) {
+          previousProtected = new Set(renamed.protected);
+        }
       }
     } catch {
       // Discovery is the repair path for a stale or malformed baseline. With
@@ -1023,14 +876,18 @@ if (discover) {
       if (!second.caught) caught = false;
     }
     console.log(
-      `  [${caught ? "PROTECTED  " : "unprotected"}] (${i + 1}/${claims.length}) ${c.id}  (${c.file}:${c.line})${caught && rechecked ? " (confirmed twice)" : ""}`,
+      `  [${caught ? "PROTECTED  " : "unprotected"}] (${i + 1}/${claims.length}) ${c.id}  (${c.file}:${c.line})${caught && rechecked ? " (confirmed twice)" : ""}` +
+        (caught && first.killer ? `  killed by ${first.killer}` : ""),
     );
     if (rechecked && !caught) {
       console.log(
         "    [FLAKY KILL] first run failed but the mutant survived confirmation; not promoted",
       );
     }
-    if (caught) protectedIds.push(c.id);
+    if (caught) {
+      protectedIds.push(c.id);
+      if (first.killer) killerById.set(c.id, first.killer);
+    }
   }
   const equivalentCount = claims.filter((c) => EQUIVALENT.has(c.id)).length;
   const unprotectedCount =
@@ -1057,6 +914,7 @@ if (discover) {
     );
     process.exit(1);
   }
+  protectedIds.sort();
   writeFileSync(
     BASELINE,
     JSON.stringify(
@@ -1066,10 +924,17 @@ if (discover) {
           "`node scripts/mutation-guard.mjs --discover` (needs PG_TEST_URL). " +
           "CI requires every live claim to be exactly classified, re-mutates " +
           "every protected claim, and fails if one regresses or disappears. " +
+          "`killers` names the test file that failed first for each protected " +
+          "claim; verify runs it before the whole suite. " +
           "Raise the ratchet by writing a race test and re-running.",
         totalClaims: claims.length,
         equivalent: [...EQUIVALENT].sort(),
-        protected: protectedIds.sort(),
+        protected: protectedIds,
+        killers: Object.fromEntries(
+          protectedIds
+            .filter((id) => killerById.has(id))
+            .map((id) => [id, killerById.get(id)]),
+        ),
       },
       null,
       2,
@@ -1096,6 +961,8 @@ console.log(
     ? `Verifying shard ${shard.i}/${shard.n}: ${mine.length} of ${base.protected.length} protected claims…\n`
     : `Verifying ${mine.length} protected claims (of ${claims.length} found; baseline saw ${base.totalClaims})…\n`,
 );
+let decidedByKiller = 0;
+const killerAlone = new Map();
 for (const id of mine) {
   const claim = byId.get(id);
   if (!claim) {
@@ -1105,17 +972,35 @@ for (const id of mine) {
     );
     continue;
   }
-  const measured = suiteCatches(claim);
+  const recorded = base.killers.get(id) ?? null;
+  // Runs before the mutant is written: the proof is on unmutated source.
+  const { killer, untrusted } = trustedKiller(recorded, {
+    run: (files) => runSuite({ bail: true, files }),
+    exists: existsSync,
+    cache: killerAlone,
+  });
+  const measured = suiteCatches(claim, killer);
+  const fallbackNote = untrusted
+    ? `    [killer untrusted] ${recorded} ${untrusted === "test-failure" ? "fails" : "does not finish cleanly"} ` +
+      "on its own against unmutated source, so the whole suite decided"
+    : measured.fallback
+      ? `    [killer ${measured.fallback}] ${killer} ${FALLBACK_NOTES[measured.fallback]}, ` +
+        "so the whole suite decided (a full --discover refreshes killers)"
+      : null;
   if (measured.invalidMutation) {
     stopForInvalidMutant(claim, measured.invalidMutation);
   }
   if (measured.infrastructure) {
+    if (fallbackNote) console.log(fallbackNote);
     stopForInfrastructure(`verifying ${id}`, measured.infrastructure);
   }
   const { caught } = measured;
+  if (measured.via === "killer") decidedByKiller++;
   console.log(
-    `  [${caught ? "ok         " : "REGRESSED  "}] ${id}  (${claim.file}:${claim.line})`,
+    `  [${caught ? "ok         " : "REGRESSED  "}] ${id}  (${claim.file}:${claim.line})` +
+      (caught && measured.killer ? `  killed by ${measured.killer}` : ""),
   );
+  if (fallbackNote) console.log(fallbackNote);
   if (!caught) {
     failures.push(
       `${id} (${claim.file}:${claim.line}) — deleting its guard no longer fails any test`,
@@ -1134,7 +1019,8 @@ console.log(
     `${unprotectedCount} unprotected; ${claims.length} total` +
     (shard
       ? ` — this shard verified ${mine.length}/${base.protected.length} protected claims.`
-      : "."),
+      : ".") +
+    ` ${decidedByKiller} of ${mine.length} were decided by their recorded killer alone.`,
 );
 
 if (failures.length) {

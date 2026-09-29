@@ -7,6 +7,7 @@ import { DOTA_MATCH_KIND } from "@/lib/constants";
 import { seasonSettingScopeWhere } from "@/lib/settings";
 import { storedDotaAccountId } from "@/lib/dota-account";
 import { serializeSeasonExport } from "@/lib/season-export-response";
+import { isSerializationConflict } from "@/lib/prisma-errors";
 
 export const dynamic = "force-dynamic";
 const NO_STORE = { "cache-control": "no-store" };
@@ -275,7 +276,7 @@ export async function GET(req: NextRequest) {
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return NextResponse.json(
         {
           error:

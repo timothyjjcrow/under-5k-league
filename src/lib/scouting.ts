@@ -1,8 +1,10 @@
-// Pre-match scouting report: an opponent dossier — per-player hero pools, a
-// team-wide threat board, and a pace profile — rolled up from stored
-// box-score lines. Pure + DB-free: the match-preview page parses each Game's
-// stored player JSON into ScoutGames, this does the math. (Declared-role
-// coverage comes from pool-stats.ts's roleCoverage.)
+// Pre-match scouting report: an opponent dossier — per-player comfort picks
+// and a team-wide threat board — rolled up from stored box-score lines. Pure +
+// DB-free: the match-preview page parses each Game's stored player JSON into
+// ScoutGames, this does the math. (Declared-role coverage comes from
+// pool-stats.ts's roleCoverage.)
+
+import type { PubHero } from "./pub-stats";
 
 export type ScoutLine = {
   /** Mapped league user, or null for an unmapped account. */
@@ -103,8 +105,8 @@ export type ThreatBoard = {
  * Team-wide hero threat board over every line by any of `userIds`. Each line
  * is a pick (two teammates on one hero in a game would count as 2 — can't
  * happen side-split anyway). `minPicks` is an adaptive floor —
- * max(2, ceil(totalTeamPicks / 25)) — mirroring the metaMinPicks philosophy:
- * a win rate needs a few picks behind it before it's a threat signal.
+ * max(2, ceil(totalTeamPicks / 25)): a win rate needs a few picks behind it
+ * before it's a threat signal.
  */
 export function threatBoard(
   userIds: string[],
@@ -148,70 +150,6 @@ export function threatBoard(
   return { rows, contested, minPicks };
 }
 
-export type PaceProfile = {
-  games: number;
-  winAvgMins: number | null;
-  lossAvgMins: number | null;
-  longestMins: number | null;
-  shortestMins: number | null;
-};
-
-/**
- * How long this team's games run, split by result. Only games where at least
- * one of `userIds` has a line AND durationSecs > 0 qualify — an unreported
- * duration is not data (same rule as the record book). The team's side in a
- * game is the majority side of their lines (ties lean radiant); a win is that
- * side winning. Minutes are 1-decimal; a side with no games averages null.
- */
-export function paceProfile(
-  userIds: string[],
-  games: ScoutGame[],
-): PaceProfile {
-  const ids = new Set(userIds);
-  let count = 0;
-  let winSecs = 0;
-  let winGames = 0;
-  let lossSecs = 0;
-  let lossGames = 0;
-  let longest: number | null = null;
-  let shortest: number | null = null;
-
-  for (const game of games) {
-    if (game.durationSecs <= 0) continue;
-    let radiant = 0;
-    let dire = 0;
-    for (const line of game.lines) {
-      if (line.userId === null || !ids.has(line.userId)) continue;
-      if (line.isRadiant) radiant++;
-      else dire++;
-    }
-    if (radiant + dire === 0) continue;
-
-    count++;
-    const onRadiant = radiant >= dire;
-    const won = onRadiant === game.radiantWin;
-    if (won) {
-      winSecs += game.durationSecs;
-      winGames++;
-    } else {
-      lossSecs += game.durationSecs;
-      lossGames++;
-    }
-    if (longest === null || game.durationSecs > longest)
-      longest = game.durationSecs;
-    if (shortest === null || game.durationSecs < shortest)
-      shortest = game.durationSecs;
-  }
-
-  return {
-    games: count,
-    winAvgMins: winGames > 0 ? round1(winSecs / winGames / 60) : null,
-    lossAvgMins: lossGames > 0 ? round1(lossSecs / lossGames / 60) : null,
-    longestMins: longest === null ? null : round1(longest / 60),
-    shortestMins: shortest === null ? null : round1(shortest / 60),
-  };
-}
-
 /**
  * True when there is literally no game data behind the dossier — every hero
  * pool empty and no hero ever picked — so the UI can render a "they're a
@@ -222,4 +160,59 @@ export function dossierEmpty(
   board: ThreatBoard,
 ): boolean {
   return pool.every((rows) => rows.length === 0) && board.contested.length === 0;
+}
+
+/**
+ * Games a hero needs, from one player or across a team, before scouting shows
+ * it. This league plays a handful of games per player a season, so a single
+ * game is noise: "comfort picks" of ×1 ×1 ×1 for all ten players, and a
+ * "most picked" list of one-offs.
+ */
+export const SCOUT_MIN_GAMES = 2;
+
+export type ComfortPicks =
+  | { source: "league"; heroes: HeroPoolRow[] }
+  /** Most-played heroes in public games, from the stored OpenDota snapshot:
+   *  shown only for a player with no hero at SCOUT_MIN_GAMES in league games. */
+  | { source: "pubs"; heroes: PubHero[] };
+
+/**
+ * A player's comfort picks: their league heroes with at least SCOUT_MIN_GAMES
+ * games, most played first. With none, their stored pub top heroes stand in,
+ * labelled as pubs by the caller. Null when there is nothing to show.
+ */
+export function comfortPicks(
+  pool: HeroPoolRow[],
+  pubHeroes: PubHero[] | null | undefined,
+  limit = 3,
+): ComfortPicks | null {
+  const league = pool.filter((row) => row.games >= SCOUT_MIN_GAMES);
+  if (league.length > 0) {
+    return { source: "league", heroes: league.slice(0, limit) };
+  }
+  const pubs = (pubHeroes ?? []).filter((hero) => hero.games > 0);
+  return pubs.length > 0 ? { source: "pubs", heroes: pubs.slice(0, limit) } : null;
+}
+
+export type ScoutThreats = {
+  /** True: the ban board (heroes they WIN on). False: plain most-picked. */
+  ranked: boolean;
+  rows: ThreatRow[];
+};
+
+/**
+ * The team heroes a scouting card shows. Only heroes they actually win on
+ * (50%+ at the board's floor) earn "ban board" framing: a 0-2 hero is not a
+ * threat. With none, it falls back to their most-picked heroes, and only ones
+ * picked at least SCOUT_MIN_GAMES times.
+ */
+export function threatList(board: ThreatBoard, limit = 5): ScoutThreats {
+  const threats = board.rows.filter((row) => row.winRate >= 50);
+  if (threats.length > 0) return { ranked: true, rows: threats.slice(0, limit) };
+  return {
+    ranked: false,
+    rows: board.contested
+      .filter((row) => row.picks >= SCOUT_MIN_GAMES)
+      .slice(0, limit),
+  };
 }

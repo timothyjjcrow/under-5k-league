@@ -60,16 +60,13 @@ async function main() {
   // Order matters for FK constraints.
   //
   // These relationless or SetNull rows survive `user.deleteMany()` and every
-  // other line here, so they
-  // have to be named: InhouseCreditEntry and AdminAction carry NO foreign key
-  // at all — deliberately, since a staking record and an audit record have to
-  // outlive the account they describe (see the model comments in
+  // other line here, so they have to be named: InhouseCreditEntry (the ledger
+  // of the retired Cred betting feature, whose tables are kept) and
+  // AdminAction carry NO foreign key at all — deliberately, since those
+  // records outlive the account they describe (see the model comments in
   // schema.prisma) — and NewsPost's author is `onDelete: SetNull`, so the post
-  // outlives its author too. Nothing cascades any of them.
-  //
-  // Missing, the ledger leaked STAKE/REFUND rows pointing at deleted users
-  // straight through a reseed, and /inhouse rendered a Cred board with betting
-  // history on a database that had just been wiped.
+  // outlives its author too. Nothing cascades any of them, and left out they
+  // would point at deleted users straight through a reseed.
   await prisma.inhouseCreditEntry.deleteMany();
   await prisma.adminAction.deleteMany();
   await prisma.newsPost.deleteMany();

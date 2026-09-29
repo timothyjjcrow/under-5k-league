@@ -5,7 +5,9 @@ const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) 
 import { tiebreakerSlot, type TiebreakerGroup } from "@/lib/tiebreakers";
 import {
   buildTiebreakerBrackets,
+  tiebreakerResultLine,
   type TiebreakerBracketFixture,
+  type TiebreakerBracketView,
   type TiebreakerBracketTeam,
 } from "./tiebreaker-bracket-view";
 
@@ -235,3 +237,51 @@ describe("complete tiebreaker bracket presentation", () => {
 function regularResult(home: string, away: string) {
   return regular(home, away, 2, 0);
 }
+
+describe("finished tiebreaker summary line", () => {
+  const bracket = (
+    placements: [string | null, number, boolean][],
+    status: TiebreakerBracketView["status"] = "resolved",
+  ): TiebreakerBracketView => ({
+    key: "k", format: "BO1_SINGLE_ELIMINATION", round: 1, bestOf: 1,
+    teamIds: [], status, byeTeamId: null, week: 6, openingAt: null, matches: [],
+    placements: placements.map(([name, seed, qualifies], index) => ({
+      place: index + 1, seed, qualifies,
+      teamId: name ? name.toLowerCase() : null, name,
+    })),
+  });
+
+  it("names the seed the winner took and the team that went out", () => {
+    expect(tiebreakerResultLine([bracket([["Pudge Patrol", 4, true], ["Couriers", 5, false]])]))
+      .toBe("Pudge Patrol took seed 4; Couriers missed the playoffs.");
+  });
+
+  it("reads the three-team bracket's final order", () => {
+    const [group] = view(next(next(next(next(drawnSeason()))))).groups;
+    expect(tiebreakerResultLine([group]))
+      .toBe("Bravo took seed 1, Alpha took seed 2; Charlie missed the playoffs.");
+  });
+
+  it("covers a seeding-only tie and a crowded weekend", () => {
+    expect(tiebreakerResultLine([bracket([["Alpha", 2, true], ["Bravo", 3, true]])]))
+      .toBe("Alpha took seed 2, Bravo took seed 3.");
+    expect(tiebreakerResultLine([bracket([
+      ["A", 5, true], ["B", 6, true], ["C", 7, false], ["D", 8, false], ["E", 9, false],
+    ])])).toBe("A took seed 5, B took seed 6; 3 teams missed the playoffs.");
+    expect(tiebreakerResultLine([bracket([["A", 3, true], ["B", 4, false], ["C", 5, false]])]))
+      .toBe("A took seed 3; B and C missed the playoffs.");
+  });
+
+  it("lets a later bracket settle teams an earlier round left open", () => {
+    const legacy = bracket([[null, 3, true], [null, 4, true], [null, 5, false]]);
+    const successor = bracket([["Charlie", 3, true], ["Alpha", 4, true], ["Bravo", 5, false]]);
+    expect(tiebreakerResultLine([legacy, successor]))
+      .toBe("Charlie took seed 3, Alpha took seed 4; Bravo missed the playoffs.");
+  });
+
+  it("stays null until every bracket is finished and the order is known", () => {
+    expect(tiebreakerResultLine([])).toBeNull();
+    expect(tiebreakerResultLine([bracket([["A", 4, true], ["B", 5, false]], "needed")])).toBeNull();
+    expect(tiebreakerResultLine([bracket([[null, 4, true], [null, 5, false]])])).toBeNull();
+  });
+});

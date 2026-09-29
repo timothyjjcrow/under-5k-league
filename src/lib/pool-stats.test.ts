@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { averageMmr, mmrDistribution, roleCoverage } from "./pool-stats";
+import { averageMmr, roleCoverage, shortRolesLine } from "./pool-stats";
 
 describe("roleCoverage", () => {
   it("counts each position across players", () => {
@@ -22,33 +22,6 @@ describe("roleCoverage", () => {
   });
 });
 
-describe("mmrDistribution", () => {
-  it("buckets players by MMR range (inclusive ends)", () => {
-    const dist = mmrDistribution([
-      { mmr: 500 },
-      { mmr: 2500 },
-      { mmr: 2999 },
-      { mmr: 4200 },
-      { mmr: 6000 },
-    ]);
-    const byLabel = Object.fromEntries(dist.map((b) => [b.label, b.count]));
-    expect(byLabel["0–1k"]).toBe(1);
-    expect(byLabel["2–3k"]).toBe(2);
-    expect(byLabel["4–4.5k"]).toBe(1);
-    expect(byLabel["4.5k+"]).toBe(1);
-  });
-  it("returns six buckets covering all ranges", () => {
-    expect(mmrDistribution([]).map((b) => b.label)).toEqual([
-      "0–1k",
-      "1–2k",
-      "2–3k",
-      "3–4k",
-      "4–4.5k",
-      "4.5k+",
-    ]);
-  });
-});
-
 describe("averageMmr", () => {
   it("rounds the mean", () => {
     expect(averageMmr([{ mmr: 1000 }, { mmr: 2000 }, { mmr: 2001 }])).toBe(1667);
@@ -63,9 +36,37 @@ describe("MMR 0 = unknown (blank signup)", () => {
     expect(averageMmr([{ mmr: 3000 }, { mmr: 0 }, { mmr: 0 }])).toBe(3000);
     expect(averageMmr([{ mmr: 0 }])).toBe(0);
   });
+});
 
-  it("mmrDistribution never buckets unknowns as bottom-of-pool", () => {
-    const dist = mmrDistribution([{ mmr: 0 }, { mmr: 4600 }]);
-    expect(dist.reduce((s, b) => s + b.count, 0)).toBe(1);
+describe("shortRolesLine", () => {
+  // Counts per position 1..5, as roleCoverage returns them.
+  const coverage = (counts: number[]) =>
+    roleCoverage([]).map((role, i) => ({ ...role, count: counts[i] }));
+
+  it("names the one position too few players list", () => {
+    expect(shortRolesLine(coverage([8, 8, 7, 7, 3]), 7, 37)).toBe(
+      "Short on Hard Support: 3 of 37 players list it, and 7 teams need one each.",
+    );
+  });
+
+  it("lists several short positions fewest first", () => {
+    expect(shortRolesLine(coverage([8, 5, 7, 6, 3]), 7, 37)).toBe(
+      "Short on Hard Support, Mid and Soft Support: 3, 5 and 6 of 37 players list them, and 7 teams need one each.",
+    );
+  });
+
+  it("is quiet when every position has one per team", () => {
+    expect(shortRolesLine(coverage([8, 8, 7, 7, 7]), 7, 37)).toBeNull();
+  });
+
+  // A small pool is short everywhere; the hero's own count already says
+  // how many more players are needed, so a five-role list adds nothing.
+  it("is quiet when every position is short", () => {
+    expect(shortRolesLine(coverage([2, 1, 1, 0, 1]), 6, 4)).toBeNull();
+  });
+
+  it("is quiet with no players or no teams", () => {
+    expect(shortRolesLine(coverage([0, 0, 0, 0, 0]), 6, 0)).toBeNull();
+    expect(shortRolesLine(coverage([3, 3, 3, 3, 1]), 0, 5)).toBeNull();
   });
 });

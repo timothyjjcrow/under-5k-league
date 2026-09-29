@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  sourceFile,
+  sourceFiles,
+  stripLineComments,
+  type SourceFile,
+} from "../../test/support/source-files";
 
 // SOURCE-LEVEL GUARDS for the two live rooms, deliberately.
 //
@@ -23,23 +29,65 @@ import { describe, expect, it } from "vitest";
 // reach the call sites that are on screen in the state that spec can reach.
 // The regression to catch is someone deleting a `signal:` line from ANY of
 // them, so the check that actually covers the invariant is a static one over
-// both files. It costs a millisecond and cannot flake.
+// both rooms' files. It costs a millisecond and cannot flake.
 //
 // `vitest.config.mts` is `environment: "node"` with no jsdom, so reading the
 // source is also the only way to assert anything about these components here.
 
-const ROOMS = ["draft-room.tsx", "inhouse-room.tsx"] as const;
+/**
+ * The two live rooms, each as the files it is made of. The draft room is one
+ * file. The inhouse room is a SHELL (the poll loop, act(), the bell, the tab
+ * title) plus one file per stage under src/components/inhouse/, and every
+ * room guard below reads the shell and that folder TOGETHER as one room: a
+ * `signal:` deleted from a stage file, or a second bell rung from one, is the
+ * same regression it was when the room was a single file.
+ */
+type Room = { name: string; shell: string; files: SourceFile[] };
+
+const ROOMS: readonly Room[] = [
+  {
+    name: "draft-room.tsx",
+    shell: "src/components/draft-room.tsx",
+    files: [sourceFile("src/components/draft-room.tsx")],
+  },
+  {
+    name: "inhouse-room.tsx",
+    shell: "src/components/inhouse-room.tsx",
+    // The shell plus its stage views. A renamed folder or a typo'd pattern
+    // fails here, loudly, instead of reading nothing.
+    files: sourceFiles(
+      [
+        "src/components/inhouse-room.tsx",
+        "src/components/inhouse/**/*.{ts,tsx}",
+      ],
+      10,
+    ),
+  },
+];
+const INHOUSE_ROOM = ROOMS[1];
+
+/** Each of a room's files with whole-line comments dropped (see `code`). */
+const roomCode = (room: Room) =>
+  room.files.map((f) => stripLineComments(f.text));
+
+/** A room's code as one string, for "the room does X somewhere" checks. */
+const roomText = (room: Room) => roomCode(room).join("\n");
 
 /** Every `fetch(...)` call in `src`, returned as its full argument text. */
 function fetchCalls(src: string): string[] {
+  return callArgs(src, "fetch");
+}
+
+/** Every `callee(...)` call in `src`, returned as its full argument text. */
+function callArgs(src: string, callee: string): string[] {
   const calls: string[] = [];
-  const needle = "fetch(";
+  const needle = `${callee}(`;
   let from = 0;
   for (;;) {
     const at = src.indexOf(needle, from);
     if (at === -1) break;
     from = at + needle.length;
-    // Skip identifiers that merely END in "fetch(" (prefetch(, refetch(…).
+    // Skip identifiers that merely END in the callee (prefetch(, refetch(…).
     const before = src[at - 1] ?? " ";
     if (/[A-Za-z0-9_$.]/.test(before)) continue;
     // Walk forward balancing parens to the end of the call.
@@ -77,14 +125,30 @@ const appCode = (file: string) =>
     .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .join("\n");
 
+/**
+ * Every component and page, comments dropped. The "re-inlined" guards below
+ * are about a rule escaping its tested lib function into UI code, and that
+ * can happen in ANY component — including a new file split out of a room — so
+ * they scan all of these, not just the two room files.
+ */
+const UI_CODE = sourceFiles(
+  ["src/components/**/*.{ts,tsx}", "src/app/**/*.{ts,tsx}"],
+  120,
+).map((f) => ({ path: f.path, code: stripLineComments(f.text) }));
+
+/** UI files (comments dropped) that contain `literal`. */
+const uiFilesWith = (literal: string) =>
+  UI_CODE.filter((f) => f.code.includes(literal)).map((f) => f.path);
+
 describe("live-room fetch deadlines", () => {
-  for (const file of ROOMS) {
-    it(`${file}: every fetch carries an AbortSignal`, () => {
-      const src = read(file);
-      const calls = fetchCalls(src);
+  for (const room of ROOMS) {
+    it(`${room.name}: every fetch carries an AbortSignal`, () => {
+      const calls = room.files.flatMap((f) =>
+        fetchCalls(f.text).map((call) => ({ file: f.path, call })),
+      );
       // Both rooms poll and act, so anything less means the parser missed one.
       expect(calls.length).toBeGreaterThanOrEqual(2);
-      for (const call of calls) {
+      for (const { file, call } of calls) {
         expect(
           call.includes("signal:"),
           `A fetch in ${file} has no signal — a request that never answers ` +
@@ -133,6 +197,41 @@ describe("result-sync ping fetch deadline", () => {
   });
 });
 
+// The rooms and the ping are the loops this file was written for, but the
+// freeze is a property of ANY client fetch whose caller waits on it. Every
+// client component's fetch carries a deadline today; keep it that way, so a
+// new poll loop (or a room split into several files) cannot slip past.
+describe("client fetch deadlines everywhere", () => {
+  const clientFetchers = sourceFiles("src/**/*.{ts,tsx}", 300)
+    .filter(({ text }) => /^["']use client["']/m.test(text))
+    .map(({ path: file, text }) => ({ file, calls: fetchCalls(text) }))
+    .filter(({ calls }) => calls.length > 0);
+
+  it("finds the client files that fetch (guard is not vacuous)", () => {
+    const files = clientFetchers.map((f) => f.file);
+    expect(files.length).toBeGreaterThanOrEqual(3);
+    for (const shell of [
+      ...ROOMS.map((room) => room.shell),
+      "src/components/result-sync-ping.tsx",
+    ]) {
+      expect(files).toContain(shell);
+    }
+  });
+
+  it("every fetch in a client file carries an AbortSignal", () => {
+    for (const { file, calls } of clientFetchers) {
+      for (const call of calls) {
+        expect(
+          call.includes("signal:"),
+          `A fetch in ${file} has no signal — a request that never answers ` +
+            `latches whatever waits on it with no visible failure. Add ` +
+            `signal: AbortSignal.timeout(...). Call was: ${call.slice(0, 120)}`,
+        ).toBe(true);
+      }
+    }
+  });
+});
+
 // Same kind of guard, for the same reason: these rules are unit-tested now,
 // but a test of a pure function proves nothing if the room stops calling it.
 // The failure mode this repo has actually hit is a policy re-inlined into a
@@ -141,9 +240,9 @@ describe("result-sync ping fetch deadline", () => {
 // another.
 
 describe("live rooms delegate their poll policy", () => {
-  for (const file of ROOMS) {
-    it(`${file}: offline events immediately gate actions until a successful poll`, () => {
-      const src = code(file);
+  for (const room of ROOMS) {
+    it(`${room.name}: offline events immediately gate actions until a successful poll`, () => {
+      const src = roomText(room);
       expect(src).toContain('window.addEventListener("offline", onOffline)');
       expect(src).toContain('window.addEventListener("online", onOnline)');
       expect(src).toContain('setConnectivity("resyncing")');
@@ -155,8 +254,8 @@ describe("live rooms delegate their poll policy", () => {
       );
     });
 
-    it(`${file}: unknown action outcomes stay locked through a newer successful poll`, () => {
-      const src = code(file);
+    it(`${room.name}: unknown action outcomes stay locked through a newer successful poll`, () => {
+      const src = roomText(room);
       expect(src).toContain("actionReconcileSeqRef");
       expect(src).toContain("setActionReconciling(true)");
       expect(src).toContain("setActionReconciling(false)");
@@ -171,29 +270,47 @@ describe("live rooms delegate their poll policy", () => {
     // The rule's subtle halves (first-response baseline, null keeps it) live
     // in the tested pure function; a re-inlined copy is a copy that drifts.
     expect(
-      src.includes("cursorAdvanced"),
-      `result-sync-ping.tsx has re-inlined its cursor rule — the decision ` +
+      uiFilesWith("cursorAdvanced"),
+      `UI code has re-inlined the sync ping's cursor rule — the decision ` +
         `must come from syncPingStep, where the parked-tab trigger is pinned.`,
-    ).toBe(false);
+    ).toEqual([]);
   });
 
   it("inhouse-room computes its cadence only through inhousePollCadence", () => {
-    const src = code("inhouse-room.tsx");
+    const src = roomText(INHOUSE_ROOM);
     expect(src).toContain("inhousePollCadence(");
     // The room legitimately names other INHOUSE constants (the lobby prefix,
     // the voice channels); the poll rates are the ones that must live in the
     // helper, where the 429 back-off and the hidden-tab keepalive are pinned.
     for (const rate of ["INHOUSE.POLL_IDLE_MS", "INHOUSE.POLL_KEEPALIVE_MS"]) {
       expect(
-        src.includes(rate),
-        `${rate} is back in inhouse-room.tsx — schedule() must take its delay ` +
+        uiFilesWith(rate),
+        `${rate} is back in UI code — schedule() must take its delay ` +
           `from inhousePollCadence so the rules stay in one tested place.`,
-      ).toBe(false);
+      ).toEqual([]);
+    }
+  });
+
+  it("inhouse-room tells the cadence and the tab title when a READY game is being played", () => {
+    // Start is optional, so a game hosted by hand is READY for its whole
+    // length; inhouseReadyInPlay ends READY's fast poll and "(!) Teams locked"
+    // once the scan window opens. Its tests prove nothing if the room stops
+    // passing the window and the clock: READY would silently go back to
+    // polling every 1.5s, with a "(!)" in the tab, for the whole game.
+    const src = roomText(INHOUSE_ROOM);
+    const uses = [
+      ...callArgs(src, "inhousePollCadence"),
+      ...callArgs(src, "inhouseTitleFlag"),
+    ];
+    expect(uses.length).toBeGreaterThanOrEqual(3);
+    for (const args of uses) {
+      expect(args).toMatch(/\bscanOpensAt:/);
+      expect(args).toMatch(/\bserverNow:/);
     }
   });
 
   it("inhouse-room cannot lose an action reconciliation behind an in-flight poll", () => {
-    const src = code("inhouse-room.tsx");
+    const src = roomText(INHOUSE_ROOM);
     expect(src).toContain("let rerunRequested = false");
     expect(src).toMatch(
       /bumpPollRef\.current\s*=\s*\(\)\s*=>\s*\{\s*rerunRequested\s*=\s*true;\s*schedule\(250\)/,
@@ -212,11 +329,11 @@ describe("live rooms delegate their poll policy", () => {
       "DRAFT_ROOM.POLL_RATE_LIMITED_MS",
     ]) {
       expect(
-        src.includes(rate),
-        `${rate} is back in draft-room.tsx — its ladder used to read a \`live\` ` +
-          `flag that is false on every failed poll, which quietly demoted a ` +
-          `live auction to the waiting-room rate for the whole outage.`,
-      ).toBe(false);
+        uiFilesWith(rate),
+        `${rate} is back in UI code — the draft room's ladder used to read a ` +
+          `\`live\` flag that is false on every failed poll, which quietly ` +
+          `demoted a live auction to the waiting-room rate for the whole outage.`,
+      ).toEqual([]);
     }
   });
 });
@@ -226,43 +343,53 @@ describe("live rooms delegate their payload ordering", () => {
   // it. No unit test can see WHERE the number is minted, and no browser spec
   // can produce the interleaving on purpose, so this is the only check that a
   // room still routes through the tested fold.
-  for (const file of ROOMS) {
-    it(`${file}: orders payloads through room-sequence`, () => {
-      const src = code(file);
+  for (const room of ROOMS) {
+    it(`${room.name}: orders payloads through room-sequence`, () => {
+      const src = roomText(room);
       expect(src).toContain("issueSequence(");
       expect(src).toContain("acceptSequence(");
       expect(
-        src.includes("appliedSeqRef"),
-        `${file} has re-inlined its ordering gate. It must fold through ` +
+        uiFilesWith("appliedSeqRef"),
+        `UI code has re-inlined a room's ordering gate. It must fold through ` +
           `acceptSequence, or the two rooms drift apart again with nothing ` +
           `able to notice.`,
-      ).toBe(false);
+      ).toEqual([]);
     });
 
-    it(`${file}: mints its sequence BEFORE awaiting the fetch`, () => {
+    it(`${room.name}: mints its sequence BEFORE awaiting the fetch`, () => {
       // Ordering is by request START. Move a mint below its `await fetch(...)`
       // and every unit test still passes while the gate degrades into a no-op:
       // responses would arrive already numbered in arrival order, so nothing
-      // would ever be rejected.
-      const src = read(file);
-      const mints = [...src.matchAll(/issueSequence\(/g)].map((m) => m.index!);
-      const awaits = [...src.matchAll(/await fetch\(/g)].map((m) => m.index!);
-      expect(mints).toHaveLength(2); // the poll and the action path
-      expect(awaits.length).toBeGreaterThanOrEqual(2);
-      for (const at of awaits) {
-        expect(
-          mints.some((m) => m < at && at - m < 1500),
-          `A fetch in ${file} has no issueSequence() just above it — the ` +
-            `sequence must be taken before the request leaves.`,
-        ).toBe(true);
+      // would ever be rejected. Checked file by file: a mint only counts for
+      // a fetch in the same file.
+      let mintCount = 0;
+      let awaitCount = 0;
+      for (const { path: file, text: src } of room.files) {
+        const mints = [...src.matchAll(/issueSequence\(/g)].map(
+          (m) => m.index!,
+        );
+        const awaits = [...src.matchAll(/await fetch\(/g)].map(
+          (m) => m.index!,
+        );
+        mintCount += mints.length;
+        awaitCount += awaits.length;
+        for (const at of awaits) {
+          expect(
+            mints.some((m) => m < at && at - m < 1500),
+            `A fetch in ${file} has no issueSequence() just above it — the ` +
+              `sequence must be taken before the request leaves.`,
+          ).toBe(true);
+        }
       }
+      expect(mintCount).toBe(2); // the poll and the action path
+      expect(awaitCount).toBeGreaterThanOrEqual(2);
     });
   }
 });
 
 describe("live rooms delegate their alert triggers", () => {
   it("inhouse-room computes the chime and the tab title through the lib", () => {
-    const src = code("inhouse-room.tsx");
+    const src = roomText(INHOUSE_ROOM);
     expect(src).toContain("inhouseAlerts(");
     expect(src).toContain("inhouseTitleFlag(");
     // The flag strings must live with the rules that choose them; a copy in
@@ -274,10 +401,10 @@ describe("live rooms delegate their alert triggers", () => {
       '"(!) Teams locked"',
     ]) {
       expect(
-        src.includes(literal),
-        `${literal} is back in inhouse-room.tsx — inhouseTitleFlag owns the ` +
+        uiFilesWith(literal),
+        `${literal} is back in UI code — inhouseTitleFlag owns the ` +
           `priority order, including which nags stop once the player acts.`,
-      ).toBe(false);
+      ).toEqual([]);
     }
   });
 
@@ -287,11 +414,11 @@ describe("live rooms delegate their alert triggers", () => {
     expect(src).toContain("stripDraftTitleFlag(");
     for (const literal of ["⏰ Your pick — ", "💸 Outbid — "]) {
       expect(
-        src.includes(literal),
-        `"${literal}" is back in draft-room.tsx. The room used to hold a ` +
+        uiFilesWith(literal),
+        `"${literal}" is back in UI code. The draft room used to hold a ` +
           `hand-copied duplicate of these literals for its strip(), and a ` +
           `one-character drift would have stacked prefixes in the tab forever.`,
-      ).toBe(false);
+      ).toEqual([]);
     }
   });
 
@@ -299,10 +426,10 @@ describe("live rooms delegate their alert triggers", () => {
     const src = code("draft-room.tsx");
     expect(src).toContain("outbidLatchAfter(");
     expect(
-      src.includes("wasOutbid("),
-      `draft-room.tsx calls wasOutbid directly again — the SET half without ` +
+      uiFilesWith("wasOutbid("),
+      `UI code calls wasOutbid directly again — the SET half without ` +
         `the CLEAR half is how the banner ends up naming a lot that has moved on.`,
-    ).toBe(false);
+    ).toEqual([]);
   });
 
   it("draft-room builds no feed line of its own", () => {
@@ -315,15 +442,15 @@ describe("live rooms delegate their alert triggers", () => {
     // poll). The room may render lines; it may not author them.
     for (const kind of ['kind: "sold"', 'kind: "nominate"', 'kind: "bid"']) {
       expect(
-        src.includes(kind),
-        `${kind} is back in draft-room.tsx — feed CONTENT belongs in ` +
+        uiFilesWith(kind),
+        `${kind} is back in UI code — feed CONTENT belongs in ` +
           `draftFeedDiff, where a test can state what each line means.`,
-      ).toBe(false);
+      ).toEqual([]);
     }
   });
 
-  for (const file of ROOMS) {
-    it(`${file}: rings the bell from ONE place, and rings from one`, () => {
+  for (const room of ROOMS) {
+    it(`${room.name}: rings the bell from ONE place, and rings from one`, () => {
       // Both rooms now fold a transition into a list of alerts and ring once.
       // Scattered call sites double-strike the same AudioContext when two
       // moments coincide — and, worse, each one is a separate unwritten rule
@@ -333,27 +460,117 @@ describe("live rooms delegate their alert triggers", () => {
       // that line a single point of failure, and a room that rings from NO
       // place is invisible to everything else here — tsc is happy, the alerts
       // list is still computed and tested, and no browser spec can hear audio.
-      const calls = code(file).split("playChime()").length - 1;
+      //
+      // Counted across ALL of the room's files: a stage view that rings on its
+      // own is the scattered call site this guard exists to stop.
+      const calls = roomCode(room).reduce(
+        (n, src) => n + src.split("playChime()").length - 1,
+        0,
+      );
       expect(
         calls,
-        `${file} has ${calls} playChime() call sites. Expected 2: the sound ` +
-          `toggle's own confirmation, and the single ring for a transition.`,
+        `${room.name} has ${calls} playChime() call sites across its ` +
+          `${room.files.length} file(s). Expected 2: the sound toggle's own ` +
+          `confirmation, and the single ring for a transition.`,
       ).toBe(2);
     });
 
-    it(`${file}: rings from the ALERTS it computed, not from one branch`, () => {
+    it(`${room.name}: rings from the ALERTS it computed, not from one branch`, () => {
       // The other half of the same failure: narrowing the condition to a
       // single trigger (say, only the outbid latch) silences the alerts that
       // reach a player who is not a captain and has nothing else on screen
       // telling them to look — sold, on the block, your turn.
-      const src = code(file);
       // Case-insensitive: the draft room rings off a local `alerts`, the
-      // inhouse room off `inhouseAlerts(prev, snap).length` inline.
+      // inhouse room off `inhouseAlerts(prev, snap).length` inline. Matched
+      // within one file, so two files can never stitch a false pass together.
       expect(
-        /alerts[\s\S]{0,120}playChime\(\)/i.test(src),
-        `${file} rings without consulting its alerts list — the ring must be ` +
-          `derived from the tested transition, not from one hand-picked branch.`,
+        roomCode(room).some((src) =>
+          /alerts[\s\S]{0,120}playChime\(\)/i.test(src),
+        ),
+        `${room.name} rings without consulting its alerts list — the ring ` +
+          `must be derived from the tested transition, not from one ` +
+          `hand-picked branch.`,
       ).toBe(true);
     });
   }
+});
+
+// Both rooms used to stack one strip per condition (offline, connection lost,
+// back online, checking after an interrupted action, sign-in expired, updates
+// delayed), and two could show at once. They now render ONE line picked by
+// the tested `roomStatus`; a strip re-inlined into a room would bring the
+// stacking back without any test noticing.
+describe("live rooms share one status line", () => {
+  for (const room of ROOMS) {
+    it(`${room.name}: renders its conditions through roomStatus + RoomStatusLine`, () => {
+      const src = roomText(room);
+      expect(src).toContain("roomStatus(");
+      expect(src).toContain("<RoomStatusLine");
+    });
+  }
+
+  it("no UI file hand-writes a status sentence", () => {
+    for (const sentence of [
+      "Connection lost — reconnecting",
+      "Connection restored — checking",
+      "after an interrupted action",
+    ]) {
+      expect(
+        uiFilesWith(sentence),
+        `UI code has re-inlined a room status strip ("${sentence}") — pick ` +
+          `the line with roomStatus and render <RoomStatusLine>.`,
+      ).toEqual([]);
+    }
+  });
+
+  // The status line and the pause note come and go between polls (a lost bid
+  // response, a 429, the admin resuming). Rendered above the lot card they
+  // pushed the lot and its bid buttons down and back up under a captain's
+  // thumb, so the live view renders them below the controls instead.
+  it("draft-room: the live view's status line sits below the bid controls", () => {
+    const src = code("draft-room.tsx");
+    const live = src.indexOf("const lotStale");
+    const zone = src.indexOf("ref={bannerRef}", live);
+    const primer = src.indexOf("<AuctionPrimer", zone);
+    expect(live).toBeGreaterThan(-1);
+    expect(zone).toBeGreaterThan(live);
+    expect(primer).toBeGreaterThan(zone);
+    const aboveCard = src.slice(live, zone);
+    expect(aboveCard).not.toContain("{roomAlerts}");
+    expect(aboveCard).not.toContain("paused the auction");
+    const card = src.slice(zone, primer);
+    const controls = card.indexOf("<ExactBidControl");
+    expect(controls).toBeGreaterThan(-1);
+    expect(card.indexOf("{roomAlerts}")).toBeGreaterThan(controls);
+    expect(card.indexOf("paused the auction")).toBeGreaterThan(controls);
+  });
+});
+
+// Every room guard above reads the inhouse shell AND src/components/inhouse/
+// as one room. That only holds while the stage views actually live there: a
+// view moved to some other folder would take its fetches and bells out of
+// sight while every guard kept passing. So the shell must import each stage
+// it renders from that folder.
+describe("the inhouse room is its shell plus the stage folder", () => {
+  it("the shell renders every stage view from src/components/inhouse/", () => {
+    const shell = code("inhouse-room.tsx");
+    for (const view of [
+      "QueueView",
+      "ReadyCheckView",
+      "VoteView",
+      "DraftView",
+      "ReadyView",
+      "InProgressView",
+    ]) {
+      expect(shell).toContain(`<${view}`);
+      expect(
+        new RegExp(
+          `import \\{[^}]*\\b${view}\\b[^}]*\\} from "@/components/inhouse/`,
+        ).test(shell),
+        `${view} is not imported from src/components/inhouse/ — the room ` +
+          `guards read only the shell and that folder, so a stage view kept ` +
+          `anywhere else escapes them.`,
+      ).toBe(true);
+    }
+  });
 });

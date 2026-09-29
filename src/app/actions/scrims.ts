@@ -6,11 +6,23 @@ import { clampInt, localDate, str } from "@/lib/form";
 import { parseAccountId } from "@/lib/dota";
 import type { ActionResult } from "@/lib/action-result";
 import { actionErrorMessage } from "@/lib/user-facing-error";
+import { sendDiscordMessage } from "@/lib/discord";
+import { mentionUsers } from "@/lib/discord-mentions";
+import {
+  SCRIM_POST_PING_THROTTLE_SECONDS,
+  scrimCancelledMessage,
+  scrimClaimedMessage,
+  scrimPostPingKey,
+  scrimPostedMessage,
+} from "@/lib/scrim-discord";
+import { claimThrottle } from "@/lib/settings";
+import { scrimBookedToast } from "@/lib/scrim-view";
 import {
   addScrimGuest as addGuestInService,
   addTeamCoach as addCoachInService,
   cancelScrim as cancelInService,
   createScrim as createInService,
+  endScrimSeries as endSeriesInService,
   joinScrim as joinInService,
   removeScrimGuest as removeGuestInService,
   removeTeamCoach as removeCoachInService,
@@ -24,6 +36,29 @@ import {
 function refreshScrims(scrimId?: string) {
   revalidatePath("/scrims");
   if (scrimId) revalidatePath(`/scrims/${scrimId}`);
+}
+
+/**
+ * Ping exactly the captains who have to act — never a broadcast — after the
+ * write has committed. Best-effort: a Discord hiccup must never turn a
+ * booking that succeeded into an error toast. `mention: false` still posts
+ * the message for them, without ringing anyone's phone.
+ */
+async function pingCaptains(
+  content: string,
+  userIds: string[],
+  { mention = true }: { mention?: boolean } = {},
+) {
+  if (userIds.length === 0) return;
+  try {
+    await sendDiscordMessage(
+      content,
+      mention ? await mentionUsers(userIds) : undefined,
+    );
+  } catch {
+    // Never log the raw error: a database failure can carry a connection URL.
+    console.error("[scrims] SCRIM_PING_FAILED");
+  }
 }
 
 async function currentUser(): Promise<
@@ -47,8 +82,30 @@ export async function createScrim(
   if (!scheduledAt) return { error: "Pick a valid date and time" };
   const bestOf = clampInt(formData, "bestOf", 1, 1, 5);
   try {
-    await createInService(auth.user.id, scheduledAt, bestOf);
+    const posted = await createInService(auth.user.id, scheduledAt, bestOf);
     refreshScrims();
+    // One mention per posting team per window; a throttle-store failure
+    // mentions anyway (the post is committed, and a missed ping is worse).
+    let mention = true;
+    try {
+      mention = await claimThrottle(
+        scrimPostPingKey(posted.hostTeam.id),
+        SCRIM_POST_PING_THROTTLE_SECONDS,
+        Date.now(),
+      );
+    } catch {
+      mention = true;
+    }
+    await pingCaptains(
+      scrimPostedMessage({
+        scrimId: posted.id,
+        hostTeamName: posted.hostTeam.name,
+        whenMs: posted.scheduledAt.getTime(),
+        bestOf: posted.bestOf,
+      }),
+      posted.notifyUserIds,
+      { mention },
+    );
     return {
       ok: true,
       message: "Scrim availability posted — another captain can claim it.",
@@ -72,9 +129,34 @@ export async function joinScrim(
   if (!auth.ok) return auth.result;
   const scrimId = str(formData, "scrimId");
   try {
-    await joinInService(auth.user.id, scrimId);
+    const booked = await joinInService(auth.user.id, scrimId);
     refreshScrims(scrimId);
-    return { ok: true, message: "Scrim booked for both teams." };
+    const withdrawnBy = (teamId: string | undefined) =>
+      booked.withdrawnOffers.filter((offer) => offer.teamId === teamId);
+    const hostWithdrawn = withdrawnBy(booked.hostTeam.id);
+    await pingCaptains(
+      scrimClaimedMessage({
+        scrimId: booked.id,
+        hostTeamName: booked.hostTeam.name,
+        opponentTeamName: booked.opponentTeam?.name ?? "",
+        opponentCaptainName: booked.opponentTeam?.captainName ?? "",
+        whenMs: booked.scheduledAt.getTime(),
+        bestOf: booked.bestOf,
+        withdrawnHostOffersMs: hostWithdrawn.map((offer) =>
+          offer.scheduledAt.getTime(),
+        ),
+      }),
+      booked.notifyUserIds,
+    );
+    return {
+      ok: true,
+      message: scrimBookedToast({
+        hostTeamName: booked.hostTeam.name,
+        hostCaptainName: booked.hostTeam.captainName,
+        ownWithdrawn: withdrawnBy(booked.opponentTeam?.id).length,
+        hostWithdrawn: hostWithdrawn.length,
+      }),
+    };
   } catch (error) {
     return {
       error: actionErrorMessage(
@@ -94,12 +176,21 @@ export async function cancelScrim(
   if (!auth.ok) return auth.result;
   const scrimId = str(formData, "scrimId");
   try {
-    await cancelInService(
+    const cancelled = await cancelInService(
       auth.user.id,
       auth.user.role === "ADMIN",
       scrimId,
     );
     refreshScrims(scrimId);
+    await pingCaptains(
+      scrimCancelledMessage({
+        hostTeamName: cancelled.hostTeamName,
+        opponentTeamName: cancelled.opponentTeamName,
+        whenMs: cancelled.scheduledAt.getTime(),
+        cancellerName: cancelled.byCaptain ? auth.user.name : null,
+      }),
+      cancelled.notifyUserIds,
+    );
     return { ok: true, message: "Scrim cancelled." };
   } catch (error) {
     return {
@@ -300,6 +391,32 @@ export async function removeScrimGame(
         error,
         "Couldn't remove that scrim game — try again",
         "scrim.game-remove",
+      ),
+    };
+  }
+}
+
+export async function endScrimSeries(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const auth = await currentUser();
+  if (!auth.ok) return auth.result;
+  const scrimId = str(formData, "scrimId");
+  try {
+    const ended = await endSeriesInService(
+      auth.user.id,
+      auth.user.role === "ADMIN",
+      scrimId,
+    );
+    refreshScrims(scrimId);
+    return { ok: true, message: ended.message };
+  } catch (error) {
+    return {
+      error: actionErrorMessage(
+        error,
+        "Couldn't end that series — reload and try again",
+        "scrim.end-series",
       ),
     };
   }

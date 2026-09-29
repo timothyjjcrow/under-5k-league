@@ -228,3 +228,32 @@ export function buildTiebreakerBrackets({
   });
   return { error: null, groups };
 }
+
+/**
+ * One line for a finished tiebreaker, shown on the folded Schedule section
+ * once the playoffs have started: who took which seed, and who went out.
+ * Null while any bracket is unfinished or no final order is known.
+ */
+export function tiebreakerResultLine(groups: TiebreakerBracketView[]): string | null {
+  if (groups.length === 0 || groups.some((group) => group.status !== "resolved")) return null;
+  // A later bracket (a published legacy round, then its successor) has the
+  // final word on a team that played in both.
+  const finish = new Map<string, TiebreakerPlacementView & { name: string }>();
+  for (const group of groups) {
+    for (const place of group.placements) {
+      if (place.teamId && place.name) finish.set(place.teamId, { ...place, name: place.name });
+    }
+  }
+  if (finish.size === 0) return null;
+  const places = [...finish.values()].sort((a, b) => a.seed - b.seed);
+  const seeded = places.filter((place) => place.qualifies);
+  const out = places.filter((place) => !place.qualifies);
+  const parts: string[] = [];
+  if (seeded.length > 0)
+    parts.push(seeded.map((place) => `${place.name} took seed ${place.seed}`).join(", "));
+  if (out.length > 0) {
+    parts.push(`${out.length > 2 ? `${out.length} teams`
+      : out.map((place) => place.name).join(" and ")} missed the playoffs`);
+  }
+  return `${parts.join("; ")}.`;
+}

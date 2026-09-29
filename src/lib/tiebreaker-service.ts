@@ -10,9 +10,10 @@ import { parseTiebreakerStage, tiebreakerSlot, type TiebreakerGroup } from "./ti
 import { parseSingleTiebreakerSlot } from "./tiebreaker-format";
 import { singleEliminationPlan } from "./single-elimination";
 import { UserFacingError } from "./user-facing-error";
-import { hasConfirmedScrimConflict } from "./scrim-schedule-conflict";
+import { describeScrimConflict, findConfirmedScrimConflict, scrimConflictFix } from "./scrim-schedule-conflict";
 import { raceHook } from "./race-hook";
-import { resultAnnouncedKey, stampResultChange, tiebreakerGamesArchiveKey, weekReminderKey } from "./settings";
+import { resultAnnouncedKey, stampResultChange, tiebreakerDrawKey, tiebreakerGamesArchiveKey, weekReminderKey } from "./settings";
+import { isSerializationConflict } from "./prisma-errors";
 
 // Same snapshot as the admin's playoff/tiebreaker confirmation. Child rows
 // matter during Reset because deleting a match cascades their commitments.
@@ -49,7 +50,7 @@ async function serializable<T>(run: (tx: Prisma.TransactionClient) => Promise<T>
   try {
     return await prisma.$transaction(run, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       throw new UserFacingError("The season or tiebreaker results changed while this action was running. Reload and try again.");
     }
     throw error;
@@ -60,7 +61,7 @@ type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 
 /** A reset keeps the original draw for the same standings; it cannot reroll a bye. */
 async function openingDraw(tx: Prisma.TransactionClient, seasonId: string, group: TiebreakerGroup) {
-  const key = `tiebreakerDraw:${seasonId}:${group.key}`;
+  const key = tiebreakerDrawKey(seasonId, group.key);
   const existing = await tx.setting.findUnique({ where: { key } });
   if (existing) {
     let parsed: unknown;
@@ -122,8 +123,9 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
         // as their own feeders finish, even while other trees are still playing.
         const scheduledAt = opening ? new Date() : night;
         for (const pair of ready) {
-          if (scheduledAt && await hasConfirmedScrimConflict(tx, { seasonId, teamIds: [pair.home, pair.away], scheduledAt })) {
-            throw new UserFacingError("A tied team has a booked scrim near kickoff. Move or cancel the scrim before continuing.");
+          const scrimClash = scheduledAt && await findConfirmedScrimConflict(tx, { seasonId, teamIds: [pair.home, pair.away], scheduledAt });
+          if (scrimClash) {
+            throw new UserFacingError(`A tiebreaker kickoff falls within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} before continuing.`);
           }
           data.push({ seasonId, week: opening?.week ?? nextWeek, phase: MATCH_PHASE.TIEBREAKER,
             homeTeamId: pair.home, awayTeamId: pair.away, bestOf: 1, bracketSlot: pair.slot, scheduledAt });
@@ -148,8 +150,9 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
       const pairings = group.drawRequired
         ? await openingDraw(tx, seasonId, group).then(([home, away]) => [{ home, away }])
         : group.pairings;
-      if (scheduledAt && await hasConfirmedScrimConflict(tx, { seasonId, teamIds: group.teamIds, scheduledAt })) {
-        throw new UserFacingError("A tied team has a booked scrim near the tiebreaker kickoff. Move or cancel the scrim before scheduling the week.");
+      const scrimClash = scheduledAt && await findConfirmedScrimConflict(tx, { seasonId, teamIds: group.teamIds, scheduledAt });
+      if (scrimClash) {
+        throw new UserFacingError(`The tiebreaker kickoff falls within four hours of ${describeScrimConflict(scrimClash)}. ${scrimConflictFix(scrimClash)} before scheduling the week.`);
       }
       data.push(...pairings.map((pair, i) => ({
         seasonId, week, phase: MATCH_PHASE.TIEBREAKER,

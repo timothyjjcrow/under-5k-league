@@ -1,0 +1,70 @@
+name: Nightly mutation verify
+
+# The full mutation ratchet on main, every night, whatever changed. CI skips
+# the ratchet when the release classifier reports needs_mutation=false, and
+# the release gate accepts that skip only on the trusted classification; this
+# run is what still re-mutates every protected claim at least once a day.
+# release:both also accepts this run's four passing shards for a later main
+# commit whose delta from this one is mutation-neutral, so keep the job name.
+# 07:00 UTC is midnight Pacific (11 PM in winter) and 9 AM Berlin (8 AM in
+# winter), outside both leagues' match nights. It never runs on pull requests,
+# and it is its own workflow so it can neither cancel nor be cancelled by push
+# CI, nor trigger the release workflow, which follows the CI workflow only.
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-nightly
+  cancel-in-progress: false
+
+jobs:
+  # Keep these steps in step with the `mutation` job in ci.yml.
+  mutation:
+    name: nightly mutation guard ${{ matrix.shard }}/4
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false # one bad shard shouldn't hide the others' results
+      matrix:
+        shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ld2l_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PG_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_test"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
+          cache: npm
+      - run: npm ci
+      - name: Point Prisma at postgres
+        run: node scripts/switch-db-provider.mjs postgresql
+      - name: Validate committed migrations and PostgreSQL schema
+        run: npm run db:migrate:validate
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
+      - name: Preflight + deploy + attest migrations + generate the client
+        run: npm run db:migrate:preflight && npx prisma migrate deploy && npm run db:migrate:postflight && npx prisma generate
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
+      - name: Verify this shard's protected claims
+        run: node scripts/mutation-guard.mjs --shard ${{ matrix.shard }}/4

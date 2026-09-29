@@ -1,7 +1,9 @@
 "use client";
 
 // The server precomputes every value and rank. This client component only
-// handles the local find-player and expand controls.
+// handles the expand control. There is deliberately no per-board search: with
+// eleven boards on /leaders that was eleven "Find player" buttons, and the
+// viewer's own row is already pinned under the preview with its real rank.
 
 import { useId, useState } from "react";
 import {
@@ -57,32 +59,16 @@ export function LeaderBoard({
   previewCount?: number;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
-  const [query, setQuery] = useState("");
   const listId = useId();
-  const searchId = useId();
   const max =
     scaleMax ?? (rows.length ? Math.max(...rows.map((r) => r.value)) : 0);
   const ranks = competitionRanks(rows.map((row) => row.rankValue ?? row.value));
-  const matchedIndexes = query.trim()
-    ? rows.flatMap((row, index) =>
-        `${row.name} ${row.team ?? ""}`
-          .toLocaleLowerCase()
-          .includes(query.trim().toLocaleLowerCase())
-          ? [index]
-          : [],
-      )
-    : [];
-  const visibleIndexes = query.trim()
-    ? matchedIndexes
-    : showAll
-      ? rows.map((_, index) => index)
-      : rows.slice(0, previewCount).map((_, index) => index);
+  const visibleIndexes = showAll
+    ? rows.map((_, index) => index)
+    : rows.slice(0, previewCount).map((_, index) => index);
   const viewerIdx = rows.findIndex((r) => r.isViewer);
   const pinnedViewer =
-    !query.trim() && !showAll && viewerIdx >= previewCount
-      ? rows[viewerIdx]
-      : undefined;
+    !showAll && viewerIdx >= previewCount ? rows[viewerIdx] : undefined;
 
   return (
     <Card id={id} className="min-w-0 scroll-mt-24 overflow-hidden">
@@ -90,51 +76,8 @@ export function LeaderBoard({
         title={title}
         subtitle={subtitle}
         headingLevel={headingLevel}
-        action={
-          rows.length > previewCount ? (
-            <button
-              type="button"
-              aria-expanded={showSearch}
-              aria-controls={searchId}
-              onClick={() => {
-                setShowSearch((open) => !open);
-                setQuery("");
-              }}
-              className="min-h-11 rounded-lg border border-line px-3 text-xs font-medium text-muted transition-colors hover:border-info/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
-            >
-              {showSearch ? "Close search" : "Find player"}
-            </button>
-          ) : undefined
-        }
       />
       <CardBody className="p-0">
-        <div
-          id={searchId}
-          hidden={!showSearch}
-          className="border-b border-line-soft bg-surface-2/25 px-4 py-3 sm:px-5"
-        >
-          <label
-            htmlFor={`${searchId}-input`}
-            className="mb-1.5 block text-xs font-medium text-muted"
-          >
-            Find a player or team in {title.toLocaleLowerCase()}
-          </label>
-          <input
-            id={`${searchId}-input`}
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by name or team"
-            className="min-h-11 w-full rounded-lg border border-line bg-bg px-3 text-sm text-fg placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
-          />
-          {query.trim() ? (
-            <p className="mt-1.5 text-xs text-muted" aria-live="polite">
-              {matchedIndexes.length}{" "}
-              {matchedIndexes.length === 1 ? "player" : "players"} found ·
-              original season ranks shown
-            </p>
-          ) : null}
-        </div>
         {rows.length === 0 ? (
           <p className="px-5 py-4 text-sm text-muted">
             No eligible players for this metric yet.
@@ -168,12 +111,7 @@ export function LeaderBoard({
                 </>
               ) : null}
             </ul>
-            {query.trim() && visibleIndexes.length === 0 ? (
-              <p className="px-5 py-5 text-sm text-muted">
-                No player or team matches that search.
-              </p>
-            ) : null}
-            {rows.length > previewCount && !query.trim() ? (
+            {rows.length > previewCount ? (
               <button
                 type="button"
                 aria-expanded={showAll}
@@ -224,13 +162,13 @@ function BoardRow({
             ) : (
               <PlayerLink
                 userId={r.id}
-                className="inline-flex min-h-11 min-w-0 items-center py-1 font-semibold leading-snug [overflow-wrap:anywhere]"
+                className="inline-flex min-h-11 min-w-6 items-center py-1 font-semibold leading-snug [overflow-wrap:anywhere]"
               >
                 {r.name}
               </PlayerLink>
             )}
             {r.isViewer ? (
-              <span className="rounded bg-info/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-info">
+              <span className="rounded bg-info/15 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-info-soft">
                 You
               </span>
             ) : null}

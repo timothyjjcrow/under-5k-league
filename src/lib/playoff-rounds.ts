@@ -1,7 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { MATCH_PHASE } from "./constants";
-import { playoffTotalRounds } from "./schedule";
+import {
+  matchRoundLabel,
+  playoffTotalRounds,
+  type RoundLabelMatch,
+} from "./schedule";
 
 /**
  * `playoffTotalRounds` for each season, from one read of their bracket rows.
@@ -34,4 +38,30 @@ export async function loadPlayoffRoundsBySeason(
     );
   }
   return rounds;
+}
+
+/**
+ * `matchRoundLabel` for each fixture a Discord post names ("Semifinal"),
+ * keyed by match id. Built for posts sent after their write has committed,
+ * so it never throws: if the bracket read fails, playoff fixtures fall back
+ * to "Playoffs", the phase-only name those posts used before they knew the
+ * round. Only PLAYOFF fixtures need the depth; anything else costs no query.
+ * Call it outside any transaction — a display label has no business in a
+ * SERIALIZABLE read set.
+ */
+export async function roundLabelsForPost(
+  matches: readonly (RoundLabelMatch & { id: string; seasonId: string })[],
+): Promise<Map<string, string>> {
+  let depth = new Map<string, number>();
+  const playoff = matches.filter((m) => m.phase === MATCH_PHASE.PLAYOFF);
+  if (playoff.length) {
+    try {
+      depth = await loadPlayoffRoundsBySeason(playoff.map((m) => m.seasonId));
+    } catch {
+      // Depth 0 reads as "can't place it" — the post still goes out.
+    }
+  }
+  return new Map(
+    matches.map((m) => [m.id, matchRoundLabel(m, depth.get(m.seasonId) ?? 0)]),
+  );
 }

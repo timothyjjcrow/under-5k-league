@@ -18,24 +18,30 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/");
 
-  const cta = page.getByRole("link", { name: "Register as a standin →" });
+  const cta = page.getByRole("link", { name: "Register as a standin" });
   await expect(cta).toBeVisible();
   await expect(cta).toHaveAttribute("href", "/me");
   // Without a team they can still play tonight.
   await expect(
-    page.getByRole("link", { name: "Play an inhouse →" }),
+    page.getByRole("link", { name: "Play an inhouse" }),
   ).toHaveAttribute("href", "/inhouse");
   await cta.click();
 
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
-  await expect(page.getByRole("radio", { name: /Standin/ })).toBeChecked();
+  // Mid-season only a standin signup is possible, so the form offers no
+  // greyed-out Full player choice and its button says what it does.
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Register as a standin", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Make sure you can play before you sign up")).toHaveCount(0);
 
   assertNoErrors();
 });
 
-test("fantasy renders standings for a signed-in viewer (league locked)", async ({
+test("fantasy shows a signed-in latecomer the scores, not a dead end (league locked)", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
@@ -43,9 +49,32 @@ test("fantasy renders standings for a signed-in viewer (league locked)", async (
   await expect(
     page.getByRole("heading", { name: "Fantasy", exact: true }),
   ).toBeVisible();
-  // Imported games lock the league — the page must say so instead of
-  // offering a dead picker.
-  await expect(page.getByText(/locked/i).first()).toBeVisible();
+  // Imported games lock the league — the page must say so, in one line,
+  // instead of offering a dead picker…
+  await expect(
+    page.getByText(/Rosters locked at the season's first game/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/New fives open after next season's draft/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /save fantasy|update fantasy/i }),
+  ).toHaveCount(0);
+  // …and the page is the scores, not a "catch the next season" card. The
+  // mid-season fixture has no fantasy entries, so it says that too.
+  await expect(
+    page.getByText("No fantasy fives this season", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Player scores" }),
+  ).toBeVisible();
+  await expect(page.getByText(/Catch the next season/)).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Your five", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "How impact points work" }),
+  ).toBeVisible();
   assertNoErrors();
 });
 
@@ -58,10 +87,11 @@ test("pick'em hides open splits and saves a call", async ({ page }) => {
     has: page.getByRole("heading", { name: /Upcoming matches/ }),
   });
   await expect(upcoming).toBeVisible();
+  // Said once, in the section heading, not repeated on every card.
   await expect(
-    upcoming
-      .getByText("Community split stays hidden until picks lock.")
-      .first(),
+    upcoming.getByRole("heading", {
+      name: /the crowd's picks stay hidden until then/,
+    }),
   ).toBeVisible();
   await expect(upcoming.getByText(/^crowd:/i)).toHaveCount(0);
 
@@ -92,17 +122,35 @@ test("Fantasy and Pick'em fit a narrow phone", async ({ page }) => {
     await expectNoHorizontalOverflow(page, path);
   }
 
+  // On a phone the two teams are stacked rows, not two halves that cut
+  // the names to "Roshan's …".
+  const pair = page.locator("fieldset").first().locator("button[aria-pressed]");
+  await expect(pair).toHaveCount(2);
+  const first = (await pair.nth(0).boundingBox())!;
+  const second = (await pair.nth(1).boundingBox())!;
+  expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
+  expect(Math.round(second.width)).toBe(Math.round(first.width));
+  const clipped = await pair.evaluateAll((buttons) =>
+    buttons.flatMap((button) =>
+      [...button.querySelectorAll("span:not(.sr-only):not([aria-hidden])")]
+        .filter((span) => span.scrollWidth > span.clientWidth + 1)
+        .map((span) => span.textContent ?? ""),
+    ),
+  );
+  expect(clipped, "pick'em team names cut off").toEqual([]);
+
   assertNoErrors();
 });
 
-// /me's identity card was broken in two ways that a single measurement misses,
-// which is why this test asserts both. `Avatar` sets width/height but bakes in
-// no shrink floor (callers pass one), so as a flex child beside the name block
-// and the button column it was crushed to a 19px-wide sliver of its 56px box —
-// measured still squashed at 430px, i.e. on every phone made. And the 17-digit
-// SteamID64 is one unbreakable token, which pushed the row past the card
-// itself: 58px of overflow at 320px, 18px at 360px, 3px at 375px, and 0 by
-// 390px.
+// /me's identity row (now the top of the "Steam & Dota" card) was broken in
+// two ways that a single measurement misses, which is why this test asserts
+// both. `Avatar` sets width/height but bakes in no shrink floor (callers pass
+// one), so as a flex child beside the name block it was crushed to a 19px-wide
+// sliver of its 56px box — measured still squashed at 430px, i.e. on every
+// phone made. And one unbreakable token in the row (it used to be the 17-digit
+// SteamID64; now it can only be a long Steam name) pushed the row past the
+// card itself: 58px of overflow at 320px, 18px at 360px, 3px at 375px, and 0
+// by 390px.
 //
 // 360px, not 390px, for exactly that reason: the first cut of this test ran at
 // 390px, where the overflow is genuinely zero, and passed against a complete
@@ -112,12 +160,14 @@ test("mobile /me identity card fits its card", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 844 });
   await page.goto("/me");
   await expect(
-    page.getByRole("heading", { name: "Your profile" }),
+    page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   // Wait for the identity card itself, not just the page heading — the first
   // cut of this test measured before it rendered, got "element missing", and
   // reported that as zero overflow. It passed against a full revert of the fix.
-  const steamLink = page.locator('#main a[href*="steamcommunity.com"]').first();
+  const steamLink = page
+    .locator('#profile-dota a[href*="steamcommunity.com"]')
+    .first();
   await steamLink.waitFor({ state: "visible", timeout: 10_000 });
 
   await expectNoSqueezedText(page, "/me");
@@ -128,13 +178,18 @@ test("mobile /me identity card fits its card", async ({ page }) => {
   // deliberately excuses anything inside a clipping ancestor.
   const card = await page.evaluate(() => {
     const steam = document.querySelector<HTMLAnchorElement>(
-      '#main a[href*="steamcommunity.com"]',
+      '#profile-dota a[href*="steamcommunity.com"]',
     );
-    const body = steam?.closest("div.flex");
-    if (!body) return null;
-    const av = body.firstElementChild!.getBoundingClientRect();
+    // The avatar row: avatar first, then the name block holding the links.
+    const row = steam?.closest("div.flex.items-center");
+    const cardEl = steam?.closest<HTMLElement>("#profile-dota");
+    if (!row || !cardEl) return null;
+    const av = row.firstElementChild!.getBoundingClientRect();
     return {
-      overflow: body.scrollWidth - body.clientWidth,
+      overflow: Math.max(
+        row.scrollWidth - row.clientWidth,
+        cardEl.scrollWidth - cardEl.clientWidth,
+      ),
       avatar: [Math.round(av.width), Math.round(av.height)] as [number, number],
     };
   });
@@ -209,7 +264,9 @@ test("mobile match page has no horizontal page overflow", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/schedule");
-  await page.getByRole("link", { name: "details →" }).first().click();
+  // Chrome's accessible name puts a space before the card link's sr-only
+  // ": Home vs Away" suffix, so the name reads "Match page : …".
+  await page.getByRole("link", { name: /^Match page ?: / }).first().click();
   await expect(page).toHaveURL(/\/matches\//);
   await expectNoHorizontalOverflow(page, "/matches/[id]");
   assertNoErrors();

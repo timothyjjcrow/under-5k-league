@@ -7,6 +7,7 @@
  * damage the guard prevents, because "an admin clicked the button the panel
  * offered and the league quietly broke" is the shape all six shared.
  */
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({
@@ -29,24 +30,25 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 
 import { prisma } from "@/lib/prisma";
 import { formatLeagueTime } from "@/lib/zoned-time";
+import { matchNightForWeek } from "@/lib/schedule";
+import { setLeagueId, setSeasonPhase } from "@/app/actions/admin-season";
+import { removeCaptain, startDraft } from "@/app/actions/admin-captains-draft";
 import {
   assignStandin,
-  generateSchedule,
-  removeCaptain,
-  removeGame,
   renameTeam,
   releasePlayer,
-  reopenMatch,
   signFreeAgent,
-  setLeagueId,
+  reinstateSignup,
+  withdrawSignup,
+} from "@/app/actions/admin-roster";
+import {
+  generateSchedule,
+  removeGame,
+  reopenMatch,
   setMatchTime,
   setWeekNight,
   recordResult,
-  reinstateSignup,
-  setSeasonPhase,
-  startDraft,
-  withdrawSignup,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { nominatePlayer } from "@/lib/draft-service";
 import { advancePlayoffBracket } from "@/lib/playoff-service";
 import { sendDiscordMessage } from "@/lib/discord";
@@ -59,6 +61,7 @@ import {
   getSetting,
   honorsAnnouncedKey,
   resultAnnouncedKey,
+  resultNudgeKey,
   setSetting,
   SETTING_KEYS,
   weekReminderKey,
@@ -97,6 +100,14 @@ const fd = (o: Record<string, string>) => {
   return f;
 };
 const empty: ActionResult = {};
+/** generateSchedule's required first match night, a week from now. */
+const firstNightFields = () => {
+  const first = new Date(Date.now() + 7 * 864e5);
+  return {
+    firstNight: "2026-10-07T20:00",
+    firstNightTs: String(first.getTime()),
+  };
+};
 
 beforeEach(resetDb);
 afterEach(() => {
@@ -900,7 +911,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
@@ -922,7 +933,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
@@ -952,6 +963,51 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
     expect(res?.message).toContain(`week 1: ${formatLeagueTime(first)}, then weekly`);
   });
 
+  // Fixtures without a kickoff get no check-in, reminder or automatic
+  // results, and filling times in afterwards took one form per week.
+  it("refuses to generate without a first match night", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Untimed${i}`, i + 1);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+
+    const res = await generateSchedule(
+      empty,
+      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+    );
+
+    expect(res?.error).toMatch(/Set the first match night/);
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(
+      0,
+    );
+  });
+
+  it("gives every generated fixture a kickoff, a week apart", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Timed${i}`, i + 1);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    const fields = firstNightFields();
+
+    const res = await generateSchedule(
+      empty,
+      fd({ ...fields, expectedActiveSeasonId: season.id }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    const matches = await prisma.match.findMany({
+      where: { seasonId: season.id },
+    });
+    expect(matches).toHaveLength(6);
+    for (const match of matches) {
+      expect(match.scheduledAt?.getTime()).toBe(
+        matchNightForWeek(new Date(Number(fields.firstNightTs)), match.week).getTime(),
+      );
+    }
+  });
+
   it("refuses to expose a schedule while the auction is still live", async () => {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
     for (let i = 0; i < 4; i++) await makeTeam(season.id, `Live${i}`, i + 1);
@@ -961,7 +1017,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     if (!res) throw new Error("generateSchedule returned no action result");
@@ -979,7 +1035,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(await getSetting(`weekReminder:${season.id}:1`)).toBeNull();
@@ -1001,7 +1057,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toMatch(/reinstate/i);
@@ -1033,7 +1089,7 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
@@ -1092,7 +1148,7 @@ describe("schedule controls — stale season claims", () => {
 
     const generated = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
     const week = await setWeekNight(
       empty,
@@ -1141,7 +1197,7 @@ describe("schedule controls — stale season claims", () => {
     transaction.mockRejectedValueOnce(conflict);
     const generated = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
     transaction.mockRejectedValueOnce(conflict);
     const week = await setWeekNight(
@@ -1762,7 +1818,7 @@ describe("assignStandin unpacks the empty-seat option from the form", () => {
 });
 
 describe("reinstateSignup medal advisory", () => {
-  // The flag flow is one-way: syncPlayerRanks names over-ceiling signups in
+  // The flag flow is one-way: refreshPlayerData names over-ceiling signups in
   // its own toast and expects a withdraw — nothing warned when the same admin
   // later REINSTATED a flagged signup. Advisory only, never a gate: the
   // mutation must succeed either way (operator's call).
@@ -1831,7 +1887,7 @@ describe("generateSchedule — the results gate (both halves)", () => {
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toMatch(/results are already recorded/i);
@@ -1852,7 +1908,7 @@ describe("generateSchedule — the results gate (both halves)", () => {
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toMatch(/results are already recorded/i);
@@ -1889,7 +1945,7 @@ describe("generateSchedule — the results gate (both halves)", () => {
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(fired).toBe(true);
@@ -1922,7 +1978,7 @@ describe("generateSchedule — the double-round-robin switch is actually wired",
     const res = await generateSchedule(
       empty,
       fd({
-        firstNight: "",
+        ...firstNightFields(),
         doubleRound: "on",
         expectedActiveSeasonId: season.id,
       }),
@@ -1962,7 +2018,7 @@ describe("generateSchedule — the double-round-robin switch is actually wired",
 
     const res = await generateSchedule(
       empty,
-      fd({ firstNight: "", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
@@ -2366,6 +2422,115 @@ describe("recordResult — queued publications follow their source state", () =>
       status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
       lastErrorCode: "STALE_SOURCE",
     });
+  });
+});
+
+/**
+ * A "we couldn't find your games" nudge accepted by the outbox but not yet
+ * delivered (the queue paused or backing off), exactly as
+ * result-nudge-service leaves it: marker finalized, row still PENDING.
+ */
+async function queueResultNudge(matchId: string, revision = 0) {
+  const key = resultNudgeKey(matchId, revision);
+  const eventId = randomUUID();
+  await prisma.setting.create({
+    data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+  });
+  const queued = await enqueueLeagueAnnouncement({
+    content: "We couldn't find the games — captains: report them",
+    dedupeKey: `nudge-source-${matchId}-${revision}`,
+    marker: { key, eventId },
+  });
+  return { key, queued };
+}
+
+/** The queued nudge is dropped at delivery instead of posted. */
+async function expectNudgeDropped(queuedId: string) {
+  const send = vi.fn(async () => true);
+  await deliverLeagueAnnouncements({ send, limit: 1 });
+  expect(send).not.toHaveBeenCalled();
+  expect(
+    await prisma.leagueAnnouncement.findUniqueOrThrow({
+      where: { id: queuedId },
+    }),
+  ).toMatchObject({
+    status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+    lastErrorCode: "STALE_SOURCE",
+  });
+}
+
+describe("a queued result nudge never posts after it has been answered", () => {
+  it("drops the nudge when an administrator records the result", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+    const { key, queued } = await queueResultNudge(target.id);
+
+    expect(
+      (
+        await recordResult(
+          empty,
+          fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+        )
+      )?.error,
+    ).toBeUndefined();
+    expect(await prisma.setting.findUnique({ where: { key } })).toBeNull();
+    await expectNudgeDropped(queued.id);
+  });
+
+  it("keeps a nudge that was already delivered recorded", async () => {
+    const { matches } = await seasonWithSchedule(SEASON_STATUS.REGULAR_SEASON);
+    const target = matches[0];
+    const key = resultNudgeKey(target.id, 0);
+    const value = `sent:v2:${randomUUID()}:${Date.now()}`;
+    await prisma.setting.create({ data: { key, value } });
+
+    await recordResult(
+      empty,
+      fd({ matchId: target.id, homeScore: "2", awayScore: "0" }),
+    );
+    expect((await prisma.setting.findUniqueOrThrow({ where: { key } })).value).toBe(
+      value,
+    );
+  });
+
+  it("drops a nudge about the old kickoff when the fixture is moved", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const target = matches[0];
+    const { queued } = await queueResultNudge(target.id);
+    const when = new Date(Date.now() + 6 * 864e5);
+
+    const res = await setMatchTime(
+      empty,
+      fd({
+        matchId: target.id,
+        expectedActiveSeasonId: season.id,
+        scheduledAt: when.toISOString(),
+        scheduledAtTs: String(when.getTime()),
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    await expectNudgeDropped(queued.id);
+  });
+
+  it("drops a nudge about the old kickoff when the whole week is moved", async () => {
+    const { season, matches } = await seasonWithSchedule();
+    const target = matches[0];
+    const { queued } = await queueResultNudge(target.id);
+    const when = new Date(Date.now() + 6 * 864e5);
+
+    const res = await setWeekNight(
+      empty,
+      fd({
+        expectedActiveSeasonId: season.id,
+        week: String(target.week),
+        night: when.toISOString(),
+        nightTs: String(when.getTime()),
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    await expectNudgeDropped(queued.id);
   });
 });
 

@@ -6,6 +6,7 @@ import {
 } from "./result-sync-service";
 import { raceHook } from "./race-hook";
 import { prismaErrorCode } from "./operational-code";
+import { isUniqueViolation } from "./prisma-errors";
 
 export const AUTOMATION_RUN_KEY = "league-maintenance";
 export const AUTOMATION_LEASE_MS = 90_000;
@@ -28,6 +29,11 @@ export type AutomationWorker = (options: {
   deadlineMs: number;
   signal: AbortSignal;
 }) => Promise<AutomationWorkerOutcome>;
+
+/** Result sync, finishing with the hourly player data refresh that only the
+ *  scheduled worker runs. */
+const scheduledWorker: AutomationWorker = (options) =>
+  runResultSync({ ...options, refreshPlayerData: true });
 
 export type AutomationLease = {
   kind: "acquired";
@@ -99,6 +105,7 @@ const SAFE_WORKER_CODES = new Set([
   "NOTIFICATION_RETRY_FAILED",
   "LEAGUE_NOTIFICATION_DELIVERY_FAILED",
   "CURSOR_READ_FAILED",
+  "PLAYER_DATA_REFRESH_FAILED",
   "LEAGUE_BUDGET_EXHAUSTED",
   "INHOUSE_BUDGET_EXHAUSTED",
   "DRAFT_BUDGET_EXHAUSTED",
@@ -179,15 +186,6 @@ function failureSummary(
 
 function errorCode(error: unknown): string {
   return prismaErrorCode(error) ?? "AUTOMATION_FAILED";
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    !!error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "P2002"
-  );
 }
 
 function leaseRetrySeconds(leaseExpiresAt: Date | null, nowMs: number): number {
@@ -393,7 +391,7 @@ export async function runAutomation(
   if (options.signal?.aborted) abortFromCaller();
   else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
 
-  const worker: AutomationWorker = options.worker ?? runResultSync;
+  const worker: AutomationWorker = options.worker ?? scheduledWorker;
   try {
     const outcome = await worker({ deadlineMs, signal: controller.signal });
     const finishedAtMs = clock();

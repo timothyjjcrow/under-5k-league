@@ -43,6 +43,41 @@ export function shiftMatchNight(
 }
 
 /**
+ * The calendar month holding `nowMs` on the league's clock, as a half-open
+ * [start, end) pair of instants plus a display label ("September 2026").
+ *
+ * A monthly board must turn over at midnight on the 1st where the league
+ * plays, not where the server runs: on a UTC host a Pacific league's October
+ * would begin at 5 PM on September 30th, mid-session. Midnight is resolved the
+ * same way as a match night, so a clock change on the 1st still lands on a
+ * real local instant. `null` uses UTC (tests only).
+ */
+export function leagueMonthWindow(
+  nowMs: number,
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): { start: Date; end: Date; label: string } {
+  const formatter = timeZone ? timeFormatter(timeZone) : null;
+  // The wall-clock reading, carried in a UTC Date so its fields are the local
+  // year and month whatever the host's own zone is.
+  const local = new Date(
+    formatter ? wallTime(new Date(nowMs), formatter) : nowMs,
+  );
+  const year = local.getUTCFullYear();
+  const month = local.getUTCMonth();
+  const at = (target: number) =>
+    formatter ? dateAtWallTime(target, formatter) : new Date(target);
+  return {
+    start: at(Date.UTC(year, month, 1)),
+    end: at(Date.UTC(year, month + 1, 1)),
+    label: new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(Date.UTC(year, month, 1))),
+  };
+}
+
+/**
  * The league night for `week`, rolled forward if that date has already passed.
  *
  * Playoff rounds are dated by pure arithmetic off `firstMatchNight`, so once a
@@ -234,19 +269,6 @@ export function roundName(roundIndex: number, totalRounds: number): string {
   return `Round ${roundIndex + 1}`;
 }
 
-/**
- * Human label for a match's slot in the season: playoff matches carry a
- * continuing week number in the DB, so raw "Week N" reads wrong for them.
- * Phase-only (every playoff round reads "Playoffs"); prefer matchRoundLabel
- * wherever the season's bracket is at hand.
- */
-export function matchPhaseLabel(phase: string, week: number): string {
-  if (phase === MATCH_PHASE.FINAL) return "Grand final";
-  if (phase === MATCH_PHASE.PLAYOFF) return "Playoffs";
-  if (phase === MATCH_PHASE.TIEBREAKER) return `Tiebreaker week ${week}`;
-  return `Week ${week}`;
-}
-
 /** A fixture as far as naming it goes. */
 export type RoundLabelMatch = {
   phase: string;
@@ -370,14 +392,6 @@ export function nextPlayoffRoundName(
   return roundName(round + 1, totalRounds);
 }
 
-/** Compact chip form of matchPhaseLabel: "GF" | "PO" | "TB" | "W3". */
-export function matchPhaseAbbrev(phase: string, week: number): string {
-  if (phase === MATCH_PHASE.FINAL) return "GF";
-  if (phase === MATCH_PHASE.PLAYOFF) return "PO";
-  if (phase === MATCH_PHASE.TIEBREAKER) return "TB";
-  return `W${week}`;
-}
-
 /**
  * Chronological comparator for match lists: kickoff time first (unscheduled
  * last), then week, then creation order. Reschedules can move a match past its
@@ -457,35 +471,89 @@ export function byeTeamsByWeek<
 }
 
 /**
- * Each team's unplayed regular-season opponents, in week order — the
- * "run-in" a playoff race is decided by.
+ * The league's current regular week when THIS team sits it out, else null.
+ * With an odd number of teams one team rests each week (roundRobin rotates
+ * the bye), and the first team in draft order always rests week 1, so on
+ * opening night its players watch everyone else check in. Every surface that
+ * shows the team's next match should say so rather than jump silently to the
+ * week after. "Current" is the earliest week still holding an open, relevant
+ * regular fixture: the week /schedule badges "This week" (leagueProgress's
+ * focusWeek). A team with no fixtures at all has no bye to report.
  */
-export function remainingSchedule<
-  T extends {
-    week: number;
-    homeTeamId: string;
-    awayTeamId: string;
-    phase: string;
-    status: string;
-  },
->(
-  teamIds: string[],
-  matches: T[],
-): Map<string, { week: number; opponentId: string }[]> {
-  const out = new Map<string, { week: number; opponentId: string }[]>(
-    teamIds.map((id) => [id, []]),
+export function teamByeWeek<
+  T extends SlateMatch & { homeTeamId: string; awayTeamId: string },
+>(matches: T[], teamId: string, nowMs: number): number | null {
+  const regular = matches.filter((m) => m.phase === MATCH_PHASE.REGULAR);
+  const plays = (m: T) => m.homeTeamId === teamId || m.awayTeamId === teamId;
+  if (!regular.some(plays)) return null;
+  const openWeeks = regular
+    .filter((m) => isRelevantOpenMatch(m, nowMs))
+    .map((m) => m.week);
+  if (openWeeks.length === 0) return null;
+  const week = Math.min(...openWeeks);
+  return regular.some((m) => m.week === week && plays(m)) ? null : week;
+}
+
+/**
+ * The order /schedule reads its regular weeks in: the league's current week,
+ * then the weeks still to come in order, then the earlier weeks NEWEST first
+ * (flagged `earlier`, so the list can head them "Earlier weeks"). A player
+ * looking for next week's fixture no longer scrolls past old results to find
+ * it. `currentWeek` is the league's current slate (leagueProgress's
+ * focusWeek); with none — every result in, or only overdue results left —
+ * every week is behind the league and the whole list reads newest first.
+ */
+export function orderScheduleWeeks<T extends { week: number }>(
+  weeks: T[],
+  currentWeek: number | null,
+): (T & { earlier: boolean })[] {
+  const ahead =
+    currentWeek == null
+      ? []
+      : weeks
+          .filter((w) => w.week >= currentWeek)
+          .sort((a, b) => a.week - b.week);
+  const behind = weeks
+    .filter((w) => currentWeek == null || w.week < currentWeek)
+    .sort((a, b) => b.week - a.week);
+  return [
+    ...ahead.map((w) => ({ ...w, earlier: false })),
+    ...behind.map((w) => ({ ...w, earlier: true })),
+  ];
+}
+
+/**
+ * Does a /schedule week (or playoff round) start closed? Only once every
+ * series it SHOWS is final and it lies before the current week. The counts
+ * are the ones on the week's header, so under a team filter a past week
+ * closes as soon as that team's own series is final: a player's season
+ * reads as one line per finished week instead of a stack of full cards.
+ */
+export function weekStartsCollapsed(
+  week: { week: number; completed: number; total: number },
+  currentWeek: number | null | undefined,
+): boolean {
+  return (
+    week.total > 0 &&
+    week.completed === week.total &&
+    (currentWeek == null || week.week < currentWeek)
   );
-  const open = matches
-    .filter(
-      (m) =>
-        m.phase === MATCH_PHASE.REGULAR && m.status !== MATCH_STATUS.COMPLETED,
-    )
-    .sort((a, b) => a.week - b.week);
-  for (const m of open) {
-    out.get(m.homeTeamId)?.push({ week: m.week, opponentId: m.awayTeamId });
-    out.get(m.awayTeamId)?.push({ week: m.week, opponentId: m.homeTeamId });
-  }
-  return out;
+}
+
+/**
+ * The team a /schedule reader is looking at: an explicit `?team=` in the URL
+ * wins ("all", or an id that isn't one of these teams, means no team), and
+ * without one it is the reader's own team. The fixture filter and the
+ * calendar control both read it, so "Add to calendar" offers the team whose
+ * matches are on screen.
+ */
+export function scheduleFilterTeamId(
+  requested: string | null,
+  initialTeamId: string | null | undefined,
+  teamIds: readonly string[],
+): string | null {
+  const candidate = requested === null ? initialTeamId : requested;
+  return candidate != null && teamIds.includes(candidate) ? candidate : null;
 }
 
 /** Match index encoded in a bracket slot like "R2M1" (null when absent). */

@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   allHeroesKnown,
-  bestWinRates,
   heroMeta,
-  heroPoolSeenPercent,
-  metaMinPicks,
+  metaHeadlines,
   type HeroMetaRow,
   type MetaGame,
   type MetaLine,
@@ -191,64 +189,44 @@ describe("catalogue boundary", () => {
     ).toBe(false);
     expect(allHeroesKnown([], known)).toBe(false);
   });
-
-  it("computes pool coverage from known unique ids only", () => {
-    const rows = [{ heroId: 1 }, { heroId: 1 }, { heroId: 99 }] as Pick<
-      HeroMetaRow,
-      "heroId"
-    >[];
-    expect(heroPoolSeenPercent(rows, known)).toBe(33);
-    expect(heroPoolSeenPercent(rows, new Set())).toBe(0);
-  });
 });
 
-describe("metaMinPicks", () => {
-  it("floors at 2 for young seasons and scales with games", () => {
-    expect(metaMinPicks(0)).toBe(2);
-    expect(metaMinPicks(10)).toBe(2);
-    expect(metaMinPicks(25)).toBe(3);
-    expect(metaMinPicks(60)).toBe(6);
-  });
-});
-
-describe("bestWinRates", () => {
-  it("uses the unrounded rate when displayed percentages tie", () => {
-    const base = heroMeta([
-      { radiantWin: true, lines: [line({ heroId: 1 })] },
-    ]).rows[0];
-    const lowerRate = { ...base, heroId: 1, picks: 27, wins: 17, losses: 10, winRate: 63 };
-    const higherRate = { ...base, heroId: 2, picks: 19, wins: 12, losses: 7, winRate: 63 };
-    expect(bestWinRates([lowerRate, higherRate], 2).map((row) => row.heroId)).toEqual([2, 1]);
+describe("metaHeadlines", () => {
+  const row = (heroId: number, picks: number, wins: number): HeroMetaRow => ({
+    heroId,
+    picks,
+    wins,
+    losses: picks - wins,
+    winRate: Math.round((wins / picks) * 100),
+    pickRate: 0,
+    kda: 0,
+    killsPerPick: 0,
+    deathsPerPick: 0,
+    assistsPerPick: 0,
+    mappedPlayers: 0,
+    topPlayer: null,
   });
 
-  it("filters below the floor and ranks by rate, then picks", () => {
-    const rows = heroMeta([
-      {
-        radiantWin: true,
-        lines: [
-          line({ heroId: 1, isRadiant: true }),
-          line({ heroId: 2, isRadiant: false }),
-        ],
-      },
-      {
-        radiantWin: true,
-        lines: [
-          line({ heroId: 1, isRadiant: true }),
-          line({ heroId: 3, isRadiant: true }),
-        ],
-      },
-      {
-        radiantWin: true,
-        lines: [
-          line({ heroId: 3, isRadiant: true }),
-          line({ heroId: 4, isRadiant: true }),
-        ],
-      },
-    ]).rows;
+  it("is empty for no picks", () => {
+    expect(metaHeadlines([])).toEqual({ mostPicked: null, bestWinRate: null });
+  });
 
-    const best = bestWinRates(rows, 2);
-    // Heroes 2 (1 pick, 0%) and 4 (1 pick) are filtered out.
-    expect(best.map((r) => r.heroId)).toEqual([1, 3]);
-    expect(best.every((r) => r.picks >= 2)).toBe(true);
+  it("never headlines a small sample's win rate", () => {
+    // A 5-for-5 hero is not "the best"; nothing has 8 picks yet.
+    const rows = [row(1, 7, 4), row(2, 5, 5)];
+    const headlines = metaHeadlines(rows);
+    expect(headlines.mostPicked?.heroId).toBe(1);
+    expect(headlines.bestWinRate).toBeNull();
+  });
+
+  it("picks the best exact win rate among heroes with 8+ picks", () => {
+    const rows = [row(1, 12, 7), row(2, 9, 6), row(3, 8, 5), row(4, 3, 3)];
+    // 6/9 = 66.7% beats 5/8 = 62.5% and 7/12 = 58.3%; 3/3 lacks the sample.
+    expect(metaHeadlines(rows).bestWinRate?.heroId).toBe(2);
+  });
+
+  it("breaks an equal rate by the bigger sample", () => {
+    const rows = [row(1, 8, 6), row(2, 12, 9)];
+    expect(metaHeadlines(rows).bestWinRate?.heroId).toBe(2);
   });
 });

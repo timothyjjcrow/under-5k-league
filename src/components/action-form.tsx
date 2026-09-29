@@ -16,6 +16,8 @@ import { useFormStatus } from "react-dom";
 import { pushToast } from "./toaster";
 import { buttonClasses, type ButtonVariant, type ButtonSize } from "./ui";
 import type { ActionResult } from "@/lib/action-result";
+import { SIGN_IN_REQUIRED } from "@/lib/sign-in";
+import { SignInRequired } from "./sign-in-required";
 
 export type { ActionResult };
 
@@ -135,9 +137,13 @@ export function ActionForm({
               ref={errorRef}
               id={errorId}
               tabIndex={-1}
-              className="basis-full w-full col-span-full scroll-mt-40 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger focus:outline-none focus:ring-2 focus:ring-danger/50"
+              className="basis-full w-full col-span-full scroll-mt-40 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger-soft focus:outline-none focus:ring-2 focus:ring-danger/50"
             >
-              {state.error}
+              {state.error === SIGN_IN_REQUIRED ? (
+                <SignInRequired />
+              ) : (
+                state.error
+              )}
             </p>
           ) : null}
           {trackChanges ? (

@@ -17,7 +17,9 @@ describe("regional league configuration", () => {
       gameServerRegionId: 2,
       inhouseLeagueName: "Under 5K In-House League",
       inhouseLeagueConfigured: true,
-      matchSchedule: { label: "Sundays at 6:00 PM Pacific", announced: true },
+      matchSchedule: {
+        label: "Sundays at 6:00 PM Pacific time", timezone: "Pacific", announced: true,
+      },
     });
   });
 
@@ -33,6 +35,8 @@ describe("regional league configuration", () => {
       inhouseLeagueConfigured: false,
       matchSchedule: {
         day: "", time: "", announced: false, label: "Match night to be announced",
+        // The zone in plain words, never the raw "Europe/Berlin" id.
+        timezone: "Berlin",
       },
     });
   });
@@ -48,8 +52,37 @@ describe("regional league configuration", () => {
     });
     expect(config.discordInviteUrl).toBe("https://discord.gg/europe-test");
     expect(config.timeZone).toBe("Europe/London");
-    expect(config.matchSchedule.label).toBe("Fridays at 7:00 PM Europe/London");
+    expect(config.matchSchedule.label).toBe("Fridays at 7:00 PM London time");
+    expect(config.matchSchedule.timezone).toBe("London");
     expect(config.matchSchedule.announced).toBe(true);
+  });
+
+  it("says in the footer who runs each league and who fixes a profile", () => {
+    expect(createLeagueConfig({}).footerNote).toBe(
+      "GGD2L is run by volunteers. Your Steam name, avatar, medal and league results are public here. To fix or remove your profile, message a league admin on Discord.",
+    );
+    // Europe has no Discord invite until it is configured, so it can't
+    // send people there.
+    expect(
+      createLeagueConfig({ NEXT_PUBLIC_LEAGUE_REGION: "eu" }).footerNote,
+    ).toBe(
+      "GGD2L Europe is run by volunteers. Your Steam name, avatar, medal and league results are public here. To fix or remove your profile, contact a league admin.",
+    );
+    expect(
+      createLeagueConfig({
+        NEXT_PUBLIC_LEAGUE_REGION: "eu",
+        NEXT_PUBLIC_DISCORD_INVITE_URL: "https://discord.gg/europe-test",
+      }).footerNote,
+    ).toMatch(/^GGD2L Europe is run by volunteers\..*message a league admin on Discord\.$/);
+  });
+
+  it("names an overridden US zone the way players say it", () => {
+    expect(createLeagueConfig({
+      NEXT_PUBLIC_LEAGUE_TIMEZONE: "America/New_York",
+    }).matchSchedule).toMatchObject({
+      label: "Sundays at 6:00 PM Eastern time",
+      timezone: "Eastern",
+    });
   });
 
   it("keeps a partially configured European slot unannounced", () => {

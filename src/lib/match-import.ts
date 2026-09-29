@@ -22,6 +22,7 @@ import {
   playoffTotalRounds,
 } from "./schedule";
 import { raceHook } from "./race-hook";
+import { seriesRecordLine } from "./record-announce";
 import { markWeekHonorsStale, maybeAnnounceWeekHonors } from "./honors-service";
 import {
   getWebhookUrl,
@@ -36,6 +37,7 @@ import {
   stampResultChange,
   weekReminderKey,
   claimProviderCooldown,
+  fixtureImportCooldownResource,
 } from "./settings";
 import {
   AUTO_SYNC,
@@ -53,6 +55,7 @@ import {
   announcementDedupeKey,
   claimAnnouncementMarker,
   invalidatePendingAnnouncementMarkers,
+  invalidateMatchNudges,
   markAnnouncementFailed,
   markAnnouncementSent,
   recoverableAnnouncementMarker,
@@ -76,6 +79,7 @@ import {
   saveImportEvidence,
   type ImportCandidateSnapshot,
 } from "./import-candidates";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
@@ -220,6 +224,13 @@ export async function announceSeriesResultOnce(match: {
           .catch(() => []),
       )
     : 0;
+  // A new all-time player record rides this post as one line: no extra
+  // send and no second marker, so a retry or re-import cannot post it twice.
+  // Best-effort like the round name: a failed read costs the line only.
+  const record =
+    current._count.games > 0
+      ? await seriesRecordLine(current.id).catch(() => null)
+      : null;
   const sent = await sendDiscordMessage(
     matchResultMessage({
       matchId: current.id,
@@ -234,6 +245,7 @@ export async function announceSeriesResultOnce(match: {
         current.phase === MATCH_PHASE.PLAYOFF
           ? { nextRound: nextPlayoffRoundName(current, playoffRounds) }
           : undefined,
+      record,
     }),
     undefined,
     {
@@ -787,7 +799,9 @@ export async function recomputeSeries(matchId: string) {
 
       // Result state and every queued message derived from the old state move
       // together. A crash can no longer leave an obsolete reminder/result/
-      // honors marker authorized after the winning score projection commits.
+      // honors/nudge marker authorized after the winning score projection
+      // commits.
+      await invalidateMatchNudges(tx, matchId);
       if (
         match.scheduledAt &&
         match.status === MATCH_STATUS.SCHEDULED &&
@@ -871,9 +885,17 @@ export type ImportGameOptions = {
   signal?: AbortSignal;
   /** Internal league-scan handoff: a finalized provider row already fetched. */
   prefetchedLeagueMatch?: OpenDotaMatch;
-  /** Automatic scans recheck intentional exclusions in the write snapshot. */
+  /**
+   * Refuse a game an admin removed (an ImportSuppression row), re-checked in
+   * the write snapshot. Every path sets it except the admin's own overrides
+   * (Add game, Auto-fetch games).
+   */
   respectImportSkips?: boolean;
 };
+
+/** Shown when a removed game is pasted again; only an admin can add it back. */
+const ADMIN_REMOVED_GAME_ERROR =
+  "An admin removed this game from the results, so it can't be imported again here. If it should count, ask an admin to add it back.";
 
 /** Re-run in the decisive Serializable snapshot; no transaction spans provider IO. */
 async function fixtureWindowFailure(
@@ -1002,6 +1024,15 @@ export async function importGameForMatch(
           : "That game is already reserved for another scheduled event",
     };
   }
+  // Refuse a removed game before spending an OpenDota call or a captain's
+  // lookup cooldown on it. Only a fast path: the write transaction below
+  // re-checks, because an admin can remove the game during provider IO.
+  if (
+    options.respectImportSkips &&
+    (await loadImportSuppressions(match.seasonId)).has(dotaMatchId)
+  ) {
+    return { ok: false, error: ADMIN_REMOVED_GAME_ERROR, code: "ADMIN_SUPPRESSED" };
+  }
 
   const fetchOptions: OpenDotaFetchOptions = {
     deadlineMs: options.deadlineMs,
@@ -1018,7 +1049,7 @@ export async function importGameForMatch(
     const providerClaim = await claimProviderCooldown(
       "open-dota-match-import",
       options.providerActorId,
-      `fixture:${match.id}`,
+      fixtureImportCooldownResource(match.id),
     );
     if (providerClaim === "cooldown") {
       return {
@@ -1164,7 +1195,7 @@ export async function importGameForMatch(
           }
           if (options.respectImportSkips &&
               (await loadImportSuppressions(fresh.seasonId, tx)).has(dotaMatchId)) {
-            throw new ImportRaceError("An administrator excluded this game from automatic import", "ADMIN_SUPPRESSED");
+            throw new ImportRaceError(ADMIN_REMOVED_GAME_ERROR, "ADMIN_SUPPRESSED");
           }
           // Classification/attribution belongs to the write snapshot too:
           // roster and standin changes during provider IO must not be stamped
@@ -1240,6 +1271,9 @@ export async function importGameForMatch(
               autoSyncAttempts: 0,
             },
           });
+          // A "we couldn't find your games" nudge still queued for this
+          // fixture is answered by this game.
+          await invalidateMatchNudges(tx, matchId);
           if (
             fresh.scheduledAt &&
             fresh.status === MATCH_STATUS.SCHEDULED &&
@@ -1278,14 +1312,14 @@ export async function importGameForMatch(
       // The dedupe check above races with concurrent imports (an OpenDota
       // fetch sits between check and create) — the unique index is the real
       // arbiter.
-      if ((e as { code?: string }).code === "P2002") {
+      if (isUniqueViolation(e)) {
         return {
           ok: false,
           code: "OWNED_ELSEWHERE",
           error: "That game was just recorded by someone else",
         };
       }
-      if ((e as { code?: string }).code === "P2034") {
+      if (isSerializationConflict(e)) {
         // A reminder marker can be the conflicting writer even when no rival
         // imported this game. Start a new Serializable snapshot so reminder
         // invalidation remains atomic with the game/result mutation. A true
@@ -1667,6 +1701,20 @@ export type EnrichResult = {
   enriched: number;
   failed: number;
   remaining: number;
+  /** stopOnFailure ended the batch at a game OpenDota didn't return. */
+  stoppedOnFailure?: boolean;
+};
+
+export type EnrichOptions = OpenDotaFetchOptions & {
+  /** Time left that a game needs before it is started (unattended runs). */
+  minStartMs?: number;
+  /**
+   * Stop at the first game OpenDota refuses (a rate limit, an outage or a
+   * timeout) instead of spending the rest of the batch on it. The automatic
+   * refresh sets this so it backs off rather than piling on. A game OpenDota
+   * no longer has (404) doesn't stop the batch: it is marked done.
+   */
+  stopOnFailure?: boolean;
 };
 
 /**
@@ -1676,10 +1724,15 @@ export type EnrichResult = {
  * stored JSON — attribution (userId/teamId) and recorded results are never
  * touched. Every processed line gains a `benchmarks` key (null when OpenDota
  * has none), which is also the "already enriched" marker, so runs are
- * idempotent. Bounded per run so one click can't burn the API budget; run
- * again to continue where it left off.
+ * idempotent. A game OpenDota answers 404 for gets the same marker with no
+ * new fields: asking again can't add stats, and left unmarked it would be
+ * fetched, and fail, on every hourly pass forever. Bounded per run so one
+ * click can't burn the API budget; run again to continue where it left off.
  */
-export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
+export async function enrichStoredGames(
+  limit = 12,
+  options: EnrichOptions = {},
+): Promise<EnrichResult> {
   // The `"benchmarks":` key only ever appears as a line's own field — a
   // player whose persona name is literally `benchmarks` serializes with a
   // comma after it, so the colon keeps the marker probe honest.
@@ -1695,9 +1748,10 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
 
   let enriched = 0;
   let failed = 0;
-  // A failed game keeps its stored JSON but moves to the back of the
-  // fetchedAt-ordered queue — otherwise a dozen permanently-unfetchable games
-  // at the head would starve every later run of this bounded batch.
+  // A game OpenDota refused (or whose JSON is malformed) keeps its stored
+  // JSON but moves to the back of the fetchedAt-ordered queue, so a few bad
+  // games at the head can't starve every later run of this bounded batch.
+  // Games OpenDota no longer has leave the queue instead (see below).
   const writeIfUnchanged = (
     game: { id: string; players: string },
     data: { players?: string; fetchedAt?: Date },
@@ -1717,7 +1771,9 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
   });
   const requeue = (game: { id: string; players: string }) =>
     writeIfUnchanged(game, { fetchedAt: new Date() });
+  let stoppedOnFailure = false;
   for (const game of batch) {
+    if (!canStartOpenDotaFetch(options, options.minStartMs)) break;
     let lines: PlayerStat[];
     try {
       const parsed = JSON.parse(game.players);
@@ -1729,10 +1785,27 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
       continue;
     }
 
-    const od = await fetchOpenDotaMatch(game.dotaMatchId);
+    const report = { missing: false };
+    const od = await fetchOpenDotaMatch(game.dotaMatchId, options, report);
     if (!od) {
       failed++;
+      if (report.missing) {
+        // OpenDota has no such match any more, so no later run can add
+        // stats either. Mark every line done (benchmarks: null, nothing
+        // else added) so the game leaves the queue. Not a refusal: the
+        // batch, and the hourly refresh, carry on.
+        await writeIfUnchanged(game, {
+          players: JSON.stringify(
+            lines.map((line) => ({ ...line, benchmarks: null })),
+          ),
+        });
+        continue;
+      }
       await requeue(game);
+      if (options.stopOnFailure) {
+        stoppedOnFailure = true;
+        break;
+      }
       continue;
     }
 
@@ -1773,6 +1846,7 @@ export async function enrichStoredGames(limit = 12): Promise<EnrichResult> {
     enriched,
     failed,
     remaining: await prisma.game.count({ where: unenriched }),
+    ...(stoppedOnFailure ? { stoppedOnFailure } : {}),
   };
 }
 
@@ -1787,6 +1861,8 @@ export type LeagueSyncResult = {
   unreachable?: boolean;
   /** The unattended worker stopped before starting more network work. */
   deadlineReached?: boolean;
+  /** Feed games left out because an admin removed them (not re-added since). */
+  removedSkipped?: number;
 };
 
 // Stay below SQLite's conservative bind-parameter ceiling while also keeping
@@ -1808,8 +1884,10 @@ const LEAGUE_GAME_LOOKUP_BATCH_SIZE = 500;
  * only missing provider evidence backs off, then enters administrator review.
  * The legacy scanner skip list remains readable for compatibility, while new
  * decisions use revision-fenced candidate rows. Intentional administrator
- * exclusions are separate and never expire. Manual sync can retry provider
- * failures and reconsider legacy scan decisions.
+ * exclusions (a removed game) are separate, never expire and bind BOTH modes:
+ * manual sync can retry provider failures and reconsider legacy scan
+ * decisions, but it never brings back a removed game — that is the per-match
+ * admin Add game / Auto-fetch games override. It counts the ones it skipped.
  */
 export async function syncLeagueGames(
   seasonId: string,
@@ -1892,12 +1970,25 @@ export async function syncLeagueGames(
     }
   }
   const skip = new Set(skipList);
-  // Legacy automated exclusions remain a distinct compatibility input.
-  // Intentional removals are independently protected by durable unique rows
-  // and are rechecked in the final automatic-import transaction.
-  if (opts.auto) {
-    for (const id of await loadImportSkips(seasonId)) skip.add(id);
-  }
+  // The legacy scan skip list above is an automatic-only compatibility input.
+  // Admin removals bind BOTH modes: they are durable unique rows, skipped here
+  // before any provider call and rechecked in the import transaction. Manual
+  // mode counts the ones it passes over so the admin's toast can say so.
+  const removed = await loadImportSkips(seasonId);
+  for (const id of removed) skip.add(id);
+  const removedInFeed = new Set<string>();
+  const removedSkipped = async (): Promise<{ removedSkipped?: number }> => {
+    if (opts.auto || removedInFeed.size === 0) return {};
+    const ids = [...removedInFeed];
+    // A game the admin has since added back is recorded, not skipped.
+    const [games, claims] = await Promise.all([
+      prisma.game.findMany({ where: { dotaMatchId: { in: ids } }, select: { dotaMatchId: true } }),
+      prisma.dotaMatchClaim.findMany({ where: { dotaMatchId: { in: ids } }, select: { dotaMatchId: true } }),
+    ]);
+    const back = new Set([...games, ...claims].map((row) => row.dotaMatchId));
+    const count = ids.filter((id) => !back.has(id)).length;
+    return count > 0 ? { removedSkipped: count } : {};
+  };
   const newlySkipped: string[] = [];
   const evidenceById = new Map<string, ImportCandidateSnapshot>();
 
@@ -2036,7 +2127,10 @@ export async function syncLeagueGames(
     for (const row of cached.values()) evidenceById.set(row.dotaMatchId, row);
     for (const dotaId of new Set(batch)) {
       const idStr = String(dotaId);
-      if (skip.has(idStr)) continue;
+      if (skip.has(idStr)) {
+        if (removed.has(idStr)) removedInFeed.add(idStr);
+        continue;
+      }
       if (recorded.has(idStr)) continue;
       const saved = cached.get(idStr);
       if (opts.auto && saved?.status === "NEEDS_REVIEW") {
@@ -2223,6 +2317,7 @@ export async function syncLeagueGames(
     }
     return {
       imported: 0, scanned: leagueMatchIds.length, pending: true,
+      ...(await removedSkipped()),
       ...(reviewRequired ? { reviewRequired: true, error: "Some game details need administrator review before automatic feed assignment can continue" } : {}),
       ...(deadlineReached ? { deadlineReached: true } : {}),
     };
@@ -2248,7 +2343,7 @@ export async function syncLeagueGames(
         ...fetchOptions,
         prefetchedLeagueMatch: c.details,
         enforceFixtureWindow: true,
-        respectImportSkips: !!opts.auto,
+        respectImportSkips: true,
       });
       if (r.ok) {
         imported++;
@@ -2284,5 +2379,6 @@ export async function syncLeagueGames(
     scanned: leagueMatchIds.length,
     ...(!discoveryComplete ? { pending: true } : {}),
     ...(deadlineReached ? { deadlineReached: true } : {}),
+    ...(await removedSkipped()),
   };
 }

@@ -6,19 +6,46 @@ import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
-import { parseAvailabilityStatus } from "@/lib/availability";
-import { playerOutMessage, sendDiscordMessage } from "@/lib/discord";
+import {
+  CHECKIN_REFUSAL_MESSAGE,
+  checkinClosedReason,
+  outBackPingThrottleKey,
+  outPingThrottleKey,
+  parseAvailabilityStatus,
+} from "@/lib/availability";
+import {
+  awayRangeResult,
+  parseAwayRange,
+  parseSeenFixtures,
+} from "@/lib/away-range";
+import {
+  currentCheckinStatus,
+  markAwayRange,
+  recordCheckin,
+  resolveCheckinSeat,
+} from "@/lib/availability-service";
+import {
+  playerAwayMessage,
+  playerBackInMessage,
+  playerOutMessage,
+  sendDiscordMessage,
+} from "@/lib/discord";
 import { mentionUsers } from "@/lib/discord-mentions";
-import { claimThrottle } from "@/lib/settings";
+import { claimThrottle, claimThrottleAnswer } from "@/lib/settings";
 import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
-import { isPlayoffPhase, matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { isPlayoffPhase } from "@/lib/league-lifecycle";
+import { roundLabelsForPost } from "@/lib/playoff-rounds";
 import type { ActionResult } from "@/lib/action-result";
 import { singleActiveSeason } from "@/lib/season";
-import { invalidateMatchLineups, loadLineupCandidates } from "@/lib/match-lineups";
 import {
   actionErrorMessage,
   UserFacingError,
 } from "@/lib/user-facing-error";
+import { isSerializationConflict } from "@/lib/prisma-errors";
+import {
+  checkinNudgeToast,
+  sendCheckinNudge,
+} from "@/lib/checkin-nudge-service";
 
 /**
  * Record the signed-in player's match-night RSVP (IN | OUT) for a scheduled
@@ -71,6 +98,7 @@ export async function setAvailability(
               seasonId: true,
               week: true,
               phase: true,
+              bracketSlot: true,
               status: true,
               scheduledAt: true,
               scheduleRevision: true,
@@ -91,102 +119,36 @@ export async function setAvailability(
           );
         }
 
-        const draftStatus = activeSeason.draft?.status;
-        if (
-          !matchCheckinOpen(
-            activeSeason.status,
-            draftStatus,
-            match.status,
-            match.scheduledAt,
-            Date.now(),
-          )
-        ) {
-          if (match.status === MATCH_STATUS.COMPLETED)
-            throw new UserFacingError("That match is already finished");
-          if (!postAuctionWorkOpen(activeSeason.status, draftStatus))
-            throw new UserFacingError(
-              "Check-in is not open in this league phase",
-            );
-          if (match.scheduledAt)
-            throw new UserFacingError(
-              "Check-in is closed because that kickoff has passed — the result is still outstanding",
-            );
-          throw new UserFacingError(
-            "That match does not have a kickoff yet",
-          );
-        }
-
-        const teamIds = [match.homeTeamId, match.awayTeamId];
-        const [onRoster, replacedSeat, standinSeat, prior] = await Promise.all([
-          tx.teamMember.findFirst({
-            where: {
-              seasonId: match.seasonId,
-              userId: user.id,
-              teamId: { in: teamIds },
-            },
-            select: { teamId: true },
-          }),
-          tx.standinAssignment.findFirst({
-            where: { matchId, replacingUserId: user.id },
-            select: { id: true },
-          }),
-          tx.standinAssignment.findFirst({
-            where: {
-              matchId,
-              standinUserId: user.id,
-              teamId: { in: teamIds },
-            },
-            select: { teamId: true },
-          }),
-          tx.matchAvailability.findUnique({
-            where: { matchId_userId: { matchId, userId: user.id } },
-            select: { status: true, scheduleRevision: true },
-          }),
+        // The fixture half of the gate, then the player half — both shared
+        // with markAwayRange so the range can never mark a fixture this
+        // action would refuse.
+        const closed = checkinClosedReason(
+          activeSeason.status,
+          activeSeason.draft?.status,
+          match,
+          Date.now(),
+        );
+        if (closed) throw new UserFacingError(CHECKIN_REFUSAL_MESSAGE[closed]);
+        const [seat, priorStatus] = await Promise.all([
+          resolveCheckinSeat(tx, match, user.id),
+          currentCheckinStatus(tx, match, user.id),
         ]);
-        if (onRoster && replacedSeat) {
-          throw new UserFacingError(
-            "A standin is covering your seat for this match, so you are not in its playing roster",
-          );
-        }
-        if (!onRoster && !standinSeat) {
-          throw new UserFacingError("You're not playing in this match");
-        }
-        const affectedTeamId = onRoster?.teamId ?? standinSeat!.teamId;
-        if ((affectedTeamId === match.homeTeamId ? match.homeTeam : match.awayTeam).withdrawn) {
-          throw new UserFacingError("A withdrawn team cannot check in for this match.");
-        }
-        const candidates = await loadLineupCandidates(tx, match, affectedTeamId);
-        if (!candidates.some((candidate) => candidate.userId === user.id && candidate.eligible)) {
-          throw new UserFacingError("You're not playing in this match — the roster or cover assignment changed.");
+        if ("refusal" in seat) {
+          throw new UserFacingError(CHECKIN_REFUSAL_MESSAGE[seat.refusal]);
         }
 
-        const priorStatus = prior?.scheduleRevision === match.scheduleRevision ? prior.status : null;
         if (priorStatus !== status) {
-          await tx.matchAvailability.upsert({
-            where: { matchId_userId: { matchId, userId: user.id } },
-            create: { matchId, userId: user.id, status, scheduleRevision: match.scheduleRevision },
-            update: { status, scheduleRevision: match.scheduleRevision },
-          });
-          await invalidateMatchLineups(tx, match.id, "A player's check-in changed", new Date(), affectedTeamId);
+          await recordCheckin(tx, match, user.id, status);
         }
 
         // Which side loses a player — the roster seat, or the team a standin
         // was covering for. This is who has to go find replacement cover.
-        return {
-          match,
-          priorStatus,
-          affectedCaptainId:
-            affectedTeamId === match.homeTeamId
-              ? match.homeTeam.captainId
-              : affectedTeamId === match.awayTeamId
-                ? match.awayTeam.captainId
-                : null,
-        };
+        return { match, priorStatus, affectedCaptainId: seat.captainId };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         error: "That match just changed — reload and try your RSVP again",
       };
@@ -209,34 +171,64 @@ export async function setAvailability(
   // The throttle backs up the was-it-already-OUT check: that one misses
   // OUT→IN→OUT, which is a duplicate line in the channel but a SECOND phone
   // buzz now that the message actually mentions the captain.
+  //
+  // An IN after an ANNOUNCED OUT closes the loop: the same captain hears the
+  // player can make it after all, so they stop hunting for cover. It answers
+  // the OUT ping's own throttle row (claimThrottleAnswer), so an OUT nobody
+  // announced gets no answer. Answering deletes that row on purpose: a
+  // captain just told "no need for cover" must hear a fresh OUT. So a player
+  // flipping back and forth buzzes the captain at most three times per window
+  // (OUT, "after all", OUT again), where the plain OUT throttle allowed one;
+  // the answer's own throttle stops the fourth (availability.itest.ts pins it).
   try {
+    const fixture = {
+      playerName: user.name,
+      homeName: match.homeTeam.name,
+      awayName: match.awayTeam.name,
+      week: match.week,
+      isPlayoff: isPlayoffPhase(match.phase),
+      isTiebreaker: match.phase === "TIEBREAKER",
+      // Read after the commit, never inside the SERIALIZABLE check-in.
+      roundLabel: isPlayoffPhase(match.phase)
+        ? (await roundLabelsForPost([match])).get(match.id)
+        : null,
+      whenMs: match.scheduledAt?.getTime() ?? null,
+      // Deep link — the mentioned captain lands on the page that holds the
+      // Standins card, not on the front door.
+      matchId: match.id,
+    };
+    let content: string | null = null;
     if (
       status === "OUT" &&
       priorStatus !== "OUT" &&
       (await claimThrottle(
-        `outPing:${matchId}:${user.id}`,
+        outPingThrottleKey(matchId, user.id),
         RSVP_OUT_PING_THROTTLE_SECONDS,
         Date.now(),
       ))
     ) {
-      // The message ends by telling the captain to line up cover, so send it
-      // to the captain rather than to a channel and hope. Nobody else is
-      // mentioned: a withdrawal is not the rest of the league's problem.
+      content = playerOutMessage(fixture);
+    } else if (
+      status === "IN" &&
+      priorStatus === "OUT" &&
+      (await claimThrottleAnswer(
+        outPingThrottleKey(matchId, user.id),
+        outBackPingThrottleKey(matchId, user.id),
+        RSVP_OUT_PING_THROTTLE_SECONDS,
+        Date.now(),
+      ))
+    ) {
+      content = playerBackInMessage(fixture);
+    }
+    if (content) {
+      // Both messages are for the captain who has to find (or stop finding)
+      // cover, so they go to that captain rather than to a channel and hope.
+      // Nobody else is mentioned: a withdrawal is not the rest of the
+      // league's problem.
       await sendDiscordMessage(
-        playerOutMessage({
-          playerName: user.name,
-          homeName: match.homeTeam.name,
-          awayName: match.awayTeam.name,
-          week: match.week,
-          isPlayoff: isPlayoffPhase(match.phase),
-          isTiebreaker: match.phase === "TIEBREAKER",
-          whenMs: match.scheduledAt?.getTime() ?? null,
-          // Deep link — the mentioned captain lands on the page that holds the
-          // Standins card, not on the front door.
-          matchId: match.id,
-        }),
-        // Never ping the captain about their OWN withdrawal — they just
-        // clicked the button and are looking at the toast.
+        content,
+        // Never ping the captain about their OWN answer — they just clicked
+        // the button and are looking at the toast.
         await mentionUsers([
           affectedCaptainId === user.id ? null : affectedCaptainId,
         ]),
@@ -256,4 +248,145 @@ export async function setAvailability(
         ? match.status === MATCH_STATUS.LIVE ? "You're ready for the next game ✓" : "You're confirmed for the match ✓"
         : "Marked as unavailable — your captain and the admin can line up a standin",
   };
+}
+
+/**
+ * "I'm away": mark the signed-in player OUT for every fixture of theirs whose
+ * kickoff falls between two dates, in one go, and tell the captain(s) once.
+ *
+ * The dates arrive as browser-computed epochs (local midnight of each day —
+ * the server's zone is UTC in production and must never read a raw date).
+ * `seen` is the fixture list the page showed, with each one's
+ * scheduleRevision: a fixture is only answered for the kickoff the player saw.
+ */
+export async function markAwayDates(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+
+  const parsed = parseAwayRange(
+    str(formData, "awayFromTs"),
+    str(formData, "awayBackTs"),
+    Date.now(),
+  );
+  if ("error" in parsed) return { error: parsed.error };
+  const expectedSeasonId = str(formData, "expectedSeasonId");
+  if (!expectedSeasonId) return { error: "Reload the page and try again." };
+
+  let outcome;
+  try {
+    outcome = await markAwayRange({
+      userId: user.id,
+      expectedSeasonId,
+      range: parsed.range,
+      seen: parseSeenFixtures(str(formData, "seen")),
+      nowMs: Date.now(),
+    });
+  } catch (error) {
+    if (isSerializationConflict(error)) {
+      return { error: "Your fixtures just changed. Reload and try again." };
+    }
+    return {
+      error: actionErrorMessage(
+        error,
+        "Could not save your away dates. Reload and try again.",
+        "availability.away",
+      ),
+    };
+  }
+
+  // ONE message for the whole range, after the write has committed. Each
+  // fixture still claims the single-OUT throttle key, so a range followed by
+  // a one-match OUT (or the reverse) can never ping twice for one match — and
+  // a fixture that lost its claim is left out of the message entirely.
+  // Best-effort like setAvailability: nothing here can undo the save.
+  try {
+    const announce = [];
+    for (const fixture of outcome.marked) {
+      if (
+        await claimThrottle(
+          outPingThrottleKey(fixture.matchId, user.id),
+          RSVP_OUT_PING_THROTTLE_SECONDS,
+          Date.now(),
+        )
+      ) {
+        announce.push(fixture);
+      }
+    }
+    if (announce.length) {
+      await sendDiscordMessage(
+        playerAwayMessage(
+          user.name,
+          announce.map((f) => ({
+            homeName: f.homeName,
+            awayName: f.awayName,
+            week: f.week,
+            isPlayoff: isPlayoffPhase(f.phase),
+            isTiebreaker: f.phase === "TIEBREAKER",
+            roundLabel: f.roundLabel,
+            whenMs: f.whenMs,
+            matchId: f.matchId,
+          })),
+        ),
+        // Every captain who now has a seat to fill (a standin's bookings can
+        // span teams) — never the player themselves, who is a captain only
+        // when they are the one reading the toast.
+        await mentionUsers(
+          announce.map((f) => (f.captainId === user.id ? null : f.captainId)),
+        ),
+      );
+    }
+  } catch {
+    // The OUTs are committed; a throttle or mention lookup outage must not
+    // turn a saved range into an error that invites a second save.
+  }
+
+  if (outcome.marked.length) {
+    updateTag(AUTOMATION_GATE_TAG);
+    revalidatePath("/", "layout");
+  }
+  return awayRangeResult(outcome);
+}
+
+/**
+ * A captain's optional "Remind the N who haven't answered": one Discord post
+ * that @-mentions only their own team's players with no answer for this
+ * match. The rules and the throttle live in checkin-nudge-service.ts.
+ */
+export async function remindUnansweredCheckins(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  let res;
+  try {
+    res = await sendCheckinNudge({
+      matchId: str(formData, "matchId"),
+      captainId: user.id,
+      nowMs: Date.now(),
+    });
+  } catch (error) {
+    return {
+      error: actionErrorMessage(
+        error,
+        "Could not send that reminder. Reload and try again.",
+        "availability.nudge",
+      ),
+    };
+  }
+  if (!res.ok) return { error: res.error };
+  // The match page swaps the button for "Reminder sent".
+  revalidatePath("/", "layout");
+  return { message: checkinNudgeToast(res.reminded, res.pinged) };
 }

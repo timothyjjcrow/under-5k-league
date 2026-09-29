@@ -23,7 +23,9 @@ const STRICT_FILES = new Set([
   "CLAUDE.md",
   "README.md",
   "docs/ARCHITECTURE.md",
+  "docs/DECISIONS.md",
   "docs/PRODUCTION-OPERATIONS.md",
+  "docs/RELEASING.md",
   "next.config.js",
   "next.config.mjs",
   "next.config.ts",
@@ -50,6 +52,31 @@ const TEST_FILE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/;
 const TEST_PREFIXES = ["e2e/", "test/"];
 const DOC_PREFIXES = ["docs/"];
 
+// The mutation ratchet (scripts/mutation-guard.mjs) deletes each protected
+// guard and runs the PostgreSQL integration suite. Its verdict can only move
+// when a change reaches the guarded code, that suite or anything it imports,
+// or the scripts, configs, packages and workflow that run it. needs_mutation
+// is false only when EVERY changed file is a kind none of that loads: a page
+// or component, a presentation asset, documentation, or a browser/unit test.
+// Every other path, unknown ones included, runs the ratchet. The prefixes
+// below are refused even inside those kinds, and
+// src/lib/release-classification.test.ts walks the suite's imports and the
+// guard's FILES list so a file either of them reaches can never be neutral.
+const MUTATION_SENSITIVE_PREFIXES = [
+  ".github/",
+  "ops/",
+  "prisma/",
+  "scripts/",
+  "src/app/actions/",
+  "src/app/api/",
+  "src/lib/",
+  "test/",
+];
+// Route handlers outside src/app/api are server entry points the suite can
+// import directly (test/integration imports src/app/recap/route.ts).
+const MUTATION_SENSITIVE_APP_FILE = /^src\/app\/(?:.+\/)?route\.[cm]?[jt]sx?$/;
+const MUTATION_NEUTRAL_DOCS = new Set(["AGENTS.md", "CLAUDE.md", "README.md"]);
+
 const SCHEDULER_PREFIXES = [
   "ops/",
   "src/app/api/cron/",
@@ -57,6 +84,33 @@ const SCHEDULER_PREFIXES = [
 ];
 const SCHEDULER_LIBRARY =
   /^src\/lib\/(?:automation(?:-|\.)|cron(?:-|\.)|external-automation-scheduler(?:\.|$))/;
+// Everything under ops/ is scheduler plumbing unless it is named here. These
+// services are hosted independently of the website and its scheduler (they
+// are the ops/ entries .vercelignore keeps out of the website upload), so they
+// stay strict for review through STRICT_PREFIXES without selecting a scheduler
+// pause. The list is an exemption, not an allowlist: a new ops/ folder, such as
+// a second scheduler worker, selects scheduler controls until someone adds it
+// here on purpose.
+export const INDEPENDENT_OPS_PREFIXES = [
+  "ops/dota-lobby-bot/",
+  "ops/dota-lobby-relay/",
+];
+
+function isSchedulerPath(path) {
+  if (INDEPENDENT_OPS_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    return false;
+  }
+  return (
+    SCHEDULER_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    SCHEDULER_LIBRARY.test(path)
+  );
+}
+
+// A plain deletion of a regular file is judged like a modification of that
+// path, except in the schema and scheduler surfaces, where removing a file
+// (a migration, the worker, the cron route or its libraries) still selects
+// every control. Renames, copies and type changes stay fail-closed everywhere.
+const DELETED_FILE_MODE = "000000";
 
 function fail(message) {
   throw new Error(`release classifier: ${message}`);
@@ -285,6 +339,23 @@ function isAppPath(path) {
   return path.startsWith("src/app/") || path.startsWith("src/components/");
 }
 
+function isMutationNeutralPath(path) {
+  if (
+    MUTATION_SENSITIVE_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    MUTATION_SENSITIVE_APP_FILE.test(path)
+  ) {
+    return false;
+  }
+  return (
+    MUTATION_NEUTRAL_DOCS.has(path) ||
+    DOC_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path.startsWith("e2e/") ||
+    TEST_FILE.test(path) ||
+    isAppPath(path) ||
+    (path.startsWith("public/") && UI_PUBLIC_ASSET.test(path))
+  );
+}
+
 function impactForStrictPath(path) {
   if (isTestPath(path)) {
     return { needsDbRelease: false, needsSchedulerPause: false };
@@ -294,16 +365,24 @@ function impactForStrictPath(path) {
   // writer. Only a committed Prisma/schema surface selects the DB-release
   // procedure; malformed/unknown changes are handled fail-closed by the caller.
   const needsDbRelease = path.startsWith("prisma/");
-  const needsSchedulerPause =
-    needsDbRelease ||
-    SCHEDULER_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
-    SCHEDULER_LIBRARY.test(path);
+  const needsSchedulerPause = needsDbRelease || isSchedulerPath(path);
   return { needsDbRelease, needsSchedulerPause };
+}
+
+function isDeletionFailClosedPath(path) {
+  return path.startsWith("prisma/") || isSchedulerPath(path);
 }
 
 function entryModeIsSafe(entry) {
   if (entry.code === "A") {
-    return entry.oldMode === "000000" && entry.newMode === REGULAR_FILE_MODE;
+    return (
+      entry.oldMode === DELETED_FILE_MODE && entry.newMode === REGULAR_FILE_MODE
+    );
+  }
+  if (entry.code === "D") {
+    return (
+      entry.oldMode === REGULAR_FILE_MODE && entry.newMode === DELETED_FILE_MODE
+    );
   }
   return (
     entry.code === "M" &&
@@ -316,14 +395,23 @@ function resultFor(
   lane,
   changedFiles,
   reasons,
-  { needsDbRelease = false, needsSchedulerPause = false } = {},
+  {
+    needsDbRelease = false,
+    needsSchedulerPause = false,
+    needsMutation = true,
+  } = {},
 ) {
+  if (!needsMutation) {
+    reasons.push(
+      "mutation ratchet not needed: no changed file reaches the guarded claims, the PostgreSQL suite or the tools that run it",
+    );
+  }
   return {
     lane,
     changedFiles,
     reasons,
     needs_postgres: lane !== "ui-only",
-    needs_mutation: lane !== "ui-only",
+    needs_mutation: needsMutation,
     needs_e2e: true,
     needs_db_release: needsDbRelease,
     needs_scheduler_pause: needsSchedulerPause,
@@ -342,18 +430,24 @@ export function classifyEntries(entries) {
   let sawStrict = false;
   let needsDbRelease = false;
   let needsSchedulerPause = false;
+  let needsMutation = false;
 
   for (const entry of entries) {
     const label = entry.oldPath
       ? `${entry.oldPath} -> ${entry.path}`
       : entry.path;
 
-    if (entry.code !== "A" && entry.code !== "M") {
+    if (
+      (entry.code !== "A" && entry.code !== "M" && entry.code !== "D") ||
+      entry.status !== entry.code ||
+      entry.oldPath !== null
+    ) {
       sawStrict = true;
       needsDbRelease = true;
       needsSchedulerPause = true;
+      needsMutation = true;
       reasons.push(
-        `${entry.status} ${label}: only additions/modifications qualify`,
+        `${entry.status} ${label}: only additions/modifications and plain deletions qualify`,
       );
       continue;
     }
@@ -361,11 +455,25 @@ export function classifyEntries(entries) {
       sawStrict = true;
       needsDbRelease = true;
       needsSchedulerPause = true;
+      needsMutation = true;
       reasons.push(
         `${entry.status} ${label}: file type or mode is not an unchanged regular 100644 file`,
       );
       continue;
     }
+    if (entry.code === "D" && isDeletionFailClosedPath(entry.path)) {
+      sawStrict = true;
+      needsDbRelease = true;
+      needsSchedulerPause = true;
+      needsMutation = true;
+      reasons.push(
+        `${entry.status} ${label}: deleting a schema or scheduler file requires database release and scheduler controls`,
+      );
+      continue;
+    }
+    // Judged per path, independently of the lane: an unknown path is never
+    // mutation-neutral, so it still runs the ratchet below.
+    if (!isMutationNeutralPath(entry.path)) needsMutation = true;
     if (isStrictPath(entry.path)) {
       sawStrict = true;
       const impact = impactForStrictPath(entry.path);
@@ -405,15 +513,18 @@ export function classifyEntries(entries) {
     return resultFor("strict", changedFiles, reasons, {
       needsDbRelease,
       needsSchedulerPause,
+      needsMutation,
     });
   }
-  if (sawApp) return resultFor("app", changedFiles, reasons);
-  if (sawUi) return resultFor("ui-only", changedFiles, reasons);
+  if (sawApp) return resultFor("app", changedFiles, reasons, { needsMutation });
+  if (sawUi) {
+    return resultFor("ui-only", changedFiles, reasons, { needsMutation });
+  }
 
   reasons.push(
     "no deployable UI or application change established a fast lane",
   );
-  return resultFor("strict", changedFiles, reasons);
+  return resultFor("strict", changedFiles, reasons, { needsMutation });
 }
 
 function verifyFullCommitSha(sha, label, cwd) {

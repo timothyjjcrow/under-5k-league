@@ -16,7 +16,7 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
 
 - **Steam sign-in** (OpenID 2.0) with a dev/mock login for local testing. Real
   logins pull the player's **Steam name + avatar** via the Steam Web API; admins
-  can bulk "Sync avatars" and players can refresh from their profile.
+  can bulk "Sync avatars" and players can refresh from My account (`/me`).
 - **Signups** with live progress toward the minimum needed to start, and an
   optional **soft MMR limit** (e.g. an under-4.5K league) that flags over-limit
   signups for admin review — only the hard 5K+ ceiling refuses anyone.
@@ -33,22 +33,21 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
   OpenDota (auto-detect from rosters, or paste a match id/URL). Winners and
   series scores are recorded automatically, with full box scores (heroes, KDA)
   on a match detail page.
-- **Team & player pages** — rosters, records, and fixtures, a "My Team"
-  shortcut in the nav, and profiles that show each player’s **Steam-verified
+- **Team & player pages** — rosters, records, and fixtures (captains can rename
+  their team and set its logo), a "My Team" shortcut in the nav, and profiles that show each player’s **Steam-verified
   Dota identity** and **ranked medal** — a resource for captains at draft time
   (medals appear in the player pool and draft room).
 - **Player scouting profiles** — on signup players pick their **preferred
-  roles**, list **favorite heroes**, and write what they want from the league +
-  a **note to captains**; all of it shows in the player pool and draft room.
+  roles**, list **favorite heroes**, and write an optional **About you** note
+  for captains; all of it shows in the player pool and draft room.
 - **In-client Dota league** — register the league at dota2.com/league, save the
   **league id**, host matches in private lobbies tagged with it, and one-click
   **sync** pulls every league game automatically (no manual match ids).
 - **Match scheduling** — admins set match date/times; players see when they play
   next on their dashboard, team page, and the schedule.
 - **Evergreen inhouses** — a season-independent pickup queue with presence,
-  exact queue priority, ready checks, captain voting, a snake draft, optional
-  Cred betting, OpenDota result recovery, Elo/Cred ladders, and a permanent
-  paginated history.
+  exact queue priority, ready checks, captain voting, a snake draft, OpenDota
+  result recovery, an Elo ladder, and a permanent paginated history.
 - **Admin control panel** to run the whole league (phases, captains, draft,
   schedule, results) — hidden unless you're an admin.
 - **Smooth UX** — toast notifications on every action, graceful
@@ -66,7 +65,8 @@ SIGNUPS  →  DRAFT  →  REGULAR_SEASON  →  PLAYOFFS  →  COMPLETE  →  (ne
 
 ## Getting started
 
-Requires Node ≥ 20.18.
+Requires Node.js 22.x (`nvm use` reads `.nvmrc`). Local SQLite backups use
+`node:sqlite`, which needs 22.16 or newer.
 
 ```bash
 npm install
@@ -194,12 +194,9 @@ live state preserves the same order, a failed ready check restores the exact
 original position, and timed auto-picks break equal MMR with
 `queuedAt` + `userId`.
 
-Cred recovery uses one shared resolver. A successful cancel or void targets
-that action's own lobby before returning; global room/site heartbeats attempt up
-to 25 eligible lobbies oldest-first, isolate failures per row, and rotate a
-failed row to the back for the next pass. `InhouseLobby.completedAt` is the
-immutable result-recency clock. Mutable `updatedAt` is only the settlement retry
-cursor and must never drive a result banner or “last game” label.
+`InhouseLobby.completedAt` is the immutable result-recency clock. Mutable
+`updatedAt` changes on any later write to the row and must never drive a result
+banner or “last game” label.
 
 The site and Discord board choose the newest **formed** completed lobby
 (`createdAt`, then `id`) for proof-of-life. They report its played end from the
@@ -247,10 +244,12 @@ already collected.
 
 Players' **ranked medals** come from the same source (OpenDota `rank_tier`). The
 Dota account is derived from each player's verified Steam sign-in; players can
-refresh their own medal, or an admin can populate everyone's at once with the
-**Sync ranks & stats** button before the draft (it also pulls
-each player's pub-scouting snapshot — recent-games win rate, most-played
-heroes, last played — which the player pool and profiles render).
+refresh their own medal. The automation worker also refreshes a few of the
+stalest accounts about once an hour (medal, Steam name and avatar, and each
+player's pub-scouting snapshot — recent-games win rate, most-played heroes,
+last played — which the player pool and profiles render), and an admin can
+refresh every signup at once with **Refresh player data now** before the
+draft.
 
 ## Scripts
 
@@ -293,9 +292,10 @@ heroes, last played — which the player pool and profiles render).
 ```
 src/
   app/
-    page.tsx            # phase-aware dashboard
+    page.tsx            # dashboard: loads data, picks the phase
     login/ me/ players/ draft/ schedule/ admin/
-    actions/            # server actions (registration, admin)
+    matches/[id]/       # match page: load.ts + one file per card
+    actions/            # server actions (registration, admin-*.ts by job)
     api/
       auth/             # steam, dev, logout, callback
       draft/            # tick (poll), nominate, bid
@@ -303,6 +303,7 @@ src/
       health/           # dependency-free live and database-ready probes
       sync/             # read-only browser cursor/watch snapshot
   components/           # ui kit, site header, draft room
+    home/               # dashboard hero and per-phase views
   lib/
     draft.ts            # pure auction rules (tested)
     standings.ts        # pure standings math (tested)
@@ -342,6 +343,14 @@ e2e/                    # Playwright tests
 
 ## Deployment (Vercel + Neon)
 
+**To release, start at [docs/RELEASING.md](docs/RELEASING.md).** Both leagues
+ship the same commit through `npm run release:both`; that page covers the
+routine release, what a good run prints and how to roll back, and links back
+here and to [docs/PRODUCTION-OPERATIONS.md](docs/PRODUCTION-OPERATIONS.md) for
+the guarded procedures. This section is the first-time hosting setup and the
+detailed migration, rollback, backup and health procedures. The full docs
+index is [docs/README.md](docs/README.md).
+
 ### Website traffic
 
 Public-page traffic uses `@vercel/analytics/next` from the root layout, only
@@ -354,14 +363,16 @@ events or properties.
 
 One-time activation: a project owner must enable **Web Analytics** for
 `under-4.5k-league` in Vercel, then deploy this integration using the ordinary
-release process below. The CLI also supports interactive activation:
+release process in [docs/RELEASING.md](docs/RELEASING.md). The CLI also
+supports interactive activation:
 
 ```sh
 npx vercel project web-analytics enable under-4.5k-league --scope timothyjjcrows-projects
 ```
 
-Open **Admin → Traffic → Open Vercel Web Analytics** (Vercel project access is
-required). Review page views, visitors, top pages, countries, and referrers over
+Use the **Website traffic** link at the foot of /admin (Vercel project access
+is required). It opens the analytics of the deployment you are on:
+`under-4.5k-league` for the US league, `ggd2l-europe` for Europe. Review page views, visitors, top pages, countries, and referrers over
 30 days. Historical untracked visits cannot be backfilled. Ad blockers can
 undercount visitors; server/API request totals are not page views.
 
@@ -535,6 +546,30 @@ declares the same runtime line used by every CI job.
      `needs_scheduler_pause` flags decide whether the recovery or scheduler
      procedures are also required.
 
+   The mutation ratchet has its own flag. `needs_mutation` is false only when
+   every changed file is a page or component (outside server actions, API and
+   route handlers), a presentation asset, documentation, or a browser/unit
+   test the PostgreSQL suite never loads; CI then skips the four mutation
+   shards, and `release:both` accepts that skip only when the trusted
+   production classification also says false (a classifier without the field
+   counts as true), or when an earlier run already covers the candidate (see
+   below). CI's test job still checks the claim inventory with
+   `node scripts/mutation-guard.mjs --static`, `mutation-nightly.yml`
+   re-verifies every protected claim on `main` at 07:00 UTC, and each shard
+   runs a claim's recorded killer test file before falling back to the whole
+   suite.
+
+   A plain deletion of a regular file is judged like an edit to that path, so
+   removing a stale doc or dead component needs no maintenance procedure.
+   Deleting anything under `prisma/`, `ops/`, the cron or automation-health
+   routes, or the scheduler libraries still selects both flags; renames,
+   copies, and file-type or mode changes select both everywhere. Everything
+   under `ops/` counts as scheduler plumbing except the independently hosted
+   lobby bot and relay (`ops/dota-lobby-bot/`, `ops/dota-lobby-relay/`, the
+   `ops/` entries in `.vercelignore`), which stay strict for review without a
+   scheduler pause. A new `ops/` folder selects scheduler controls until it is
+   deliberately added to that exemption list.
+
    A UI-only or app release does **not** require a fresh database backup or a
    scheduler pause. Its migration gate contains no writer, and the classifier
    reports neither impact flag. Do not force an unknown change into a faster
@@ -547,6 +582,31 @@ declares the same runtime line used by every CI job.
    the candidate even when the event-based CI comparison was narrower. Missing
    canonical deployment metadata or an unfetchable/non-ancestor production SHA
    blocks the fast release path.
+
+   The mutation shards follow the same rule whenever that delta has
+   `needs_mutation: true`. CI can still have skipped them: when production lags
+   `main` by an unpromoted commit that reaches the ratchet, a later page-only
+   push skips the shards on its own delta. `release:both` then accepts the four
+   passing shards of the newest CI run (a push or a forced run) or nightly
+   verify on an earlier `main` commit, as long as every changed region's
+   trusted classifier calls the delta from that commit to the candidate
+   mutation-neutral; the report records the run it used. If no earlier run
+   covers it, the release stops and says so. To recover:
+
+   1. In GitHub Actions, run the **CI** workflow on `main` with
+      `force_strict` ticked.
+   2. Wait for that run to finish green.
+   3. Run the **Prepare both leagues** workflow by hand. A dispatched CI run
+      does not start it (it follows push runs only), and a manual run, like a
+      local `npm run release:both`, uses the newest passing CI run for the
+      commit, which is the forced one.
+
+   CI cancels an older run on `main` when a newer push lands, so a hotfix
+   pushed while the previous commit's shards are still running usually finds
+   nothing to reuse until the next nightly verify has passed. Until production
+   runs a build that sets `needs_mutation` per path, production's classifier
+   still sets it from the lane (true for every `app` change), so preparing any
+   page-only push fails and needs this recovery until that build is promoted.
 
    In production, the database-attestation portion of `npm run build:vercel` is
    a read-only, fail-fast sequence:
@@ -868,7 +928,8 @@ and credential-free database identity metadata. `backups/` is mode `0700`;
 every artifact and sidecar is `0600`; failed runs remove partial output. SQLite
 uses its online backup API rather than a byte copy and requires the resulting snapshot to pass
 `PRAGMA integrity_check` before publication. That local-development path
-requires the `sqlite3` command-line client and fails safely if it is absent.
+uses Node's built-in `node:sqlite` (Node 22.16 or newer), needs no `sqlite3`
+program, and fails safely if the running Node lacks it.
 
 > **`pg_dump` must be at least as new as the server**, or it aborts with
 > `aborting because of server version mismatch` and writes nothing. Check the
@@ -980,8 +1041,9 @@ timeout can prevent scale-to-zero. `/api/health/live` does no database work;
 `/api/health/automation` reuses the cached gate while automation is sleeping.
 Keep the real readiness check for database failure detection and deployment
 verification; reducing its frequency trades slower detection for more idle
-time. See [the database efficiency review](docs/DATABASE-EFFICIENCY-2026-09-05.md)
-for the observed usage of both deployments and the remaining cost levers.
+time. See the
+[5 September 2026 database efficiency review](docs/archive/DATABASE-EFFICIENCY-2026-09-05.md)
+for the usage observed on both deployments then and the remaining cost levers.
 
 Do **not** point a monitor at `/api/sync` to run maintenance. It is a public,
 read-only cursor/watch snapshot used by visible browser tabs; it never imports

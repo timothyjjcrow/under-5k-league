@@ -274,16 +274,6 @@ export async function loadBoardSnapshot(
         status: true,
         startedAt: true,
         acceptEndsAt: true,
-        // The pot, in the SAME round trip: at most ten tiny rows behind a join
-        // rather than a second query, on a path that already runs per poll.
-        // `betsCloseAt` comes along because it — not the presence of rows — is
-        // what separates "this lobby has no betting window" from "it has one
-        // and nobody has staked yet"; see potFrom.
-        betsCloseAt: true,
-        bets: {
-          where: { confirmedAt: { not: null } },
-          select: { stake: true },
-        },
         players: {
           select: { acceptedAt: true, user: { select: { name: true } } },
         },
@@ -297,32 +287,10 @@ export async function loadBoardSnapshot(
     presentNames: present.map((q) => q.user.name),
     awayCount: queue.length - present.length,
     lobbySize: INHOUSE.LOBBY_SIZE,
-    lobby: lobby
-      ? lobbyView(lobby, potFrom(lobby.betsCloseAt, lobby.bets))
-      : null,
+    lobby: lobby ? lobbyView(lobby) : null,
     siteUrl: resolveSiteUrl(),
     nowMs,
   };
-}
-
-/**
- * Total confirmed Cred staked on a lobby, or null when it has no betting window
- * at all.
- *
- * The null/zero split is the load-bearing part, and it is not cosmetic: BOTH
- * builders below feed `renderBoard`, whose digest carries this figure, so if the
- * two disagreed about a bet-free lobby — one saying null, the other 0 — the
- * board would burn one Discord PATCH every time the two paths alternated, on a
- * message whose entire cost model is "a motionless queue costs zero edits".
- * `betsCloseAt` is the shared test because it is a column both callers can read
- * without counting anything.
- */
-export function potFrom(
-  betsCloseAt: Date | null,
-  bets: { stake: number }[],
-): number | null {
-  if (!betsCloseAt) return null;
-  return bets.reduce((sum, b) => sum + b.stake, 0);
 }
 
 /** The board snapshot minus `stats`, which only the empty render needs and
@@ -337,19 +305,10 @@ type LobbyRow = {
 };
 
 /** Shared by loadBoardSnapshot and getInhouseState so the two can never drift
- *  into describing the same lobby differently.
- *
- *  `potCred` is a REQUIRED second argument rather than a field on `LobbyRow`
- *  because the two callers reach it by different routes — the board query joins
- *  the bets, while getInhouseState already holds the fully-priced pot it renders
- *  for the room — and a parameter is the one shape the compiler forces both of
- *  them to answer. Pass `potFrom(...)` from either side; never a bare count. */
-export function lobbyView(
-  l: LobbyRow,
-  potCred: number | null,
-): NonNullable<BoardSnapshot["lobby"]> {
+ *  into describing the same lobby differently — both feed the digest, so a
+ *  disagreement would make the two paths repaint each other in a loop. */
+export function lobbyView(l: LobbyRow): NonNullable<BoardSnapshot["lobby"]> {
   return {
-    potCred,
     status: l.status,
     acceptedCount: l.players.filter((p) => p.acceptedAt != null).length,
     playerCount: l.players.length,

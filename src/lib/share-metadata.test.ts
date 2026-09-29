@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shareMetadata } from "./share-metadata";
+import { playerProfileMetadata, shareMetadata } from "./share-metadata";
 
 describe("shareMetadata", () => {
   it("mirrors title/description into both social objects and re-includes the images", () => {
@@ -42,5 +42,26 @@ describe("shareMetadata", () => {
     );
     expect(meta.alternates).toEqual({ canonical: "/records" });
     expect(meta.openGraph).toMatchObject({ url: "/records" });
+  });
+});
+
+describe("playerProfileMetadata", () => {
+  it("keeps profiles out of search results but lets links unfurl", () => {
+    const meta = playerProfileMetadata("Player 3", ["Legend medal", "Bane player"]);
+    expect(meta.robots).toEqual({ index: false, follow: true });
+    expect(meta.title).toBe("Player 3 · Player");
+    expect(meta.description).toBe(
+      "Player 3's player profile · Legend medal · Bane player — match history in GGD2L.",
+    );
+    expect(meta.openGraph).toMatchObject({
+      title: "Player 3 · Player",
+      images: ["/opengraph-image.png"],
+    });
+  });
+
+  it("leaves the highlights off when there are none", () => {
+    expect(playerProfileMetadata("x", []).description).toBe(
+      "x's player profile — match history in GGD2L.",
+    );
   });
 });

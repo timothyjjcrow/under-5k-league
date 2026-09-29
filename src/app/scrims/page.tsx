@@ -1,3 +1,4 @@
+import { shareMetadata } from "@/lib/share-metadata";
 import { Suspense } from "react";
 import { listPage } from "@/lib/list-page";
 import Link from "next/link";
@@ -8,6 +9,11 @@ import { getSessionUser } from "@/lib/auth";
 import { singleActiveSeason } from "@/lib/season";
 import { SCRIM_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { formatMatchTime } from "@/lib/match-time";
+import {
+  isScrimNotPlayed,
+  scrimJoinCheck,
+  scrimNotPlayedCutoff,
+} from "@/lib/scrim-view";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
@@ -32,11 +38,11 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = {
-  title: "Scrims",
-  description:
-    "Post team availability, book casual league scrims, and review scrim-only results and statistics.",
-};
+export const metadata = shareMetadata(
+  "Scrims",
+  "Post team availability, book casual league scrims, and review scrim-only results and statistics.",
+  "/scrims",
+);
 
 const inputClass =
   "h-10 rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60";
@@ -127,7 +133,13 @@ export default async function ScrimsPage({
         seasonId: season.id,
         status: { in: [SCRIM_STATUS.OPEN, SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
         OR: [
-          { status: { not: SCRIM_STATUS.OPEN } },
+          { status: SCRIM_STATUS.LIVE },
+          // A booking still without games 36h after kickoff moves to the
+          // history as "Not played" instead of sitting in Booked forever.
+          {
+            status: SCRIM_STATUS.SCHEDULED,
+            scheduledAt: { gte: scrimNotPlayedCutoff(now.getTime()) },
+          },
           { status: SCRIM_STATUS.OPEN, scheduledAt: { gte: now } },
         ],
       },
@@ -243,7 +255,7 @@ export default async function ScrimsPage({
       ) : !viewer && seasonOpen ? (
         <Card tone="quiet">
           <CardBody className="text-sm text-muted">
-            <Link href="/login?returnTo=%2Fscrims" className={textLink()}>
+            <Link href="/login?next=/scrims" className={textLink()}>
               Sign in
             </Link>{" "}
             to post, claim, or manage a scrim.
@@ -262,15 +274,30 @@ export default async function ScrimsPage({
             <EmptyState
               compact
               title="No open scrim times"
-              description="A captain can post the first one above."
+              description={
+                // Only a captain has a post form above to point at.
+                myCaptainTeam && seasonOpen
+                  ? "Post the first one above."
+                  : seasonOpen
+                    ? "Team captains post their practice times here, and none are open right now."
+                    : "This season is closed, so no new times can be posted."
+              }
             />
           ) : (
             open.map((scrim) => {
+              // Same verdict as the scrim's own page, minus the per-row
+              // clash lookup (the service names that clash if it applies).
               const canJoin =
-                seasonOpen &&
-                !!myCaptainTeam &&
-                myCaptainTeam.id !== scrim.hostTeamId &&
-                !myCaptainTeam.withdrawn;
+                scrimJoinCheck({
+                  status: scrim.status,
+                  seasonOpen,
+                  signedIn: !!viewer,
+                  viewerTeam: myCaptainTeam,
+                  hostTeamId: scrim.hostTeamId,
+                  hostWithdrawn: scrim.hostTeam.withdrawn,
+                  scheduledAtMs: scrim.scheduledAt.getTime(),
+                  nowMs: now.getTime(),
+                })?.canJoin === true;
               const canCancel =
                 seasonOpen &&
                 (viewer?.role === "ADMIN" ||
@@ -365,7 +392,7 @@ export default async function ScrimsPage({
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <Suspense fallback={<p role="status">Loading practice history…</p>}><ScrimHistory seasonId={season.id} page={listPage(query.historyPage)} /></Suspense>
+        <Suspense fallback={<p role="status">Loading practice history…</p>}><ScrimHistory seasonId={season.id} page={listPage(query.historyPage)} nowMs={now.getTime()} /></Suspense>
         <Suspense fallback={<p role="status">Loading all-time practice statistics…</p>}><ScrimStatistics seasonId={season.id} teams={teams} /></Suspense>
       </div>
 
@@ -392,7 +419,11 @@ export default async function ScrimsPage({
                   className={`${inputClass} w-full`}
                 />
               </label>
-              <SubmitButton size="sm">Add coach</SubmitButton>
+              {/* Secondary: a set-once form must not compete with Post
+                  availability, the page's one main action. */}
+              <SubmitButton size="sm" variant="secondary">
+                Add coach
+              </SubmitButton>
             </ActionForm>
             {myCaptainTeam.staff.length > 0 ? (
               <ul className="divide-y divide-line/60 rounded-lg border border-line/70">
@@ -432,12 +463,23 @@ export default async function ScrimsPage({
 async function ScrimHistory({
   seasonId,
   page,
+  nowMs,
 }: {
   seasonId: string;
   page: number;
+  nowMs: number;
 }) {
   const results = await prisma.scrim.findMany({
-    where: { seasonId, status: SCRIM_STATUS.COMPLETED },
+    where: {
+      seasonId,
+      OR: [
+        { status: SCRIM_STATUS.COMPLETED },
+        {
+          status: SCRIM_STATUS.SCHEDULED,
+          scheduledAt: { lt: scrimNotPlayedCutoff(nowMs) },
+        },
+      ],
+    },
     orderBy: [{ scheduledAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     skip: (page - 1) * 20,
     take: 21,
@@ -451,7 +493,7 @@ async function ScrimHistory({
     <Card id="history">
       <CardHeader
         title="Scrim history"
-        subtitle="Practice results only — never league results."
+        subtitle="Practice results only — never league results. A booking with no games 36 hours after it started is listed as not played."
         headingLevel={2}
       />
       <CardBody className="space-y-2">
@@ -467,9 +509,17 @@ async function ScrimHistory({
               <span className="min-w-0 truncate">
                 {scrim.hostTeam.name} vs {scrim.opponentTeam?.name}
               </span>
-              <span className="shrink-0 font-mono tabular-nums">
-                {scrim.hostScore}–{scrim.awayScore}
-              </span>
+              {isScrimNotPlayed(
+                scrim.status,
+                scrim.scheduledAt.getTime(),
+                nowMs,
+              ) ? (
+                <Badge className="shrink-0">Not played</Badge>
+              ) : (
+                <span className="shrink-0 font-mono tabular-nums">
+                  {scrim.hostScore}–{scrim.awayScore}
+                </span>
+              )}
             </Link>
           ))
         )}

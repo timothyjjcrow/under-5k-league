@@ -7,6 +7,8 @@ import {
   gradeFor,
   gradeTone,
   percentLabel,
+  REPORT_CARD_MIN_GRADED,
+  reportVerdicts,
   type BenchmarkLine,
   type BenchmarkValue,
 } from "./benchmarks";
@@ -242,6 +244,47 @@ describe("careerReportCard", () => {
     expect(report.best).not.toBeNull();
     expect(report.focus).not.toBeNull();
     expect(report.focus?.key).not.toBe(report.best?.key);
+  });
+});
+
+describe("reportVerdicts", () => {
+  const graded = (n: number) =>
+    careerReportCard(
+      Array.from({ length: n }, (_, i) =>
+        line({
+          gold_per_min: { pct: 0.9 },
+          kills_per_min: { pct: i === 0 ? 0.1 : 0.2 },
+        }),
+      ),
+    );
+
+  it("passes no judgment below the minimum graded games", () => {
+    for (let n = 0; n < REPORT_CARD_MIN_GRADED; n++) {
+      const report = graded(n);
+      // careerReportCard itself still finds a best/focus from two games...
+      if (n === 2) expect(report.focus).not.toBeNull();
+      // ...but the profile shows none of it, not even to the player.
+      expect(reportVerdicts(report, true)).toEqual({
+        graded: false,
+        overall: null,
+        best: null,
+        focus: null,
+      });
+    }
+  });
+
+  it("grades from the minimum on, and keeps Work on for the player only", () => {
+    const report = graded(REPORT_CARD_MIN_GRADED);
+    const own = reportVerdicts(report, true);
+    expect(own.graded).toBe(true);
+    expect(own.overall).toBe(gradeFor(report.avgPct!));
+    expect(own.best?.key).toBe("gold_per_min");
+    expect(own.focus?.key).toBe("kills_per_min");
+
+    const visitor = reportVerdicts(report, false);
+    expect(visitor.overall).toBe(own.overall);
+    expect(visitor.best?.key).toBe("gold_per_min");
+    expect(visitor.focus).toBeNull();
   });
 });
 

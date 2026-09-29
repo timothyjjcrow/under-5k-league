@@ -18,7 +18,8 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { regularSeasonStartedMessage, sendDiscordMessage } from "@/lib/discord";
-import { setSeasonPhase, startDraft } from "@/app/actions/admin";
+import { setSeasonPhase } from "@/app/actions/admin-season";
+import { startDraft } from "@/app/actions/admin-captains-draft";
 import { pauseDraft, undoLastSale } from "@/lib/draft-service";
 import { nominatePlayer } from "@/lib/draft-service";
 import {
@@ -53,6 +54,22 @@ function activeSeasonForm(seasonId: string): FormData {
 async function statusOf(seasonId: string) {
   return (await prisma.season.findUniqueOrThrow({ where: { id: seasonId } }))
     .status;
+}
+
+/** A generated regular schedule: the Regular season waits for one. */
+async function scheduleFixtures(seasonId: string) {
+  const home = await makeTeam(seasonId, "Fixture Home", 10);
+  const away = await makeTeam(seasonId, "Fixture Away", 11);
+  return prisma.match.create({
+    data: {
+      seasonId,
+      week: 1,
+      phase: MATCH_PHASE.REGULAR,
+      homeTeamId: home.id,
+      awayTeamId: away.id,
+      bestOf: 2,
+    },
+  });
 }
 
 beforeEach(() => vi.mocked(sendDiscordMessage).mockClear());
@@ -135,7 +152,9 @@ describe("setSeasonPhase — an unfinished auction can't be stranded", () => {
       teamSize: 3,
       status: SEASON_STATUS.DRAFT,
     });
-    await makeCaptain(season.id, "Captain A", 100, 0);
+    const captain = await makeCaptain(season.id, "Captain A", 100, 0);
+    const rival = await makeCaptain(season.id, "Captain B", 100, 1);
+    const bye = await makeCaptain(season.id, "Captain C", 100, 2);
     await startDraftState(season.id);
     await prisma.draft.update({
       where: { seasonId: season.id },
@@ -144,6 +163,29 @@ describe("setSeasonPhase — an unfinished auction can't be stranded", () => {
         nominatedUserId: null,
         bidEndsAt: null,
       },
+    });
+    const kickoff = new Date("2026-10-07T18:00:00.000Z");
+    await prisma.match.createMany({
+      data: [
+        {
+          seasonId: season.id,
+          week: 1,
+          phase: MATCH_PHASE.REGULAR,
+          homeTeamId: captain.team.id,
+          awayTeamId: rival.team.id,
+          bestOf: 2,
+          scheduledAt: kickoff,
+        },
+        {
+          seasonId: season.id,
+          week: 2,
+          phase: MATCH_PHASE.REGULAR,
+          homeTeamId: bye.team.id,
+          awayTeamId: captain.team.id,
+          bestOf: 2,
+          scheduledAt: new Date(kickoff.getTime() + 7 * 864e5),
+        },
+      ],
     });
 
     const res = await setSeasonPhase(
@@ -154,9 +196,68 @@ describe("setSeasonPhase — an unfinished auction can't be stranded", () => {
     expect(res?.error).toBeUndefined();
     expect(await statusOf(season.id)).toBe(SEASON_STATUS.REGULAR_SEASON);
     expect(sendDiscordMessage).toHaveBeenCalledOnce();
+    // The post carries the opening week: its fixture, its kickoff and the
+    // team sitting it out. Week 2 waits for its own reminder.
     expect(sendDiscordMessage).toHaveBeenCalledWith(
-      regularSeasonStartedMessage(season.name),
+      regularSeasonStartedMessage(season.name, {
+        week: 1,
+        fixtures: [
+          {
+            home: captain.team.name,
+            away: rival.team.name,
+            whenMs: kickoff.getTime(),
+          },
+        ],
+        byes: [bye.team.name],
+      }),
     );
+  });
+
+  // Starting with no fixtures used to post "season is live" to Discord with
+  // nothing to play, and leave /schedule and every player's home page empty.
+  it("waits for the schedule before starting the Regular season", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+
+    const res = await setSeasonPhase(
+      {},
+      phaseForm(SEASON_STATUS.REGULAR_SEASON, season.id),
+    );
+
+    expect(res?.error).toMatch(/Generate the schedule first/);
+    expect(await statusOf(season.id)).toBe(SEASON_STATUS.DRAFT);
+    expect(sendDiscordMessage).not.toHaveBeenCalled();
+  });
+
+  // The schedule check is judged again inside the transaction: fixtures
+  // deleted after the preflight read must still stop the phase change.
+  it("re-checks the schedule at the write", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    await scheduleFixtures(season.id);
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.setSeasonPhase.beforeWrite", async () => {
+        fired = true;
+        await prisma.match.deleteMany({ where: { seasonId: season.id } });
+      }),
+    );
+    try {
+      const res = await setSeasonPhase(
+        {},
+        phaseForm(SEASON_STATUS.REGULAR_SEASON, season.id),
+      );
+      expect(fired).toBe(true);
+      expect(res?.error).toMatch(/Generate the schedule first/);
+    } finally {
+      setRaceHook(null);
+    }
+    expect(await statusOf(season.id)).toBe(SEASON_STATUS.DRAFT);
+    expect(sendDiscordMessage).not.toHaveBeenCalled();
   });
 
   it("commits the Regular season and warns when its Discord announcement fails", async () => {
@@ -166,6 +267,7 @@ describe("setSeasonPhase — an unfinished auction can't be stranded", () => {
     await prisma.draft.create({
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
+    await scheduleFixtures(season.id);
     vi.mocked(sendDiscordMessage).mockResolvedValueOnce(false);
 
     const res = await setSeasonPhase(
@@ -796,6 +898,7 @@ describe("setSeasonPhase — the write re-asserts the phase it judged", () => {
         nominationIndex: 1,
       },
     });
+    await scheduleFixtures(season.id);
     const admin = sessionFor(await makeUser("Undo Admin", "ADMIN"));
     let undone = false;
     setRaceHook(
@@ -832,6 +935,7 @@ describe("setSeasonPhase — the write re-asserts the phase it judged", () => {
     await prisma.draft.create({
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
+    await scheduleFixtures(season.id);
 
     const [a, b] = await Promise.all([
       setSeasonPhase({}, phaseForm(SEASON_STATUS.REGULAR_SEASON, season.id)),
@@ -858,6 +962,7 @@ describe("setSeasonPhase — the claim is what makes a stale flip lose", () => {
     await prisma.draft.create({
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
+    await scheduleFixtures(season.id);
     let fired = false;
     setRaceHook(
       onceAt("admin.setSeasonPhase.beforeWrite", async () => {

@@ -7,18 +7,24 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   updateTag: vi.fn(),
 }));
-vi.mock("@/lib/auth", () => ({ requireUser: vi.fn(), requireAdmin: vi.fn() }));
+vi.mock("@/lib/auth", () => ({
+  requireUser: vi.fn(),
+  requireAdmin: vi.fn(),
+  getSessionUser: vi.fn(async () => null),
+}));
 vi.mock("@/lib/discord", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/discord")>()),
   getWebhookUrl: vi.fn(async () => ""),
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
+import { setMatchTime } from "@/app/actions/admin-schedule-results";
 import { setAvailability } from "@/app/actions/availability";
-import { requireUser } from "@/lib/auth";
+import { requireAdmin, requireUser } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
 import { DRAFT_STATUS, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { assignStandinGuarded, removeStandinGuarded } from "@/lib/standin-service";
 import {
   generateRegularSchedule,
   makeSeason,
@@ -366,5 +372,288 @@ describe("setAvailability — assigned standins", () => {
     );
     expect(call, "a standin's first OUT must announce").toBeTruthy();
     expect(String(call![0])).toContain(`/matches/${match.id}`);
+  });
+});
+
+function form(values: Record<string, string>): FormData {
+  const fd = new FormData();
+  for (const [key, value] of Object.entries(values)) fd.set(key, value);
+  return fd;
+}
+
+/** Two full 3-player rosters, all registered and checked IN for tomorrow. */
+async function setupFullSides() {
+  const season = await makeSeason({
+    teamSize: 3,
+    status: SEASON_STATUS.REGULAR_SEASON,
+  });
+  const people = await Promise.all(
+    Array.from({ length: 6 }, (_, i) => makeUser(`Side player ${i}`)),
+  );
+  const home = await prisma.team.create({
+    data: { seasonId: season.id, name: "Home", captainId: people[0].id },
+  });
+  const away = await prisma.team.create({
+    data: { seasonId: season.id, name: "Away", captainId: people[3].id },
+  });
+  await prisma.teamMember.createMany({
+    data: people.map((p, i) => ({
+      seasonId: season.id,
+      teamId: i < 3 ? home.id : away.id,
+      userId: p.id,
+      isCaptain: i === 0 || i === 3,
+    })),
+  });
+  await prisma.registration.createMany({
+    data: people.map((p) => ({ seasonId: season.id, userId: p.id, mmr: 2800, roles: "4,5" })),
+  });
+  const match = await prisma.match.create({
+    data: {
+      seasonId: season.id,
+      week: 1,
+      homeTeamId: home.id,
+      awayTeamId: away.id,
+      scheduledAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      bestOf: 3,
+    },
+  });
+  await prisma.matchAvailability.createMany({
+    data: people.map((p) => ({
+      matchId: match.id,
+      userId: p.id,
+      status: "IN",
+      scheduleRevision: match.scheduleRevision,
+    })),
+  });
+  return { season, people, home, away, match };
+}
+
+describe("setAvailability — retimes and live cover", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  it("refuses an unscheduled LIVE fixture with a clear error", async () => {
+    const { match, people } = await setupFullSides();
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: MATCH_STATUS.LIVE, scheduledAt: null },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[0]));
+
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
+    expect(res?.error).toMatch(/does not have a kickoff/);
+  });
+
+  it("an admin retime to the same time keeps check-ins; a real one clears them and refuses the old form", async () => {
+    const { season, match, people } = await setupFullSides();
+    const admin = await makeUser("Scheduler", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    const retime = (when: Date) =>
+      setMatchTime(
+        {},
+        form({
+          matchId: match.id,
+          expectedActiveSeasonId: season.id,
+          scheduledAt: when.toISOString(),
+          scheduledAtTs: String(when.getTime()),
+        }),
+      );
+
+    expect((await retime(match.scheduledAt!))?.error).toBeUndefined();
+    expect(await prisma.match.findUnique({ where: { id: match.id } })).toMatchObject({ scheduleRevision: 0 });
+    expect(await prisma.matchAvailability.count({ where: { matchId: match.id } })).toBe(6);
+
+    expect((await retime(new Date(match.scheduledAt!.getTime() + 60 * 60 * 1000)))?.error).toBeUndefined();
+    expect(await prisma.match.findUnique({ where: { id: match.id } })).toMatchObject({ scheduleRevision: 1 });
+    expect(await prisma.matchAvailability.count({ where: { matchId: match.id } })).toBe(0);
+
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[0]));
+    expect((await setAvailability({}, rsvpForm(match, "IN")))?.error).toMatch(/kickoff changed/);
+    expect((await setAvailability({}, rsvpForm({ id: match.id, scheduleRevision: 1 }, "IN")))?.message).toBeTruthy();
+    expect(await prisma.matchAvailability.findFirst({ where: { matchId: match.id } })).toMatchObject({ status: "IN", scheduleRevision: 1 });
+  });
+
+  it("repeating the same answer writes nothing; changing it flips the row", async () => {
+    const { match, people } = await setupFullSides();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[1]));
+    const where = { matchId_userId: { matchId: match.id, userId: people[1].id } };
+    const before = await prisma.matchAvailability.findUniqueOrThrow({ where });
+
+    expect((await setAvailability({}, rsvpForm(match, "IN")))?.message).toBeTruthy();
+    expect(await prisma.matchAvailability.findUniqueOrThrow({ where })).toEqual(before);
+
+    expect((await setAvailability({}, rsvpForm(match, "OUT")))?.message).toBeTruthy();
+    expect(await prisma.matchAvailability.findUniqueOrThrow({ where })).toMatchObject({ status: "OUT", scheduleRevision: 0 });
+  });
+
+  it("a stale or missing kickoff revision cannot post a fresh RSVP", async () => {
+    const { match, people } = await setupFullSides();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[1]));
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { scheduleRevision: { increment: 1 } },
+    });
+
+    expect((await setAvailability({}, rsvpForm(match, "IN")))?.error).toMatch(/kickoff changed/);
+    expect((await setAvailability({}, form({ matchId: match.id, status: "IN" })))?.error).toMatch(/Reload/);
+    expect(await prisma.matchAvailability.count({ where: { matchId: match.id, scheduleRevision: 1 } })).toBe(0);
+  });
+
+  it("mid-series cover: the standin answers for the seat until the cover is removed", async () => {
+    const { season, match, people } = await setupFullSides();
+    const standin = await makeUser("Mid-series cover");
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: standin.id, type: "STANDIN", mmr: 0 },
+    });
+    await prisma.match.update({ where: { id: match.id }, data: { status: MATCH_STATUS.LIVE } });
+    expect(
+      await assignStandinGuarded({
+        matchId: match.id,
+        standinUserId: standin.id,
+        replacingUserId: people[1].id,
+        actingCaptainId: people[0].id,
+      }),
+    ).toMatchObject({ ok: true });
+
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+    expect((await setAvailability({}, rsvpForm(match, "IN")))?.message).toMatch(/next game/);
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[1]));
+    expect((await setAvailability({}, rsvpForm(match, "OUT")))?.error).toMatch(/standin is covering your seat/);
+
+    const assignment = await prisma.standinAssignment.findFirstOrThrow({ where: { matchId: match.id } });
+    expect(
+      await removeStandinGuarded({ assignmentId: assignment.id, actingCaptainId: people[0].id }),
+    ).toMatchObject({ ok: true });
+
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+    expect((await setAvailability({}, rsvpForm(match, "OUT")))?.error).toMatch(/not playing/i);
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(people[1]));
+    expect((await setAvailability({}, rsvpForm(match, "OUT")))?.message).toBeTruthy();
+  });
+
+  it("a standin answers only while their signup is active, they hold no roster seat and the seat still exists", async () => {
+    const { season, match, home, people } = await setupFullSides();
+    const [withdrawn, rostered, unregistered, staleCover, gone, elsewhereCaptain] = await Promise.all(
+      ["Withdrawn cover", "Rostered cover", "Unregistered cover", "Stale cover", "Released player", "Elsewhere captain"].map((name) => makeUser(name)),
+    );
+    const elsewhere = await prisma.team.create({
+      data: { seasonId: season.id, name: "Elsewhere", captainId: elsewhereCaptain.id },
+    });
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: elsewhere.id, userId: rostered.id },
+    });
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: withdrawn.id, type: "STANDIN", mmr: 0, status: "WITHDRAWN" },
+    });
+    // Written directly: assignStandinGuarded refuses every one of these, and
+    // the check-in rule has to hold for rows that predate that refusal.
+    await prisma.standinAssignment.createMany({
+      data: [
+        { matchId: match.id, teamId: home.id, standinUserId: withdrawn.id, replacingUserId: people[1].id },
+        { matchId: match.id, teamId: home.id, standinUserId: rostered.id, replacingUserId: people[2].id },
+        { matchId: match.id, teamId: home.id, standinUserId: unregistered.id, replacingUserId: null },
+        { matchId: match.id, teamId: home.id, standinUserId: staleCover.id, replacingUserId: gone.id },
+      ],
+    });
+    const answer = async (user: { id: string; steamId: string; name: string; role: string }) => {
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+      return setAvailability({}, rsvpForm(match, "IN"));
+    };
+
+    for (const refused of [withdrawn, rostered, staleCover]) {
+      expect((await answer(refused))?.error, refused.name).toMatch(/roster or cover assignment changed/);
+    }
+    expect((await answer(unregistered))?.message).toBeTruthy();
+    expect(
+      await prisma.matchAvailability.findMany({
+        where: { matchId: match.id, userId: { in: [withdrawn.id, rostered.id, staleCover.id, unregistered.id] } },
+        select: { userId: true },
+      }),
+    ).toEqual([{ userId: unregistered.id }]);
+  });
+});
+
+describe("setAvailability — closing the OUT loop", () => {
+  beforeEach(() => {
+    vi.mocked(requireUser).mockReset();
+    mockSend.mockClear();
+  });
+
+  const backIns = () =>
+    mockSend.mock.calls.filter(([msg]) => String(msg).includes("after all"));
+  const outs = () =>
+    mockSend.mock.calls.filter(([msg]) => String(msg).includes("line up a standin"));
+
+  it("tells the same captain when a player who said OUT can make it after all", async () => {
+    const { match, home, player } = await setupMatch();
+    await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "555666777888999001" },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    await setAvailability({}, rsvpForm(match, "OUT"));
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
+    expect(res?.error).toBeUndefined();
+
+    expect(outs()).toHaveLength(1);
+    expect(backIns()).toHaveLength(1);
+    const [content, mentions] = backIns()[0]!;
+    expect(content).toContain("**Roster Player** can make the week 1 match after all");
+    expect(content).toContain(`/matches/${match.id}#match-standins>`);
+    expect(mentions).toEqual({ users: ["555666777888999001"] });
+  });
+
+  it("buzzes a captain at most three times while a player flips back and forth", async () => {
+    const { match, player } = await setupMatch();
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    for (const status of ["OUT", "IN", "OUT", "IN", "OUT", "IN", "OUT"]) {
+      await setAvailability({}, rsvpForm(match, status));
+    }
+    // OUT, "after all", OUT again — then quiet until the window passes.
+    expect(outs()).toHaveLength(2);
+    expect(backIns()).toHaveLength(1);
+    expect(mockSend).toHaveBeenCalledTimes(3);
+  });
+
+  it("says nothing for an IN when no OUT was ever announced", async () => {
+    const { match, player } = await setupMatch();
+    // An OUT on file with no ping behind it (answered before, or never sent).
+    await prisma.matchAvailability.create({
+      data: {
+        matchId: match.id,
+        userId: player.id,
+        status: "OUT",
+        scheduleRevision: match.scheduleRevision,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    const res = await setAvailability({}, rsvpForm(match, "IN"));
+    expect(res?.message).toMatch(/confirmed/i);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("never pings a captain about their own answer", async () => {
+    const { match, home } = await setupMatch();
+    const captain = await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "555666777888999002" },
+    });
+    await prisma.teamMember.create({
+      data: {
+        seasonId: match.seasonId,
+        teamId: home.id,
+        userId: captain.id,
+        isCaptain: true,
+        price: 0,
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(captain));
+
+    await setAvailability({}, rsvpForm(match, "OUT"));
+    await setAvailability({}, rsvpForm(match, "IN"));
+    expect(backIns()).toHaveLength(1);
+    expect(backIns()[0]![1]).toBeUndefined();
   });
 });

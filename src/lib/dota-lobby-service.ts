@@ -129,6 +129,56 @@ export async function recoverableInhouseBotLobby(viewer: SessionUser) {
   }
 }
 
+/** What an in-house bot spec is built from: the lobby's id, sides and roster. */
+type InhouseSpecLobby = {
+  id: string;
+  radiantTeam: number;
+  players: {
+    team: number | null;
+    isCaptain?: boolean;
+    user: DotaAccountIdentity & { name?: string };
+  }[];
+};
+
+/**
+ * A side's display name in the bot panel: the drafting captain's team, the way
+ * players think of it, or "Team N" when the roster has no single captain for
+ * that side. Display only: the bot never sends or checks side names.
+ */
+function inhouseSideName(lobby: InhouseSpecLobby, team: number) {
+  const captains = lobby.players.filter((p) => p.team === team && p.isCaptain);
+  const name = captains.length === 1 ? captains[0].user.name : undefined;
+  return name ? `${name}'s team` : `Team ${team}`;
+}
+
+/**
+ * The bot spec for an in-house lobby. One builder for the browser controls and
+ * the scheduled result scan, so both address the same bot job (the key) with
+ * the same settings. Throws a UserFacingError when the ticket is unset or a
+ * player has no usable Dota account.
+ */
+function inhouseLobbySpec(lobby: InhouseSpecLobby): DotaLobbySpec {
+  const leagueId = parseLobbyLeagueId(process.env.DOTA_INHOUSE_LEAGUE_ID);
+  if (!leagueId)
+    throw new UserFacingError(
+      "An admin must configure the numeric in-house league ticket ID before using the bot.",
+    );
+  const team = (n: number) =>
+    lobby.players.filter((p) => p.team === n).map((p) => playingSteamId(p.user));
+  return {
+    key: regionalLobbyKey("inhouse", lobby.id, 1),
+    name: `${INHOUSE.LOBBY_NAME} ${lobby.id.slice(-8)}`,
+    password: INHOUSE.LOBBY_PASSWORD,
+    leagueId,
+    gameMode: LEAGUE_GAME_MODE.id,
+    serverRegion: LEAGUE_CONFIG.gameServerRegionId,
+    radiant: team(lobby.radiantTeam),
+    dire: team(lobby.radiantTeam === 1 ? 2 : 1),
+    radiantName: inhouseSideName(lobby, lobby.radiantTeam),
+    direName: inhouseSideName(lobby, lobby.radiantTeam === 1 ? 2 : 1),
+  };
+}
+
 /** All lobby settings and roster identities come from trusted app state. */
 export async function resolveDotaLobby(
   viewer: SessionUser,
@@ -165,27 +215,7 @@ export async function resolveDotaLobby(
       });
       playable = active.length === 1 && active[0].id === lobby.id;
     }
-    const leagueId = parseLobbyLeagueId(process.env.DOTA_INHOUSE_LEAGUE_ID);
-    if (!leagueId)
-      throw new UserFacingError(
-        "An admin must configure the numeric in-house league ticket ID before using the bot.",
-      );
-    const team = (n: number) =>
-      lobby.players
-        .filter((p) => p.team === n)
-        .map((p) => playingSteamId(p.user));
-    spec = {
-      key: regionalLobbyKey("inhouse", id, 1),
-      name: `${INHOUSE.LOBBY_NAME} ${id.slice(-8)}`,
-      password: INHOUSE.LOBBY_PASSWORD,
-      leagueId,
-      gameMode: LEAGUE_GAME_MODE.id,
-      serverRegion: LEAGUE_CONFIG.gameServerRegionId,
-      radiant: team(lobby.radiantTeam),
-      dire: team(lobby.radiantTeam === 1 ? 2 : 1),
-      radiantName: `Team ${lobby.radiantTeam}`,
-      direName: `Team ${lobby.radiantTeam === 1 ? 2 : 1}`,
-    };
+    spec = inhouseLobbySpec(lobby);
   } else {
     const match = await prisma.match.findUnique({
       where: { id },
@@ -234,7 +264,9 @@ export async function resolveDotaLobby(
     const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
     spec = {
       key,
-      name: `${`${LEAGUE_CONFIG.region === "us" ? "LD2L" : LEAGUE_CONFIG.name} ${match.homeTeam.name} vs ${match.awayTeam.name}`.slice(0, 90)} G${game} ${id.slice(-8)}`,
+      // The league's own name in both regions, as the site and Discord say
+      // it: players type this into Dota's Custom Lobbies browser.
+      name: `${`${LEAGUE_CONFIG.name} ${match.homeTeam.name} vs ${match.awayTeam.name}`.slice(0, 90)} G${game} ${id.slice(-8)}`,
       password: createHmac("sha256", secret)
         .update(key)
         .digest("hex")
@@ -254,6 +286,8 @@ export async function resolveDotaLobby(
 export async function callLobbyBot(
   spec: DotaLobbySpec,
   action?: LobbyAction,
+  /** Extra cancellation (the scheduled worker's deadline); 15s applies regardless. */
+  signal?: AbortSignal,
 ): Promise<DotaLobbyStatus> {
   const key = ownLobbyKey(spec.key);
   if (!key)
@@ -264,11 +298,12 @@ export async function callLobbyBot(
   if (!connection)
     throw new UserFacingError("The lobby bot has not been configured yet.");
   try {
+    const timeout = AbortSignal.timeout(15_000);
     const response = await fetch(`${connection.origin}/lobby`, {
       method: "POST",
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(15_000),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${connection.token}`,
@@ -281,8 +316,12 @@ export async function callLobbyBot(
       const messages: Record<string, string> = {
         BUSY: "The bot is hosting another game. Try again after that game finishes or its captain releases the bot.",
         OFFLINE: "The bot is not connected to Dota yet. Try again shortly.",
+        // Inhouses have no match page and no stand-ins: the ten drafted
+        // players are the whole roster.
         ROSTER:
-          "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
+          key.kind === "inhouse"
+            ? "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start."
+            : "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
         SETTINGS:
           "Dota has not confirmed the required ticket and lobby settings. Ask an admin to check the bot's ticket permissions.",
         STATE:
@@ -316,4 +355,59 @@ export async function callLobbyBot(
       "The lobby bot could not be reached. Refresh its status before retrying; the request may have reached Dota.",
     );
   }
+}
+
+// The worker's bot read is a garnish on a result scan that has its own
+// OpenDota budget: never let an offline relay eat that budget.
+const BOT_STATUS_TIMEOUT_MS = 3_000;
+const BOT_STATUS_MIN_BUDGET_MS = 1_000;
+
+/**
+ * Server-side, for the scheduled result scan (there is no viewer): what the
+ * lobby bot knows about this in-house game — in particular the Dota match id
+ * it saw when the game launched, which it keeps after it leaves at postgame.
+ * One status read, bounded by the caller's deadline.
+ *
+ * Never throws: an unconfigured, misconfigured or unreachable bot, a missing
+ * ticket id or a player with no usable Dota account all return null, and the
+ * caller falls back to the player-history scan. The status read never creates
+ * or changes a bot lobby.
+ */
+export async function inhouseBotGameStatus(
+  lobby: InhouseSpecLobby,
+  options: { deadlineMs?: number; signal?: AbortSignal } = {},
+): Promise<DotaLobbyStatus | null> {
+  try {
+    if (!lobbyBotConnection()) return null;
+    const remaining =
+      options.deadlineMs === undefined
+        ? BOT_STATUS_TIMEOUT_MS
+        : options.deadlineMs - Date.now();
+    if (remaining < BOT_STATUS_MIN_BUDGET_MS || options.signal?.aborted)
+      return null;
+    const timeout = AbortSignal.timeout(
+      Math.min(BOT_STATUS_TIMEOUT_MS, remaining),
+    );
+    return await callLobbyBot(
+      inhouseLobbySpec(lobby),
+      undefined,
+      options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Dota match id of a game the bot actually launched, when it is a real
+ * one. Only a "started" job counts: the GC saw that game running, so the id
+ * is not left over from a launch that never began. The bot passes Valve's id
+ * through as a string; "0" means no game was allocated.
+ */
+export function botReportedMatchId(
+  status: DotaLobbyStatus | null,
+): string | null {
+  if (status?.state !== "started") return null;
+  const id = status.matchId;
+  return id && /^[1-9]\d{5,19}$/.test(id) ? id : null;
 }

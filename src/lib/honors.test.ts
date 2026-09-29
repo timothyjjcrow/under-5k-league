@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { weeklyHonors } from "./honors";
+import { honorBestGame, weeklyHonors, type HonorsGame } from "./honors";
 
 const teamOf = new Map([
   ["a1", "T1"],
@@ -198,5 +198,59 @@ describe("weeklyHonors — roster churn", () => {
       ]),
     );
     expect(honors.team?.teamId).toBe("T1");
+  });
+});
+
+describe("honorBestGame", () => {
+  const games: HonorsGame[] = [
+    {
+      radiantWin: true,
+      players: [
+        { userId: "a1", isRadiant: true, heroId: 9, kills: 12, deaths: 2, assists: 18 },
+        { userId: "b1", isRadiant: false, heroId: 3, kills: 1, deaths: 9, assists: 2 },
+      ],
+    },
+    {
+      radiantWin: false,
+      players: [
+        { userId: "a1", isRadiant: true, heroId: 2, kills: 3, deaths: 7, assists: 4 },
+        { userId: "b1", isRadiant: false, heroId: 5, kills: 4, deaths: 1, assists: 9 },
+      ],
+    },
+  ];
+
+  it("returns the hero and K/D/A of the player's best game", () => {
+    expect(honorBestGame(games, "a1")).toEqual({
+      heroId: 9,
+      kills: 12,
+      deaths: 2,
+      assists: 18,
+    });
+    expect(honorBestGame([...games].reverse(), "a1")).toEqual(
+      honorBestGame(games, "a1"),
+    );
+  });
+
+  it("names the same hero as the Player of the Week", () => {
+    const honors = weeklyHonors(games, teamOf);
+    expect(honors.player?.userId).toBe("a1");
+    expect(honorBestGame(games, "a1")?.heroId).toBe(honors.player?.heroId);
+    // Equal points break to the lower hero id in both.
+    const tied: HonorsGame[] = [
+      { radiantWin: true, players: [{ userId: "a1", isRadiant: true, heroId: 7, kills: 5, deaths: 0, assists: 0 }] },
+      { radiantWin: true, players: [{ userId: "a1", isRadiant: true, heroId: 4, kills: 5, deaths: 0, assists: 0 }] },
+    ];
+    expect(honorBestGame(tied, "a1")?.heroId).toBe(4);
+    expect(weeklyHonors(tied, teamOf).player?.heroId).toBe(4);
+  });
+
+  it("is null for a player with no game line that names a hero", () => {
+    expect(honorBestGame(games, "nobody")).toBeNull();
+    expect(
+      honorBestGame(
+        [{ radiantWin: true, players: [{ userId: "a1", isRadiant: true, kills: 5, deaths: 0, assists: 0 }] }],
+        "a1",
+      ),
+    ).toBeNull();
   });
 });

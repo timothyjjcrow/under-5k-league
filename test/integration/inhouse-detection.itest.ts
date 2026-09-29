@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
+import {
+  INHOUSE,
+  INHOUSE_PLAYING_STATUSES,
+  INHOUSE_STATUS,
+} from "@/lib/constants";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { maybeAutoDetectResult } from "@/lib/inhouse-service";
 import { makeUser } from "./factories";
@@ -24,11 +28,15 @@ afterEach(() => {
   vi.mocked(fetchRecentMatchIds).mockClear();
 });
 
-async function game(startedAt = dueStartedAt(), detectedAt: Date | null = null) {
+async function game(
+  startedAt = dueStartedAt(),
+  detectedAt: Date | null = null,
+  createdAt = new Date(NOW - 30 * 60_000),
+) {
   return prisma.inhouseLobby.create({
     data: {
       status: INHOUSE_STATUS.IN_PROGRESS,
-      createdAt: new Date(NOW - 30 * 60_000),
+      createdAt,
       startedAt,
       detectedAt,
     },
@@ -37,7 +45,8 @@ async function game(startedAt = dueStartedAt(), detectedAt: Date | null = null) 
 
 describe("automatic inhouse detection read budget", () => {
   it("does not load a roster or claim a scan before a game is old enough", async () => {
-    await game(new Date(NOW));
+    // Started the moment teams locked, so neither clock has opened yet.
+    await game(new Date(NOW), null, new Date(NOW - 5 * 60_000));
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const probe = vi.spyOn(prisma.inhouseLobby, "findFirst");
     const roster = vi.spyOn(prisma.inhouseLobbyPlayer, "findMany");
@@ -47,12 +56,57 @@ describe("automatic inhouse detection read budget", () => {
     expect(probe).toHaveBeenCalledOnce();
     // This hot probe must not hydrate result JSON or joined user profiles.
     expect(probe.mock.calls[0]?.[0]).toEqual({
-      where: { status: INHOUSE_STATUS.IN_PROGRESS },
-      select: { id: true, createdAt: true, startedAt: true, detectedAt: true },
+      where: { status: { in: INHOUSE_PLAYING_STATUSES } },
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+        startedAt: true,
+        detectedAt: true,
+        radiantTeam: true,
+      },
     });
     expect(roster).not.toHaveBeenCalled();
     expect(claim).not.toHaveBeenCalled();
     expect(fetchRecentMatchIds).not.toHaveBeenCalled();
+  });
+
+  it("waits the longer READY floor from formation before scanning a game nobody started", async () => {
+    // Formed just inside the READY floor: the draft has barely finished and
+    // the group is still hosting, so no scan, claim or roster load yet.
+    await prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.READY,
+        createdAt: new Date(
+          NOW - (INHOUSE.DETECT_READY_MIN_MINUTES - 1) * 60_000,
+        ),
+      },
+    });
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const roster = vi.spyOn(prisma.inhouseLobbyPlayer, "findMany");
+    const claim = vi.spyOn(prisma.inhouseLobby, "updateMany");
+
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(roster).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(fetchRecentMatchIds).not.toHaveBeenCalled();
+  });
+
+  it("keeps scanning a game whose Start was pressed long after teams locked", async () => {
+    // Formed an hour ago; the formation window opened long before someone
+    // pressed the optional Start just now. The press must not buy the game
+    // another DETECT_MIN_MINUTES of silence.
+    const lobby = await game(new Date(NOW), null, new Date(NOW - 60 * 60_000));
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const claim = vi.spyOn(prisma.inhouseLobby, "updateMany");
+
+    expect(await maybeAutoDetectResult()).toBe(false);
+    expect(claim).toHaveBeenCalledOnce();
+    const after = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+      select: { detectedAt: true },
+    });
+    expect(after.detectedAt).toEqual(new Date(NOW));
   });
 
   it("uses only the clock probe while the shared scan cooldown is current", async () => {
@@ -101,7 +155,10 @@ describe("automatic inhouse detection read budget", () => {
       expect(roster.mock.calls[0]?.[0]).toMatchObject({
         where: {
           lobbyId: lobby.id,
-          lobby: { status: INHOUSE_STATUS.IN_PROGRESS, detectedAt: new Date(NOW) },
+          lobby: {
+            status: { in: INHOUSE_PLAYING_STATUSES },
+            detectedAt: new Date(NOW),
+          },
         },
         select: {
           userId: true,

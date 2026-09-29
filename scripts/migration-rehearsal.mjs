@@ -24,6 +24,7 @@ const MANUAL_PLAYER_MEDAL_MIGRATION = "20260914000000_manual_player_medal";
 const RESUMABLE_IMPORT_MIGRATION = "20260925010000_resumable_import";
 const HISTORICAL_PARTICIPATION_MIGRATION =
   "20260925020000_historical_participation";
+const REVIEW_FOLLOWUPS_MIGRATION = "20260927000000_review_followups";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -153,6 +154,7 @@ async function rehearseFreshDatabase(url) {
           MANUAL_PLAYER_MEDAL_MIGRATION,
           RESUMABLE_IMPORT_MIGRATION,
           HISTORICAL_PARTICIPATION_MIGRATION,
+          REVIEW_FOLLOWUPS_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -407,6 +409,7 @@ async function rehearseExistingLegacyDatabase(url) {
           MANUAL_PLAYER_MEDAL_MIGRATION,
           RESUMABLE_IMPORT_MIGRATION,
           HISTORICAL_PARTICIPATION_MIGRATION,
+          REVIEW_FOLLOWUPS_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );

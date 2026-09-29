@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 async function acceptNextDialog(page: Page) {
   page.once("dialog", (dialog) => dialog.accept());
@@ -151,5 +151,55 @@ test("admin result entry rejects partial play and supports a reversible no-game 
     }
   }
 
+  assertNoErrors();
+});
+
+// /admin's Needs attention items link to the match page's Admin tools, which
+// render /admin's own per-match row there. Read-only: nothing is submitted.
+test("admin tools on the match page carry the admin row's controls and link back to it", async ({
+  page,
+}) => {
+  test.slow();
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/api/auth/dev?name=Result%20Admin&admin=1");
+  await page.goto("/admin");
+  const adminForm = page
+    .getByRole("button", { name: "Save as final" })
+    .first()
+    .locator("xpath=ancestor::form[1]");
+  const matchHref = (await adminForm
+    .getByRole("link")
+    .first()
+    .getAttribute("href"))!;
+  expect(matchHref).toMatch(/^\/matches\//);
+  const matchId = matchHref.split("/").pop()!;
+  // Every result row is a jump target.
+  await expect(page.locator(`#adm-match-${matchId}`)).toHaveCount(1);
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(`${matchHref}#match-admin`);
+  const tools = page.locator("#match-admin");
+  // The jump opens the folded card.
+  await expect(tools).toHaveAttribute("open", "");
+  await expect(
+    tools.getByRole("heading", { name: "Admin tools", exact: true }),
+  ).toBeVisible();
+  await expect(
+    tools.getByRole("button", { name: "Save as final", exact: true }),
+  ).toBeVisible();
+  await expect(
+    tools.getByRole("checkbox", { name: "forfeit / ruling" }),
+  ).toBeVisible();
+  await expect(
+    tools.getByRole("button", { name: "Auto-fetch games", exact: true }),
+  ).toBeVisible();
+  await expect(tools.getByLabel("Kickoff time", { exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page, "match page admin tools at 390px");
+
+  await tools
+    .getByRole("link", { name: /^Open this match in the admin panel/ })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/admin#adm-match-${matchId}$`));
+  await expect(page.locator(`#adm-match-${matchId}`)).toBeInViewport();
   assertNoErrors();
 });

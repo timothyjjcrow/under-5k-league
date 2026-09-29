@@ -1,5 +1,8 @@
 import type { AutomationRunState } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+const { runResultSync } = vi.hoisted(() => ({ runResultSync: vi.fn() }));
+vi.mock("./result-sync-service", () => ({ runResultSync }));
+
 import {
   AUTOMATION_LEASE_MS,
   AUTOMATION_RUN_KEY,
@@ -370,6 +373,26 @@ describe("automation ownership and health", () => {
       lastStatus: "DEGRADED",
       consecutiveFailures: 1,
       lastErrorCode: "WORKER_DEGRADED",
+    });
+  });
+
+  it("runs result sync with the hourly player data refresh when no worker is given", async () => {
+    runResultSync.mockReset().mockResolvedValue(OUTCOME);
+    const store = fakeDb();
+
+    const result = await runAutomation({
+      source: "CRON",
+      db: store.db,
+      token: "default-worker-token",
+      now: () => NOW,
+    });
+
+    expect(result).toMatchObject({ kind: "completed", status: "SUCCEEDED" });
+    expect(runResultSync).toHaveBeenCalledTimes(1);
+    expect(runResultSync.mock.calls[0][0]).toMatchObject({
+      refreshPlayerData: true,
+      deadlineMs: expect.any(Number),
+      signal: expect.any(AbortSignal),
     });
   });
 });

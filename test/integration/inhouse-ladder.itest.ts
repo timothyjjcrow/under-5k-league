@@ -5,9 +5,11 @@ import { INHOUSE_STATUS } from "@/lib/constants";
 import {
   loadInhouseLadder,
   loadInhouseLadderSummary,
+  loadInhouseMonthLadder,
   resetInhouseLadderCache,
 } from "@/lib/inhouse-ladder";
 import {
+  MONTH_MIN_GAMES,
   PROVISIONAL_GAMES,
   rankInhouse,
   summarizeInhouse,
@@ -162,5 +164,139 @@ describe("loadInhouseLadder — the memoised full-history ladder", () => {
     expect(voided.completedCount).toBe(0);
     expect(voided.records).toHaveLength(0);
     await expect(loadBoardStats(now + 2_000)).resolves.toMatchObject({ lobbiesPlayed: 0 });
+  });
+});
+
+describe("loadInhouseMonthLadder — this month's board", () => {
+  const ZONE = "America/Los_Angeles";
+  // Sept 20 2026, noon UTC: the Pacific month is Sept 1 07:00Z → Oct 1 07:00Z.
+  const NOW = Date.parse("2026-09-20T12:00:00Z");
+
+  async function seedMonthLobby(
+    sides: [string, 1 | 2][],
+    winnerTeam: 1 | 2,
+    completedAt: Date | null,
+    opts: {
+      status?: string;
+      createdAt?: Date;
+      eloDeltas?: Record<string, number>;
+    } = {},
+  ) {
+    return prisma.inhouseLobby.create({
+      data: {
+        status: opts.status ?? INHOUSE_STATUS.COMPLETED,
+        winnerTeam,
+        completedAt,
+        createdAt: opts.createdAt ?? completedAt ?? new Date(NOW),
+        eloDeltas: JSON.stringify(
+          opts.eloDeltas ??
+            Object.fromEntries(
+              sides.map(([id, team]) => [id, team === winnerTeam ? 16 : -16]),
+            ),
+        ),
+        players: {
+          create: sides.map(([userId, team]) => ({ userId, team, mmr: 3000 })),
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    resetInhouseLadderCache();
+  });
+
+  it("counts only results that completed this month on the league clock", async () => {
+    const a = await makeUser("Month A");
+    const b = await makeUser("Month B");
+    const c = await makeUser("Month C");
+    // Formed in August, finished on the first instant of September: counts,
+    // because the month is keyed on completedAt, never createdAt.
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 1, new Date("2026-09-01T07:00:00Z"), {
+      createdAt: new Date("2026-08-31T23:00:00Z"),
+      eloDeltas: { [a.id]: 16, [b.id]: -16 },
+    });
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 2, new Date("2026-09-10T03:00:00Z"), {
+      eloDeltas: { [a.id]: -15, [b.id]: 15 },
+    });
+    await seedMonthLobby([[a.id, 1], [c.id, 2]], 1, new Date("2026-09-15T03:00:00Z"), {
+      eloDeltas: { [a.id]: 14, [c.id]: -14 },
+    });
+    // September in UTC but still August 31st in Los Angeles.
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 1, new Date("2026-09-01T03:00:00Z"));
+    // Voided, pre-completedAt history, and the first instant of October.
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 1, new Date("2026-09-12T03:00:00Z"), {
+      status: INHOUSE_STATUS.CANCELLED,
+    });
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 1, null, {
+      createdAt: new Date("2026-09-12T03:00:00Z"),
+    });
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 1, new Date("2026-10-01T07:00:00Z"));
+
+    const scan = vi.spyOn(prisma.inhouseLobby, "findMany");
+    try {
+      // Two concurrent cold reads share one windowed query, and neither is
+      // the career ladder's full-history scan.
+      const [month, again] = await Promise.all([
+        loadInhouseMonthLadder(NOW, ZONE),
+        loadInhouseMonthLadder(NOW, ZONE),
+      ]);
+      expect(again).toBe(month);
+      expect(scan).toHaveBeenCalledTimes(1);
+      expect(scan.mock.calls[0][0]?.where).toMatchObject({
+        status: INHOUSE_STATUS.COMPLETED,
+        completedAt: {
+          gte: new Date("2026-09-01T07:00:00Z"),
+          lt: new Date("2026-10-01T07:00:00Z"),
+        },
+      });
+
+      expect(month.label).toBe("September 2026");
+      expect(month.games).toBe(3);
+      expect(MONTH_MIN_GAMES).toBe(3);
+      expect(month.ranked.map((r) => r.userId)).toEqual([a.id]);
+      expect(month.ranked[0]).toMatchObject({
+        games: 3,
+        wins: 2,
+        losses: 1,
+        eloNet: 15,
+      });
+      expect(month.unranked).toEqual([
+        expect.objectContaining({ userId: b.id, games: 2, wins: 1, eloNet: -1 }),
+        expect.objectContaining({ userId: c.id, games: 1, wins: 0, eloNet: -14 }),
+      ]);
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
+  it("serves the memo until the cursor moves, and rolls over on the 1st", async () => {
+    const a = await makeUser("Memo A");
+    const b = await makeUser("Memo B");
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, "one");
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 1, new Date("2026-09-05T03:00:00Z"));
+    expect((await loadInhouseMonthLadder(NOW, ZONE)).games).toBe(1);
+
+    // A result lands without its cursor stamp: the memo still answers…
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 2, new Date("2026-09-06T03:00:00Z"));
+    expect((await loadInhouseMonthLadder(NOW + 30_000, ZONE)).games).toBe(1);
+    // …until the result cursor moves, which invalidates at once.
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, "two");
+    expect((await loadInhouseMonthLadder(NOW + 31_000, ZONE)).games).toBe(2);
+
+    // Ten seconds before local midnight on Oct 1, then twenty after: well
+    // inside the TTL, but a new month is a new board.
+    const lastOfMonth = Date.parse("2026-10-01T06:59:50Z");
+    expect((await loadInhouseMonthLadder(lastOfMonth, ZONE)).games).toBe(2);
+    const october = await loadInhouseMonthLadder(lastOfMonth + 20_000, ZONE);
+    expect(october.label).toBe("October 2026");
+    expect(october.games).toBe(0);
+    expect(october.ranked).toEqual([]);
+    expect(october.unranked).toEqual([]);
+
+    // The shared reset seam drops the month memo too.
+    await seedMonthLobby([[a.id, 1], [b.id, 2]], 1, new Date("2026-10-02T03:00:00Z"));
+    expect((await loadInhouseMonthLadder(lastOfMonth + 25_000, ZONE)).games).toBe(0);
+    resetInhouseLadderCache();
+    expect((await loadInhouseMonthLadder(lastOfMonth + 26_000, ZONE)).games).toBe(1);
   });
 });

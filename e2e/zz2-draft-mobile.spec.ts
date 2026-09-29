@@ -17,13 +17,16 @@ test("draft room on a phone: pool first, working anchor, unclipped clock bar", a
   );
   await expect(page.getByText(/Available ·/)).toBeVisible();
 
-  // Pool-first: on a phone the pool card must sit ABOVE the first team card
-  // (team cards are the ones carrying a "max $" bid-cap line).
+  // Pool-first: on a phone the pool card must sit ABOVE the team cards. The
+  // cards are located by their labelled section, not by a "max $" line: that
+  // bid cap only renders while a lot is live, and whether one is live when
+  // this spec runs depends on how far the previous spec's clock has run.
   const pool = page.locator("#player-pool");
   await expect(pool).toBeVisible();
   const poolTop = (await pool.boundingBox())!.y;
-  const teamCard = page.getByText(/max \$/).first();
-  const teamsTop = (await teamCard.boundingBox())!.y;
+  const teams = page.getByRole("region", { name: "Team rosters" });
+  await expect(teams).toBeVisible();
+  const teamsTop = (await teams.boundingBox())!.y;
   expect(poolTop).toBeLessThan(teamsTop);
 
   // Scroll deep: the compact clock bar appears and clears the 80px header.

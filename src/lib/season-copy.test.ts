@@ -1,15 +1,32 @@
 import { describe, it, expect } from "vitest";
 import {
   draftPhasePresentation,
+  leagueEligibilityLine,
+  leaguePitch,
+  mmrCeilingPhrase,
+  matchNightText,
   phaseSubtitle,
-  scheduleDestinationLabel,
+  PLAYER_SIGNUPS_OPEN_UNTIL,
+  seasonPhaseLabel,
+  seasonPhaseTone,
 } from "./season-copy";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { draftReminderAnnouncement } from "./discord";
 
 describe("phaseSubtitle", () => {
   it("asks for players while the season is short of its minimum", () => {
     const s = phaseSubtitle(SEASON_STATUS.SIGNUPS, { canDraft: false });
     expect(s).toContain("Sign up now");
+  });
+
+  // A signed-up player reads this beside their own "You're in" panel.
+  it("doesn't ask a signed-up viewer to sign up again", () => {
+    const s = phaseSubtitle(SEASON_STATUS.SIGNUPS, {
+      canDraft: false,
+      signedUp: true,
+    });
+    expect(s).not.toMatch(/sign up now/i);
+    expect(s).toMatch(/once enough players/i);
   });
 
   // The hero renders this directly beneath a "Ready to draft" badge. Claiming
@@ -20,6 +37,25 @@ describe("phaseSubtitle", () => {
     const s = phaseSubtitle(SEASON_STATUS.SIGNUPS, { canDraft: true });
     expect(s).not.toMatch(/once enough players/i);
     expect(s).toMatch(/signups stay open/i);
+  });
+
+  // An admin can close signups (Close signups, or Start draft) before draft
+  // night, so neither Home nor the draft-night reminder may promise draft
+  // night or the auction; both say PLAYER_SIGNUPS_OPEN_UNTIL.
+  it("says signups stay open until an admin closes them, as the reminder does", () => {
+    const s = phaseSubtitle(SEASON_STATUS.SIGNUPS, { canDraft: true });
+    expect(s).toContain(`signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}`);
+    expect(s).not.toMatch(/until draft night|until the auction/i);
+    expect(
+      draftReminderAnnouncement({
+        seasonName: "Season 3",
+        draftAtMs: 1_800_000_000_000,
+        playerSignupsOpen: true,
+        playerCount: 14,
+        captains: [],
+        unconfirmed: [],
+      }).content,
+    ).toContain(`Player signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}.`);
   });
 
   it("says signups are open in BOTH signup states", () => {
@@ -39,10 +75,10 @@ describe("phaseSubtitle", () => {
 
   // canDraft is meaningless outside SIGNUPS; passing it must not leak into
   // another phase's copy.
-  it("ignores canDraft in the other phases", () => {
+  it("ignores canDraft and signedUp in the other phases", () => {
     for (const status of Object.values(SEASON_STATUS)) {
       if (status === SEASON_STATUS.SIGNUPS) continue;
-      expect(phaseSubtitle(status, { canDraft: true })).toBe(
+      expect(phaseSubtitle(status, { canDraft: true, signedUp: true })).toBe(
         phaseSubtitle(status, { canDraft: false }),
       );
     }
@@ -108,15 +144,113 @@ describe("draftPhasePresentation", () => {
   });
 });
 
-describe("scheduleDestinationLabel", () => {
-  it("tracks the route's phase-specific purpose", () => {
-    expect(scheduleDestinationLabel(SEASON_STATUS.DRAFT)).toBe("Schedule");
-    expect(scheduleDestinationLabel(SEASON_STATUS.REGULAR_SEASON)).toBe(
-      "Schedule",
+describe("seasonPhaseLabel", () => {
+  it("names every phase once, without repeating the season beside it", () => {
+    expect(seasonPhaseLabel(SEASON_STATUS.SIGNUPS)).toBe("Signups open");
+    expect(seasonPhaseLabel(SEASON_STATUS.REGULAR_SEASON)).toBe(
+      "Regular season",
     );
-    expect(scheduleDestinationLabel(SEASON_STATUS.PLAYOFFS)).toBe("Playoffs");
-    expect(scheduleDestinationLabel(SEASON_STATUS.COMPLETE)).toBe(
-      "Season results",
+    expect(seasonPhaseLabel(SEASON_STATUS.PLAYOFFS)).toBe("Playoffs");
+    // Every chip sits beside the season's name: "Season 7 · Complete".
+    expect(seasonPhaseLabel(SEASON_STATUS.COMPLETE)).toBe("Complete");
+    for (const status of Object.values(SEASON_STATUS)) {
+      expect(seasonPhaseLabel(status, DRAFT_STATUS.COMPLETE)).not.toMatch(
+        /^season/i,
+      );
+    }
+  });
+
+  // The footer used to say "Draft in progress" whatever the auction was
+  // doing: before it started, while paused, and after every roster was sold.
+  it("says what the auction is doing inside the draft phase", () => {
+    expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, null)).toBe("Draft setup");
+    expect(
+      seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.NOT_STARTED),
+    ).toBe("Draft setup");
+    expect(
+      seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS),
+    ).toBe("Draft live");
+    expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.PAUSED)).toBe(
+      "Draft paused",
+    );
+    expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE)).toBe(
+      "Draft complete",
+    );
+    for (const draftStatus of Object.values(DRAFT_STATUS)) {
+      expect(seasonPhaseLabel(SEASON_STATUS.DRAFT, draftStatus)).toBe(
+        draftPhasePresentation(draftStatus).badge,
+      );
+    }
+  });
+
+  it("ignores the auction outside the draft phase", () => {
+    expect(
+      seasonPhaseLabel(SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE),
+    ).toBe("Regular season");
+  });
+
+  it("covers the offseason and unknown states", () => {
+    expect(seasonPhaseLabel(null)).toBe("Between seasons");
+    expect(seasonPhaseLabel(undefined)).toBe("Between seasons");
+    expect(seasonPhaseLabel("SOMETHING_NEW")).toBe("SOMETHING_NEW");
+  });
+});
+
+describe("seasonPhaseTone", () => {
+  it("gives each phase its badge colour and anything else neutral", () => {
+    expect(seasonPhaseTone(SEASON_STATUS.SIGNUPS)).toBe("info");
+    expect(seasonPhaseTone(SEASON_STATUS.DRAFT)).toBe("accent");
+    expect(seasonPhaseTone(SEASON_STATUS.REGULAR_SEASON)).toBe("success");
+    expect(seasonPhaseTone(SEASON_STATUS.PLAYOFFS)).toBe("accent");
+    expect(seasonPhaseTone(SEASON_STATUS.COMPLETE)).toBe("accent");
+    expect(seasonPhaseTone(null)).toBe("neutral");
+    expect(seasonPhaseTone("SOMETHING_NEW")).toBe("neutral");
+  });
+});
+
+describe("matchNightText", () => {
+  // Every surface quoting it ends the sentence itself, so an admin's own full
+  // stop printed "Wednesdays, 8pm ET.. Games are on…".
+  it("trims the admin's text and drops a trailing full stop", () => {
+    expect(matchNightText("Wednesdays, 8pm ET")).toBe("Wednesdays, 8pm ET");
+    expect(matchNightText("  Wednesdays, 8pm ET.  ")).toBe("Wednesdays, 8pm ET");
+    expect(matchNightText("Sundays 6 p.m. CET...")).toBe("Sundays 6 p.m. CET");
+  });
+
+  it("is null when the admin hasn't set one", () => {
+    for (const unset of [null, undefined, "", "   ", ".", " . "]) {
+      expect(matchNightText(unset)).toBeNull();
+    }
+  });
+});
+
+describe("the league pitch for new visitors", () => {
+  it("names the league and says what a season is", () => {
+    expect(leaguePitch("GGD2L")).toBe(
+      "GGD2L is an amateur Dota 2 league: captains draft players in a live auction, then teams play weekly matches and playoffs.",
+    );
+    expect(leaguePitch("GGD2L Europe")).toMatch(/^GGD2L Europe is an amateur/);
+  });
+
+  it("states the hard MMR limit and the announced match night", () => {
+    expect(leagueEligibilityLine("Sundays at 6:00 PM Pacific time")).toBe(
+      "Open to players up to 5,000 MMR · Match night: Sundays at 6:00 PM Pacific time",
+    );
+    expect(leagueEligibilityLine("Wednesdays at 20:00 Berlin time")).toBe(
+      "Open to players up to 5,000 MMR · Match night: Wednesdays at 20:00 Berlin time",
+    );
+  });
+
+  // Home, How it works and the link previews describe who can join; they
+  // share one phrase so the limit can't be worded three ways.
+  it("words the hard MMR limit once for every surface", () => {
+    expect(mmrCeilingPhrase()).toBe("up to 5,000 MMR");
+    expect(leagueEligibilityLine(null)).toContain(mmrCeilingPhrase());
+  });
+
+  it("says the match night is still to come rather than inventing one", () => {
+    expect(leagueEligibilityLine(null)).toBe(
+      "Open to players up to 5,000 MMR · Match night to be announced",
     );
   });
 });

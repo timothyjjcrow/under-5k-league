@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { verifyBackupReceipt } from "./backup-receipt.mjs";
 
@@ -29,6 +30,30 @@ function envWithoutDatabaseUrls(): NodeJS.ProcessEnv {
   ) as NodeJS.ProcessEnv;
 }
 
+// Fixtures and assertions use Node's built-in SQLite, like the script itself,
+// so the suite needs no sqlite3 program on the machine.
+function sqliteExec(file: string, sql: string) {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(sql);
+  } finally {
+    db.close();
+  }
+}
+
+function sqliteQuery(file: string, sql: string): string {
+  const db = new DatabaseSync(file);
+  try {
+    return db
+      .prepare(sql)
+      .all()
+      .map((row) => Object.values(row).join("|"))
+      .join("\n");
+  } finally {
+    db.close();
+  }
+}
+
 function backupFiles(directory: string, extension: ".db" | ".sql") {
   return readdirSync(directory)
     .filter((file) => file.endsWith(extension))
@@ -39,19 +64,26 @@ function createSqliteBackup() {
   const directory = mkdtempSync(path.join(tmpdir(), "ld2l-backup-"));
   const database = path.join(directory, "source.db");
   const output = path.join(directory, "out");
-  execFileSync("sqlite3", [
-    database,
-    "PRAGMA journal_mode=WAL; CREATE TABLE fixture(value TEXT NOT NULL); INSERT INTO fixture VALUES ('sqlite-row-fixture');",
-  ]);
-
-  const stdout = execFileSync("node", [BACKUP_SCRIPT], {
-    env: {
-      ...envWithoutDatabaseUrls(),
-      DATABASE_URL: `file:${database}`,
-      BACKUP_DIR: output,
-    },
-    encoding: "utf8",
-  });
+  // Keep the source open in WAL mode while the backup runs, so the row lives
+  // only in the uncheckpointed -wal file: a byte copy of source.db would miss
+  // it, and the online backup must not.
+  const live = new DatabaseSync(database);
+  let stdout: string;
+  try {
+    live.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE fixture(value TEXT NOT NULL); INSERT INTO fixture VALUES ('sqlite-row-fixture');",
+    );
+    stdout = execFileSync("node", [BACKUP_SCRIPT], {
+      env: {
+        ...envWithoutDatabaseUrls(),
+        DATABASE_URL: `file:${database}`,
+        BACKUP_DIR: output,
+      },
+      encoding: "utf8",
+    });
+  } finally {
+    live.close();
+  }
 
   const [backup] = backupFiles(output, ".db");
   return { backup, database, directory, output, stdout };
@@ -93,16 +125,10 @@ describe("db backup script", () => {
     const { backup, database, output, stdout } = createSqliteBackup();
 
     expect(stdout).toContain("SQLite backup written");
-    expect(
-      execFileSync("sqlite3", [backup, "PRAGMA integrity_check;"], {
-        encoding: "utf8",
-      }).trim(),
-    ).toBe("ok");
-    expect(
-      execFileSync("sqlite3", [backup, "SELECT value FROM fixture;"], {
-        encoding: "utf8",
-      }).trim(),
-    ).toBe("sqlite-row-fixture");
+    expect(sqliteQuery(backup, "PRAGMA integrity_check;")).toBe("ok");
+    expect(sqliteQuery(backup, "SELECT value FROM fixture;")).toBe(
+      "sqlite-row-fixture",
+    );
     expect(existsSync(database)).toBe(true);
     expect(statSync(output).mode & 0o777).toBe(0o700);
     expect(statSync(backup).mode & 0o777).toBe(0o600);
@@ -128,7 +154,7 @@ describe("db backup script", () => {
     const legacy = path.join(output, "backup-legacy.db");
     const sidecar = `${legacy}.sha256`;
     const metadata = `${legacy}.metadata.json`;
-    execFileSync("sqlite3", [database, "CREATE TABLE fixture(value);"]);
+    sqliteExec(database, "CREATE TABLE fixture(value);");
     writeFileSync(legacy, "legacy", { mode: 0o644 });
     writeFileSync(sidecar, "legacy-checksum", { mode: 0o644 });
     writeFileSync(metadata, "{}", { mode: 0o644 });
@@ -147,11 +173,46 @@ describe("db backup script", () => {
     expect(statSync(metadata).mode & 0o777).toBe(0o600);
   });
 
+  it("refuses to publish a SQLite snapshot that fails integrity_check", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ld2l-backup-corrupt-"));
+    const database = path.join(directory, "source.db");
+    const output = path.join(directory, "out");
+    sqliteExec(
+      database,
+      "CREATE TABLE fixture(value TEXT NOT NULL); CREATE INDEX fixture_value ON fixture(value); INSERT INTO fixture VALUES ('index-entry-fixture');",
+    );
+    // The value is stored twice: in the table page and in the index page after
+    // it. Changing the index's copy leaves a database that opens and copies
+    // fine but whose index no longer matches its table.
+    const bytes = readFileSync(database);
+    const needle = Buffer.from("index-entry-fixture");
+    const inIndex = bytes.lastIndexOf(needle);
+    expect(bytes.indexOf(needle)).toBeLessThan(inIndex);
+    bytes[inIndex] = "X".charCodeAt(0);
+    writeFileSync(database, bytes);
+    expect(sqliteQuery(database, "PRAGMA integrity_check;")).not.toBe("ok");
+
+    const result = spawnSync("node", [BACKUP_SCRIPT], {
+      env: {
+        ...envWithoutDatabaseUrls(),
+        DATABASE_URL: `file:${database}`,
+        BACKUP_DIR: output,
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "SQLite snapshot failed PRAGMA integrity_check",
+    );
+    expect(readdirSync(output)).toEqual([]);
+  });
+
   it("falls back to .env in the cwd when the process has no database URL", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "ld2l-backup-env-"));
     const database = path.join(directory, "envdb.db");
     const output = path.join(directory, "out");
-    execFileSync("sqlite3", [database, "CREATE TABLE fixture(value);"]);
+    sqliteExec(database, "CREATE TABLE fixture(value);");
     writeFileSync(
       path.join(directory, ".env"),
       `# comment\nDATABASE_URL="file:${database}"\nOTHER=x\n`,

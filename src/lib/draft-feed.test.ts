@@ -54,9 +54,9 @@ describe("seedDraftFeed", () => {
     expect(seedDraftFeed(seed())).toEqual([]);
   });
 
-  it("puts the LIVE nomination at the top, over the recent sales", () => {
-    // A captain who reloads mid-lot must see what is on the block first; the
-    // feed renders newest-first and the live nomination is the newest thing.
+  it("seeds the sales only; the live lot has the lot card to itself", () => {
+    // The room's list is "Recent sales" now. The live nomination is on the
+    // lot card, with its bid trail, right above it.
     const lines = seedDraftFeed(
       seed({
         nominatedPlayer: { userId: "p9", name: "Pudge" },
@@ -64,10 +64,7 @@ describe("seedDraftFeed", () => {
         recentSales: [{ name: "Sniper", teamName: "Bravo", price: 12 }],
       }),
     );
-    expect(lines).toEqual([
-      { kind: "nominate", text: "Alpha nominated Pudge", amount: 7 },
-      { kind: "sold", text: "Sniper → Bravo", amount: 12 },
-    ]);
+    expect(lines).toEqual([{ kind: "sold", text: "Sniper → Bravo", amount: 12 }]);
   });
 
   it("keeps the server's sale order — newest first", () => {
@@ -85,12 +82,10 @@ describe("seedDraftFeed", () => {
 
   it("caps at FEED_MAX, trimming the tail rather than the head", () => {
     // Defence in depth, not a live constraint: getDraftState already slices
-    // recentSales to 8, so the largest seed production can produce is 9 lines.
-    // If that bound is ever widened this is what stops a page load pushing the
-    // live nomination off the bottom of the feed.
+    // recentSales to 8. If that bound is ever widened this keeps a page load
+    // from listing the whole draft, and keeps the NEWEST sales.
     const lines = seedDraftFeed(
       seed({
-        nominatedPlayer: { userId: "p1", name: "Live" },
         recentSales: Array.from({ length: 20 }, (_, i) => ({
           name: `P${i}`,
           teamName: "Alpha",
@@ -99,17 +94,22 @@ describe("seedDraftFeed", () => {
       }),
     );
     expect(lines).toHaveLength(FEED_MAX);
-    expect(lines[0].kind).toBe("nominate");
+    expect(lines[0].text).toBe("P0 → Alpha");
   });
 
-  it("names a missing team '—' rather than rendering undefined", () => {
+  it("tags a past sale that was the clock's pick", () => {
     const lines = seedDraftFeed(
       seed({
-        nominatedPlayer: { userId: "p1", name: "Pudge" },
-        nominatorTeamId: "gone",
+        recentSales: [
+          { name: "Sniper", teamName: "Bravo", price: 1, auto: true },
+          { name: "Lion", teamName: "Alpha", price: 6, auto: false },
+        ],
       }),
     );
-    expect(lines[0].text).toBe("— nominated Pudge");
+    expect(lines).toEqual([
+      { kind: "sold", text: "Sniper → Bravo", amount: 1, auto: true },
+      { kind: "sold", text: "Lion → Alpha", amount: 6 },
+    ]);
   });
 });
 
@@ -226,7 +226,12 @@ describe("draftFeedResetReason", () => {
 describe("draftFeedDiff", () => {
   it("says nothing when nothing changed", () => {
     const s = snap({ nominatedPlayer: { userId: "p1", name: "Pudge" }, currentBid: 3 });
-    expect(draftFeedDiff(s, s)).toEqual({ lines: [], sale: null, alerts: [] });
+    expect(draftFeedDiff(s, s)).toEqual({
+      lines: [],
+      sale: null,
+      alerts: [],
+      notice: null,
+    });
   });
 
   it("logs a sale and flashes it", () => {
@@ -338,6 +343,18 @@ describe("draftFeedDiff", () => {
     expect(draftFeedDiff(before, meOnBlock).alerts).toEqual(["im-nominated"]);
   });
 
+  it("names a missing team '—' rather than rendering undefined", () => {
+    const lines = draftFeedDiff(
+      snap(),
+      snap({
+        nominatedPlayer: { userId: "p1", name: "Pudge" },
+        nominatorTeamId: "gone",
+        currentBid: 1,
+      }),
+    ).lines;
+    expect(lines[0].text).toBe("— nominated Pudge");
+  });
+
   it("does not re-log the same nomination on every poll", () => {
     // The lot is polled at 1.2s; without the changed-id guard the feed would
     // fill with the same line twelve times in fifteen seconds.
@@ -353,7 +370,7 @@ describe("draftFeedDiff", () => {
     });
     const at5 = { ...at1, currentBid: 5, currentBidTeamId: "t2" };
     expect(draftFeedDiff(at1, at5).lines).toEqual([
-      { kind: "bid", text: "Bravo bid", amount: 5 },
+      { kind: "bid", text: "Bravo bid on Pudge", amount: 5 },
     ]);
   });
 
@@ -367,7 +384,7 @@ describe("draftFeedDiff", () => {
     });
     const at9 = { ...at1, currentBid: 9, currentBidTeamId: "t1" };
     expect(draftFeedDiff(at1, at9).lines).toEqual([
-      { kind: "bid", text: "Alpha bid", amount: 9 },
+      { kind: "bid", text: "Alpha bid on Pudge", amount: 9 },
     ]);
   });
 
@@ -477,6 +494,93 @@ describe("draftFeedDiff", () => {
       8,
     );
     expect(draftFeedDiff(before, after).alerts).toEqual(["im-sold", "my-nomination"]);
+  });
+
+  describe("a lot the clock opened for an absent captain", () => {
+    const autoLot = (over: Partial<FeedSnapshot> = {}) =>
+      snap({
+        nominatedPlayer: { userId: "p28", name: "Player 28" },
+        nominatorTeamId: "t2",
+        currentBid: 1,
+        currentBidTeamId: "t2",
+        lotAutoNominated: true,
+        ...over,
+      });
+
+    it("says so in the feed instead of passing it off as a nomination", () => {
+      const { lines, alerts } = draftFeedDiff(snap(), autoLot());
+      expect(lines).toEqual([
+        {
+          kind: "nominate",
+          text: "Clock ran out: auto-picked Player 28 for Bravo",
+          amount: 1,
+          auto: true,
+        },
+      ]);
+      // No bell: the your-turn chime already rang when the clock started.
+      expect(alerts).toEqual([]);
+    });
+
+    it("tells THAT team's captain, and nobody else", () => {
+      const mine = { userId: "me", canNominate: false, myTeamId: "t2" };
+      expect(
+        draftFeedDiff(
+          snap({ me: { ...mine, canNominate: true } }),
+          autoLot({ me: mine }),
+        ).notice,
+      ).toBe(
+        "Your nomination clock ran out, so the draft nominated Player 28 for you at the minimum bid.",
+      );
+      // Another captain, a visitor, a signed-out viewer.
+      for (const me of [
+        { userId: "c1", canNominate: false, myTeamId: "t1" },
+        { userId: "v", canNominate: false, myTeamId: null },
+        { userId: null, canNominate: false },
+      ]) {
+        expect(draftFeedDiff(snap({ me }), autoLot({ me })).notice).toBeNull();
+      }
+    });
+
+    it("tells them once, not on every poll of the same lot", () => {
+      const me = { userId: "me", canNominate: false, myTeamId: "t2" };
+      const lot = autoLot({ me });
+      expect(draftFeedDiff(lot, { ...lot, currentBid: 4 }).notice).toBeNull();
+    });
+
+    it("never labels a captain's own nomination", () => {
+      const me = { userId: "me", canNominate: false, myTeamId: "t2" };
+      const { lines, notice } = draftFeedDiff(
+        snap({ me }),
+        autoLot({ me, lotAutoNominated: false }),
+      );
+      expect(lines[0]).toEqual({
+        kind: "nominate",
+        text: "Bravo nominated Player 28",
+        amount: 1,
+      });
+      expect(notice).toBeNull();
+    });
+
+    it("carries the label onto that lot's sale, and only that one", () => {
+      // A slow poll can bring two sales at once; only the player who was on
+      // the block in the PREVIOUS payload was the clock's pick.
+      const before = autoLot();
+      const after = withSale(
+        withSale(snap(), "t2", "p28", 1),
+        "t1",
+        "p5",
+        9,
+      );
+      expect(draftFeedDiff(before, after).lines).toEqual([
+        { kind: "sold", text: "P5 → Alpha", amount: 9 },
+        { kind: "sold", text: "P28 → Bravo", amount: 1, auto: true },
+      ]);
+      // A captain's own lot selling carries no label.
+      const manual = autoLot({ lotAutoNominated: false });
+      expect(
+        draftFeedDiff(manual, withSale(snap(), "t2", "p28", 1)).lines,
+      ).toEqual([{ kind: "sold", text: "P28 → Bravo", amount: 1 }]);
+    });
   });
 
   it("does not mutate either payload", () => {

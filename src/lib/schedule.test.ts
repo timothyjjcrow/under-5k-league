@@ -3,7 +3,9 @@ import {
   focusSlate,
   roundRobin,
   byeTeamsByWeek,
-  remainingSchedule,
+  orderScheduleWeeks,
+  teamByeWeek,
+  weekStartsCollapsed,
   seedOrder,
   playoffFirstRound,
   pickBracketSize,
@@ -19,6 +21,8 @@ import {
   shiftMatchNight,
   upcomingMatchNight,
   rescheduleDeadline,
+  leagueMonthWindow,
+  scheduleFilterTeamId,
 } from "./schedule";
 import { LEAGUE_CONFIG } from "./league-config";
 
@@ -84,6 +88,69 @@ describe("shiftMatchNight", () => {
       .toBe("2026-04-13T19:30:00.000Z");
     expect(shiftMatchNight(outlier, previous, next, null).toISOString())
       .toBe("2026-04-13T18:30:00.000Z");
+  });
+});
+
+describe("leagueMonthWindow", () => {
+  const iso = (w: { start: Date; end: Date }) => [
+    w.start.toISOString(),
+    w.end.toISOString(),
+  ];
+
+  it("turns the month over at local midnight, not UTC midnight", () => {
+    // 03:00 UTC on Oct 1 is still 8 PM on Sept 30 in Los Angeles.
+    const w = leagueMonthWindow(
+      Date.parse("2026-10-01T03:00:00Z"),
+      "America/Los_Angeles",
+    );
+    expect(w.label).toBe("September 2026");
+    expect(iso(w)).toEqual([
+      "2026-09-01T07:00:00.000Z",
+      "2026-10-01T07:00:00.000Z",
+    ]);
+    // A minute past local midnight is October.
+    expect(
+      leagueMonthWindow(Date.parse("2026-10-01T07:01:00Z"), "America/Los_Angeles")
+        .label,
+    ).toBe("October 2026");
+  });
+
+  it("keeps each boundary on local midnight across a clock change", () => {
+    // Nov 1 2026 00:00 is still PDT (the change is at 2 AM); Dec 1 is PST.
+    const w = leagueMonthWindow(
+      Date.parse("2026-11-15T12:00:00Z"),
+      "America/Los_Angeles",
+    );
+    expect(iso(w)).toEqual([
+      "2026-11-01T07:00:00.000Z",
+      "2026-12-01T08:00:00.000Z",
+    ]);
+    // Europe: 23:30 UTC on Oct 31 is already November in Berlin (CET, +1).
+    const eu = leagueMonthWindow(
+      Date.parse("2026-10-31T23:30:00Z"),
+      "Europe/Berlin",
+    );
+    expect(eu.label).toBe("November 2026");
+    expect(iso(eu)).toEqual([
+      "2026-10-31T23:00:00.000Z",
+      "2026-11-30T23:00:00.000Z",
+    ]);
+  });
+
+  it("rolls the year over in December and uses UTC with no zone", () => {
+    const w = leagueMonthWindow(Date.parse("2026-12-31T23:59:59Z"), null);
+    expect(w.label).toBe("December 2026");
+    expect(iso(w)).toEqual([
+      "2026-12-01T00:00:00.000Z",
+      "2027-01-01T00:00:00.000Z",
+    ]);
+  });
+
+  it("defaults to the league's configured clock", () => {
+    const now = Date.parse("2026-10-01T03:00:00Z");
+    expect(leagueMonthWindow(now)).toEqual(
+      leagueMonthWindow(now, LEAGUE_CONFIG.timeZone),
+    );
   });
 });
 
@@ -348,6 +415,22 @@ describe("groupPlayoffRounds", () => {
   });
 });
 
+describe("scheduleFilterTeamId", () => {
+  const ids = ["a", "b"];
+  it("starts on the reader's own team when the URL names none", () => {
+    expect(scheduleFilterTeamId(null, "b", ids)).toBe("b");
+    expect(scheduleFilterTeamId(null, undefined, ids)).toBeNull();
+  });
+  it("follows the team picked in the URL, and 'all' clears it", () => {
+    expect(scheduleFilterTeamId("a", "b", ids)).toBe("a");
+    expect(scheduleFilterTeamId("all", "b", ids)).toBeNull();
+  });
+  it("ignores a team that isn't one of this page's teams", () => {
+    expect(scheduleFilterTeamId("gone", "b", ids)).toBeNull();
+    expect(scheduleFilterTeamId(null, "gone", ids)).toBeNull();
+  });
+});
+
 describe("slotIndex", () => {
   it("reads the match index from a bracket slot", () => {
     expect(slotIndex("R0M1")).toBe(1);
@@ -436,43 +519,136 @@ describe("byeTeamsByWeek", () => {
   });
 });
 
-describe("remainingSchedule", () => {
+describe("teamByeWeek", () => {
+  const now = Date.parse("2026-10-01T12:00:00Z");
+  const day = 86_400_000;
   const m = (
+    id: string,
     week: number,
     home: string,
     away: string,
     status = "SCHEDULED",
     phase = "REGULAR",
-  ) => ({ week, homeTeamId: home, awayTeamId: away, status, phase });
+  ) => ({
+    id,
+    week,
+    homeTeamId: home,
+    awayTeamId: away,
+    status,
+    phase,
+    scheduledAt: new Date(now + (week - 1) * 7 * day + day),
+  });
+  // Five teams: a rests week 1, b rests week 2.
+  const season = [
+    m("1a", 1, "b", "c"),
+    m("1b", 1, "d", "e"),
+    m("2a", 2, "a", "c"),
+    m("2b", 2, "d", "e"),
+  ];
 
-  it("lists unplayed opponents in week order for both sides", () => {
-    const rem = remainingSchedule(
-      ["a", "b", "c", "d"],
-      [
-        m(1, "a", "b", "COMPLETED"),
-        m(3, "c", "a"),
-        m(2, "a", "d"),
-        m(2, "b", "c"),
-      ],
-    );
-    expect(rem.get("a")).toEqual([
-      { week: 2, opponentId: "d" },
-      { week: 3, opponentId: "c" },
-    ]);
-    expect(rem.get("c")).toEqual([
-      { week: 2, opponentId: "b" },
-      { week: 3, opponentId: "a" },
-    ]);
-    expect(rem.get("d")).toEqual([{ week: 2, opponentId: "a" }]);
+  it("names the current week when the team sits it out", () => {
+    expect(teamByeWeek(season, "a", now)).toBe(1);
+    expect(teamByeWeek(season, "b", now)).toBeNull();
   });
 
-  it("ignores completed and playoff matches", () => {
-    const rem = remainingSchedule(
-      ["a", "b"],
-      [m(1, "a", "b", "COMPLETED"), m(9, "a", "b", "SCHEDULED", "PLAYOFF")],
+  it("moves on with the league's current week", () => {
+    const weekOneDone = season.map((match) =>
+      match.week === 1 ? { ...match, status: "COMPLETED" } : match,
     );
-    expect(rem.get("a")).toEqual([]);
-    expect(rem.get("b")).toEqual([]);
+    expect(teamByeWeek(weekOneDone, "a", now)).toBeNull();
+    expect(teamByeWeek(weekOneDone, "b", now)).toBe(2);
+  });
+
+  it("says nothing once no regular week is open", () => {
+    const done = season.map((match) => ({ ...match, status: "COMPLETED" }));
+    expect(teamByeWeek(done, "a", now)).toBeNull();
+    expect(
+      teamByeWeek(
+        [...done, m("f", 9, "b", "c", "SCHEDULED", "PLAYOFF")],
+        "a",
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not call a team with no fixtures at all a bye", () => {
+    expect(teamByeWeek(season, "z", now)).toBeNull();
+  });
+
+  it("skips an overdue week that is no longer current", () => {
+    const stale = [
+      {
+        ...m("0a", 1, "b", "c"),
+        scheduledAt: new Date(now - 30 * day),
+      },
+      m("2a", 2, "a", "c"),
+      m("2b", 2, "d", "e"),
+    ];
+    // Week 1's only open result is long overdue, so week 2 is current and a
+    // plays in it; b, with no week-2 fixture, is the one resting.
+    expect(teamByeWeek(stale, "a", now)).toBeNull();
+    expect(teamByeWeek(stale, "b", now)).toBe(2);
+  });
+});
+
+describe("orderScheduleWeeks", () => {
+  const weeks = [1, 2, 3, 4, 5].map((week) => ({ week }));
+  const order = (current: number | null) =>
+    orderScheduleWeeks(weeks, current).map(
+      (w) => `${w.earlier ? "earlier " : ""}${w.week}`,
+    );
+
+  it("reads this week, then the weeks ahead, then earlier weeks newest first", () => {
+    expect(order(3)).toEqual(["3", "4", "5", "earlier 2", "earlier 1"]);
+  });
+
+  it("keeps a whole season in order before it starts", () => {
+    expect(order(1)).toEqual(["1", "2", "3", "4", "5"]);
+  });
+
+  it("puts the last week first once no week is current", () => {
+    expect(order(5)).toEqual(["5", "earlier 4", "earlier 3", "earlier 2", "earlier 1"]);
+    expect(order(null)).toEqual([
+      "earlier 5",
+      "earlier 4",
+      "earlier 3",
+      "earlier 2",
+      "earlier 1",
+    ]);
+  });
+
+  it("does not depend on the order it is given", () => {
+    expect(
+      orderScheduleWeeks([{ week: 4 }, { week: 1 }, { week: 2 }], 2).map(
+        (w) => w.week,
+      ),
+    ).toEqual([2, 4, 1]);
+  });
+});
+
+describe("weekStartsCollapsed", () => {
+  it("closes a finished week before the current one", () => {
+    expect(weekStartsCollapsed({ week: 2, completed: 3, total: 3 }, 3)).toBe(true);
+  });
+
+  it("keeps the current week, later weeks and unfinished weeks open", () => {
+    expect(weekStartsCollapsed({ week: 3, completed: 3, total: 3 }, 3)).toBe(false);
+    expect(weekStartsCollapsed({ week: 4, completed: 3, total: 3 }, 3)).toBe(false);
+    expect(weekStartsCollapsed({ week: 2, completed: 2, total: 3 }, 3)).toBe(false);
+  });
+
+  it("closes every finished week once no week is current", () => {
+    expect(weekStartsCollapsed({ week: 7, completed: 3, total: 3 }, null)).toBe(true);
+    expect(weekStartsCollapsed({ week: 7, completed: 3, total: 3 }, undefined)).toBe(true);
+  });
+
+  it("closes one team's finished week even while the rest of it is open", () => {
+    // Under a team filter the header counts that team's series only.
+    expect(weekStartsCollapsed({ week: 2, completed: 1, total: 1 }, 3)).toBe(true);
+  });
+
+  it("never closes a week with nothing in it (a filtered bye week)", () => {
+    expect(weekStartsCollapsed({ week: 2, completed: 0, total: 0 }, 3)).toBe(false);
   });
 });
 
@@ -500,20 +676,6 @@ describe("seedsFromFirstRound (bracket-view)", () => {
     expect(seeds.get("a")).toBe(1);
     expect(seeds.get("b")).toBe(2);
     expect(seedsFromFirstRound([]).size).toBe(0);
-  });
-});
-
-describe("matchPhaseLabel / matchPhaseAbbrev", () => {
-  it("labels regular weeks by number and playoff phases by name", async () => {
-    const { matchPhaseLabel, matchPhaseAbbrev } = await import("./schedule");
-    expect(matchPhaseLabel("REGULAR", 3)).toBe("Week 3");
-    expect(matchPhaseLabel("PLAYOFF", 9)).toBe("Playoffs");
-    expect(matchPhaseLabel("FINAL", 10)).toBe("Grand final");
-    expect(matchPhaseLabel("TIEBREAKER", 8)).toBe("Tiebreaker week 8");
-    expect(matchPhaseAbbrev("REGULAR", 3)).toBe("W3");
-    expect(matchPhaseAbbrev("PLAYOFF", 9)).toBe("PO");
-    expect(matchPhaseAbbrev("FINAL", 10)).toBe("GF");
-    expect(matchPhaseAbbrev("TIEBREAKER", 8)).toBe("TB");
   });
 });
 

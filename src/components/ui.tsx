@@ -1,15 +1,18 @@
 import * as React from "react";
 import Link from "next/link";
 import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
-import { cn, initials } from "@/lib/utils";
+import { cn, initials, teamInitials } from "@/lib/utils";
+import { teamHueVar } from "@/lib/team-hues";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
-import { type Hero, heroById, heroIcon, parseHeroList } from "@/lib/heroes";
+import { heroById, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
 import { splitLinks } from "@/lib/linkify";
+import { splitLeadingEmoji } from "@/lib/leading-emoji";
 import { CountUp } from "./count-up";
 import { NewsMedia } from "./news-media";
 import { TeamLogoImage } from "./team-logo-image";
+import { HeroIcon } from "./hero-icon";
 
 // ---------- Button ----------
 
@@ -25,7 +28,7 @@ const variantClasses: Record<ButtonVariant, string> = {
   secondary:
     "bg-surface-2 text-fg border border-line hover:border-muted/60 hover:bg-surface-2/70",
   ghost: "text-muted hover:text-fg hover:bg-surface-2/60",
-  danger: "bg-danger text-white hover:bg-danger/90",
+  danger: "bg-danger-strong text-white hover:bg-danger-strong/90",
   accent: "bg-accent text-black hover:bg-accent/90",
 };
 
@@ -70,9 +73,12 @@ const cardTones = {
   default: "border-line bg-surface shadow-sm shadow-black/10",
   /**
    * The one card on a page that the viewer is meant to act on. Used sparingly —
-   * if two cards on a screen are `feature`, neither is.
+   * if two cards on a screen are `feature`, neither is. Its CardHeader rule
+   * steps up to `line`: the header's default `line-soft` is all but the same
+   * colour as surface-3, so the rule vanished and left an unexplained gap
+   * between the subtitle and the body.
    */
-  feature: "border-accent/40 bg-surface-3 shadow-sm shadow-black/15",
+  feature: "border-accent/40 bg-surface-3 shadow-sm shadow-black/15 [&>:first-child]:border-line",
   /** Context that should recede: archives, reference copy, empty-ish sections. */
   quiet: "border-line-soft bg-surface/50",
 } as const;
@@ -153,13 +159,21 @@ export function CardBody({
 
 // ---------- Badge ----------
 
+/**
+ * Badge text sits on a 15% tint of its own colour at 12px, so each tone's TEXT
+ * must clear 4.5:1 on that tint over every card surface. The bright tones
+ * (success, accent) do in their own colour; red and blue don't, so brand and
+ * danger use `danger-soft` and info uses `info-soft` (all ≥ 4.6:1 on
+ * surface-2). Red means a problem — a live alarm, a loss, private data — so
+ * good news ("Captain", "Champions", "Current season") uses accent or success.
+ */
 const badgeTones = {
   neutral: "bg-surface-2 text-muted border-line",
-  brand: "bg-brand/15 text-brand border-brand/30",
+  brand: "bg-brand/15 text-danger-soft border-brand/30",
   accent: "bg-accent/15 text-accent border-accent/30",
   success: "bg-success/15 text-success border-success/30",
-  info: "bg-info/15 text-info border-info/30",
-  danger: "bg-danger/15 text-danger border-danger/30",
+  info: "bg-info/15 text-info-soft border-info/30",
+  danger: "bg-danger/15 text-danger-soft border-danger/30",
 } as const;
 
 export function Badge({
@@ -344,6 +358,34 @@ export function textLink(className?: string) {
 }
 
 /**
+ * The arrow after a link's words: "Full schedule →", or "OpenDota ↗" with
+ * `out` (only for a link that leaves the site). Hidden from screen readers,
+ * which otherwise read the glyph ("right arrow") as part of the link's name.
+ * `textLink()` returns class names only, so the arrow is its own element:
+ * keep it on the SAME source line as the words before it, or JSX drops the
+ * space between them.
+ */
+export function LinkArrow({ out = false }: { out?: boolean }) {
+  return <span aria-hidden="true">{out ? "↗" : "→"}</span>;
+}
+
+/**
+ * A label that may open with a decorative emoji ("🏆 Championship
+ * contributions"). The emoji stays on screen but is hidden from screen
+ * readers, which would otherwise read its name ("trophy") before the words on
+ * every heading. Labels without a leading emoji render unchanged.
+ */
+export function EmojiLead({ text }: { text: string }) {
+  const { emoji, rest } = splitLeadingEmoji(text);
+  if (!emoji) return <>{text}</>;
+  return (
+    <>
+      <span aria-hidden="true">{emoji}</span> {rest}
+    </>
+  );
+}
+
+/**
  * Wraps a player's name/avatar in a link to their season profile. Server-safe,
  * so it works in both server pages and the client player-pool.
  */
@@ -377,7 +419,7 @@ export function PlayerLink({
 
 const FORM_TONE: Record<FormResult, string> = {
   W: "bg-success/15 text-success border-success/30",
-  L: "bg-danger/15 text-danger border-danger/30",
+  L: "bg-danger/15 text-danger-soft border-danger/30",
   D: "bg-surface-2 text-muted border-line",
 };
 
@@ -421,6 +463,8 @@ export function FormStrip({
 // A kills/deaths/assists line with consistent semantic coloring — green
 // kills, red deaths, blue assists — used anywhere a KDA appears (box scores,
 // match history, standout games) so the stat reads the same everywhere.
+// Deaths are danger-SOFT: plain danger at this small size fell under AA on
+// the winners' green-tinted box score (4.4:1) and on surface-2 rows.
 export function KDA({
   kills,
   deaths,
@@ -436,7 +480,7 @@ export function KDA({
     <span className={cn("font-mono tabular-nums", className)}>
       <span className="text-success">{kills}</span>
       <span className="text-muted">/</span>
-      <span className="text-danger">{deaths}</span>
+      <span className="text-danger-soft">{deaths}</span>
       <span className="text-muted">/</span>
       <span className="text-info">{assists}</span>
     </span>
@@ -488,17 +532,6 @@ export function Avatar({
 // ---------- Team crest ----------
 
 /**
- * Deterministic hue (0–359) from a stable seed, so each team gets a consistent
- * color identity. Seed on the team id (not the name) so editing the name keeps
- * the color.
- */
-export function teamHue(seed: string): number {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
-  return h;
-}
-
-/**
  * A team's configured logo, or a deterministic generated monogram when the
  * team has not configured one. Crests are decorative wherever they appear;
  * the adjacent team name remains the accessible label.
@@ -519,10 +552,12 @@ export function TeamCrest({
   className?: string;
 }) {
   const src = logoUrl?.trim();
-  const hue = teamHue(seed);
+  // The season hue from the layout's stylesheet, else the hash hue.
+  const hue = teamHueVar(seed);
   return (
     <span
       aria-hidden
+      data-team-hue={seed}
       className={cn(
         "relative grid shrink-0 place-items-center overflow-hidden rounded-xl font-display font-bold uppercase text-white shadow ring-1 ring-white/15",
         className,
@@ -534,42 +569,11 @@ export function TeamCrest({
         backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
       }}
     >
-      {initials(name)}
+      {teamInitials(name)}
       {src ? (
         <TeamLogoImage key={src} src={src} size={size} fit={imageFit} />
       ) : null}
     </span>
-  );
-}
-
-// ---------- Progress ----------
-
-export function Progress({
-  value,
-  max,
-  label,
-  className,
-}: {
-  value: number;
-  max: number;
-  label: string;
-  className?: string;
-}) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={Math.max(0, max)}
-      aria-valuenow={Math.max(0, Math.min(value, max))}
-      className={cn("h-2.5 w-full rounded-full bg-surface-2", className)}
-    >
-      <div
-        className="bar-fill h-full rounded-full bg-brand transition-all"
-        style={{ width: `${pct}%` }}
-      />
-    </div>
   );
 }
 
@@ -935,6 +939,10 @@ export function SectionTitle({
   className,
 }: {
   children: React.ReactNode;
+  /**
+   * A short note beside the title. Don't open it with a separator: the title
+   * draws its own "·" between the two, and only while they share a line.
+   */
   aside?: React.ReactNode;
   className?: string;
 }) {
@@ -942,13 +950,26 @@ export function SectionTitle({
     <h2
       className={cn(
         "flex flex-wrap items-center gap-x-2.5 gap-y-1 text-lg font-semibold leading-snug",
+        // Clips the separator when the note wraps (below); horizontal only,
+        // so nothing above or below the title is cut off.
+        aside ? "overflow-x-clip" : null,
         className,
       )}
     >
       <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-accent" />
       <span>{children}</span>
       {aside ? (
-        <span className="font-sans text-sm font-normal text-muted">
+        <span className="relative font-sans text-sm font-normal text-muted">
+          {/* The separator sits in the gap before the note. When the note
+              wraps to its own line (a phone), the gap is past the heading's
+              left edge and the dot is clipped, so no line opens with a stray
+              "·". It is decoration, left out of the heading's name. */}
+          <span
+            aria-hidden
+            className="absolute right-full top-0 w-2.5 text-center"
+          >
+            ·
+          </span>
           {aside}
         </span>
       ) : null}
@@ -958,38 +979,9 @@ export function SectionTitle({
 
 // ---------- Hero icons ----------
 
-export function HeroIcon({
-  hero,
-  size = 26,
-  className,
-  title,
-}: {
-  hero: Hero;
-  size?: number;
-  className?: string;
-  /** Hover text override. Needed because the browser shows the INNERMOST
-   *  title under the cursor, and this img fills any wrapper — a title on a
-   *  wrapping span is unreachable. Defaults to the hero name, so the
-   *  existing call sites render byte-identically. */
-  title?: string;
-}) {
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={heroIcon(hero)}
-      alt={hero.name}
-      title={title ?? hero.name}
-      width={size}
-      height={size}
-      loading="lazy"
-      style={{ width: size, height: size }}
-      className={cn(
-        "shrink-0 rounded-md border border-line/70 bg-surface-2 object-cover",
-        className,
-      )}
-    />
-  );
-}
+// The portrait itself lives in hero-icon.tsx: falling back to initials when
+// the CDN fails needs client state.
+export { HeroIcon };
 
 /**
  * A grid of a player's or team's most-played heroes, each with a win-rate
@@ -999,17 +991,27 @@ export function HeroIcon({
 export function HeroPool({
   heroes,
   limit = 8,
+  minGamesForRate = 0,
 }: {
   /** `kda` is optional and additive: entries without it render byte-identical
    *  to before it existed (team pages and pub heroes pass nothing). */
   heroes: { heroId: number; games: number; wins: number; kda?: number }[];
   limit?: number;
+  /**
+   * Below this many games a hero shows a plain W–L with no colour and no bar:
+   * "1g · 100% W" in green reads as a trend when it is one game. The bar's
+   * height is kept (an invisible spacer) so rows stay even, but not its track:
+   * an empty track under every tile read as a broken meter. The default 0
+   * keeps every existing caller byte-identical.
+   */
+  minGamesForRate?: number;
 }) {
   return (
     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
       {heroes.slice(0, limit).map((h) => {
         const hero = heroById(h.heroId);
         const winPct = Math.round((h.wins / h.games) * 100);
+        const judged = h.games >= minGamesForRate;
         // Green when clearly winning, red when clearly losing, neutral around even.
         const tone = winPct >= 60 ? "win" : winPct >= 40 ? "even" : "loss";
         return (
@@ -1029,38 +1031,52 @@ export function HeroPool({
                 </div>
                 <div className="text-muted">
                   {h.games}g ·{" "}
-                  <span
-                    className={cn(
-                      "font-semibold",
-                      tone === "win"
-                        ? "text-success"
-                        : tone === "loss"
-                          ? "text-danger"
-                          : "text-fg",
-                    )}
-                  >
-                    {winPct}%
-                  </span>{" "}
-                  W
+                  {judged ? (
+                    <>
+                      <span
+                        className={cn(
+                          "font-semibold",
+                          tone === "win"
+                            ? "text-success"
+                            : tone === "loss"
+                              ? "text-danger"
+                              : "text-fg",
+                        )}
+                      >
+                        {winPct}%
+                      </span>{" "}
+                      W
+                    </>
+                  ) : (
+                    <span className="tabular-nums">
+                      {h.wins}–{h.games - h.wins}
+                    </span>
+                  )}
                   {h.kda != null ? (
-                    <span className="tabular-nums"> · {h.kda} KDA</span>
+                    // One unit when the line wraps in a narrow tile, never a
+                    // lone "KDA" on its own line.
+                    <span className="whitespace-nowrap tabular-nums"> · {h.kda} KDA</span>
                   ) : null}
                 </div>
               </div>
             </div>
-            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2">
-              <div
-                className={cn(
-                  "bar-fill h-full rounded-full",
-                  tone === "win"
-                    ? "bg-success/70"
-                    : tone === "loss"
-                      ? "bg-danger/70"
-                      : "bg-muted/60",
-                )}
-                style={{ width: `${winPct}%` }}
-              />
-            </div>
+            {judged ? (
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2">
+                <div
+                  className={cn(
+                    "bar-fill h-full rounded-full",
+                    tone === "win"
+                      ? "bg-success/70"
+                      : tone === "loss"
+                        ? "bg-danger/70"
+                        : "bg-muted/60",
+                  )}
+                  style={{ width: `${winPct}%` }}
+                />
+              </div>
+            ) : (
+              <div aria-hidden className="mt-1.5 h-1" />
+            )}
           </div>
         );
       })}
@@ -1247,33 +1263,5 @@ export function ShieldCheckIcon({
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       <path d="m9 12 2 2 4-4" />
     </svg>
-  );
-}
-
-/**
- * Reassurance for players wary of "Sign in with Steam". This copy is also the
- * collection notice: login creates the durable Steam identity and immediately
- * performs the documented public OpenDota enrichment.
- */
-export function SteamSafetyNote({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border border-line bg-surface-2/40 p-4 text-left",
-        className,
-      )}
-    >
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <ShieldCheckIcon size={18} className="text-success" />
-        Why Steam sign-in?
-      </div>
-      <p className="mt-2 text-xs leading-relaxed text-muted">
-        Steam verifies your <b className="font-medium text-fg">SteamID64</b>.
-        This creates or updates your league profile with your public name,
-        avatar, and profile link; we derive your Dota account and use OpenDota
-        for your medal and public match activity. You sign in on Steam&apos;s
-        own site, so we never receive your Steam password or email.
-      </p>
-    </div>
   );
 }

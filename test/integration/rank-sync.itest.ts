@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
-// syncPlayerRanks is an admin action: stub the request-scope bits and the
+// refreshPlayerData is an admin action: stub the request-scope bits and the
 // network fetch so we can drive it against the test DB and control each
 // player's OpenDota outcome.
 vi.mock("next/cache", () => ({
@@ -8,14 +8,20 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   updateTag: vi.fn(),
 }));
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(), requireUser: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })), requireUser: vi.fn() }));
 vi.mock("@/lib/dota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dota")>()),
   fetchRankTier: vi.fn(),
   fetchPubStats: vi.fn(),
 }));
+// Steam is a separate API; the refresh must never reach it from a test.
+vi.mock("@/lib/steam", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/steam")>()),
+  fetchSteamProfiles: vi.fn(async () => new Map()),
+}));
 
-import { syncPlayerRanks, syncAllRanks } from "@/app/actions/admin";
+import { refreshPlayerData } from "@/app/actions/admin-captains-draft";
+import { refreshPlayerDataAutomatically } from "@/lib/player-data-refresh";
 import {
   refreshRank,
   setInhousePingOptIn,
@@ -110,7 +116,7 @@ describe("manual medals survive provider updates", () => {
       data: { rankTier, rankTierManual: true },
     });
 
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
 
     expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
       .toMatchObject({
@@ -132,13 +138,13 @@ describe("manual medals survive provider updates", () => {
       return { ok: true, rankTier: 75, fhUnavailable: true };
     });
 
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
 
     expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
       .toMatchObject({ rankTier: 42, rankTierManual: true, fhUnavailable: true });
   });
 
-  it("keeps manual Unranked through login and all-account medal backfill", async () => {
+  it("keeps manual Unranked through login and the hourly refresh", async () => {
     const original = await makeUser("Intentionally Unranked");
     const user = await prisma.user.update({
       where: { id: original.id },
@@ -146,10 +152,13 @@ describe("manual medals survive provider updates", () => {
     });
 
     await ensureRankTier(prisma, user);
-    await syncAllRanks({}, new FormData());
-
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(await medalOf(user.id)).toBeNull();
+    // The hourly refresh still updates scouting stats, but the medal stays.
+    expect((await refreshPlayerDataAutomatically()).accounts).toBe(1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(
+      await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+    ).toMatchObject({ rankTier: null, rankTierManual: true, fhUnavailable: true });
   });
 
   it("keeps an explicit Unranked override committed during login's rank fetch", async () => {
@@ -282,7 +291,7 @@ describe("manual medals survive provider updates", () => {
   });
 });
 
-describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
+describe("refreshPlayerData — never wipes a medal on a failed fetch", () => {
   beforeEach(() => mockFetch.mockReset());
 
   it("keeps the stored medal when OpenDota can't be reached (rate limit / timeout)", async () => {
@@ -294,7 +303,7 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
     });
     mockFetch.mockResolvedValue({ ok: false, rankTier: null, fhUnavailable: null });
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     expect(await medalOf(user.id)).toBe(53); // NOT wiped to null
     expect(res?.message).toMatch(/couldn't be reached/);
@@ -309,7 +318,7 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
     });
     mockFetch.mockResolvedValue({ ok: true, rankTier: 71, fhUnavailable: null }); // Divine 1
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     expect(await medalOf(user.id)).toBe(71);
     expect(res?.message).toMatch(/1 ranked/);
@@ -338,7 +347,7 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
       return { ok: true, rankTier: 41, fhUnavailable: true };
     });
 
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
 
     expect(
       await prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
@@ -359,7 +368,7 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
     });
     mockFetch.mockResolvedValue({ ok: true, rankTier: null, fhUnavailable: null });
 
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
 
     expect(await medalOf(user.id)).toBe(42); // preserved
   });
@@ -376,7 +385,7 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
       .mockResolvedValueOnce({ ok: false, rankTier: null, fhUnavailable: null })
       .mockResolvedValueOnce({ ok: true, rankTier: 61, fhUnavailable: null }); // Ancient 1
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(await medalOf(user.id)).toBe(61);
@@ -384,7 +393,7 @@ describe("syncPlayerRanks — never wipes a medal on a failed fetch", () => {
   });
 });
 
-describe("syncPlayerRanks — bails out fast when OpenDota is down", () => {
+describe("refreshPlayerData — bails out fast when OpenDota is down", () => {
   beforeEach(() => mockFetch.mockReset());
 
   async function fivePlayersWithAccounts() {
@@ -405,7 +414,7 @@ describe("syncPlayerRanks — bails out fast when OpenDota is down", () => {
     const players = await fivePlayersWithAccounts();
     mockFetch.mockResolvedValue({ ok: false, rankTier: null, fhUnavailable: null });
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     // Surfaces as an error toast (not a message), and nothing was written.
     expect(res?.error).toMatch(/OpenDota isn't responding/);
@@ -426,7 +435,7 @@ describe("syncPlayerRanks — bails out fast when OpenDota is down", () => {
         : { ok: false as const, rankTier: null, fhUnavailable: null },
     );
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     expect(res?.error).toBeUndefined();
     expect(res?.message).toMatch(/1 ranked/);
@@ -610,53 +619,6 @@ describe("ensureRankTier — medals for accounts that never signed up", () => {
   });
 });
 
-describe("syncAllRanks — backfill every account, registered or not", () => {
-  beforeEach(() => mockFetch.mockReset());
-
-  it("fills medals for accounts with none — including non-registrants", async () => {
-    // A plain account that never signed up (no registration).
-    const outsider = await makeUser("Never Signed Up");
-    await prisma.user.update({
-      where: { id: outsider.id },
-      data: { rankTier: null, dotaAccountIdV2: 900 },
-    });
-    mockFetch.mockResolvedValue({ ok: true, rankTier: 54, fhUnavailable: null });
-
-    const res = await syncAllRanks({}, new FormData());
-
-    expect(await medalOf(outsider.id)).toBe(54);
-    expect(res?.message).toMatch(/1 now ranked/);
-  });
-
-  it("skips accounts that already have a medal (no wasted fetch)", async () => {
-    const has = await makeUser("Already Ranked");
-    await prisma.user.update({
-      where: { id: has.id },
-      data: { rankTier: 71, dotaAccountIdV2: 901 },
-    });
-
-    const res = await syncAllRanks({}, new FormData());
-
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(await medalOf(has.id)).toBe(71);
-    expect(res?.message).toMatch(/already has a medal/);
-  });
-
-  it("preserves nothing to overwrite and reports unreachable on failure", async () => {
-    const user = await makeUser("Cant Reach");
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { rankTier: null, dotaAccountIdV2: 902 },
-    });
-    mockFetch.mockResolvedValue({ ok: false, rankTier: null, fhUnavailable: null });
-
-    const res = await syncAllRanks({}, new FormData());
-
-    expect(await medalOf(user.id)).toBeNull();
-    expect(res?.message).toMatch(/couldn't be reached/);
-  });
-});
-
 describe("private-match-data flag (fh_unavailable)", () => {
   beforeEach(() => mockFetch.mockReset());
 
@@ -674,7 +636,7 @@ describe("private-match-data flag (fh_unavailable)", () => {
       fhUnavailable: true,
     });
 
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
 
     const db = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(db.fhUnavailable).toBe(true);
@@ -690,7 +652,7 @@ describe("private-match-data flag (fh_unavailable)", () => {
     });
     mockFetch.mockResolvedValue({ ok: true, rankTier: 44, fhUnavailable: false });
 
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
 
     const db = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(db.fhUnavailable).toBe(false);
@@ -706,7 +668,7 @@ describe("private-match-data flag (fh_unavailable)", () => {
     });
 
     mockFetch.mockResolvedValue({ ok: false, rankTier: null, fhUnavailable: null });
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
     expect(
       (await prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
         .fhUnavailable,
@@ -715,7 +677,7 @@ describe("private-match-data flag (fh_unavailable)", () => {
     // OpenDota answered but omitted the field → unknown → keep the flag.
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({ ok: true, rankTier: 30, fhUnavailable: null });
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
     const db = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(db.fhUnavailable).toBe(true);
     expect(db.rankTier).toBe(30);
@@ -1062,10 +1024,10 @@ describe("upsertLeagueUser — zero-config admin bootstrap", () => {
 // their Dota account, or OpenDota is unreachable at that moment. registrationGate
 // only runs on submit, and a stored MMR is league-approved by design (so an admin
 // correction survives a player editing their roles), so NOTHING re-judges those
-// signups. "Sync ranks" is the one moment the league learns the truth: it must
+// signups. "Refresh player data now" is the one moment the league learns the truth: it must
 // say so, or a ceiling-breaking player sits in the pool behind a low typed number
 // and gets drafted.
-describe("syncPlayerRanks — flags signups a new medal proves ineligible", () => {
+describe("refreshPlayerData — flags signups a new medal proves ineligible", () => {
   beforeEach(() => mockFetch.mockReset());
 
   it("names the player when the synced medal is over the hard ceiling", async () => {
@@ -1078,7 +1040,7 @@ describe("syncPlayerRanks — flags signups a new medal proves ineligible", () =
     // Divine 4: exact band floor 5220, above the 5000 hard ceiling.
     mockFetch.mockResolvedValue({ ok: true, rankTier: 74, fhUnavailable: false });
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     expect(res?.error).toBeUndefined();
     expect(res?.message).toContain("Sandbagger");
@@ -1101,7 +1063,7 @@ describe("syncPlayerRanks — flags signups a new medal proves ineligible", () =
     // Divine 2: floor 4820, under the ceiling — admissible.
     mockFetch.mockResolvedValue({ ok: true, rankTier: 72, fhUnavailable: false });
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     expect(res?.error).toBeUndefined();
     expect(res?.message).not.toMatch(/ceiling/);
@@ -1121,7 +1083,7 @@ describe("syncPlayerRanks — flags signups a new medal proves ineligible", () =
     });
     mockFetch.mockResolvedValue({ ok: true, rankTier: 80, fhUnavailable: false });
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     expect(res?.message).not.toContain("Gone Already");
   });
@@ -1567,7 +1529,7 @@ describe("pub-scouting snapshot capture (User.pubStats)", () => {
     return { raw: u.pubStats, at: u.pubStatsAt };
   }
 
-  it("syncPlayerRanks stores the snapshot beside the medal and reports it", async () => {
+  it("refreshPlayerData stores the snapshot beside the medal and reports it", async () => {
     const season = await makeSeason();
     const user = await makePlayer(season.id, "Scouted Player", 3000);
     await prisma.user.update({
@@ -1577,7 +1539,7 @@ describe("pub-scouting snapshot capture (User.pubStats)", () => {
     mockFetch.mockResolvedValue({ ok: true, rankTier: 55, fhUnavailable: null });
     mockPubFetch.mockResolvedValue({ ok: true, stats: PUB_FIXTURE });
 
-    const res = await syncPlayerRanks({}, new FormData());
+    const res = await refreshPlayerData({}, new FormData());
 
     const { raw, at } = await pubOf(user.id);
     expect(raw && JSON.parse(raw)).toEqual(PUB_FIXTURE);
@@ -1601,7 +1563,7 @@ describe("pub-scouting snapshot capture (User.pubStats)", () => {
     mockFetch.mockResolvedValue({ ok: true, rankTier: 55, fhUnavailable: null });
     // Default mockPubFetch is ok:false — the failure case under test.
 
-    await syncPlayerRanks({}, new FormData());
+    await refreshPlayerData({}, new FormData());
 
     const { raw } = await pubOf(user.id);
     expect(raw && JSON.parse(raw)).toEqual(PUB_FIXTURE); // NOT wiped

@@ -6,6 +6,7 @@ import {
   SEASON_STATUS,
 } from "./constants";
 import type { Prisma } from "@prisma/client";
+import { hasLaterBracketRound, slotRound } from "./schedule";
 import { hasLaterTiebreakerStage } from "./tiebreaker-format";
 
 /** Tiebreaker fixtures precede the seeded playoff bracket. */
@@ -154,4 +155,58 @@ export async function matchResultLockReason(
   return hasLaterTiebreakerStage(match, dependents)
     ? "A later tiebreaker round or game is already scheduled. Reset the tiebreaker week before correcting an earlier result."
     : null;
+}
+
+type CorrectionFixture = {
+  id: string;
+  phase: string;
+  week: number;
+  bracketSlot: string | null;
+};
+
+/**
+ * How an admin result row may correct this match, from the season's fixtures:
+ *
+ *  - `correctionBlockedByLaterRound`: a later round already depends on this
+ *    result. A regular-season result is blocked once any tiebreaker exists, a
+ *    tiebreaker once a later tiebreaker game does, and a playoff series once a
+ *    later bracket round does (the same rules matchResultLockReason and the
+ *    playoff correction actions enforce).
+ *  - `isSoleLatestPlayoffSeries`: the bracket's latest round is this one
+ *    series, the only grand final whose title a correction may retract.
+ *
+ * /admin's result rows and the match page's Admin tools both read it, so the
+ * two can never offer different controls for the same match.
+ */
+export function matchCorrectionContext(
+  match: CorrectionFixture,
+  seasonMatches: CorrectionFixture[],
+): { correctionBlockedByLaterRound: boolean; isSoleLatestPlayoffSeries: boolean } {
+  if (isPlayoffPhase(match.phase)) {
+    const playoff = seasonMatches.filter((m) => isPlayoffPhase(m.phase));
+    const latestRound = Math.max(
+      ...playoff.map((m) => slotRound(m.bracketSlot)),
+    );
+    const latest = playoff.filter(
+      (m) => slotRound(m.bracketSlot) === latestRound,
+    );
+    return {
+      correctionBlockedByLaterRound: hasLaterBracketRound(
+        playoff,
+        match.bracketSlot,
+      ),
+      isSoleLatestPlayoffSeries:
+        latest.length === 1 && latest[0].id === match.id,
+    };
+  }
+  const tiebreakers = seasonMatches.filter(
+    (m) => m.phase === MATCH_PHASE.TIEBREAKER,
+  );
+  return {
+    correctionBlockedByLaterRound:
+      match.phase === MATCH_PHASE.TIEBREAKER
+        ? hasLaterTiebreakerStage(match, tiebreakers)
+        : tiebreakers.length > 0,
+    isSoleLatestPlayoffSeries: false,
+  };
 }

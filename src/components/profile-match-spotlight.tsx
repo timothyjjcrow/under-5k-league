@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { LocalTime } from "@/components/local-time";
-import { Badge, TeamCrest } from "@/components/ui";
+import { Badge, LinkArrow, TeamCrest } from "@/components/ui";
 import { formatMatchTime } from "@/lib/match-time";
 import { profileMatchState } from "@/lib/profile-match";
 import { matchRoundLabel, type SlateMatch } from "@/lib/schedule";
@@ -116,7 +116,7 @@ export function ProfileMatchSpotlight({
           )}
         </span>
         <span className="font-medium text-info group-hover:underline">
-          Open match →
+          Open match <LinkArrow />
         </span>
       </div>
     </Link>

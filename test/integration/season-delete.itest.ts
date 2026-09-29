@@ -13,7 +13,7 @@ vi.mock("next/cache", () => ({
   updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
-  requireAdmin: vi.fn(),
+  requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })),
   requireUser: vi.fn(),
   // logAdminAction resolves the actor itself; an undefined mock would throw
   // inside its try/catch and silently skip the row this suite asserts on.
@@ -35,7 +35,7 @@ import {
   setMatchSchedule,
   setMaxMmr,
   setSeriesLengths,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-season";
 import { updateTag } from "next/cache";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
@@ -145,6 +145,7 @@ async function archivedSeasonWithHistory() {
     data: [
       { key: `championAnnounced:${season.id}`, value: "sent" },
       { key: `weekReminder:${season.id}:1:123`, value: "sent" },
+      { key: `draftReminder:${season.id}:1`, value: "sent" },
       { key: `playoffRoundBuilt:${season.id}:2`, value: "done" },
       { key: `playoffGamesArchive:${season.id}`, value: "[]" },
       { key: `tiebreakerGamesArchive:${season.id}`, value: "[]" },
@@ -152,6 +153,7 @@ async function archivedSeasonWithHistory() {
       { key: `leagueSyncSkip:${season.id}`, value: "[]" },
       { key: `resultAnnounced:${match.id}`, value: "sent" },
       { key: `outPing:${match.id}:player-1`, value: "sent" },
+      { key: `checkinNudge:${match.id}:team-1:0`, value: "2026-01-01T00:00:00.000Z" },
       { key: "discordWebhookUrl", value: "global-setting-survives" },
     ],
   });
@@ -189,6 +191,17 @@ describe("deleteSeason", () => {
         where: seasonSettingScopeWhere(season.id, [match.id]),
       }),
     ).toBe(0);
+    // The scoped count above can't see a family the scope forgot to list.
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `draftReminder:${season.id}:1` },
+      }),
+    ).toBeNull();
+    expect(
+      await prisma.setting.findUnique({
+        where: { key: `checkinNudge:${match.id}:team-1:0` },
+      }),
+    ).toBeNull();
     expect(
       await prisma.setting.findUnique({ where: { key: "discordWebhookUrl" } }),
     ).toMatchObject({ value: "global-setting-survives" });
@@ -330,6 +343,115 @@ describe("createSeason", () => {
     expect(actives).toHaveLength(1);
     expect(actives[0].name).toBe("Season N+1");
     // Season N's children are untouched by the archival.
+  });
+
+  // Series lengths and the league id used to reset silently to Bo2/Bo3/Bo5
+  // and no league id at every handoff, while the draft settings carried.
+  it("carries every league setting from the closed season, whatever the form posts", async () => {
+    const oldSeason = await completedSeason("Customised Complete");
+    await prisma.season.update({
+      where: { id: oldSeason.id },
+      data: {
+        teamSize: 6,
+        minTeams: 5,
+        draftBudget: 250,
+        budgetMmrWeight: 0,
+        maxMmr: 4200,
+        regularBestOf: 3,
+        playoffBestOf: 5,
+        finalBestOf: 7,
+        dotaLeagueId: "17654",
+      },
+    });
+
+    const res = await createSeason(
+      {},
+      fd({
+        name: "Season Carried",
+        // A stale tab still posting the old form's fields changes nothing.
+        teamSize: "2",
+        draftBudget: "10",
+        expectedActiveSeasonId: oldSeason.id,
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(
+      await prisma.season.findFirstOrThrow({ where: { isActive: true } }),
+    ).toMatchObject({
+      name: "Season Carried",
+      status: "SIGNUPS",
+      teamSize: 6,
+      minTeams: 5,
+      draftBudget: 250,
+      budgetMmrWeight: 0,
+      maxMmr: 4200,
+      regularBestOf: 3,
+      playoffBestOf: 5,
+      finalBestOf: 7,
+      dotaLeagueId: "17654",
+    });
+  });
+
+  it("carries from the most recent season when opening out of the offseason", async () => {
+    await prisma.season.create({
+      data: {
+        name: "Older Archive",
+        isActive: false,
+        status: "COMPLETE",
+        regularBestOf: 1,
+        dotaLeagueId: "111",
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      },
+    });
+    await prisma.season.create({
+      data: {
+        name: "Latest Archive",
+        isActive: false,
+        status: "REGULAR_SEASON",
+        teamSize: 4,
+        regularBestOf: 3,
+        dotaLeagueId: "222",
+        createdAt: new Date("2025-06-01T00:00:00Z"),
+      },
+    });
+
+    const res = await createSeason(
+      {},
+      fd({ name: "After The Break", expectedActiveSeasonId: "" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(
+      await prisma.season.findFirstOrThrow({ where: { isActive: true } }),
+    ).toMatchObject({
+      name: "After The Break",
+      teamSize: 4,
+      regularBestOf: 3,
+      dotaLeagueId: "222",
+    });
+  });
+
+  it("opens a league's first season on the defaults", async () => {
+    const res = await createSeason(
+      {},
+      fd({ name: "Season 1", expectedActiveSeasonId: "" }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(
+      await prisma.season.findFirstOrThrow({ where: { isActive: true } }),
+    ).toMatchObject({
+      teamSize: 5,
+      minTeams: 4,
+      draftBudget: 100,
+      budgetMmrWeight: 20,
+      maxMmr: 4500,
+      regularBestOf: 2,
+      playoffBestOf: 3,
+      finalBestOf: 5,
+      dotaLeagueId: null,
+    });
   });
 
   it("refuses a replayed create form instead of archiving the season it just made", async () => {

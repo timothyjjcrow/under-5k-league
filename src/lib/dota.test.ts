@@ -41,6 +41,42 @@ describe("bounded OpenDota fetches", () => {
   });
 });
 
+describe("fetchOpenDotaMatch's missing report", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const answer = (status: number) =>
+    vi.fn(async (_url: string) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => ({ error: "x" }),
+    }));
+
+  it("flags a 404 as missing: OpenDota has no such match", async () => {
+    vi.stubGlobal("fetch", answer(404));
+    const report = { missing: false };
+    expect(await fetchOpenDotaMatch("8880928888", {}, report)).toBeNull();
+    expect(report.missing).toBe(true);
+  });
+
+  it("leaves a refusal, an outage or a bad body unflagged, for a retry", async () => {
+    for (const status of [429, 500, 503, 200]) {
+      vi.stubGlobal("fetch", answer(status));
+      const report = { missing: false };
+      expect(await fetchOpenDotaMatch("8880928888", {}, report)).toBeNull();
+      expect(report.missing, `status ${status}`).toBe(false);
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("timeout");
+      }),
+    );
+    const report = { missing: false };
+    expect(await fetchOpenDotaMatch("8880928888", {}, report)).toBeNull();
+    expect(report.missing).toBe(false);
+  });
+});
+
 describe("fetchLeagueMatchIds", () => {
   afterEach(() => vi.unstubAllGlobals());
 

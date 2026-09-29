@@ -34,6 +34,9 @@ export function LocalDatetimeField({
   className,
   defaultValue,
   defaultTs,
+  minTs,
+  maxTs,
+  describedBy,
   timeZone,
 }: {
   /** Name for the raw datetime-local string (server-side fallback). */
@@ -52,6 +55,13 @@ export function LocalDatetimeField({
    *  server's wall clock: resubmitting an untouched form on the UTC prod
    *  host would silently shift the stored time by the viewer's UTC offset. */
   defaultTs?: number | null;
+  /** Earliest / latest instant the browser lets the viewer submit, as epochs.
+   *  Formatted client-side in the zone the field reads, like defaultTs. The
+   *  server still checks; these only stop an obviously refused time early. */
+  minTs?: number | null;
+  maxTs?: number | null;
+  /** Id of a hint that explains the allowed range, for screen readers. */
+  describedBy?: string;
   /** Opt-in: an IANA zone (the league's) whose clock the field reads and
    *  prefills on, labelled beside the box. Omitted = the viewer's own clock,
    *  exactly as before. */
@@ -73,16 +83,22 @@ export function LocalDatetimeField({
     if (!input || !hidden) return;
     // The prefill is applied IMPERATIVELY (not as a defaultValue attribute)
     // because only the browser can render the instant in the viewer's zone.
+    // Minute precision: a seconds-precise `min` would become the step base
+    // and mark every whole-minute entry as invalid.
+    const toInputValue = (ms: number) => {
+      if (timeZone) return epochToZonedDatetimeLocal(ms, timeZone);
+      const d = new Date(ms);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
     const applyPrefill = () => {
       if (defaultTs == null || input.value) return;
-      if (timeZone) {
-        input.value = epochToZonedDatetimeLocal(defaultTs, timeZone);
-        return;
-      }
-      const d = new Date(defaultTs);
-      const pad = (n: number) => String(n).padStart(2, "0");
-      input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      input.value = toInputValue(defaultTs);
     };
+    if (minTs != null) input.min = toInputValue(minTs);
+    else input.removeAttribute("min");
+    if (maxTs != null) input.max = toInputValue(maxTs);
+    else input.removeAttribute("max");
     applyPrefill();
     const hint = hintRef.current;
     // The viewer's own zone, only needed for the "your time" line.
@@ -134,7 +150,7 @@ export function LocalDatetimeField({
       form?.removeEventListener("submit", onSubmit);
       form?.removeEventListener("reset", onReset);
     };
-  }, [defaultTs, timeZone]);
+  }, [defaultTs, minTs, maxTs, timeZone]);
 
   if (!timeZone) {
     return (
@@ -147,6 +163,7 @@ export function LocalDatetimeField({
           required={required}
           defaultValue={defaultValue}
           className={className}
+          aria-describedby={describedBy}
         />
         <input ref={hiddenRef} type="hidden" name={tsName} defaultValue="" />
       </>
@@ -162,7 +179,9 @@ export function LocalDatetimeField({
         required={required}
         defaultValue={defaultValue}
         className={className}
-        aria-describedby={`${zoneId} ${hintId}`}
+        aria-describedby={[zoneId, hintId, describedBy]
+          .filter(Boolean)
+          .join(" ")}
       />
       <input ref={hiddenRef} type="hidden" name={tsName} defaultValue="" />
       <span id={zoneId} className="text-xs text-muted">

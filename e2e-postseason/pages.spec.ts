@@ -9,48 +9,27 @@ import {
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
 for (const archived of [false, true]) {
-  test(`feature tour preserves history ${archived ? "when the next season opens" : "after the final"}`, async ({
+  test(`How it works points to what's next ${archived ? "when the next season opens" : "after the final"}`, async ({
     page,
   }) => {
     const assertNoErrors = trackPageErrors(page);
     await reseed(page, "complete", archived);
-    await page.goto("/features");
-    const directory = page.getByRole("region", {
-      name: "Everything the league offers.",
-    });
-    await expect(directory.getByRole("article")).toHaveCount(32);
-    await expect(
-      directory.getByRole("link", { name: "Season history", exact: true }),
-    ).toHaveAttribute("href", "/seasons");
-    await expect(
-      directory.getByRole("link", { name: "Hall of Fame", exact: true }),
-    ).toHaveAttribute("href", "/hall-of-fame");
-    await expect(
-      page.getByRole("heading", {
-        name: archived ? "Signups are open" : "Ready for next season?",
-      }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Sign up with Steam" }),
-    ).toHaveCount(archived ? 2 : 0);
-    await expect(page.locator('main a[href="/draft"]')).toHaveCount(0);
-    await expect(
-      directory.getByRole("link", { name: "Playoff race", exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      directory.getByRole("link", { name: "Season recap", exact: true }),
-    ).toHaveCount(archived ? 0 : 1);
-    if (!archived) {
+    await page.goto("/how-it-works");
+    const main = page.locator("#main");
+    if (archived) {
+      // The next season is in signups: its one button is the header's join
+      // link ("Season 10 (fixture)" is too long to name).
       await expect(
-        page.locator("main").getByText(/^Season complete/),
-      ).toBeVisible();
+        main.getByRole("link", { name: "Join the season" }),
+      ).toHaveAttribute("href", "/login?next=/me");
+    } else {
+      // A finished season has nothing to sign up for until the next one.
+      await expect(main.getByRole("link", { name: /^Join the season/ })).toHaveCount(0);
       await expect(
-        directory.getByRole("link", { name: "Fantasy", exact: true }),
-      ).toHaveAttribute("href", "/fantasy");
-      await expect(
-        directory.getByRole("link", { name: "Pick'em", exact: true }),
-      ).toHaveAttribute("href", "/pickem");
+        main.getByRole("link", { name: "Sign up as a standin" }),
+      ).toHaveCount(0);
     }
+    await expect(page.locator('main a[href="/draft"]')).toHaveCount(0);
     assertNoErrors();
   });
 }
@@ -146,9 +125,35 @@ test("mid-playoffs renders the real bracket and supports tracing a run", async (
   await expect(
     page.getByRole("heading", { name: "Season 9 (fixture)" }),
   ).toBeVisible();
+  // The schedule keeps one name in every phase; the page's own heading is
+  // what says "Playoffs".
+  const primaryNav = page.getByRole("navigation", { name: "Primary" }).first();
   await expect(
-    page.getByRole("link", { name: "Playoffs", exact: true }).first(),
+    primaryNav.getByRole("link", { name: "Schedule", exact: true }),
   ).toBeVisible();
+  await expect(
+    primaryNav.getByRole("link", { name: "Playoffs", exact: true }),
+  ).toHaveCount(0);
+  // The round in progress leads and the bracket follows it. The finished
+  // regular-season table is one link to Schedule, not printed on Home.
+  const round = page.getByRole("heading", {
+    name: "The round in progress",
+    level: 2,
+  });
+  const bracketTitle = page.getByRole("heading", {
+    name: "Playoff bracket",
+    level: 2,
+  });
+  await expect(round).toBeVisible();
+  expect((await round.boundingBox())!.y).toBeLessThan(
+    (await bracketTitle.boundingBox())!.y,
+  );
+  await expect(
+    page.getByRole("table", { name: "League standings", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator("#main").getByRole("link", { name: "Regular-season table" }),
+  ).toHaveAttribute("href", "/schedule#standings");
   const bracket = page.getByRole("region", { name: "Playoff bracket" });
   await expect(bracket).toBeVisible();
   await expect(
@@ -183,6 +188,45 @@ test("mid-playoffs renders the real bracket and supports tracing a run", async (
     await expect(sameTeam.nth(index)).toHaveAttribute("aria-pressed", "true");
   }
 
+  // Each semifinal's page says what the series decides. The finished one
+  // (the only 2–0) names who went through and who is out, and links to the
+  // bracket since the final isn't built yet; the open one names the
+  // finalist waiting for its winner.
+  const decidedSemi = bracket.getByRole("link", {
+    name: /^Playoff match: .+, final at 2 to 0, best of 3/,
+  });
+  await expect(decidedSemi).toHaveCount(1);
+  await decidedSemi.click();
+  await expect(page).toHaveURL(/\/matches\//);
+  const decidedLine = page.locator("#main p", {
+    hasText: "went through to the grand final",
+  });
+  await expect(decidedLine).toContainText(
+    /^.+ went through to the grand final to play the winner of .+ vs .+; .+ was knocked out\./,
+  );
+  await expect(
+    decidedLine.getByRole("link", { name: "Bracket", exact: true }),
+  ).toHaveAttribute("href", "/schedule#playoff-bracket");
+  const finalist = (await decidedLine.textContent())!.split(
+    " went through",
+  )[0];
+
+  await page.goto("/");
+  const openSemi = page
+    .getByRole("region", { name: "Playoff bracket" })
+    .getByRole("link", {
+      name: /^Playoff match: .+, (scheduled for .+|details available), best of 3/,
+    });
+  await expect(openSemi).toHaveCount(1);
+  await openSemi.click();
+  await expect(page).toHaveURL(/\/matches\//);
+  await expect(
+    page.getByText(
+      `The winner goes through to the grand final to play ${finalist}; the loser is knocked out.`,
+      { exact: true },
+    ),
+  ).toBeVisible();
+
   assertNoErrors();
 });
 
@@ -198,8 +242,27 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
   await expect(
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
+  // Mid-playoffs the phase card has no forward button (Complete is automatic),
+  // and every other phase move sits in the folded "Fix the phase" section,
+  // which stays shut because nothing needs fixing.
+  // The current phase is marked in the progress row, never offered as a
+  // button that could only move the league to where it already is.
+  await expect(
+    page
+      .getByRole("list", { name: "Season phases" })
+      .locator('li[aria-current="step"]'),
+  ).toHaveText(/Playoffs/);
+  const fixPhase = page.locator("summary", { hasText: "Fix the phase" });
+  await expect(fixPhase.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await fixPhase.click();
   await expect(
     page.getByRole("button", { name: "Playoffs", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Signups", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Draft", exact: true }),
   ).toBeDisabled();
   await expect(
     page.getByRole("button", { name: "Regular season", exact: true }),
@@ -213,17 +276,31 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
       .first(),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Reset playoffs", exact: true }),
-  ).toBeEnabled();
-  await expect(
     page.getByRole("button", { name: "Regenerate schedule", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByText(/A regular-season result or imported game already exists/i),
   ).toBeVisible();
+  // The Playoffs card lists the series still to play; the decided ones and
+  // the two bracket repairs are folded away beneath them.
+  const playoffs = page.locator("#playoffs");
   await expect(
-    page.getByText(/already advanced a later playoff round/i).first(),
+    playoffs.getByRole("heading", { name: /Series to play/ }),
   ).toBeVisible();
+  const decided = playoffs.locator("summary", { hasText: "Decided series" });
+  await expect(decided.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await decided.click();
+  await expect(
+    playoffs.getByText(/already advanced a later playoff round/i).first(),
+  ).toBeVisible();
+  const fixBracket = playoffs.locator("summary", {
+    hasText: "Fix the bracket",
+  });
+  await expect(fixBracket.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await fixBracket.click();
+  await expect(
+    page.getByRole("button", { name: "Reset playoffs", exact: true }),
+  ).toBeEnabled();
   await expect(
     page.getByRole("button", {
       name: "Return to regular season",
@@ -231,7 +308,7 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
     }),
   ).toBeEnabled();
   await expect(
-    page.getByRole("button", { name: "Create next season" }),
+    page.getByRole("button", { name: "Open signups" }),
   ).toHaveCount(0);
   await page.locator("#adm-new-season > summary").click();
   await expect(page.getByText("Handoff locked", { exact: true })).toBeVisible();
@@ -251,7 +328,16 @@ test("the playoff bracket scrolls inside itself at 360px, not across the page", 
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/schedule");
 
+  // Phones lead with the round list; the drawn bracket (wider than a phone
+  // once it has wings) is folded underneath it until asked for.
+  const section = page.locator("#playoff-bracket");
   const scroller = page.getByRole("region", { name: "Playoff bracket" });
+  await expect(scroller).toBeHidden();
+  await expect(
+    section.getByRole("button", { name: /^Quarterfinals/ }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/schedule postseason round list");
+  await section.locator("summary").filter({ hasText: "Full bracket" }).click();
   await expect(scroller).toBeVisible();
   const dimensions = await scroller.evaluate((element) => ({
     clientWidth: element.clientWidth,
@@ -273,6 +359,63 @@ test("the playoff bracket scrolls inside itself at 360px, not across the page", 
   assertNoErrors();
 });
 
+// Mid-semifinals: all four quarterfinals played, one semifinal played, the
+// other still to come. Each /teams card says where its team stands, teams
+// still alive lead, and an eliminated team's own page says it is out.
+const PLAYOFF_STATUS =
+  /^(Through to the (grand final|semifinals)|(Quarterfinal|Semifinal|Grand final) vs .+|Out in the (quarterfinal|semifinal|grand final) \(lost .+\)|Champion|Runner-up \(lost the grand final .+\)|Missed the playoffs)$/;
+
+async function playoffStatusLines(page: Page): Promise<string[]> {
+  // allTextContents() does not wait. After goto the rosters can still sit in
+  // React's hidden streaming container (<div hidden id="S:…">) until the
+  // Suspense reveal runs, where the role query finds no region at all. Wait
+  // for the region to be revealed; the boundary swaps in whole, so every
+  // card's status line is there once it is.
+  const rosters = page.getByRole("region", { name: "Team rosters" });
+  await expect(rosters).toBeVisible();
+  const texts = await rosters.locator("p").allTextContents();
+  return texts.map((text) => text.trim()).filter((text) => PLAYOFF_STATUS.test(text));
+}
+
+test("teams say where each one stands in the playoffs", async ({ page }) => {
+  await reseed(page, "playoffs");
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.goto("/teams");
+
+  const statuses = await playoffStatusLines(page);
+  expect(statuses).toHaveLength(8);
+  // Alive first (the grand finalist and both teams in the open semifinal),
+  // then the semifinal loser, then the four quarterfinal losers.
+  expect(statuses[0]).toBe("Through to the grand final");
+  expect(statuses.slice(1, 3).every((text) => /^Semifinal vs /.test(text))).toBe(true);
+  expect(statuses[3]).toMatch(/^Out in the semifinal \(lost 0–2 to .+\)$/);
+  for (const text of statuses.slice(4)) {
+    expect(text).toMatch(/^Out in the quarterfinal \(lost 1–2 to .+\)$/);
+  }
+  const rosters = page.getByRole("region", { name: "Team rosters" });
+  // Each card's summary line leads with its seed ("Seed 2 · Regular season
+  // 5W 0D 2L · 15 pts").
+  await expect(rosters.getByText(/^Seed [1-8]$/)).toHaveCount(8);
+  await expectNoHorizontalOverflow(page, "/teams playoffs");
+
+  // The last card is a quarterfinal loser; its page says so and shows its seed.
+  await rosters.locator('a[href^="/teams/"]').last().click();
+  await expect(page).toHaveURL(/\/teams\/[^/]+$/);
+  await expect(
+    page.locator("#main p", { hasText: /^Out in the quarterfinal \(lost 1–2 to / }),
+  ).toBeVisible();
+  await expect(page.getByText(/^Seed #[5-8]$/)).toBeVisible();
+  // It met its quarterfinal opponent in the round robin too, so that one
+  // opponent, and only that one, is in its Head-to-head card.
+  await expect(
+    page.getByRole("heading", { name: "Head-to-head", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#team-rivals li")).toHaveCount(1);
+  await expectNoHorizontalOverflow(page, "/teams/[id] eliminated");
+  assertNoErrors();
+});
+
 test("complete-season public pages agree on the champion and recap", async ({
   page,
 }) => {
@@ -282,12 +425,27 @@ test("complete-season public pages agree on the champion and recap", async ({
 
   const champion = await championName(page);
   await expect(
-    page.getByRole("link", { name: "Season results", exact: true }).first(),
+    page
+      .getByRole("navigation", { name: "Primary" })
+      .first()
+      .getByRole("link", { name: "Schedule", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Won the grand final")).toBeVisible();
   await expect(
     page.getByRole("img", { name: "Champion crowned" }),
   ).toBeVisible();
+  // One champion block (the card; the hero names no team) and one way to
+  // the season's page, from the hero.
+  const main = page.locator("#main");
+  const hero = main
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { level: 1 }) });
+  await expect(hero).toContainText("That's a wrap");
+  await expect(hero).not.toContainText(champion);
+  await expect(
+    main.getByRole("link", { name: "Relive the season", exact: true }),
+  ).toHaveAttribute("href", /^\/seasons\/[^/?#]+$/);
+  await expect(main.getByRole("link", { name: /Season recap/ })).toHaveCount(0);
 
   await page.goto("/schedule");
   await expect(
@@ -298,15 +456,24 @@ test("complete-season public pages agree on the champion and recap", async ({
     page.getByRole("img", { name: "Champion crowned" }),
   ).toBeVisible();
 
+  // The recap lives on the season's own page; /recap redirects there.
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\/[^/?#]+$/);
+  const seasonPage = new URL(page.url()).pathname;
   await expect(
-    page.getByRole("heading", { name: "Season Recap" }),
+    page.getByRole("heading", {
+      name: "Season 9 (fixture)",
+      exact: true,
+      level: 1,
+    }),
   ).toBeVisible();
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(champion, { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Season awards")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Season awards" }),
+  ).toBeVisible();
   await expect(
     page.getByText("Completed series", { exact: true }),
   ).toBeVisible();
@@ -314,13 +481,26 @@ test("complete-season public pages agree on the champion and recap", async ({
   await expectStatValue(page, "Completed series", 35);
   await expectStatValue(page, "Imported games", 74);
 
+  // A finished season's boards point at that page too.
+  await page.goto("/leaders");
+  await expect(
+    page.locator("#main").getByRole("link", {
+      name: "Season recap",
+      exact: true,
+    }),
+  ).toHaveAttribute("href", seasonPage);
+
   await page.goto("/fantasy");
   await expect(
     page.getByRole("heading", { name: "Fantasy", exact: true }),
   ).toBeVisible();
+  // A signed-out visitor gets the final standings, with no lineup section.
+  await expect(
+    page.getByText(/Season complete: these are the final standings/),
+  ).toBeVisible();
   await expect(
     page.getByText(/season complete — these are the final fives/i),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(page.getByText("Fantasy opens after the draft")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: /save fantasy|update fantasy/i }),
@@ -349,6 +529,10 @@ test("complete-season public pages agree on the champion and recap", async ({
       exact: true,
     }),
   ).toBeVisible();
+  // The manager still gets their own five, below the standings.
+  await expect(
+    page.getByText(/season complete — these are the final fives/i),
+  ).toBeVisible();
   const finalFive = page.getByText("View fantasy five", { exact: true });
   await expect(finalFive).toBeVisible();
   await finalFive.click();
@@ -364,13 +548,31 @@ test("complete-season public pages agree on the champion and recap", async ({
       exact: true,
     }),
   ).toBeVisible();
+  // One "Your picks" list: the graded call and the void one, each marked.
+  const yourPicks = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /^Your picks/ }),
+  });
   await expect(
-    page.getByRole("heading", { name: "Your graded picks" }),
+    yourPicks.getByRole("img", { name: "Correct pick" }),
   ).toBeVisible();
+  await expect(yourPicks.getByRole("img", { name: "Void pick" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /Your void picks/ }),
-  ).toBeVisible();
+    page.getByRole("heading", { name: /Your (graded|void|locked) picks/ }),
+  ).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/pickem completed side game");
+
+  // The finished match itself tells the picker how the call went. The
+  // seeded viewer is the only one who picked it, and picked the winner.
+  await yourPicks
+    .getByRole("img", { name: "Correct pick" })
+    .locator("xpath=..")
+    .getByRole("link")
+    .first()
+    .click();
+  await expect(page).toHaveURL(/\/matches\//);
+  await expect(page.getByText(/Your pick:/)).toContainText(
+    "(1 of 1 called it)",
+  );
 
   assertNoErrors();
 });
@@ -380,13 +582,26 @@ test("complete champion and recap remain usable at 360px", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
 
+  // "/recap" lands on the season page, awards included.
   for (const path of ["/", "/schedule", "/recap"] as const) {
     await page.goto(path);
     await expect(
       page.getByText("Season 9 (fixture) Champion", { exact: true }),
     ).toBeVisible();
+    if (path === "/recap") {
+      await expect(
+        page.getByRole("region", { name: "Season awards" }),
+      ).toBeVisible();
+    }
     await expectNoHorizontalOverflow(page, `${path} completed postseason`);
   }
+
+  // Teams lead with the champion and the runner-up.
+  await page.goto("/teams");
+  const statuses = await playoffStatusLines(page);
+  expect(statuses[0]).toBe("Champion");
+  expect(statuses[1]).toMatch(/^Runner-up \(lost the grand final .+\)$/);
+  await expectNoHorizontalOverflow(page, "/teams completed postseason");
 
   assertNoErrors();
 });
@@ -401,12 +616,30 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin",
   );
 
+  // Once the champion is crowned, the handoff leads the page: one form to
+  // open the next season, prefilled and stating what carries over.
   await expect(
-    page.getByText("Season handoff", { exact: true }).first(),
+    page.getByRole("heading", { name: "Season handoff", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Open Season 10 signups" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("New season name")).toHaveValue("Season 10");
+  await expect(
+    page.getByText(/Carried over from Season 9 \(fixture\):/),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open signups" })).toBeVisible();
+  // The finished season's own cards fold into one record section.
+  await expect(
+    page.getByRole("heading", { name: "Season 9 (fixture) record" }),
+  ).toBeVisible();
+  await expect(page.locator("#adm-record")).not.toHaveAttribute("open", "");
+  // Archiving without opening the next season is folded away, for
+  // reactivating an older season.
   await expect(
     page.getByRole("button", { name: "Archive and enter offseason" }),
-  ).toBeVisible();
+  ).toBeHidden();
+  await page.getByText("Archive without opening the next season").click();
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByRole("button", { name: "Archive and enter offseason" })
@@ -418,22 +651,30 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     page.getByRole("heading", { name: "League offseason" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Review Season 9 (fixture) →" }),
+    page.getByRole("link", { name: "Review Season 9 (fixture)" }),
   ).toBeVisible();
+  // The title stays on the front page until another season crowns someone.
+  const defending = page
+    .locator("#main")
+    .getByRole("link", { name: /\(Season 9 \(fixture\)\)$/ });
+  await expect(
+    page.getByText("Defending champions:", { exact: true }),
+  ).toBeVisible();
+  await expect(defending).toHaveAttribute("href", /^\/seasons\//);
   await expectNoHorizontalOverflow(page, "/ offseason home");
 
-  await page.goto("/features");
+  await page.goto("/how-it-works");
+  // Between seasons the page's one button is the league Discord (League
+  // news where the region has no invite), never a signup.
   await expect(
-    page.getByRole("heading", { name: "Ready for next season?" }),
-  ).toBeVisible();
-  await expect(page.locator('main a[href="/recap"]')).toHaveCount(0);
-  await expect(
-    page.getByRole("link", { name: "Sign up with Steam" }),
+    page.locator("#main").getByRole("link", { name: "Sign up as a standin" }),
   ).toHaveCount(0);
   await expect(
-    page.getByRole("link", { name: "Find an inhouse game" }),
+    page.locator("#main").getByRole("link", {
+      name: /^(Join our Discord|League news)$/,
+    }),
   ).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/features offseason");
+  await expectNoHorizontalOverflow(page, "/how-it-works offseason");
 
   for (const [path, heading] of [
     ["/players", "Players"],
@@ -446,10 +687,27 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     await expect(
       page.getByText("League offseason", { exact: true }),
     ).toBeVisible();
+    // The footer lists Season history too; this is the page's own pointer.
     await expect(
-      page.getByRole("link", { name: "Season history" }),
+      page.locator("#main").getByRole("link", { name: "Season history" }),
     ).toBeVisible();
     await expectNoHorizontalOverflow(page, `${path} offseason`);
+  }
+
+  // With no season running, the season pages open on the last season
+  // instead of an empty "No active season" screen.
+  for (const [path, heading] of [
+    ["/leaders", "Leaders"],
+    ["/pickem", "Pick'em"],
+  ] as const) {
+    await page.goto(path);
+    await expect(
+      page.getByRole("heading", { name: heading, level: 1 }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Season 9 \(fixture\) · archived/).first(),
+    ).toBeVisible();
+    await expect(page.getByText("No active season")).toHaveCount(0);
   }
 
   await page.goto("/seasons");
@@ -467,9 +725,9 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.getByRole("heading", { name: "Open a new season" }),
   ).toBeVisible();
-  await page.getByLabel("Season name").fill("Season 10 (audit)");
+  await page.getByLabel("New season name").fill("Season 10 (audit)");
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Create season" }).click();
+  await page.getByRole("button", { name: "Open signups" }).click();
   await expect(page.getByText(/Created Season 10 \(audit\)/)).toBeVisible();
   await expect(
     page.getByText(/Season 10 \(audit\) — phase control/),
@@ -493,6 +751,7 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   await expect(
     page.locator("#main").getByText("Signups open", { exact: true }),
   ).toBeVisible();
+  await expect(defending).toBeVisible();
   await expectNoHorizontalOverflow(page, "/ next-season signups");
   assertNoErrors();
 });
@@ -524,6 +783,7 @@ test("a conflicting stored champion is never presented as the title holder", asy
   );
 
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\//);
   await expect(
     page.getByText("Champion state needs review", { exact: true }),
   ).toBeVisible();
@@ -542,6 +802,7 @@ test("a champion recap remains complete without imported Dota games", async ({
   const assertNoErrors = trackPageErrors(page);
 
   await page.goto("/recap");
+  await expect(page).toHaveURL(/\/seasons\//);
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
@@ -586,7 +847,7 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   expect(champion).toBeTruthy();
 
   await archivedLink.click();
-  await expect(page.getByText("Season archive", { exact: true })).toBeVisible();
+  await expect(page.getByText("Archived season", { exact: true })).toBeVisible();
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
@@ -603,6 +864,22 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   await expect(
     page.getByRole("heading", { name: "Regular season results" }),
   ).toBeVisible();
+  // The season's recap is part of its page now.
+  await expect(
+    page.getByRole("region", { name: "Season awards" }),
+  ).toBeVisible();
+  await expectStatValue(page, "Completed series", 35);
+  await expect(
+    page.locator("#main").getByRole("link", {
+      name: "Season recap",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  // The season page uses Schedule's head-to-head grid, the league's one
+  // results grid.
+  await expect(
+    page.getByRole("table", { name: /^Head-to-head results\./ }),
+  ).toBeVisible();
   await expectNoHorizontalOverflow(page, "/seasons/[id] archived postseason");
 
   for (const [path, heading] of [
@@ -617,7 +894,10 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
       page.getByText(/Season 9 \(fixture\).*archived/).first(),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "Season archive →" }),
+      page.locator("#main").getByRole("link", {
+        name: "Season recap",
+        exact: true,
+      }),
     ).toHaveAttribute("href", `/seasons/${archivedSeasonId}`);
     const statsNav = page.getByRole("navigation", { name: "Statistics" });
     await expect(
@@ -629,22 +909,17 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
     await expectNoHorizontalOverflow(page, `${path} archived stats`);
   }
 
-  await page.goto(`/seasons/${archivedSeasonId}`);
-  await page.getByRole("link", { name: "Season recap →" }).click();
-  await expect(page).toHaveURL(/\/recap\?season=/);
-  await expect(
-    page.getByRole("heading", { name: "Season Recap" }),
-  ).toBeVisible();
+  // An old recap link (the champion post in Discord) lands on the same page.
+  await page.goto(`/recap?season=${archivedSeasonId}`);
+  await expect(page).toHaveURL(
+    new RegExp(`/seasons/${archivedSeasonId}$`),
+  );
   await expect(
     page.getByText("Season 9 (fixture) Champion", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText(champion!, { exact: true }).first(),
+    page.getByRole("region", { name: "Season awards" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("region", { name: "Playoff bracket" }),
-  ).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/recap archived postseason");
 
   await page.goto(
     "/api/auth/dev?name=Side%20Game%20Viewer&steamId=76561190000992001&redirect=/",
@@ -670,11 +945,14 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   }
 
   await page.goto(`/pickem?season=${archivedSeasonId}`);
+  const archivedPicks = page.locator("section").filter({
+    has: page.getByRole("heading", { name: /^Your picks/ }),
+  });
   await expect(
-    page.getByRole("heading", { name: "Your graded picks" }),
+    archivedPicks.getByRole("img", { name: "Correct pick" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /Your void picks/ }),
+    archivedPicks.getByRole("img", { name: "Void pick" }),
   ).toBeVisible();
 
   assertNoErrors();

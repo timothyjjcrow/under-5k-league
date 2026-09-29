@@ -136,30 +136,35 @@ describe("topBy", () => {
   function entry(id: string, lines: PlayerGameLine[]): LeaderEntry {
     return { id, summary: summarizePlayerGames(lines) };
   }
-  const win = (heroId = 1) =>
-    line({ isRadiant: true, radiantWin: true, heroId });
-  const loss = (heroId = 1) =>
-    line({ isRadiant: true, radiantWin: false, heroId });
+  const game = (kills: number, assists = 0) => line({ kills, assists });
 
-  it("ranks by total wins, most first", () => {
+  it("ranks kills and assists per game, not as season totals", () => {
+    // "extra" played twice as many games (a tiebreaker series, playoffs) and
+    // so has the bigger total; per game, the steadier "sharp" leads.
     const entries = [
-      entry("a", [win(), win(), loss()]), // 2 wins
-      entry("b", [win()]), // 1 win
-      entry("c", [win(), win(), win()]), // 3 wins
+      entry("extra", [game(4, 9), game(4, 9), game(4, 9), game(4, 9), game(4, 9), game(4, 9)]),
+      entry("sharp", [game(7, 12), game(7, 12), game(7, 12)]),
     ];
-    expect(topBy(entries, "wins").map((r) => r.id)).toEqual(["c", "a", "b"]);
+    const kills = topBy(entries, "killsPerGame", { minGames: 3 });
+    expect(kills.map((r) => [r.id, r.value])).toEqual([
+      ["sharp", 7],
+      ["extra", 4],
+    ]);
+    expect(
+      topBy(entries, "assistsPerGame", { minGames: 3 }).map((r) => r.id),
+    ).toEqual(["sharp", "extra"]);
   });
 
-  it("applies a minGames floor for rate stats", () => {
+  it("applies a minGames floor to per-game boards", () => {
     const entries = [
-      entry("oneshot", [win()]), // 100% but only 1 game
-      entry("grinder", [win(), win(), win(), loss()]), // 75% over 4
+      entry("oneshot", [game(20)]), // 20 a game, but only 1 game
+      entry("grinder", [game(6), game(8), game(7), game(5)]), // 6.5 over 4
     ];
-    // Without the floor the 1-game player would top winRate; with minGames=3
-    // they're excluded.
-    expect(topBy(entries, "winRate", { minGames: 3 }).map((r) => r.id)).toEqual(
-      ["grinder"],
-    );
+    // Without the floor the 1-game player would top the board; with
+    // minGames=3 they're excluded.
+    expect(
+      topBy(entries, "killsPerGame", { minGames: 3 }).map((r) => r.id),
+    ).toEqual(["grinder"]);
   });
 
   it("ranks by average GPM and excludes players with no economy data", () => {
@@ -191,13 +196,25 @@ describe("topBy", () => {
 
   it("drops zero-value rows and respects the limit", () => {
     const entries = [
-      entry("a", [win(), win()]),
-      entry("b", [loss(), loss()]), // 0 wins -> excluded from a wins board
-      entry("c", [win()]),
+      entry("a", [game(3), game(3)]),
+      entry("b", [game(0), game(0)]), // no kills -> excluded from a kills board
+      entry("c", [game(1)]),
     ];
-    const rows = topBy(entries, "wins", { limit: 1 });
+    expect(topBy(entries, "killsPerGame").map((r) => r.id)).toEqual(["a", "c"]);
+    const rows = topBy(entries, "killsPerGame", { limit: 1 });
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe("a");
+  });
+
+  it("counts attendance on the games board, most first", () => {
+    const entries = [
+      entry("regular", [game(0), game(0), game(0)]),
+      entry("standin", [game(9)]),
+    ];
+    expect(topBy(entries, "games").map((r) => [r.id, r.value])).toEqual([
+      ["regular", 3],
+      ["standin", 1],
+    ]);
   });
 });
 

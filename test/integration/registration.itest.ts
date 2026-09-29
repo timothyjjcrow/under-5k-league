@@ -25,11 +25,8 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { leaveLeague, saveRegistration } from "@/app/actions/registration";
-import {
-  setRegistrationMmr,
-  startDraft,
-  withdrawSignup,
-} from "@/app/actions/admin";
+import { startDraft } from "@/app/actions/admin-captains-draft";
+import { setRegistrationMmr, withdrawSignup } from "@/app/actions/admin-roster";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { fetchPlayerRankTier } from "@/lib/dota";
@@ -1205,13 +1202,13 @@ describe("saveRegistration — a late medal must not brick an admitted signup", 
     // `roles` is a repeated field (formData.getAll), so one valid key here.
     const res = await saveRegistration(
       {},
-      form({ type: "PLAYER", mmr: 3000, roles: "2", statement: "still here" }),
+      form({ type: "PLAYER", mmr: 3000, roles: "2", about: "still here" }),
     );
 
     expect(res?.error).toBeUndefined();
     const reg = await regFor(season.id, user.id);
     expect(reg?.roles).toBe("2");
-    expect(reg?.statement).toBe("still here");
+    expect(reg?.captainNote).toBe("still here");
     expect(reg?.status).toBe("ACTIVE");
   });
 
@@ -1274,7 +1271,7 @@ describe("saveRegistration — a late medal must not brick an admitted signup", 
     const reg = await regFor(season.id, user.id);
     expect(reg?.status).toBe("WITHDRAWN"); // not revived
     expect(reg?.roles).not.toBe("3"); // and the edit didn't land either
-    expect(reg?.statement).toBe(""); // nothing from this submit landed
+    expect(reg?.captainNote).toBe(""); // nothing from this submit landed
   });
 });
 
@@ -1312,14 +1309,14 @@ describe("saveRegistration — draft-night locks (live auction)", () => {
 
     const res = await saveRegistration(
       {},
-      form({ type: "PLAYER", mmr: 1500, statement: "new goals" }),
+      form({ type: "PLAYER", mmr: 1500, about: "new goals" }),
     );
 
     expect(res?.error).toBeUndefined();
     expect(res?.message).toMatch(/MMR is locked/);
     const reg = await regFor(season.id, user.id);
     expect(reg?.mmr).toBe(4400); // getDraftState re-reads this every poll
-    expect(reg?.statement).toBe("new goals"); // the harmless edit still lands
+    expect(reg?.captainNote).toBe("new goals"); // the harmless edit still lands
   });
 
   it("freezes MMR while the auction is merely PAUSED too", async () => {
@@ -1362,6 +1359,64 @@ describe("saveRegistration — draft-night locks (live auction)", () => {
 
     expect(res?.error).toMatch(/rejoining the player pool/i);
     expect((await regFor(season.id, user.id))?.status).toBe("WITHDRAWN");
+  });
+
+  it.each([null, "NOT_STARTED"])(
+    "a WITHDRAWN full player can undo it during draft setup (draft row: %s)",
+    async (draftStatus) => {
+      // /me offers the Full player choice here (fullPlayerChoiceOpen); this
+      // is the server rule that promise rests on.
+      const season = await makeSeason({ status: "DRAFT" });
+      if (draftStatus) {
+        await prisma.draft.create({
+          data: { seasonId: season.id, status: draftStatus },
+        });
+      }
+      const user = await makeUser("Setup Returner");
+      await prisma.registration.create({
+        data: {
+          seasonId: season.id,
+          userId: user.id,
+          type: "PLAYER",
+          status: "WITHDRAWN",
+          mmr: 3000,
+          roles: "",
+        },
+      });
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+      const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+
+      expect(res?.error).toBeUndefined();
+      const reg = await regFor(season.id, user.id);
+      expect(reg?.status).toBe("ACTIVE");
+      expect(reg?.type).toBe("PLAYER");
+    },
+  );
+
+  it("a WITHDRAWN full player can't come back as a standin mid-auction either", async () => {
+    // Why /me shows a "wait for the draft" note instead of a standin-only
+    // form to this player while the auction runs (rejoinPausedByDraft).
+    const season = await liveDraftSeason();
+    const user = await makeUser("Mid Draft Standin Switch");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "WITHDRAWN",
+        mmr: 3000,
+        roles: "",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, form({ type: "STANDIN", mmr: 3000 }));
+
+    expect(res?.error).toMatch(/draft is running/i);
+    const reg = await regFor(season.id, user.id);
+    expect(reg?.status).toBe("WITHDRAWN");
+    expect(reg?.type).toBe("PLAYER");
   });
 
   it("the re-entry lock lifts once the draft completes", async () => {
@@ -1443,5 +1498,161 @@ describe("saveRegistration — draft-night lock scope", () => {
     expect(res?.error).toMatch(/admin removed your signup/i);
     expect(res?.error).not.toMatch(/reopens once it finishes/i);
     expect((await regFor(season.id, user.id))?.status).toBe("REMOVED");
+  });
+});
+
+// One "About you" box replaced the goals + captain-note pair. Both stored
+// columns stay; the text a player writes now lands in captainNote, and an old
+// two-part answer is only rewritten once the player actually edits it.
+describe("saveRegistration — the About you box", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  async function oldTwoPartSignup() {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Two Part Writer");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3000,
+        statement: "Want to learn offlane",
+        captainNote: "Reliable on Sundays",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    return { season, user };
+  }
+
+  it("stores a new signup's text in the captain note", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("New About Writer");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3000, about: "  Pos 5 main\r\nComms on  " }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      captainNote: "Pos 5 main\nComms on",
+      statement: "",
+    });
+  });
+
+  it("leaves an old two-part answer alone when the box comes back unchanged", async () => {
+    const { season, user } = await oldTwoPartSignup();
+
+    // Exactly what /me shows (the browser posts the break as CRLF), plus an
+    // unrelated edit to the roles.
+    const res = await saveRegistration(
+      {},
+      form({
+        type: "PLAYER",
+        mmr: 3000,
+        roles: "3",
+        about: "Reliable on Sundays\r\n\r\nWant to learn offlane",
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      roles: "3",
+      captainNote: "Reliable on Sundays",
+      statement: "Want to learn offlane",
+    });
+  });
+
+  it("merges an old answer into the one field once the player edits it", async () => {
+    const { season, user } = await oldTwoPartSignup();
+
+    const res = await saveRegistration(
+      {},
+      form({
+        type: "PLAYER",
+        mmr: 3000,
+        about: "Reliable on Sundays\n\nNow learning mid",
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      captainNote: "Reliable on Sundays\n\nNow learning mid",
+      statement: "",
+    });
+  });
+
+  it("joins both answers from a page loaded before the merge", async () => {
+    const { season, user } = await oldTwoPartSignup();
+
+    const res = await saveRegistration(
+      {},
+      form({
+        type: "PLAYER",
+        mmr: 3000,
+        statement: "Want to learn support",
+        captainNote: "Reliable on Sundays",
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      captainNote: "Reliable on Sundays\n\nWant to learn support",
+      statement: "",
+    });
+  });
+});
+
+// /me's "Welcome back" card posts last season's answers to the same action as
+// the full form. It must get exactly the same checks: the medal clamp and the
+// phase rules, and the MMR the card promised is what is stored.
+describe("saveRegistration — a returning player's one-tap join", () => {
+  beforeEach(() => vi.mocked(requireUser).mockReset());
+
+  function oneTap(type: string, mmr: number, roles: string[]) {
+    const fd = new FormData();
+    fd.set("type", type);
+    fd.set("mmr", mmr > 0 ? String(mmr) : "");
+    for (const role of roles) fd.append("roles", role);
+    fd.set("favoriteHeroes", "Lion");
+    fd.set("about", "Support main");
+    return fd;
+  }
+
+  it("saves last season's answers, with today's medal clamp", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Returning Support");
+    // Legend 3 now: last season's 4400 is outside the medal's window.
+    await prisma.user.update({ where: { id: user.id }, data: { rankTier: 53 } });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const res = await saveRegistration({}, oneTap("PLAYER", 4400, ["4", "5"]));
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/MMR set to 2965/);
+    expect(await regFor(season.id, user.id)).toMatchObject({
+      type: "PLAYER",
+      status: "ACTIVE",
+      mmr: 2965,
+      roles: "4,5",
+      favoriteHeroes: "Lion",
+      captainNote: "Support main",
+    });
+  });
+
+  it("still refuses a full-player join once signups have closed", async () => {
+    const season = await makeSeason({ status: "REGULAR_SEASON" });
+    const user = await makeUser("Late Returner");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    const refused = await saveRegistration({}, oneTap("PLAYER", 3000, ["1"]));
+    expect(refused?.error).toBeTruthy();
+    expect(await regFor(season.id, user.id)).toBeNull();
+
+    const standin = await saveRegistration({}, oneTap("STANDIN", 3000, ["1"]));
+    expect(standin?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id))?.type).toBe("STANDIN");
   });
 });

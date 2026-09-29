@@ -3,7 +3,9 @@ import {
   INHOUSE_HISTORY_PAGE_SIZE,
   inhouseEndedAt,
   inhouseHistoryPage,
+  inhouseHistorySides,
   inhousePlayedAt,
+  type InhouseHistorySidePlayer,
 } from "./inhouse-history";
 
 describe("inhousePlayedAt", () => {
@@ -76,5 +78,71 @@ describe("inhouseHistoryPage", () => {
 
   it("keeps an empty archive on a single page", () => {
     expect(inhouseHistoryPage("2", 0)).toEqual({ page: 1, pages: 1, skip: 0 });
+  });
+});
+
+describe("inhouseHistorySides", () => {
+  const player = (
+    userId: string,
+    team: number | null,
+    isCaptain = false,
+  ): InhouseHistorySidePlayer => ({
+    userId,
+    team,
+    isCaptain,
+    name: userId.toUpperCase(),
+  });
+  const lobby = [
+    player("ember", 1, true),
+    player("storm", 1),
+    player("wisp", 2, true),
+    player("nova", 2),
+  ];
+
+  it("names both sides after their captains", () => {
+    expect(inhouseHistorySides(lobby, 2, null)).toEqual({
+      winnerCaptain: "WISP",
+      loserCaptain: "EMBER",
+      viewer: null,
+    });
+  });
+
+  it("marks the game won or lost for a viewer who played it", () => {
+    expect(inhouseHistorySides(lobby, 1, "storm").viewer).toBe("won");
+    expect(inhouseHistorySides(lobby, 1, "nova").viewer).toBe("lost");
+    expect(inhouseHistorySides(lobby, 1, "wisp").viewer).toBe("lost");
+  });
+
+  it("gives no result to a viewer who was not in the game", () => {
+    expect(inhouseHistorySides(lobby, 1, "outsider").viewer).toBeNull();
+    expect(inhouseHistorySides(lobby, 1, null).viewer).toBeNull();
+  });
+
+  it("drops the captain names when a side has no captain or two", () => {
+    // The import moved a captain who sat on the other side in Dota.
+    const moved = [
+      player("ember", 2, true),
+      player("wisp", 2, true),
+      player("storm", 1),
+    ];
+    expect(inhouseHistorySides(moved, 1, "storm")).toEqual({
+      winnerCaptain: null,
+      loserCaptain: null,
+      viewer: "won",
+    });
+    expect(
+      inhouseHistorySides([player("storm", 1), player("nova", 2)], 1, null),
+    ).toMatchObject({ winnerCaptain: null, loserCaptain: null });
+  });
+
+  it("says nothing about a game with no winner or a player with no side", () => {
+    expect(inhouseHistorySides(lobby, null, "ember")).toEqual({
+      winnerCaptain: null,
+      loserCaptain: null,
+      viewer: null,
+    });
+    expect(
+      inhouseHistorySides([...lobby, player("pool", null)], 1, "pool").viewer,
+    ).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import {
   HARD_MMR_CEILING,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_STATUS,
@@ -122,6 +123,52 @@ export function withdrawGateError({
   return null;
 }
 
+/** Why a signup row has no "remove": a short note, and what to do instead. */
+export type SignupRemovalBlocker = { note: string; fix: string };
+
+/**
+ * Which signups the admin lists must NOT offer "remove" on, and what to show
+ * in its place. It mirrors the two `withdrawGateError` refusals a whole
+ * season's rows can hit (rostered, then owing cover on an unplayed match, in
+ * the gate's order) from data the admin page already loads, so a button is
+ * never rendered where the server can only refuse it. Mid-season that was
+ * every drafted player's row. The server gate stays authoritative; this only
+ * decides what to render.
+ */
+export function signupRemovalBlockers({
+  teams,
+  assignments,
+  matches,
+}: {
+  teams: ReadonlyArray<{
+    name: string;
+    members: ReadonlyArray<{ userId: string }>;
+  }>;
+  assignments: ReadonlyArray<{ standinUserId: string; matchId: string }>;
+  matches: ReadonlyArray<{ id: string; status: string }>;
+}): Map<string, SignupRemovalBlocker> {
+  const blockers = new Map<string, SignupRemovalBlocker>();
+  for (const team of teams) {
+    for (const member of team.members) {
+      blockers.set(member.userId, {
+        note: `on ${team.name}`,
+        fix: "Release them from the team in Roster moves first, then remove the signup.",
+      });
+    }
+  }
+  // pendingCoverWhere: a booking on any match of the season not COMPLETED.
+  const statusOf = new Map(matches.map((match) => [match.id, match.status]));
+  for (const assignment of assignments) {
+    if (blockers.has(assignment.standinUserId)) continue;
+    if (statusOf.get(assignment.matchId) === MATCH_STATUS.COMPLETED) continue;
+    blockers.set(assignment.standinUserId, {
+      note: "covering a match",
+      fix: "They're standing in for an unplayed match. Remove that assignment first, then the signup.",
+    });
+  }
+  return blockers;
+}
+
 /**
  * Enforce signup rules: the hard MMR ceiling, and that PLAYER registrations
  * only *begin* during SIGNUPS. The soft limit (`season.maxMmr`) does NOT block
@@ -164,7 +211,8 @@ export function registrationGate({
   // refused right here.
   //
   // It must NOT re-judge someone the league has already admitted. The medal is
-  // a fact synced behind the player's back (admin "Sync ranks & stats"), that sync is
+  // a fact synced behind the player's back (the hourly player data refresh, or
+  // the admin's "Refresh player data now"), that sync is
   // deliberately WARN-ONLY — who plays is the operator's call — and a player
   // admitted while their rankTier was null holds no lever over it. Judging it
   // on every submit turned the admin's decision to KEEP them into a silent
@@ -197,7 +245,7 @@ export function registrationGate({
  * league-approved (an unchanged resubmit is never re-judged, so an admin's
  * setRegistrationMmr correction survives). So a player who signs up before
  * linking a Dota account — or while OpenDota is unreachable — is admitted with
- * `rankTier: null`, and when the admin's later "Sync ranks & stats" fills in a Divine
+ * `rankTier: null`, and when a later player data refresh fills in a Divine
  * 3+/Immortal medal, nothing re-checks: they stay ACTIVE, over the ceiling.
  *
  * This is the detector for that gap. It never removes anyone — who plays is the

@@ -1,6 +1,10 @@
-import { calendarFeedLinks } from "@/lib/calendar-links";
+import { AddToCalendar } from "@/components/add-to-calendar";
+import { resolveSiteUrl } from "@/lib/site-url";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { PlayoffOutlook } from "@/components/playoff-outlook";
+import {
+  PlayoffOutlook,
+  settledPlayoffStatus,
+} from "@/components/playoff-outlook";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
@@ -14,11 +18,23 @@ import { getSessionUser } from "@/lib/auth";
 import { DiscordTag } from "@/components/discord-tag";
 import { shareMetadata } from "@/lib/share-metadata";
 import { LocalTime } from "@/components/local-time";
+import { Countdown } from "@/components/countdown";
+import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import { seasonScenarioReport } from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import type { TeamScenario } from "@/lib/scenarios";
-import { headToHead, recentForm } from "@/lib/team-matches";
-import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
+import {
+  headToHead,
+  recentForm,
+  rematches,
+  teamFixtureOrder,
+} from "@/lib/team-matches";
+import {
+  matchRoundLabel,
+  playoffTotalRounds,
+  teamByeWeek,
+} from "@/lib/schedule";
+import { ByeWeekNote } from "@/components/bye-week-note";
 import { roleCoverage } from "@/lib/pool-stats";
 import {
   summarizePlayerGames,
@@ -33,28 +49,37 @@ import { draftSetupOpen } from "@/lib/draft-setup";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { getTeamJersey } from "@/lib/team-jerseys";
 import { TeamJerseyPreview } from "@/components/team-jersey-preview";
+import { TeamIdentityForm } from "@/components/team-identity-form";
+import { editTeamIdentity } from "@/app/actions/teams";
+import { canEditTeamIdentity } from "@/lib/team-identity";
 import { canViewLeagueContact } from "@/lib/visibility";
 import {
+  DRAFT_STATUS,
+  MATCH_PHASE,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
   SEASON_STATUS,
 } from "@/lib/constants";
+import { playoffStatuses } from "@/lib/playoff-status";
+import { seedsFromFirstRound } from "@/lib/bracket-view";
+import { PlayoffStatusLine } from "@/components/playoff-status-line";
+import { SeriesRecord } from "@/components/series-record";
+import { rosterOrder } from "@/lib/team-roster";
+import { teamHueVar } from "@/lib/team-hues";
 import {
   Avatar,
   Badge,
   Card,
   CardBody,
   CardHeader,
-  EmptyState,
   FormStrip,
   HeroPool,
+  LinkArrow,
   PlayerLink,
   RankBadge,
   RoleBadges,
-  Sparkline,
   Stat,
   TeamCrest,
-  teamHue,
   textLink,
 } from "@/components/ui";
 
@@ -68,20 +93,16 @@ export async function generateMetadata({
     where: { id },
     select: { name: true },
   });
-  // Metadata resolves BEFORE the body streams — a notFound() here is the
-  // only way an unknown id yields a real 404 status (the root loading.tsx
-  // otherwise commits a 200 shell before the page's own notFound throws).
+  // notFound() in metadata: crawlers wait for metadata, so they get a real
+  // 404 status (the root loading.tsx otherwise commits a 200 shell before
+  // the page's own notFound throws). Browsers get streamed metadata, so the
+  // not-found page arrives with a 200 and Next's noindex tag (its documented
+  // streaming behaviour).
   if (!team) notFound();
   return shareMetadata(
     team.name,
     `${team.name} — roster, results, and stats in ${LEAGUE_CONFIG.name}.`,
   );
-}
-
-function fmtDate(d: Date | null): string | null {
-  // Delegates to formatMatchTime — these strings are LocalTime hydration
-  // snapshots, so drifting from the client's formatter causes flicker.
-  return d ? formatMatchTime(d, "full") : null;
 }
 
 export default async function TeamPage({
@@ -101,8 +122,21 @@ export default async function TeamPage({
     },
   });
   if (!team) notFound();
-  const jersey = team.season.isActive ? getTeamJersey(team.name) : null;
+  const jersey = team.season.isActive
+    ? getTeamJersey({
+        id: team.id,
+        roster: team.members.map((member) => member.user),
+      })
+    : null;
   const viewer = await getSessionUser();
+  // The captain (or an admin) edits the team's name and logo right here, all
+  // season until it is complete; the service enforces the same rule on save.
+  const canEditTeam = canEditTeamIdentity({
+    viewer,
+    captainId: team.captainId,
+    seasonIsActive: team.season.isActive,
+    seasonStatus: team.season.status,
+  });
 
   const memberIds = team.members.map((m) => m.userId);
   const shouldProjectBudget =
@@ -111,7 +145,6 @@ export default async function TeamPage({
   const [
     allTeams,
     allMatches,
-    myMatches,
     rosterRegs,
     seasonGames,
     captainRegs,
@@ -119,13 +152,6 @@ export default async function TeamPage({
   ] = await Promise.all([
     prisma.team.findMany({ where: { seasonId: team.seasonId } }),
     prisma.match.findMany({ where: { seasonId: team.seasonId } }),
-    prisma.match.findMany({
-      where: {
-        seasonId: team.seasonId,
-        OR: [{ homeTeamId: id }, { awayTeamId: id }],
-      },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
-    }),
     memberIds.length
       ? prisma.registration.findMany({
           where: { seasonId: team.seasonId, userId: { in: memberIds } },
@@ -157,6 +183,15 @@ export default async function TeamPage({
         })
       : null,
   ]);
+  // This team's fixtures are a filter of the season's, so derive them here
+  // rather than paying a second query. Same order the old query asked for:
+  // week, then creation time (Array.prototype.sort is stable).
+  const myMatches = allMatches
+    .filter((m) => m.homeTeamId === id || m.awayTeamId === id)
+    .sort(
+      (a, b) =>
+        a.week - b.week || a.createdAt.getTime() - b.createdAt.getTime(),
+    );
   const viewerHasActiveRegistration =
     team.season.isActive &&
     viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE;
@@ -220,31 +255,50 @@ export default async function TeamPage({
     : (stakesReport?.teams.get(id) ?? null);
 
   const form = recentForm(id, myMatches);
-  // Game differential per completed match (chronological) → a form trend.
-  const diffTrend = myMatches
-    .filter((m) => m.status === "COMPLETED")
-    .map((m) => {
-      const isHome = m.homeTeamId === id;
-      const myS = isHome ? m.homeScore : m.awayScore;
-      const oppS = isHome ? m.awayScore : m.homeScore;
-      return myS - oppS;
-    });
-  const h2h = headToHead(id, myMatches).sort(
+  // Only opponents met more than once: a single meeting is already on the
+  // Matches list, so the card would repeat it.
+  const h2h = rematches(headToHead(id, myMatches)).sort(
     (a, b) => b.wins - a.wins || a.losses - b.losses,
   );
   const spent = team.members.reduce((sum, m) => sum + m.price, 0);
+  const draftStatus = team.season.draft?.status;
+  const auctionStarted =
+    draftStatus != null && draftStatus !== DRAFT_STATUS.NOT_STARTED;
+  // Signups, or a draft phase whose auction hasn't finished: fixtures come
+  // after the draft.
+  const draftAhead =
+    team.season.isActive &&
+    (team.season.status === SEASON_STATUS.SIGNUPS ||
+      (team.season.status === SEASON_STATUS.DRAFT &&
+        draftStatus !== DRAFT_STATUS.COMPLETE));
   // Before any result exists, record/points/rank are noise (and the "rank"
   // is just draft order) — show draft-shaped tiles instead.
   const played = allMatches.some((m) => m.status === "COMPLETED");
+  // Once nothing left can change the team's fate, its status is a chip by
+  // the name; the outlook card at the bottom stays only while results still
+  // matter.
+  const hasOutlook = !!(myScenario && stakesReport && played);
+  const settledStatus =
+    hasOutlook && myScenario ? settledPlayoffStatus(myScenario) : null;
+  const showOutlookCard = hasOutlook && !settledStatus;
   const knownMmrs = rosterRegs.map((r) => r.mmr).filter((v) => v > 0);
   const avgMmr = knownMmrs.length
     ? Math.round(knownMmrs.reduce((s, v) => s + v, 0) / knownMmrs.length)
     : null;
+  // Role coverage helps a captain decide whom to buy, so it shows only in
+  // the draft phase before the auction completes. In signups it is all gaps
+  // (only the captain is rostered); after the draft the team can't act on
+  // it, and each player's roles stay on their roster row.
   const coverage = roleCoverage(rosterRegs);
-  const hasRoleData = coverage.some((r) => r.count > 0);
+  const showCoverage =
+    team.season.isActive &&
+    team.season.status === SEASON_STATUS.DRAFT &&
+    draftStatus !== DRAFT_STATUS.COMPLETE &&
+    coverage.some((r) => r.count > 0);
   // Which player prefers which roles → per-row badges in the roster card.
   const rolesByUser = new Map(rosterRegs.map((r) => [r.userId, r.roles]));
-  const hue = teamHue(team.id);
+  // The season hue its crest wears (published by the root layout).
+  const hue = teamHueVar(team.id);
   // The roster's most-commonly listed hero → a faint banner backdrop. Kept
   // subtle so the team's color identity (crest + glow) stays dominant.
   const heroCounts = new Map<number, number>();
@@ -265,18 +319,68 @@ export default async function TeamPage({
   // One server snapshot keeps every fixture label consistent on the page.
   // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
+  // Playoffs (and the finished season): the bracket seed replaces the
+  // regular-season rank badge, and a line says where the team stands.
+  const postseason =
+    team.season.status === SEASON_STATUS.PLAYOFFS ||
+    team.season.status === SEASON_STATUS.COMPLETE;
+  const playoffStatus = postseason
+    ? (playoffStatuses(
+        allTeams,
+        allMatches,
+        championPresentation.championTeamId,
+        nowMs,
+      ).get(id) ?? null)
+    : null;
+  const seed = postseason
+    ? seedsFromFirstRound(
+        allMatches.filter(
+          (m) =>
+            m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+        ),
+      ).get(id)
+    : undefined;
   const featuredMatch = profileMatch(
     myMatches,
     nowMs,
     team.season.isActive && team.season.status !== SEASON_STATUS.COMPLETE,
   );
+  // Resting this week: say so before the spotlight shows a match a week away.
+  const byeWeek =
+    team.season.isActive &&
+    !team.withdrawn &&
+    (team.season.status === SEASON_STATUS.REGULAR_SEASON ||
+      team.season.status === SEASON_STATUS.DRAFT)
+      ? teamByeWeek(allMatches, id, nowMs)
+      : null;
+  const byeNext =
+    byeWeek != null && featuredMatch && featuredMatch.status !== "COMPLETED"
+      ? `${matchRoundLabel(featuredMatch, playoffRounds)} vs ${
+          teamName.get(
+            featuredMatch.homeTeamId === id
+              ? featuredMatch.awayTeamId
+              : featuredMatch.homeTeamId,
+          ) ?? "?"
+        }`
+      : null;
+  // The page leads with what's next: the live or next series (or, before
+  // any result, the draft numbers), then the roster, then every fixture.
+  const showOverview = !played || featuredMatch != null;
+  const fixtureList = teamFixtureOrder(myMatches);
+  // The same "Add to calendar" menu as Schedule, offering this team's feed
+  // (or the whole league's), once the team has a kickoff time to add.
+  const showCalendar =
+    team.season.isActive &&
+    (team.season.status === SEASON_STATUS.REGULAR_SEASON ||
+      team.season.status === SEASON_STATUS.PLAYOFFS) &&
+    myMatches.some((m) => m.scheduledAt);
   const sectionItems = [
-    { id: "team-overview", label: "Overview" },
-    { id: "team-matches", label: "Matches" },
+    ...(showOverview ? [{ id: "team-overview", label: "Overview" }] : []),
     { id: "team-roster", label: "Roster" },
+    ...(myMatches.length > 0 ? [{ id: "team-matches", label: "Matches" }] : []),
     ...(teamHeroes.length > 0 ? [{ id: "team-heroes", label: "Heroes" }] : []),
     ...(h2h.length > 0 ? [{ id: "team-rivals", label: "Head-to-head" }] : []),
-    ...(myScenario && stakesReport && played
+    ...(showOutlookCard
       ? [{ id: "team-outlook", label: "Playoff outlook" }]
       : []),
     ...(jersey ? [{ id: "team-jersey", label: "Jersey" }] : []),
@@ -292,42 +396,27 @@ export default async function TeamPage({
             href={team.season.isActive ? "/teams" : `/seasons/${team.seasonId}`}
             className={textLink("text-sm")}
           >
-            {team.season.isActive ? "← All teams" : "← Season archive"}
+            {team.season.isActive ? "← All teams" : `← ${team.season.name}`}
           </ContextBackLink>
+          {/* The standings sit behind the rank badge beside the team's
+              name, and the calendar in the Matches card. */}
           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
             {team.season.isActive ? (
               <Link href="/scrims" className={textLink("text-sm")}>
-                Scrims →
+                Scrims <LinkArrow />
               </Link>
             ) : null}
-            {team.season.isActive &&
-            (team.season.status === "REGULAR_SEASON" ||
-              team.season.status === "PLAYOFFS") ? (
-              <>
-                <a
-                  href={calendarFeedLinks(team.id).subscribe}
-                  className={textLink("text-sm")}
-                  title="Add this team's matches to your calendar app — moved matches update on their own"
-                >
-                  📅 Subscribe to calendar
-                </a>
-                <a
-                  href={calendarFeedLinks(team.id).download}
-                  className={textLink("text-sm")}
-                  title="Download this team's active-season .ics calendar file"
-                >
-                  Download .ics
-                </a>
-              </>
-            ) : null}
-            {team.season.isActive && team.season.status === "DRAFT" ? (
-              <Link href="/draft" className={textLink("text-sm")}>
-                Draft room →
-              </Link>
-            ) : team.season.isActive ? (
-              <Link href="/schedule#standings" className={textLink("text-sm")}>
-                Standings →
-              </Link>
+            {team.season.isActive ? (
+              team.season.status === SEASON_STATUS.SIGNUPS ? (
+                // The week's job before the draft: scouting the pool.
+                <Link href="/players" className={textLink("text-sm")}>
+                  Player pool →
+                </Link>
+              ) : team.season.status === SEASON_STATUS.DRAFT ? (
+                <Link href="/draft" className={textLink("text-sm")}>
+                  Draft room →
+                </Link>
+              ) : null
             ) : (
               <Link
                 href={`/seasons/${team.seasonId}`}
@@ -365,6 +454,7 @@ export default async function TeamPage({
           />
           <div
             aria-hidden
+            data-team-hue={team.id}
             className="animate-hero-glow pointer-events-none absolute -left-8 top-0 h-40 w-40 -translate-y-1/3 rounded-full blur-3xl"
             style={{ backgroundColor: `hsl(${hue} 70% 50% / 0.22)` }}
           />
@@ -372,24 +462,52 @@ export default async function TeamPage({
             aria-hidden
             className="animate-hero-glow-alt pointer-events-none absolute -right-8 bottom-0 h-40 w-40 translate-y-1/3 rounded-full bg-accent/15 blur-3xl"
           />
-          <div className="relative flex flex-wrap items-center gap-5 p-6">
+          <div className="relative flex items-center gap-4 p-4 sm:gap-5 sm:p-6">
+            {/* A smaller crest on phones leaves the names room to breathe. */}
+            <TeamCrest
+              name={team.name}
+              seed={team.id}
+              logoUrl={team.logoUrl}
+              size={64}
+              imageFit="cover"
+              className="self-start rounded-xl shadow-lg sm:hidden"
+            />
             <TeamCrest
               name={team.name}
               seed={team.id}
               logoUrl={team.logoUrl}
               size={112}
               imageFit="cover"
-              className="rounded-2xl shadow-lg"
+              className="hidden rounded-2xl shadow-lg sm:grid"
             />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="font-display text-3xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
+                <h1 className="font-display text-2xl font-bold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">
                   {team.name}
                 </h1>
-                {played && rank > 0 ? (
-                  <Badge tone="accent">
+                {seed ? (
+                  <StandingBadge
+                    href={
+                      team.season.isActive
+                        ? "/schedule#playoff-bracket"
+                        : undefined
+                    }
+                    where="in the playoff bracket"
+                  >
+                    Seed #{seed}
+                  </StandingBadge>
+                ) : played && rank > 0 ? (
+                  <StandingBadge
+                    href={
+                      team.season.isActive ? "/schedule#standings" : undefined
+                    }
+                    where="in the standings"
+                  >
                     #{rank} of {allTeams.length}
-                  </Badge>
+                  </StandingBadge>
+                ) : null}
+                {settledStatus ? (
+                  <Badge tone={settledStatus.tone}>{settledStatus.text}</Badge>
                 ) : null}
                 {championPresentation.championTeamId === team.id ? (
                   <Badge tone="accent">🏆 Champion</Badge>
@@ -397,6 +515,39 @@ export default async function TeamPage({
                 {team.withdrawn ? <Badge tone="danger">Withdrawn</Badge> : null}
               </div>
               <div className="mt-1 text-sm text-muted">{team.season.name}</div>
+              {played && row ? (
+                // Record and points in one line (the badge beside the name
+                // carries the rank, or the playoff seed).
+                <p className="mt-1 text-sm">
+                  {seed ? (
+                    <span className="text-muted">Regular season: </span>
+                  ) : null}
+                  <span className="font-semibold tabular-nums">
+                    <SeriesRecord record={row} />
+                  </span>
+                  <span className="text-muted"> · </span>
+                  <span className="font-semibold tabular-nums">
+                    {row.points}
+                  </span>{" "}
+                  <span className="text-muted">
+                    {row.points === 1 ? "pt" : "pts"}
+                  </span>
+                  {seed && rank > 0 ? (
+                    <span className="text-muted">
+                      {" "}
+                      · #{rank} of {allTeams.length}
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+              {/* The Champion badge beside the name already says it. */}
+              {playoffStatus && playoffStatus.kind !== "champion" ? (
+                <PlayoffStatusLine
+                  status={playoffStatus}
+                  teamName={teamName}
+                  className="mt-1.5 text-sm"
+                />
+              ) : null}
               <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
                 <span className="flex items-center gap-1.5 text-muted">
                   Captain
@@ -424,6 +575,34 @@ export default async function TeamPage({
             </div>
           </div>
         </div>
+        {canEditTeam ? (
+          <details className="mt-3 rounded-[var(--radius)] border border-line bg-surface px-4">
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-muted hover:text-fg">
+              ✎ Edit team name and logo
+            </summary>
+            <div className="space-y-3 pb-4">
+              <p className="text-xs text-muted">
+                Changes save right away and are posted in the league Discord.
+                {viewer?.role === "ADMIN"
+                  ? null
+                  : " For a logo, upload the image to Imgur and paste its direct link (https://i.imgur.com/…)."}
+              </p>
+              <TeamIdentityForm
+                // Remount on a saved change so the fields start from it.
+                key={`${team.name}|${team.logoUrl ?? ""}`}
+                action={editTeamIdentity}
+                teamId={team.id}
+                name={team.name}
+                logoUrl={team.logoUrl}
+                note={
+                  jersey
+                    ? "This team's Fourthwall jerseys stay linked when it is renamed."
+                    : undefined
+                }
+              />
+            </div>
+          </details>
+        ) : null}
       </div>
 
       {team.withdrawn ? (
@@ -437,197 +616,57 @@ export default async function TeamPage({
         </div>
       ) : null}
 
+      {byeWeek != null ? (
+        <ByeWeekNote week={byeWeek} who={team.name} next={byeNext} />
+      ) : null}
+
       <SectionNav items={sectionItems} label="Team sections" sticky />
 
-      <section
-        id="team-overview"
-        aria-label="Team overview"
-        className={cn(
-          "scroll-mt-40 grid grid-cols-1 gap-4",
-          featuredMatch && "lg:grid-cols-2",
-        )}
-      >
-        {played ? (
-          <div className="grid min-w-0 grid-cols-2 gap-3">
-            <Stat
-              label="Record"
-              value={`${row?.wins ?? 0}–${row?.losses ?? 0}${
-                (row?.draws ?? 0) > 0 ? `–${row?.draws}` : ""
-              }`}
-            />
-            <Stat label="Points" value={row?.points ?? 0} />
-            <Stat
-              label="Rank"
-              value={rank > 0 ? `#${rank}` : "—"}
-              hint={`of ${allTeams.length}`}
-            />
-            <Stat
-              label="Roster"
-              value={`${team.members.length}/${team.season.teamSize}`}
-            />
-          </div>
-        ) : (
-          <div className="grid min-w-0 grid-cols-2 gap-3">
-            <Stat
-              label={
-                displayBudgets.isProjected ? "Projected budget" : "Budget left"
-              }
-              value={`$${displayBudget}`}
-              hint={
-                displayBudgets.isProjected
-                  ? "Finalized when the auction starts"
-                  : undefined
-              }
-            />
-            <Stat label="Spent" value={`$${spent}`} />
-            <Stat
-              label="Roster"
-              value={`${team.members.length}/${team.season.teamSize}`}
-            />
-            <Stat label="Avg MMR" value={avgMmr ?? "—"} />
-          </div>
-        )}
-
-        {featuredMatch ? (
-          <ProfileMatchSpotlight
-            match={featuredMatch}
-            teams={allTeams}
-            playoffRounds={playoffRounds}
-            nowMs={nowMs}
-          />
-        ) : null}
-      </section>
-
-      <Card id="team-matches" className="scroll-mt-40 overflow-hidden">
-        <CardHeader
-          title="Matches"
-          headingLevel={2}
-          action={
-            team.season.isActive ? (
-              <Link
-                href={`/schedule?team=${team.id}#fixtures`}
-                className={textLink("text-sm")}
-              >
-                Team schedule →
-              </Link>
-            ) : undefined
-          }
-        />
-        <CardBody className="p-0">
-          {myMatches.length === 0 ? (
-            <div className="p-5">
-              <EmptyState title="No matches scheduled yet" />
-            </div>
-          ) : (
-            <ul className="grid grid-cols-1 gap-px bg-line/60 sm:grid-cols-2">
-              {myMatches.map((m) => {
-                const isHome = m.homeTeamId === id;
-                const oppId = isHome ? m.awayTeamId : m.homeTeamId;
-                const myScore = isHome ? m.homeScore : m.awayScore;
-                const oppScore = isHome ? m.awayScore : m.homeScore;
-                const result =
-                  m.winnerTeamId === id
-                    ? "W"
-                    : m.winnerTeamId === null
-                      ? "D"
-                      : "L";
-                const matchState = profileMatchState(m, nowMs);
-                const when = fmtDate(m.scheduledAt);
-                return (
-                  <li key={m.id} className="sm:last:odd:col-span-2">
-                    <Link
-                      href={`/matches/${m.id}`}
-                      className="group flex h-full min-w-0 flex-col gap-3 bg-surface px-5 py-4 text-sm transition-colors hover:bg-surface-2"
-                    >
-                      <span className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                        <span>{matchRoundLabel(m, playoffRounds)}</span>
-                        {m.status === "COMPLETED" ? (
-                          <Badge
-                            tone={
-                              result === "W"
-                                ? "success"
-                                : result === "L"
-                                  ? "danger"
-                                  : "neutral"
-                            }
-                          >
-                            {m.forfeit ? "Forfeit · " : ""}
-                            {result === "W"
-                              ? "Won"
-                              : result === "L"
-                                ? "Lost"
-                                : "Draw"}
-                          </Badge>
-                        ) : (
-                          <Badge
-                            tone={m.status === "LIVE" ? "danger" : "neutral"}
-                          >
-                            {matchState === "Next series"
-                              ? "Upcoming"
-                              : matchState}
-                          </Badge>
-                        )}
-                      </span>
-                      <span className="flex min-w-0 items-center gap-3">
-                        <TeamCrest
-                          name={teamName.get(oppId) ?? "?"}
-                          seed={oppId}
-                          logoUrl={teamLogoUrl.get(oppId)}
-                          size={32}
-                          imageFit="cover"
-                          className="shrink-0 rounded-lg"
-                        />
-                        <span className="min-w-0 flex-1 font-medium leading-snug [overflow-wrap:anywhere]">
-                          <span className="font-normal text-muted">vs </span>
-                          {teamName.get(oppId) ?? "?"}
-                        </span>
-                        {m.status === "COMPLETED" || m.status === "LIVE" ? (
-                          <span className="shrink-0 font-display text-2xl font-semibold tabular-nums">
-                            {myScore}–{oppScore}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="mt-auto flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                        {when && m.scheduledAt ? (
-                          <LocalTime
-                            ts={m.scheduledAt.getTime()}
-                            variant="full"
-                            initial={when}
-                          />
-                        ) : (
-                          <span>
-                            {m.status === "COMPLETED"
-                              ? "Time not recorded"
-                              : "Time TBD"}
-                          </span>
-                        )}
-                        <span className="font-medium text-info group-hover:underline">
-                          Match →
-                        </span>
-                      </span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+      {showOverview ? (
+        <section
+          id="team-overview"
+          aria-label="Team overview"
+          className={cn(
+            "scroll-mt-40 grid grid-cols-1 gap-4",
+            !played && featuredMatch && "lg:grid-cols-2",
           )}
-        </CardBody>
-      </Card>
-
-      {diffTrend.length >= 2 ? (
-        <Card>
-          <CardBody className="flex items-center justify-between gap-4 py-3">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                Game diff by match
-              </div>
-              <div className="text-xs text-muted">
-                last {diffTrend.length} played
-              </div>
+        >
+          {/* Record, points and rank sit in the header once results exist;
+              before that the draft numbers are what this team is about. */}
+          {!played ? (
+            <div className="grid min-w-0 grid-cols-2 gap-3">
+              <Stat
+                label={
+                  displayBudgets.isProjected ? "Projected budget" : "Budget left"
+                }
+                value={`$${displayBudget}`}
+                hint={
+                  displayBudgets.isProjected
+                    ? "Finalized when the auction starts"
+                    : undefined
+                }
+              />
+              <Stat
+                label="Roster"
+                value={`${team.members.length}/${team.season.teamSize}`}
+              />
+              <Stat label="Avg MMR" value={avgMmr ?? "—"} />
+              {/* Nothing is spent before the auction opens. */}
+              {auctionStarted || spent > 0 ? (
+                <Stat label="Spent" value={`$${spent}`} />
+              ) : null}
             </div>
-            <Sparkline values={diffTrend} width={180} height={40} />
-          </CardBody>
-        </Card>
+          ) : null}
+
+          {featuredMatch ? (
+            <ProfileMatchSpotlight
+              match={featuredMatch}
+              teams={allTeams}
+              playoffRounds={playoffRounds}
+              nowMs={nowMs}
+            />
+          ) : null}
+        </section>
       ) : null}
 
       <section
@@ -639,19 +678,22 @@ export default async function TeamPage({
           <CardHeader
             title="Roster"
             headingLevel={2}
-            subtitle={
-              spent > 0
-                ? displayBudgets.isProjected
-                  ? `Recorded $${spent} · projected start $${displayBudget}`
-                  : `Spent $${spent} · $${displayBudget} left`
-                : undefined
-            }
+            subtitle={[
+              `${team.members.length} of ${team.season.teamSize} players`,
+              ...(spent > 0
+                ? [
+                    displayBudgets.isProjected
+                      ? `Recorded $${spent} · projected start $${displayBudget}`
+                      : `Spent $${spent} · $${displayBudget} left`,
+                  ]
+                : []),
+            ].join(" · ")}
           />
           <CardBody className="space-y-1.5">
             {team.members.length === 0 ? (
               <p className="text-sm text-muted">No players yet.</p>
             ) : (
-              team.members.map((m) => (
+              rosterOrder(team.members).map((m) => (
                 <div
                   key={m.id}
                   className="flex items-center gap-3 rounded-lg border border-line/60 bg-surface-2/20 px-3 py-2 text-sm"
@@ -679,19 +721,24 @@ export default async function TeamPage({
                         m.userId,
                         viewerHasActiveRegistration,
                       ) ? (
+                        // Shown on phones too: match night is when teammates
+                        // look each other up. Still members-only.
                         <DiscordTag
                           name={m.user.discordName}
                           verified={!!m.user.discordId}
-                          className="hidden sm:inline-flex"
                         />
                       ) : null}
-                      <RoleBadges
-                        roles={rolesByUser.get(m.userId)}
-                        className="hidden sm:inline-flex"
-                      />
+                      <RoleBadges roles={rolesByUser.get(m.userId)} />
                     </div>
                   </div>
-                  <span className="shrink-0 font-mono text-muted">
+                  {/* Prices matter while the draft is ahead; after it, phones
+                      give the room to the name and contact chips. */}
+                  <span
+                    className={cn(
+                      "shrink-0 font-mono text-muted",
+                      !draftAhead && "hidden sm:inline",
+                    )}
+                  >
                     {m.isCaptain ? "—" : `$${m.price}`}
                   </span>
                 </div>
@@ -700,7 +747,7 @@ export default async function TeamPage({
           </CardBody>
         </Card>
 
-        {hasRoleData ? (
+        {showCoverage ? (
           <Card>
             <CardHeader
               title="Role coverage"
@@ -745,6 +792,168 @@ export default async function TeamPage({
         ) : null}
       </section>
 
+      {myMatches.length === 0 ? (
+        // No fixtures yet: one line saying when they come, not an empty card.
+        <p className="rounded-[var(--radius)] border border-line-soft bg-surface/50 px-4 py-3 text-sm text-muted">
+          {draftAhead ? (
+            <>
+              No matches until after the draft.
+              {team.season.draftAt && !auctionStarted ? (
+                <>
+                  {" "}
+                  🗓️ Draft night:{" "}
+                  <strong className="text-fg">
+                    <LocalTime
+                      ts={team.season.draftAt.getTime()}
+                      variant="full"
+                      initial={formatMatchTime(team.season.draftAt, "full")}
+                    />
+                  </strong>{" "}
+                  <Countdown
+                    targetMs={team.season.draftAt.getTime()}
+                    eventLabel="Draft"
+                    passedLabel={DRAFT_PASSED_LABEL}
+                  />
+                </>
+              ) : null}
+            </>
+          ) : team.season.isActive ? (
+            "No matches scheduled yet."
+          ) : (
+            "No matches were scheduled for this team."
+          )}
+        </p>
+      ) : (
+        // No overflow-hidden on the card: it would clip the calendar menu.
+        // The body clips the rows' hover background to the corners instead.
+        <Card id="team-matches" className="scroll-mt-40">
+          <CardHeader
+            title="Matches"
+            headingLevel={2}
+            action={
+              team.season.isActive ? (
+                // Full width on phones so the calendar button, and the menu
+                // under it, keep to the card's right edge.
+                <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 sm:w-auto">
+                  <Link
+                    href={`/schedule?team=${team.id}#fixtures`}
+                    className={textLink("text-sm")}
+                  >
+                    Team schedule <LinkArrow />
+                  </Link>
+                  {showCalendar ? (
+                    <div className="ml-auto">
+                      <AddToCalendar
+                        site={resolveSiteUrl()}
+                        teams={[{ id: team.id, name: team.name }]}
+                        initialTeamId={team.id}
+                        align="end"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : undefined
+            }
+          />
+          <CardBody className="overflow-hidden rounded-b-[var(--radius)] p-0">
+            <ul className="divide-y divide-line/60">
+              {fixtureList.map((m) => {
+                const isHome = m.homeTeamId === id;
+                const oppId = isHome ? m.awayTeamId : m.homeTeamId;
+                const oppName = teamName.get(oppId) ?? "?";
+                const myScore = isHome ? m.homeScore : m.awayScore;
+                const oppScore = isHome ? m.awayScore : m.homeScore;
+                const done = m.status === "COMPLETED";
+                const live = m.status === "LIVE";
+                const result =
+                  m.winnerTeamId === id
+                    ? "W"
+                    : m.winnerTeamId === null
+                      ? "D"
+                      : "L";
+                const matchState = profileMatchState(m, nowMs);
+                return (
+                  <li key={m.id}>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className="group flex min-h-14 min-w-0 items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-2 sm:px-5"
+                    >
+                      <TeamCrest
+                        name={oppName}
+                        seed={oppId}
+                        logoUrl={teamLogoUrl.get(oppId)}
+                        size={28}
+                        imageFit="cover"
+                        className="shrink-0 rounded-lg"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium leading-snug [overflow-wrap:anywhere] group-hover:underline">
+                          <span className="font-normal text-muted">vs </span>
+                          {oppName}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-muted">
+                          {matchRoundLabel(m, playoffRounds)}
+                          {" · "}
+                          {m.scheduledAt ? (
+                            <LocalTime
+                              ts={m.scheduledAt.getTime()}
+                              variant="short"
+                              initial={formatMatchTime(m.scheduledAt, "short")}
+                            />
+                          ) : done ? (
+                            "Time not recorded"
+                          ) : (
+                            "Time TBD"
+                          )}
+                          {done && m.forfeit ? " · Forfeit" : ""}
+                        </span>
+                      </span>
+                      {done || live ? (
+                        <span className="shrink-0 font-display text-lg font-semibold tabular-nums">
+                          {myScore}–{oppScore}
+                        </span>
+                      ) : null}
+                      {done ? (
+                        <Badge
+                          tone={
+                            result === "W"
+                              ? "success"
+                              : result === "L"
+                                ? "danger"
+                                : "neutral"
+                          }
+                          className="w-7 shrink-0 justify-center px-0"
+                        >
+                          <span aria-hidden>{result}</span>
+                          <span className="sr-only">
+                            {result === "W"
+                              ? "Won"
+                              : result === "L"
+                                ? "Lost"
+                                : "Draw"}
+                          </span>
+                        </Badge>
+                      ) : (
+                        <Badge
+                          tone={live ? "danger" : "neutral"}
+                          className="shrink-0"
+                        >
+                          {live
+                            ? "Live"
+                            : matchState === "Awaiting result"
+                              ? "Awaiting result"
+                              : "Upcoming"}
+                        </Badge>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </CardBody>
+        </Card>
+      )}
+
       {teamHeroes.length > 0 ? (
         <Card id="team-heroes" className="scroll-mt-40">
           <CardHeader
@@ -763,12 +972,11 @@ export default async function TeamPage({
           <CardHeader
             title="Head-to-head"
             headingLevel={2}
-            subtitle="Completed series by opponent"
+            subtitle="Opponents met more than once"
           />
           <CardBody className="p-0">
             <ul className="divide-y divide-line/60">
               {h2h.map((r) => {
-                const record = `${r.wins}–${r.losses}${r.draws > 0 ? `–${r.draws}` : ""}`;
                 const edge =
                   r.wins > r.losses
                     ? "success"
@@ -799,7 +1007,9 @@ export default async function TeamPage({
                       <span className="text-xs text-muted">
                         {r.gamesFor}–{r.gamesAgainst} games
                       </span>
-                      <Badge tone={edge}>{record}</Badge>
+                      <Badge tone={edge}>
+                        <SeriesRecord record={r} />
+                      </Badge>
                     </span>
                   </li>
                 );
@@ -809,7 +1019,7 @@ export default async function TeamPage({
         </Card>
       ) : null}
 
-      {myScenario && stakesReport && played ? (
+      {showOutlookCard && myScenario ? (
         <section
           id="team-outlook"
           aria-label="Playoff outlook"
@@ -838,6 +1048,40 @@ export default async function TeamPage({
         </section>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The team's place beside its name ("#2 of 8", "Seed #2"). In the active
+ * season it opens that table on Schedule; an archived team's page links its
+ * season archive separately.
+ */
+function StandingBadge({
+  href,
+  where,
+  children,
+}: {
+  href?: string;
+  /** Spoken after the badge text when it is a link: "in the standings". */
+  where: string;
+  children: React.ReactNode;
+}) {
+  if (!href) return <Badge tone="accent">{children}</Badge>;
+  return (
+    <Link
+      href={href}
+      className="group rounded-full py-1 -my-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+    >
+      <Badge
+        tone="accent"
+        className="transition-colors group-hover:border-accent/70 group-hover:bg-accent/25"
+      >
+        {/* Its own element, so the badge's text can be found on its own. */}
+        <span>{children}</span>
+        <span className="sr-only"> {where}</span>
+        <span aria-hidden>→</span>
+      </Badge>
+    </Link>
   );
 }
 

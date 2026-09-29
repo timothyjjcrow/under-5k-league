@@ -14,9 +14,9 @@ import {
   claimOpenPredictionMatch,
   claimSideGameDraft,
   claimSideGameSeason,
-  isSideGameTransactionConflict,
   retrySideGameTransaction,
 } from "@/lib/side-game-claims";
+import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 
 /**
  * Save (or change) the signed-in user's predicted winner for a match. Picks
@@ -136,10 +136,7 @@ export async function savePrediction(
           "The league state changed while you saved — reload before picking",
       };
     }
-    if (
-      (e as { code?: string }).code === "P2002" ||
-      isSideGameTransactionConflict(e)
-    ) {
+    if (isUniqueViolation(e) || isSerializationConflict(e)) {
       return {
         error:
           "The match or your pick changed at the same time — reload to confirm the current state",
@@ -148,6 +145,10 @@ export async function savePrediction(
     throw e;
   }
 
+  // Every surface that renders the pick control (PickemPickForm): /pickem,
+  // the dashboard's This-week cards and the match preview.
   revalidatePath("/pickem");
+  revalidatePath("/");
+  revalidatePath(`/matches/${matchId}`);
   return { message: `Locked in: ${name} to win` };
 }

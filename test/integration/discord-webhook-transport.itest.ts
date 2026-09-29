@@ -8,10 +8,22 @@ import {
   it,
   vi,
 } from "vitest";
+// The real `after` (it throws outside a request scope, which is every test
+// here), wrapped so one test can capture the task a request would run after
+// its response.
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: vi.fn(actual.after) };
+});
+import { after } from "next/server";
 import {
+  deleteNewsFromDiscord,
   deleteWebhookMessage,
   deliverPendingLeagueAnnouncements,
+  draftLiveAnnouncementGroup,
+  editNewsOnDiscord,
   patchWebhookMessage,
+  postNewsToDiscord,
   postWebhookMessage,
   sendDiscordMessage,
 } from "@/lib/discord";
@@ -22,8 +34,12 @@ import { makeUser, sessionFor } from "./factories";
 import { prisma } from "@/lib/prisma";
 import {
   enqueueLeagueAnnouncement,
+  expireLeagueAnnouncementGroup,
   LEAGUE_ANNOUNCEMENT_STATUS,
+  loadLeagueDeliveryHealth,
+  resumeLeagueAnnouncements,
 } from "@/lib/league-announcement-outbox";
+import { deliveryPaused } from "@/lib/league-delivery";
 
 // The queue board's transport, exercised over REAL HTTP against a stand-in for
 // Discord. Module mocks can prove the service's decisions but not the wire
@@ -135,7 +151,8 @@ describe("sendDiscordMessage", () => {
       content: "Durable result",
       status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
       attempts: 1,
-      lastErrorCode: "TRANSPORT_REJECTED",
+      // The status code, never the response body or the webhook URL.
+      lastErrorCode: "DISCORD_503",
     });
     // The bearer credential and arbitrary transport response are never stored.
     expect(JSON.stringify(pending)).not.toContain("tok-secret");
@@ -147,6 +164,132 @@ describe("sendDiscordMessage", () => {
         limit: 1,
       }),
     ).resolves.toEqual({ attempted: 1, delivered: 1, pending: false });
+  });
+
+  it("pauses on a deleted webhook and resumes on the next one, in order", async () => {
+    // Discord answers 404 (Unknown Webhook) once the webhook is deleted.
+    respond = () => ({ status: 404, body: { code: 10015 } });
+    expect(await sendDiscordMessage("Reschedule proposed")).toBe(true);
+    expect(await sendDiscordMessage("Reschedule accepted")).toBe(true);
+    // One request: the second post waits behind the paused first.
+    expect(recorded).toHaveLength(1);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { status: true, lastErrorCode: true },
+      }),
+    ).toEqual([
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, lastErrorCode: "DISCORD_404" },
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, lastErrorCode: null },
+    ]);
+
+    respond = () => ({ status: 204 });
+    await setSetting(
+      SETTING_KEYS.DISCORD_WEBHOOK_URL,
+      `${base}/api/webhooks/2222/new-secret`,
+    );
+    expect(await resumeLeagueAnnouncements()).toBe(2);
+    await deliverPendingLeagueAnnouncements({ limit: 2 });
+    expect(recorded.slice(1).map((r) => [r.url, r.body?.content])).toEqual([
+      ["/api/v10/webhooks/2222/new-secret", "Reschedule proposed"],
+      ["/api/v10/webhooks/2222/new-secret", "Reschedule accepted"],
+    ]);
+  });
+
+  it("skips a post Discord refuses (400) instead of blocking the queue", async () => {
+    respond = (r) =>
+      r.body?.content === "Malformed" ? { status: 400 } : { status: 204 };
+    expect(await sendDiscordMessage("Malformed")).toBe(true);
+    expect(await sendDiscordMessage("Next result")).toBe(true);
+    expect(recorded.map((r) => r.body?.content)).toEqual([
+      "Malformed",
+      "Next result",
+    ]);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { status: true, lastErrorCode: true },
+      }),
+    ).toEqual([
+      {
+        status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+        lastErrorCode: "DISCORD_400",
+      },
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.SENT, lastErrorCode: null },
+    ]);
+  });
+
+  // A webhook in a forum channel gets a 400 (code 220001, "thread_name or
+  // thread_id required") on EVERY plain post. Read as a bad post, the queue
+  // drained and cancelled every announcement one by one, with nothing left to
+  // resend once the webhook was fixed. It is the webhook, so the queue pauses.
+  it("pauses, not drops, when a forum-channel webhook refuses every post", async () => {
+    respond = () => ({
+      status: 400,
+      body: {
+        message:
+          "Webhooks posted to forum channels must have a thread_name or thread_id",
+        code: 220001,
+      },
+    });
+    expect(await sendDiscordMessage("Series result")).toBe(true);
+    expect(await sendDiscordMessage("Champion crowned")).toBe(true);
+    // One request: the second post waits behind the paused first.
+    expect(recorded).toHaveLength(1);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { status: true, lastErrorCode: true },
+      }),
+    ).toEqual([
+      {
+        status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+        lastErrorCode: "DISCORD_400_220001",
+      },
+      { status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, lastErrorCode: null },
+    ]);
+    const health = await loadLeagueDeliveryHealth(
+      new Date(Date.now() + 60_000),
+    );
+    expect(deliveryPaused(health)).toBe(true);
+    expect(health.refusedRecently).toBe(0);
+
+    // A working webhook saved: both go out, in order.
+    respond = () => ({ status: 204 });
+    await setSetting(
+      SETTING_KEYS.DISCORD_WEBHOOK_URL,
+      `${base}/api/webhooks/3333/text-channel`,
+    );
+    expect(await resumeLeagueAnnouncements()).toBe(2);
+    await deliverPendingLeagueAnnouncements({ limit: 2 });
+    expect(recorded.slice(1).map((r) => r.body?.content)).toEqual([
+      "Series result",
+      "Champion crowned",
+    ]);
+  });
+
+  it("drops a live-draft post still waiting when the draft ends", async () => {
+    respond = () => ({ status: 503 });
+    const group = draftLiveAnnouncementGroup("season-1");
+    expect(
+      await sendDiscordMessage("The draft is LIVE", undefined, {
+        expiryGroup: group,
+      }),
+    ).toBe(true);
+    const queued = await prisma.leagueAnnouncement.findFirstOrThrow();
+    expect(queued.dedupeKey?.startsWith(group)).toBe(true);
+
+    expect(await expireLeagueAnnouncementGroup(group)).toBe(1);
+    respond = () => ({ status: 204 });
+    await deliverPendingLeagueAnnouncements({
+      now: new Date(queued.availableAt.getTime() + 60_000),
+      limit: 1,
+    });
+    expect(recorded).toHaveLength(1);
+    expect(await prisma.leagueAnnouncement.findFirstOrThrow()).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "EXPIRED",
+    });
   });
 
   it("supports a true direct transport check without creating outbox work", async () => {
@@ -232,6 +375,93 @@ describe("sendDiscordMessage", () => {
       else process.env.DISCORD_WEBHOOK_URL = previous;
     }
     expect(recorded).toHaveLength(0);
+  });
+
+  it("afterResponse queues the post and leaves Discord for after the response", async () => {
+    // Inside a request, after() takes the delivery attempt: the request that
+    // queued the posts returns before Discord is contacted at all.
+    const scheduled: (() => Promise<unknown>)[] = [];
+    vi.mocked(after)
+      .mockImplementationOnce((task) => {
+        scheduled.push(task as () => Promise<unknown>);
+      })
+      .mockImplementationOnce((task) => {
+        scheduled.push(task as () => Promise<unknown>);
+      });
+    respond = () => ({ status: 204, delayMs: 50 });
+
+    expect(
+      await sendDiscordMessage("Teams post", undefined, { afterResponse: true }),
+    ).toBe(true);
+    expect(
+      await sendDiscordMessage("Recap post", undefined, { afterResponse: true }),
+    ).toBe(true);
+    expect(recorded).toHaveLength(0);
+    expect(
+      await prisma.leagueAnnouncement.findMany({
+        orderBy: { createdAt: "asc" },
+        select: { content: true, status: true, attempts: true },
+      }),
+    ).toEqual([
+      { content: "Teams post", status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, attempts: 0 },
+      { content: "Recap post", status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING, attempts: 0 },
+    ]);
+
+    // after() runs its tasks concurrently. The queue still delivers both, in
+    // order, without leaving the second post for the minute worker.
+    expect(scheduled).toHaveLength(2);
+    await Promise.all(scheduled.map((task) => task()));
+    expect(recorded.map((r) => r.body?.content)).toEqual([
+      "Teams post",
+      "Recap post",
+    ]);
+    expect(
+      await prisma.leagueAnnouncement.count({
+        where: { status: LEAGUE_ANNOUNCEMENT_STATUS.SENT },
+      }),
+    ).toBe(2);
+  });
+
+  it("afterResponse outside a request delivers inline, like a plain send", async () => {
+    expect(
+      await sendDiscordMessage("Worker post", undefined, { afterResponse: true }),
+    ).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(await prisma.leagueAnnouncement.findFirst()).toMatchObject({
+      content: "Worker post",
+      status: LEAGUE_ANNOUNCEMENT_STATUS.SENT,
+    });
+  });
+
+  it("afterResponse keeps the post queued when the late attempt fails", async () => {
+    let scheduled: (() => Promise<unknown>) | null = null;
+    vi.mocked(after).mockImplementationOnce((task) => {
+      scheduled = task as () => Promise<unknown>;
+    });
+    respond = () => ({ status: 503 });
+
+    expect(
+      await sendDiscordMessage("Durable draft post", undefined, {
+        afterResponse: true,
+      }),
+    ).toBe(true);
+    await scheduled!();
+    const pending = await prisma.leagueAnnouncement.findFirstOrThrow();
+    expect(pending).toMatchObject({
+      content: "Durable draft post",
+      status: LEAGUE_ANNOUNCEMENT_STATUS.PENDING,
+      attempts: 1,
+      lastErrorCode: "DISCORD_503",
+    });
+
+    // The worker's drain picks it up once Discord is back.
+    respond = () => ({ status: 204 });
+    await expect(
+      deliverPendingLeagueAnnouncements({
+        now: new Date(pending.availableAt.getTime() + 1),
+        limit: 1,
+      }),
+    ).resolves.toEqual({ attempted: 1, delivered: 1, pending: false });
   });
 
   it("rejects invalid payloads and persistence failures before webhook I/O", async () => {
@@ -430,5 +660,69 @@ describe("deleteWebhookMessage", () => {
   it("reports a real failure", async () => {
     respond = () => ({ status: 500 });
     expect(await deleteWebhookMessage(hookUrl(), "42")).toBe(false);
+  });
+});
+
+// League news keeps its Discord message id so edits and deletes reach the
+// copy, and pings @everyone only when the admin ticked the box.
+describe("news posts on the league webhook", () => {
+  it("posts with ?wait=true on v10, keeps the id, and pings nobody by default", async () => {
+    const res = await postNewsToDiscord("📣 **Week 3** @everyone @here", false);
+    expect(res).toEqual({ ok: true, id: "1379001234567890123" });
+    expect(recorded[0].method).toBe("POST");
+    expect(recorded[0].url).toBe("/api/v10/webhooks/1111/tok-secret?wait=true");
+    expect(recorded[0].body).toEqual({
+      content: "📣 **Week 3** @everyone @here",
+      allowed_mentions: { parse: [] },
+    });
+  });
+
+  it("opens with @everyone and allows only that ping when the admin asked", async () => {
+    await postNewsToDiscord("📣 **Week 3**", true);
+    expect(recorded[0].body).toEqual({
+      content: "@everyone\n📣 **Week 3**",
+      allowed_mentions: { parse: ["everyone"] },
+    });
+  });
+
+  it("reports a missing webhook apart from a failed post", async () => {
+    respond = () => ({ status: 500 });
+    expect(await postNewsToDiscord("x", false)).toEqual({
+      ok: false,
+      reason: "failed",
+    });
+    await setSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL, "");
+    const envWebhook = process.env.DISCORD_WEBHOOK_URL;
+    delete process.env.DISCORD_WEBHOOK_URL;
+    try {
+      expect(await postNewsToDiscord("x", false)).toEqual({
+        ok: false,
+        reason: "no-webhook",
+      });
+      expect(await editNewsOnDiscord("42", "x")).toBe("no-webhook");
+      expect(await deleteNewsFromDiscord("42")).toBe("failed");
+    } finally {
+      if (envWebhook !== undefined) process.env.DISCORD_WEBHOOK_URL = envWebhook;
+    }
+    expect(recorded).toHaveLength(1);
+  });
+
+  it("edits in place without re-pinging, and deletes the copy", async () => {
+    expect(await editNewsOnDiscord("42", "@everyone fixed")).toBe("ok");
+    expect(recorded[0].method).toBe("PATCH");
+    expect(recorded[0].url).toBe("/api/v10/webhooks/1111/tok-secret/messages/42");
+    expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
+
+    respond = () => ({ status: 204 });
+    expect(await deleteNewsFromDiscord("42")).toBe("deleted");
+    expect(recorded[1].method).toBe("DELETE");
+    expect(recorded[1].url).toBe("/api/v10/webhooks/1111/tok-secret/messages/42");
+  });
+
+  it("reports a 404 as gone, not deleted: another webhook may have sent it", async () => {
+    respond = () => ({ status: 404, body: { code: 10008 } });
+    expect(await deleteNewsFromDiscord("42")).toBe("gone");
+    respond = () => ({ status: 500 });
+    expect(await deleteNewsFromDiscord("42")).toBe("failed");
   });
 });

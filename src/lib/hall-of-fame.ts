@@ -1,36 +1,18 @@
-// Hall-of-fame math — pure and unit-tested. Careers span seasons: titles,
-// series wins, and (via the fantasy/pick'em libs) career points and oracle
-// records are all computed from the archive, not just the active season.
+// Hall-of-fame math — pure and unit-tested. Careers span seasons: game
+// counts, and (via appearance-careers and the fantasy/pick'em libs) titles,
+// career points and oracle records are all computed from the archive, not
+// just the active season.
 
-export type CareerMembership = { userId: string; teamId: string };
+import { competitionRanks } from "./leader-ranking";
 
-/**
- * Count, per player, how many entries of `teamIds` belong to one of their
- * teams. With championship team ids this yields career titles; with the
- * winners of completed series it yields career series wins. Team ids are
- * globally unique (cuid), so cross-season membership just works.
- */
-export function careerCounts(
-  memberships: CareerMembership[],
-  teamIds: (string | null | undefined)[],
-): Map<string, number> {
-  const membersOfTeam = new Map<string, string[]>();
-  for (const m of memberships) {
-    const arr = membersOfTeam.get(m.teamId) ?? [];
-    arr.push(m.userId);
-    membersOfTeam.set(m.teamId, arr);
-  }
-  const counts = new Map<string, number>();
-  for (const teamId of teamIds) {
-    if (!teamId) continue;
-    for (const userId of membersOfTeam.get(teamId) ?? []) {
-      counts.set(userId, (counts.get(userId) ?? 0) + 1);
-    }
-  }
-  return counts;
-}
-
-export type HofRow = { userId: string; value: number };
+export type HofRow = {
+  userId: string;
+  value: number;
+  /** What places compare when it isn't the shown value: pick'em shows
+   *  correct picks but places whole records (see pickemStandings). Higher is
+   *  better, and equal rankValues share a place. */
+  rankValue?: number;
+};
 
 export type CareerGameCount = { games: number; wins: number };
 
@@ -54,15 +36,59 @@ export function careerGameCounts(
   return counts;
 }
 
-/** Top-N of a per-user count map (value desc, id tiebreak for stability). */
-export function topCounts(
+/** Every user with at least `min`, best first. The user id only makes the
+ *  order of equal values stable; it never decides a place (see topPlaces). */
+export function rankCounts(
   counts: Map<string, number>,
-  limit = 5,
   min = 1,
 ): HofRow[] {
   return [...counts.entries()]
     .filter(([, v]) => v >= min)
     .map(([userId, value]) => ({ userId, value }))
-    .sort((a, b) => b.value - a.value || a.userId.localeCompare(b.userId))
-    .slice(0, limit);
+    .sort((a, b) => b.value - a.value || a.userId.localeCompare(b.userId));
+}
+
+type PlacedRow = HofRow & { place: number };
+export type HofBoardRows = {
+  rows: PlacedRow[];
+  /** Players tied with the last shown row who did not fit under maxRows. */
+  moreTied: number;
+};
+
+/**
+ * The top of a board with shared places: equal values share a place
+ * (1, 1, 3), and everyone tied with a top-`limit` place is shown, so a tie
+ * at the cutoff never drops a player for their user id. `maxRows` caps a
+ * board where half the league is tied; the rest are counted in `moreTied`.
+ * `placeKey` rounds to the precision the board displays, so two values that
+ * read the same share a place. `sorted` must be best first.
+ */
+export function topPlaces(
+  sorted: HofRow[],
+  {
+    limit = 5,
+    maxRows = 10,
+    placeKey = (value: number) => value,
+  }: {
+    limit?: number;
+    maxRows?: number;
+    placeKey?: (value: number) => number;
+  } = {},
+): HofBoardRows {
+  const places = competitionRanks(
+    sorted.map((row) => row.rankValue ?? placeKey(row.value)),
+  );
+  let end = Math.min(limit, sorted.length);
+  while (end < sorted.length && places[end] <= limit) end++;
+  const shown = Math.min(end, Math.max(limit, maxRows));
+  return {
+    rows: sorted
+      .slice(0, shown)
+      .map((row, index) => ({
+        userId: row.userId,
+        value: row.value,
+        place: places[index],
+      })),
+    moreTied: end - shown,
+  };
 }

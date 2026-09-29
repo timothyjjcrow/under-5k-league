@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // withdrawTeam is the tool for the most common amateur-league disaster — a
@@ -11,7 +12,7 @@ vi.mock("next/cache", () => ({
   updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
-  requireAdmin: vi.fn(),
+  requireAdmin: vi.fn(async () => ({ id: "test-admin", name: "Test administrator", role: "ADMIN", steamId: "76561198000000000", avatar: null })),
   requireUser: vi.fn(),
   getSessionUser: vi.fn(async () => null),
 }));
@@ -21,12 +22,17 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { reinstateTeam, withdrawTeam } from "@/app/actions/admin";
+import { reinstateTeam, withdrawTeam } from "@/app/actions/admin-roster";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { createPlayoffBracket } from "@/lib/playoff-service";
 import { prisma } from "@/lib/prisma";
 import { sendDiscordMessage } from "@/lib/discord";
-import { resultAnnouncedKey } from "@/lib/settings";
+import { resultAnnouncedKey, resultNudgeKey } from "@/lib/settings";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+} from "@/lib/league-announcement-outbox";
 import {
   MATCH_PHASE,
   MATCH_STATUS,
@@ -130,6 +136,39 @@ async function installWithdrawStatusTrigger(input: {
 
 describe("withdrawTeam", () => {
   afterEach(() => setRaceHook(null));
+
+  it("drops a queued result nudge on a fixture it forfeits", async () => {
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const doomed = matches.find(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    )!;
+    // Queued by the worker, not yet delivered: marker finalized, row pending.
+    const key = resultNudgeKey(doomed.id, 0);
+    const eventId = randomUUID();
+    await prisma.setting.create({
+      data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+    });
+    const queued = await enqueueLeagueAnnouncement({
+      content: "We couldn't find the games — captains: report them",
+      dedupeKey: `nudge-source-${doomed.id}`,
+      marker: { key, eventId },
+    });
+
+    await withdrawTeam(null, teamFd(quitter));
+
+    const send = vi.fn(async () => true);
+    await deliverLeagueAnnouncements({ send, limit: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      await prisma.leagueAnnouncement.findUniqueOrThrow({
+        where: { id: queued.id },
+      }),
+    ).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "STALE_SOURCE",
+    });
+  });
 
   it("forfeits every unplayed fixture to the opponent and flags the team", async () => {
     const { teams, matches } = await midSeason();

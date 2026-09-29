@@ -1,13 +1,36 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  haystackOf,
+  homePageSource,
+  sourceFiles,
+} from "../../test/support/source-files";
 
 const ROOT = join(__dirname, "..", "..");
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
+/**
+ * Every /admin page and the admin components they mount, joined, so the admin
+ * page can be split into files. The per-match result row lives in
+ * src/components/admin-match-tools.tsx, shared with the match page's Admin
+ * tools.
+ */
+const adminPages = () =>
+  haystackOf(
+    sourceFiles(
+      [
+        "src/app/admin/**/*.tsx",
+        "src/components/admin-*.tsx",
+        "src/components/admin/**/*.tsx",
+      ],
+      4,
+    ),
+  );
+
 describe("postseason UI lifecycle guards", () => {
   it("does not expose generic phase changes that bypass bracket commands", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
     const policy = read("src/lib/season-phase-policy.ts");
 
     expect(admin).toContain("seasonPhasePolicy({");
@@ -28,13 +51,17 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("mirrors schedule, correction, kickoff, and playoff-start capabilities in the admin UI", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
 
     expect(admin).toContain("const scheduleEditingOpen = postAuctionWorkOpen(");
     expect(admin).toContain("const scheduleGenerationLockedReason =");
     expect(admin).toContain("scheduleEditingOpen && openWeeks.length > 0");
-    expect(admin).toContain(
-      "correctionBlockedByLaterRound={hasLaterBracketRound(",
+    // Every result row (on /admin and on the match page) takes its
+    // later-round lock from the one shared rule, which reads the bracket.
+    expect(admin).toContain("{...matchCorrectionContext(m, data.matches)}");
+    expect(admin).toContain("matchCorrectionContext(match, fixtures)");
+    expect(read("src/lib/league-lifecycle.ts")).toMatch(
+      /export function matchCorrectionContext[\s\S]*?hasLaterBracketRound\([\s\S]*?hasLaterTiebreakerStage\(/,
     );
     expect(admin).toContain("resultOpen && !correctionBlockedByLaterRound");
     expect(admin).toContain("const logisticsOpen = matchLogisticsOpen(");
@@ -45,7 +72,7 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("keeps team withdrawal and reinstatement visibly regular-season-only", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
 
     expect(admin).toMatch(
       /const teamWithdrawalLocked\s*=\s*teamWithdrawalLockedReason\(season\.status\)/,
@@ -57,7 +84,7 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("reserves champion retraction for the final's stored participant, including mismatch recovery", () => {
-    const admin = read("src/app/admin/page.tsx");
+    const admin = adminPages();
     const start = admin.indexOf("const championIsFinalParticipant =");
     const end = admin.indexOf("const crownedGrandFinal =", start);
     const classification = admin.slice(start, end);
@@ -72,7 +99,7 @@ describe("postseason UI lifecycle guards", () => {
   });
 
   it("distinguishes missing-bracket recovery from final reconciliation", () => {
-    const dashboard = read("src/app/page.tsx");
+    const dashboard = homePageSource();
     const schedule = read("src/app/schedule/page.tsx");
 
     expect(dashboard).toContain(
@@ -93,10 +120,14 @@ describe("postseason UI lifecycle guards", () => {
 describe("postseason status semantics", () => {
   it("shows withdrawn status on both team summaries and power rankings", () => {
     const teams = read("src/app/teams/page.tsx");
+    const power = read("src/components/power-rankings-card.tsx");
 
-    expect(teams).toContain("withdrawnTeamIds.has(row.teamId)");
     expect(teams).toContain("t.withdrawn ? (");
-    expect(teams.match(/Withdrawn/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(teams).toContain("withdrawn: t.withdrawn");
+    expect(teams).toContain("<PowerRankingsCard");
+    expect(power).toContain("team?.withdrawn ? (");
+    expect(teams.match(/Withdrawn/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
+    expect(power.match(/Withdrawn/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
   });
 
   it("gives the standings a row header, spoken seeds, and a semantic cut", () => {

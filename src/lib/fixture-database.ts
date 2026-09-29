@@ -7,6 +7,18 @@ export const FIXTURE_DATABASE_PATHS = {
   postseason: fileURLToPath(
     new URL("../../prisma/postseason-e2e-fixture.db", import.meta.url),
   ),
+  // The `npm run fixture:<state>` demo servers (scripts/fixture-server.ts):
+  // one file per league state, so they can run side by side and never touch
+  // a browser suite's database.
+  demoRegular: fileURLToPath(
+    new URL("../../prisma/regular-fixture.db", import.meta.url),
+  ),
+  demoPlayoffs: fileURLToPath(
+    new URL("../../prisma/playoffs-fixture.db", import.meta.url),
+  ),
+  demoComplete: fileURLToPath(
+    new URL("../../prisma/complete-fixture.db", import.meta.url),
+  ),
 } as const;
 
 export type FixtureDatabase = keyof typeof FIXTURE_DATABASE_PATHS;
@@ -23,8 +35,8 @@ function sqlitePath(databaseUrl: string): string | null {
 
 /**
  * Fixture writers are destructive by design. Accept only the exact SQLite
- * files owned by the browser suites, never a database whose name merely
- * happens to contain "fixture".
+ * files owned by the browser suites and the demo servers, never a database
+ * whose name merely happens to contain "fixture".
  */
 export function isExpectedFixtureDatabase(
   databaseUrl: string,

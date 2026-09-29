@@ -7,6 +7,8 @@ import {
   returnToRegularSeason,
 } from "@/lib/playoff-service";
 import { pickBracketSize } from "@/lib/schedule";
+import { announcePlayoffRoundOnce } from "@/lib/playoff-round-announcement";
+import { runResultSync } from "@/lib/result-sync-service";
 import { playoffSetupRevision } from "@/lib/playoff-command";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { DOTA_MATCH_KIND, SCRIM_STATUS } from "@/lib/constants";
@@ -1083,5 +1085,171 @@ describe("playoffs — the crowning claim guards the SEASON ROW, not just the pi
     });
     expect(after.status).toBe("PLAYOFFS");
     expect(after.championTeamId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The rounds between the opening bracket and the champion post their own
+// "is set" line, after the build commits, mentioning the new fixtures'
+// captains. Exactly once per built round; never for a round a reset removed.
+// ---------------------------------------------------------------------------
+describe("playoffs — the next round is announced once, after it commits", () => {
+  afterEach(() => {
+    setRaceHook(null);
+    mockSend.mockReset();
+    mockSend.mockResolvedValue(true);
+  });
+
+  const roundPosts = () =>
+    mockSend.mock.calls.filter((call) => String(call[0]).includes("is set!"));
+
+  async function linkCaptains(seasonId: string) {
+    const teams = await prisma.team.findMany({ where: { seasonId } });
+    for (const [i, team] of teams.entries()) {
+      await prisma.user.update({
+        where: { id: team.captainId },
+        data: { discordId: `90000000000000000${i}` },
+      });
+    }
+    return new Map(teams.map((t, i) => [t.id, `90000000000000000${i}`]));
+  }
+
+  async function playSemis(seasonId: string) {
+    const semis = (await playoffMatches(seasonId)).filter((m) =>
+      m.bracketSlot?.startsWith("R0"),
+    );
+    for (const m of semis) await recordMatch(m.id, 2, 0);
+  }
+
+  it("posts the grand final once, mentioning only the finalists' captains", async () => {
+    const season = await makeSeason({
+      teamSize: 3,
+      minTeams: 4,
+      name: "Season 7",
+    });
+    await makeSeededTeams(season.id, 4);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: {
+        status: "REGULAR_SEASON",
+        firstMatchNight: new Date(Date.now() + 86_400_000),
+      },
+    });
+    const discordIdOf = await linkCaptains(season.id);
+    await createPlayoffBracket(season.id);
+    await playSemis(season.id);
+    mockSend.mockClear();
+
+    await raceN(4, () => advancePlayoffBracket(season.id));
+
+    const posts = roundPosts();
+    expect(posts).toHaveLength(1);
+    const [content, mentions, options] = posts[0]!;
+    const final = (await playoffMatches(season.id)).find(
+      (m) => m.phase === "FINAL",
+    )!;
+    const kickoff = Math.floor(final.scheduledAt!.getTime() / 1000);
+    expect(content).toContain("**Season 7 grand final is set!**");
+    expect(content).toContain(`<t:${kickoff}:F> (<t:${kickoff}:R>)`);
+    // The season's own page, so the link still shows this bracket after the
+    // next season starts.
+    expect(content).toMatch(
+      new RegExp(`Bracket: <[^>]+/seasons/${season.id}#playoffs>$`),
+    );
+    expect(new Set(mentions?.users)).toEqual(
+      new Set([
+        discordIdOf.get(final.homeTeamId),
+        discordIdOf.get(final.awayTeamId),
+      ]),
+    );
+    expect(options?.dedupeKey).toMatch(/^round:/);
+    expect(options?.marker?.key).toBe(`playoffRoundAnnounced:${season.id}:1`);
+    expect(options?.expiresAt?.getTime()).toBe(final.scheduledAt!.getTime());
+    expect(
+      (
+        await prisma.setting.findUniqueOrThrow({
+          where: { key: `playoffRoundAnnounced:${season.id}:1` },
+        })
+      ).value,
+    ).toMatch(/^sent:v2:/);
+  });
+
+  it("a reset drops the round's marker, and the rebuilt round posts afresh", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    await playSemis(season.id);
+    await advancePlayoffBracket(season.id);
+    expect(roundPosts()).toHaveLength(1);
+
+    await createPlayoffBracket(season.id); // reset
+    expect(
+      await prisma.setting.count({
+        where: { key: { startsWith: `playoffRoundAnnounced:${season.id}:` } },
+      }),
+    ).toBe(0);
+
+    await playSemis(season.id);
+    await advancePlayoffBracket(season.id);
+    expect(roundPosts()).toHaveLength(2);
+  });
+
+  it("the stale advance a reset overtook posts nothing", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    await playSemis(season.id);
+    let fired = false;
+    setRaceHook(
+      onceAt("playoffs.advance.beforeBuild", async () => {
+        fired = true;
+        await createPlayoffBracket(season.id);
+      }),
+    );
+    mockSend.mockClear();
+
+    expect(await advancePlayoffBracket(season.id)).toBe(false);
+
+    expect(fired).toBe(true);
+    expect(roundPosts()).toHaveLength(0);
+  });
+
+  it("says nothing for a round that does not exist, and keeps no marker", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+
+    expect(await announcePlayoffRoundOnce(season.id, 3)).toBe(false);
+
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(
+      await prisma.setting.count({
+        where: { key: { startsWith: `playoffRoundAnnounced:${season.id}:` } },
+      }),
+    ).toBe(0);
+  });
+
+  it("the worker retries a round post that could not be queued", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 4 });
+    await makeSeededTeams(season.id, 4);
+    await createPlayoffBracket(season.id);
+    await playSemis(season.id);
+    mockSend.mockImplementation(
+      async (content: string) => !content.includes("is set!"),
+    );
+
+    expect(await advancePlayoffBracket(season.id)).toBe(true);
+    const key = `playoffRoundAnnounced:${season.id}:1`;
+    expect(
+      (await prisma.setting.findUniqueOrThrow({ where: { key } })).value,
+    ).toMatch(/^failed:v2:/);
+
+    mockSend.mockResolvedValue(true);
+    await runResultSync();
+
+    expect(roundPosts()).toHaveLength(2); // the failed attempt + the retry
+    expect(
+      (await prisma.setting.findUniqueOrThrow({ where: { key } })).value,
+    ).toMatch(/^sent:v2:/);
   });
 });

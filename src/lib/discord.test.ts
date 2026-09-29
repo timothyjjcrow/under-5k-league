@@ -6,8 +6,9 @@ import {
   rescheduleMessage,
   adminRetimeMessage,
   signupMessage,
-  draftStartedMessage,
-  draftCompleteMessage,
+  signupsOpenMessage,
+  draftStartedAnnouncement,
+  draftCompleteAnnouncement,
   regularSeasonStartedMessage,
   freeAgentSignedMessage,
   inhouseLobbyMessage,
@@ -16,9 +17,10 @@ import {
   inhouseResultVoidedMessage,
   matchResultMessage,
   playerReleasedMessage,
-  playerSoldMessage,
   playoffsStartedMessage,
+  playoffRoundSetMessage,
   playoffsReturnedToRegularMessage,
+  resultNudgeMessage,
   championMessage,
   maskWebhookUrl,
   rolePrefix,
@@ -29,13 +31,20 @@ import {
   draftAbortedMessage,
   draftRescheduledMessage,
   draftScheduledMessage,
+  draftReminderAnnouncement,
   captainAssignedMessage,
+  captainChangedMessage,
+  captainRemovedMessage,
+  checkinNudgeAnnouncement,
+  playerAwayMessage,
+  playerBackInMessage,
   playerOutMessage,
   rescheduleDeclinedMessage,
   rescheduleProposedMessage,
   standinAssignedMessage,
   standinRemovedMessage,
   teamWithdrewMessage,
+  teamIdentityChangedMessage,
   weekReminderAnnouncement,
   weekReminderMessage,
   weeklyHonorsMessage,
@@ -43,7 +52,6 @@ import {
   deleteWebhookMessage,
   patchWebhookMessage,
   postWebhookMessage,
-  type InhouseBetSlip,
 } from "./discord";
 
 afterEach(() => {
@@ -104,37 +112,98 @@ describe("Discord mention materialization", () => {
 });
 
 describe("discord message formatters", () => {
+  // 4 teams of 5: the draft minimum is 20 players.
+  const FOUR_OF_FIVE = { teamSize: 5, minTeams: 4 };
+
   it("counts down remaining signups", () => {
-    const msg = signupMessage("Zai", 17, 20);
+    const msg = signupMessage("Zai", 17, FOUR_OF_FIVE);
     expect(msg).toContain("**Zai**");
     expect(msg).toContain("17 players");
-    expect(msg).toContain("3 more to start");
+    expect(msg).toContain("3 more to start the draft.");
   });
 
-  it("celebrates when signups hit the threshold", () => {
-    expect(signupMessage("Zai", 20, 20)).toContain("enough to start");
-    expect(signupMessage("Zai", 25, 20)).toContain("enough to start");
+  it("celebrates only the signup that reaches the minimum", () => {
+    const msg = signupMessage("Zai", 20, FOUR_OF_FIVE);
+    expect(msg).toContain("that's enough to start the draft! 🎉");
+    expect(msg).toContain("5 more players makes it 5 full teams.");
+  });
+
+  it("past the minimum, counts toward the next full team like the site", () => {
+    // Signups are uncapped, so "enough to start the draft" would repeat for
+    // the rest of signup week; the site says how many make another team.
+    const msg = signupMessage("Moonwalker", 34, { teamSize: 5, minTeams: 6 });
+    expect(msg).toContain("34 players in, 1 more player makes it 7 full teams.");
+    expect(msg).not.toContain("enough to start");
+    expect(signupMessage("Zai", 25, FOUR_OF_FIVE)).toContain(
+      "25 players in, 5 more players makes it 6 full teams.",
+    );
+  });
+
+  it("ends every signup post with the signup link", () => {
+    for (const count of [1, 17, 20, 34]) {
+      expect(signupMessage("Zai", count, FOUR_OF_FIVE)).toMatch(
+        /Join them: <https?:\/\/[^>]+\/me>$/,
+      );
+    }
   });
 
   it("uses singular for the first signup", () => {
-    expect(signupMessage("Zai", 1, 20)).toContain("1 player in");
+    expect(signupMessage("Zai", 1, FOUR_OF_FIVE)).toContain("1 player in");
   });
 
-  it("links the draft room when the draft starts", () => {
-    const msg = draftStartedMessage("Season 1");
-    expect(msg).toContain("Season 1");
-    expect(msg).toContain("/draft");
+  it("announces a season opening with its match night and the signup link", () => {
+    const msg = signupsOpenMessage("Season 9", "Sundays at 6:00 PM PT");
+    expect(msg).toContain("**Season 9 signups are open!**");
+    expect(msg).toContain("Match night: Sundays at 6:00 PM PT.");
+    expect(msg).toMatch(/Sign up: <[^>]+\/me>$/);
   });
 
-  it("links the teams page when the draft completes", () => {
-    expect(draftCompleteMessage("Season 1")).toContain("/teams");
+  it("leaves the match night out until one is announced", () => {
+    const msg = signupsOpenMessage("Season 9", null);
+    expect(msg).not.toContain("Match night");
+    expect(msg).toContain("signups are open!** Sign up: <");
   });
 
-  it("announces the start of the Regular season with its schedule", () => {
+
+  it("announces the start of the regular season with its schedule", () => {
     const msg = regularSeasonStartedMessage("Season *One*");
     expect(msg).toContain("Season \\*One\\*");
-    expect(msg).toMatch(/Regular season is live/i);
+    // Lower case mid-sentence: "The Season 9 regular season is live."
+    expect(msg).toContain("regular season is live.");
     expect(msg).toContain("/schedule");
+  });
+
+  it("lists the opening week's fixtures, kickoffs and byes in the season-start post", () => {
+    const whenMs = Date.UTC(2026, 9, 7, 18, 0);
+    const msg = regularSeasonStartedMessage("S1", {
+      week: 1,
+      fixtures: [
+        { home: "[free](https://evil.test)", away: "Beta", whenMs },
+        { home: "Gamma", away: "Delta", whenMs: null },
+      ],
+      byes: ["Eps_ilon"],
+    });
+    expect(msg).toContain("Week 1:");
+    expect(msg).toContain(`Beta — <t:${whenMs / 1000}:F>`);
+    // An untimed fixture is listed without a made-up time.
+    expect(msg).toContain("• Gamma vs Delta\n");
+    expect(msg).toContain("Bye: Eps\\_ilon");
+    // Team names are escaped like every other announcement.
+    expect(msg).not.toContain("](");
+    expect(msg).toContain("/schedule>");
+  });
+
+  it("caps a long opening week and says how many more are on the schedule", () => {
+    const fixtures = Array.from({ length: 15 }, (_, i) => ({
+      home: `H${i}`,
+      away: `A${i}`,
+      whenMs: null,
+    }));
+    const msg = regularSeasonStartedMessage("S1", { week: 1, fixtures, byes: [] });
+    expect(msg).toContain("• H11 vs A11");
+    expect(msg).not.toContain("• H12 vs A12");
+    expect(msg).toContain("• and 3 more on the schedule");
+    expect(msg).not.toContain("Bye:");
   });
 
   it("announces a decided series with the winner and links its match page", () => {
@@ -153,6 +222,42 @@ describe("discord message formatters", () => {
     // Ends with the match page, angle-bracketed so Discord doesn't unfurl it.
     expect(msg).toMatch(/Box score: <https?:\/\/[^>]+\/matches\/m42>$/);
     expect(msg).not.toMatch(/eliminated|advance/);
+  });
+
+  it("adds at most one broken-record line, with the holder's name escaped", () => {
+    const base = {
+      matchId: "m9",
+      homeName: "A",
+      awayName: "B",
+      homeScore: 2,
+      awayScore: 0,
+      label: "Week 4",
+      hasGames: true,
+    };
+    const msg = matchResultMessage({
+      ...base,
+      record: {
+        emoji: "🔪",
+        holderName: "[free mmr](https://evil.test)",
+        mark: "17 kills",
+        heroName: "Razor",
+        previousMark: "14 kills",
+      },
+    });
+    const lines = msg.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/Box score: <[^>]+\/matches\/m9>$/);
+    expect(lines[1]).toMatch(/^🔪 New league record: \*\*.+\*\*, 17 kills on Razor \(old mark 14 kills\)$/);
+    expect(lines[1]).not.toContain("](");
+    expect(
+      matchResultMessage({
+        ...base,
+        record: { emoji: "💰", holderName: "Carry", mark: "32.1k net worth", heroName: null, previousMark: "30.0k net worth" },
+      }),
+    ).toContain("**Carry**, 32.1k net worth (old mark 30.0k net worth)");
+    // No record, no second line: the post is byte-for-byte what it was.
+    expect(matchResultMessage({ ...base, record: null })).toBe(matchResultMessage(base));
+    expect(matchResultMessage(base)).not.toContain("\n");
   });
 
   it("promises a box score only when a game was imported", () => {
@@ -284,18 +389,27 @@ describe("discord message formatters", () => {
   });
 
   it("lists every playoff pairing", () => {
-    const msg = playoffsStartedMessage("Season 1", [
+    const msg = playoffsStartedMessage("Season 1", "s1", [
       { home: "A", away: "D" },
       { home: "B", away: "C" },
     ]);
     expect(msg).toContain("A vs D");
     expect(msg).toContain("B vs C");
-    expect(msg).toContain("/schedule");
+    // The season's own page, not /schedule: after the next season starts,
+    // /schedule shows that season, and the post would open an empty page.
+    expect(msg).toMatch(/\nBracket: <[^>]+\/seasons\/s1#playoffs>$/);
+    expect(msg).not.toContain("/schedule");
+  });
+
+  it("encodes the season id in the bracket link", () => {
+    expect(
+      playoffsStartedMessage("Season 1", "season/one", [{ home: "A", away: "B" }]),
+    ).toContain("/seasons/season%2Fone#playoffs>");
   });
 
   it("gives each playoff pairing its seeds and a reader-local kickoff", () => {
     const whenMs = Date.parse("2026-10-03T01:00:00Z");
-    const msg = playoffsStartedMessage("Season 1", [
+    const msg = playoffsStartedMessage("Season 1", "s1", [
       { home: "A", away: "D", homeSeed: 1, awaySeed: 4, whenMs },
       { home: "B", away: "C", homeSeed: 2, awaySeed: 3, whenMs: null },
     ]);
@@ -312,11 +426,97 @@ describe("discord message formatters", () => {
     expect(msg).toContain("/schedule");
   });
 
+  it("announces the next playoff round with reader-local kickoffs", () => {
+    const msg = playoffRoundSetMessage({
+      seasonName: "Season 7",
+      seasonId: "s1",
+      roundName: "Grand final",
+      fixtures: [{ home: "Alpha", away: "Delta", whenMs: 1_800_000_000_000 }],
+    });
+    expect(msg).toContain("**Season 7 grand final is set!**");
+    expect(msg).toContain(
+      "• **Alpha** vs **Delta** — <t:1800000000:F> (<t:1800000000:R>)",
+    );
+    expect(msg).toMatch(/\nBracket: <[^>]+\/seasons\/s1#playoffs>$/);
+  });
+
+  it("agrees the verb with a plural round and says when a kickoff is unset", () => {
+    const msg = playoffRoundSetMessage({
+      seasonName: "Season 7",
+      seasonId: "s1",
+      roundName: "Semifinals",
+      fixtures: [
+        { home: "A", away: "D", whenMs: null },
+        { home: "B", away: "C", whenMs: 1_800_000_000_000 },
+      ],
+    });
+    expect(msg).toContain("**Season 7 semifinals are set!**");
+    expect(msg).toContain("• **A** vs **D** — kickoff time still to be set");
+    expect(msg.split("\n")).toHaveLength(4);
+  });
+
+  it("asks the captains to report a fixture whose games were never found", () => {
+    const msg = resultNudgeMessage({
+      matchId: "m1",
+      homeName: "Alpha",
+      awayName: "Delta",
+      label: "Week 3",
+      homeScore: 0,
+      awayScore: 0,
+      gamesFound: 0,
+    });
+    expect(msg).toContain(
+      "We couldn't find the games for **Alpha** vs **Delta** (Week 3).",
+    );
+    // Lands on the Report your result card, not the top of the page.
+    expect(msg).toMatch(
+      /Captains: report them on the match page: <[^>]+\/matches\/m1#match-report>$/,
+    );
+  });
+
+  it("names the score a part-played series is stuck at", () => {
+    const msg = resultNudgeMessage({
+      matchId: "m2",
+      homeName: "Alpha",
+      awayName: "Delta",
+      label: "Semifinal",
+      homeScore: 1,
+      awayScore: 0,
+      gamesFound: 1,
+    });
+    expect(msg).toContain("**Alpha** vs **Delta** (Semifinal) is stuck at 1–0");
+    expect(msg).toContain("report the missing games");
+    expect(msg).toMatch(/<[^>]+\/matches\/m2#match-report>$/);
+  });
+
   it("crowns the champion", () => {
     const msg = championMessage("Season 1", "Zai's Team", "season/one");
     expect(msg).toContain("**Zai's Team**");
     expect(msg).toContain("champions");
-    expect(msg).toContain("/recap?season=season%2Fone");
+    // Straight to the season page (old /recap?season= posts redirect there).
+    expect(msg).toContain("/seasons/season%2Fone>");
+    expect(msg).not.toContain("/recap");
+  });
+
+  it("congratulates the champion roster, mentioning only linked players", () => {
+    const msg = championMessage("Season 1", "Zai's Team", "s1", [
+      { name: "Captain", discordId: "123456789012345678" },
+      { name: "Unlinked *Star*", discordId: null },
+      { name: "Bad id", discordId: "not-a-snowflake" },
+      { name: "Support", discordId: "223456789012345678" },
+    ]);
+    expect(msg).toContain(
+      "champions! Congratulations <@123456789012345678>, Unlinked \\*Star\\*, Bad id and <@223456789012345678>! GG everyone",
+    );
+    expect(msg).toMatch(/season recap at <[^>]+\/seasons\/s1>$/);
+  });
+
+  it("names nobody when no roster is given", () => {
+    const msg = championMessage("Season 1", "T", "s1");
+    expect(msg).not.toContain("Congratulations");
+    expect(msg).toContain("champions! GG everyone");
+    expect(championMessage("Season 1", "T", "s1", [{ name: "Solo", discordId: null }]))
+      .toContain("Congratulations Solo! GG");
   });
 
   it("escapes a season name in the champion announcement", () => {
@@ -330,30 +530,22 @@ describe("discord message formatters", () => {
     expect(msg).not.toContain("(https://evil.test)");
   });
 
-  it("announces a sale with the price", () => {
-    const msg = playerSoldMessage("Fly", "Fear's Team", 23);
-    expect(msg).toContain("**Fly**");
-    expect(msg).toContain("**Fear's Team**");
-    expect(msg).toContain("$23");
-  });
-
   it("announces a free-agent signing", () => {
     const msg = freeAgentSignedMessage("Late Joiner", "Short Squad");
     expect(msg).toContain("**Late Joiner**");
     expect(msg).toContain("**Short Squad**");
     expect(msg).toContain("/teams");
+    // Says whose match nights they are; "their schedule" read as the player's.
+    expect(msg).toContain(
+      "Late Joiner: the **Short Squad** match nights are yours now",
+    );
+    expect(msg).not.toContain("their schedule");
   });
 
   it("announces a release", () => {
     const msg = playerReleasedMessage("Ghoster", "Short Squad");
     expect(msg).toContain("**Ghoster**");
     expect(msg).toContain("released from **Short Squad**");
-  });
-
-  it("flavors min-bid steals and big spends", () => {
-    expect(playerSoldMessage("A", "T", 1)).toContain("steal");
-    expect(playerSoldMessage("A", "T", 75)).toContain("big spender");
-    expect(playerSoldMessage("A", "T", 20)).not.toMatch(/steal|big spender/);
   });
 });
 
@@ -396,12 +588,475 @@ describe("draft scheduling", () => {
     expect(fallback).toContain("/me");
   });
 
-  it("signupMessage appends draft night only when one is set", () => {
-    expect(signupMessage("Dendi", 3, 20, 1_800_000_000_000)).toContain(
-      "Draft night: <t:1800000000:F>",
+  it("tells the channel a replaced captain no longer captains the team", () => {
+    const msg = captainAssignedMessage("New", "Team [A]", "123456789012345678", {
+      name: "Old *One*",
+      discordId: null,
+    });
+    expect(msg).toContain(
+      "<@123456789012345678>, **you now captain Team \\[A\\].** **Old \\*One\\*** is no longer captain and stays on the roster as a player.",
     );
-    expect(signupMessage("Dendi", 3, 20)).not.toContain("Draft night");
-    expect(signupMessage("Dendi", 3, 20, null)).not.toContain("Draft night");
+    expect(
+      captainAssignedMessage("New", "T", null, {
+        name: "Old",
+        discordId: "223456789012345678",
+      }),
+    ).toContain("<@223456789012345678> is no longer captain");
+    // No previous captain: the designation post is unchanged.
+    expect(captainAssignedMessage("New", "T", "1")).not.toContain("no longer");
+  });
+
+  it("tells both sides of a pre-draft captain change, with pool wording", () => {
+    const linked = captainChangedMessage(
+      { name: "New", discordId: "123456789012345678" },
+      { name: "Old", discordId: "223456789012345678" },
+      "New's [Team]",
+      "Old's [Team]",
+    );
+    expect(linked).toContain(
+      "🧭 <@123456789012345678>, **you now captain New's \\[Team\\]** (was Old's \\[Team\\]). <@223456789012345678> is no longer captain and goes back into the player pool.",
+    );
+    // Not transferCaptaincy's "stays on the roster", nor removeCaptain's
+    // "the team was removed": the team stays and the old captain leaves it.
+    expect(linked).not.toContain("stays on the roster");
+    expect(linked).not.toContain("was removed");
+    const plain = captainChangedMessage(
+      { name: "N*ew", discordId: null },
+      { name: "O_ld", discordId: null },
+      "T",
+    );
+    expect(plain).toContain(
+      "🧭 **N\\*ew**, **you now captain T**. **O\\_ld** is no longer captain",
+    );
+    expect(plain).not.toContain("(was ");
+  });
+
+  it("tells a removed captain they no longer captain the team", () => {
+    const linked = captainRemovedMessage(
+      { name: "Zai", discordId: "123456789012345678" },
+      "Zai's [Team]",
+    );
+    expect(linked).toContain(
+      "🧭 <@123456789012345678> is no longer captain of **Zai's \\[Team\\]**",
+    );
+    // The link after "player pool" is the pool, not the reader's own /me.
+    expect(linked).toMatch(/player pool: <[^>]+\/players>$/);
+    expect(
+      captainRemovedMessage({ name: "Un*linked", discordId: null }, "T"),
+    ).toContain("🧭 **Un\\*linked** is no longer captain of **T**");
+  });
+
+  it("signupMessage appends draft night only when one is set", () => {
+    const season = { teamSize: 5, minTeams: 4 };
+    expect(signupMessage("Dendi", 3, season, 1_800_000_000_000)).toContain(
+      "Draft night: <t:1800000000:F>. Join them:",
+    );
+    expect(signupMessage("Dendi", 3, season)).not.toContain("Draft night");
+    expect(signupMessage("Dendi", 3, season, null)).not.toContain("Draft night");
+  });
+});
+
+describe("draftReminderAnnouncement", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const base = {
+    seasonName: "Season 3",
+    draftAtMs: 1_800_000_000_000,
+    playerSignupsOpen: true,
+    playerCount: 14,
+    captains: [
+      { name: "Dendi", discordId: "111111111111111111" },
+      { name: "Puppey", discordId: null },
+    ],
+    unconfirmed: [
+      { name: "Miracle-", discordId: "222222222222222222" },
+      { name: "N0tail", discordId: null },
+    ],
+  };
+  const visibleMentions = (content: string) =>
+    [...content.matchAll(/<@(\d{17,20})>/g)].map((m) => m[1]);
+
+  it("renders the whole reminder reader-local, with counts and both links", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftReminderAnnouncement(base);
+    expect(announcement.content).toBe(
+      [
+        "⏰ **Draft night reminder: the Season 3 draft is scheduled for <t:1800000000:F> (<t:1800000000:R>).**",
+        "**14** players signed up, **2** captains designated. Player signups stay open until an admin closes them for the draft.",
+        "Captains, be in the draft room before the auction starts: <@111111111111111111>, Puppey",
+        "Still to confirm this draft time (2): <@222222222222222222>, N0tail. Confirm on the signup page.",
+        "Draft room: <https://league.example/draft> · Signup page: <https://league.example/me>",
+      ].join("\n"),
+    );
+    // Only the linked captain and the linked straggler; exactly the visible tokens.
+    expect(announcement.mentionUserIds).toEqual([
+      "111111111111111111",
+      "222222222222222222",
+    ]);
+    expect(announcement.content).not.toContain("1800000000000");
+  });
+
+  it("says truthfully whether player signups are still open", () => {
+    const open = draftReminderAnnouncement(base).content;
+    expect(open).toContain("Player signups stay open until an admin closes them for the draft.");
+    const closed = draftReminderAnnouncement({
+      ...base,
+      playerSignupsOpen: false,
+    }).content;
+    expect(closed).toContain(
+      "Player signups are closed; standins can still sign up.",
+    );
+    expect(closed).not.toContain("stay open");
+  });
+
+  it("uses singular counts and drops lines that have nobody in them", () => {
+    const msg = draftReminderAnnouncement({
+      ...base,
+      playerCount: 1,
+      captains: [{ name: "Solo", discordId: null }],
+      unconfirmed: [],
+    }).content;
+    expect(msg).toContain("**1** player signed up, **1** captain designated.");
+    expect(msg).not.toContain("Still to confirm");
+
+    const bare = draftReminderAnnouncement({
+      ...base,
+      playerCount: 0,
+      captains: [],
+      unconfirmed: [],
+    });
+    expect(bare.content).toContain("**0** players signed up, **0** captains designated.");
+    expect(bare.content).not.toContain("Captains, be in");
+    expect(bare.content.split("\n")).toHaveLength(3); // header, counts, links
+    expect(bare.mentionUserIds).toEqual([]);
+  });
+
+  it("never mentions an id that isn't a real snowflake", () => {
+    const announcement = draftReminderAnnouncement({
+      ...base,
+      captains: [{ name: "Typo", discordId: "123" }],
+      unconfirmed: [{ name: "Blank", discordId: "   " }],
+    });
+    expect(announcement.content).not.toContain("<@123>");
+    expect(announcement.content).toContain("Typo");
+    expect(announcement.content).toContain("Blank");
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("caps the unconfirmed list and pings only the names it shows", () => {
+    const unconfirmed = Array.from({ length: 25 }, (_, i) => ({
+      name: `Player ${i + 1}`,
+      discordId: (BigInt("700000000000000000") + BigInt(i)).toString(),
+    }));
+    const announcement = draftReminderAnnouncement({ ...base, unconfirmed });
+    expect(announcement.content).toContain("Still to confirm this draft time (25):");
+    expect(announcement.content).toContain("+5 more. Confirm on the signup page.");
+    expect(announcement.content).toContain(`<@${unconfirmed[19].discordId}>`);
+    expect(announcement.content).not.toContain(`<@${unconfirmed[20].discordId}>`);
+    expect(announcement.mentionUserIds).not.toContain(unconfirmed[20].discordId);
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(announcement.content)),
+    );
+  });
+
+  it("packs captains first under Discord's 2,000-character limit", () => {
+    const captains = Array.from({ length: 60 }, (_, i) => ({
+      name: `A Very Long Captain Persona Number ${i + 1}`,
+      discordId: i % 2 ? null : (BigInt("600000000000000000") + BigInt(i)).toString(),
+    }));
+    const unconfirmed = Array.from({ length: 10 }, (_, i) => ({
+      name: `Straggler ${i + 1}`,
+      discordId: (BigInt("500000000000000000") + BigInt(i)).toString(),
+    }));
+    // Where the captains stop depends on exact lengths, so lengthen the
+    // season name a character at a time until the captains leave room for
+    // some stragglers; a copy change in the header would otherwise need this
+    // fixture retuned by hand.
+    let announcement = draftReminderAnnouncement(base);
+    for (let pad = 0; pad < 60; pad += 1) {
+      announcement = draftReminderAnnouncement({
+        ...base,
+        seasonName: `${base.seasonName}${"x".repeat(pad)}`,
+        playerCount: 200,
+        captains,
+        unconfirmed,
+      });
+      if (announcement.content.includes("Still to confirm this draft time (10): ")) break;
+    }
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+    // Every allowlisted id is already visible, so transport materialization
+    // can't prepend anyone who was packed out of the body.
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    expect(delivered).toMatch(/Captains, be in the draft room before the auction starts: .* \+\d+ more/);
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(delivered)),
+    );
+    // Captains ate most of the budget; the stragglers get what is left.
+    expect(delivered).toMatch(
+      /Still to confirm this draft time \(10\): .* \+\d+ more\. Confirm on the signup page\./,
+    );
+    expect(announcement.mentionUserIds).not.toContain(unconfirmed[9].discordId);
+    expect(delivered).toContain("/draft>");
+  });
+
+  it("collapses stragglers to a count when no name fits", () => {
+    const straggler = { name: "Late", discordId: "500000000000000001" };
+    // The longest captain persona that still leaves the post deliverable
+    // leaves no room for even one straggler's mention.
+    let announcement = draftReminderAnnouncement(base);
+    for (let len = 1_900; len > 0; len -= 1) {
+      announcement = draftReminderAnnouncement({
+        ...base,
+        captains: [{ name: "C".repeat(len), discordId: null }],
+        unconfirmed: [straggler],
+      });
+      if (announcement.content.includes("C".repeat(len))) break;
+    }
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.content).toContain(
+      "1 player is still to confirm this draft time. Confirm on the signup page.",
+    );
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("falls back to a deliverable post that names nobody", () => {
+    const announcement = draftReminderAnnouncement({
+      ...base,
+      seasonName: "S".repeat(2_100),
+    });
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.content).toContain("<t:1800000000:F>");
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("uses no em-dashes in any variant", () => {
+    const variants = [
+      draftReminderAnnouncement(base),
+      draftReminderAnnouncement({ ...base, playerSignupsOpen: false }),
+      draftReminderAnnouncement({ ...base, captains: [], unconfirmed: [] }),
+      draftReminderAnnouncement({ ...base, seasonName: "S".repeat(2_100) }),
+      draftReminderAnnouncement({
+        ...base,
+        unconfirmed: Array.from({ length: 30 }, (_, i) => ({
+          name: `P${i}`,
+          discordId: null,
+        })),
+      }),
+    ];
+    for (const { content } of variants) {
+      expect(content).not.toContain("—");
+    }
+  });
+});
+
+describe("draftStartedAnnouncement", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const captains = [
+    { name: "Dendi", discordId: "111111111111111111" },
+    { name: "Puppey", discordId: null },
+    { name: "Typo", discordId: "123" },
+  ];
+  const visibleMentions = (content: string) =>
+    [...content.matchAll(/<@(\d{17,20})>/g)].map((m) => m[1]);
+
+  it("links the room and mentions only the linked captains", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains,
+    });
+    expect(announcement.content).toBe(
+      [
+        "🔨 **The Season 1 draft is LIVE!** Watch the auction: <https://league.example/draft>",
+        "Captains <@111111111111111111>, Puppey, Typo: you're on the clock. If your nomination timer runs out, the site nominates for you.",
+      ].join("\n"),
+    );
+    // A captain without a real snowflake is named, never pinged.
+    expect(announcement.mentionUserIds).toEqual(["111111111111111111"]);
+    expect(announcement.content).not.toContain("—");
+  });
+
+  it("still says what to do when no captain is known", () => {
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: [],
+    });
+    expect(announcement.content).toContain("/draft>");
+    expect(announcement.content).toMatch(
+      /\nCaptains, you're on the clock\. .* the site nominates for you\.$/,
+    );
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("packs captains under Discord's limit and pings only the ones shown", () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({
+      name: `A Very Long Captain Persona Number ${i + 1}`,
+      discordId: i % 3 ? null : (BigInt("600000000000000000") + BigInt(i)).toString(),
+    }));
+    const announcement = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: many,
+    });
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    expect(delivered).toMatch(
+      / \+\d+ more: you're on the clock\. If your nomination timer runs out, the site nominates for you\.$/,
+    );
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(delivered)),
+    );
+    expect(announcement.mentionUserIds).not.toContain(many[117].discordId);
+  });
+
+  it("falls back to a deliverable post that names nobody", () => {
+    const announcement = draftStartedAnnouncement({
+      seasonName: "S".repeat(2_100),
+      captains,
+    });
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("escapes a captain name", () => {
+    const content = draftStartedAnnouncement({
+      seasonName: "Season 1",
+      captains: [{ name: "[free mmr](https://evil.test)\nfake line", discordId: null }],
+    }).content;
+    expect(content).not.toContain("](");
+    expect(content.split("\n")).toHaveLength(2);
+  });
+});
+
+describe("draftCompleteAnnouncement", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const teams = [
+    {
+      name: "Radiant Rejects",
+      captainName: "Dendi",
+      players: [
+        { name: "Miracle", discordId: "222222222222222222", price: 9 },
+        { name: "N0tail", discordId: null, price: 1 },
+      ],
+      openSeats: 0,
+    },
+    {
+      name: "Dire Straits",
+      captainName: "Puppey",
+      players: [{ name: "Typo", discordId: "123", price: 3 }],
+      openSeats: 1,
+    },
+  ];
+  const visibleMentions = (content: string) =>
+    [...content.matchAll(/<@(\d{17,20})>/g)].map((m) => m[1]);
+
+  it("lists every team and mentions each linked drafted player once", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams,
+    });
+    expect(announcement.content).toBe(
+      [
+        "✅ **The Season 3 draft is complete! Here are the teams:**",
+        "**Radiant Rejects** (captain Dendi): <@222222222222222222> $9, N0tail $1",
+        "**Dire Straits** (captain Puppey, 1 open seat): Typo $3",
+        "Open seats get filled with free agents, and standins cover until then. Every roster: <https://league.example/teams>",
+      ].join("\n"),
+    );
+    // Captains are named, never pinged; a fake snowflake is named, never pinged.
+    expect(announcement.mentionUserIds).toEqual(["222222222222222222"]);
+    // No automatic "a steal!" tag on $1 lots, and no em dashes.
+    expect(announcement.content).not.toMatch(/steal/i);
+    expect(announcement.content).not.toContain("—");
+  });
+
+  it("drops the open-seats note when every roster is full, and says so for an empty team", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const content = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams: [
+        { name: "Solo", captainName: "Lone", players: [], openSeats: 0 },
+      ],
+    }).content;
+    expect(content).toContain("**Solo** (captain Lone): no players bought");
+    expect(content.split("\n").at(-1)).toBe(
+      "Every roster: <https://league.example/teams>",
+    );
+  });
+
+  it("packs whole teams under Discord's limit and pings only the players shown", () => {
+    let id = BigInt("700000000000000000");
+    const many = Array.from({ length: 16 }, (_, t) => ({
+      name: `A Rather Long Team Name Number ${t + 1}`,
+      captainName: `Captain Persona ${t + 1}`,
+      players: Array.from({ length: 6 }, (_, p) => {
+        id += BigInt(1);
+        return {
+          name: `Player ${t + 1}-${p + 1} with a long persona`,
+          discordId: p % 2 ? null : id.toString(),
+          price: p + 1,
+        };
+      }),
+      openSeats: 0,
+    }));
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams: many,
+    });
+    const delivered = materializeAllowedMentions(announcement.content, {
+      users: announcement.mentionUserIds,
+    });
+    // Every allowlisted id is already in the text, so nothing is prepended.
+    expect(delivered).toBe(announcement.content);
+    expect(delivered.length).toBeLessThanOrEqual(2_000);
+    expect(delivered).toMatch(/…and \d+ more teams on the teams page\./);
+    expect(delivered).toContain("/teams>");
+    expect(new Set(announcement.mentionUserIds)).toEqual(
+      new Set(visibleMentions(delivered)),
+    );
+    const lastPlayer = many.at(-1)!.players[0].discordId!;
+    expect(announcement.mentionUserIds).not.toContain(lastPlayer);
+  });
+
+  it("falls back to a deliverable post that names nobody", () => {
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "S".repeat(2_100),
+      teams,
+    });
+    expect(announcement.content.length).toBeLessThanOrEqual(2_000);
+    expect(announcement.mentionUserIds).toEqual([]);
+  });
+
+  it("completing again after an undo names everyone and pings nobody", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const announcement = draftCompleteAnnouncement({
+      seasonName: "Season 3",
+      teams,
+      again: true,
+    });
+    expect(announcement.content).toBe(
+      [
+        "✅ **The Season 3 draft is complete again. Here are the updated teams:**",
+        "**Radiant Rejects** (captain Dendi): Miracle $9, N0tail $1",
+        "**Dire Straits** (captain Puppey, 1 open seat): Typo $3",
+        "Open seats get filled with free agents, and standins cover until then. Every roster: <https://league.example/teams>",
+      ].join("\n"),
+    );
+    expect(announcement.mentionUserIds).toEqual([]);
   });
 });
 
@@ -430,8 +1085,28 @@ describe("inhouse messages", () => {
     expect(msg).toContain("/inhouse");
   });
 
+  it("gives the accept deadline as live Discord timestamps", () => {
+    // Players come to this ping from a pub game or another tab: the message
+    // itself has to say how long they have, in their own time zone, with a
+    // countdown that moves without the message being edited.
+    const endsAt = new Date(Date.UTC(2026, 8, 28, 19, 1, 30, 400));
+    const epoch = Math.floor(endsAt.getTime() / 1000);
+    const msg = inhouseLobbyMessage(
+      [{ name: "A", discordId: null }],
+      null,
+      endsAt,
+    );
+    expect(msg).toContain(`<t:${epoch}:T>`);
+    expect(msg).toContain(`<t:${epoch}:R>`);
+    expect(msg).toContain("or you lose your spot");
+    // Without a deadline (older callers) it still asks them to accept.
+    const plain = inhouseLobbyMessage([{ name: "A", discordId: null }]);
+    expect(plain).toContain("Accept your game before the clock runs out");
+    expect(plain).not.toContain("<t:");
+  });
+
   it("mentions linked players by id so the ping reaches a phone", () => {
-    // A formed lobby is on a 45-second clock and the site's chime can't reach
+    // A formed lobby is on a short accept clock and the site's chime can't reach
     // a backgrounded phone. Linked players get a real mention; the rest are
     // named as plain text rather than being left out.
     const msg = inhouseLobbyMessage([
@@ -493,210 +1168,12 @@ describe("inhouse messages", () => {
   });
 });
 
-describe("inhouseResultMessage — the slips block", () => {
-  const RESULT = {
-    winnerSide: "Radiant" as const,
-    radiantScore: 41,
-    direScore: 28,
-    durationSecs: 38 * 60 + 12,
-    mvpName: "Kessler",
-    mvpHero: "Puck",
-    dotaMatchId: "8412345678",
-  };
-
-  const won = (
-    name: string,
-    stake: number,
-    matched: number,
-  ): InhouseBetSlip => ({
-    name,
-    stake,
-    matched,
-    outcome: "WON",
-    delta: matched,
-  });
-  const lost = (
-    name: string,
-    stake: number,
-    matched: number,
-  ): InhouseBetSlip => ({
-    name,
-    stake,
-    matched,
-    outcome: "LOST",
-    delta: -matched,
-  });
-  const voided = (
-    name: string,
-    stake: number,
-    outcome: "VOID_LINEUP" | "VOID_LATE",
-  ): InhouseBetSlip => ({ name, stake, matched: 0, outcome, delta: 0 });
-
-  /** Everything below the headline — the block, on its own. */
-  const block = (slips: InhouseBetSlip[] | null, over = {}) =>
-    inhouseResultMessage({ ...RESULT, ...over, slips })
-      .split("\n")
-      .slice(1);
-
-  it("sends byte-identical output to a league that doesn't bet", () => {
-    // The whole point of the omission: `slips` is passed unconditionally by the
-    // service, so the three ways of having no bets (never settled, nobody bet,
-    // settlement threw and was swallowed) must all read exactly as this message
-    // read before the economy existed.
-    const before = inhouseResultMessage(RESULT);
-    expect(inhouseResultMessage({ ...RESULT, slips: null })).toBe(before);
-    expect(inhouseResultMessage({ ...RESULT, slips: [] })).toBe(before);
-    expect(before).not.toContain("\n");
-  });
-
-  it("reports a fully-covered pot with both sides' slips", () => {
-    // Worked example 1: 200 a side, every stake matched at ratio 1.0.
-    expect(
-      block([
-        won("Kessler", 100, 100),
-        won("Roo", 50, 50),
-        won("Vex", 40, 40),
-        won("Bo", 10, 10),
-        lost("Dooley", 100, 100),
-        lost("Mig", 60, 60),
-        lost("Nine", 40, 40),
-      ]),
-    ).toEqual([
-      "**Pot 400 Cred** · CONTESTED · fully covered",
-      "Radiant: Kessler 100 → +100 · Roo 50 → +50 · Vex 40 → +40 · Bo 10 → +10",
-      "Dire: Dooley 100 → -100 · Mig 60 → -60 · Nine 40 → -40",
-    ]);
-  });
-
-  it("says how much came home when one side out-stakes the other", () => {
-    // Worked example 2: the long side is matched by largest remainder, so a
-    // 100 stake is live for 43. The player has to be able to read that off the
-    // line without doing the division — hence stake → net, side by side.
-    expect(
-      block(
-        [
-          won("Dooley", 100, 43),
-          won("Mig", 100, 43),
-          won("Nine", 60, 26),
-          won("Pia", 20, 8),
-          lost("Ash", 100, 100),
-          lost("Bo", 20, 20),
-        ],
-        { winnerSide: "Dire" as const },
-      ),
-    ).toEqual([
-      "**Pot 400 Cred** · CONTESTED · 240 covered · 160 came home",
-      "Dire: Dooley 100 → +43 · Mig 100 → +43 · Nine 60 → +26 · Pia 20 → +8",
-      "Radiant: Ash 100 → -100 · Bo 20 → -20",
-    ]);
-  });
-
-  it("phrases an uncovered pot as a verdict, not a failure", () => {
-    // Even money means the side that thinks it's behind stakes nothing, so
-    // M = 0 is the ten agreeing the game wasn't close. Nobody lost anything.
-    expect(block([won("Ash", 100, 0), won("Bo", 50, 0)])).toEqual([
-      "**Pot 150 Cred** · nobody took the other side — every stake came home",
-      "Radiant: Ash 100 → 0 · Bo 50 → 0",
-    ]);
-  });
-
-  it("never prints a side nobody backed", () => {
-    expect(block([won("Ash", 100, 0)]).join("\n")).not.toContain("Dire:");
-  });
-
-  it("names the refunded and keeps their stake out of the pot", () => {
-    // A voided stake is handed back in full and never entered a pool — count it
-    // in the pot and the message advertises money that was never at risk.
-    expect(
-      block([
-        won("Kessler", 100, 100),
-        lost("Dooley", 100, 100),
-        voided("Ash", 100, "VOID_LINEUP"),
-        voided("Bo", 20, "VOID_LATE"),
-      ]),
-    ).toEqual([
-      "**Pot 200 Cred** · CONTESTED · fully covered",
-      "Radiant: Kessler 100 → +100",
-      "Dire: Dooley 100 → -100",
-      "-# Refunded: Ash 100 (lineup changed) · Bo 20 (placed after the game started)",
-    ]);
-  });
-
-  it("still reports a settlement in which every bet voided", () => {
-    // No pot line — there was no pot — but the two people who staked and got it
-    // back find that out here rather than from a balance that moved twice.
-    expect(block([voided("Ash", 100, "VOID_LATE")])).toEqual([
-      "-# Refunded: Ash 100 (placed after the game started)",
-    ]);
-  });
-
-  it("labels the loud pots and stays quiet on the ordinary ones", () => {
-    const potOf = (slips: InhouseBetSlip[]) => block(slips)[0];
-    expect(potOf([won("A", 50, 50), lost("B", 50, 50)])).toBe(
-      "**Pot 100 Cred** · fully covered", // casual: no label at all
-    );
-    expect(potOf([won("A", 100, 100), lost("B", 100, 100)])).toContain(
-      "CONTESTED",
-    );
-    expect(
-      potOf([
-        won("A", 100, 100),
-        won("B", 100, 100),
-        won("C", 100, 100),
-        lost("D", 100, 100),
-        lost("E", 100, 100),
-        lost("F", 100, 100),
-      ]),
-    ).toContain("HIGH STAKES");
-    expect(
-      potOf([
-        won("A", 100, 100),
-        won("B", 100, 100),
-        won("C", 100, 100),
-        won("D", 100, 100),
-        won("E", 100, 100),
-        lost("F", 100, 100),
-        lost("G", 100, 100),
-        lost("H", 100, 100),
-        lost("I", 100, 100),
-        lost("J", 100, 100),
-      ]),
-    ).toContain("MARQUEE");
-  });
-
-  it("orders each side by stake, deterministically", () => {
-    // Two equal stakes must not settle into whatever order Prisma returned the
-    // rows in — the same lobby has to read the same way every time.
-    const rows: InhouseBetSlip[] = [
-      won("Zed", 40, 40),
-      won("Ana", 100, 100),
-      won("Bob", 40, 40),
-    ];
-    expect(block(rows)[1]).toBe(
-      "Radiant: Ana 100 → +100 · Bob 40 → +40 · Zed 40 → +40",
-    );
-    expect(block([...rows].reverse())[1]).toBe(block(rows)[1]);
-  });
-
-  it("carries no emoji — the block is data, and every glyph is text", () => {
-    const msg = block([
-      won("A", 100, 100),
-      lost("B", 100, 100),
-      voided("C", 10, "VOID_LATE"),
-    ]);
-    expect(msg.join("\n")).not.toMatch(/\p{Extended_Pictographic}/u);
-  });
-});
-
 describe("inhouseResultVoidedMessage", () => {
-  it("names the pot and links the match the void is about to erase", () => {
-    const msg = inhouseResultVoidedMessage({
-      betCount: 4,
-      staked: 260,
-      dotaMatchId: "8412345678",
-    });
-    expect(msg).toContain("4 slips");
-    expect(msg).toContain("260 Cred");
+  it("says the result no longer stands and links the match the void erases", () => {
+    const msg = inhouseResultVoidedMessage({ dotaMatchId: "8412345678" });
+    expect(msg).toContain("result has been voided");
+    expect(msg).toContain("off the ladder");
+    expect(msg).not.toMatch(/cred|slip|stake|wager/i);
     // The correction has to be tie-able to the post it corrects, and the void
     // NULLS dotaMatchId — after this message nothing in the database can say
     // which game it was.
@@ -706,13 +1183,8 @@ describe("inhouseResultVoidedMessage", () => {
     expect(msg).not.toMatch(/[^<]https:\/\//);
   });
 
-  it("says 'slip' for one, and drops the link when there is no match id", () => {
-    const msg = inhouseResultVoidedMessage({
-      betCount: 1,
-      staked: 25,
-      dotaMatchId: null,
-    });
-    expect(msg).toContain("1 slip,");
+  it("drops the link when there is no match id", () => {
+    const msg = inhouseResultVoidedMessage({ dotaMatchId: null });
     expect(msg).not.toContain("opendota");
     // No dangling " " where the link would have been.
     expect(msg).toBe(msg.trim());
@@ -749,6 +1221,108 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
     expect(msg).not.toContain("week 9");
   });
 
+  it("names a playoff fixture by its round", () => {
+    const base = {
+      playerName: "Puppey",
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      whenMs: null,
+    };
+    expect(playerOutMessage({ ...base, roundLabel: "Semifinal" }))
+      .toContain("can't make the semifinal —");
+    expect(playerOutMessage({ ...base, roundLabel: "Grand final" }))
+      .toContain("can't make the grand final —");
+    expect(playerOutMessage({ ...base, roundLabel: "Round 1" }))
+      .toContain("can't make the playoff round 1 —");
+    // A bracket that couldn't place the fixture keeps the phase name.
+    expect(playerOutMessage({ ...base, roundLabel: "Playoffs" }))
+      .toContain("can't make the playoff match —");
+    expect(playerBackInMessage({ ...base, roundLabel: "Semifinal" }))
+      .toContain("can make the semifinal after all");
+    // A regular week ignores any round label.
+    expect(playerOutMessage({ ...base, isPlayoff: false, roundLabel: "Semifinal" }))
+      .toContain("can't make the week 9 match");
+  });
+
+  it("names the fixture by its round in every post about the same playoff match", () => {
+    // The OUT ping, the standin booked in reply, the stand-down and the
+    // reschedule thread must all call the semifinal the same thing.
+    const fixture = {
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      roundLabel: "Semifinal",
+    };
+    expect(
+      standinAssignedMessage({
+        ...fixture,
+        standinName: "Cover",
+        replacedName: "Puppey",
+        teamName: "A",
+        whenMs: null,
+      }),
+    ).toContain("stands in for **Puppey** on **A** — semifinal **A** vs **B**");
+    expect(
+      standinRemovedMessage({ ...fixture, standinName: "Cover", teamName: "A" }),
+    ).toContain("(semifinal **A** vs **B**)");
+    expect(
+      rescheduleProposedMessage({ ...fixture, proposerName: "Cap", whenMs: 0 }),
+    ).toContain("proposed moving the semifinal **A** vs **B**");
+    expect(
+      rescheduleDeclinedMessage({ ...fixture, declinerName: "Cap", whenMs: 0 }),
+    ).toContain("declined moving the semifinal **A** vs **B**");
+    // A fixture the bracket couldn't place keeps the phase name.
+    expect(
+      rescheduleProposedMessage({
+        ...fixture,
+        roundLabel: "Playoffs",
+        proposerName: "Cap",
+        whenMs: 0,
+      }),
+    ).toContain("proposed moving the playoff match **A** vs **B**");
+    expect(
+      standinRemovedMessage({
+        ...fixture,
+        roundLabel: undefined,
+        standinName: "Cover",
+        teamName: "A",
+      }),
+    ).toContain("(playoff match **A** vs **B**)");
+  });
+
+  it("tells the captain a player who said OUT can make it after all", () => {
+    const msg = playerBackInMessage({
+      playerName: "Dendi",
+      homeName: "Radiant Raccoons",
+      awayName: "Dire Wolves",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+      matchId: "m1",
+    });
+    expect(msg).toContain(
+      "**Dendi** can make the week 4 match after all — **Radiant Raccoons** vs **Dire Wolves** (<t:1800000000:F>).",
+    );
+    expect(msg).toContain("No need to find cover for them");
+    // The Standins card, where the OUT post it answers also lands.
+    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1#match-standins>$/);
+    // Unscheduled and hand-built: no kickoff, no link.
+    const bare = playerBackInMessage({
+      playerName: "Puppey",
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      whenMs: null,
+    });
+    expect(bare).toContain("can make the playoff match after all");
+    expect(bare).not.toContain("<t:");
+    expect(bare).not.toContain("/matches/");
+  });
+
   it("pings a fresh reschedule proposal at the proposed reader-local time", () => {
     const msg = rescheduleProposedMessage({
       homeName: "A",
@@ -761,6 +1335,89 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
     expect(msg).toContain("Kuroky");
     expect(msg).toContain("week 2");
     expect(msg).toContain("<t:1800000000:F>");
+  });
+});
+
+describe("playerAwayMessage", () => {
+  const fixture = (week: number, whenMs: number | null, matchId?: string) => ({
+    homeName: "Radiant Raccoons",
+    awayName: "Dire Wolves",
+    week,
+    isPlayoff: false,
+    whenMs,
+    matchId,
+  });
+
+  it("sends nothing for an empty range", () => {
+    expect(playerAwayMessage("Dendi", [])).toBe("");
+  });
+
+  it("is exactly the one-match OUT message for a single fixture", () => {
+    // The captain reads the same words whichever way the player said it.
+    const one = fixture(4, 1_800_000_000_000, "m4");
+    expect(playerAwayMessage("Dendi", [one])).toBe(
+      playerOutMessage({ playerName: "Dendi", ...one }),
+    );
+  });
+
+  it("lists every fixture once, each with its reader-local kickoff and page", () => {
+    const msg = playerAwayMessage("Dendi", [
+      fixture(3, 1_800_000_000_000, "m3"),
+      fixture(4, 1_800_604_800_000, "m4"),
+      { ...fixture(5, null, "m5"), isPlayoff: true },
+    ]);
+    const lines = msg.split("\n");
+    expect(lines).toHaveLength(5); // header, three fixtures, footer
+    expect(lines[0]).toContain("**Dendi**");
+    expect(lines[0]).toContain("3 matches");
+    expect(lines[1]).toContain("Week 3 match");
+    expect(lines[1]).toContain("<t:1800000000:F>");
+    expect(lines[1]).toMatch(/<[^<>\s]*\/matches\/m3#match-standins>/);
+    expect(lines[2]).toContain("<t:1800604800:F>");
+    expect(lines[3]).toContain("Playoff match");
+    expect(lines[3]).not.toContain("<t:");
+    expect(lines[4]).toContain("line up standins");
+  });
+
+  it("names each playoff fixture by its round", () => {
+    const msg = playerAwayMessage("Dendi", [
+      { ...fixture(8, null, "m8"), isPlayoff: true, roundLabel: "Semifinal" },
+      { ...fixture(9, null, "m9"), isPlayoff: true, roundLabel: "Grand final" },
+      { ...fixture(9, null, "m10"), isPlayoff: true, roundLabel: "Playoffs" },
+    ]);
+    const lines = msg.split("\n");
+    expect(lines[1]).toMatch(/^• Semifinal: \*\*Radiant Raccoons\*\*/);
+    expect(lines[2]).toMatch(/^• Grand final: /);
+    expect(lines[3]).toMatch(/^• Playoff match: /);
+  });
+
+  it("labels a tiebreaker like the one-match message does", () => {
+    const msg = playerAwayMessage("Dendi", [
+      { ...fixture(6, null), isTiebreaker: true },
+      fixture(7, null),
+    ]);
+    expect(msg).toContain("Tiebreaker match");
+  });
+
+  it("stays under Discord's limit however long the range, and says what it cut", () => {
+    const long = "x".repeat(32);
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      homeName: long,
+      awayName: long,
+      week: i + 1,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000 + i * 604_800_000,
+      matchId: `match-${i}`,
+    }));
+    const msg = playerAwayMessage(long, many);
+    // Room is left for the captain mentions sendDiscordMessage prepends.
+    expect(msg.length).toBeLessThanOrEqual(1_800);
+    expect(msg).toMatch(/…and \d+ more/);
+    const lines = msg.split("\n");
+    const shown = lines.filter((l) => l.includes("/matches/")).length;
+    const more = Number(/…and (\d+) more/.exec(msg)![1]);
+    expect(shown + more).toBe(40);
+    expect(lines[lines.length - 1]).toContain("line up standins");
   });
 });
 
@@ -798,10 +1455,106 @@ describe("weekReminderMessage", () => {
     expect(closed).not.toContain("pickem");
   });
 
+  it("names the teams sitting out the week, above the RSVP line", () => {
+    const msg = weekReminderMessage({
+      week: 1,
+      isPlayoff: false,
+      fixtures: [],
+      byeTeamNames: ["Team One", "[free mmr](https://evil.test)"],
+    });
+    expect(msg).toMatch(
+      /\n💤 Bye: \*\*Team One\*\*, \*\*.+\*\* — no match this week\.\nRSVP on your match page/,
+    );
+    // Team names are captain-typed: the masked link must stay inert.
+    expect(msg).toContain("\\[free mmr\\]");
+    expect(msg).not.toContain("](");
+  });
+
+  it("leaves the bye line out of playoff and tiebreaker weeks, and when nobody rests", () => {
+    for (const extra of [{ isPlayoff: true }, { isTiebreaker: true }]) {
+      const msg = weekReminderMessage({
+        week: 6, isPlayoff: false, fixtures: [], byeTeamNames: ["Team One"], ...extra,
+      });
+      expect(msg).not.toContain("Bye");
+    }
+    expect(weekReminderMessage({ week: 1, isPlayoff: false, fixtures: [], byeTeamNames: [] }))
+      .not.toContain("Bye");
+  });
+
   it("labels playoff rounds without a week number", () => {
     const msg = weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [] });
     expect(msg).toContain("Playoff matches");
     expect(msg).not.toContain("Week 9");
+  });
+
+  it("names the playoff round in the header when the bracket gives one", () => {
+    const header = (roundLabel: string | null) =>
+      weekReminderMessage({ week: 9, isPlayoff: true, fixtures: [], roundLabel })
+        .split("\n")[0];
+    expect(header("Semifinals")).toBe("⏰ **Semifinals coming up — check in!**");
+    expect(header("Grand final")).toBe("⏰ **Grand final coming up — check in!**");
+    expect(header("Quarterfinals")).toBe(
+      "⏰ **Quarterfinals coming up — check in!**",
+    );
+    expect(header("Round 1")).toBe(
+      "⏰ **Playoff round 1 matches coming up — check in!**",
+    );
+    // No placeable round, or a slate spanning rounds: the phase name, never
+    // the database week number.
+    for (const unnamed of [null, "Playoffs", "Week 9"]) {
+      expect(header(unnamed)).toBe("⏰ **Playoff matches coming up — check in!**");
+    }
+    // A round name never leaks into a regular or tiebreaker week.
+    expect(
+      weekReminderMessage({ week: 3, isPlayoff: false, fixtures: [], roundLabel: "Semifinals" }),
+    ).toContain("Week 3 matches");
+  });
+
+  it("states the kickoff's day and clock time once, beside the countdown", () => {
+    const fixture = (i: number) => ({
+      matchId: `m${i}`,
+      homeName: `Home ${i}`,
+      awayName: `Away ${i}`,
+      scheduledAt: 1_800_000_000_000,
+      homeIn: 1,
+      homeSize: 5,
+      awayIn: 2,
+      awaySize: 5,
+      waitingOn: [],
+    });
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [fixture(1), fixture(2)],
+    });
+    const lines = msg.split("\n");
+    expect(lines[1]).toBe("Kickoff: <t:1800000000:F> (<t:1800000000:R>)");
+    // One reminder is one kickoff, so the rows don't repeat the date.
+    expect(msg.match(/<t:1800000000:F>/g)).toHaveLength(1);
+    expect(lines[2]).toMatch(
+      /^🆚 \*\*Home 1\*\* vs \*\*Away 1\*\* · check-ins 1\/5 vs 2\/5 · <[^>]+\/matches\/m1>$/,
+    );
+  });
+
+  it("gives each row its own time if kickoffs ever differ", () => {
+    const msg = weekReminderMessage({
+      week: 3,
+      isPlayoff: false,
+      fixtures: [1_800_000_000_000, 1_800_003_600_000].map((scheduledAt, i) => ({
+        matchId: `m${i}`,
+        homeName: "A",
+        awayName: "B",
+        scheduledAt,
+        homeIn: 0,
+        homeSize: 5,
+        awayIn: 0,
+        awaySize: 5,
+        waitingOn: [],
+      })),
+    });
+    expect(msg).not.toContain("Kickoff:");
+    expect(msg).toContain("**B** — <t:1800000000:F> (<t:1800000000:R>) · check-ins");
+    expect(msg).toContain("**B** — <t:1800003600:F> (<t:1800003600:R>) · check-ins");
   });
 
   it("mentions the people who owe an answer, and names the unlinked ones", () => {
@@ -910,6 +1663,10 @@ describe("weekReminderMessage", () => {
     // transport materialization cannot prepend hidden/omitted users.
     expect(delivered).toBe(announcement.content);
     expect(delivered.length).toBeLessThanOrEqual(2_000);
+    // The clock time is part of the packed body, not added after it.
+    expect(delivered.split("\n")[1]).toBe(
+      "Kickoff: <t:1800000000:F> (<t:1800000000:R>)",
+    );
     const visibleMentions = [...delivered.matchAll(/<@(\d{17,20})>/g)].map(
       (match) => match[1],
     );
@@ -937,6 +1694,91 @@ describe("weekReminderMessage", () => {
   });
 });
 
+describe("checkinNudgeAnnouncement", () => {
+  const base = {
+    captainName: "Cap",
+    teamName: "Radiant Rats",
+    homeName: "Radiant Rats",
+    awayName: "Dire Dogs",
+    week: 3,
+    isPlayoff: false,
+    whenMs: 1_800_000_000_500,
+    matchId: "m1",
+    waitingOn: [
+      { name: "Linked", discordId: "123456789012345678" },
+      { name: "Unlinked", discordId: null },
+    ],
+  };
+
+  it("mentions only the linked waiters it names and links the match page", () => {
+    const a = checkinNudgeAnnouncement(base);
+    expect(a.content).toContain("**Cap** needs check-ins for **Radiant Rats**'s week 3 match");
+    expect(a.content).toContain("**Radiant Rats** vs **Dire Dogs**");
+    expect(a.content).toContain("<t:1800000000:F>");
+    expect(a.content).toContain("<@123456789012345678>, Unlinked");
+    expect(a.content).toMatch(/<https?:\/\/[^>]+\/matches\/m1>$/);
+    expect(a.mentionUserIds).toEqual(["123456789012345678"]);
+    // Every allowlisted id is visible, so transport adds nobody.
+    expect(
+      materializeAllowedMentions(a.content, { users: a.mentionUserIds }),
+    ).toBe(a.content);
+  });
+
+  it("leaves the time out of an unscheduled fixture and labels playoffs", () => {
+    const a = checkinNudgeAnnouncement({ ...base, whenMs: null, isPlayoff: true });
+    expect(a.content).not.toContain("<t:");
+    expect(a.content).toContain("playoff match");
+    expect(
+      checkinNudgeAnnouncement({ ...base, isPlayoff: true, isTiebreaker: true })
+        .content,
+    ).toContain("tiebreaker match");
+  });
+
+  // The reminder, result and standin posts name a playoff fixture by its
+  // round; the check-in nudge for the same fixture used to say "playoff match".
+  it("names a playoff fixture by its round, like every other post", () => {
+    const a = checkinNudgeAnnouncement({
+      ...base,
+      isPlayoff: true,
+      roundLabel: "Semifinal",
+    });
+    expect(a.content).toContain("'s semifinal **");
+    expect(a.content).not.toContain("playoff match");
+    expect(
+      playerOutMessage({
+        playerName: "X",
+        homeName: base.homeName,
+        awayName: base.awayName,
+        week: base.week,
+        isPlayoff: true,
+        roundLabel: "Semifinal",
+        whenMs: null,
+      }),
+    ).toContain("semifinal");
+  });
+
+  it("caps the named list and never allowlists a hidden player", () => {
+    const waitingOn = Array.from({ length: 11 }, (_, i) => ({
+      name: `P${i + 1}`,
+      discordId: (BigInt("900000000000000000") + BigInt(i)).toString(),
+    }));
+    const a = checkinNudgeAnnouncement({ ...base, waitingOn });
+    expect(a.content).toContain("+3 more");
+    expect(a.mentionUserIds).toHaveLength(8);
+    expect(a.mentionUserIds).not.toContain(waitingOn[10].discordId);
+    expect(a.content).not.toContain(`<@${waitingOn[10].discordId}>`);
+  });
+
+  it("allowlists nobody when nobody named has linked Discord", () => {
+    const a = checkinNudgeAnnouncement({
+      ...base,
+      waitingOn: [{ name: "A", discordId: null }, { name: "B", discordId: "not-a-snowflake" }],
+    });
+    expect(a.mentionUserIds).toEqual([]);
+    expect(a.content).toContain("A, B");
+  });
+});
+
 describe("rescheduleMessage", () => {
   it("announces the agreed time as a Discord timestamp (reader-local)", () => {
     const msg = rescheduleMessage({
@@ -961,6 +1803,22 @@ describe("rescheduleMessage", () => {
         whenMs: 1784167200000,
       }),
     ).toContain("Playoffs");
+  });
+
+  it("names the playoff round when it is known", () => {
+    const base = {
+      homeName: "A",
+      awayName: "B",
+      week: 9,
+      isPlayoff: true,
+      whenMs: 1784167200000,
+    };
+    expect(rescheduleMessage({ ...base, roundLabel: "Semifinal" }))
+      .toContain("Semifinal: **A** vs **B**");
+    expect(rescheduleMessage({ ...base, roundLabel: "Round 2" }))
+      .toContain("Playoff round 2: **A** vs **B**");
+    expect(rescheduleMessage({ ...base, roundLabel: "Playoffs" }))
+      .toContain("Playoffs: **A** vs **B**");
   });
 });
 
@@ -1098,10 +1956,16 @@ describe("Discord transport diagnostics", () => {
       path.join(process.cwd(), "src/lib/discord.ts"),
       "utf8",
     );
-    const start = source.indexOf("async function sendTo(");
-    const end = source.indexOf("\n}\n", start);
-    expect(start).toBeGreaterThan(-1);
-    const sink = source.slice(start, end);
+    const body = (name: string) => {
+      const start = source.indexOf(`async function ${name}(`);
+      expect(start, name).toBeGreaterThan(-1);
+      return source.slice(start, source.indexOf("\n}\n", start));
+    };
+    // sendTo is the boolean wrapper; postTo is the one network sink, and it
+    // keeps Discord's status for the league queue.
+    expect(body("sendTo")).toContain("postTo(url, content, mentions)");
+    expect(body("sendTo")).not.toContain("fetch(");
+    const sink = body("postTo");
     expect(sink).toContain("const target = runtimeWebhookUrl(url)");
     expect(sink).toContain("fetch(webhookApiUrl(target)");
     expect(sink).not.toContain("fetch(webhookApiUrl(url)");
@@ -1206,6 +2070,28 @@ describe("standinRemovedMessage", () => {
     });
     expect(msg).toContain("Sub Sam");
     expect(msg).toContain("no longer standing in");
+    // No reason given: the post is exactly what it always was.
+    expect(msg).toMatch(/— stand down\.$/);
+  });
+
+  it("says in a few words why the booking ended", () => {
+    const base = {
+      standinName: "Sub Sam",
+      teamName: "Dire Straits",
+      homeName: "Roshan's Rejects",
+      awayName: "Dire Straits",
+      week: 4,
+      isPlayoff: false,
+    };
+    expect(standinRemovedMessage({ ...base, reason: "TEAM_WITHDREW" })).toMatch(
+      /— stand down \(a team withdrew from the season\)\.$/,
+    );
+    expect(
+      standinRemovedMessage({ ...base, reason: "ADMIN_CANCELLED" }),
+    ).toContain("stand down (an admin cancelled the booking).");
+    expect(
+      standinRemovedMessage({ ...base, reason: "CAPTAIN_CANCELLED" }),
+    ).toContain("stand down (the team's captain cancelled the booking).");
   });
 });
 
@@ -1219,14 +2105,51 @@ describe("no message unfurls a link preview", () => {
 
   it("wraps every site link in angle brackets", () => {
     const messages = [
-      signupMessage("Zai", 3, 20),
+      signupMessage("Zai", 3, { teamSize: 5, minTeams: 4 }),
+      signupMessage("Zai", 34, { teamSize: 5, minTeams: 6 }),
       draftScheduledMessage("S1", 1_800_000_000_000),
       draftRescheduledMessage("S1", 1_800_000_000_000),
       draftCancelledMessage("S1"),
+      draftReminderAnnouncement({
+        seasonName: "S1",
+        draftAtMs: 1_800_000_000_000,
+        playerSignupsOpen: true,
+        playerCount: 3,
+        captains: [{ name: "A", discordId: null }],
+        unconfirmed: [{ name: "B", discordId: null }],
+      }).content,
       captainAssignedMessage("A", "T", "123"),
-      draftStartedMessage("S1"),
-      draftCompleteMessage("S1"),
-      playerSoldMessage("A", "T", 5),
+      captainAssignedMessage("A", "T", "123", { name: "B", discordId: null }),
+      captainRemovedMessage({ name: "A", discordId: null }, "T"),
+      captainChangedMessage(
+        { name: "A", discordId: null },
+        { name: "B", discordId: null },
+        "T",
+        "U",
+      ),
+      checkinNudgeAnnouncement({
+        captainName: "C",
+        teamName: "T",
+        homeName: "T",
+        awayName: "U",
+        week: 1,
+        isPlayoff: false,
+        whenMs: 1_800_000_000_000,
+        matchId: "m1",
+        waitingOn: [{ name: "B", discordId: null }],
+      }).content,
+      draftStartedAnnouncement({ seasonName: "S1", captains: [] }).content,
+      draftCompleteAnnouncement({
+        seasonName: "S1",
+        teams: [
+          {
+            name: "T",
+            captainName: "C",
+            players: [{ name: "A", discordId: null, price: 5 }],
+            openSeats: 1,
+          },
+        ],
+      }).content,
       matchResultMessage({
         matchId: "m1",
         homeName: "A",
@@ -1245,15 +2168,45 @@ describe("no message unfurls a link preview", () => {
         forfeit: true,
         knockout: { nextRound: "Grand final" },
       }),
-      playoffsStartedMessage("S1", [{ home: "A", away: "B" }]),
-      playoffsStartedMessage("S1", [
+      playoffsStartedMessage("S1", "s1", [{ home: "A", away: "B" }]),
+      playoffsStartedMessage("S1", "s1", [
         { home: "A", away: "B", homeSeed: 1, awaySeed: 2, whenMs: 1_800_000_000_000 },
       ]),
       playoffsReturnedToRegularMessage("S1"),
       championMessage("S1", "T", "s1"),
+      signupsOpenMessage("S1", "Sundays"),
+      playoffRoundSetMessage({
+        seasonName: "S1",
+        seasonId: "s1",
+        roundName: "Grand final",
+        fixtures: [{ home: "A", away: "B", whenMs: 1_800_000_000_000 }],
+      }),
+      resultNudgeMessage({
+        matchId: "m1",
+        homeName: "A",
+        awayName: "B",
+        label: "Week 1",
+        homeScore: 1,
+        awayScore: 0,
+        gamesFound: 1,
+      }),
       freeAgentSignedMessage("A", "T"),
       playerReleasedMessage("A", "T"),
       teamWithdrewMessage("T", 3),
+      teamIdentityChangedMessage({
+        teamId: "t1",
+        previousName: "Old",
+        name: "New",
+        nameChanged: true,
+        logoChanged: false,
+      }),
+      teamIdentityChangedMessage({
+        teamId: "t1",
+        previousName: "New",
+        name: "New",
+        nameChanged: false,
+        logoChanged: true,
+      }),
       inhouseQueueMessage(4, 10),
       inhouseQueueMessage(4, 10, "999"),
       inhouseLobbyMessage([{ name: "A", discordId: null }]),
@@ -1266,19 +2219,6 @@ describe("no message unfurls a link preview", () => {
         mvpHero: null,
         dotaMatchId: "1",
       }),
-      inhouseResultMessage({
-        winnerSide: "Radiant",
-        radiantScore: 1,
-        direScore: 0,
-        durationSecs: 60,
-        mvpName: null,
-        mvpHero: null,
-        dotaMatchId: "1",
-        slips: [
-          { name: "A", stake: 100, matched: 100, outcome: "WON", delta: 100 },
-          { name: "B", stake: 100, matched: 100, outcome: "LOST", delta: -100 },
-        ],
-      }),
       playerOutMessage({
         playerName: "A",
         homeName: "H",
@@ -1286,6 +2226,15 @@ describe("no message unfurls a link preview", () => {
         week: 1,
         isPlayoff: false,
         whenMs: null,
+      }),
+      playerBackInMessage({
+        playerName: "A",
+        homeName: "H",
+        awayName: "W",
+        week: 1,
+        isPlayoff: false,
+        whenMs: null,
+        matchId: "m1",
       }),
       standinAssignedMessage({
         standinName: "S",
@@ -1305,6 +2254,10 @@ describe("no message unfurls a link preview", () => {
         week: 1,
         isPlayoff: false,
       }),
+      playerAwayMessage("A", [
+        { homeName: "H", awayName: "W", week: 1, isPlayoff: false, whenMs: 1_800_000_000_000, matchId: "m1" },
+        { homeName: "H", awayName: "W", week: 2, isPlayoff: false, whenMs: null, matchId: "m2" },
+      ]),
       rescheduleProposedMessage({
         homeName: "H",
         awayName: "W",
@@ -1329,6 +2282,7 @@ describe("no message unfurls a link preview", () => {
         whenMs: 1_800_000_000_000,
       }),
       weeklyHonorsMessage({
+        seasonId: "s1",
         week: 1,
         playerName: "A",
         playerPoints: 10,
@@ -1375,8 +2329,27 @@ describe("no player-supplied name can inject markdown", () => {
   const EVIL = "[free mmr](https://evil.test)";
 
   const messages = () => [
-    signupMessage(EVIL, 3, 10),
-    playerSoldMessage(EVIL, EVIL, 5),
+    signupMessage(EVIL, 3, { teamSize: 5, minTeams: 2 }),
+    captainAssignedMessage(EVIL, EVIL, null, { name: EVIL, discordId: null }),
+    captainRemovedMessage({ name: EVIL, discordId: null }, EVIL),
+    captainChangedMessage(
+      { name: EVIL, discordId: null },
+      { name: EVIL, discordId: null },
+      EVIL,
+      EVIL,
+    ),
+    signupsOpenMessage(EVIL, EVIL),
+    draftCompleteAnnouncement({
+      seasonName: "S1",
+      teams: [
+        {
+          name: EVIL,
+          captainName: EVIL,
+          players: [{ name: EVIL, discordId: null, price: 5 }],
+          openSeats: 0,
+        },
+      ],
+    }).content,
     matchResultMessage({
       matchId: "m1",
       homeName: EVIL,
@@ -1395,14 +2368,54 @@ describe("no player-supplied name can inject markdown", () => {
       label: "Semifinal",
       knockout: { nextRound: "Grand final" },
     }),
-    playoffsStartedMessage("Season 1", [
+    playoffsStartedMessage("Season 1", "s1", [
       { home: EVIL, away: EVIL, homeSeed: 1, awaySeed: 4, whenMs: 1_800_000_000_000 },
     ]),
-    championMessage("Season 1", EVIL, "s1"),
+    championMessage("Season 1", EVIL, "s1", [
+      { name: EVIL, discordId: null },
+      { name: EVIL, discordId: "123456789012345678" },
+    ]),
+    playoffRoundSetMessage({
+      seasonName: EVIL,
+      seasonId: "s1",
+      roundName: "Grand final",
+      fixtures: [{ home: EVIL, away: EVIL, whenMs: null }],
+    }),
+    resultNudgeMessage({
+      matchId: "m1",
+      homeName: EVIL,
+      awayName: EVIL,
+      label: "Week 1",
+      homeScore: 0,
+      awayScore: 0,
+      gamesFound: 0,
+    }),
     freeAgentSignedMessage(EVIL, EVIL),
     playerReleasedMessage(EVIL, EVIL),
     teamWithdrewMessage(EVIL, 3),
+    teamIdentityChangedMessage({
+      teamId: "t1",
+      previousName: EVIL,
+      name: EVIL,
+      nameChanged: true,
+      logoChanged: true,
+    }),
+    teamIdentityChangedMessage({
+      teamId: "t1",
+      previousName: EVIL,
+      name: EVIL,
+      nameChanged: false,
+      logoChanged: true,
+    }),
     playerOutMessage({
+      playerName: EVIL,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      whenMs: null,
+    }),
+    playerBackInMessage({
       playerName: EVIL,
       homeName: EVIL,
       awayName: EVIL,
@@ -1428,6 +2441,10 @@ describe("no player-supplied name can inject markdown", () => {
       week: 1,
       isPlayoff: false,
     }),
+    playerAwayMessage(EVIL, [
+      { homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: null },
+      { homeName: EVIL, awayName: EVIL, week: 2, isPlayoff: false, whenMs: 1_800_000_000_000, matchId: "m2" },
+    ]),
     rescheduleProposedMessage({
       homeName: EVIL,
       awayName: EVIL,
@@ -1452,12 +2469,14 @@ describe("no player-supplied name can inject markdown", () => {
       whenMs: 1_800_000_000_000,
     }),
     weeklyHonorsMessage({
+      seasonId: "s1",
       week: 1,
       playerName: EVIL,
       playerPoints: 40,
       heroName: "Pudge",
       teamName: EVIL,
       teamGameWins: 2,
+      oracle: { names: [EVIL, EVIL], correct: 1, graded: 1 },
     }),
     inhouseLobbyMessage([{ name: EVIL, discordId: null }]),
     inhouseResultMessage({
@@ -1468,23 +2487,6 @@ describe("no player-supplied name can inject markdown", () => {
       mvpName: EVIL,
       mvpHero: "Pudge",
       dotaMatchId: "123",
-    }),
-    // The slips block interpolates a name per bettor — same injection point,
-    // three renders (winning side, losing side, refunded), all of which land in
-    // a channel post the league appears to have written.
-    inhouseResultMessage({
-      winnerSide: "Radiant",
-      radiantScore: 30,
-      direScore: 10,
-      durationSecs: 2000,
-      mvpName: null,
-      mvpHero: null,
-      dotaMatchId: "123",
-      slips: [
-        { name: EVIL, stake: 100, matched: 100, outcome: "WON", delta: 100 },
-        { name: EVIL, stake: 100, matched: 100, outcome: "LOST", delta: -100 },
-        { name: EVIL, stake: 10, matched: 0, outcome: "VOID_LATE", delta: 0 },
-      ],
     }),
     weekReminderMessage({
       week: 1,
@@ -1503,6 +2505,25 @@ describe("no player-supplied name can inject markdown", () => {
         },
       ],
     }),
+    draftReminderAnnouncement({
+      seasonName: "Season 1",
+      draftAtMs: 1_800_000_000_000,
+      playerSignupsOpen: true,
+      playerCount: 2,
+      captains: [{ name: EVIL, discordId: null }],
+      unconfirmed: [{ name: EVIL, discordId: null }],
+    }).content,
+    checkinNudgeAnnouncement({
+      captainName: EVIL,
+      teamName: EVIL,
+      homeName: EVIL,
+      awayName: EVIL,
+      week: 1,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+      matchId: "m1",
+      waitingOn: [{ name: EVIL, discordId: null }],
+    }).content,
     adminRetimeMessage({
       clearedRsvps: 2,
       moves: [
@@ -1526,8 +2547,30 @@ describe("no player-supplied name can inject markdown", () => {
 
   it("never lets a name forge an extra line", () => {
     const nl = "evil\nplayer";
-    expect(playerSoldMessage(nl, nl, 1)).not.toContain("\n");
+    // header, one team line, footer
+    expect(
+      draftCompleteAnnouncement({
+        seasonName: "S1",
+        teams: [
+          {
+            name: nl,
+            captainName: nl,
+            players: [{ name: nl, discordId: null, price: 1 }],
+            openSeats: 0,
+          },
+        ],
+      }).content.split("\n"),
+    ).toHaveLength(3);
     expect(teamWithdrewMessage(nl, 3)).not.toContain("\n");
+    expect(
+      teamIdentityChangedMessage({
+        teamId: "t1",
+        previousName: nl,
+        name: nl,
+        nameChanged: true,
+        logoChanged: false,
+      }),
+    ).not.toContain("\n");
     expect(
       rescheduleDeclinedMessage({
         homeName: nl,
@@ -1557,23 +2600,24 @@ describe("no player-supplied name can inject markdown", () => {
         },
       ],
     });
-    expect(reminder.split("\n")).toHaveLength(4); // header, fixture, waiting, footer
-    // The slips block is one line per SIDE, so a newline in a persona would
-    // forge a row and make the message lie about who was in the game.
-    const slips = inhouseResultMessage({
-      winnerSide: "Radiant",
-      radiantScore: 1,
-      direScore: 0,
-      durationSecs: 60,
-      mvpName: null,
-      mvpHero: null,
-      dotaMatchId: "1",
-      slips: [
-        { name: nl, stake: 100, matched: 100, outcome: "WON", delta: 100 },
-        { name: nl, stake: 100, matched: 100, outcome: "LOST", delta: -100 },
-      ],
-    });
-    expect(slips.split("\n")).toHaveLength(4); // headline, pot, two sides
+    // header, kickoff, fixture, waiting, footer
+    expect(reminder.split("\n")).toHaveLength(5);
+    // One line per fixture: a persona newline must not forge a fixture row.
+    const away = playerAwayMessage(nl, [
+      { homeName: nl, awayName: nl, week: 1, isPlayoff: false, whenMs: null },
+      { homeName: nl, awayName: nl, week: 2, isPlayoff: false, whenMs: null },
+    ]);
+    expect(away.split("\n")).toHaveLength(4); // header, two fixtures, footer
+    const draftReminder = draftReminderAnnouncement({
+      seasonName: "Season 1",
+      draftAtMs: 1_800_000_000_000,
+      playerSignupsOpen: true,
+      playerCount: 2,
+      captains: [{ name: nl, discordId: null }],
+      unconfirmed: [{ name: nl, discordId: null }],
+    }).content;
+    // header, counts, captains, unconfirmed, links
+    expect(draftReminder.split("\n")).toHaveLength(5);
   });
 
   // Escaping must not eat the one thing these messages exist to do.
@@ -1600,12 +2644,32 @@ describe("no player-supplied name can inject markdown", () => {
         ],
       }),
     ).toContain("<@456789012345678901>");
+    const draftReminder = draftReminderAnnouncement({
+      seasonName: "Season 1",
+      draftAtMs: 1_800_000_000_000,
+      playerSignupsOpen: true,
+      playerCount: 2,
+      captains: [{ name: "x", discordId: "456789012345678901" }],
+      unconfirmed: [{ name: "y", discordId: "556789012345678901" }],
+    }).content;
+    expect(draftReminder).toContain("<@456789012345678901>");
+    expect(draftReminder).toContain("<@556789012345678901>");
   });
 
   it("leaves ordinary names alone", () => {
-    expect(playerSoldMessage("Puppey", "Team Liquid", 40)).toContain(
-      "**Puppey** → **Team Liquid**",
-    );
+    expect(
+      draftCompleteAnnouncement({
+        seasonName: "S1",
+        teams: [
+          {
+            name: "Team Liquid",
+            captainName: "Puppey",
+            players: [{ name: "Miracle", discordId: null, price: 40 }],
+            openSeats: 0,
+          },
+        ],
+      }).content,
+    ).toContain("**Team Liquid** (captain Puppey): Miracle $40");
   });
 });
 
@@ -1624,7 +2688,49 @@ describe("match-page deep links", () => {
       whenMs: null,
       matchId: "m1",
     });
-    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>/);
+    // Straight to the Standins card, where the captain lines up cover.
+    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1#match-standins>/);
+  });
+
+  it("reschedule messages link the match page, the Reschedule card where there is an answer to give", () => {
+    const fixture = {
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+      matchId: "m1",
+    };
+    // The proposal asks the other captain to respond: land on that card.
+    expect(
+      rescheduleProposedMessage({ ...fixture, proposerName: "P" }),
+    ).toMatch(/respond on the match page: <[^<>\s]*\/matches\/m1#match-reschedule>$/);
+    // A decline goes to the proposer, who may want to try another time.
+    expect(
+      rescheduleDeclinedMessage({ ...fixture, declinerName: "D" }),
+    ).toMatch(/original kickoff stands\. <[^<>\s]*\/matches\/m1#match-reschedule>$/);
+    // An acceptance asks everyone to check in again, on the match page.
+    expect(
+      rescheduleMessage({ ...fixture, clearedRsvps: 3 }),
+    ).toMatch(/RSVP again\. <[^<>\s]*\/matches\/m1>$/);
+  });
+
+  it("reschedule messages stay link-free without a matchId — hand-built calls", () => {
+    const fixture = {
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_800_000_000_000,
+    };
+    for (const msg of [
+      rescheduleProposedMessage({ ...fixture, proposerName: "P" }),
+      rescheduleDeclinedMessage({ ...fixture, declinerName: "D" }),
+      rescheduleMessage(fixture),
+    ]) {
+      expect(msg).not.toContain("/matches/");
+      expect(msg).toBe(msg.trim());
+    }
   });
 
   it("playerOutMessage stays link-free without one — hand-built calls", () => {
@@ -1681,9 +2787,120 @@ describe("freeAgentSignedMessage addresses the signed player", () => {
   });
 });
 
+describe("weeklyHonorsMessage", () => {
+  it("names the Player of the Week score impact points, as /leaders does", () => {
+    const message = weeklyHonorsMessage({
+      seasonId: "s1",
+      week: 4,
+      playerName: "Winner",
+      playerPoints: 134.2,
+      heroName: "Lina",
+      teamName: "Team",
+      teamGameWins: 2,
+    });
+    expect(message).toContain("134.2 impact points on Lina");
+    expect(message).not.toMatch(/fantasy/i);
+  });
+
+  const base = {
+    seasonId: "s1",
+    week: 4,
+    playerName: "Winner",
+    playerPoints: 50,
+    heroName: "Lina",
+    teamName: "Team",
+    teamGameWins: 2,
+  };
+
+  it("adds the pick'em oracle inside the same post, before the link", () => {
+    const lines = weeklyHonorsMessage({
+      ...base,
+      oracle: { names: ["Seer"], correct: 3, graded: 3 },
+    }).split("\n");
+    expect(lines).toContain(
+      "🔮 Pick'em Oracle of the Week: **Seer** (3 of 3 picks right)",
+    );
+    expect(lines.at(-1)).toMatch(/^Full leaderboards: /);
+  });
+
+  it("links that season's leaderboards, so the post outlives the handoff", () => {
+    const last = weeklyHonorsMessage(base).split("\n").at(-1);
+    expect(last).toMatch(/^Full leaderboards: <[^>]+\/leaders\?season=s1>$/);
+    expect(
+      weeklyHonorsMessage({ ...base, seasonId: "season/one" }),
+    ).toContain("/leaders?season=season%2Fone>");
+  });
+
+  it("lists every tied oracle, then caps a long tie", () => {
+    expect(
+      weeklyHonorsMessage({
+        ...base,
+        oracle: { names: ["A", "B", "C"], correct: 2, graded: 2 },
+      }),
+    ).toContain(
+      "🔮 Pick'em Oracles of the Week: **A**, **B** and **C** (2 of 2 picks right each)",
+    );
+    expect(
+      weeklyHonorsMessage({
+        ...base,
+        oracle: {
+          names: ["A", "B", "C", "D", "E", "F", "G"],
+          correct: 1,
+          graded: 1,
+        },
+      }),
+    ).toContain("**A**, **B**, **C**, **D**, **E** and 2 more (1 of 1");
+  });
+
+  it("leaves the line out when there is no oracle", () => {
+    expect(weeklyHonorsMessage(base)).not.toMatch(/Oracle/);
+    expect(
+      weeklyHonorsMessage({ ...base, oracle: { names: [], correct: 0, graded: 0 } }),
+    ).not.toMatch(/Oracle/);
+  });
+});
+
+describe("weeklyHonorsMessage mentions", () => {
+  const base = {
+    seasonId: "s1",
+    week: 4,
+    playerName: "Winner",
+    playerPoints: 50,
+    heroName: "Lina",
+    teamName: "Team",
+    teamGameWins: 2,
+  };
+
+  it("mentions a linked Player of the Week on the first post", () => {
+    expect(
+      weeklyHonorsMessage({ ...base, playerDiscordId: "123456789012345678" }),
+    ).toContain("⭐ Player of the Week: <@123456789012345678> — 50 impact points on Lina");
+  });
+
+  it("names an unlinked player, or one with a malformed id, in plain text", () => {
+    expect(weeklyHonorsMessage(base)).toContain(
+      "⭐ Player of the Week: **Winner** — 50",
+    );
+    expect(
+      weeklyHonorsMessage({ ...base, playerDiscordId: "<@everyone>" }),
+    ).toContain("⭐ Player of the Week: **Winner** — 50");
+  });
+
+  it("never mentions anyone in a correction", () => {
+    const message = weeklyHonorsMessage({
+      ...base,
+      playerDiscordId: "123456789012345678",
+      corrected: true,
+    });
+    expect(message).toContain("⭐ Player of the Week: **Winner** — 50");
+    expect(message).not.toContain("<@");
+  });
+});
+
 describe("weeklyHonorsMessage corrections", () => {
   it("clearly labels a corrected award", () => {
     const message = weeklyHonorsMessage({
+      seasonId: "s1",
       week: 3,
       playerName: "New winner",
       playerPoints: 42,
@@ -1697,6 +2914,7 @@ describe("weeklyHonorsMessage corrections", () => {
 
   it("explicitly withdraws an award when a corrected week has no eligible games", () => {
     const message = weeklyHonorsMessage({
+      seasonId: "s1",
       week: 3,
       playerName: null,
       playerPoints: 0,
@@ -1746,10 +2964,100 @@ describe("adminRetimeMessage", () => {
     expect(msg).toMatch(/\/schedule>$/);
   });
 
+  it("says a first-ever kickoff is set, not moved", () => {
+    const msg = adminRetimeMessage({
+      moves: [{ ...move(1), firstTime: true }],
+      clearedRsvps: 0,
+    });
+    expect(msg).toContain(
+      "🗓️ **Kickoff set** — Week 3: **Home 1** vs **Away 1** plays <t:1800000060:F> (set by an admin).",
+    );
+    expect(msg).not.toMatch(/moved/i);
+  });
+
+  it("announces a week getting its first times as kickoffs set", () => {
+    const msg = adminRetimeMessage({
+      moves: [1, 2, 3].map((i) => ({ ...move(i), firstTime: true })),
+      clearedRsvps: 0,
+    });
+    expect(msg).toMatch(
+      /^🗓️ \*\*Kickoffs set\*\* by an admin — 3 matches now have kickoff times:\n/,
+    );
+    expect(msg).toContain("• Week 3: **Home 1** vs **Away 1** — <t:1800000060:F>\n");
+    expect(msg).not.toMatch(/moved/i);
+  });
+
+  it("marks which lines moved when a post mixes first times and moves", () => {
+    const msg = adminRetimeMessage({
+      moves: [{ ...move(1), firstTime: true }, move(2), move(3, null)],
+      clearedRsvps: 0,
+    });
+    expect(msg).toMatch(/^🗓️ \*\*Schedule updated\*\* by an admin — 1 new kickoff and 2 moved:/);
+    expect(msg).toContain("**Away 1** — <t:1800000060:F>\n");
+    expect(msg).toContain("**Away 2** — <t:1800000120:F> (moved)\n");
+    expect(msg).toContain("**Away 3** — unscheduled for now\n");
+  });
+
   it("labels playoff and tiebreaker fixtures", () => {
     expect(adminRetimeMessage({ moves: [{ ...move(1), isPlayoff: true }], clearedRsvps: 0 }))
       .toContain("Playoffs:");
     expect(adminRetimeMessage({ moves: [{ ...move(1), isTiebreaker: true }], clearedRsvps: 0 }))
       .toContain("Tiebreaker week 3:");
+  });
+
+  it("names a playoff fixture's round when it is known", () => {
+    const one = adminRetimeMessage({
+      moves: [{ ...move(1), isPlayoff: true, roundLabel: "Grand final" }],
+      clearedRsvps: 0,
+    });
+    expect(one).toContain("Grand final: **Home 1** vs **Away 1** now plays");
+    const many = adminRetimeMessage({
+      moves: [
+        { ...move(1), isPlayoff: true, roundLabel: "Semifinal" },
+        { ...move(2), isPlayoff: true, roundLabel: "Semifinal" },
+      ],
+      clearedRsvps: 0,
+    });
+    expect(many).toContain("• Semifinal: **Home 1** vs **Away 1**");
+    expect(many).toContain("• Semifinal: **Home 2** vs **Away 2**");
+  });
+});
+
+describe("teamIdentityChangedMessage", () => {
+  it("names the old and new team and links the team page", () => {
+    const msg = teamIdentityChangedMessage({
+      teamId: "team-1",
+      previousName: "w4tkins's Team",
+      name: "My Team Sucks",
+      nameChanged: true,
+      logoChanged: false,
+    });
+    expect(msg).toContain("**w4tkins's Team** is now **My Team Sucks**");
+    expect(msg).toMatch(/<https?:\/\/[^>]+\/teams\/team-1>$/);
+    expect(msg).not.toContain("logo");
+  });
+
+  it("mentions a logo that changed with the name", () => {
+    expect(
+      teamIdentityChangedMessage({
+        teamId: "team-1",
+        previousName: "Old",
+        name: "New",
+        nameChanged: true,
+        logoChanged: true,
+      }),
+    ).toContain("**Old** is now **New**, with a new logo");
+  });
+
+  it("announces a logo-only change under the current name", () => {
+    expect(
+      teamIdentityChangedMessage({
+        teamId: "team-1",
+        previousName: "Radiant Raccoons",
+        name: "Radiant Raccoons",
+        nameChanged: false,
+        logoChanged: true,
+      }),
+    ).toMatch(/^🎨 \*\*Radiant Raccoons\*\* has a new logo: </);
   });
 });

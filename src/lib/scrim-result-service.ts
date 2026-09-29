@@ -32,6 +32,7 @@ import {
 import { claimProviderCooldown } from "./settings";
 import { isWithinScrimResultWindow } from "./scrim-window";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 export {
   isWithinScrimResultWindow,
@@ -704,14 +705,13 @@ async function commitFetchedScrimGame(
       if (error instanceof ScrimImportError) {
         return { ok: false, error: error.message };
       }
-      const code = (error as { code?: string }).code;
-      if (code === "P2002") {
+      if (isUniqueViolation(error)) {
         return {
           ok: false,
           error: "That Dota game was just recorded for another event",
         };
       }
-      if (code === "P2034") {
+      if (isSerializationConflict(error)) {
         if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) continue;
         return {
           ok: false,
@@ -1155,7 +1155,7 @@ export async function removeScrimGame(
       if (error instanceof ScrimImportError) {
         return { ok: false, error: error.message };
       }
-      if ((error as { code?: string }).code === "P2034") {
+      if (isSerializationConflict(error)) {
         if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) continue;
         return {
           ok: false,

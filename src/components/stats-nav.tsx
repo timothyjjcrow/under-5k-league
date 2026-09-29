@@ -1,12 +1,23 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { getSessionUser } from "@/lib/auth";
-import { textLink } from "@/components/ui";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
+import { getActiveSeason } from "@/lib/season";
+import { seasonStatsListed } from "@/lib/site-nav";
+import { LinkArrow, textLink } from "@/components/ui";
 
 export type StatsSection = "leaders" | "meta" | "records" | "compare";
 
-/** Compact cross-navigation for the league's four public statistics views. */
-export function StatsNav({
+/**
+ * Compact cross-navigation for the league's four public statistics views.
+ * All four fill from imported games, so before the league's first game the
+ * bar is left out: it only linked one empty page to three more. Leaders and
+ * Hero meta open on the active season, so they wait for it to reach the
+ * regular season, by the menus' own rule (seasonStatsListed in
+ * src/lib/site-nav.ts). Two exceptions: a selected past season (`seasonId`)
+ * has boards to show, and the page being viewed always keeps its tab.
+ */
+export async function StatsNav({
   active,
   seasonId,
 }: {
@@ -14,15 +25,25 @@ export function StatsNav({
   /** Keep a selected season when moving between the season-scoped boards. */
   seasonId?: string;
 }) {
+  const [{ hasGames }, season] = await Promise.all([
+    getPublicLeagueContent(null),
+    getActiveSeason(),
+  ]);
+  if (!hasGames) return null;
+  const seasonBoards =
+    seasonId !== undefined ||
+    seasonStatsListed({ phase: season?.status ?? null, hasGames });
   const query = seasonId
     ? `?${new URLSearchParams({ season: seasonId }).toString()}`
     : "";
-  const items: { key: StatsSection; href: string; label: string }[] = [
-    { key: "leaders", href: `/leaders${query}`, label: "Leaders" },
-    { key: "meta", href: `/meta${query}`, label: "Hero meta" },
-    { key: "records", href: `/records${query}`, label: "Record book" },
-    { key: "compare", href: "/players/compare", label: "Compare players" },
-  ];
+  const items = (
+    [
+      { key: "leaders", href: `/leaders${query}`, label: "Leaders", seasonBoard: true },
+      { key: "meta", href: `/meta${query}`, label: "Hero meta", seasonBoard: true },
+      { key: "records", href: `/records${query}`, label: "Record book", seasonBoard: false },
+      { key: "compare", href: "/players/compare", label: "Compare players", seasonBoard: false },
+    ] satisfies { key: StatsSection; href: string; label: string; seasonBoard: boolean }[]
+  ).filter((item) => !item.seasonBoard || seasonBoards || item.key === active);
 
   return (
     <nav aria-label="Statistics" className="mb-6">
@@ -94,8 +115,11 @@ export function StatsDataNoticeBody({
   if (!isAdmin) {
     return (
       <p className="mb-6 rounded-xl border border-line bg-surface-2/60 px-4 py-3 text-sm text-muted">
-        A few imported games are still being checked, so some stats may be
-        missing for now.
+        {/* Nothing re-checks these on its own: they stay out of the stats
+            until an admin repairs or re-imports them, so the copy must not
+            promise a delay that clears itself. */}
+        Some imported games are incomplete, so a few stats are missing until
+        an admin fixes them.
       </p>
     );
   }
@@ -139,7 +163,7 @@ export function StatsDataNoticeBody({
           ? "Unknown hero IDs require an update to the bundled hero catalogue. "
           : ""}
         <Link href="/admin/data-quality" className={textLink("text-xs")}>
-          Open data quality →
+          Open data quality <LinkArrow />
         </Link>
       </p>
       <p className="mt-1 text-xs text-muted">Only admins see these details.</p>

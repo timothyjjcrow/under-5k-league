@@ -102,6 +102,63 @@ describe("week reminder (integration)", () => {
     ).toBe(2);
   });
 
+  it("states the kickoff time and names the playoff round", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const teams = await Promise.all(
+      ["Alpha", "Bravo", "Charlie", "Delta"].map((n, i) =>
+        makeTeam(season.id, n, i),
+      ),
+    );
+    const kickoff = new Date(Math.floor((Date.now() + 4 * 3600_000) / 1000) * 1000);
+    for (const [i, slot] of ["R0M0", "R0M1"].entries()) {
+      await prisma.match.create({
+        data: {
+          seasonId: season.id,
+          week: 6,
+          phase: MATCH_PHASE.PLAYOFF,
+          bracketSlot: slot,
+          homeTeamId: teams[i * 2].id,
+          awayTeamId: teams[i * 2 + 1].id,
+          scheduledAt: kickoff,
+        },
+      });
+    }
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const lines = mockSend.mock.calls[0][0].split("\n");
+    const t = kickoff.getTime() / 1000;
+    expect(lines[0]).toBe("⏰ **Semifinals coming up — check in!**");
+    expect(lines[1]).toBe(`Kickoff: <t:${t}:F> (<t:${t}:R>)`);
+    expect(lines.filter((l) => l.startsWith("🆚"))).toHaveLength(2);
+    // No bye line in the playoffs.
+    expect(lines.join("\n")).not.toContain("Bye");
+  });
+
+  it("names the team with a bye, and only a team that sits the whole week out", async () => {
+    const { season } = await setupWeek(4);
+    await makeTeam(season.id, "Rested", 2);
+    const gone = await makeTeam(season.id, "Gone", 3);
+    await prisma.team.update({ where: { id: gone.id }, data: { withdrawn: true } });
+    // Plays this week, on a later night: not a bye.
+    const late = await makeTeam(season.id, "Late", 4);
+    const lateAway = await makeTeam(season.id, "Late Away", 5);
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: late.id,
+        awayTeamId: lateAway.id,
+        scheduledAt: new Date(Date.now() + 30 * 3600_000),
+      },
+    });
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const msg = mockSend.mock.calls[0][0];
+    expect(msg).toContain("💤 Bye: **Rested** — no match this week.");
+    expect(msg).not.toMatch(/Bye:.*(Gone|Late)/);
+  });
+
   it("stays quiet outside the window, off-season, and without a webhook", async () => {
     const far = await setupWeek(48); // kickoff too far out
     expect(await maybeAnnounceUpcomingWeek(far.season)).toBe(false);

@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { getSessionUser } from "./auth";
+import { fixtureLogLabel } from "./admin-log-copy";
 
 /**
  * Record what an admin did.
@@ -52,6 +53,36 @@ export async function logAdminAction(opts: {
   } catch {
     // Swallowed on purpose — see rule 1.
   }
+}
+
+/**
+ * A fixture's name for a log summary ("Week 3: Alpha vs Bravo"), read at write
+ * time. Best-effort like the log itself: a failed or missing read falls back
+ * to the bare id rather than failing the action it describes.
+ */
+export async function fixtureLogName(matchId: string): Promise<string> {
+  try {
+    const match = await prisma.match.findUnique({
+      where: { id: matchId },
+      select: {
+        phase: true,
+        week: true,
+        bracketSlot: true,
+        homeTeam: { select: { name: true } },
+        awayTeam: { select: { name: true } },
+      },
+    });
+    if (match) {
+      return fixtureLogLabel({
+        ...match,
+        homeName: match.homeTeam.name,
+        awayName: match.awayTeam.name,
+      });
+    }
+  } catch {
+    // Fall through to the id — see logAdminAction's rule 1.
+  }
+  return `match ${matchId}`;
 }
 
 /** Most recent admin actions, newest first, for the panel's activity card.

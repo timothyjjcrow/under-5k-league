@@ -8,6 +8,12 @@ test("home shows the signups phase for the seeded season", async ({ page }) => {
     page.locator("#main").getByText("Signups open", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(/more to reach the player minimum/)).toBeVisible();
+  // Signed out, the hero says what the league is and who can join.
+  const main = page.locator("#main");
+  await expect(main.getByText(/is an amateur Dota 2 league/)).toBeVisible();
+  await expect(
+    main.getByText(/^Open to players up to 5,000 MMR · Match night/),
+  ).toBeVisible();
 });
 
 test("a new player can sign in and join the season", async ({ page }) => {
@@ -18,7 +24,7 @@ test("a new player can sign in and join the season", async ({ page }) => {
   await page.goto(
     `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/me`,
   );
-  await expect(page.getByRole("heading", { name: "Your profile" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "My account" })).toBeVisible();
 
   await page.getByLabel("Dota 2 MMR").fill("3500");
   await page.getByRole("button", { name: /Join the season|Update signup/ }).click();
@@ -26,18 +32,22 @@ test("a new player can sign in and join the season", async ({ page }) => {
   // Confirmed signed up.
   await expect(page.getByText("Playing").first()).toBeVisible();
 
-  // A player with an active signup but no imported league games gets an
-  // honest, useful public-profile starting state instead of a blank stat area.
-  await page.getByRole("link", { name: "View public profile →" }).click();
+  // A player with an active signup but no imported league games gets one
+  // plain status heading instead of a blank stat area.
+  await page.getByRole("link", { name: "View my public profile →" }).click();
   await expect(page.getByRole("heading", { name })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Ready for the first game" }),
+    page.getByRole("heading", { name: "No league games yet" }),
   ).toBeVisible();
 
   // And visible on the home dashboard's signup list (scoped to main content,
   // since the name also appears in the header nav).
   await page.goto("/");
   await expect(page.getByRole("main").getByText(name)).toBeVisible();
+  // Signed up: the header's "Join Season 1" gives its place back to Merch.
+  const header = page.getByRole("banner");
+  await expect(header.getByRole("link", { name: /^Join / })).toHaveCount(0);
+  await expect(header.getByRole("link", { name: /Merch/ })).toBeVisible();
 });
 
 test("a player's profile uses their Steam-verified Dota account", async ({
@@ -51,10 +61,20 @@ test("a player's profile uses their Steam-verified Dota account", async ({
     `/api/auth/dev?name=Linker&steamId=${steamId}&redirect=/me`,
   );
   await expect(
-    page.getByRole("heading", { name: "Dota / Dotabuff account" }),
+    page.getByRole("heading", { name: "Steam & Dota" }),
   ).toBeVisible();
-  await expect(page.getByText("(verified by Steam)")).toBeVisible();
-  await expect(page.getByText(accountId, { exact: true })).toBeVisible();
+  // The card no longer prints the raw ids: its Dotabuff and OpenDota links
+  // carry the Steam-verified account.
+  const card = page.locator("#profile-dota");
+  await expect(
+    card.getByRole("link", { name: "Dotabuff", exact: true }),
+  ).toHaveAttribute("href", `https://www.dotabuff.com/players/${accountId}`);
+  await expect(
+    card.getByRole("link", { name: "OpenDota", exact: true }),
+  ).toHaveAttribute("href", `https://www.opendota.com/players/${accountId}`);
+  await expect(
+    page.getByRole("button", { name: "Refresh my Steam & Dota info" }),
+  ).toBeVisible();
   await expect(
     page.getByPlaceholder("Dotabuff/OpenDota URL or account id"),
   ).toHaveCount(0);
@@ -81,6 +101,20 @@ test("a player confirms the draft schedule and admin sees the readiness change",
 }) => {
   const name = `Draft Ready ${Date.now()}`;
   const steamId = "7656118" + String(Date.now()).slice(-10);
+  const joinerName = `Draft Joiner ${Date.now()}`;
+  const joinerSteamId = "7656117" + String(Date.now()).slice(-10);
+
+  // Signed up BEFORE a draft time exists: they confirm it later on /me.
+  const playerContext = await browser.newContext();
+  const playerPage = await playerContext.newPage();
+  await playerPage.goto(
+    `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/me`,
+  );
+  await playerPage.getByLabel("Dota 2 MMR").fill("3100");
+  await playerPage
+    .getByRole("button", { name: /Join the season|Update signup/ })
+    .click();
+  await expect(playerPage.getByText("Playing").first()).toBeVisible();
 
   // Schedule draft night from the real admin form. The datetime-local helper
   // converts this league-time value to the epoch the confirmation action
@@ -92,20 +126,10 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   await page.getByRole("button", { name: "Set draft night" }).click();
   await expect(page.getByText(/^0\/\d+ ready$/)).toBeVisible();
 
-  const playerContext = await browser.newContext();
-  const playerPage = await playerContext.newPage();
-  await playerPage.goto(
-    `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/me`,
-  );
-  await playerPage.getByLabel("Dota 2 MMR").fill("3100");
-  await playerPage
-    .getByRole("button", { name: /Join the season|Update signup/ })
-    .click();
-  await expect(playerPage.getByText("Playing").first()).toBeVisible();
+  await playerPage.reload();
   await expect(
     playerPage.getByRole("button", { name: "Confirm I’m ready for draft" }),
   ).toBeVisible();
-
   await playerPage
     .getByRole("button", { name: "Confirm I’m ready for draft" })
     .click();
@@ -113,21 +137,65 @@ test("a player confirms the draft schedule and admin sees the readiness change",
     playerPage.getByText("Ready for draft ✓", { exact: true }),
   ).toBeVisible();
 
+  // Joining AFTER the time is posted counts as confirming it: the form showed
+  // the time, so there is no second step.
+  const joinerContext = await browser.newContext();
+  const joinerPage = await joinerContext.newPage();
+  await joinerPage.goto(
+    `/api/auth/dev?name=${encodeURIComponent(joinerName)}&steamId=${joinerSteamId}&redirect=/me`,
+  );
+  await expect(
+    joinerPage.getByText(/Joining as a full player confirms/),
+  ).toBeVisible();
+  await joinerPage.getByLabel("Dota 2 MMR").fill("3000");
+  await joinerPage.getByRole("button", { name: "Join the season" }).click();
+  await expect(
+    joinerPage.getByText("Ready for draft ✓", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    joinerPage.getByRole("button", { name: "Confirm I’m ready for draft" }),
+  ).toHaveCount(0);
+  await joinerContext.close();
+
+  // Who has confirmed lives behind the preflight's "Show who" toggle (one
+  // count, not a chip on every row). Open it only once React has hydrated
+  // it: flipping `open` on the server HTML first is a hydration mismatch.
+  const showWho = async () => {
+    const who = page.locator("#adm-draft-confirmations");
+    await expect
+      .poll(() =>
+        who.evaluate((el) =>
+          Object.keys(el).some((key) => key.startsWith("__reactFiber")),
+        ),
+      )
+      .toBe(true);
+    // Hydration is time-sliced and can restart; an idle main thread means
+    // it has finished.
+    await page.evaluate(
+      () => new Promise((resolve) => requestIdleCallback(() => resolve(null))),
+    );
+    await who.evaluate((el) => ((el as HTMLDetailsElement).open = true));
+  };
   await page.reload();
-  const playerRow = page
-    .locator(".max-h-80 div.rounded-lg", { hasText: name })
-    .first();
-  await expect(playerRow.getByText("ready ✓", { exact: true })).toBeVisible();
+  await showWho();
+  for (const who of [name, joinerName]) {
+    await expect(
+      page
+        .getByRole("list", { name: "Ready", exact: true })
+        .getByText(who, { exact: false }),
+    ).toBeVisible();
+  }
 
   // Moving the date must invalidate the old acknowledgement rather than
   // leaving a misleading permanent ready flag.
   await page.getByLabel(/Draft night/).fill("2026-08-15T19:00");
   await page.getByRole("button", { name: "Update draft night" }).click();
+  await expect(page.getByText("Must reconfirm (", { exact: false })).toBeAttached();
+  await showWho();
   await expect(
     page
-      .locator(".max-h-80 div.rounded-lg", { hasText: name })
-      .first()
-      .getByText("reconfirm", { exact: true }),
+      .getByRole("list", { name: "Must reconfirm", exact: true })
+      .getByText(name, { exact: false }),
   ).toBeVisible();
 
   await playerPage.reload();
@@ -138,17 +206,25 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   await playerContext.close();
 });
 
-test("typed confirmation actually removes a designated captain", async ({
+test("removing a captain before any fixtures exist takes one plain confirm", async ({
   page,
 }) => {
-  page.on("dialog", (dialog) => dialog.accept());
+  // With no schedule only the team goes, so a plain confirm guards it; the
+  // typed-name barrier is for once fixtures exist, when removing a captain
+  // clears every fixture in the season (danger-submit.test.ts pins that).
+  const confirms: string[] = [];
+  page.on("dialog", (dialog) => {
+    confirms.push(dialog.message());
+    void dialog.accept();
+  });
   await page.goto(
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
   );
 
-  const dendiRow = page.locator(".max-h-80 div.rounded-lg", {
-    hasText: "Dendi",
-  });
+  const dendiRow = page
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Dendi" });
   await dendiRow.getByRole("button", { name: "make captain" }).click();
   await expect(
     page.getByRole("heading", { name: "Captains (1)" }),
@@ -160,16 +236,18 @@ test("typed confirmation actually removes a designated captain", async ({
   await captainSection
     .getByRole("button", { name: "remove", exact: true })
     .click();
-  const confirmation = page.getByRole("dialog");
-  await confirmation.locator("input").fill("Dendi's Team");
-  await confirmation
-    .getByRole("button", { name: "remove", exact: true })
-    .click();
 
   await expect(
     page.getByRole("heading", { name: "Captains (0)" }),
   ).toBeVisible();
   await expect(page.getByText("Dendi's Team", { exact: true })).toHaveCount(0);
+  // The confirm names the team that goes and the gentler alternative; no
+  // typed-name dialog appears.
+  const removal = confirms.filter((message) => message.startsWith("Remove "));
+  expect(removal).toHaveLength(1);
+  expect(removal[0]).toContain("delete Dendi's Team?");
+  expect(removal[0]).toContain("use Change captain instead");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 test("non-admin sees a clear restricted-access state", async ({ page }) => {

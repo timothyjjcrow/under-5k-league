@@ -1018,8 +1018,9 @@ describe("inhouse board — removal is honest", () => {
 
 describe("inhouse board — wiring into the sitewide sync", () => {
   // The board is only as fresh as the code that calls it. These pin the two
-  // hooks in syncInhouse (result-sync-service) that CLAUDE.md records as
-  // invariants — both were previously deletable with the suite still green.
+  // hooks in syncInhouse (result-sync-service) that docs/features/discord.md
+  // (queue board, "Who repaints") records as invariants — both were
+  // previously deletable with the suite still green.
 
   it("repaints from a page view when the queue is empty and no lobby is up", async () => {
     // The state nothing else observes: resolvers are skipped and nobody is
