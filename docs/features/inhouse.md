@@ -39,8 +39,11 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   and pick deadlines, the detect window, abandonment floors and queue
   idle/away transitions. Mutations call `invalidateAutomationGateBestEffort()`.
 - **Never make a mutation wait on Discord.** Mutations answer with
-  `getInhouseState(user, { runMaintenance: false, syncBoard: false })`; the
-  client's follow-up poll ~250ms later repaints the board.
+  `getInhouseState(user, { runMaintenance: false, syncBoard: false })`. A poll
+  repaints the board only when it wins the 2s `inhouseRoomMaintenanceAt`
+  claim (`syncBoard: runMaintenance`, `src/app/api/inhouse/route.ts`), and
+  signed-out polls never do; otherwise the claim's winner or the worker
+  repaints. Don't make every poll sync the board to "fix" this.
 - **API contract:** `state` plus `join`, `leave`, `accept`, `decline`, `vote`,
   `pick`, `start`, `record`, `detect`, `cancel`, `void`. The body must be a JSON
   object with a non-empty string `action`, else 400. `state` allows 1,200/min
@@ -126,9 +129,11 @@ Every transition is a guarded claim; keep it that way (general rules:
   snapshot (clamped), so a blank "Run it back" join keeps a known MMR. Client
   MMR alone never decides captaincy for a registered player.
 - **Keep the queue's "How your MMR is set" note after joining** (`mmrHint`,
-  `src/components/inhouse/queue-view.tsx`). It is the only place that explains
-  why the listed MMR differs from what was typed: a registration MMR overrides
-  the typed value, and a self-reported value is clamped to the medal.
+  built in `src/app/inhouse/page.tsx`, shown by
+  `src/components/inhouse/queue-view.tsx`). It renders only for a medal-holder
+  with no signup MMR and explains why a typed value outside the medal's window
+  is clamped. A registered player gets no MMR input at all, only "Joining at N
+  MMR, from your league signup", which is what explains that override.
 - **Order by exact keys, never row order.** Queue reads and formation sort
   `[joinedAt, userId]`; formation copies `joinedAt` to
   `InhouseLobbyPlayer.queuedAt`, and later sorts use `[queuedAt, userId]`.

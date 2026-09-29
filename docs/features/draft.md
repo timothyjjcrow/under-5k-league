@@ -12,9 +12,11 @@ Admin actions: `src/app/actions/admin-captains-draft.ts`. Helpers:
 
 - **Clocks are server-authoritative and resolve lazily.**
   `resolveExpiredNomination` (bid clock out) and `resolveStalledNomination`
-  (nominator's clock out) run in `getDraftState`, before each nominate/bid,
-  and in the worker's `syncDraftClocks` (`result-sync-service.ts`), so the
-  auction moves with nobody watching. Signed-in polls resolve at most once per
+  (nominator's clock out) both run in `getDraftState`, `pauseDraft` and the
+  worker's `syncDraftClocks` (`result-sync-service.ts`), so the auction moves
+  with nobody watching. `nominatePlayer` and `placeBid` run only
+  `resolveExpiredNomination`: a nominate or bid never settles a stalled
+  nominator clock. Signed-in polls resolve at most once per
   `draftRoomMaintenanceAt` window; anonymous polls are read-only. Timers are
   `DEFAULTS` in `constants.ts`; a lot nobody can outbid gets the short clock
   (`bidClockSeconds`).

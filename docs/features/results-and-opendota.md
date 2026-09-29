@@ -94,8 +94,11 @@ Captain report, admin import, league feed and roster scan all end in
   Manual score entry (`recordResult`) stays admin-only.
 - **Admin controls are the override.** Admin Add game skips the fixture-window
   check, and admin Auto-fetch passes `ignoreSkips`, so a game removed by
-  mistake is one click from coming back. Every other scan (automatic, league
-  feed, a captain's Auto-fetch) honors removals.
+  mistake is one click from coming back. Automatic sync, the automatic league
+  feed and a captain's Auto-fetch honor removals (`respectImportSkips`). Two
+  more paths do NOT, and no test pins either: the admin's manual "Sync league
+  games" (`respectImportSkips: !!opts.auto`) re-imports every removed game still
+  in the feed, and a captain's pasted id (`reportImportGame`) can bring one back.
 - **Bust the caches after an import.** Both action files call `refreshGames()`,
   which expires `"games"` and `AUTOMATION_GATE_TAG` and revalidates the layout.
 
@@ -121,14 +124,17 @@ Captain report, admin import, league feed and roster scan all end in
   a skipped game importable. Provider failures retry, then become
   `NEEDS_REVIEW` after `IMPORT_CANDIDATE_MAX_ATTEMPTS` for an admin to retry or
   ignore with a reason (`src/app/actions/import-progress.ts`). A retryable
-  failure never becomes a permanent exclusion. Manual sync skips the fetch cap
-  and the legacy skip list.
-- **Admin removals are permanent exclusions.** `removeGame` writes an
-  `ImportSuppression` row, deletes the game and releases its `DotaMatchClaim`
-  in one transaction; scans re-check suppressions in their write.
-  Without it auto-sync re-imported a removed game within minutes. The legacy
-  `importSkip:<season>` and `leagueSyncSkip:<season>` Settings are still read,
-  never written; a corrupt legacy `importSkip` fails closed.
+  failure never becomes a permanent exclusion. Manual sync skips the fetch cap,
+  the legacy skip list and admin removals (it refetches a suppressed id).
+- **Admin removals exclude a game from automatic import.** `removeGame` writes
+  an `ImportSuppression` row, deletes the game and releases its
+  `DotaMatchClaim` in one transaction; automatic scans re-check suppressions
+  in their write, and the toast promises only "Automatic sync won't re-import
+  it". Without it auto-sync re-imported a removed game within minutes. The
+  manual paths that ignore it are listed under "Admin controls are the
+  override" above. The legacy `importSkip:<season>` and
+  `leagueSyncSkip:<season>` Settings are still read, never written; a corrupt
+  legacy `importSkip` fails closed.
 
 ## Automatic result sync
 

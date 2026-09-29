@@ -362,8 +362,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 
 ### Admin actions and data
 
-- **Open every admin action with `adminOrError()`** and add any new
-  `"use server"` admin file to `test/integration/admin-auth.itest.ts`. Never
+- **Open every admin action with `adminOrError()`, in an `admin-*.ts` file:**
+  `admin-auth.itest.ts` globs only those (seven older modules escape it). Never
   mark `admin-shared.ts` `"use server"`: every export would become an endpoint.
 - **Assume the guard you need is missing.** The engines are hardened; the thin
   actions calling them are where untested defects hid.

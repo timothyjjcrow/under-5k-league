@@ -289,9 +289,10 @@ actions: `src/app/actions/admin-discord.ts`.
   unknown membership adds no step.
 - **The dashboard prompt is derived, never dismissible.** `DiscordSetupPrompt`
   (`discord-setup.tsx`, rendered by `src/app/page.tsx`) shows only to ACTIVE
-  registrations, in every phase: unlinked gets `DiscordSetupCard` (copy branches
-  on `autoJoins`); not-member or pending gets `DiscordJoinCard`; unknown gets
-  nothing.
+  registrations, in every phase except COMPLETE (`page.tsx` gates it: nobody
+  needs to reach them for a finished season): unlinked gets `DiscordSetupCard`
+  (copy branches on `autoJoins`); not-member or pending gets `DiscordJoinCard`;
+  unknown gets nothing.
 - **Name each join CTA distinctly and keep an invite beside one-click.** "Join
   the server" (re-OAuth), "Use the invite instead"; pending gets "Open the
   server" (dashboard) or "Open Discord" (/me). Re-OAuth alone loops a player

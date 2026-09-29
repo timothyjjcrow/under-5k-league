@@ -20,8 +20,13 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
 - **Open every admin action with
   `const admin = await adminOrError(); if ("error" in admin) return admin;`.**
   `test/integration/admin-auth.itest.ts` calls each one signed out and as a
-  player; add any new `"use server"` admin file to its list (it fails until
-  you do).
+  player. It globs only `src/app/actions/admin*.ts`, and fails until a new
+  `"use server"` file matching that glob is in its `MODULES`; so put new admin
+  actions in an `admin-*.ts` file. Seven older admin-only modules sit outside
+  the glob, use `try { await requireAdmin() } catch`, and have NO refusal
+  coverage there: `automation.ts`, `game-participants.ts`,
+  `import-progress.ts`, `inhouse-admin.ts`, `news.ts`, `roster-history.ts`,
+  `tiebreakers.ts`.
 - **Assume the guard you need is missing.** The engines are hardened; the thin
   actions calling them are where untested defects hid. Re-assert preconditions
   at the write (`docs/features/concurrency-and-testing.md`).
