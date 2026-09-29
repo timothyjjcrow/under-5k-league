@@ -447,8 +447,13 @@ export default async function ScrimDetailPage({
                     className={textLink()}
                   >
                     Sign in
-                  </Link>{" "}
-                  to see the captains&apos; Discord handles.
+                  </Link>
+                  {/* Name who the handles are for: contactFor opens them
+                      only to this season's signed-up players (active
+                      seasons only) and both teams' captains and coaches. */}
+                  {scrim.season.isActive
+                    ? " to see the captains' Discord handles if you're signed up this season or captain or coach one of these teams."
+                    : " to see the captains' Discord handles if you captain or coach one of these teams."}
                 </p>
               ) : null}
             </div>

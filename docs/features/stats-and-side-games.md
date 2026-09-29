@@ -235,7 +235,10 @@ standings. `scrim-service.ts` (post, claim, cancel, end, guests, coaches),
   (`advanceTiebreakerWeek`) is still blocked by a clash instead of yielding.
 - **Booked page**: both captains, `<DiscordTag>` behind
   `canViewLeagueContact` (never public), and `scrimHostLine` (the poster
-  hosts, on `LEAGUE_CONFIG.gameServerRegion`). **Open page**: a one-click Join
+  hosts, on `LEAGUE_CONFIG.gameServerRegion`). The signed-out "Sign in to
+  see the handles" prompt names who they are for (this season's signed-up
+  players, active seasons only, or either team's captains and coaches):
+  signing in alone unlocks nothing. **Open page**: a one-click Join
   or the reason from `scrimJoinCheck` (shared with `/scrims`; grace
   `SCRIM_PAST_GRACE_MS`, the service's own).
 - **Ping only captains who must act** (`mentionUsers`, post-commit,

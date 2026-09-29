@@ -60,6 +60,21 @@ describe("player-directory contact visibility wiring", () => {
     expect(scrimPage).toMatch(/showContact \? \(\s*captain\.discordName/);
   });
 
+  it("tells a signed-out scrim visitor who the handles are actually for", () => {
+    // Signing in alone unlocks nothing: the registration half of the gate
+    // is only loaded for an active season, so the prompt may promise
+    // "signed up this season" only there, and always names team staff.
+    expect(scrimPage).toMatch(
+      /const viewerRegistration =\s*viewer && scrim\.season\.isActive/,
+    );
+    expect(scrimPage).toMatch(
+      /scrim\.season\.isActive\s*\?\s*" to see the captains' Discord handles if you're signed up this season or captain or coach one of these teams\."\s*:\s*" to see the captains' Discord handles if you captain or coach one of these teams\."/,
+    );
+    expect(scrimPage).not.toContain(
+      "to see the captains&apos; Discord handles.",
+    );
+  });
+
   it("keeps profile contact and the private-match-data flag behind the shared policy", () => {
     // The page decides with the shared policy and hands the answer to the
     // header, which renders the members-only tokens behind it.
