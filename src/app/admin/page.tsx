@@ -2069,18 +2069,15 @@ function SeasonControls({
               <SubmitButton variant="secondary" size="sm">
                 Save series lengths
               </SubmitButton>
-              {/* These are copied onto each Match row when it is CREATED, so they
-                  are read-once per phase, not live. Saving after the fact still
-                  writes the Season and re-renders with the new value — a perfect
-                  false confirmation — while every existing fixture keeps its old
-                  length. Say which ones are already locked in rather than letting
-                  an admin "fix" a Bo1 into a Bo3 that never happens. */}
+              {/* Each Match row carries its own length, copied when it is
+                  created. Saving once wrote only the Season, so an existing
+                  grand final stayed Bo5 under a "Bo3" setting; setSeriesLengths
+                  now moves every fixture that has not started, and its toast
+                  names what moved and what it left. */}
               <span className="text-xs text-muted">
-                games per match — copied onto each fixture when it is created, so
-                these only affect matches made from now on.
-                {data.matches.some((m) => m.phase === "REGULAR")
-                  ? " The regular-season schedule already exists: change its length per match, or regenerate."
-                  : ""}
+                games per match — saving also updates every match that hasn&apos;t
+                kicked off yet. Matches already played or under way keep their
+                length, and tiebreakers keep theirs.
               </span>
             </ActionForm>
           </div>
