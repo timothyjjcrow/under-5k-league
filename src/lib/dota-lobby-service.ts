@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { SessionUser } from "./auth";
 import { prisma } from "./prisma";
-import { INHOUSE, INHOUSE_ACTIVE_STATUSES } from "./constants";
+import { INHOUSE, INHOUSE_ACTIVE_STATUSES, LEAGUE_GAME_MODE } from "./constants";
 import { getActiveSeason } from "./season";
 import { matchResultsOpen } from "./league-lifecycle";
 import { matchNightRoster } from "./availability";
@@ -179,7 +179,7 @@ export async function resolveDotaLobby(
       name: `${INHOUSE.LOBBY_NAME} ${id.slice(-8)}`,
       password: INHOUSE.LOBBY_PASSWORD,
       leagueId,
-      gameMode: 2,
+      gameMode: LEAGUE_GAME_MODE.id,
       serverRegion: LEAGUE_CONFIG.gameServerRegionId,
       radiant: team(lobby.radiantTeam),
       dire: team(lobby.radiantTeam === 1 ? 2 : 1),
@@ -240,7 +240,7 @@ export async function resolveDotaLobby(
         .digest("hex")
         .slice(0, 12),
       leagueId,
-      gameMode: 2,
+      gameMode: LEAGUE_GAME_MODE.id,
       serverRegion: LEAGUE_CONFIG.gameServerRegionId,
       radiant: roster(match.homeTeam),
       dire: roster(match.awayTeam),

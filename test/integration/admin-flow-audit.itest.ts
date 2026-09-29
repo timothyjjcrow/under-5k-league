@@ -28,6 +28,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
+import { formatLeagueTime } from "@/lib/zoned-time";
 import {
   assignStandin,
   generateSchedule,
@@ -930,6 +931,27 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
     expect(res?.message).not.toMatch(/\b0 /);
   });
 
+  it("restates week 1's kickoff on the league's clock", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Clock${i}`, i + 1);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    const first = new Date(Date.now() + 7 * 864e5);
+
+    const res = await generateSchedule(
+      empty,
+      fd({
+        firstNight: "2026-10-07T20:00",
+        firstNightTs: String(first.getTime()),
+        expectedActiveSeasonId: season.id,
+      }),
+    );
+
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toContain(`week 1: ${formatLeagueTime(first)}, then weekly`);
+  });
+
   it("refuses to expose a schedule while the auction is still live", async () => {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
     for (let i = 0; i < 4; i++) await makeTeam(season.id, `Live${i}`, i + 1);
@@ -1220,6 +1242,8 @@ describe("setMatchTime — a retime must report itself", () => {
 
     expect(res?.message).toMatch(/3 check-in/);
     expect(res?.message).toMatch(/1 open reschedule proposal/i);
+    // Restated on the league's clock, zone named.
+    expect(res?.message).toContain(`Kickoff time set to ${formatLeagueTime(when)}`);
     expect(
       await prisma.matchAvailability.count({ where: { matchId: target.id } }),
     ).toBe(0);

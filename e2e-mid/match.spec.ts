@@ -15,7 +15,7 @@ test("a completed match page renders the box score with an MVP chip", async ({
   // the header hamburger also has aria-expanded) and open its first match.
   await page.locator('#main button[aria-expanded="false"]').first().click();
   await page
-    .getByRole("article", { name: / · Final$/ })
+    .getByRole("article", { name: / · Final score$/ })
     .first()
     .getByRole("link", { name: "details →" })
     .click();
@@ -132,9 +132,12 @@ test("captains can report an open series and get a clear correction handoff once
     page.getByText("Current league id", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("17119", { exact: true })).toBeVisible();
+  // One "How to host" line, inside the checklist: the host and the Bo2
+  // lobby rule are said once, not in a second box above it.
+  await expect(page.getByText("How to host:", { exact: true })).toHaveCount(1);
   await expect(
     page.getByText(
-      "This is a Bo2: create two separate Bo1 lobbies and select this league ticket in both.",
+      /captain hosts · .+ · Captains Mode · Bo2 = two separate lobbies/,
     ),
   ).toBeVisible();
   await expect(

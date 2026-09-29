@@ -67,6 +67,9 @@ export function StandingsTable({
   const cutIsReal =
     playoffCut != null && playoffCut > 0 && playoffCut < eligibleFieldSize;
   const pendingTeamIds = new Set(unresolvedPlayoffTeamIds);
+  // Before anyone has played, every team is level at zero: that is not a tie
+  // worth a chip on every row.
+  const anyPlayed = standings.some((row) => row.played > 0);
   const eligibleRows = standings.filter((row) => !withdrawnIds?.has(row.teamId));
   const qualificationTieIds = new Set<string>();
   for (const row of eligibleRows) {
@@ -104,7 +107,7 @@ export function StandingsTable({
         : pending && !seedPending ? null : (clinch?.get(s.teamId) ?? null)
       : null,
     move: movement?.get(s.teamId) ?? 0,
-    idDecided: !confirmedOut && (s.idDecided ?? false),
+    idDecided: anyPlayed && !confirmedOut && (s.idDecided ?? false),
     tiebreakerResolved: s.tiebreakerResolved ?? false,
     tiebreakerPending: pending && !withdrawnIds?.has(s.teamId),
     seedingTiebreakerPending: seedPending,

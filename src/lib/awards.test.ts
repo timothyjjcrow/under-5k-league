@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeSeasonAwards, type AwardGame } from "./awards";
+import { fantasyPoints } from "./fantasy";
 
 // Helper to build a game line.
 function line(
@@ -29,15 +30,95 @@ describe("computeSeasonAwards", () => {
     expect(computeSeasonAwards([])).toEqual([]);
   });
 
-  it("awards MVP to the player with the most wins", () => {
+  it("awards MVP on points per game, not on the champion regular's win count", () => {
+    // champ's side wins all four games; star's side loses all four but star
+    // plays far better every night. The old most-wins MVP went to champ.
+    const games: AwardGame[] = [1, 2, 3, 4].map((i) =>
+      game(`m${i}`, true, 20, 10, [
+        line("champ", 1, true, 2, 2, 5, 500), // 2*2 + 5*2 - 1.5 + 8 win + 4 economy = 24.5
+        line("star", 2, false, 12, 2, 10, 600), // 24 + 20 - 1.5 + 6 economy = 48.5
+      ]),
+    );
+    const mvp = computeSeasonAwards(games).find((a) => a.key === "mvp");
+    expect(mvp?.userId).toBe("star");
+    expect(mvp?.value).toBe("48.5 pts/game");
+    expect(mvp?.detail).toBe("over 4 games");
+    expect(mvp?.blurb).toContain("per game");
+    expect(mvp?.blurb).toContain("Player of the Week");
+    expect(mvp?.blurb).not.toMatch(/most wins/i);
+  });
+
+  it("scores the MVP with the exact Player of the Week line, extended stats included", () => {
+    // Without heroHealing, healer's playmaking bonus is 4.5 (23.5 pts) and
+    // carry's 24.5 would win; healing caps the bonus at 8 (27 pts). The award
+    // must read the same optional fields fantasyPoints does.
+    const healerLine = { ...line("healer", 1, false, 1, 4, 10, 250), heroHealing: 6000 };
+    const carryLine = line("carry", 2, false, 5, 2, 6, 500);
     const games: AwardGame[] = [
-      // alice (radiant) wins twice, bob (dire) loses twice
-      game("m1", true, 30, 10, [line("alice", 1, true, 5, 2, 8), line("bob", 2, false, 3, 6, 4)]),
-      game("m2", true, 25, 12, [line("alice", 1, true, 6, 1, 9), line("bob", 2, false, 2, 5, 3)]),
+      game("m1", true, 10, 20, [healerLine, carryLine]),
+      game("m2", true, 10, 20, [healerLine, carryLine]),
     ];
     const mvp = computeSeasonAwards(games).find((a) => a.key === "mvp");
-    expect(mvp?.userId).toBe("alice");
-    expect(mvp?.value).toBe("2 wins");
+    expect(mvp?.userId).toBe("healer");
+    expect(mvp?.value).toBe(`${fantasyPoints(healerLine, false).toFixed(1)} pts/game`);
+    expect(mvp?.value).toBe("27.0 pts/game");
+  });
+
+  it("requires at least half the most games anyone played to be MVP", () => {
+    // steady plays all 5 games → floor is ceil(5/2) = 3. threeGame (exactly
+    // the floor) qualifies; twoGame's two monster games do not.
+    const games: AwardGame[] = [1, 2, 3, 4, 5].map((i) =>
+      game(`m${i}`, true, 20, 10, [
+        line("steady", 1, true, 3, 4, 3, 400), // 6 + 6 - 3 + 8 + 2 = 19
+        i <= 3
+          ? line("threeGame", 2, false, 8, 2, 8, 500) // 16 + 16 - 1.5 + 4 = 34.5
+          : line("twoGame", 3, false, 20, 0, 20, 800), // 80 + 8 capped bonus = 88
+      ]),
+    );
+    const mvp = computeSeasonAwards(games).find((a) => a.key === "mvp");
+    expect(mvp?.userId).toBe("threeGame");
+    expect(mvp?.value).toBe("34.5 pts/game");
+    expect(mvp?.detail).toBe("over 3 games");
+    expect(mvp?.blurb).toContain("min 3 games");
+  });
+
+  it("uses a one-game floor when nobody has played more than one game", () => {
+    const games: AwardGame[] = [
+      game("m1", true, 20, 10, [
+        line("solo", 1, true, 3, 4, 3, 400), // 19
+        line("other", 2, false, 1, 5, 1, 300), // 2 + 2 - 3.75 + 0.45 = 0.7
+      ]),
+    ];
+    const mvp = computeSeasonAwards(games).find((a) => a.key === "mvp");
+    expect(mvp?.userId).toBe("solo");
+    expect(mvp?.detail).toBe("over 1 game");
+    expect(mvp?.blurb).toContain("min 1 game)");
+  });
+
+  it("breaks an exact points-per-game tie by more games, then by player id", () => {
+    // Every line is worth 11.7 (2 + 2 - 0.75 + 8 + 0.45). In floats
+    // (11.7 * 3) / 3 !== (11.7 * 2) / 2, so a float running sum would split
+    // this tie by rounding noise; the award must see it as a real tie.
+    const lineOf = (id: string) => line(id, 1, true, 1, 1, 1, null);
+    const games: AwardGame[] = [
+      game("m1", true, 20, 10, [lineOf("zed"), lineOf("bob"), lineOf("amy")]),
+      game("m2", true, 20, 10, [lineOf("zed"), lineOf("bob"), lineOf("amy")]),
+      game("m3", true, 20, 10, [lineOf("zed"), lineOf("bob")]),
+    ];
+    const mvp = computeSeasonAwards(games).find((a) => a.key === "mvp");
+    // amy (2 games) has the lowest id but fewer games; bob beats zed on id.
+    expect(mvp?.userId).toBe("bob");
+    expect(mvp?.value).toBe("11.7 pts/game");
+  });
+
+  it("no longer hands out a games-played Workhorse award", () => {
+    const games: AwardGame[] = [
+      game("m1", true, 20, 10, [line("alice", 1, true, 5, 2, 8), line("bob", 2, false, 3, 6, 4)]),
+      game("m2", true, 25, 12, [line("alice", 1, true, 6, 1, 9)]),
+    ];
+    const keys = computeSeasonAwards(games).map((a) => a.key);
+    expect(keys).not.toContain("workhorse");
+    expect(keys).toContain("mvp");
   });
 
   it("awards Kill Leader by total kills", () => {

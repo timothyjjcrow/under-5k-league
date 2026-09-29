@@ -136,9 +136,46 @@ describe("GET /api/calendar", () => {
     const response = await GET(request());
     const body = await response.text();
     expect(body).toContain("UID:match-tiebreaker@league.example");
-    expect(body).toContain("SUMMARY:Tiebreaker week 6: Radiant Raiders vs Dire Wolves");
+    expect(body).toContain("SUMMARY:Tiebreaker: Radiant Raiders vs Dire Wolves");
     expect(body).toContain(`best of ${bestOf}`);
     expect(body).not.toContain("Playoffs");
+  });
+
+  it("names playoff events by their round, reading the depth from the whole bracket", async () => {
+    // A team feed holds only that team's semifinal; the bracket's first round
+    // (four quarterfinals) is what says this is a semifinal, not "Playoffs".
+    const semi = {
+      ...matchRows[0],
+      id: "match-semi",
+      phase: "PLAYOFF",
+      week: 9,
+      bracketSlot: "R1M0",
+      bestOf: 3,
+    };
+    const final = {
+      ...matchRows[0],
+      id: "match-final",
+      phase: "FINAL",
+      week: 10,
+      bracketSlot: "R2M0",
+      bestOf: 3,
+    };
+    mocks.findMatches.mockImplementation(
+      async ({ select }: { select?: unknown }) =>
+        select
+          ? [0, 1, 2, 3].map((i) => ({ phase: "PLAYOFF", bracketSlot: `R0M${i}` }))
+          : [semi, final],
+    );
+    const body = await (await GET(request("?team=team-radiant"))).text();
+    expect(body).toContain("SUMMARY:Semifinal: Radiant Raiders vs Dire Wolves");
+    expect(body).toContain("SUMMARY:Grand final: Radiant Raiders vs Dire Wolves");
+    expect(body).not.toContain("Playoffs");
+    // Subscribers key events on the UID: its format must never change.
+    expect(body).toContain("UID:match-semi@league.example");
+    expect(mocks.findMatches).toHaveBeenCalledWith({
+      where: { seasonId: season.id, phase: { in: ["PLAYOFF", "FINAL"] } },
+      select: { phase: true, bracketSlot: true },
+    });
   });
 
   it("returns 404 when no season is active", async () => {
@@ -232,7 +269,7 @@ describe("GET /api/calendar", () => {
       "text/calendar; charset=utf-8",
     );
     expect(response.headers.get("content-disposition")).toBe(
-      'attachment; filename="ld2l-summer-finals-2026-schedule.ics"',
+      'attachment; filename="ggd2l-summer-finals-2026-schedule.ics"',
     );
     expect(response.headers.get("cache-control")).toBe(
       "public, max-age=0, must-revalidate",

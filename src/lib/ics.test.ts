@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { buildCalendar, escapeIcsText, foldIcsLine, icsDate } from "./ics";
+import {
+  buildCalendar,
+  calendarProductId,
+  escapeIcsText,
+  foldIcsLine,
+  icsDate,
+} from "./ics";
+import { LEAGUE_CONFIG } from "./league-config";
 
 describe("escapeIcsText", () => {
   it("escapes backslash, semicolon, comma, and newlines", () => {
@@ -46,6 +53,20 @@ describe("buildCalendar", () => {
     expect(buildCalendar("League", [{ ...event, sequence: 3 }])).toContain("SEQUENCE:3");
     expect(buildCalendar("League", [{ ...event, sequence: -1 }])).toContain("SEQUENCE:0");
     expect(buildCalendar("League", [{ ...event, sequence: 1.5 }])).toContain("SEQUENCE:0");
+  });
+
+  it("names the league, not LD2L, in its product id", () => {
+    expect(buildCalendar("League", [])).toContain(
+      `PRODID:${calendarProductId(LEAGUE_CONFIG.name)}`,
+    );
+    expect(buildCalendar("League", [])).not.toContain("LD2L");
+    expect(calendarProductId("GGD2L")).toBe("-//GGD2L//League Schedule//EN");
+    expect(calendarProductId("GGD2L Europe")).toBe(
+      "-//GGD2L Europe//League Schedule//EN",
+    );
+    // A configured name can't break the -//owner//product//EN shape.
+    expect(calendarProductId("A//B;C")).toBe("-//ABC//League Schedule//EN");
+    expect(calendarProductId("///")).toBe("-//GGD2L//League Schedule//EN");
   });
 
   it("emits an empty calendar without events", () => {

@@ -1,3 +1,4 @@
+import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { playoffFirstRound, pickBracketSize, type Pairing } from "./schedule";
 import {
   computeStandings,
@@ -94,4 +95,36 @@ export function projectPlayoffField(
     seedingDeadHeatTeamIds,
     tiebreakers: resolution.state,
   };
+}
+
+/**
+ * Whether a dead heat in the table is a real playoff tiebreaker yet: every
+ * regular-season fixture is final, or tiebreaker fixtures already exist.
+ * Before that, two teams level today can still be split by the games left to
+ * play, so public pages show only the quiet "Tied" chip and keep projecting
+ * seeds and matchups in the displayed order.
+ */
+export function tiebreakersInPlay(
+  matches: Pick<MatchLike, "phase" | "status">[],
+): boolean {
+  const regular = matches.filter((m) => m.phase === MATCH_PHASE.REGULAR);
+  const regularComplete =
+    regular.length > 0 &&
+    regular.every((m) => m.status === MATCH_STATUS.COMPLETED);
+  return (
+    regularComplete || matches.some((m) => m.phase === MATCH_PHASE.TIEBREAKER)
+  );
+}
+
+/**
+ * The dead-heat teams the public standings and playoff picture may badge as
+ * waiting on a tiebreaker. Presentation only: admin tiebreaker scheduling and
+ * createPlayoffBracket read `seedingDeadHeatTeamIds` directly, and they only
+ * act once the regular season is over.
+ */
+export function publicDeadHeatTeamIds(
+  projection: Pick<PlayoffFieldProjection, "seedingDeadHeatTeamIds">,
+  matches: Pick<MatchLike, "phase" | "status">[],
+): string[] {
+  return tiebreakersInPlay(matches) ? projection.seedingDeadHeatTeamIds : [];
 }

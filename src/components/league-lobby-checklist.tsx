@@ -10,15 +10,20 @@ import {
   buttonClasses,
 } from "@/components/ui";
 
-/** Captain-only match-night instructions for official Valve league lobbies. */
+/**
+ * Captain-only match-night instructions for official Valve league lobbies.
+ *
+ * Opens with the same "How to host" line a ticketless season gets on its own
+ * (`howToHostParts`: who hosts, region, mode, how many lobbies), so the steps
+ * below don't repeat the host or the Bo2 rule. Each fact appears once.
+ */
 export function LeagueLobbyChecklist({
   leagueId,
-  bestOf,
-  homeTeamName,
+  hostParts,
 }: {
   leagueId: string;
-  bestOf: number;
-  homeTeamName: string;
+  /** `howToHostParts` for this match. */
+  hostParts: string[];
 }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -29,10 +34,14 @@ export function LeagueLobbyChecklist({
         action={<Badge tone="accent">Captain check</Badge>}
       />
       <CardBody className="space-y-3 text-sm">
+        <p className="[overflow-wrap:anywhere]">
+          <b className="text-fg">How to host:</b>{" "}
+          <span className="text-muted">{hostParts.join(" · ")}</span>
+        </p>
         <ol className="list-decimal space-y-1.5 pl-5 text-muted">
           <li>
-            <strong className="text-fg">{homeTeamName}&apos;s captain</strong>{" "}
-            creates the private lobby; the away captain is the backup host.
+            The host creates the private lobby; the away captain is the backup
+            host.
           </li>
           <li>
             Set the lobby&apos;s <strong className="text-fg">League</strong>{" "}
@@ -69,12 +78,6 @@ export function LeagueLobbyChecklist({
             {copied ? "Copied" : "Copy league id"}
           </button>
         </div>
-        {bestOf === 2 ? (
-          <p className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm text-fg">
-            This is a Bo2: create two separate Bo1 lobbies and select this
-            league ticket in both.
-          </p>
-        ) : null}
         <p className="text-xs text-muted">
           If a lobby uses an old or incorrect ticket, automatic recovery checks
           the teams&apos; linked player accounts. You can also add the Dota

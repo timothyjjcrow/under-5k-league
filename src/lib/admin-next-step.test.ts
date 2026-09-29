@@ -296,3 +296,77 @@ describe("adminNextStep — playoffs and completion", () => {
     expect(s.detail).toMatch(/kept/i);
   });
 });
+
+// Valve asks for a league ticket at least 15 days before the event, so a
+// missing ticket has to be on the admin's screen from the first signup — by
+// the time the season starts, the window has passed.
+describe("adminNextStep — league ticket", () => {
+  const ticketless = (o: Partial<AdminPhaseInput>) =>
+    at({ ...o, hasLeagueTicket: false });
+
+  it("warns from the first signup, before anything else is ready", () => {
+    const s = ticketless({ playerCount: 2, minPlayers: 10 });
+    expect(s.tone).toBe("waiting");
+    expect(s.ticketWarning).toMatch(/no Dota league ticket/);
+    expect(s.ticketWarning).toMatch(/about 15 days/);
+    expect(s.ticketWarning).toMatch(/results can't be imported/);
+  });
+
+  it("warns on the Start draft steps, while the draft runs, and when it is done", () => {
+    for (const draftStatus of [
+      null,
+      DRAFT_STATUS.NOT_STARTED,
+      DRAFT_STATUS.IN_PROGRESS,
+      DRAFT_STATUS.PAUSED,
+    ]) {
+      expect(
+        ticketless({ seasonStatus: SEASON_STATUS.DRAFT, draftStatus })
+          .ticketWarning,
+      ).toBeTruthy();
+    }
+    expect(
+      ticketless({ playerCount: 10, minPlayers: 10, teamCount: 4 })
+        .ticketWarning,
+    ).toBeTruthy();
+  });
+
+  it("repeats it on the start-of-season steps", () => {
+    const moveToRegular = ticketless({
+      seasonStatus: SEASON_STATUS.DRAFT,
+      draftStatus: DRAFT_STATUS.COMPLETE,
+    });
+    expect(moveToRegular.title).toMatch(/Regular season/);
+    expect(moveToRegular.ticketWarning).toBeTruthy();
+    const schedule = ticketless({ seasonStatus: SEASON_STATUS.REGULAR_SEASON });
+    expect(schedule.title).toMatch(/generate the schedule/i);
+    expect(schedule.ticketWarning).toBeTruthy();
+    // The step itself is unchanged — the warning rides beside it.
+    expect(moveToRegular.detail).toBe(
+      at({
+        seasonStatus: SEASON_STATUS.DRAFT,
+        draftStatus: DRAFT_STATUS.COMPLETE,
+      }).detail,
+    );
+  });
+
+  it("says nothing when the season has a ticket, or the caller didn't say", () => {
+    for (const seasonStatus of [
+      SEASON_STATUS.SIGNUPS,
+      SEASON_STATUS.DRAFT,
+      SEASON_STATUS.REGULAR_SEASON,
+      SEASON_STATUS.PLAYOFFS,
+    ]) {
+      expect(
+        at({ seasonStatus, hasLeagueTicket: true }).ticketWarning,
+      ).toBeUndefined();
+      expect(at({ seasonStatus }).ticketWarning).toBeUndefined();
+    }
+  });
+
+  it("drops it once the season is complete", () => {
+    expect(
+      ticketless({ seasonStatus: SEASON_STATUS.COMPLETE, hasChampion: true })
+        .ticketWarning,
+    ).toBeUndefined();
+  });
+});

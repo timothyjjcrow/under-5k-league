@@ -9,7 +9,10 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
-import { projectPlayoffField } from "@/lib/playoff-field";
+import {
+  projectPlayoffField,
+  publicDeadHeatTeamIds,
+} from "@/lib/playoff-field";
 import { TiebreakerNotice } from "@/components/tiebreaker-notice";
 import { TiebreakerBracket } from "@/components/tiebreaker-bracket";
 import { buildTiebreakerBrackets } from "@/components/tiebreaker-bracket-view";
@@ -19,6 +22,7 @@ import {
   byeTeamsByWeek,
   byKickoff,
   groupPlayoffRounds,
+  matchRoundLabel,
   pickBracketSize,
   playoffFirstRound,
   remainingSchedule,
@@ -328,6 +332,10 @@ export default async function SchedulePage() {
   }
   const playoffField = projectPlayoffField(teams, matches);
   const standings = playoffField.standings;
+  // A tie mid-season is just a tie. Only once the regular season is over (or
+  // tiebreaker fixtures exist) does it get a tiebreaker badge that holds back
+  // its seeds and the projected matchups.
+  const shownDeadHeatTeamIds = publicDeadHeatTeamIds(playoffField, matches);
   const teamForm = formByTeam(
     teams.map((t) => t.id),
     matches,
@@ -497,9 +505,10 @@ export default async function SchedulePage() {
   const tiebreakerBrackets = buildTiebreakerBrackets({ projection: playoffField, teams, matches });
   const playoffRoundViews: WeekView[] = playoffGrouping.rounds.map((r) => {
     const night = earliestScheduled(r.matches);
+    const seriesLengths = [...new Set(r.matches.map((m) => m.bestOf))];
     return {
       week: r.matches[0]?.week ?? r.round + 1,
-      label: roundName(r.round, playoffGrouping.totalRounds),
+      label: `${roundName(r.round, playoffGrouping.totalRounds)}${seriesLengths.length === 1 ? ` · Best of ${seriesLengths[0]}` : ""}`,
       completed: r.matches.filter((m) => m.status === "COMPLETED").length,
       total: r.matches.length,
       isCurrent: false,
@@ -646,7 +655,7 @@ export default async function SchedulePage() {
           matchId={myNextMatch.id}
           scheduleRevision={myNextMatch.scheduleRevision}
           remainingGames={myNextMatch.status === "LIVE"}
-          heading={`Your next match — ${myNextMatch.phase === "TIEBREAKER" ? "Tiebreaker week · " : ""}Week ${myNextMatch.week}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
+          heading={`Your next match — ${matchRoundLabel(myNextMatch, playoffGrouping.totalRounds, { bestOf: true })}: ${teamName.get(myNextMatch.homeTeamId)} vs ${teamName.get(myNextMatch.awayTeamId)}`}
           when={fmtWhen(myNextMatch.scheduledAt)}
           whenTs={myNextMatch.scheduledAt?.getTime()}
           myRsvp={myRsvp}
@@ -859,7 +868,7 @@ export default async function SchedulePage() {
                 : undefined
             }
             playoffSeedByTeam={playoffField.seedByTeam}
-            unresolvedPlayoffTeamIds={playoffField.seedingDeadHeatTeamIds}
+            unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
             clinch={clinchFromReport(stakesReport)}
             playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
             viewerTeamId={[...myTeamIds][0]}
@@ -884,7 +893,7 @@ export default async function SchedulePage() {
             teamName={teamName}
             teamLogoUrl={teamLogoUrl}
             report={stakesReport}
-            unresolvedTeamIds={playoffField.seedingDeadHeatTeamIds}
+            unresolvedTeamIds={shownDeadHeatTeamIds}
             tiebreakerError={playoffField.tiebreakers.error}
           />
           <RunIn
@@ -948,7 +957,7 @@ function SeasonGrid({
           "flex min-h-12 min-w-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-transparent px-2 py-2 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
           cell.result === "W" &&
             "bg-success/15 text-success hover:bg-success/25",
-          cell.result === "L" && "bg-danger/10 text-danger hover:bg-danger/20",
+          cell.result === "L" && "bg-danger/10 text-danger-soft hover:bg-danger/20",
           cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
           !cell.played && "text-muted hover:text-info",
         )}

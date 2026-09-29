@@ -16,6 +16,11 @@ import {
 import { effectiveDotaAccountId } from "./dota-account";
 import { advancePlayoffBracket } from "./playoff-service";
 import { advanceTiebreakerWeek } from "./tiebreaker-service";
+import {
+  matchRoundLabel,
+  nextPlayoffRoundName,
+  playoffTotalRounds,
+} from "./schedule";
 import { raceHook } from "./race-hook";
 import { markWeekHonorsStale, maybeAnnounceWeekHonors } from "./honors-service";
 import {
@@ -178,6 +183,9 @@ export async function announceSeriesResultOnce(match: {
       week: true,
       phase: true,
       forfeit: true,
+      seasonId: true,
+      bracketSlot: true,
+      _count: { select: { games: true } },
     },
   });
   if (!current || current.status !== MATCH_STATUS.COMPLETED) {
@@ -196,16 +204,36 @@ export async function announceSeriesResultOnce(match: {
     await markAnnouncementFailed(claim);
     return false;
   }
+  // Name the round the way the site does ("Semifinal", not "Playoffs"). The
+  // bracket's depth comes from its first round. A failed read only costs the
+  // round name, never the announcement itself.
+  const playoffRounds = isPlayoffPhase(current.phase)
+    ? playoffTotalRounds(
+        await prisma.match
+          .findMany({
+            where: {
+              seasonId: current.seasonId,
+              phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
+            },
+            select: { phase: true, bracketSlot: true },
+          })
+          .catch(() => []),
+      )
+    : 0;
   const sent = await sendDiscordMessage(
     matchResultMessage({
+      matchId: current.id,
       homeName: home.name,
       awayName: away.name,
       homeScore: current.homeScore,
       awayScore: current.awayScore,
-      week: current.week,
-      isPlayoff: isPlayoffPhase(current.phase),
-      isTiebreaker: current.phase === MATCH_PHASE.TIEBREAKER,
+      label: matchRoundLabel(current, playoffRounds),
       forfeit: current.forfeit,
+      hasGames: current._count.games > 0,
+      knockout:
+        current.phase === MATCH_PHASE.PLAYOFF
+          ? { nextRound: nextPlayoffRoundName(current, playoffRounds) }
+          : undefined,
     }),
     undefined,
     {

@@ -517,6 +517,103 @@ describe("matchPhaseLabel / matchPhaseAbbrev", () => {
   });
 });
 
+describe("matchRoundLabel and friends", () => {
+  // An 8-team bracket: R0 quarterfinals (4), R1 semifinals (2), R2 final.
+  const bracket8 = [
+    ...[0, 1, 2, 3].map((i) => ({ phase: "PLAYOFF", bracketSlot: `R0M${i}` })),
+    ...[0, 1].map((i) => ({ phase: "PLAYOFF", bracketSlot: `R1M${i}` })),
+    { phase: "FINAL", bracketSlot: "R2M0" },
+  ];
+
+  it("reads the bracket depth from the first round, ignoring other phases", async () => {
+    const { playoffTotalRounds } = await import("./schedule");
+    expect(playoffTotalRounds(bracket8)).toBe(3);
+    // Later rounds don't exist yet — the first round alone fixes the depth.
+    expect(playoffTotalRounds(bracket8.slice(0, 4))).toBe(3);
+    expect(
+      playoffTotalRounds([
+        { phase: "REGULAR", bracketSlot: null },
+        { phase: "TIEBREAKER", bracketSlot: "TB:abc:0" },
+        { phase: "PLAYOFF", bracketSlot: "R0M0" },
+        { phase: "PLAYOFF", bracketSlot: "R0M1" },
+      ]),
+    ).toBe(2);
+    expect(playoffTotalRounds([{ phase: "REGULAR", bracketSlot: null }])).toBe(0);
+  });
+
+  it("names a playoff match by its round, singular, and keeps 'Final' for the grand final", async () => {
+    const { matchRoundLabel } = await import("./schedule");
+    const m = (phase: string, bracketSlot: string | null, week = 9) => ({
+      phase,
+      week,
+      bracketSlot,
+      bestOf: 3,
+    });
+    expect(matchRoundLabel(m("PLAYOFF", "R0M2"), 3)).toBe("Quarterfinal");
+    expect(matchRoundLabel(m("PLAYOFF", "R1M0"), 3)).toBe("Semifinal");
+    expect(matchRoundLabel(m("FINAL", "R2M0"), 3)).toBe("Grand final");
+    expect(matchRoundLabel(m("PLAYOFF", "R0M0"), 2)).toBe("Semifinal");
+    expect(matchRoundLabel(m("PLAYOFF", "R0M0"), 4)).toBe("Round 1");
+    // Can't place it: say "Playoffs", never guess and never "Grand final".
+    expect(matchRoundLabel(m("PLAYOFF", "R0M0"), 0)).toBe("Playoffs");
+    expect(matchRoundLabel(m("PLAYOFF", null), 3)).toBe("Playoffs");
+    expect(matchRoundLabel(m("PLAYOFF", "R2M0"), 3)).toBe("Playoffs");
+    expect(matchRoundLabel(m("FINAL", null), 0)).toBe("Grand final");
+    expect(matchRoundLabel(m("TIEBREAKER", "TB:x:0", 6), 0)).toBe("Tiebreaker");
+    expect(matchRoundLabel(m("REGULAR", null, 4), 3)).toBe("Week 4");
+  });
+
+  it("appends the series length for postseason fixtures only", async () => {
+    const { matchRoundLabel } = await import("./schedule");
+    const opts = { bestOf: true };
+    expect(
+      matchRoundLabel({ phase: "PLAYOFF", week: 9, bracketSlot: "R1M0", bestOf: 3 }, 3, opts),
+    ).toBe("Semifinal · Bo3");
+    expect(
+      matchRoundLabel({ phase: "FINAL", week: 10, bracketSlot: "R2M0", bestOf: 5 }, 3, opts),
+    ).toBe("Grand final · Bo5");
+    expect(
+      matchRoundLabel({ phase: "TIEBREAKER", week: 6, bestOf: 1 }, 0, opts),
+    ).toBe("Tiebreaker · Bo1");
+    expect(
+      matchRoundLabel({ phase: "REGULAR", week: 2, bestOf: 2 }, 0, opts),
+    ).toBe("Week 2");
+    expect(matchRoundLabel({ phase: "FINAL", week: 10 }, 3, opts)).toBe(
+      "Grand final",
+    );
+  });
+
+  it("heads a same-week group with its round name", async () => {
+    const { roundGroupLabel } = await import("./schedule");
+    const semi = (i: number) => ({ phase: "PLAYOFF", week: 9, bracketSlot: `R1M${i}` });
+    expect(roundGroupLabel([semi(0), semi(1)], 3)).toBe("Semifinals");
+    expect(roundGroupLabel([{ phase: "FINAL", week: 10, bracketSlot: "R2M0" }], 3)).toBe(
+      "Grand final",
+    );
+    expect(roundGroupLabel([{ phase: "TIEBREAKER", week: 6 }], 0)).toBe("Tiebreaker");
+    expect(roundGroupLabel([{ phase: "REGULAR", week: 3 }], 3)).toBe("Week 3");
+    // A mixed week falls back to its number rather than naming one of them.
+    expect(
+      roundGroupLabel([semi(0), { phase: "REGULAR", week: 9 }], 3),
+    ).toBe("Week 9");
+    expect(roundGroupLabel([], 3)).toBe("");
+  });
+
+  it("names the round a knockout winner advances to", async () => {
+    const { nextPlayoffRoundName } = await import("./schedule");
+    expect(nextPlayoffRoundName({ phase: "PLAYOFF", week: 8, bracketSlot: "R0M1" }, 3)).toBe(
+      "Semifinals",
+    );
+    expect(nextPlayoffRoundName({ phase: "PLAYOFF", week: 9, bracketSlot: "R1M0" }, 3)).toBe(
+      "Grand final",
+    );
+    expect(nextPlayoffRoundName({ phase: "FINAL", week: 10, bracketSlot: "R2M0" }, 3)).toBeNull();
+    expect(nextPlayoffRoundName({ phase: "PLAYOFF", week: 9, bracketSlot: null }, 3)).toBeNull();
+    expect(nextPlayoffRoundName({ phase: "PLAYOFF", week: 9, bracketSlot: "R0M0" }, 0)).toBeNull();
+    expect(nextPlayoffRoundName({ phase: "REGULAR", week: 3 }, 3)).toBeNull();
+  });
+});
+
 describe("byKickoff", () => {
   it("orders by kickoff, pushing unscheduled matches last", async () => {
     const { byKickoff } = await import("./schedule");

@@ -107,6 +107,8 @@ import {
 } from "@/app/actions/news";
 import { NEWS_LIMITS } from "@/lib/news";
 import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueTime } from "@/lib/zoned-time";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import {
@@ -1004,6 +1006,7 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
       .length,
     hasChampion: championPresentation.championTeamId != null,
     unlinkedDiscordCount: data.unlinkedDiscord,
+    hasLeagueTicket: !!season.dotaLeagueId,
   });
   const hasPlayedResult = data.matches.some(
     (match) => match.status === MATCH_STATUS.COMPLETED,
@@ -1139,6 +1142,18 @@ function SeasonControls({ season, data }: { season: Season; data: AdminData }) {
           <b className="text-fg">{nextStep.title}</b>
           {nextStep.detail ? <> {nextStep.detail}</> : null}
         </div>
+        {/* A standing condition, not this phase's step: Valve needs about 15
+            days to issue a ticket, so this shows from the first signup rather
+            than surfacing when week 1 is already lost. The link opens the
+            collapsed league-id section (the jump bar reveals it on hash). */}
+        {nextStep.ticketWarning ? (
+          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
+            {nextStep.ticketWarning}{" "}
+            <a href="#adm-league" className={textLink()}>
+              Set the league id →
+            </a>
+          </p>
+        ) : null}
         <ActionForm
           action={renameSeason}
           hidden={{
@@ -1709,6 +1724,18 @@ function CaptainControls({
                   ? `${boughtCount} non-captain member${boughtCount === 1 ? " is" : "s are"} already assigned — Start is blocked to protect later-season roster data`
                   : "captain-only teams — ready for a fresh auction"}
               </li>
+              {/* Beside draft night on purpose: that is when week 1 gets its
+                  date, and the ticket has to be applied for ~15 days before. */}
+              {!season.dotaLeagueId ? (
+                <li className="rounded-md border border-danger/40 px-3 py-2 text-muted sm:col-span-2">
+                  <b className="text-fg">League ticket:</b> not set — Valve
+                  needs about 15 days to issue one; without it, league games
+                  may not reach OpenDota.{" "}
+                  <a href="#adm-league" className={textLink()}>
+                    Set the league id →
+                  </a>
+                </li>
+              ) : null}
             </ul>
             {!canStart && startBlocker ? (
               <p className="mt-2 text-xs font-medium text-accent">
@@ -1733,20 +1760,18 @@ function CaptainControls({
                 name="draftAt"
                 tsName="draftAtTs"
                 defaultTs={season.draftAt?.getTime()}
+                timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />
             </div>
             <SubmitButton variant="secondary" size="sm">
               {season.draftAt ? "Update draft night" : "Set draft night"}
             </SubmitButton>
+            {/* League time, like the box beside it — the admin's own clock
+                is what hid a mis-entered night before. */}
             {season.draftAt ? (
               <span className="text-xs text-muted">
-                Currently{" "}
-                <LocalTime
-                  ts={season.draftAt.getTime()}
-                  variant="full"
-                  initial={formatMatchTime(season.draftAt, "full")}
-                />
+                Currently {formatLeagueTime(season.draftAt)}
               </span>
             ) : null}
           </ActionForm>
@@ -2592,7 +2617,7 @@ function ScheduleControls({
               <label
                 htmlFor="firstNight"
                 className="text-xs text-muted"
-                title="Week 1 plays at this time; each later week (and playoff round) is +7 days. Leave empty for no times."
+                title="Week 1 plays at this time on the league's clock; each later week (and playoff round) is +7 days at the same time. Leave empty for no times."
               >
                 First match night
               </label>
@@ -2601,6 +2626,7 @@ function ScheduleControls({
                 name="firstNight"
                 tsName="firstNightTs"
                 defaultTs={season.firstMatchNight?.getTime()}
+                timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />
               {/* The lib always supported the mirrored second leg; this box is
@@ -2742,6 +2768,7 @@ function ScheduleControls({
                     <LocalDatetimeField
                       name="night"
                       tsName="nightTs"
+                      timeZone={LEAGUE_CONFIG.timeZone}
                       className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
                     />
                   </span>
@@ -3124,19 +3151,21 @@ function MatchResultRow({
           className="flex flex-wrap items-end gap-2 text-xs text-muted"
           hidden={{ matchId: m.id, expectedActiveSeasonId }}
         >
-          <label
-            htmlFor={`scheduledAt-${m.id}`}
-            className="flex flex-col gap-1"
-          >
-            <span>Kickoff time</span>
+          {/* The label sits BESIDE the field, not around it: the field now
+              carries its zone name and "your time" hint, and a wrapping label
+              folds both into the box's accessible name ("Kickoff time Pacific
+              time = 9:57 AM your time"). They are its description instead. */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor={`scheduledAt-${m.id}`}>Kickoff time</label>
             <LocalDatetimeField
               id={`scheduledAt-${m.id}`}
               name="scheduledAt"
               tsName="scheduledAtTs"
               defaultTs={m.scheduledAt?.getTime()}
+              timeZone={LEAGUE_CONFIG.timeZone}
               className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
             />
-          </label>
+          </div>
           <SubmitButton variant="secondary" size="sm">
             {m.scheduledAt ? "Update time" : "Set time"}
           </SubmitButton>

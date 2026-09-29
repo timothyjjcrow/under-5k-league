@@ -4,6 +4,11 @@ import { describe, expect, it } from "vitest";
 import { StandingsTable } from "./standings-table-server";
 import type { ClinchStatus, TeamStanding } from "@/lib/standings";
 import { scenarioReport } from "@/lib/scenarios";
+import type { MatchLike } from "@/lib/standings";
+import {
+  projectPlayoffField,
+  publicDeadHeatTeamIds,
+} from "@/lib/playoff-field";
 
 const row = (teamId: string, points: number): TeamStanding => ({
   teamId, points, played: 5, wins: points / 3, draws: 0,
@@ -98,5 +103,59 @@ describe("standings tiebreaker presentation", () => {
     expect(teamRowHtml(html, "echo")).toContain("Outside cut");
     expect(html).toContain("Playoff cut · 4 places");
     expect(html).not.toContain("Tiebreaker pending");
+  });
+});
+
+describe("mid-season ties", () => {
+  // The chip's accessible name (the table caption also says "Fully tied").
+  const TIED_CHIP = 'aria-label="Fully tied with a neighbouring team';
+  const match = (
+    homeTeamId: string,
+    awayTeamId: string,
+    homeScore: number,
+    awayScore: number,
+    status = "COMPLETED",
+  ): MatchLike => ({
+    homeTeamId, awayTeamId, homeScore, awayScore, status, phase: "REGULAR",
+    winnerTeamId: status !== "COMPLETED" || homeScore === awayScore
+      ? null : homeScore > awayScore ? homeTeamId : awayTeamId,
+  });
+  const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }));
+  const teamName = new Map(teams.map((team) => [team.id, team.id]));
+  const render = (matches: MatchLike[], overview: boolean) => {
+    const field = projectPlayoffField(teams, matches);
+    return renderToStaticMarkup(createElement(StandingsTable, {
+      standings: field.standings, teamName, overview,
+      playoffCut: field.bracketSize, playoffSeedByTeam: field.seedByTeam,
+      eligibleTeams: field.eligibleTeamIds.length,
+      unresolvedPlayoffTeamIds: publicDeadHeatTeamIds(field, matches),
+    }));
+  };
+
+  it.each([true, false])("shows a quiet tied chip and keeps seeds while games remain (overview=%s)", (overview) => {
+    // d, e and f are level across the cut, but a regular fixture is still live.
+    const html = render([
+      ...["b", "c", "d", "e", "f"].map((away) => match("a", away, 2, 0)),
+      ...["c", "d", "e", "f"].map((away) => match("b", away, 2, 0)),
+      ...["d", "e", "f"].map((away) => match("c", away, 2, 0)),
+      match("d", "e", 1, 1),
+      match("d", "f", 1, 1),
+      match("e", "f", 1, 1),
+      match("a", "b", 1, 0, "LIVE"),
+    ], overview);
+    expect(html).not.toContain("Tiebreaker pending");
+    expect(html).not.toMatch(/[Ss]eeding tiebreaker/);
+    expect(html).not.toContain("pending a tiebreaker match");
+    for (const id of ["d", "e", "f"])
+      expect(teamRowHtml(html, id)).toContain(TIED_CHIP);
+    expect(teamRowHtml(html, "d")).toContain("current playoff seed 4");
+    if (overview) expect(html).toContain("Playoff cut · 4 places");
+    else expect(html).toContain("Playoff cut");
+  });
+
+  it.each([true, false])("shows no tie chips before anyone has played (overview=%s)", (overview) => {
+    const html = render([match("a", "b", 0, 0, "SCHEDULED")], overview);
+    expect(html).not.toContain("Tiebreaker pending");
+    expect(html).not.toContain(TIED_CHIP);
   });
 });

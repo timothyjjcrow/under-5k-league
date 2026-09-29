@@ -21,7 +21,8 @@ import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { heroById, heroPortrait, parseHeroList } from "@/lib/heroes";
 import { roleLabels } from "@/lib/roles";
 import { projectPlayoffField } from "@/lib/playoff-field";
-import { matchPhaseLabel } from "@/lib/schedule";
+import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
+import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { getSessionUser } from "@/lib/auth";
 import { loadCredSnapshot } from "@/lib/inhouse-cred-summary";
 import { DiscordTag } from "@/components/discord-tag";
@@ -65,6 +66,7 @@ import {
 } from "@/components/ui";
 import {
   INHOUSE_STATUS,
+  MATCH_PHASE,
   REGISTRATION_STATUS,
 } from "@/lib/constants";
 import { PROVISIONAL_GAMES } from "@/lib/inhouse-stats";
@@ -230,6 +232,13 @@ export default async function PlayerProfilePage({
         orderBy: { startTime: "desc" },
       })
     : [];
+  // Bracket depth for every season this player has playoff games in, so the
+  // history rows name the round ("Semifinal") the way the match page does.
+  const playoffRoundsBySeason = await loadPlayoffRoundsBySeason(
+    games
+      .filter((g) => g.match.phase === MATCH_PHASE.PLAYOFF)
+      .map((g) => g.match.seasonId),
+  );
 
   const accountId = effectiveDotaAccountId(user);
 
@@ -542,6 +551,11 @@ export default async function PlayerProfilePage({
       )
     : null;
   const featuredMatch = teamSpotlight ?? latestLeagueGame?.game.match ?? null;
+  const featuredPlayoffRounds = teamSpotlight
+    ? playoffTotalRounds(seasonMatches)
+    : latestLeagueGame
+      ? (playoffRoundsBySeason.get(latestLeagueGame.game.match.seasonId) ?? 0)
+      : 0;
   const featuredTeams = teamSpotlight
     ? seasonTeams
     : latestLeagueGame
@@ -840,6 +854,7 @@ export default async function PlayerProfilePage({
             <ProfileMatchSpotlight
               match={featuredMatch}
               teams={featuredTeams}
+              playoffRounds={featuredPlayoffRounds}
               nowMs={nowMs}
               teamContext={!!teamSpotlight}
             />
@@ -1471,9 +1486,11 @@ export default async function PlayerProfilePage({
                               </span>
                               <span className="mt-1 block text-xs text-muted">
                                 {hero?.name ?? `Hero ${stat.heroId}`} ·{" "}
-                                {matchPhaseLabel(
-                                  game.match.phase,
-                                  game.match.week,
+                                {matchRoundLabel(
+                                  game.match,
+                                  playoffRoundsBySeason.get(
+                                    game.match.seasonId,
+                                  ) ?? 0,
                                 )}
                               </span>
                             </span>

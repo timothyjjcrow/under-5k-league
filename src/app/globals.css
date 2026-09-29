@@ -22,7 +22,13 @@
   --color-accent: #f2b134;
   --color-success: #3fb950;
   --color-danger: #e5534b;
-  --color-info: #4c8dff;
+  /* Danger as TEXT on a danger-tinted chip (a lost or live result). Plain
+     danger there is 4.3:1, under AA for the chips' small type; this is 5.6:1. */
+  --color-danger-soft: #f47067;
+  /* Link blue. Was #4c8dff, which fell to 4.1:1 on the raised cards
+     (surface-3, the LIVE match card) once link colours applied at all; this
+     keeps every blue link above AA (4.8:1 on the darkest card, 6.9:1 on bg). */
+  --color-info: #609aff;
 
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
@@ -80,10 +86,6 @@ body {
   scrollbar-color: var(--color-line) transparent;
 }
 
-a {
-  color: inherit;
-}
-
 /* Several dense forms intentionally remove the browser's default outline to
    avoid a double ring. Give every native field one consistent, unmistakable
    keyboard focus indicator even when a local utility only changes its border. */
@@ -93,6 +95,16 @@ a {
 }
 
 @layer base {
+  /* Links take their parent's colour unless a class says otherwise. This MUST
+     stay inside a layer: an unlayered rule outranks every Tailwind utility, so
+     `text-black` on a gold accent button, `text-info` on textLink() and the
+     nav's `text-muted`/active colours were all silently ignored on links
+     (near-white on gold, about 1.6:1). Here the utilities win, and a link
+     with no colour class still inherits. */
+  a {
+    color: inherit;
+  }
+
   /* Brand-tinted text selection. */
   ::selection {
     background: color-mix(in srgb, var(--color-brand) 35%, transparent);

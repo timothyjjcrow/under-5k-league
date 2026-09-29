@@ -111,6 +111,91 @@ describe("series-result announcement retry", () => {
     expect(mockSend).toHaveBeenCalledTimes(2); // 1 failed + 1 success
   });
 
+  it("names the playoff round and who advances, on the first send and the retry", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const alpha = await makeTeam(season.id, "Alpha", 0);
+    const bravo = await makeTeam(season.id, "Bravo", 1);
+    const charlie = await makeTeam(season.id, "Charlie", 2);
+    const delta = await makeTeam(season.id, "Delta", 3);
+    // A 4-team bracket: two semifinals, so the grand final is next.
+    const semi = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 8,
+        phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M0",
+        bestOf: 3,
+        homeTeamId: alpha.id,
+        awayTeamId: delta.id,
+        homeScore: 2,
+        awayScore: 1,
+        status: MATCH_STATUS.COMPLETED,
+        winnerTeamId: alpha.id,
+        completedAt: new Date(),
+      },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 8,
+        phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1",
+        bestOf: 3,
+        homeTeamId: bravo.id,
+        awayTeamId: charlie.id,
+      },
+    });
+    // An imported game is what makes the link a box score.
+    await prisma.game.create({
+      data: {
+        matchId: semi.id,
+        dotaMatchId: `semi-${semi.id}`,
+        radiantWin: true,
+        radiantTeamId: alpha.id,
+        direTeamId: delta.id,
+        winnerTeamId: alpha.id,
+      },
+    });
+    const input = {
+      id: semi.id,
+      homeTeamId: alpha.id,
+      awayTeamId: delta.id,
+      homeScore: 2,
+      awayScore: 1,
+      week: 8,
+      phase: MATCH_PHASE.PLAYOFF,
+    };
+    mockSend.mockResolvedValue(false); // Discord down: the retry re-reads the row
+    expect(await announceSeriesResultOnce(input)).toBe(false);
+    mockSend.mockResolvedValue(true);
+    expect(await announceSeriesResultOnce(input)).toBe(true);
+
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    for (const [content] of mockSend.mock.calls) {
+      expect(content).toContain("**Semifinal:** Alpha 2–1 Delta");
+      expect(content).toContain(
+        "**Alpha** advance to the grand final; Delta are eliminated.",
+      );
+      expect(content).not.toContain("Playoffs");
+      expect(content).toMatch(
+        new RegExp(`Box score: <[^>]+/matches/${semi.id}>$`),
+      );
+    }
+  });
+
+  it("links the match page, not a box score, for a manual score with no games", async () => {
+    // An admin-recorded result for a played series whose data is private (or
+    // a ticketless lobby): not a forfeit, but there is no box score to open.
+    const match = await setupDecidedMatch();
+    expect(await announceSeriesResultOnce(match)).toBe(true);
+    const [content] = mockSend.mock.calls[0] ?? [];
+    expect(content).toContain("**Home** take the series!");
+    expect(content).toMatch(
+      new RegExp(`Match page: <[^>]+/matches/${match.id}>$`),
+    );
+    expect(content).not.toContain("Box score");
+  });
+
   it("treats historical sent markers and active v2 claims as final/in flight", async () => {
     const match = await setupDecidedMatch();
     const key = `resultAnnounced:${match.id}`;
