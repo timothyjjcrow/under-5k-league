@@ -995,6 +995,7 @@ export function HeroPool({
   heroes,
   limit = 8,
   minGamesForRate = 0,
+  columns = "viewport",
 }: {
   /** `kda` is optional and additive: entries without it render byte-identical
    *  to before it existed (team pages and pub heroes pass nothing). */
@@ -1008,9 +1009,23 @@ export function HeroPool({
    * keeps every existing caller byte-identical.
    */
   minGamesForRate?: number;
+  /**
+   * "viewport" (the default) steps from two to four across with the screen.
+   * "container" steps with the nearest `@container` instead (two, three from
+   * 32rem, four from 48rem), for a pool that sits in a side rail on a
+   * desktop and full width on a tablet.
+   */
+  columns?: "viewport" | "container";
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+    <div
+      className={cn(
+        "grid grid-cols-2 gap-2.5",
+        columns === "container"
+          ? "@lg:grid-cols-3 @3xl:grid-cols-4"
+          : "sm:grid-cols-3 lg:grid-cols-4",
+      )}
+    >
       {heroes.slice(0, limit).map((h) => {
         const hero = heroById(h.heroId);
         const winPct = Math.round((h.wins / h.games) * 100);

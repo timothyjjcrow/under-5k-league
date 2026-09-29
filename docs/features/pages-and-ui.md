@@ -315,6 +315,23 @@ the league is already draftable and many visitors have joined. Write for both.
 - **A side's playoff stakes flow as one wrapping line of outcome pairs**
   (Win, Draw, Loss, each with its result), not a row per outcome.
 
+## Teams (`/teams`, `/teams/[id]`)
+
+- **The index is three across from `xl`** (two from `md`), each card a
+  compact header (56px crest, name, one summary line) over the roster chips.
+- **A team page is two columns from `lg` when it has a rail:** the main
+  column is the next series, the roster and every fixture; the rail (22rem,
+  24rem from `xl`) holds the hero pool, rematches and the playoff outlook.
+  A phone reads them in that order, so the overview, roster and matches
+  still lead. With nothing for the rail the page stays one column. The
+  jersey keeps the full width below.
+- **Both columns are `@container`s:** the roster goes two across and the
+  draft-phase overview splits at `@2xl` of the main column, and the hero
+  pool (`HeroPool columns="container"`) steps two, three, four across with
+  the rail's width, so it is two in the rail and wider on a tablet.
+- **A roster row keeps its chips on the name's line** (flex-wrap), so most
+  rows are one 44px line instead of a name over an empty badge row.
+
 ## The player pool (`/players`)
 
 - **One grid string for header and rows:** `rowGrid(withInhouse)` in

@@ -127,8 +127,9 @@ describe("TeamCrest", () => {
       join(__dirname, "../app/teams/page.tsx"),
       "utf8",
     );
+    // The index cards went three across on a desktop with a 56px crest.
     const cardCrest = crestWithName(teamsPage, "name={t.name}");
-    expect(cardCrest).toContain("size={64}");
+    expect(cardCrest).toContain("size={56}");
     expect(cardCrest).toContain('imageFit="cover"');
     expect(teamsPage).toContain("md:grid-cols-2");
 
@@ -137,7 +138,7 @@ describe("TeamCrest", () => {
       "utf8",
     );
     // Phones get a 64px crest so the names beside it have room; tablets and
-    // up keep the 112px one. Both fill with the logo.
+    // up get a 96px one. Both fill with the logo.
     const heroCrests = (teamPage.match(/<TeamCrest[\s\S]*?\/>/g) ?? []).filter(
       (crest) => crest.includes("name={team.name}"),
     );
@@ -145,7 +146,7 @@ describe("TeamCrest", () => {
     const [phoneCrest, heroCrest] = heroCrests;
     expect(phoneCrest).toContain("size={64}");
     expect(phoneCrest).toContain("sm:hidden");
-    expect(heroCrest).toContain("size={112}");
+    expect(heroCrest).toContain("size={96}");
     expect(heroCrest).toMatch(/className="hidden [^"]*sm:grid/);
     for (const crest of heroCrests) expect(crest).toContain('imageFit="cover"');
   });
