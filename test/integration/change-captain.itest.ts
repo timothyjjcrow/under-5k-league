@@ -88,6 +88,14 @@ async function captainSeats(teamId: string) {
 describe("changeCaptain — swaps who captains a team before the draft", () => {
   it("keeps the team row and seats the new captain in the old one's place", async () => {
     const { season, zai, mira } = await preDraft();
+    await prisma.user.update({
+      where: { id: zai.user.id },
+      data: { discordId: "123456789012345601" },
+    });
+    await prisma.user.update({
+      where: { id: mira.id },
+      data: { discordId: "123456789012345602" },
+    });
     await prisma.team.update({
       where: { id: zai.team.id },
       data: {
@@ -157,9 +165,16 @@ describe("changeCaptain — swaps who captains a team before the draft", () => {
     expect(audit.summary).toBe(
       'Changed the captain of "Radiant Raccoons" from Zai to Mira',
     );
+    // One post tells both: the new captain, and the old one, whose own
+    // "you now captain" ping would otherwise stand uncorrected.
     expect(sendDiscordMessage).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(sendDiscordMessage).mock.calls[0][0]).toContain(
-      "you now captain Radiant Raccoons",
+    const [content, mentions] = vi.mocked(sendDiscordMessage).mock.calls[0];
+    expect(content).toContain(
+      "<@123456789012345602>, **you now captain Radiant Raccoons**. <@123456789012345601> is no longer captain and goes back into the player pool.",
+    );
+    expect(content).not.toContain("(was ");
+    expect(new Set(mentions?.users)).toEqual(
+      new Set(["123456789012345602", "123456789012345601"]),
     );
   });
 
@@ -170,6 +185,10 @@ describe("changeCaptain — swaps who captains a team before the draft", () => {
 
     expect(res?.message).toBe(
       "Mira now captains Mira's Team (renamed from Zai's Team). Zai is back in the player pool.",
+    );
+    // Unlinked people are named, and the old name tells Zai which team.
+    expect(vi.mocked(sendDiscordMessage).mock.calls[0][0]).toContain(
+      "**Mira**, **you now captain Mira's Team** (was Zai's Team). **Zai** is no longer captain and goes back into the player pool.",
     );
     expect(
       (await prisma.team.findUniqueOrThrow({ where: { id: zai.team.id } }))

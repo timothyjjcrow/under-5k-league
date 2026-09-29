@@ -65,6 +65,7 @@ import {
   draftRescheduledMessage,
   draftScheduledMessage,
   captainAssignedMessage,
+  captainChangedMessage,
   captainRemovedMessage,
   draftLiveAnnouncementGroup,
 } from "@/lib/discord";
@@ -547,6 +548,7 @@ export async function changeCaptain(
     incomingName: string;
     outgoingName: string;
     incomingDiscordId: string | null;
+    outgoingDiscordId: string | null;
   };
   try {
     changed = await prisma.$transaction(
@@ -729,6 +731,7 @@ export async function changeCaptain(
           incomingName: incomingUser.name,
           outgoingName: team.captain.name,
           incomingDiscordId: incomingUser.discordId,
+          outgoingDiscordId: team.captain.discordId,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -766,13 +769,16 @@ export async function changeCaptain(
       (changed.renamedFrom ? ` (renamed from "${changed.renamedFrom}")` : ""),
     seasonId: season.id,
   });
+  // One post for both: the outgoing captain's own "you now captain" ping
+  // would otherwise stand uncorrected (the removeCaptain rule).
   await sendDiscordMessage(
-    captainAssignedMessage(
-      changed.incomingName,
+    captainChangedMessage(
+      { name: changed.incomingName, discordId: changed.incomingDiscordId },
+      { name: changed.outgoingName, discordId: changed.outgoingDiscordId },
       changed.teamName,
-      changed.incomingDiscordId,
+      changed.renamedFrom,
     ),
-    mentionsOf([changed.incomingDiscordId]),
+    mentionsOf([changed.incomingDiscordId, changed.outgoingDiscordId]),
   );
   refresh();
   return {

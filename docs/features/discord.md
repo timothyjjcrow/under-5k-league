@@ -112,6 +112,11 @@ actions: `src/app/actions/admin-discord.ts`.
   the captains, then linked players who haven't confirmed the current draft
   time, at most 20 (`DRAFT_UNCONFIRMED_SHOWN`); only names that fit the
   2,000-character post are allowlisted, and the rest are counted, never pinged.
+  Captaincy: every change pings both sides, so a "you now captain" ping never
+  stands uncorrected — `transferCaptaincy` (old captain stays on the roster),
+  `changeCaptain` (`captainChangedMessage`: old captain goes back into the
+  pool, "(was <old name>)" when the team name followed the captain) and
+  `removeCaptain` (`captainRemovedMessage`).
 - **Use `mentionsOf` / `mentionUsers`, never hand-rolled lists.** `mentionsOf`
   drops nulls and returns `undefined` when empty, so an unlinked league sends
   the same text as before (`{ users: [undefined] }` fails silently).

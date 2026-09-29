@@ -152,6 +152,24 @@ export function captainRemovedMessage(
   return `🧭 ${captainLabel(captain)} is no longer captain of **${name(teamName)}**: the team was removed before the draft. Their signup stays, so they go into the player pool: <${resolveSiteUrl()}/players>`;
 }
 
+/**
+ * An admin handed a team to a different signup before the draft
+ * (changeCaptain). Unlike transferCaptaincy, the outgoing captain leaves the
+ * team: their signup goes back into the player pool. One post tells both, so
+ * the ping that made the old captain captain does not stand uncorrected.
+ * `renamedFrom` is the team's name before a generated "<captain>'s Team"
+ * followed the captaincy, so the old captain can recognise their team.
+ */
+export function captainChangedMessage(
+  incoming: DraftReminderPerson,
+  outgoing: DraftReminderPerson,
+  teamName: string,
+  renamedFrom?: string | null,
+): string {
+  const was = renamedFrom ? ` (was ${name(renamedFrom)})` : "";
+  return `🧭 ${captainLabel(incoming)}, **you now captain ${name(teamName)}**${was}. ${captainLabel(outgoing)} is no longer captain and goes back into the player pool. Review your team, draft-night status, and next responsibilities: <${resolveSiteUrl()}/me>`;
+}
+
 /** `<@id>` for a linked captain, their bold escaped name otherwise. */
 function captainLabel(p: DraftReminderPerson): string {
   const id = mentionableId(p);
