@@ -182,13 +182,13 @@ export function SiteHeader({
   return (
     <>
       <header className="sticky top-0 z-30 border-b border-line/80 bg-bg/80 backdrop-blur">
-        <div className="mx-auto flex h-20 w-full max-w-7xl items-center gap-2 px-4 sm:gap-3 sm:px-6 xl:gap-4">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center gap-2 px-4 sm:gap-3 sm:px-6 lg:px-8 xl:gap-4">
           <Link
             href="/"
             aria-label={`${LEAGUE_CONFIG.name} — home`}
             className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
-            {/* Regional emblem sized to fit the existing header height. */}
+            {/* Regional emblem sized to fit the 64px header. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={LEAGUE_CONFIG.branding.navLogo}
@@ -196,14 +196,14 @@ export function SiteHeader({
               alt={LEAGUE_CONFIG.name}
               width={LEAGUE_CONFIG.branding.navWidth}
               height={LEAGUE_CONFIG.branding.navHeight}
-              className="h-[76px] w-auto"
+              className="h-14 w-auto"
             />
           </Link>
 
           {/* What is happening in the league right now, on every width. A
             live draft or series links to it from every page, Home included;
             otherwise the chip names the phase on inner pages and links Home,
-            whose hero already says it. Kept inside the 80px header (draft-room
+            whose hero already says it. Kept inside the 64px header (draft-room
             sticky offsets depend on that height). On a narrow phone the
             label may truncate rather than push the account button off. */}
           {status && seasonName && (status.live || pathname !== "/") ? (
@@ -482,7 +482,7 @@ export function SiteHeader({
           ref={sheetRef}
           id="mobile-discovery"
           aria-label="Explore league"
-          className="mobile-discovery fixed inset-x-3 z-40 mx-auto max-h-[calc(100dvh-11rem)] max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-3 shadow-2xl shadow-black/50 lg:hidden"
+          className="mobile-discovery fixed inset-x-3 z-40 mx-auto max-h-[calc(100dvh-10rem)] max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-3 shadow-2xl shadow-black/50 lg:hidden"
         >
           <div className="mb-2 flex items-center justify-between border-b border-line-soft pb-2 pl-3">
             <span className="font-display text-lg font-semibold">

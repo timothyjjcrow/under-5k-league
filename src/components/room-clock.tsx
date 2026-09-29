@@ -156,7 +156,7 @@ export function usePollHealth(threshold = ROOM_POLL_FAIL_THRESHOLD) {
 /**
  * Tracks whether a room's main clock banner has scrolled under the sticky
  * site header, so the room can pin a compact clock bar in its place. The
- * header is h-20 (80px) — this rootMargin and the compact bars' `top-20`
+ * header is h-16 (64px) — this rootMargin and the compact bars' `top-16`
  * must change TOGETHER (see the CLAUDE.md mobile rules).
  */
 export function useBannerOffscreen(active: boolean) {
@@ -184,7 +184,7 @@ export function useBannerOffscreen(active: boolean) {
     if (!el || typeof IntersectionObserver === "undefined") return;
     const obs = new IntersectionObserver(
       ([entry]) => setOffscreen(!entry.isIntersecting),
-      { rootMargin: "-80px 0px 0px 0px" },
+      { rootMargin: "-64px 0px 0px 0px" },
     );
     obs.observe(el);
     return () => obs.disconnect();

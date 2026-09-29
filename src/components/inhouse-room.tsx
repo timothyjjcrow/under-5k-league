@@ -843,7 +843,7 @@ export function InhouseRoom({
         )
       ) : null}
 
-      {/* scroll-mt clears the 80px sticky header (see shouldFocusStage). */}
+      {/* scroll-mt clears the 64px sticky header (see shouldFocusStage). */}
       <div ref={stageRef} className="scroll-mt-24">
         {!lobby ? (
           <QueueView

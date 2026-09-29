@@ -122,12 +122,14 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Put `overflow-hidden` on the card around an `overflow-x-auto` scroller**
   (`SeasonGrid`, every card wrapping `<Bracket>`, whose root scrolls a
   `min-w-max` row). Chrome otherwise pushes the inner width into the page.
-- **The header is `h-20` (80px); move every offset under it together:** the
-  compact clock bars' `top-20` (`draft-room.tsx`,
+- **The header is `h-16` (64px); move every offset under it together:** the
+  compact clock bars' `top-16` (`draft-room.tsx`,
   `src/components/inhouse/*-view.tsx`), `useBannerOffscreen`'s
-  `rootMargin: "-80px ..."` (`room-clock.tsx`), the `lg:top-20` sticky
+  `rootMargin: "-64px ..."` (`room-clock.tsx`), the `lg:top-16` sticky
   `SectionNav`/`AdminJump`, and anchor `scroll-mt-*` values (the draft pool's
   `scroll-mt-32` is header plus clock bar). A resize once clipped the clock bar.
+  It was 80px until the 2026-09 overhaul, which gave the height back to
+  content on every page.
   Section bars pin only from `lg` up: on a phone, header plus tab bar plus
   chips took a quarter of the screen.
 - **The draft room puts the player pool FIRST in the DOM** for captains on a
