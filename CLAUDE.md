@@ -362,9 +362,9 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 
 ### Admin actions and data
 
-- **Open every admin action with `adminOrError()`, in an `admin-*.ts` file:**
-  `admin-auth.itest.ts` globs only those (seven older modules escape it). Never
-  mark `admin-shared.ts` `"use server"`: every export would become an endpoint.
+- **Open every admin action with `adminOrError()`:** `admin-auth.itest.ts`
+  tests every export of each `"use server"` file calling it or `requireAdmin`.
+  Never mark `admin-shared.ts` `"use server"`: every export becomes an endpoint.
 - **Assume the guard you need is missing.** The engines are hardened; the thin
   actions calling them are where untested defects hid.
 - **Put no-undo actions behind `<DangerSubmit>`** (type the real season or team

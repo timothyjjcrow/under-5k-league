@@ -20,13 +20,18 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
 - **Open every admin action with
   `const admin = await adminOrError(); if ("error" in admin) return admin;`.**
   `test/integration/admin-auth.itest.ts` calls each one signed out and as a
-  player. It globs only `src/app/actions/admin*.ts`, and fails until a new
-  `"use server"` file matching that glob is in its `MODULES`; so put new admin
-  actions in an `admin-*.ts` file. Seven older admin-only modules sit outside
-  the glob, use `try { await requireAdmin() } catch`, and have NO refusal
-  coverage there: `automation.ts`, `game-participants.ts`,
-  `import-progress.ts`, `inhouse-admin.ts`, `news.ts`, `roster-history.ts`,
-  `tiebreakers.ts`.
+  player. It finds every `"use server"` file under `src/` that calls
+  `adminOrError` or `requireAdmin` (or is named `admin-*.ts`) and fails until
+  that file is in its `MODULES`, so a new admin-only module is covered wherever
+  it lives. Seven older admin-only modules (`automation.ts`,
+  `game-participants.ts`, `import-progress.ts`, `inhouse-admin.ts`, `news.ts`,
+  `roster-history.ts`, `tiebreakers.ts`) still open with
+  `try { await requireAdmin() } catch { return { error: "Not authorized" } }`:
+  the same check and the same refusal, and they are in `MODULES` too. Not
+  covered there: an admin-only branch inside a module captains also use, which
+  checks `role === "ADMIN"` inline (scrims' `removeScrimGame`, the admin paths
+  in team rename, standins and reschedule). Test those in their own files; the
+  scrim service re-checks the role itself.
 - **Assume the guard you need is missing.** The engines are hardened; the thin
   actions calling them are where untested defects hid. Re-assert preconditions
   at the write (`docs/features/concurrency-and-testing.md`).
