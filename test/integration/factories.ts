@@ -47,19 +47,51 @@ export async function raceN<T>(n: number, fn: () => Promise<T>): Promise<T[]> {
 }
 
 /** Wipe every table (children first) so each test starts from empty. */
+/**
+ * PostgreSQL enforces "one active season" and "one live inhouse lobby" with
+ * partial unique indexes that Prisma's datamodel can't declare (migration
+ * 20260804010000_release_readiness), so `db push` never creates them on the
+ * SQLite suite. Without a copy, a test that makes two active seasons passes
+ * here and only fails in CI's Postgres job. These are the same predicates in
+ * SQLite's dialect: every row inside each partial set indexes one value, so a
+ * second row is a unique violation (P2002), as on Postgres. `setup.ts`
+ * (re)creates them before every SQLite test.
+ */
+const SQLITE_PARTIAL_UNIQUE_INDEXES: Record<string, string> = {
+  Season_one_active_idx:
+    'CREATE UNIQUE INDEX IF NOT EXISTS "Season_one_active_idx" ON "Season" ("isActive") WHERE "isActive" = 1',
+  InhouseLobby_one_active_idx:
+    'CREATE UNIQUE INDEX IF NOT EXISTS "InhouseLobby_one_active_idx" ON "InhouseLobby" (("status" IS NOT NULL)) ' +
+    "WHERE \"status\" IN ('READY_CHECK', 'CAPTAIN_VOTE', 'DRAFTING', 'READY', 'IN_PROGRESS')",
+};
+
+export async function ensureSqlitePartialUniqueIndexes() {
+  if (ON_POSTGRES) return;
+  for (const sql of Object.values(SQLITE_PARTIAL_UNIQUE_INDEXES)) {
+    await prisma.$executeRawUnsafe(sql);
+  }
+}
+
+/**
+ * For SQLite-only tests of LEGACY data (rows written before the Postgres
+ * barrier existed): drops the copies above so the test can build the
+ * duplicate-active state they forbid. The next test's setup restores them.
+ * Postgres can't hold that state at all, so those tests skip there.
+ */
+export async function allowLegacyDuplicateActives() {
+  if (ON_POSTGRES) {
+    throw new Error("Legacy duplicate-active data can't exist on Postgres; skip this test there.");
+  }
+  for (const name of Object.keys(SQLITE_PARTIAL_UNIQUE_INDEXES)) {
+    await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS "${name}"`);
+  }
+}
+
 export async function resetDb() {
   // Operational singletons/outboxes are relationless and survive every domain
   // cascade; clear them first so lease/backlog state cannot cross test cases.
   await prisma.leagueAnnouncement.deleteMany();
   await prisma.automationRunState.deleteMany();
-  // Cred first: InhouseCreditEntry has NO foreign key at all (the AdminAction
-  // shape — a staking record has to outlive the account), so nothing cascades
-  // it and a missing line here leaks balances between tests. For money math
-  // that is worse than a normal leak: the suite stays green while measuring
-  // the previous test's ledger.
-  await prisma.inhouseCreditEntry.deleteMany();
-  await prisma.inhouseCredit.deleteMany();
-  await prisma.inhouseBet.deleteMany();
   await prisma.inhouseLobbyPlayer.deleteMany();
   await prisma.inhouseLobby.deleteMany();
   await prisma.inhouseQueueEntry.deleteMany();

@@ -6,37 +6,46 @@ import { getSeasonHonorReadiness } from "./honors-readiness-service";
 import { weeklyHonors, type WeeklyHonors } from "./honors";
 import { prisma } from "./prisma";
 import {
-  ANNOUNCE_FAILED_PREFIX,
   HONORS_ANNOUNCED_PREFIX,
   honorsAnnouncedKey,
+  honorsAnnouncedPrefix,
 } from "./settings";
 import {
   getWebhookUrl,
   sendDiscordMessage,
   weeklyHonorsMessage,
 } from "./discord";
-import { announcementDedupeKey } from "./announcement-marker";
+import {
+  announcementDedupeKey,
+  HONORS_CLAIM_PATTERN,
+  HONORS_CLAIM_PREFIX,
+  HONORS_FAILED_PATTERN,
+  HONORS_FAILED_PREFIX,
+  HONORS_STALE_PREFIX,
+} from "./announcement-marker";
 import { singleActiveSeason } from "./season";
+import { mentionsOf } from "./discord-mentions";
 import { raceHook } from "./race-hook";
+import { MATCH_PHASE } from "./constants";
+import { weekOracles } from "./pickem";
 
-const HONORS_STALE_PREFIX = "stale:";
-const HONORS_CLAIM_PREFIX = "claim:honors:";
+// Value formats (prefixes and patterns) are shared with the automation gate
+// and the outbox through announcement-marker.ts; see the note there.
 const HONORS_CLAIM_V2_PREFIX = `${HONORS_CLAIM_PREFIX}v2:`;
-const HONORS_FAILED_INITIAL_PREFIX = `${ANNOUNCE_FAILED_PREFIX}honors:initial:`;
-const HONORS_FAILED_CORRECTED_PREFIX = `${ANNOUNCE_FAILED_PREFIX}honors:corrected:`;
+const HONORS_FAILED_INITIAL_PREFIX = `${HONORS_FAILED_PREFIX}initial:`;
+const HONORS_FAILED_CORRECTED_PREFIX = `${HONORS_FAILED_PREFIX}corrected:`;
 const HONORS_CLAIM_LEASE_MS = 90_000;
-const UUID =
-  "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const HONORS_CLAIM_PATTERN = new RegExp(
-  `^claim:honors:v2:(\\d{1,16}):(${UUID}):(${UUID}):(initial|corrected)$`,
-  "i",
-);
-const HONORS_FAILED_PATTERN = new RegExp(
-  `^failed:honors:(initial|corrected):v2:(${UUID}):\\d{1,16}$`,
-  "i",
-);
 
 type HonorAnnouncementMode = "initial" | "corrected";
+
+/** Mint a fresh honors claim value for one event generation. */
+export function honorsClaimValue(
+  nowMs: number,
+  eventId: string,
+  mode: HonorAnnouncementMode,
+): string {
+  return `${HONORS_CLAIM_V2_PREFIX}${nowMs + HONORS_CLAIM_LEASE_MS}:${eventId}:${randomUUID()}:${mode}`;
+}
 
 function honorsFor(readiness: HonorWeekReadiness): WeeklyHonors {
   // Readiness requires every line to retain its import-time teamId, so the
@@ -49,20 +58,52 @@ function honorDigest(honors: WeeklyHonors): string {
   return Buffer.from(JSON.stringify(honors)).toString("base64url");
 }
 
+/**
+ * The week's pick'em Oracle line for the honors post: whoever called the most
+ * of that week's regular-season matches (ties all listed). It rides the same
+ * message and send-once marker as the awards, never a post of its own.
+ * Best-effort: a failed read costs the line, never the announcement.
+ */
+async function weekOracleLine(
+  seasonId: string,
+  week: number,
+): Promise<{ names: string[]; correct: number; graded: number } | null> {
+  try {
+    const matches = await prisma.match.findMany({
+      where: { seasonId, week, phase: MATCH_PHASE.REGULAR },
+      select: { id: true, status: true, winnerTeamId: true, scheduledAt: true },
+    });
+    if (matches.length === 0) return null;
+    const predictions = await prisma.prediction.findMany({
+      where: { matchId: { in: matches.map((match) => match.id) } },
+      select: { matchId: true, userId: true, pickedTeamId: true },
+    });
+    const oracles = weekOracles(predictions, matches);
+    if (oracles.length === 0) return null;
+    const users = await prisma.user.findMany({
+      where: { id: { in: oracles.map((oracle) => oracle.userId) } },
+      select: { id: true, name: true },
+    });
+    const nameOf = new Map(users.map((user) => [user.id, user.name]));
+    const names = oracles.flatMap((oracle) => {
+      const name = nameOf.get(oracle.userId);
+      return name ? [name] : [];
+    });
+    return names.length > 0
+      ? { names, correct: oracles[0].correct, graded: oracles[0].graded }
+      : null;
+  } catch {
+    // Never log the raw error: a database failure can carry a connection URL.
+    console.error("[honors] ORACLE_LINE_SKIPPED");
+    return null;
+  }
+}
+
 async function readyWeek(seasonId: string, week: number) {
   const readiness = (await getSeasonHonorReadiness(seasonId, week)).find(
     (candidate) => candidate.week === week,
   );
   return readiness?.state === HONOR_WEEK_STATE.READY ? readiness : null;
-}
-
-/** Compute one week's honors only after the shared publication gate passes. */
-export async function getWeekHonors(
-  seasonId: string,
-  week: number,
-): Promise<WeeklyHonors> {
-  const readiness = await readyWeek(seasonId, week);
-  return readiness ? honorsFor(readiness) : { player: null, team: null };
 }
 
 /**
@@ -93,7 +134,7 @@ async function claimHonorAnnouncement(
 } | null> {
   const initialEventId = randomUUID();
   const makeClaim = (mode: HonorAnnouncementMode, eventId: string) =>
-    `${HONORS_CLAIM_V2_PREFIX}${nowMs + HONORS_CLAIM_LEASE_MS}:${eventId}:${randomUUID()}:${mode}`;
+    honorsClaimValue(nowMs, eventId, mode);
   const initialValue = makeClaim("initial", initialEventId);
   const created = await prisma.$executeRaw`
     INSERT INTO "Setting" ("key", "value")
@@ -211,18 +252,21 @@ export async function maybeAnnounceWeekHonors(
     return;
   }
 
-  const [playerUser, team] = await Promise.all([
+  const [playerUser, team, oracle] = await Promise.all([
     honors.player
       ? prisma.user.findUnique({ where: { id: honors.player.userId } })
       : null,
     honors.team
       ? prisma.team.findUnique({ where: { id: honors.team.teamId } })
       : null,
+    weekOracleLine(seasonId, week),
   ]);
   const sent = await sendDiscordMessage(
     weeklyHonorsMessage({
+      seasonId,
       week,
       playerName: playerUser?.name ?? null,
+      playerDiscordId: playerUser?.discordId ?? null,
       playerPoints: honors.player?.points ?? 0,
       heroName:
         honors.player?.heroId != null
@@ -231,8 +275,14 @@ export async function maybeAnnounceWeekHonors(
       teamName: team?.name ?? null,
       teamGameWins: honors.team?.gameWins ?? 0,
       corrected: claim.mode === "corrected",
+      oracle,
     }),
-    undefined,
+    // A cheerful ping for the Player of the Week, if they linked Discord, on
+    // the first post only: a correction must not ping anyone a second time
+    // (the formatter drops the mention from a correction's text to match).
+    claim.mode === "initial"
+      ? mentionsOf([playerUser?.discordId])
+      : undefined,
     {
       dedupeKey: announcementDedupeKey("honors", {
         key: marker,
@@ -276,7 +326,7 @@ export async function retryPendingHonorAnnouncements(
       // Archived seasons are historical truth, not an unbounded retry queue.
       // The complete marker set of the one active season is small and avoids
       // any fixed take-window where broken early weeks starve later work.
-      key: { startsWith: `${HONORS_ANNOUNCED_PREFIX}${activeSeason.id}:` },
+      key: { startsWith: honorsAnnouncedPrefix(activeSeason.id) },
       OR: [
         { value: { startsWith: HONORS_STALE_PREFIX } },
         { value: { startsWith: HONORS_FAILED_INITIAL_PREFIX } },

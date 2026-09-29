@@ -17,7 +17,7 @@ vi.mock("@/lib/dota", async (importOriginal) => ({
 }));
 
 import { revalidatePath } from "next/cache";
-import { setPlayerRank } from "@/app/actions/admin";
+import { setPlayerRank } from "@/app/actions/admin-roster";
 import { requireAdmin } from "@/lib/auth";
 import { fetchRankTier } from "@/lib/dota";
 import { prisma } from "@/lib/prisma";

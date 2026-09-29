@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import {
   Avatar,
@@ -13,7 +19,8 @@ import {
   buttonClasses,
   textLink,
 } from "@/components/ui";
-import { cn, hasText } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { aboutText } from "@/lib/about-you";
 import { pushToast } from "@/components/toaster";
 import { Countdown } from "@/components/countdown";
 import { DiscordTag } from "@/components/discord-tag";
@@ -26,14 +33,42 @@ import {
 } from "@/components/room-clock";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
+  adminNominationTeam,
+  nominationOrderLabel,
+  bidAllowanceLine,
+  captainStatusLine,
+  draftAlertsReachViewer,
   draftTitleFlag,
   draftViewerStake,
+  keepsLinedUpPick,
+  lineUpHint,
+  lotHeadingLead,
+  lotWatcherLine,
   maxBid,
-  nextNominatorIndex,
+  nominationTurnTeamId,
+  nominationWaitLine,
+  openSeatsLabel,
   outbidLatchAfter,
+  outbidLine,
+  rosterDisplayOrder,
   stripDraftTitleFlag,
+  uncoveredRoles,
+  upcomingNominatorTeamId,
+  upNextLine,
 } from "@/lib/draft";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
+import {
+  DRAFT_PRESENCE,
+  captainPresence,
+  captainPresenceLine,
+  missingCaptainsConfirmLine,
+} from "@/lib/draft-presence";
+import {
+  draftToolbarControls,
+  hasToolbarControl,
+  undoSaleConfirm,
+  voidLotConfirm,
+} from "@/lib/draft-admin";
 import {
   FEED_MAX,
   draftFeedInvalidated,
@@ -42,6 +77,8 @@ import {
   type FeedLine,
 } from "@/lib/draft-feed";
 import { draftPollCadence } from "@/lib/room-poll";
+import { DRAFT_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
+import { RoomStatusLine } from "@/components/room-status-line";
 import { nextClockOffset } from "@/lib/countdown";
 import {
   ROOM_SEQUENCE_START,
@@ -57,9 +94,11 @@ import {
 import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
 import type { DraftState } from "@/lib/draft-service";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { DraftRecapCard } from "@/components/draft-recap-card";
+import { StartDraftConfirmLine } from "@/components/start-draft-submit";
 import type { ActionResult } from "@/lib/action-result";
 
-// A single line in the live feed: the tested content (see @/lib/draft-feed)
+// A single line in "Recent sales": the tested content (see @/lib/draft-feed)
 // plus the React key this component hands out.
 type FeedEvent = FeedLine & { id: number };
 
@@ -93,7 +132,9 @@ function CompactClock({
   );
 }
 
-// The big bid clock in the "on the block" banner (ping dot under 5s).
+// The big bid clock in the "on the block" banner (ping dot under 5s). The
+// small lead-in says WHICH clock this is: the header beside it names the team
+// that nominated, and a bare "27s" there read as that team's turn.
 function BidClock({
   endsAtMs,
   offsetMs,
@@ -111,6 +152,9 @@ function BidClock({
         seconds <= 5 ? "text-danger" : "text-accent",
       )}
     >
+      <span className="font-sans text-xs font-normal text-muted">
+        <span className="hidden sm:inline">Bidding </span>closes in
+      </span>
       {seconds <= 5 ? (
         <span className="relative flex h-2.5 w-2.5">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-danger opacity-75 motion-reduce:animate-none" />
@@ -170,42 +214,68 @@ function ClockExpiryObserver({
   return null;
 }
 
+// The typed-amount box, with Max as a quiet link inside it. It starts EMPTY
+// (hinted with the cap) rather than pre-filled: the +$1 button already offers
+// the next price, and a pre-filled box had to be reset on every rival bid,
+// wiping whatever a captain was halfway through typing.
 function ExactBidControl({
   currentBid,
   maxBid,
   pending,
   submit,
+  onMax,
 }: {
   currentBid: number;
   maxBid: number;
   pending: boolean;
   submit: (amount: number) => void;
+  onMax: () => void;
 }) {
-  const [amount, setAmount] = useState(Math.min(currentBid + 1, maxBid));
+  const [raw, setRaw] = useState("");
+  const amount = raw.trim() === "" ? null : Number(raw);
   const valid =
-    Number.isSafeInteger(amount) && amount > currentBid && amount <= maxBid;
+    amount !== null &&
+    Number.isSafeInteger(amount) &&
+    amount > currentBid &&
+    amount <= maxBid;
 
   return (
-    <label className="col-span-2 flex items-center gap-2 sm:ml-1">
-      <span className="text-xs text-muted">Exact bid</span>
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (valid && !pending) submit(amount);
+      }}
+      className="flex w-full min-w-0 items-center gap-2 sm:w-auto"
+    >
       <input
         type="number"
+        inputMode="numeric"
         min={currentBid + 1}
         max={maxBid}
-        value={amount}
-        onChange={(event) => setAmount(Number(event.target.value))}
-        className="h-9 min-w-0 flex-1 rounded-md border border-line bg-surface-2/50 px-2 text-center text-sm sm:w-20 sm:flex-none"
+        value={raw}
+        placeholder={`up to $${maxBid}`}
+        onChange={(event) => setRaw(event.target.value)}
+        className="h-10 min-w-0 flex-1 rounded-md border border-line bg-surface-2/50 px-2 text-center text-sm sm:h-8 sm:w-28 sm:flex-none"
         aria-label="Exact bid amount"
       />
       <button
-        type="button"
+        type="submit"
         disabled={pending || !valid}
-        onClick={() => submit(amount)}
-        className={buttonClasses("accent", "sm")}
+        className={buttonClasses("accent", "sm", "shrink-0")}
       >
-        Bid ${amount}
+        {amount !== null && Number.isFinite(amount) ? `Bid $${amount}` : "Bid"}
       </button>
-    </label>
+      {/* Spends the whole cap, so it is the QUIETEST control here, and it
+          still asks first. */}
+      <button
+        type="button"
+        disabled={pending || maxBid <= currentBid}
+        onClick={onMax}
+        className="inline-flex h-10 shrink-0 items-center rounded px-1 text-xs text-muted underline decoration-line underline-offset-4 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50 sm:h-8"
+      >
+        Max ${maxBid}
+      </button>
+    </form>
   );
 }
 
@@ -216,6 +286,8 @@ export function DraftRoom({
   resumeAction,
   undoAction,
   voidLotAction,
+  adminStart,
+  adminFinish,
 }: {
   pollMs?: number;
   seasonId: string;
@@ -223,6 +295,19 @@ export function DraftRoom({
   resumeAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   undoAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   voidLotAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
+  /**
+   * Admins only, while draft setup is open: the Start draft button from
+   * /admin (same form, same startDraft action, same confirm), rendered by the
+   * page, plus why Start is unavailable when it is.
+   */
+  adminStart?: { control: ReactNode; blocker: string | null };
+  /**
+   * Admins only, in the Draft phase: the finished auction's next step, titled
+   * as /admin's banner titles it, with its control (the Regular season phase
+   * button from /admin, same action and confirm, or the way to the schedule
+   * when there are no fixtures yet).
+   */
+  adminFinish?: { title: string; detail: string; control: ReactNode };
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
@@ -257,12 +342,10 @@ export function DraftRoom({
   const [soundOn, setSoundOn] = usePersistedFlag("draftSound");
   // Latched while the viewer's team has lost the high bid on the live
   // nomination — cleared by the poll once it's stale (re-took the bid, the
-  // player sold, or bidding closed).
-  const [outbid, setOutbid] = useState<{
-    player: string;
-    team: string;
-    amount: number;
-  } | null>(null);
+  // player sold, or bidding closed). A plain flag: the card's price block
+  // already names the current leader live, and a remembered "Team B bid $5"
+  // went stale the moment a third captain bid.
+  const [outbid, setOutbid] = useState(false);
   // Clock skew as STATE, not a ref read during render. Reading `ref.current`
   // while rendering is unsafe under concurrent React (the value can differ
   // between a render React keeps and one it throws away) and the lint rules
@@ -273,12 +356,19 @@ export function DraftRoom({
   // can show.
   const [offsetMsState, setOffsetMs] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
+  // The pool's position filter lives here, not in <AvailableList>, so the
+  // captain's "roles to cover" chips at the top of the room can set it.
+  const [poolRole, setPoolRole] = useState<string | null>(null);
   const [nomAmount, setNomAmount] = useState(1);
-  // Live feed + "SOLD!" flash — derived client-side by diffing successive
+  // Recent sales + "SOLD!" flash — derived client-side by diffing successive
   // polled states, so no changes to the server-authoritative draft engine.
   const prevRef = useRef<DraftState | null>(null);
   const eventIdRef = useRef(0);
-  const [events, setEvents] = useState<FeedEvent[]>([]);
+  const [sales, setSales] = useState<FeedEvent[]>([]);
+  // The newest nomination or bid, read out to screen readers only. The lot
+  // card shows both already; the old feed repeated them on screen, and was
+  // also the only place a bid was ever announced.
+  const [lotNews, setLotNews] = useState("");
   const [soldFlash, setSoldFlash] = useState<{
     name: string;
     team: string;
@@ -343,7 +433,7 @@ export function DraftRoom({
       ...line,
       id: -1 - i,
     }));
-    if (seed.length) setEvents(seed);
+    if (seed.length) setSales(seed);
   }
 
   // Does this viewer need alerts even with the tab hidden? Captains and admins
@@ -535,29 +625,40 @@ export function DraftRoom({
     // live history.
     if (draftFeedInvalidated(prev, state)) {
       eventIdRef.current = 0;
-      setEvents(
+      setSales(
         seedDraftFeed(state).map((line, index) => ({
           ...line,
           id: -1 - index,
         })),
       );
+      setLotNews("");
       setSoldFlash(null);
-      setOutbid(null);
+      setOutbid(false);
       return;
     }
 
-    const { lines, sale, alerts } = draftFeedDiff(prev, state);
+    const { lines, sale, alerts, notice } = draftFeedDiff(prev, state);
     if (sale) setSoldFlash(sale);
+    // "The clock picked for you" — news only to the captain it happened to.
+    if (notice) pushToast("info", notice);
 
     // The feed is an append-only LOG of state transitions; it cannot be
     // derived from the current state alone, which is what a pure alternative
     // would require, and setting it here rather than deferring is deliberate:
-    // the feed line and the SOLD! flash must land in the same commit, and this
+    // the sale line and the SOLD! flash must land in the same commit, and this
     // is draft night's marquee moment. Ids are assigned HERE and counted up
     // from 0, staying clear of the negative ids the seed uses — a collision
     // would break React keys mid-draft.
-    const fresh = lines.map((line) => ({ ...line, id: eventIdRef.current++ }));
-    if (fresh.length) setEvents((e) => [...fresh, ...e].slice(0, FEED_MAX));
+    //
+    // Only SALES are listed; the lot card already shows the live nomination
+    // and its bid trail. The newest lot line (lines are newest first) goes to
+    // the screen-reader announcement instead.
+    const fresh = lines
+      .filter((line) => line.kind === "sold")
+      .map((line) => ({ ...line, id: eventIdRef.current++ }));
+    if (fresh.length) setSales((e) => [...fresh, ...e].slice(0, FEED_MAX));
+    const lotLine = lines.find((line) => line.kind !== "sold");
+    if (lotLine) setLotNews(`${lotLine.text}, $${lotLine.amount}`);
 
     // Outbid latch — set / clear / leave alone, decided by the tested
     // outbidLatchAfter (which deliberately has no budget input: a priced-out
@@ -569,15 +670,8 @@ export function DraftRoom({
       prevNominatedId: prev.nominatedPlayer?.userId ?? null,
       curNominatedId: state.nominatedPlayer?.userId ?? null,
     });
-    if (latch === "clear") setOutbid(null);
-    if (latch === "set") {
-      setOutbid({
-        player: state.nominatedPlayer!.name,
-        team:
-          state.teams.find((t) => t.id === state.currentBidTeamId)?.name ?? "—",
-        amount: state.currentBid,
-      });
-    }
+    if (latch === "clear") setOutbid(false);
+    if (latch === "set") setOutbid(true);
 
     // ONE ring for the whole transition — being sold, being nominated, your
     // turn to nominate, being outbid. These do coincide (an admin nominating
@@ -595,8 +689,15 @@ export function DraftRoom({
   const turnRef = useRef<string | null>(null);
   useEffect(() => {
     if (!state) return;
+    // A player the captain lined up while "next" survives the turn passing to
+    // them — that is the point of lining one up. Any other hand-over clears
+    // the selection.
+    const keep = keepsLinedUpPick({
+      nominatorTeamId: state.nominatorTeamId,
+      myTeamId: state.me.myTeamId,
+    });
     if (turnRef.current && turnRef.current !== state.nominatorTeamId) {
-      setSelected(null);
+      setSelected((current) => (keep ? current : null));
       setNomAmount(state.minBid);
     }
     turnRef.current = state.nominatorTeamId;
@@ -623,7 +724,7 @@ export function DraftRoom({
     loaded: !!state,
     status: state?.status ?? null,
     canNominate: !!state?.me.canNominate,
-    outbid: !!outbid,
+    outbid,
   });
   useEffect(() => {
     // Strip before writing, so a re-render can never stack two prefixes. The
@@ -722,7 +823,9 @@ export function DraftRoom({
           return;
         }
         apply(next, seq);
-        setSelected(null);
+        // A bid leaves the pick a captain has lined up for their next turn
+        // alone; a nomination has just used it.
+        if (url !== "/api/draft/bid") setSelected(null);
       }
     } catch {
       // A lost response is never proof that a mutation failed: the server can
@@ -739,7 +842,7 @@ export function DraftRoom({
     return (
       <div
         role="alert"
-        className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
+        className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-8 text-center"
       >
         <div className="text-lg font-semibold">
           This draft room is out of date
@@ -781,7 +884,7 @@ export function DraftRoom({
         <div
           role="status"
           aria-live="polite"
-          className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-8 text-center"
+          className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-8 text-center"
         >
           <div className="text-lg font-semibold">
             The draft room hasn&apos;t loaded
@@ -816,94 +919,24 @@ export function DraftRoom({
     return <div className="py-10 text-center text-muted">Loading draft…</div>;
   }
 
-  // Shared "polling is dead" strip — clocks below are ticking on stale state.
-  const disconnectedStrip = disconnected ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
-    >
-      ⚠️ Connection lost — reconnecting… The auction keeps running on the
-      server; actions are paused until we&apos;re back.
-    </div>
-  ) : null;
-
-  const connectivityStrip = connectionUnavailable ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className={cn(
-        "rounded-lg border px-4 py-2 text-sm",
-        connectivity === "offline"
-          ? "border-danger/40 bg-danger/10 text-danger"
-          : "border-info/40 bg-info/10 text-info",
-      )}
-    >
-      {connectivity === "offline"
-        ? "⚠️ You're offline — the auction keeps running on the server. Actions are paused until you reconnect and the current lot is confirmed."
-        : "Connection restored — checking the current lot. Actions remain paused until the latest auction state arrives."}
-    </div>
-  ) : null;
-
-  const syncDelayedStrip = syncDelayed ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning"
-    >
-      Live updates are delayed by traffic — the room is retrying at a slower
-      pace. Check the lot before acting.
-    </div>
-  ) : null;
-
-  const actionReconcilingStrip = actionReconciling ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
-    >
-      Checking the current live lot after an interrupted action. Controls will
-      unlock when the server confirms the latest auction state.
-    </div>
-  ) : null;
-
-  const sessionExpiredStrip = sessionExpired ? (
-    <div
-      role="alert"
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
-    >
-      <span>
-        Your sign-in expired. You are watching as a visitor and cannot nominate,
-        bid, or use admin controls.
-      </span>
-      <Link
-        href="/login?next=/draft"
-        className={buttonClasses("secondary", "sm")}
-      >
-        Sign in again
-      </Link>
-    </div>
-  ) : null;
-
-  const settlingStrip = clockSettling ? (
-    <div
-      role="status"
-      aria-live="polite"
-      className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
-    >
-      Time is up — confirming the sale or next nomination turn with the server…
-    </div>
-  ) : null;
-
+  // ONE status line, chosen by priority (roomStatus): offline, connection
+  // lost, back online and checking, checking after an interrupted action,
+  // sign-in expired, updates delayed. The inhouse room renders the same line.
+  const connectionStatus = roomStatus(
+    {
+      connectivity,
+      disconnected,
+      actionReconciling,
+      sessionExpired,
+      syncDelayed,
+    },
+    DRAFT_ROOM_STATUS_COPY,
+  );
   const roomAlerts = (
-    <>
-      {connectivityStrip}
-      {disconnectedStrip}
-      {syncDelayedStrip}
-      {actionReconcilingStrip}
-      {sessionExpiredStrip}
-      {settlingStrip}
-    </>
+    <RoomStatusLine
+      status={connectionStatus}
+      signInHref="/login?next=/draft"
+    />
   );
 
   const { me } = state;
@@ -917,22 +950,52 @@ export function DraftRoom({
   )?.name;
   // Who nominates after this lot — captains plan a turn ahead. Pure rotation
   // math over the same draftOrder-sorted teams the server uses.
-  const curNomIdx = state.teams.findIndex(
-    (t) => t.id === state.nominatorTeamId,
-  );
-  const nextNomIdx = nextNominatorIndex(
-    state.teams.map((t) => ({
-      id: t.id,
-      budget: t.budget,
-      rosterCount: t.members.length,
-    })),
-    state.teamSize,
-    curNomIdx < 0 ? 0 : curNomIdx,
-  );
-  const nextNominatorName =
-    nextNomIdx >= 0 && state.teams[nextNomIdx]?.id !== state.nominatorTeamId
-      ? state.teams[nextNomIdx]?.name
-      : null;
+  const upcomingTeamId = upcomingNominatorTeamId(state);
+  const nextNominatorName = upcomingTeamId
+    ? (state.teams.find((t) => t.id === upcomingTeamId)?.name ?? null)
+    : null;
+  // The captain whose turn comes next may line up a pick in advance, and so
+  // may the captain on the clock while the admin has paused the auction.
+  const iAmNext = !!me.myTeamId && upcomingTeamId === me.myTeamId;
+  const myTurnPaused =
+    state.status === "PAUSED" &&
+    !state.nominatedPlayer &&
+    !!me.myTeamId &&
+    state.nominatorTeamId === me.myTeamId;
+  // An admin can nominate for the team on the clock (a captain who dropped
+  // off and asks for "Player X at $5"), capped at that team's max bid.
+  const adminTeam = adminNominationTeam({
+    status: state.status,
+    seasonStatus: state.seasonStatus,
+    nominatedUserId: state.nominatedUserId,
+    nominatorTeamId: state.nominatorTeamId,
+    teams: state.teams,
+    teamSize: state.teamSize,
+    minBid: state.minBid,
+    me,
+  });
+  const canLineUp = me.canNominate || iAmNext || myTurnPaused || !!adminTeam;
+  const nominateCap = adminTeam ? adminTeam.maxBid : me.myMaxBid;
+  // Same endpoint and turn check for both; the admin confirms because the
+  // nomination spends another team's turn.
+  const nominate = (playerId: string, amount: number) => {
+    if (adminTeam) {
+      const name =
+        state.available.find((p) => p.userId === playerId)?.name ??
+        "this player";
+      if (
+        !window.confirm(
+          `Nominate ${name} for ${adminTeam.name} at $${amount}? This uses ${adminTeam.name}'s turn.`,
+        )
+      ) {
+        return;
+      }
+    }
+    act("/api/draft/nominate", { playerId, amount });
+  };
+  const linedUpName = selected
+    ? (state.available.find((p) => p.userId === selected)?.name ?? null)
+    : null;
   // The viewer's own team (if a captain) — drives the "why can't I bid" copy.
   const myTeam = me.myTeamId
     ? state.teams.find((t) => t.id === me.myTeamId)
@@ -940,6 +1003,27 @@ export function DraftRoom({
   const rosterFull = !!me.myTeamId && myTeam?.need === 0;
   const pricedOut =
     !!me.myTeamId && !rosterFull && me.myMaxBid <= state.currentBid;
+  // The player on the block, or one still waiting in the pool, gets a line of
+  // their own; visitors get none (they used to read the captains' rules).
+  const watcherText = lotWatcherLine({
+    me,
+    nominatedPlayer: state.nominatedPlayer,
+    available: state.available,
+    currentBid: state.currentBid,
+    highBidderName: highBidderName ?? null,
+  });
+  // Who can still answer the current price — the fact a captain weighs before
+  // going higher, which used to live only in each team card's tiny "max $N".
+  const outbidText = state.nominatedPlayer
+    ? outbidLine({
+        teams: state.teams,
+        teamSize: state.teamSize,
+        minBid: state.minBid,
+        currentBid: state.currentBid,
+        currentBidTeamId: state.currentBidTeamId,
+        myTeamId: me.myTeamId,
+      })
+    : null;
 
   const viewerTeamBanner = me.rosterTeamId ? (
     <div
@@ -977,7 +1061,7 @@ export function DraftRoom({
         <div className="space-y-6">
           {roomAlerts}
           {viewerTeamBanner}
-          <div className="rounded-[var(--radius)] border border-warning/40 bg-warning/10 p-6 text-center">
+          <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-6 text-center">
             <div className="text-lg font-semibold">
               The auction is not available
             </div>
@@ -1005,6 +1089,9 @@ export function DraftRoom({
     // admin starts — nobody has to hand-refresh into a running clock. The
     // admin CTA renders only for admins (everyone else used to get bounced
     // off /admin with no explanation).
+    // Who's in the room, from the live poll: a line above Start draft, and
+    // the missing captains named in its confirm at the moment of the click.
+    const presence = captainPresence(state.teams, me.userId);
     return (
       <div className="space-y-6">
         {roomAlerts}
@@ -1052,25 +1139,68 @@ export function DraftRoom({
             <Link href="/teams" className={buttonClasses("secondary", "sm")}>
               Captains &amp; budgets
             </Link>
-            {me.isAdmin ? (
-              <Link href="/admin" className={buttonClasses("accent", "sm")}>
+            {me.isAdmin && !adminStart ? (
+              <Link
+                href="/admin#adm-captains"
+                className={buttonClasses("accent", "sm")}
+              >
                 Start it from the admin panel →
               </Link>
             ) : null}
           </div>
+          {/* Admins start the auction right here: the same Start draft form
+              as the Captains & draft card (same action, same confirm), so a
+              phone on draft night doesn't have to dig through /admin. The
+              rest of setup stays one link away, on that card. */}
+          {me.isAdmin && adminStart ? (
+            <div className="mt-4 flex flex-col items-center gap-2 border-t border-line pt-4">
+              {presence ? (
+                <p className="text-sm text-muted">
+                  {captainPresenceLine(presence)}
+                </p>
+              ) : null}
+              <StartDraftConfirmLine
+                line={missingCaptainsConfirmLine(presence?.away ?? [], "now")}
+              >
+                {adminStart.control}
+              </StartDraftConfirmLine>
+              {adminStart.blocker ? (
+                <p className="text-sm font-medium text-accent">
+                  Start unavailable: {adminStart.blocker}
+                </p>
+              ) : null}
+              <Link href="/admin#adm-captains" className={textLink("text-sm")}>
+                Captains &amp; draft setup on the admin panel
+              </Link>
+            </div>
+          ) : null}
         </div>
         <AuctionPrimer
           minBid={state.minBid}
           teamSize={state.teamSize}
           defaultOpen
         />
-        {state.teams.length > 0 ? <TeamsGrid state={state} /> : null}
+        {state.teams.length > 0 ? (
+          <TeamsGrid state={state} showNominationOrder />
+        ) : null}
       </div>
     );
   }
 
   if (state.status === "COMPLETE") {
     const shortTeams = state.teams.filter((team) => team.need > 0);
+    // Auction purchases only: $0 rows are free-agent signings, which an
+    // admin can make once the auction is over.
+    const bought = state.teams.reduce(
+      (n, t) => n + t.members.filter((m) => !m.isCaptain && m.price > 0).length,
+      0,
+    );
+    // The auction is over, so this is a results page: what happened, the
+    // recap, and the final rosters with what each player cost. Admins get
+    // the one thing left to do here (start the Regular season), not a list
+    // of places to go.
+    const showNextStep =
+      me.isAdmin && !!adminFinish && state.seasonStatus === "DRAFT";
     return (
       <div className="space-y-6">
         {/* Same strip as every other branch — undoLastSale can re-open a
@@ -1093,29 +1223,36 @@ export function DraftRoom({
           aria-live="polite"
           className="rounded-[var(--radius)] border border-success/40 bg-success/10 p-6 text-center"
         >
-          <div className="text-2xl">✅</div>
-          <div className="mt-1 text-lg font-semibold">
-            The draft is complete!
+          <div className="text-2xl" aria-hidden>
+            ✅
           </div>
-          <div className="text-sm text-muted">
+          <h2 className="mt-1 text-lg font-semibold">The draft is complete</h2>
+          <p className="text-sm text-muted">
+            {bought} player{bought === 1 ? "" : "s"} bought across{" "}
+            {state.teams.length} team{state.teams.length === 1 ? "" : "s"}.{" "}
             {shortTeams.length === 0
-              ? "All roster seats were filled. Schedule setup is next."
-              : `${shortTeams.length} team${shortTeams.length === 1 ? "" : "s"} still ${shortTeams.length === 1 ? "has" : "have"} open seats; admins can use free-agent signings after advancing the league.`}
-          </div>
+              ? "Every roster is full."
+              : `${shortTeams.length} team${shortTeams.length === 1 ? " still has" : "s still have"} open seats: an admin can sign free agents to fill them, and standins can cover games until then.`}
+          </p>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             <Link href="/teams" className={buttonClasses("secondary", "sm")}>
               View teams
             </Link>
-            <Link href="/schedule" className={buttonClasses("secondary", "sm")}>
-              View schedule
-            </Link>
-            {me.isAdmin ? (
-              <Link href="/admin" className={buttonClasses("accent", "sm")}>
-                Continue league setup
-              </Link>
-            ) : null}
           </div>
         </div>
+        {showNextStep ? (
+          <section
+            aria-label="Next step"
+            className="flex flex-col items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 p-4 text-center"
+          >
+            <p className="text-sm">
+              <span className="font-semibold">{adminFinish.title}</span>{" "}
+              <span className="text-muted">{adminFinish.detail}</span>
+            </p>
+            {adminFinish.control}
+          </section>
+        ) : null}
+        {state.recap ? <DraftRecapCard recap={state.recap} /> : null}
         <TeamsGrid state={state} />
       </div>
     );
@@ -1123,10 +1260,138 @@ export function DraftRoom({
 
   const paused = state.status === "PAUSED";
 
+  // A captain's roles-to-cover chip: filter the pool to that position and
+  // bring the pool into view if it is below the fold (phones). Pressing the
+  // active one again clears the filter, like the pool's own chips.
+  const findRole = (key: string) => {
+    if (poolRole === key) {
+      setPoolRole(null);
+      return;
+    }
+    setPoolRole(key);
+    document.getElementById("player-pool")?.scrollIntoView({
+      block: "nearest",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  };
+  const rolesToCover =
+    myTeam && myTeam.need > 0 ? uncoveredRoles(myTeam.members) : [];
+
+  // While the auction runs, "Your team" and the sound toggle ride in the lot
+  // card's header instead of taking two rows of their own above the clock.
+  // A captain's version is their standing in the auction — money, seats, bid
+  // cap and the positions nobody on the roster plays yet — which used to show
+  // only inside a lot they could bid on, never during their own nomination.
+  const liveTeamLine = myTeam ? (
+    <span className="min-w-0 flex-1">
+      <Link
+        href={`/teams/${myTeam.id}`}
+        target="_blank"
+        rel="noreferrer"
+        title="Open your team's roster in a new tab"
+        className={textLink("font-medium")}
+      >
+        {myTeam.name}
+        <span aria-hidden> ↗</span>
+      </Link>
+      {" · "}
+      {captainStatusLine({
+        budget: me.myBudget,
+        need: myTeam.need,
+        maxBid: me.myMaxBid,
+      })}
+      {rolesToCover.length > 0 ? (
+        <>
+          {" · roles to cover "}
+          <span
+            role="group"
+            aria-label="Positions nobody on your team plays yet"
+            className="inline-flex flex-wrap gap-1 align-middle"
+          >
+            {rolesToCover.map((key) => {
+              const role = DOTA_ROLES.find((r) => r.key === key);
+              const name = role ? `${role.short} (${role.label})` : key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => findRole(key)}
+                  aria-pressed={poolRole === key}
+                  aria-label={`Show ${name} players in the pool`}
+                  title={`Nobody on your team lists ${name}. Tap to show those players in the pool.`}
+                  className={cn(
+                    "inline-flex h-6 min-w-6 items-center justify-center rounded border px-1 text-[11px] font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                    poolRole === key
+                      ? "border-accent/60 bg-accent/20 text-fg"
+                      : "border-line text-muted hover:border-accent/60 hover:text-fg",
+                  )}
+                >
+                  {key}
+                </button>
+              );
+            })}
+          </span>
+        </>
+      ) : null}
+    </span>
+  ) : me.rosterTeamId ? (
+    <span className="min-w-0 truncate">
+      Your team:{" "}
+      <Link
+        href={`/teams/${me.rosterTeamId}`}
+        target="_blank"
+        rel="noreferrer"
+        title="Open your team's roster in a new tab"
+        className={textLink("font-medium")}
+      >
+        {me.rosterTeamName}
+        <span aria-hidden> ↗</span>
+      </Link>
+      {me.rosterIsCaptain
+        ? " · captain"
+        : me.rosterPrice != null
+          ? ` · drafted for $${me.rosterPrice}`
+          : ""}
+    </span>
+  ) : null;
+  // Only for viewers the room can actually ring for (draftAlertsReachViewer):
+  // a visitor, an admin or a drafted player never hears a thing.
+  const soundToggle = draftAlertsReachViewer(state) ? (
+    <button
+      type="button"
+      onClick={toggleSound}
+      aria-pressed={soundOn}
+      title={
+        soundOn
+          ? "Notification sound on — click to mute"
+          : "Notifications muted — click to enable a bell"
+      }
+      className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
+    >
+      <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
+      {soundOn ? "Sound on" : "Muted"}
+    </button>
+  ) : null;
+
+  // Dim the (stale) clocks while polling is dead: they're ticking on the last
+  // state we saw, not the live auction. Everything in the lot card dims
+  // except the status slot that explains why.
+  const lotStale = connectionUnavailable || disconnected;
+  // The player's "About you" box, named as the pool and profile name it. An
+  // older signup's captain note and goals show joined (about-you.ts).
+  const nominatedAbout = state.nominatedPlayer
+    ? aboutText(state.nominatedPlayer, " · ")
+    : "";
+
   return (
     <div className="space-y-6">
-      {roomAlerts}
-      {viewerTeamBanner}
+      {/* Screen readers hear each nomination and bid as it lands ("Team 3
+          bid on Pudge, $8"); sighted viewers read it off the lot card. */}
+      <p role="status" className="sr-only">
+        {lotNews}
+      </p>
       {!paused ? (
         <ClockExpiryObserver
           endsAtMs={
@@ -1147,102 +1412,6 @@ export function DraftRoom({
           voidLotAction={voidLotAction}
         />
       ) : null}
-      {paused ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
-        >
-          ⏸️ The admin paused the auction — clocks are parked and nothing can
-          sell. Stay put; it resumes with a fresh clock.
-        </div>
-      ) : null}
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          onClick={toggleSound}
-          aria-pressed={soundOn}
-          title={
-            soundOn
-              ? "Notification sound on — click to mute"
-              : "Notifications muted — click to enable a bell"
-          }
-          className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
-        >
-          <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
-          {soundOn ? "Sound on" : "Muted"}
-        </button>
-      </div>
-
-      {outbid ? (
-        <div
-          role="status"
-          className="flex flex-col items-center gap-1 rounded-[var(--radius)] border border-danger/50 bg-gradient-to-r from-danger/15 via-danger/10 to-danger/15 px-5 py-3 text-center"
-        >
-          <div className="font-display text-lg font-black uppercase tracking-widest text-danger">
-            💸 Outbid!
-          </div>
-          <div className="text-sm">
-            <span className="font-semibold">{outbid.team}</span> bid $
-            {outbid.amount} on{" "}
-            <span className="font-semibold">{outbid.player}</span>
-          </div>
-          {state.me.canBid ? (
-            <button
-              type="button"
-              onClick={() => quickBid(1)}
-              disabled={pending || state.currentBid + 1 > me.myMaxBid}
-              className={buttonClasses("accent", "sm", "mt-1")}
-            >
-              Re-bid ${state.currentBid + 1}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {soldFlash ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "sold-flash flex flex-col items-center gap-1 rounded-[var(--radius)] border px-5 py-4 text-center",
-            soldFlash.isMe
-              ? "border-accent/60 bg-gradient-to-r from-accent/20 via-accent/10 to-accent/20"
-              : "border-success/50 bg-gradient-to-r from-success/15 via-success/10 to-success/15",
-          )}
-        >
-          <div
-            className={cn(
-              "font-display text-2xl font-black uppercase tracking-widest",
-              soldFlash.isMe ? "text-accent" : "text-success",
-            )}
-          >
-            {soldFlash.isMe ? "🎉 You're drafted!" : "Sold!"}
-          </div>
-          <div className="text-sm">
-            {soldFlash.isMe ? (
-              <>
-                Welcome to{" "}
-                <span className="font-semibold">{soldFlash.team}</span> — they
-                paid{" "}
-                <span className="font-bold text-accent">
-                  ${soldFlash.price}
-                </span>{" "}
-                for you.
-              </>
-            ) : (
-              <>
-                <span className="font-semibold">{soldFlash.name}</span> →{" "}
-                {soldFlash.team} for{" "}
-                <span className="font-bold text-accent">
-                  ${soldFlash.price}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
-
       {/* Compact clock bar — pins under the site header while the captain is
           deep in the player pool, so the auction never disappears. */}
       {bannerOffscreen &&
@@ -1271,9 +1440,9 @@ export function DraftRoom({
               title="Back to the auction clock"
               className="flex h-full min-w-0 flex-1 items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
             >
-              {connectionUnavailable || disconnected ? (
+              {connectionStatus?.short ? (
                 <span className="shrink-0 text-xs font-medium text-danger">
-                  {connectivity === "offline" ? "⚠ offline" : "⚠ reconnecting…"}
+                  {connectionStatus.short}
                 </span>
               ) : null}
               {state.nominatedPlayer ? (
@@ -1327,17 +1496,14 @@ export function DraftRoom({
                   ? `Re-bid $${state.currentBid + 1}`
                   : `Bid $${state.currentBid + 1}`}
               </button>
-            ) : !state.nominatedPlayer && me.canNominate && selected ? (
+            ) : !state.nominatedPlayer &&
+              (me.canNominate || adminTeam) &&
+              selected ? (
               <button
                 type="button"
-                onClick={() =>
-                  act("/api/draft/nominate", {
-                    playerId: selected,
-                    amount: nomAmount,
-                  })
-                }
+                onClick={() => nominate(selected, nomAmount)}
                 disabled={
-                  pending || nomAmount < state.minBid || nomAmount > me.myMaxBid
+                  pending || nomAmount < state.minBid || nomAmount > nominateCap
                 }
                 className={buttonClasses(
                   "accent",
@@ -1359,276 +1525,446 @@ export function DraftRoom({
 
       {/* On the block */}
       <div
-        ref={bannerRef}
         className={cn(
           "rounded-[var(--radius)] border border-line bg-surface/80",
           // The viewer IS the player being auctioned — their moment glows.
           !!me.userId &&
             state.nominatedPlayer?.userId === me.userId &&
             "border-accent/70 ring-2 ring-accent/30",
-          // Dim the (stale) clocks while polling is dead — they're ticking on
-          // the last state we saw, not the live auction.
-          (connectionUnavailable || disconnected) && "opacity-50",
         )}
       >
-        <div className="flex items-center justify-between border-b border-line px-5 py-3">
-          <h2 className="min-w-0 text-sm font-normal text-muted">
-            On the clock: <span className="text-fg">{nominatorName}</span>
-            {nextNominatorName ? (
-              <span className="hidden sm:inline">
-                {" "}
-                · next: {nextNominatorName}
-              </span>
+        {/* The ACTION ZONE — clock, player, price and the bid controls, in
+            that order — is what useBannerOffscreen watches. Scouting detail
+            (heroes, notes, contact, the bid trail) lives below it, so the
+            compact bar takes over the moment the controls themselves scroll
+            away rather than once the whole card has gone. */}
+        <div ref={bannerRef}>
+          <div
+            className={cn("border-b border-line", lotStale && "opacity-50")}
+          >
+            {/* FIXED HEIGHT (min-h-14, two text lines at most): a sale and a
+                clock running out used to insert banners ABOVE the card, which
+                pushed the lot and its buttons ~110px down and back again right
+                as the next captain nominated and others reached for +$1. Those
+                moments now replace text inside this row instead. */}
+            <div
+              className={cn(
+                "flex min-h-14 items-center justify-between gap-3 rounded-t-[var(--radius)] px-5 py-2 transition-colors",
+                soldFlash &&
+                  (soldFlash.isMe ? "bg-accent/15" : "bg-success/10"),
+              )}
+            >
+              {soldFlash ? (
+                <p
+                  role="status"
+                  className={cn(
+                    "sold-flash line-clamp-2 min-w-0 text-sm font-semibold [overflow-wrap:anywhere]",
+                    soldFlash.isMe ? "text-accent" : "text-success",
+                  )}
+                >
+                  {soldFlash.isMe ? (
+                    <>
+                      🎉 You&apos;re drafted! {soldFlash.team} paid $
+                      {soldFlash.price} for you.
+                    </>
+                  ) : (
+                    <>
+                      Sold! {soldFlash.name} → {soldFlash.team} · $
+                      {soldFlash.price}
+                    </>
+                  )}
+                </p>
+              ) : (
+                <h2 className="line-clamp-2 min-w-0 text-sm font-normal text-muted [overflow-wrap:anywhere]">
+                  {lotHeadingLead({
+                    lotLive: !!state.nominatedPlayer,
+                    autoNominated: state.lotAutoNominated,
+                  })}{" "}
+                  <span className="text-fg">{nominatorName}</span>
+                  {nextNominatorName ? (
+                    <span className="hidden sm:inline">
+                      {" "}
+                      · next: {nextNominatorName}
+                    </span>
+                  ) : null}
+                </h2>
+              )}
+              {paused ? (
+                <span className="shrink-0 font-mono text-sm font-semibold text-info">
+                  ⏸ paused
+                </span>
+              ) : clockSettling ? (
+                // The clock hit zero and the room is waiting for the server to
+                // settle it — said in the clock's own slot, not a strip above.
+                <span
+                  role="status"
+                  className="shrink-0 font-mono text-sm font-semibold text-info"
+                >
+                  {state.nominatedPlayer ? "Closing…" : "Time's up…"}
+                  <span className="sr-only">
+                    {state.nominatedPlayer
+                      ? " Confirming the sale with the server."
+                      : " Confirming the next nomination with the server."}
+                  </span>
+                </span>
+              ) : state.nominatedPlayer ? (
+                <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
+              ) : state.nominationEndsAt ? (
+                <NomClock
+                  endsAtMs={state.nominationEndsAt}
+                  offsetMs={offsetMs}
+                />
+              ) : null}
+            </div>
+            {liveTeamLine || soundToggle || iAmNext ? (
+              <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-5 pb-2 text-xs text-muted">
+                {liveTeamLine}
+                {soundToggle}
+                {/* Every screen size: the header's "next: Team 3" is hidden
+                    on phones, and a turn that starts with searching the pool
+                    loses most of its 90 seconds. */}
+                {iAmNext ? (
+                  <p className="basis-full font-medium text-accent">
+                    {upNextLine(linedUpName)}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
-          </h2>
-          {paused ? (
-            <span className="font-mono text-sm font-semibold text-info">
-              ⏸ paused
-            </span>
-          ) : state.nominatedPlayer ? (
-            <BidClock endsAtMs={state.bidEndsAt} offsetMs={offsetMs} />
-          ) : state.nominationEndsAt ? (
-            <NomClock endsAtMs={state.nominationEndsAt} offsetMs={offsetMs} />
+          </div>
+
+          <div className={cn("p-5", lotStale && "opacity-50")}>
+            {state.nominatedPlayer ? (
+              <>
+                {/* Price beside the name, then straight into the controls:
+                    on a phone the bid row used to start ~800px down, under
+                    the player's heroes, note and quote. */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Avatar
+                      name={state.nominatedPlayer.name}
+                      src={state.nominatedPlayer.avatar}
+                      size={52}
+                      className="shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xl font-bold [overflow-wrap:anywhere]">
+                        {state.nominatedPlayer.name}
+                        {me.userId === state.nominatedPlayer.userId ? (
+                          <Badge tone="accent">You&apos;re on the block!</Badge>
+                        ) : null}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted">
+                        {state.nominatedPlayer.mmr > 0 ? (
+                          <span>{state.nominatedPlayer.mmr} MMR</span>
+                        ) : null}
+                        <RankBadge rankTier={state.nominatedPlayer.rankTier} />
+                        <RoleBadges roles={state.nominatedPlayer.roles} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-3xl font-bold text-accent">
+                      ${state.currentBid}
+                    </div>
+                    {/* One line whatever the bidder's name: a wrapping name
+                        would move the bid buttons every time the lead
+                        changed hands. */}
+                    <div
+                      className="max-w-[8rem] truncate text-xs text-muted sm:max-w-[12rem]"
+                      title={
+                        highBidderName
+                          ? `High bid: ${highBidderName}`
+                          : undefined
+                      }
+                    >
+                      {highBidderName
+                        ? `high bid · ${highBidderName}`
+                        : "opening"}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  aria-busy={me.canBid ? reqPending : undefined}
+                  className="mt-4 space-y-3 border-t border-line pt-4 text-sm"
+                >
+                  {/* The outbid alert has a slot of its own at the top of this
+                      area rather than a banner above the card. It can only
+                      appear on the poll where the viewer LOST the high bid —
+                      the same poll that brings their bid buttons back — so it
+                      never shoves controls that were already on screen. */}
+                  {/* The latch clears in the effect AFTER this render, so
+                      also check the payload: never "lost" beside "hold". */}
+                  {outbid && state.currentBidTeamId !== me.myTeamId ? (
+                    <p role="status">
+                      <span className="font-display font-black uppercase tracking-wider text-danger">
+                        💸 Outbid!
+                      </span>{" "}
+                      You lost the high bid.
+                    </p>
+                  ) : null}
+                  {me.canBid ? (
+                    <>
+                      <p className="text-muted">
+                        {bidAllowanceLine({
+                          maxBid: me.myMaxBid,
+                          need: myTeam?.need ?? 1,
+                          minBid: state.minBid,
+                        })}
+                      </p>
+                      {/* +$1, +$5 and a typed amount. +$10 went: the box
+                          covers any bigger jump, and six controls under a
+                          30-second clock was four more than a captain needs. */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+                          {[1, 5].map((d) => {
+                            const amount = state.currentBid + d;
+                            // After an outbid, +$1 IS the re-bid — one button,
+                            // not a second copy of it in a banner.
+                            const label =
+                              d === 1 && outbid
+                                ? `Re-bid $${amount}`
+                                : `Bid $${amount}`;
+                            return (
+                              <button
+                                key={d}
+                                disabled={pending || amount > me.myMaxBid}
+                                onClick={() => quickBid(d)}
+                                aria-label={label}
+                                title={label}
+                                className={buttonClasses(
+                                  d === 1 && outbid ? "accent" : "secondary",
+                                  "sm",
+                                )}
+                              >
+                                {/* Show the amount that will actually be
+                                    submitted — "+$5" alone hid the absolute
+                                    price. */}
+                                {d === 1 && outbid
+                                  ? label
+                                  : `+$${d} → $${amount}`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <ExactBidControl
+                          key={
+                            state.currentLotId ?? state.nominatedPlayer.userId
+                          }
+                          currentBid={state.currentBid}
+                          maxBid={me.myMaxBid}
+                          pending={pending}
+                          submit={(amount) => act("/api/draft/bid", { amount })}
+                          onMax={() => {
+                            // One tap here commits the entire remaining
+                            // budget — make it deliberate.
+                            if (
+                              window.confirm(
+                                `Bid your maximum $${me.myMaxBid}? That's everything you can spend on this player.`,
+                              )
+                            ) {
+                              act("/api/draft/bid", { amount: me.myMaxBid });
+                            }
+                          }}
+                        />
+                      </div>
+                    </>
+                  ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
+                    <p role="status" className="text-success">
+                      You hold the high bid.
+                    </p>
+                  ) : rosterFull ? (
+                    <p className="text-muted">
+                      Your roster is full — you&apos;re done bidding.
+                    </p>
+                  ) : pricedOut ? (
+                    <p className="text-muted">
+                      Priced out — your max bid is ${me.myMaxBid} (reserving $
+                      {state.minBid} per remaining slot).
+                    </p>
+                  ) : watcherText ? (
+                    <p
+                      className={
+                        me.userId === state.nominatedPlayer.userId
+                          ? "text-fg"
+                          : "text-muted"
+                      }
+                    >
+                      {watcherText}
+                    </p>
+                  ) : null}
+                  {/* Last in the area, BELOW the controls: its length changes
+                      as teams price out, and above the buttons that would move
+                      them under a captain's thumb. */}
+                  {outbidText ? (
+                    <p className="text-xs text-muted">{outbidText}</p>
+                  ) : null}
+                </div>
+              </>
+            ) : me.canNominate ? (
+              <NominateBar
+                state={state}
+                selected={selected}
+                nomAmount={nomAmount}
+                setNomAmount={setNomAmount}
+                maxBid={me.myMaxBid}
+                pending={pending}
+                onNominate={nominate}
+              />
+            ) : adminTeam ? (
+              <div className="space-y-3">
+                <NominateBar
+                  state={state}
+                  selected={selected}
+                  nomAmount={nomAmount}
+                  setNomAmount={setNomAmount}
+                  maxBid={adminTeam.maxBid}
+                  forTeamName={adminTeam.name}
+                  pending={pending}
+                  onNominate={nominate}
+                />
+                <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+                  <span>Or let the draft choose:</span>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => {
+                      // Skipping a captain's turn is intrusive — confirm it.
+                      if (
+                        window.confirm(
+                          `Auto-nominate the top player for ${adminTeam.name}? Use this when they're absent — it takes their turn.`,
+                        )
+                      ) {
+                        act("/api/draft/admin-nominate", {});
+                      }
+                    }}
+                    className={buttonClasses("secondary", "sm")}
+                  >
+                    Auto-nominate top player
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 py-4">
+                <p
+                  className={cn(
+                    "text-center",
+                    myTurnPaused ? "font-medium text-fg" : "text-muted",
+                  )}
+                >
+                  {nominationWaitLine({
+                    paused,
+                    myTurn: myTurnPaused,
+                    nominatorName,
+                  })}
+                </p>
+                {myTurnPaused ? (
+                  <p className="text-center text-sm text-muted">
+                    {lineUpHint(linedUpName)}
+                  </p>
+                ) : null}
+              </div>
+            )}
+          </div>
+          {/* The room's status line and the pause note sit BELOW the
+              controls, undimmed. Above the card they came and went between
+              polls (a lost bid response, a 429, the admin resuming) and
+              pushed the lot and its bid buttons down and back up under a
+              captain's thumb; here they move only the scouting detail. */}
+          {connectionStatus || paused ? (
+            <div className="space-y-2 px-5 pb-5">
+              {roomAlerts}
+              {paused ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info"
+                >
+                  ⏸️ The admin paused the auction — clocks are parked and
+                  nothing can sell. Stay put; it resumes with a fresh clock.
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
 
-        <div className="p-5">
-          {state.nominatedPlayer ? (
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Avatar
-                  name={state.nominatedPlayer.name}
-                  src={state.nominatedPlayer.avatar}
-                  size={52}
-                />
-                <div>
-                  <div className="flex flex-wrap items-center gap-2 text-xl font-bold">
-                    {state.nominatedPlayer.name}
-                    {me.userId === state.nominatedPlayer.userId ? (
-                      <Badge tone="accent">You&apos;re on the block!</Badge>
-                    ) : null}
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted">
-                    {state.nominatedPlayer.mmr > 0 ? (
-                      <span>{state.nominatedPlayer.mmr} MMR</span>
-                    ) : null}
-                    <RankBadge rankTier={state.nominatedPlayer.rankTier} />
-                    <RoleBadges roles={state.nominatedPlayer.roles} />
-                    <DiscordTag
-                      name={state.nominatedPlayer.discordName}
-                      verified={state.nominatedPlayer.discordVerified}
-                    />
-                    {/* Scouting links — open in a new tab so a captain can't
-                        navigate away mid-auction. */}
-                    <Link
-                      href={`/players/${state.nominatedPlayer.userId}`}
-                      target="_blank"
-                      className={textLink()}
-                    >
-                      Profile ↗
-                    </Link>
-                    {state.nominatedPlayer.accountId ? (
-                      <a
-                        href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={textLink()}
-                      >
-                        Dotabuff ↗
-                      </a>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-
-              <div className="text-right">
-                <div className="text-3xl font-bold text-accent">
-                  ${state.currentBid}
-                </div>
-                <div className="text-xs text-muted">
-                  {highBidderName ? `high bid · ${highBidderName}` : "opening"}
-                </div>
-              </div>
-
-              {state.nominatedPlayer.favoriteHeroes ||
-              state.nominatedPlayer.statement ||
-              hasText(state.nominatedPlayer.captainNote) ? (
-                <div className="w-full space-y-1 border-t border-line pt-3 text-sm">
-                  {state.nominatedPlayer.favoriteHeroes ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-muted">Heroes:</span>
-                      <HeroList
-                        value={state.nominatedPlayer.favoriteHeroes}
-                        size={30}
-                      />
-                    </div>
-                  ) : null}
-                  {/* Clamped: these are free text up to 1000 chars each, and
-                      at full length the banner grew past the viewport and
-                      pushed the bid controls off-screen mid-auction. The full
-                      text is a click away on the player's profile. */}
-                  {hasText(state.nominatedPlayer.captainNote) ? (
-                    <div className="line-clamp-3 [overflow-wrap:anywhere]">
-                      <span className="text-muted">Note to captains:</span>{" "}
-                      {state.nominatedPlayer.captainNote}
-                    </div>
-                  ) : null}
-                  {hasText(state.nominatedPlayer.statement) ? (
-                    <div className="line-clamp-3 [overflow-wrap:anywhere] text-muted">
-                      &ldquo;{state.nominatedPlayer.statement}&rdquo;
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {state.lotBids.length > 1 ? (
-                // The lot's audit trail (newest first) — kills "who bid
-                // what?" disputes without leaving the banner.
-                <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 border-t border-line pt-3 text-xs text-muted">
-                  <span className="shrink-0">
-                    {state.lotBidsTruncated ? "Latest 8 bids:" : "Bid trail:"}
-                  </span>
-                  {state.lotBids.map((b, i) => (
+        {state.nominatedPlayer ? (
+          <div
+            className={cn(
+              "space-y-3 border-t border-line px-5 py-3 text-sm",
+              lotStale && "opacity-50",
+            )}
+          >
+            {state.lotBids.length > 1 ? (
+              // The lot's audit trail (newest first) — kills "who bid
+              // what?" disputes without leaving the card.
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                <span className="shrink-0">
+                  {state.lotBidsTruncated ? "Latest 8 bids:" : "Bid trail:"}
+                </span>
+                {state.lotBids.map((b, i) => (
+                  <span
+                    key={b.at + "-" + i}
+                    className="flex items-center gap-2"
+                  >
+                    {i > 0 ? <span aria-hidden>‹</span> : null}
                     <span
-                      key={b.at + "-" + i}
-                      className="flex items-center gap-2"
+                      className={cn(
+                        "font-mono tabular-nums",
+                        i === 0 && "font-semibold text-accent",
+                      )}
                     >
-                      {i > 0 ? <span aria-hidden>‹</span> : null}
-                      <span
-                        className={cn(
-                          "font-mono tabular-nums",
-                          i === 0 && "font-semibold text-accent",
-                        )}
-                      >
-                        {state.teams.find((t) => t.id === b.teamId)?.name ??
-                          "—"}{" "}
-                        ${b.amount}
-                      </span>
+                      {state.teams.find((t) => t.id === b.teamId)?.name ?? "—"}{" "}
+                      ${b.amount}
                     </span>
-                  ))}
-                </div>
-              ) : null}
-
-              {me.canBid ? (
-                <div
-                  aria-busy={reqPending}
-                  className="flex w-full flex-wrap items-center gap-2 border-t border-line pt-4"
-                >
-                  <span className="text-sm text-muted">
-                    Your max ${me.myMaxBid} · budget ${me.myBudget}
-                    {myTeam && myTeam.need > 1
-                      ? ` · winning at $${state.currentBid + 1} leaves $${
-                          me.myBudget - (state.currentBid + 1)
-                        } for ${myTeam.need - 1} more ${
-                          myTeam.need - 1 === 1 ? "seat" : "seats"
-                        }`
-                      : ""}
                   </span>
-                  <div className="ml-auto grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
-                    {[1, 5, 10].map((d) => (
-                      <button
-                        key={d}
-                        disabled={pending || state.currentBid + d > me.myMaxBid}
-                        onClick={() => quickBid(d)}
-                        aria-label={`Bid $${state.currentBid + d}`}
-                        title={`Bid $${state.currentBid + d}`}
-                        className={buttonClasses("secondary", "sm")}
-                      >
-                        {/* Show the amount that will actually be submitted —
-                            "+$5" alone hid the absolute price. */}
-                        +${d} → ${state.currentBid + d}
-                      </button>
-                    ))}
-                    <button
-                      disabled={pending || me.myMaxBid <= state.currentBid}
-                      onClick={() => {
-                        // One tap here commits the entire remaining budget —
-                        // make it deliberate.
-                        if (
-                          window.confirm(
-                            `Bid your maximum $${me.myMaxBid}? That's everything you can spend on this player.`,
-                          )
-                        ) {
-                          act("/api/draft/bid", { amount: me.myMaxBid });
-                        }
-                      }}
-                      className={buttonClasses("primary", "sm")}
-                    >
-                      Max ${me.myMaxBid}
-                    </button>
-                    <ExactBidControl
-                      key={`${state.nominatedPlayer.userId}:${state.currentBid}:${me.myMaxBid}`}
-                      currentBid={state.currentBid}
-                      maxBid={me.myMaxBid}
-                      pending={pending}
-                      submit={(amount) => act("/api/draft/bid", { amount })}
-                    />
-                  </div>
-                </div>
-              ) : me.myTeamId && state.currentBidTeamId === me.myTeamId ? (
-                <div
-                  role="status"
-                  className="w-full border-t border-line pt-3 text-sm text-success"
+                ))}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2 text-muted">
+              <DiscordTag
+                name={state.nominatedPlayer.discordName}
+                verified={state.nominatedPlayer.discordVerified}
+              />
+              {/* Scouting links — open in a new tab so a captain can't
+                  navigate away mid-auction. */}
+              <Link
+                href={`/players/${state.nominatedPlayer.userId}`}
+                target="_blank"
+                className={textLink()}
+              >
+                Profile ↗
+              </Link>
+              {state.nominatedPlayer.accountId ? (
+                <a
+                  href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={textLink()}
                 >
-                  You hold the high bid.
-                </div>
-              ) : rosterFull ? (
-                <div className="w-full border-t border-line pt-3 text-sm text-muted">
-                  Your roster is full — you&apos;re done bidding.
-                </div>
-              ) : pricedOut ? (
-                <div className="w-full border-t border-line pt-3 text-sm text-muted">
-                  Priced out — your max bid is ${me.myMaxBid} (reserving $
-                  {state.minBid} per remaining slot).
-                </div>
-              ) : (
-                <div className="w-full border-t border-line pt-3 text-sm text-muted">
-                  You&apos;re watching this lot. Only captains with an open
-                  roster seat and enough reserved budget can bid.
-                </div>
-              )}
-            </div>
-          ) : me.canNominate ? (
-            <NominateBar
-              state={state}
-              selected={selected}
-              nomAmount={nomAmount}
-              setNomAmount={setNomAmount}
-              pending={pending}
-              onNominate={(playerId, amount) =>
-                act("/api/draft/nominate", { playerId, amount })
-              }
-            />
-          ) : (
-            <div className="flex flex-col items-center gap-3 py-4">
-              <p className="text-center text-muted">
-                Waiting for {nominatorName} to nominate a player…
-              </p>
-              {/* Hidden while PAUSED: nominatePlayer refuses any non-live
-                  draft, so in the pause → settle → resume flow this button
-                  could only walk the admin through the confirm into a
-                  "Draft is not live" toast. Resume is the real next step. */}
-              {me.isAdmin && !paused ? (
-                <button
-                  disabled={pending}
-                  onClick={() => {
-                    // Skipping a captain's turn is intrusive — confirm it.
-                    if (
-                      window.confirm(
-                        `Auto-nominate the top player for ${nominatorName}? Use this when they're absent — it takes their turn.`,
-                      )
-                    ) {
-                      act("/api/draft/admin-nominate", {});
-                    }
-                  }}
-                  className={buttonClasses("secondary", "sm")}
-                >
-                  Admin: auto-nominate top player
-                </button>
+                  Dotabuff ↗
+                </a>
               ) : null}
             </div>
-          )}
-        </div>
+            {state.nominatedPlayer.favoriteHeroes ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-muted">Favorite heroes:</span>
+                <HeroList
+                  value={state.nominatedPlayer.favoriteHeroes}
+                  size={30}
+                />
+              </div>
+            ) : null}
+            {/* Clamped: this is free text up to 2000 chars. The full
+                text is a click away on the player's profile. */}
+            {nominatedAbout ? (
+              <div className="line-clamp-3 [overflow-wrap:anywhere]">
+                <span className="text-muted">About this player:</span>{" "}
+                {nominatedAbout}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <AuctionPrimer
@@ -1649,7 +1985,9 @@ export function DraftRoom({
           <div id="player-pool" className="scroll-mt-32 lg:order-2">
             <AvailableList
               state={state}
-              canNominate={me.canNominate}
+              role={poolRole}
+              onRoleChange={setPoolRole}
+              canPick={canLineUp}
               selected={selected}
               onPick={(userId) => {
                 setSelected(userId);
@@ -1658,7 +1996,7 @@ export function DraftRoom({
             />
           </div>
           <div className="lg:order-1">
-            <BidFeed events={events} />
+            <RecentSales sales={sales} />
           </div>
         </div>
         <div className="min-w-0 lg:order-1 lg:col-span-2">
@@ -1669,6 +2007,9 @@ export function DraftRoom({
   );
 }
 
+// Only the buttons that work right now (draftToolbarControls): a disabled
+// Undo explained in a hover tooltip told a phone nothing, and the bar took
+// ~190px above the clock. The room's confirms are the same texts /admin uses.
 function DraftAdminToolbar({
   state,
   seasonId,
@@ -1686,92 +2027,87 @@ function DraftAdminToolbar({
   undoAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   voidLotAction: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
 }) {
+  const controls = draftToolbarControls({
+    seasonStatus: state.seasonStatus,
+    status: state.status,
+    lotLive: !!state.nominatedPlayer,
+    hasSale: state.recentSales.length > 0,
+  });
+  // Nothing to press here (e.g. the season has left the Draft phase): no
+  // bar, just the way to the admin panel.
+  if (!controls || !hasToolbarControl(controls)) {
+    return (
+      <p className="text-right">
+        <Link href="/admin" className={textLink("text-sm")}>
+          Admin panel
+        </Link>
+      </p>
+    );
+  }
   const hidden = { expectedActiveSeasonId: seasonId };
-  const paused = state.status === "PAUSED";
-  const live = state.status === "IN_PROGRESS";
-  const canUndo =
-    state.seasonStatus === "DRAFT" &&
-    !state.nominatedPlayer &&
-    state.recentSales.length > 0;
+  const lastSale = state.recentSales[0];
+  const nominatorName =
+    state.teams.find((t) => t.id === state.nominatorTeamId)?.name ?? null;
 
   return (
     <section
       aria-label="Live draft administration"
-      className="rounded-[var(--radius)] border border-info/30 bg-info/5 p-4"
+      className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-info/30 bg-info/5 px-4 py-2"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">Admin controls</h2>
-          <p className="text-xs text-muted">
-            These controls follow the polled live state. Pause before correcting
-            a mistaken nomination.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {live ? (
-            <ActionForm action={pauseAction} hidden={hidden}>
-              <SubmitButton variant="secondary" size="sm" disabled={disabled}>
-                Pause auction
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-          {paused ? (
-            <ActionForm action={resumeAction} hidden={hidden}>
-              <SubmitButton variant="primary" size="sm" disabled={disabled}>
-                Resume auction
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-          {paused && state.nominatedPlayer ? (
-            <ActionForm action={voidLotAction} hidden={hidden}>
-              <SubmitButton
-                variant="danger"
-                size="sm"
-                disabled={disabled}
-                confirm={`Void the paused lot for ${state.nominatedPlayer.name}? Bids on this lot will be removed and the same team keeps the nomination turn.`}
-              >
-                Void live lot
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-          {canUndo ? (
-            <ActionForm action={undoAction} hidden={hidden}>
-              <SubmitButton
-                variant="secondary"
-                size="sm"
-                disabled={disabled}
-                confirm={`Undo the most recent sale (${state.recentSales[0]?.name} → ${state.recentSales[0]?.teamName})?`}
-              >
-                Undo last sale
-              </SubmitButton>
-            </ActionForm>
-          ) : (
-            <button
-              type="button"
-              disabled
-              title={
-                state.recentSales.length === 0
-                  ? "No completed sale is available to undo."
-                  : state.nominatedPlayer
-                    ? "Pause and void the current lot before undoing a prior sale."
-                    : "Undo is available only during the draft phase."
-              }
-              className={buttonClasses("secondary", "sm")}
-            >
-              Undo last sale
-            </button>
-          )}
-          <Link href="/admin" className={buttonClasses("secondary", "sm")}>
-            Full recovery controls
-          </Link>
-        </div>
-      </div>
-      {state.nominatedPlayer && !paused ? (
-        <p className="mt-2 text-xs text-muted">
-          Undo is unavailable while a lot is live. Pause, then void this lot if
-          the nomination or bidding state is wrong.
-        </p>
+      <h2 className="mr-auto text-sm font-semibold">Admin controls</h2>
+      {controls.pause ? (
+        <ActionForm action={pauseAction} hidden={hidden}>
+          <SubmitButton variant="secondary" size="sm" disabled={disabled}>
+            Pause auction
+          </SubmitButton>
+        </ActionForm>
       ) : null}
+      {controls.resume ? (
+        <ActionForm action={resumeAction} hidden={hidden}>
+          <SubmitButton variant="primary" size="sm" disabled={disabled}>
+            Resume auction
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
+      {controls.voidLot ? (
+        <ActionForm action={voidLotAction} hidden={hidden}>
+          <SubmitButton
+            variant="danger"
+            size="sm"
+            disabled={disabled}
+            confirm={voidLotConfirm({
+              playerName: state.nominatedPlayer?.name ?? null,
+              nominatorName,
+            })}
+          >
+            Void live lot
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
+      {controls.undo ? (
+        <ActionForm action={undoAction} hidden={hidden}>
+          <SubmitButton
+            variant="secondary"
+            size="sm"
+            disabled={disabled}
+            confirm={undoSaleConfirm({
+              draftComplete: state.status === "COMPLETE",
+              sale: lastSale
+                ? {
+                    name: lastSale.name,
+                    teamName: lastSale.teamName,
+                    price: lastSale.price,
+                  }
+                : null,
+            })}
+          >
+            Undo last sale
+          </SubmitButton>
+        </ActionForm>
+      ) : null}
+      <Link href="/admin#adm-captains" className={textLink("text-sm")}>
+        More controls
+      </Link>
     </section>
   );
 }
@@ -1780,19 +2116,27 @@ function DraftAdminToolbar({
 // search, position filters, and sorting instead of one long MMR-sorted list.
 function AvailableList({
   state,
-  canNominate,
+  role,
+  onRoleChange: setRole,
+  canPick,
   selected,
   onPick,
 }: {
   state: DraftState;
-  canNominate: boolean;
+  /** The position filter, owned by the room (see `poolRole`). */
+  role: string | null;
+  onRoleChange: (role: string | null) => void;
+  /** Rows are pick buttons: on the clock, or lining up the next turn. */
+  canPick: boolean;
   selected: string | null;
   onPick: (userId: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [role, setRole] = useState<string | null>(null);
   const [sort, setSort] = useState<PoolSort>("mmr");
   const shown = filterAndSortPlayers(state.available, { query, role, sort });
+  // The lot's player stays in "Available" until they sell, so say which row it
+  // is — otherwise the top of the list reads like nobody is up yet.
+  const onBlockId = state.nominatedPlayer?.userId ?? null;
 
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/80">
@@ -1807,9 +2151,11 @@ function AvailableList({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search players…"
             aria-label="Search available players"
-            className="h-8 w-full rounded-md border border-line bg-surface-2/50 px-2.5 text-sm outline-none focus:border-accent/60"
+            className="h-11 w-full rounded-md border border-line bg-surface-2/50 px-2.5 text-sm outline-none focus:border-accent/60 sm:h-9"
           />
-          <div className="flex flex-wrap items-center gap-1">
+          {/* One row at every width, the desktop side column included: the
+              three sort chips used to wrap "Name" onto a line of its own. */}
+          <div className="flex items-center gap-1">
             <div
               role="group"
               aria-label="Filter by role"
@@ -1819,7 +2165,7 @@ function AvailableList({
                 onClick={() => setRole(null)}
                 aria-pressed={role === null}
                 className={cn(
-                  "min-h-9 rounded-md px-2 py-1 text-xs",
+                  "min-h-11 rounded-md px-2 py-1 text-xs sm:min-h-9",
                   role === null
                     ? "bg-accent/20 text-fg ring-1 ring-accent/40"
                     : "text-muted hover:bg-surface-2",
@@ -1835,7 +2181,7 @@ function AvailableList({
                   aria-pressed={role === r.key}
                   onClick={() => setRole(role === r.key ? null : r.key)}
                   className={cn(
-                    "min-h-9 rounded-md px-2 py-1 text-xs tabular-nums",
+                    "min-h-11 rounded-md px-2 py-1 text-xs tabular-nums sm:min-h-9",
                     role === r.key
                       ? "bg-accent/20 text-fg ring-1 ring-accent/40"
                       : "text-muted hover:bg-surface-2",
@@ -1845,33 +2191,35 @@ function AvailableList({
                 </button>
               ))}
             </div>
-            <span className="mx-1 h-4 w-px bg-line" aria-hidden />
-            {(["mmr", "rank", "name"] as const).map((s) => (
-              <button
-                key={s}
-                aria-label={`Sort by ${s}`}
-                aria-pressed={sort === s}
-                onClick={() => setSort(s)}
-                className={cn(
-                  "min-h-9 rounded-md px-2 py-1 text-xs capitalize",
-                  sort === s
-                    ? "bg-accent/20 text-fg ring-1 ring-accent/40"
-                    : "text-muted hover:bg-surface-2",
-                )}
-              >
-                {s}
-              </button>
-            ))}
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as PoolSort)}
+              aria-label="Sort players"
+              className="ml-auto h-11 min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-xs outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9"
+            >
+              <option value="mmr">Sort: MMR</option>
+              <option value="rank">Sort: Medal</option>
+              <option value="name">Sort: Name</option>
+            </select>
           </div>
         </div>
       ) : null}
-      <div className="max-h-[30rem] space-y-1 overflow-y-auto p-3">
+      {/* Its own scroll box only beside the auction on desktop. On a phone the
+          list flows with the page: a scroller inside a scrolling page made a
+          swipe move one or the other, unpredictably. */}
+      <div className="space-y-1 p-3 lg:max-h-[30rem] lg:overflow-y-auto">
         {shown.map((p) => {
+          const onBlock = p.userId === onBlockId;
           const rowContent = (
             <>
               <span className="flex min-w-0 items-center gap-2">
                 <Avatar name={p.name} src={p.avatar} size={20} />
                 <span className="truncate">{p.name}</span>
+                {onBlock ? (
+                  <span className="shrink-0">
+                    <Badge tone="accent">on the block</Badge>
+                  </span>
+                ) : null}
               </span>
               <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
                 <RoleBadges roles={p.roles} />
@@ -1889,10 +2237,12 @@ function AvailableList({
                 "flex items-center rounded-md",
                 selected === p.userId
                   ? "bg-accent/15 ring-1 ring-accent/40"
-                  : "",
+                  : onBlock
+                    ? "bg-accent/5"
+                    : "",
               )}
             >
-              {canNominate ? (
+              {canPick ? (
                 <button
                   type="button"
                   onClick={() => onPick(p.userId)}
@@ -1931,12 +2281,12 @@ function AvailableList({
   );
 }
 
-function BidFeed({ events }: { events: FeedEvent[] }) {
+function RecentSales({ sales }: { sales: FeedEvent[] }) {
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/80">
       <h2 className="flex items-center gap-2 border-b border-line px-5 py-3 text-sm font-semibold">
         <span className="animate-live-pulse inline-block h-1.5 w-1.5 rounded-full bg-danger" />
-        Live feed
+        Recent sales
       </h2>
       <div
         role="log"
@@ -1944,31 +2294,29 @@ function BidFeed({ events }: { events: FeedEvent[] }) {
         aria-relevant="additions"
         className="max-h-64 space-y-0.5 overflow-y-auto p-3"
       >
-        {events.length === 0 ? (
+        {sales.length === 0 ? (
           <p className="p-2 text-sm text-muted">
-            Nominations, bids, and picks appear here…
+            Each player appears here as they&apos;re sold.
           </p>
         ) : (
-          events.map((e) => (
+          sales.map((e) => (
             <div
               key={e.id}
-              className={cn(
-                "flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm",
-                e.kind === "sold" && "bg-success/5",
-              )}
+              className="flex items-center justify-between gap-2 rounded-md bg-success/5 px-2 py-1.5 text-sm"
             >
               <span className="flex min-w-0 items-center gap-1.5">
-                <span aria-hidden>
-                  {e.kind === "sold" ? "✅" : e.kind === "bid" ? "💰" : "🎯"}
-                </span>
+                <span aria-hidden>✅</span>
                 <span className="truncate">{e.text}</span>
+                {e.auto ? (
+                  <span
+                    title="The nominating captain's clock ran out, so the draft put this player up for them."
+                    className="shrink-0 text-xs text-muted"
+                  >
+                    auto-picked
+                  </span>
+                ) : null}
               </span>
-              <span
-                className={cn(
-                  "shrink-0 font-mono text-xs tabular-nums",
-                  e.kind === "sold" ? "font-bold text-success" : "text-accent",
-                )}
-              >
+              <span className="shrink-0 font-mono text-xs font-bold tabular-nums text-success">
                 ${e.amount}
               </span>
             </div>
@@ -1984,6 +2332,8 @@ function NominateBar({
   selected,
   nomAmount,
   setNomAmount,
+  maxBid,
+  forTeamName,
   pending,
   onNominate,
 }: {
@@ -1991,13 +2341,23 @@ function NominateBar({
   selected: string | null;
   nomAmount: number;
   setNomAmount: (n: number) => void;
+  /** Opening-bid cap: the nominating TEAM's max bid (an admin has none). */
+  maxBid: number;
+  /** Set when an admin nominates on behalf of the team on the clock. */
+  forTeamName?: string;
   pending: boolean;
   onNominate: (playerId: string, amount: number) => void;
 }) {
   const player = state.available.find((p) => p.userId === selected);
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Badge tone="accent">You&apos;re on the clock</Badge>
+      <Badge tone="accent">
+        {forTeamName ? (
+          <>Nominating for {forTeamName}</>
+        ) : (
+          <>You&apos;re on the clock</>
+        )}
+      </Badge>
       {player ? (
         <span className="flex items-center gap-2 text-sm">
           <Avatar name={player.name} src={player.avatar} size={24} />
@@ -2021,7 +2381,7 @@ function NominateBar({
           id="nom-amount"
           type="number"
           min={state.minBid}
-          max={state.me.myMaxBid}
+          max={maxBid}
           value={nomAmount}
           onChange={(e) => setNomAmount(Number(e.target.value))}
           className="h-9 w-20 rounded-md border border-line bg-surface-2/50 px-2 text-center text-sm"
@@ -2031,13 +2391,17 @@ function NominateBar({
             pending ||
             !selected ||
             nomAmount < state.minBid ||
-            nomAmount > state.me.myMaxBid
+            nomAmount > maxBid
           }
           onClick={() => selected && onNominate(selected, nomAmount)}
           aria-busy={pending}
           className={buttonClasses("accent", "sm")}
         >
-          {pending ? "Submitting…" : "Nominate"}
+          {pending
+            ? "Submitting…"
+            : forTeamName
+              ? `Nominate for ${forTeamName}`
+              : "Nominate"}
         </button>
       </div>
     </div>
@@ -2087,6 +2451,15 @@ function AuctionPrimer({
           When it hits zero, the high bidder wins the player.
         </li>
         <li>
+          <strong className="text-fg">
+            Nobody left to outbid? {DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS}s.
+          </strong>{" "}
+          When no other team has an open seat and the money to top the price,
+          the clock runs {DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS} seconds
+          instead, so late lots don&apos;t sit through{" "}
+          {DEFAULTS.BID_TIMER_SECONDS} seconds of waiting.
+        </li>
+        <li>
           <strong className="text-fg">Your max bid is capped</strong> — the room
           reserves ${minBid} for each seat you&apos;d still have to fill
           afterwards, so you can always finish your roster.
@@ -2101,14 +2474,59 @@ function AuctionPrimer({
   );
 }
 
-function TeamsGrid({ state }: { state: DraftState }) {
-  // A player is up for auction → the "max bid" lines can flag who's priced out.
-  const nominationLive = !!state.nominatedPlayer;
+/**
+ * Beside a captain's name while presence is tracked: whether they have the
+ * draft room open. Words, not just a dot, so it reads without colour and to
+ * a screen reader. A captain who isn't here never bids, and the draft
+ * nominates for them when their clock runs out.
+ */
+function InRoomMark({ inRoom }: { inRoom: boolean }) {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      {state.teams.map((t) => {
-        const onClock =
-          state.status === "IN_PROGRESS" && t.id === state.nominatorTeamId;
+    <span
+      title={
+        inRoom
+          ? "Has the draft room open"
+          : `Hasn't had the draft room open in the last ${DRAFT_PRESENCE.AWAY_SECONDS} seconds`
+      }
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 text-[10px] font-medium",
+        inRoom ? "text-success" : "text-muted",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          inRoom ? "bg-success" : "border border-current",
+        )}
+      />
+      {inRoom ? "in room" : "not in room"}
+    </span>
+  );
+}
+
+function TeamsGrid({
+  state,
+  showNominationOrder = false,
+}: {
+  state: DraftState;
+  /** Waiting room: label each card with its place in the opening order. */
+  showNominationOrder?: boolean;
+}) {
+  // A player is up for auction → the "max bid" lines can flag who's priced
+  // out. Outside a live lot there is nothing to bid on, so the cards show just
+  // the budget (a waiting-room "max $77" meant nothing to anyone).
+  const nominationLive = !!state.nominatedPlayer;
+  const finished = state.status === "COMPLETE";
+  return (
+    <section
+      aria-label="Team rosters"
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+    >
+      {state.teams.map((t, i) => {
+        // Only while the team still has to nominate — during a live lot the
+        // ring and badge belong to the high bidder, not whoever put it up.
+        const onClock = nominationTurnTeamId(state) === t.id;
         const highBid = t.id === state.currentBidTeamId;
         // Derived from the roster, not me.myTeamId (that's captain-only) —
         // drafted players get a persistent home marker too.
@@ -2122,6 +2540,7 @@ function TeamsGrid({ state }: { state: DraftState }) {
           state.teamSize,
           state.minBid,
         );
+        const openSeats = openSeatsLabel(t.need);
         return (
           <div
             key={t.id}
@@ -2146,8 +2565,8 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   />
                   <Link
                     href={`/teams/${t.id}`}
-                    target={state.status === "COMPLETE" ? undefined : "_blank"}
-                    rel={state.status === "COMPLETE" ? undefined : "noreferrer"}
+                    target={finished ? undefined : "_blank"}
+                    rel={finished ? undefined : "noreferrer"}
                     className="truncate hover:text-info hover:underline"
                   >
                     {t.name}
@@ -2169,30 +2588,52 @@ function TeamsGrid({ state }: { state: DraftState }) {
                   ) : null}
                 </div>
                 <div className="text-xs text-muted">
-                  {t.members.length}/{state.teamSize} · needs {t.need}
+                  {/* state.teams is in draft order, which is the order
+                      Start draft hands out the opening nominations. */}
+                  {showNominationOrder ? (
+                    <>
+                      <span className="font-medium text-fg">
+                        {nominationOrderLabel(i)}
+                      </span>
+                      {" · "}
+                    </>
+                  ) : null}
+                  {t.members.length}/{state.teamSize} players
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
-                <Badge
-                  tone="accent"
-                  title={
-                    state.budgetsProjected
-                      ? "Projected starting budget; finalized when the auction starts"
-                      : "Remaining auction budget"
-                  }
-                >
-                  ${t.budget}
-                  {state.budgetsProjected ? " projected" : null}
-                </Badge>
-                {t.need === 0 ? (
+                {/* Once the auction is over, leftover budget is worth
+                    nothing; what a team spent is the number people compare
+                    (purchases only, like the recap's spend totals). */}
+                {finished ? (
+                  <Badge title="What this team spent at the auction">
+                    $
+                    {t.members.reduce(
+                      (sum, m) => sum + (m.isCaptain ? 0 : m.price),
+                      0,
+                    )}{" "}
+                    spent
+                  </Badge>
+                ) : (
+                  <Badge
+                    tone="accent"
+                    title={
+                      state.budgetsProjected
+                        ? "Projected starting budget; finalized when the auction starts"
+                        : "Remaining auction budget"
+                    }
+                  >
+                    ${t.budget}
+                    {state.budgetsProjected ? " projected" : null}
+                  </Badge>
+                )}
+                {!nominationLive ? null : t.need === 0 ? (
                   <span className="text-[10px] text-muted">full</span>
                 ) : (
                   <span
                     className={cn(
                       "text-[10px] tabular-nums",
-                      nominationLive && cap <= state.currentBid
-                        ? "text-danger"
-                        : "text-muted",
+                      cap <= state.currentBid ? "text-danger" : "text-muted",
                     )}
                   >
                     max ${cap}
@@ -2201,42 +2642,46 @@ function TeamsGrid({ state }: { state: DraftState }) {
               </div>
             </div>
             <div className="space-y-1 p-3">
-              {Array.from({ length: state.teamSize }).map((_, i) => {
-                const m = t.members[i];
-                return m ? (
-                  <div
-                    key={m.userId}
-                    className="flex items-center justify-between gap-2 text-sm"
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <Avatar name={m.name} src={m.avatar} size={20} />
-                      <PlayerLink
-                        userId={m.userId}
-                        className="min-w-6 truncate"
-                      >
-                        {m.name}
-                      </PlayerLink>
-                      {m.isCaptain ? (
-                        <span className="shrink-0">
-                          <Badge tone="accent">C</Badge>
-                        </span>
-                      ) : null}
-                      <RankBadge rankTier={m.rankTier} />
-                    </span>
-                    <span className="shrink-0 text-muted">
-                      {m.isCaptain ? "—" : `$${m.price}`}
-                    </span>
-                  </div>
-                ) : (
-                  <div key={i} className="py-1 text-sm text-muted">
-                    Empty slot
-                  </div>
-                );
-              })}
+              {/* Captain first, then purchases — never a price sort, which put
+                  the $0 captain below the players they bought. */}
+              {rosterDisplayOrder(t.members).map((m) => (
+                <div
+                  key={m.userId}
+                  className="flex items-center justify-between gap-2 text-sm"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Avatar name={m.name} src={m.avatar} size={20} />
+                    <PlayerLink userId={m.userId} className="min-w-6 truncate">
+                      {m.name}
+                    </PlayerLink>
+                    {m.isCaptain ? (
+                      <span className="shrink-0">
+                        <Badge tone="accent">C</Badge>
+                      </span>
+                    ) : null}
+                    {m.userId === t.captainId && t.captainInRoom !== null ? (
+                      <InRoomMark
+                        inRoom={
+                          t.captainInRoom || t.captainId === state.me.userId
+                        }
+                      />
+                    ) : null}
+                    <RankBadge rankTier={m.rankTier} />
+                  </span>
+                  <span className="shrink-0 text-muted">
+                    {m.isCaptain ? "—" : `$${m.price}`}
+                  </span>
+                </div>
+              ))}
+              {/* One line for every open seat: five "Empty slot" rows per card
+                  made six teams about 1,500px tall on a phone. */}
+              {openSeats ? (
+                <div className="py-1 text-sm text-muted">{openSeats}</div>
+              ) : null}
             </div>
           </div>
         );
       })}
-    </div>
+    </section>
   );
 }

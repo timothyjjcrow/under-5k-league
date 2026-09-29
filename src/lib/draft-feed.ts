@@ -1,6 +1,14 @@
 /**
  * The draft room's live feed, as a pure diff.
  *
+ * WHERE THE LINES GO. The room shows only the SALE lines, as its "Recent
+ * sales" card: the lot card already carries the live nomination and its bid
+ * trail, and a second list repeating "Team 3 bid" beside it told the same story
+ * twice. The nomination and bid lines are still produced here, and the room
+ * reads the newest of them out through a screen-reader-only status line, so a
+ * captain using a screen reader still hears each bid as it lands (the feed was
+ * an aria-live log, and that was the only place bids were announced).
+ *
  * WHAT MAKES THIS DIFFERENT from the room's other extracted rules: the feed is
  * an append-only LOG of state transitions, so it genuinely cannot be derived
  * from the current payload — a captain who reloads mid-draft has no way to know
@@ -27,11 +35,17 @@
  *    it prepends this array whole. One poll routinely carries a sale AND the
  *    nomination it resolved into — `getDraftState` runs both resolvers before
  *    it reads — and the nomination is the newer of the two, so it goes on top.
- *    (The seed below has always ordered itself this way; the diff used to
- *    disagree with it and show the sale above the nomination that followed.)
+ *    (The diff used to disagree with the seed's order and show the sale above
+ *    the nomination that followed.)
  *
  * Team names are looked up in the NEW payload, so a line about a team that has
  * somehow vanished renders "—" rather than crashing the room.
+ *
+ * A lot the DRAFT opened — the nominator's clock ran out, so
+ * `resolveStalledNomination` put the top player up at the minimum for them —
+ * is said as such ("Clock ran out: auto-picked …"), and so is its sale. It used
+ * to read exactly like the captain's own choice, and a returning captain found
+ * themselves holding the high bid on a player they had never picked.
  */
 
 export type FeedKind = "nominate" | "bid" | "sold";
@@ -41,6 +55,8 @@ export type FeedLine = {
   kind: FeedKind;
   text: string;
   amount: number;
+  /** The lot was opened by the clock, not the captain. Present only when true. */
+  auto?: boolean;
 };
 
 /** The SOLD! flash: the sale worth interrupting the room for. */
@@ -66,12 +82,19 @@ export type FeedSnapshot = {
   nominatorTeamId: string | null;
   currentBid: number;
   currentBidTeamId: string | null;
-  me: { userId: string | null; canNominate: boolean };
+  /** The live lot was opened by the nominator's clock running out. */
+  lotAutoNominated?: boolean;
+  me: { userId: string | null; canNominate: boolean; myTeamId?: string | null };
 };
 
 /** …plus the server's reconstructed sale history, for the first paint. */
 export type FeedSeedSnapshot = FeedSnapshot & {
-  recentSales: { name: string; teamName: string; price: number }[];
+  recentSales: {
+    name: string;
+    teamName: string;
+    price: number;
+    auto?: boolean;
+  }[];
 };
 
 /** The lifecycle slice used to decide whether an accumulated client feed is
@@ -86,11 +109,25 @@ export type DraftFeedResetReason =
   | "lot-voided"
   | "roster-retracted";
 
-/** How many lines the feed keeps. */
+/** How many sales the room's "Recent sales" list keeps. */
 export const FEED_MAX = 12;
 
 const teamName = (s: FeedSnapshot, id: string | null) =>
   s.teams.find((t) => t.id === id)?.name ?? "—";
+
+/** The line for the lot now on the block (the caller checks there is one). */
+function nominationLine(s: FeedSnapshot): FeedLine {
+  const team = teamName(s, s.nominatorTeamId);
+  const player = s.nominatedPlayer!.name;
+  return s.lotAutoNominated
+    ? {
+        kind: "nominate",
+        text: `Clock ran out: auto-picked ${player} for ${team}`,
+        amount: s.currentBid,
+        auto: true,
+      }
+    : { kind: "nominate", text: `${team} nominated ${player}`, amount: s.currentBid };
+}
 
 /**
  * Why an append-only feed must be discarded and reconstructed from the latest
@@ -140,32 +177,27 @@ export function draftFeedInvalidated(
 }
 
 /**
- * The feed as reconstructed from the FIRST payload after a page load: the live
- * nomination on top, then recent sales. Without it, joining mid-draft shows an
- * empty feed on the busiest screen in the app.
+ * The "Recent sales" list as reconstructed from the FIRST payload after a page
+ * load, newest first. Without it, joining mid-draft shows an empty list on the
+ * busiest screen in the app. The live lot is not a line here: it has the lot
+ * card to itself.
  */
-export function seedDraftFeed(s: FeedSeedSnapshot): FeedLine[] {
-  const seed: FeedLine[] = [];
-  if (s.nominatedPlayer) {
-    seed.push({
-      kind: "nominate",
-      text: `${teamName(s, s.nominatorTeamId)} nominated ${s.nominatedPlayer.name}`,
-      amount: s.currentBid,
-    });
-  }
-  for (const sale of s.recentSales) {
-    seed.push({
-      kind: "sold",
-      text: `${sale.name} → ${sale.teamName}`,
-      amount: sale.price,
-    });
-  }
-  return seed.slice(0, FEED_MAX);
+export function seedDraftFeed(
+  s: Pick<FeedSeedSnapshot, "recentSales">,
+): FeedLine[] {
+  return s.recentSales.slice(0, FEED_MAX).map((sale) => ({
+    kind: "sold",
+    text: `${sale.name} → ${sale.teamName}`,
+    amount: sale.price,
+    ...(sale.auto ? { auto: true } : {}),
+  }));
 }
 
 /**
  * What one poll changed: the lines to prepend (newest first), the sale to
- * flash, and the alerts it earned.
+ * flash, the alerts it earned, and a `notice` to toast — set only for the
+ * captain whose nomination clock ran out and who now holds the auto-picked lot,
+ * the one person for whom that line is news about their own team.
  *
  * When several sales land together — a slow poll, or a hidden tab returning on
  * the keepalive — every one gets a line, but only one can have the banner.
@@ -178,11 +210,21 @@ export function seedDraftFeed(s: FeedSeedSnapshot): FeedLine[] {
 export function draftFeedDiff(
   prev: FeedSnapshot,
   next: FeedSnapshot,
-): { lines: FeedLine[]; sale: FeedSale | null; alerts: DraftAlert[] } {
+): {
+  lines: FeedLine[];
+  sale: FeedSale | null;
+  alerts: DraftAlert[];
+  notice: string | null;
+} {
   const sold: FeedLine[] = [];
   const lot: FeedLine[] = [];
   const alerts: DraftAlert[] = [];
   let sale: FeedSale | null = null;
+  let notice: string | null = null;
+  // The lot that just closed was the clock's pick, so its sale is too.
+  const prevAutoLot = prev.lotAutoNominated
+    ? (prev.nominatedPlayer?.userId ?? null)
+    : null;
 
   const rostered = new Set(
     prev.teams.flatMap((t) => t.members.map((m) => m.userId)),
@@ -194,6 +236,7 @@ export function draftFeedDiff(
         kind: "sold",
         text: `${m.name} → ${t.name}`,
         amount: m.price,
+        ...(m.userId === prevAutoLot ? { auto: true } : {}),
       });
       const isMe = !!next.me.userId && m.userId === next.me.userId;
       sale = { name: m.name, team: t.name, price: m.price, isMe };
@@ -204,18 +247,24 @@ export function draftFeedDiff(
   const prevNom = prev.nominatedPlayer?.userId ?? null;
   const curNom = next.nominatedPlayer?.userId ?? null;
   if (curNom && curNom !== prevNom) {
-    lot.push({
-      kind: "nominate",
-      text: `${teamName(next, next.nominatorTeamId)} nominated ${next.nominatedPlayer!.name}`,
-      amount: next.currentBid,
-    });
+    lot.push(nominationLine(next));
     // On the block yourself — worth a bell even for a non-captain, who has
     // nothing else on this screen telling them to pay attention.
     if (curNom === next.me.userId) alerts.push("im-nominated");
+    // No bell: the "your turn" chime already rang when the clock started.
+    if (
+      next.lotAutoNominated &&
+      !!next.me.myTeamId &&
+      next.nominatorTeamId === next.me.myTeamId
+    ) {
+      notice = `Your nomination clock ran out, so the draft nominated ${next.nominatedPlayer!.name} for you at the minimum bid.`;
+    }
   } else if (curNom && curNom === prevNom && next.currentBid > prev.currentBid) {
+    // Names the player: read out on its own, "Team 3 bid" said nothing
+    // about which lot.
     lot.push({
       kind: "bid",
-      text: `${teamName(next, next.currentBidTeamId)} bid`,
+      text: `${teamName(next, next.currentBidTeamId)} bid on ${next.nominatedPlayer!.name}`,
       amount: next.currentBid,
     });
   }
@@ -226,5 +275,5 @@ export function draftFeedDiff(
 
   // Newest first: whatever happened to the LOT is later than the sale that
   // freed it.
-  return { lines: [...lot, ...sold], sale, alerts };
+  return { lines: [...lot, ...sold], sale, alerts, notice };
 }

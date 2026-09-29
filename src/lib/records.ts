@@ -6,6 +6,7 @@
 
 import { decodeGamePlayers, trustedGamePlayers } from "./player-stats";
 import { heroById } from "./heroes";
+import { formatNetWorth } from "./utils";
 
 export type RecordLine = {
   /** Mapped league user, or null for an unmapped account (skipped). */
@@ -122,12 +123,10 @@ const PLAYER_RECORDS: PlayerRecordSpec[] = [
     metric: (l) =>
       l.heroHealing != null && l.heroHealing > 0 ? l.heroHealing : null,
   },
-  {
-    key: "deaths",
-    title: "Most deaths",
-    emoji: "🪦",
-    metric: (l) => l.deaths,
-  },
+  // No "Most deaths" record on purpose: this is a league for learning the
+  // game, and an all-time board that names someone for their worst outing
+  // stays up for good. "Most kills in defeat" keeps the losing-side story
+  // without naming anyone.
 ];
 
 type GameRecordSpec = {
@@ -370,6 +369,84 @@ export function leagueRecords(games: RecordGame[]): RecordBook {
   }
 
   return { players, games: gameRecords };
+}
+
+/** Book order for stored games: OpenDota start time, unknown times last
+ *  (never before dated games), id as the stable tiebreak. leagueRecords
+ *  keeps the first achiever of a tie, so every reader must agree on this. */
+export function compareRecordChronology(
+  a: { startTime: number; id: string },
+  b: { startTime: number; id: string },
+): number {
+  const aTime = a.startTime > 0 ? a.startTime : Number.MAX_SAFE_INTEGER;
+  const bTime = b.startTime > 0 ? b.startTime : Number.MAX_SAFE_INTEGER;
+  return aTime - bTime || a.id.localeCompare(b.id);
+}
+
+/** Complete games the book needs before a broken record is worth a line in
+ *  a result post. A young league breaks most marks every game night, and
+ *  "new league record" means nothing until there is a real base to beat. */
+export const RECORD_ANNOUNCE_MIN_GAMES = 20;
+
+export type BrokenRecord = {
+  /** The new mark, set in the series. */
+  record: PlayerRecord;
+  /** The best mark from every other game, which it beat. */
+  previous: PlayerRecord;
+};
+
+/**
+ * The all-time player record a series just broke, for one line in its
+ * result post. `games` is the whole book in chronological order (as
+ * leagueRecords wants it) and must include the series' own games.
+ *
+ * Only a strict improvement counts: a mark equalled keeps its first holder,
+ * and a first-ever mark (no previous value) broke nothing. Nothing is
+ * reported until `minBaseGames` complete games stood outside the series.
+ * When one series breaks several records, the first in book order wins
+ * (kills first), because the post carries at most one line.
+ */
+export function brokenPlayerRecord(
+  games: RecordGame[],
+  matchId: string,
+  minBaseGames = RECORD_ANNOUNCE_MIN_GAMES,
+): BrokenRecord | null {
+  const others = games.filter((game) => game.matchId !== matchId);
+  if (others.length === games.length || others.length < minBaseGames) {
+    return null;
+  }
+  const previousOf = new Map(
+    leagueRecords(others).players.map((record) => [record.key, record]),
+  );
+  for (const record of leagueRecords(games).players) {
+    if (record.matchId !== matchId) continue;
+    const previous = previousOf.get(record.key);
+    if (previous && record.value > previous.value) return { record, previous };
+  }
+  return null;
+}
+
+const MARK_UNIT: Record<string, string> = {
+  kills: "kills",
+  assists: "assists",
+  netWorth: "net worth",
+  gpm: "GPM",
+  lastHits: "last hits",
+  xpm: "XPM",
+  denies: "denies",
+  heroDamage: "hero damage",
+  towerDamage: "tower damage",
+  heroHealing: "hero healing",
+};
+
+/** "17 kills", "32.1k net worth", "812 GPM" — a player mark with its unit. */
+export function formatRecordMark(key: string, value: number): string {
+  const amount =
+    key === "netWorth"
+      ? formatNetWorth(value)
+      : new Intl.NumberFormat("en-US").format(value);
+  const unit = MARK_UNIT[key];
+  return unit ? `${amount} ${unit}` : amount;
 }
 
 /** "43m 17s" — shared display format for duration records. */

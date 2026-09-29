@@ -19,6 +19,8 @@ export interface ReleaseClassification {
   needs_scheduler_pause: boolean;
 }
 
+/** ops/ subtrees hosted independently of the website's scheduler. */
+export const INDEPENDENT_OPS_PREFIXES: readonly string[];
 export function parseNameStatus(output: string): ReleaseDiffEntry[];
 export function parseRawDiff(output: string): ReleaseDiffEntry[];
 export function isStaticClassNameOnlyDiff(patch: string): boolean;

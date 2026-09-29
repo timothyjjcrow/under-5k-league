@@ -46,6 +46,7 @@ export async function captainAssignStandin(
     replacingUserId: seat ? null : target,
     teamId: seat ?? undefined,
     actingCaptainId: user.role === "ADMIN" ? null : user.id,
+    actingUserId: user.id,
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
@@ -73,6 +74,7 @@ export async function captainRemoveStandin(
   const res = await removeStandinGuarded({
     assignmentId: str(formData, "assignmentId"),
     actingCaptainId: user.role === "ADMIN" ? null : user.id,
+    actingUserId: user.id,
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);

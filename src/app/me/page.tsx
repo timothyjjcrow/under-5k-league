@@ -10,22 +10,39 @@ import {
   confirmDraftReadiness,
   leaveLeague,
   updateDotaAccount,
-  refreshRank,
-  refreshSteamProfile,
+  refreshMyAccounts,
   updateDiscordName,
   unlinkDiscord,
   setInhousePingOptIn,
 } from "@/app/actions/registration";
-import { DiscordTag } from "@/components/discord-tag";
 import {
   fetchGuildMember,
   getGuildConfig,
   getRoleConfig,
   primeMembershipMemo,
+  type GuildConfig,
+  type GuildMemberInfo,
 } from "@/lib/discord-roles";
-import { DiscordJoinCard, DiscordSetupCard } from "@/components/discord-setup";
+import { AccountDiscordCard } from "@/components/account-discord-card";
+import {
+  AccountNextStepBanner,
+  SignupNextSteps,
+} from "@/components/account-next-steps";
+import {
+  accountNextSteps,
+  auctionRunning,
+  favoriteHeroSuggestions,
+  fullPlayerChoiceOpen,
+  mmrLeadLine,
+  mmrRulesLine,
+  rejoinPausedByDraft,
+  returningJoinPlan,
+  signupSummary,
+  withdrawConfirmText,
+  type AccountStepInput,
+} from "@/lib/account-page";
+import { ABOUT_MAX_LENGTH, aboutText } from "@/lib/about-you";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
-import { StripQueryParam } from "@/components/strip-query-param";
 import { steamIdToAccountId } from "@/lib/dota";
 import {
   effectiveDotaAccountId,
@@ -34,94 +51,47 @@ import {
 import { pendingCoverWhere } from "@/lib/standin";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
+  AUTO_SYNC,
+  DISCORD_INVITE_URL,
   HARD_MMR_CEILING,
   MATCH_PHASE,
+  MATCH_STATUS,
   REGISTRATION_STATUS,
   REGISTRATION_TYPE,
+  SEASON_STATUS,
 } from "@/lib/constants";
 import { registrationSeasonClosedError } from "@/lib/registration";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
 import { draftSetupOpen } from "@/lib/draft-setup";
-import {
-  formatMmrRange,
-  mmrRangeForRankTier,
-  rankMedalName,
-  rankTierExactMinMmr,
-} from "@/lib/rank";
+import { rankMedalName, rankTierExactMinMmr } from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchRoundLabel } from "@/lib/schedule";
+import { seasonMatchNightLabel } from "@/lib/match-night";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { formatMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
+import { MmrField } from "@/components/mmr-field";
 import { SavedSignupForm } from "@/components/saved-signup-form";
+import { ReturningJoinCard } from "@/components/returning-join-card";
+import { AwayDatesCard } from "@/components/away-dates-card";
+import { listAwayFixtures } from "@/lib/availability-service";
 import {
   Avatar,
   Badge,
   Card,
   CardBody,
   CardHeader,
-  DiscordButton,
   PageTitle,
-  RankBadge,
+  RankMedal,
   ScheduleCallout,
   TeamCrest,
-  buttonClasses,
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Your profile" };
-
-// The Discord OAuth callback bounces outcomes back here as ?discord=<code>.
-// Map only KNOWN codes to copy — never echo the raw query value (same
-// injection/phishing hygiene as the login page's ?error=).
-const DISCORD_LINK_NOTES: Record<
-  string,
-  { tone: "success" | "danger" | "muted"; text: string }
-> = {
-  linked: {
-    tone: "success",
-    text: "Discord linked — your handle is now verified.",
-  },
-  joined: {
-    tone: "success",
-    text: "Discord linked and you're in the league server — that's everything.",
-  },
-  joined_pending: {
-    tone: "muted",
-    text: "Discord linked and you've been added to the server — open it and accept the rules, otherwise nobody can ping you.",
-  },
-  join_failed: {
-    tone: "muted",
-    text: "Discord linked. We couldn't add you to the server automatically — join it with the button below.",
-  },
-  denied: {
-    tone: "muted",
-    text: "Discord link cancelled — nothing was changed.",
-  },
-  taken: {
-    tone: "danger",
-    text: "That Discord account is already linked to another player — sign in to that account and unlink it there first.",
-  },
-  state: {
-    tone: "danger",
-    text: "That link attempt expired or didn't start here — try Link Discord again.",
-  },
-  error: {
-    tone: "danger",
-    text: "Discord didn't confirm the link — give it another try.",
-  },
-  unconfigured: {
-    tone: "danger",
-    text: "Discord linking isn't available right now — ask a league admin.",
-  },
-  session: {
-    tone: "danger",
-    text: "Your site session expired while Discord was open. Sign in again, then retry the link.",
-  },
-};
+export const metadata = { title: "My account" };
 
 export default async function MePage({
   searchParams,
@@ -157,9 +127,19 @@ export default async function MePage({
       : null,
   ]);
 
+  // Async server component: Date.now is request-time state, not render replay.
+  // eslint-disable-next-line react-hooks/purity
+  const freshFrom = new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000);
   // Returning player: no signup for this season yet, but one from a past
   // season — carry those answers into the fresh form so they don't retype.
-  const [previous, standinAssignments] = await Promise.all([
+  const seasonComplete = season?.status === SEASON_STATUS.COMPLETE;
+  const [
+    previous,
+    standinAssignments,
+    coveredMatches,
+    nextTeamMatch,
+    seasonFixtures,
+  ] = await Promise.all([
     season && !reg
       ? prisma.registration.findFirst({
           where: { userId: user.id, NOT: { seasonId: season.id } },
@@ -174,23 +154,79 @@ export default async function MePage({
           orderBy: { match: { week: "asc" } },
         })
       : null,
+    // Once the season is over, the standin card thanks them for the cover
+    // they gave instead of saying "no assignments yet".
+    season && seasonComplete && reg?.status === "ACTIVE" && !member
+      ? prisma.standinAssignment.count({
+          where: {
+            standinUserId: user.id,
+            match: { seasonId: season.id, status: MATCH_STATUS.COMPLETED },
+          },
+        })
+      : 0,
+    // A rostered player's next fixture, shown under "Your team" instead of
+    // the signup-era match-night callout. The dashboard's freshness rule: a
+    // days-old fixture nobody reported isn't "next".
+    season && member
+      ? prisma.match.findFirst({
+          where: {
+            seasonId: season.id,
+            status: { not: MATCH_STATUS.COMPLETED },
+            AND: [
+              {
+                OR: [
+                  { homeTeamId: member.teamId },
+                  { awayTeamId: member.teamId },
+                ],
+              },
+              {
+                OR: [
+                  { scheduledAt: null },
+                  { scheduledAt: { gte: freshFrom } },
+                ],
+              },
+            ],
+          },
+          orderBy: [
+            { scheduledAt: { sort: "asc", nulls: "last" } },
+            { week: "asc" },
+            { createdAt: "asc" },
+          ],
+          include: {
+            homeTeam: { select: { name: true } },
+            awayTeam: { select: { name: true } },
+          },
+        })
+      : null,
+    // Kickoffs only: the match-night line is the weekly slot most fixtures
+    // use (see match-night.ts).
+    season
+      ? prisma.match.findMany({
+          where: { seasonId: season.id, scheduledAt: { not: null } },
+          select: { scheduledAt: true, status: true },
+        })
+      : [],
   ]);
   const form = reg ?? previous;
-  // A booked playoff fixture is named by its round ("Semifinal"), the way the
-  // match page, /schedule and Discord name it. Only read when one is booked.
+  // A playoff fixture (booked cover, or the team's next match) is named by
+  // its round ("Semifinal"), the way the match page, /schedule and Discord
+  // name it. Only read when one is shown.
   const playoffRounds = await loadPlayoffRoundsBySeason(
-    (standinAssignments ?? [])
-      .filter((a) => a.match.phase === MATCH_PHASE.PLAYOFF)
-      .map((a) => a.match.seasonId),
+    [
+      ...(standinAssignments ?? []).map((a) => a.match),
+      ...(nextTeamMatch ? [nextTeamMatch] : []),
+    ]
+      .filter((m) => m.phase === MATCH_PHASE.PLAYOFF)
+      .map((m) => m.seasonId),
   );
 
   // The medal's plausible MMR window — signup claims outside it are snapped
   // to its floor by saveRegistration, so tell the player up front. A medal
   // whose EXACT band floor clears the hard ceiling (Divine 3+/Immortal) is
   // ineligible outright — registrationGate will reject it whatever they type.
-  const mmrWindow = mmrRangeForRankTier(dbUser?.rankTier ?? null);
   const medalFloor = rankTierExactMinMmr(dbUser?.rankTier ?? null);
   const medalBlocked = medalFloor != null && medalFloor > HARD_MMR_CEILING;
+  const mmrLead = mmrLeadLine(dbUser?.rankTier ?? null);
 
   // Your-season context: the roster seat (from DRAFT on) or, for standins,
   // the matches they've been assigned to cover.
@@ -212,16 +248,61 @@ export default async function MePage({
     season?.status ?? "",
   );
   // Post-signups, PLAYER stays available only to those already registered as
-  // one (matches registrationGate — standins can't upgrade mid-season). The
-  // locked tile must also not stay default-checked: disabled radios don't
-  // submit, so the form would silently fall back to PLAYER and get rejected.
-  const playerLocked =
-    !signupsOpen && !(isRegistered && reg?.type === "PLAYER");
+  // one, withdrawn included (matches registrationGate — standins can't upgrade
+  // mid-season), and not to a withdrawn player while the auction runs. When
+  // it isn't, the form has no choice to show: it registers a standin.
+  const signupChoice = {
+    seasonStatus: season?.status ?? "",
+    draftStatus: draft?.status,
+    existing: reg ? { type: reg.type, status: reg.status } : null,
+  };
+  const playerLocked = !fullPlayerChoiceOpen(signupChoice);
+  // A withdrawn full player can't return at all while the auction runs.
+  const rejoinPaused = rejoinPausedByDraft(signupChoice);
   const myRoles = parseRoles(form?.roles);
   const myDraftReadiness = reg
     ? draftReadiness(reg, season?.draftRevision ?? 0)
     : DRAFT_READINESS.AWAITING;
 
+  // The draft time printed on the signup card, posted back with any join so
+  // saveRegistration can count the join as confirming it (only if the
+  // season still has exactly this schedule when it saves).
+  const seenDraftFields =
+    season?.draftAt && draftConfirmationOpen
+      ? {
+          seenDraftSeasonId: season.id,
+          seenDraftRevision: String(season.draftRevision),
+          seenDraftAtTs: String(season.draftAt.getTime()),
+        }
+      : undefined;
+  // A returning player (a signup from an earlier season, none in this one)
+  // gets a one-tap join of last season's answers, run through the same
+  // saveRegistration as the form. Null when that can't be offered honestly
+  // (the medal or last season's MMR is over the ceiling): the form says why.
+  const returningPlan =
+    season && !reg && previous && !medalBlocked
+      ? returningJoinPlan({
+          seasonName: season.name,
+          previous,
+          rankTier: dbUser?.rankTier ?? null,
+          playerChoiceOpen: !playerLocked,
+        })
+      : null;
+  // The form's Participation default. A returning standin is NOT pre-set to
+  // Standin from last season: neither tile is ticked and the form asks.
+  const typeDefault: string | null = reg
+    ? reg.type
+    : previous?.type === REGISTRATION_TYPE.STANDIN
+      ? null
+      : REGISTRATION_TYPE.PLAYER;
+  // Someone who can press Join as a full player right now: that submit also
+  // confirms the draft time printed above the form (saveRegistration).
+  const joinConfirmsDraft =
+    !(isRegistered && reg?.type === REGISTRATION_TYPE.PLAYER) &&
+    !playerLocked &&
+    !registrationRemoved &&
+    !seasonRegistrationClosed &&
+    !rejoinPaused;
   const needsDraftConfirmation = !!(
     season?.draftAt &&
     draftConfirmationOpen &&
@@ -229,212 +310,68 @@ export default async function MePage({
     reg?.type === REGISTRATION_TYPE.PLAYER &&
     myDraftReadiness !== DRAFT_READINESS.READY
   );
-  const canJoin =
-    !!season &&
-    !isRegistered &&
-    !registrationRemoved &&
-    !seasonRegistrationClosed;
-  const nextSetupStep = needsDraftConfirmation
-    ? { href: "#profile-signup", label: "Review draft commitment" }
-    : canJoin
-      ? {
-          href: "#profile-signup",
-          label: signupsOpen ? "Join the season" : "Register as a standin",
-        }
-      : dbUser?.fhUnavailable === true
-        ? { href: "#profile-dota", label: "Fix match visibility" }
-        : !dbUser?.discordId && !dbUser?.discordName
-          ? { href: "#profile-discord", label: "Add Discord" }
-          : { href: "#profile-signup", label: "Your season" };
-  const setupSteps = [
-    {
-      href: "#profile-signup",
-      label: "Season participation",
-      complete: isRegistered && !needsDraftConfirmation,
-      attention: canJoin || needsDraftConfirmation || registrationRemoved,
-      status: registrationRemoved
-        ? "Admin review required"
-        : needsDraftConfirmation
-          ? "Draft confirmation needed"
-          : isRegistered
-            ? reg?.type === "STANDIN"
-              ? "Registered · standin"
-              : "Registered · player"
-            : seasonRegistrationClosed
-              ? "Season complete"
-              : season
-                ? "Not registered"
-                : "No active season",
-    },
-    {
-      href: "#profile-discord",
-      label: "Discord",
-      complete: false,
-      attention: !dbUser?.discordId && !dbUser?.discordName,
-      status: dbUser?.discordId
-        ? "Linked · review server access below"
-        : dbUser?.discordName
-          ? "Handle saved · link to verify"
-          : "Add or link your handle",
-    },
-    {
-      href: "#profile-dota",
-      label: "Dota match data",
-      complete: dbUser?.fhUnavailable === false,
-      attention: dbUser?.fhUnavailable === true,
-      status:
-        dbUser?.fhUnavailable === false
-          ? "Public match data"
-          : dbUser?.fhUnavailable === true
-            ? "Private · imports need access"
-            : "Review visibility",
-    },
-    {
-      href: "#profile-identity",
-      label: "Steam identity",
-      complete: true,
-      attention: false,
-      status: "Verified with Steam",
-    },
-  ];
+  // What is still left to do, derived fresh on every render (never a stored
+  // flag). Signed up in a season that still takes changes: listed under the
+  // signup form, where the player just pressed the button. Everyone else can
+  // only have the match-data step, shown as one line at the top.
+  const signupLive = isRegistered && !seasonRegistrationClosed;
+  const stepFacts = {
+    signedUp: signupLive,
+    draftConfirmation: needsDraftConfirmation
+      ? myDraftReadiness === DRAFT_READINESS.STALE
+        ? ("changed" as const)
+        : ("needed" as const)
+      : ("none" as const),
+    isCaptain,
+    discordLinked: !!dbUser?.discordId,
+    discordHandle: !!dbUser?.discordName,
+    discordLinkable: !!(
+      process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET
+    ),
+    matchDataPrivate: dbUser?.fhUnavailable === true,
+  };
+  // ONE live member lookup, shared by the next-steps list and the Discord
+  // card, so a cold visit costs Discord a single request. Never awaited here:
+  // both readers sit behind their own <Suspense>.
+  const guildCfg = getGuildConfig();
+  const memberInfo: Promise<GuildMemberInfo> =
+    dbUser?.discordId && guildCfg
+      ? fetchGuildMember(dbUser.discordId, guildCfg)
+      : Promise.resolve(null);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <PageTitle title="Your profile" />
-      <Card>
-        <CardHeader
-          headingLevel={2}
-          title="Your setup"
-          action={
-            <a
-              href={nextSetupStep.href}
-              className={buttonClasses("secondary", "sm")}
-            >
-              {nextSetupStep.label} →
-            </a>
-          }
+      <PageTitle title="My account" />
+      {signupLive ? null : (
+        <AccountNextStepBanner
+          step={accountNextSteps({ ...stepFacts, membership: null })[0]}
         />
-        <CardBody>
-          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {setupSteps.map((step) => (
-              <li key={step.href} className="min-w-0">
-                <a
-                  href={step.href}
-                  className={`flex min-h-16 items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors hover:bg-surface-2 ${step.attention ? "border-accent/35 bg-accent/5" : "border-line bg-surface-2/30"}`}
-                >
-                  <span
-                    aria-hidden
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm ${step.complete ? "border-success/35 bg-success/10 text-success" : step.attention ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-muted"}`}
-                  >
-                    {step.complete ? "✓" : step.attention ? "!" : "·"}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium">
-                      {step.label}
-                    </span>
-                    <span className="block text-xs text-muted">
-                      {step.status}
-                    </span>
-                  </span>
-                  <span aria-hidden className="text-muted">
-                    ↗
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </CardBody>
-      </Card>
-
-      <Card id="profile-identity" className="scroll-mt-24">
-        {/* Two separate defects, both here all along, and only one of them is
-            about width.
-
-            THE SQUASH is what `shrink-0` fixes: Avatar sets width/height but
-            bakes in no shrink floor (callers pass one), so beside the name
-            block and the button column it rendered 19px wide inside its 56px
-            box — measured still squashed at 430px, i.e. on every phone made.
-            It is not width-dependent and no overflow check can see it.
-
-            THE OVERFLOW is the 17-digit SteamID64, one unbreakable token,
-            pushing this row past its own card: 58px at 320px, 18px at 360px,
-            3px at 375px, and gone by 390px. `min-w-0` + `break-all` and
-            `flex-wrap` + `basis-full` EACH fix that on their own (verified by
-            reverting one at a time) — both are kept because they do different
-            jobs: the first stops the id widening the row, the second gives the
-            buttons their own line rather than a 135px sliver of this one.
-
-            Note which item carries the floor. It goes on the column that is
-            ALLOWED to leave the line; a min-width on the min-w-0 child instead
-            is the trap that broke the player profile hero. */}
-        <CardBody className="flex flex-wrap items-center gap-4">
-          <Avatar
-            name={user.name}
-            src={user.avatar}
-            size={56}
-            className="shrink-0"
-          />
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-display text-xl font-semibold">
-                {user.name}
-              </span>
-              {user.role === "ADMIN" ? (
-                <Badge tone="accent">Admin</Badge>
-              ) : null}
-              <RankBadge rankTier={dbUser?.rankTier} />
-            </div>
-            <a
-              // A player whose Steam profile URL was never fetched still has
-              // a Steam id; "#" opened a blank tab.
-              href={
-                dbUser?.profileUrl ||
-                `https://steamcommunity.com/profiles/${encodeURIComponent(user.steamId)}`
-              }
-              target="_blank"
-              rel="noreferrer"
-              className="break-all text-sm text-muted hover:text-fg"
-            >
-              Steam: {user.steamId}
-            </a>
-          </div>
-          <div className="ml-auto flex basis-full flex-col items-end gap-2 sm:basis-auto">
-            <ActionForm action={refreshSteamProfile}>
-              <SubmitButton variant="secondary" size="sm">
-                Refresh from Steam
-              </SubmitButton>
-            </ActionForm>
-            <Link
-              href={`/players/${user.id}`}
-              className={textLink("whitespace-nowrap text-sm")}
-            >
-              View public profile →
-            </Link>
-          </div>
-        </CardBody>
-      </Card>
-
-      <DotaAccountCard
-        effectiveId={
-          dbUser
-            ? effectiveDotaAccountId(dbUser)
-            : steamIdToAccountId(user.steamId)
-        }
-        steamAccountId={steamIdToAccountId(user.steamId)}
-        override={dbUser ? storedDotaAccountId(dbUser) : null}
-        rankTier={dbUser?.rankTier ?? null}
-        fhUnavailable={dbUser?.fhUnavailable ?? null}
-      />
-
-      <Suspense fallback={<Card><CardBody><p role="status">Checking Discord reachability… Your signup form is ready below.</p></CardBody></Card>}>
-        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} />
-      </Suspense>
+      )}
 
       <section id="profile-signup" className="scroll-mt-24">
       {!season ? (
+        // Between seasons: a cancelled season, or an admin reactivating an old
+        // one. Say where the next signup window will be announced. The Discord
+        // card further down carries the join and link buttons, so this card
+        // doesn't add a second one.
         <Card>
-          <CardBody className="text-center text-muted">
-            There is no active season to sign up for right now.
+          <CardBody className="space-y-2 text-center text-muted">
+            <p>No season is open for signups right now.</p>
+            {DISCORD_INVITE_URL ? (
+              <p>
+                The next season&apos;s signups are announced in the league
+                Discord. Join it or link your account in the Discord card
+                below.
+              </p>
+            ) : (
+              <p>
+                The next season&apos;s signups are announced in{" "}
+                <Link href="/news" className={textLink()}>
+                  League news
+                </Link>
+                .
+              </p>
+            )}
           </CardBody>
         </Card>
       ) : (
@@ -451,7 +388,11 @@ export default async function MePage({
                     : "The season is complete, so registrations are closed."
                   : isRegistered
                     ? `You're currently ${reg?.type === "STANDIN" ? "a standin" : "signed up to play"}.`
-                    : signupsOpen
+                    : reg?.status === REGISTRATION_STATUS.WITHDRAWN
+                      ? rejoinPaused
+                        ? "You withdrew from this season."
+                        : "You withdrew from this season. You can rejoin below."
+                      : signupsOpen
                       ? "Fill this out to join the season."
                       : "Player signups are closed, but you can still register as a standin."
             }
@@ -483,6 +424,12 @@ export default async function MePage({
                   eventLabel="Draft"
                   passedLabel={DRAFT_PASSED_LABEL}
                 />
+                {joinConfirmsDraft ? (
+                  <span className="mt-0.5 block text-xs">
+                    Joining as a full player confirms you&apos;ve seen this
+                    time and plan to be there.
+                  </span>
+                ) : null}
               </p>
             ) : null}
             {season.draftAt &&
@@ -490,10 +437,11 @@ export default async function MePage({
             isRegistered &&
             reg?.type === REGISTRATION_TYPE.PLAYER ? (
               <div
+                id="draft-commitment"
                 className={
                   myDraftReadiness === DRAFT_READINESS.READY
-                    ? "rounded-lg border border-success/35 bg-success/10 px-4 py-3"
-                    : "rounded-lg border border-accent/35 bg-accent/10 px-4 py-3"
+                    ? "scroll-mt-24 rounded-lg border border-success/35 bg-success/10 px-4 py-3"
+                    : "scroll-mt-24 rounded-lg border border-accent/35 bg-accent/10 px-4 py-3"
                 }
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -603,11 +551,15 @@ export default async function MePage({
                   <div className="text-xs uppercase tracking-wide text-muted">
                     Your team
                   </div>
-                  <div className="truncate font-medium">{member.team.name}</div>
+                  {/* Two lines before a cut: beside "Drafted for $N" one
+                      line showed only the start of the name. */}
+                  <div className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
+                    {member.team.name}
+                  </div>
                 </div>
                 <div className="ml-auto shrink-0">
                   {member.isCaptain ? (
-                    <Badge tone="brand">Captain</Badge>
+                    <Badge tone="accent">Captain</Badge>
                   ) : (
                     <span className="text-sm text-muted">
                       Drafted for{" "}
@@ -615,6 +567,43 @@ export default async function MePage({
                         ${member.price}
                       </span>
                     </span>
+                  )}
+                </div>
+              </Link>
+            ) : null}
+            {member && nextTeamMatch ? (
+              <Link
+                href={`/matches/${nextTeamMatch.id}`}
+                className="block rounded-lg border border-line bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-muted/60"
+              >
+                <div className="text-xs uppercase tracking-wide text-muted">
+                  Your next match
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
+                  <Badge tone="info">
+                    {matchRoundLabel(
+                      nextTeamMatch,
+                      playoffRounds.get(nextTeamMatch.seasonId) ?? 0,
+                    )}
+                  </Badge>
+                  <span className="min-w-0">
+                    vs{" "}
+                    <span className="font-medium text-fg">
+                      {nextTeamMatch.homeTeamId === member.teamId
+                        ? nextTeamMatch.awayTeam.name
+                        : nextTeamMatch.homeTeam.name}
+                    </span>
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  {nextTeamMatch.scheduledAt ? (
+                    <LocalTime
+                      ts={nextTeamMatch.scheduledAt.getTime()}
+                      variant="full"
+                      initial={formatMatchTime(nextTeamMatch.scheduledAt, "full")}
+                    />
+                  ) : (
+                    "Time TBD"
                   )}
                 </div>
               </Link>
@@ -627,10 +616,25 @@ export default async function MePage({
                 bare card stays standin-only: during SIGNUPS every registrant
                 is unrostered, and an empty "your assignments" box for the
                 whole pool would be noise. */}
-            {isRegistered &&
-            !member &&
-            standinAssignments &&
-            (reg?.type === "STANDIN" || standinAssignments.length > 0) ? (
+            {isRegistered && !member && seasonComplete ? (
+              // A finished season has nothing left to book: thank the ones
+              // who covered, and say nothing to the ones who were never
+              // needed.
+              coveredMatches > 0 ? (
+                <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
+                  <div className="text-xs uppercase tracking-wide text-muted">
+                    Your standin assignments
+                  </div>
+                  <p className="mt-1 text-sm text-muted">
+                    Season over — you covered {coveredMatches}{" "}
+                    {coveredMatches === 1 ? "match" : "matches"}. Thanks!
+                  </p>
+                </div>
+              ) : null
+            ) : isRegistered &&
+              !member &&
+              standinAssignments &&
+              (reg?.type === "STANDIN" || standinAssignments.length > 0) ? (
               <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
                 <div className="text-xs uppercase tracking-wide text-muted">
                   Your standin assignments
@@ -718,14 +722,58 @@ export default async function MePage({
                 <p className="font-medium text-fg">Registration is closed.</p>
                 <p className="mt-1 text-muted">
                   {isRegistered
-                    ? "Your final signup details stay attached to this season's history. Your Steam, Dota and Discord profile settings above remain editable."
-                    : "This season has finished. Watch the dashboard for the next season; your Steam, Dota and Discord profile settings above are ready to carry forward."}
+                    ? "Your final signup details stay attached to this season's history. Your Discord, Steam and Dota settings below remain editable."
+                    : "This season has finished. Watch the dashboard for the next season; your Discord, Steam and Dota settings below are ready to carry forward."}
+                </p>
+              </div>
+            ) : rejoinPaused ? (
+              <div className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm">
+                <p className="font-medium text-fg">The draft is running.</p>
+                <p className="mt-1 text-muted">
+                  You withdrew, so you&apos;re not in the pool captains are
+                  bidding on. Once the draft finishes you can rejoin here, as a
+                  full player or a standin.
                 </p>
               </div>
             ) : (
               <>
-                <ScheduleCallout label={season.matchSchedule} />
-                {!reg && previous ? (
+                {/* The weekly slot is for deciding whether to sign up. Once
+                    the player has a fixture listed above (their team's next
+                    match, or cover they're booked for), that says when they
+                    play instead. */}
+                {(member && nextTeamMatch) ||
+                (standinAssignments?.length ?? 0) > 0 ? null : (
+                  <ScheduleCallout
+                    label={seasonMatchNightLabel(season, seasonFixtures)}
+                    description={
+                      playerLocked ||
+                      (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN)
+                        ? "Games run weekly. Captains book standins for this night when one of their players can't make it."
+                        : isRegistered
+                          ? "Games run weekly on this night."
+                          : undefined
+                    }
+                  />
+                )}
+                {returningPlan && previous ? (
+                  <ReturningJoinCard
+                    plan={returningPlan}
+                    seasonName={previous.season.name}
+                    roles={previous.roles}
+                    action={saveRegistration}
+                    notice={<SignupPublicNotice />}
+                    hidden={{
+                      ...seenDraftFields,
+                      mmr: previous.mmr > 0 ? String(previous.mmr) : "",
+                      favoriteHeroes: previous.favoriteHeroes,
+                      about: aboutText(previous),
+                      ...(previous.wantsCaptain &&
+                      previous.type === REGISTRATION_TYPE.PLAYER
+                        ? { wantsCaptain: "on" }
+                        : {}),
+                    }}
+                  />
+                ) : !reg && previous ? (
                   <div className="flex items-start gap-2 rounded-lg border border-info/40 bg-info/10 px-3 py-2 text-xs">
                     <span aria-hidden>↩️</span>
                     <span>
@@ -735,130 +783,144 @@ export default async function MePage({
                     </span>
                   </div>
                 ) : null}
-                <SavedSignupForm saved={isRegistered}>
-                <ActionForm action={saveRegistration} trackChanges className="space-y-5">
-                  <div className="rounded-lg border border-accent/35 bg-accent/10 p-3 text-sm">
-                    <h3 className="font-medium text-fg">
-                      Public signup profile
-                    </h3>
-                    <p className="mt-1 text-xs leading-relaxed text-muted">
-                      Your participation type, submitted or estimated MMR,
-                      medal, preferred roles, favorite heroes, captain
-                      interest, goals, and captain note can appear in the public
-                      player pool and on your public profile. Do not enter
-                      contact details, specific availability, health details,
-                      or anything private in free-text fields. Joining asks the
-                      league to periodically refresh the public Steam and Dota
-                      data needed to run your competition.
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      Discord contact is limited to you, league admins, and
-                      active league participants.
-                    </p>
-                  </div>
+                <SavedSignupForm
+                  saved={isRegistered || !!returningPlan}
+                  label={returningPlan ? "Change answers" : undefined}
+                  summary={
+                    reg && isRegistered
+                      ? signupSummary(reg)
+                      : returningPlan
+                        ? "Opens the full signup form"
+                        : undefined
+                  }
+                >
+                <ActionForm
+                  action={saveRegistration}
+                  trackChanges
+                  className="space-y-5"
+                  // The draft time printed above this form. Joining the pool
+                  // with it counts as confirming it; the server stamps that
+                  // only if these still match the season when it saves.
+                  hidden={seenDraftFields}
+                >
+                  {/* The one-tap card above already says it. */}
+                  {returningPlan ? null : <SignupPublicNotice />}
 
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      Participation
-                    </label>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <RadioTile
-                        name="type"
-                        value="PLAYER"
-                        defaultChecked={
-                          !playerLocked && form?.type !== "STANDIN"
-                        }
-                        title="Full player"
-                        desc="Get drafted onto a team and play every week."
-                        disabled={playerLocked}
-                      />
-                      <RadioTile
-                        name="type"
-                        value="STANDIN"
-                        defaultChecked={
-                          playerLocked || form?.type === "STANDIN"
-                        }
-                        title="Standin"
-                        desc="Fill in for teams when someone can't play."
-                      />
+                  {playerLocked ? (
+                    /* Only a standin signup is possible here (signups closed,
+                       and this viewer was never a full player), so there is
+                       no choice to make: no greyed-out Full player tile, no
+                       captain box, no draft wording. */
+                    <div>
+                      <p className="mb-1.5 text-sm font-medium">Participation</p>
+                      <input type="hidden" name="type" value="STANDIN" />
+                      <div className="rounded-lg border border-accent bg-accent/10 p-3">
+                        <span className="block text-sm font-medium">Standin</span>
+                        <span className="block text-xs text-muted">
+                          Fill in for teams when someone can&apos;t play.
+                          Full-player signups are closed for this season.
+                        </span>
+                      </div>
                     </div>
-                    {!signupsOpen ? (
-                      <p className="mt-2 text-xs text-muted">
-                        Full-player signups are closed. Standins can still
-                        register through the draft, regular season and playoffs
-                        when teams may need cover.
-                      </p>
-                    ) : null}
-                  </div>
+                  ) : (
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium">
+                        Participation
+                      </label>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <RadioTile
+                          name="type"
+                          value="PLAYER"
+                          defaultChecked={typeDefault === REGISTRATION_TYPE.PLAYER}
+                          required={typeDefault === null}
+                          title="Full player"
+                          desc="Get drafted onto a team and play every week."
+                        />
+                        <RadioTile
+                          name="type"
+                          value="STANDIN"
+                          defaultChecked={typeDefault === REGISTRATION_TYPE.STANDIN}
+                          required={typeDefault === null}
+                          title="Standin"
+                          desc="Fill in for teams when someone can't play."
+                        />
+                      </div>
+                      {/* Captain volunteering is a signup-phase choice for
+                          full players, so it sits with the participation
+                          choice and only while signups are open. Afterwards
+                          the server keeps the stored answer (a missing box
+                          submits nothing). */}
+                      {signupsOpen ? (
+                        <label className="mt-2 flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
+                          <input
+                            type="checkbox"
+                            name="wantsCaptain"
+                            defaultChecked={form?.wantsCaptain ?? false}
+                            className="h-4 w-4 accent-[var(--color-brand)]"
+                          />
+                          <span className="text-sm">
+                            <span className="block">
+                              I&apos;d like to be considered as a team captain
+                            </span>
+                            <span className="block text-xs text-muted">
+                              Full players only.
+                            </span>
+                          </span>
+                        </label>
+                      ) : null}
+                    </div>
+                  )}
 
                   <div>
                     <label
                       htmlFor="mmr"
-                      className="mb-1.5 block text-sm font-medium"
+                      className="block text-sm font-medium"
                     >
                       Dota 2 MMR
                     </label>
-                    <input
-                      id="mmr"
-                      name="mmr"
-                      type="number"
-                      // min=1: a typed 0 fails native validation, while BLANK stays
-                      // allowed — 0 is the stored "unknown" sentinel, never typed.
-                      min={1}
-                      max={HARD_MMR_CEILING}
-                      // `|| ""` (not ??): a stored unknown (0) must render blank,
-                      // or resubmitting the form trips the min=1 validation.
-                      defaultValue={form?.mmr || ""}
-                      placeholder="e.g. 3200"
-                      className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-                    />
-                    <p className="mt-1 text-xs text-muted">
-                      {mmrWindow && mmrWindow.min > 0
-                        ? "Not sure? Leave it blank — we'll estimate it from your ranked medal. "
-                        : "Unranked or not sure? Leave it blank — captains will see your ranked medal instead, and you can update it later. "}
-                      Used to help balance the draft. Be honest!
-                      {" "}Your submitted or medal-estimated MMR is public on
-                      the player pool and profile.
-                      {season.maxMmr > 0
-                        ? ` ${season.maxMmr} is a soft limit — you can still sign up above it, but you'll be reviewed before the draft. We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`
-                        : ` We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`}
-                    </p>
+                    {/* The medal first: many players don't know their exact
+                        number. The line under the box shows what will be
+                        stored as they type (display only; the server still
+                        judges the raw claim and clamps it). */}
                     {medalBlocked ? (
-                      <p className="mt-1 text-xs text-danger">
+                      <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-danger">
                         Your {rankMedalName(dbUser?.rankTier)} medal puts you
                         above {HARD_MMR_CEILING} MMR, so this league can&apos;t
                         take your signup.
                       </p>
-                    ) : mmrWindow ? (
-                      <p className="mt-1 text-xs text-muted">
-                        Your {rankMedalName(dbUser?.rankTier)} medal puts you
-                        around{" "}
-                        <strong>
-                          {/* Display capped at the ceiling — the form's max —
-                          even where the tolerance window runs past it. */}
-                          {formatMmrRange({
-                            min: mmrWindow.min,
-                            max:
-                              mmrWindow.max === null
-                                ? HARD_MMR_CEILING
-                                : Math.min(mmrWindow.max, HARD_MMR_CEILING),
-                          })}
-                        </strong>{" "}
-                        MMR —{" "}
-                        {mmrWindow.min > 0
-                          ? `a value outside that range is automatically set to ${mmrWindow.min}.`
-                          : "a value outside that range is treated as unknown (captains judge by your medal)."}
+                    ) : mmrLead ? (
+                      <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-muted">
+                        {mmrLead}
                       </p>
                     ) : null}
+                    <MmrField
+                      // Remount when the saved number changes, so the preview
+                      // starts from what the server stored.
+                      key={String(reg?.mmr ?? "new")}
+                      // `|| ""` (not ??): a stored unknown (0) must render
+                      // blank, or resubmitting trips the min=1 validation.
+                      defaultValue={String(form?.mmr || "")}
+                      rankTier={dbUser?.rankTier ?? null}
+                      storedMmr={reg ? reg.mmr : null}
+                      frozen={
+                        reg?.type === REGISTRATION_TYPE.PLAYER &&
+                        reg.status === REGISTRATION_STATUS.ACTIVE &&
+                        auctionRunning(draft?.status)
+                      }
+                      describedBy={medalBlocked || mmrLead ? "mmr-lead" : undefined}
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      {mmrRulesLine(season.maxMmr)}
+                    </p>
                   </div>
 
-                  <details className="rounded-lg border border-line p-3">
-                    <summary className="min-h-11 cursor-pointer font-medium">Optional scouting profile</summary>
-                    <div className="space-y-5 pt-3">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
+                  {/* Out of the optional disclosure: one tap each, and the
+                      pool, the home page's role mix and the admin's "blank
+                      signup" check all read them. Still never required. */}
+                  <fieldset>
+                    <legend className="mb-1.5 block text-sm font-medium">
                       Preferred roles
-                    </label>
+                    </legend>
                     <div className="flex flex-wrap gap-2">
                       {DOTA_ROLES.map((r) => (
                         <label
@@ -880,11 +942,13 @@ export default async function MePage({
                       ))}
                     </div>
                     <p className="mt-1 text-xs text-muted">
-                      Shown publicly on your player profile and in the player
-                      pool.
+                      Optional. Tick every position you&apos;re happy to play.
                     </p>
-                  </div>
+                  </fieldset>
 
+                  <details className="rounded-lg border border-line p-3">
+                    <summary className="min-h-11 cursor-pointer font-medium">Optional scouting profile</summary>
+                    <div className="space-y-5 pt-3">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium">
                       Favorite heroes
@@ -892,92 +956,69 @@ export default async function MePage({
                     <HeroPicker
                       name="favoriteHeroes"
                       defaultValue={form?.favoriteHeroes}
+                      suggestions={favoriteHeroSuggestions(
+                        form?.favoriteHeroes,
+                        dbUser?.pubStats,
+                      )}
                     />
                     <p className="mt-1 text-xs text-muted">
-                      Pick the heroes you&apos;re known for — shown publicly on your{" "}
-                      <Link href={`/players/${user.id}`} className={textLink()}>
-                        player profile
-                      </Link>{" "}
-                      and in the player pool, including during the draft.
+                      Pick the heroes you&apos;re known for.
                     </p>
                   </div>
 
+                  {/* One box where there used to be two near-identical ones
+                      (goals, and a note for captains). An older signup's two
+                      answers show here joined, so nothing is lost. */}
                   <div>
                     <label
-                      htmlFor="statement"
+                      htmlFor="about"
                       className="mb-1.5 block text-sm font-medium"
                     >
-                      What you want from the league (public)
+                      About you (public, shown to captains)
                     </label>
                     <textarea
-                      id="statement"
-                      name="statement"
-                      rows={3}
-                      maxLength={1000}
-                      defaultValue={form?.statement ?? ""}
-                      placeholder="Why you're here and what you'd like to improve…"
+                      id="about"
+                      name="about"
+                      rows={4}
+                      maxLength={ABOUT_MAX_LENGTH}
+                      defaultValue={form ? aboutText(form) : ""}
+                      placeholder="How you play, what you're working on, what you want from the league…"
                       className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
                     />
-                    <p className="mt-1 text-xs text-muted">
-                      Shown publicly on your player profile and, when no captain
-                      note is present, in the player pool. Don&apos;t include
-                      contact details or specific availability.
-                    </p>
                   </div>
-
-                  <div>
-                    <label
-                      htmlFor="captainNote"
-                      className="mb-1.5 block text-sm font-medium"
-                    >
-                      Note for captains / drafters (public)
-                    </label>
-                    <textarea
-                      id="captainNote"
-                      name="captainNote"
-                      rows={3}
-                      maxLength={1000}
-                      defaultValue={form?.captainNote ?? ""}
-                      placeholder="What should captains know about you as a player?"
-                      className="w-full rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-accent/60"
-                    />
-                    <p className="mt-1 text-xs text-muted">
-                      Shown publicly on your player profile and in the player
-                      pool, and surfaced again to captains during the draft.
-                      Don&apos;t put private contact details here.
-                    </p>
-                  </div>
-
-                  <label className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 p-3">
-                    <input
-                      type="checkbox"
-                      name="wantsCaptain"
-                      defaultChecked={form?.wantsCaptain ?? false}
-                      disabled={!signupsOpen}
-                      className="h-4 w-4 accent-[var(--color-brand)]"
-                    />
-                    <span className="text-sm">
-                      <span className="block">
-                        I&apos;d like to be considered as a team captain
-                      </span>
-                      <span className="block text-xs text-muted">
-                        {signupsOpen
-                          ? "Applies to full-player signups only and is public on the player pool and profile."
-                          : "Captain volunteering closed when player signups ended."}
-                      </span>
-                    </span>
-                  </label>
 
                     </div>
                   </details>
 
                   <div className="flex flex-wrap gap-3">
                     <SubmitButton>
-                      {isRegistered ? "Update signup" : "Join the season"}
+                      {isRegistered
+                        ? "Update signup"
+                        : playerLocked
+                          ? "Register as a standin"
+                          : "Join the season"}
                     </SubmitButton>
                   </div>
                 </ActionForm>
                 </SavedSignupForm>
+
+                {signupLive ? (
+                  <Suspense
+                    fallback={
+                      <SignupNextSteps
+                        steps={accountNextSteps({
+                          ...stepFacts,
+                          membership: null,
+                        })}
+                      />
+                    }
+                  >
+                    <LiveSignupNextSteps
+                      facts={stepFacts}
+                      memberInfo={memberInfo}
+                    />
+                  </Suspense>
+                ) : null}
 
                 {isRegistered ? (
                   <div className="mt-4 border-t border-line pt-4">
@@ -1001,7 +1042,11 @@ export default async function MePage({
                         <SubmitButton
                           variant="ghost"
                           size="sm"
-                          confirm="Withdraw from this season?"
+                          confirm={withdrawConfirmText({
+                            type: reg?.type ?? REGISTRATION_TYPE.PLAYER,
+                            seasonStatus: season.status,
+                            draftStatus: draft?.status,
+                          })}
                         >
                           Withdraw from this season
                         </SubmitButton>
@@ -1015,25 +1060,94 @@ export default async function MePage({
         </Card>
       )}
       </section>
+
+      <Suspense fallback={null}>
+        <AwayDatesSection userId={user.id} />
+      </Suspense>
+
+      <Suspense fallback={<section id="profile-discord" className="scroll-mt-24"><Card><CardBody><p role="status">Checking your Discord…</p></CardBody></Card></section>}>
+        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isRegistered={isRegistered} isCaptain={isCaptain} signupsOpen={signupsOpen} guildCfg={guildCfg} memberInfo={memberInfo} />
+      </Suspense>
+
+      <SteamDotaCard
+        userId={user.id}
+        name={dbUser?.name ?? user.name}
+        avatar={dbUser ? dbUser.avatar : user.avatar}
+        isAdmin={user.role === "ADMIN"}
+        steamUrl={
+          // A player whose Steam profile URL was never fetched still has a
+          // Steam id; "#" opened a blank tab.
+          dbUser?.profileUrl ||
+          `https://steamcommunity.com/profiles/${encodeURIComponent(user.steamId)}`
+        }
+        effectiveId={
+          dbUser
+            ? effectiveDotaAccountId(dbUser)
+            : steamIdToAccountId(user.steamId)
+        }
+        steamAccountId={steamIdToAccountId(user.steamId)}
+        override={dbUser ? storedDotaAccountId(dbUser) : null}
+        rankTier={dbUser?.rankTier ?? null}
+        fhUnavailable={dbUser?.fhUnavailable ?? null}
+      />
     </div>
   );
 }
 
-async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCaptain, signupsOpen }: {
+/**
+ * "I'm away": only for a viewer with at least one upcoming fixture they can
+ * check in for, judged by the same seat rules the save uses. Streamed, so the
+ * roster and cover lookups never hold up the rest of the profile.
+ */
+async function AwayDatesSection({ userId }: { userId: string }) {
+  // Async server component: the clock is request-time state, not render replay.
+  // eslint-disable-next-line react-hooks/purity
+  const away = await listAwayFixtures(userId, Date.now());
+  if (!away) return null;
+  return (
+    <AwayDatesCard
+      seasonId={away.seasonId}
+      fixtures={away.fixtures.map((f) => ({
+        ...f,
+        whenLabel: formatMatchTime(new Date(f.kickoffMs), "short"),
+      }))}
+    />
+  );
+}
+
+/**
+ * The next-steps list once Discord has answered. The fallback above renders
+ * the same list without the membership steps, so an unknown or slow answer
+ * simply leaves them out: never "not in the server" on a guess.
+ */
+async function LiveSignupNextSteps({
+  facts,
+  memberInfo,
+}: {
+  facts: Omit<AccountStepInput, "membership">;
+  memberInfo: Promise<GuildMemberInfo>;
+}) {
+  const info = await memberInfo;
+  return (
+    <SignupNextSteps
+      steps={accountNextSteps({
+        ...facts,
+        membership: info === null ? null : info.membership,
+      })}
+    />
+  );
+}
+
+async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCaptain, signupsOpen, guildCfg, memberInfo: memberInfoPromise }: {
   dbUser: User | null;
   discordParam?: string;
   isRegistered: boolean;
   isCaptain: boolean;
   signupsOpen: boolean;
+  guildCfg: GuildConfig | null;
+  /** The page's one live member lookup (null without a link or a bot). */
+  memberInfo: Promise<GuildMemberInfo>;
 }) {
-  // hasOwnProperty guard: a crafted ?discord=__proto__/constructor/toString
-  // would otherwise resolve an inherited truthy value past the ?? fallback
-  // and render an empty note instead of the generic error copy.
-  const discordNote = discordParam
-    ? Object.prototype.hasOwnProperty.call(DISCORD_LINK_NOTES, discordParam)
-      ? DISCORD_LINK_NOTES[discordParam]
-      : DISCORD_LINK_NOTES.error
-    : null;
   // Server component, so we can check the OAuth app config directly and only
   // offer "Link Discord" when clicking it can actually work.
   const discordLinkAvailable = !!(
@@ -1042,14 +1156,11 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
   // With a bot + server configured the OAuth consent also carries
   // `guilds.join`, so linking adds them to the server in the same click. The
   // copy has to match what the consent screen actually asks for.
-  const guildCfg = getGuildConfig();
   const discordWritesEnabled = discordMutationsAllowed();
   const discordAutoJoins = discordWritesEnabled && !!guildCfg;
 
   const [memberInfo, pingCfg] = await Promise.all([
-    dbUser?.discordId && guildCfg
-      ? fetchGuildMember(dbUser.discordId, guildCfg)
-      : null,
+    memberInfoPromise,
     dbUser?.discordId && discordWritesEnabled ? getRoleConfig() : null,
   ]);
   // ONE live member lookup answers both questions this page has about the
@@ -1066,21 +1177,6 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
     // two surfaces disagreeing for a memo window.
     primeMembershipMemo(dbUser.discordId, membership);
   }
-  // The ?discord= note was minted by the CALLBACK; the membership check ran
-  // just now — and the callback can be wrong about the present: a player who
-  // was ALREADY in the server when the auto-join 403'd (mismatched app,
-  // missing invite permission) arrives with ?discord=join_failed while the
-  // live check says "member". Rendering the param's copy verbatim put "we
-  // couldn't add you — join it with the button below" directly under an
-  // "In the server ✓" badge, with no such button anywhere on the page. The
-  // live answer wins; the param is still scrubbed either way.
-  const discordNoteResolved =
-    (discordParam === "join_failed" || discordParam === "joined_pending") &&
-    membership === "member"
-      ? DISCORD_LINK_NOTES.joined
-      : discordParam === "join_failed" && membership === "pending"
-        ? DISCORD_LINK_NOTES.joined_pending
-        : discordNote;
   // Inhouse ping opt-in. `on: null` = we genuinely don't know (Discord slow,
   // or the player isn't in the server) — rendered as unknown rather than "off",
   // because showing an unticked box to someone already opted in makes them
@@ -1093,259 +1189,46 @@ async function ProfileDiscordSection({ dbUser, discordParam, isRegistered, isCap
         : null
       : false,
   };
-  return <section id="profile-discord" className="scroll-mt-24 space-y-4">
-      {/* Signed up but unreachable. Above the fold rather than in the Discord
-          card below, because that card is what everyone has already scrolled
-          past. Gone the moment discordId exists. */}
-      {isRegistered && !dbUser?.discordId ? (
-        <DiscordSetupCard
-          linkAvailable={discordLinkAvailable}
-          autoJoins={discordAutoJoins}
-          isCaptain={isCaptain}
-        />
-      ) : isRegistered &&
-        (membership === "not-member" || membership === "pending") ? (
-        /* Linked but not (fully) in the server — the cohort that LOOKS done.
-           Same above-the-fold placement as the setup card, same derived-state
-           rule: it disappears the moment the join/rules step is complete. */
-        <DiscordJoinCard
-          membership={membership}
-          linkAvailable={discordLinkAvailable && discordAutoJoins}
-          handle={dbUser?.discordName}
-        />
-      ) : null}
+  // The league coordinates on Discord — this is how captains reach their
+  // roster for scheduling, check-ins, and standin scrambles. One card: its
+  // badge and main button follow the state, the invite stays beside any
+  // one-click join, and the typed handle is the fallback.
+  return (
+    <section id="profile-discord" className="scroll-mt-24">
+      <AccountDiscordCard
+        discordId={dbUser?.discordId ?? null}
+        discordName={dbUser?.discordName || null}
+        membership={membership}
+        param={discordParam}
+        linkAvailable={discordLinkAvailable}
+        autoJoins={discordAutoJoins}
+        isCaptain={isCaptain}
+        warnBeforeLeaving={!isRegistered && signupsOpen}
+        pingOptIn={pingOptIn}
+        unlinkAction={unlinkDiscord}
+        saveHandleAction={updateDiscordName}
+        pingAction={setInhousePingOptIn}
+      />
+    </section>
+  );
+}
 
-      {/* The league coordinates on Discord — this is how captains reach their
-          roster for scheduling, check-ins, and standin scrambles. Linking via
-          OAuth proves account ownership; the typed handle is the fallback. */}
-      <Card>
-        <CardHeader
-          headingLevel={2}
-          title="Discord"
-          subtitle={
-            dbUser?.discordId
-              ? membership === "member"
-                ? isCaptain
-                  ? "Linked and in the league's Discord server — your handle is verified, and your team and league admins can reach you."
-                  : "Linked and in the league's Discord server — your handle is verified, and captains can reach you."
-                : "Linked via Discord — your handle is verified, and shown to you, league admins, and active league participants."
-              : dbUser?.discordName
-                ? "Shown to you, league admins, and active league participants on rosters and the player pool."
-                : isCaptain
-                  ? "Add your Discord so your team and league admins can reach you — it's how the league coordinates."
-                  : "Add your Discord so your captain can reach you — it's how the league talks."
-          }
-          action={
-            /* The badge only claims what this render actually verified:
-               membership when the bot could answer, plain "Linked ✓" when it
-               couldn't (no bot, or Discord down) — an unknown must never be
-               downgraded to "Not in the server". */
-            dbUser?.discordId ? (
-              membership === "member" ? (
-                <Badge tone="success">In the server ✓</Badge>
-              ) : membership === "pending" ? (
-                <Badge tone="info">Rules pending</Badge>
-              ) : membership === "not-member" ? (
-                <Badge tone="danger">Not in the server</Badge>
-              ) : (
-                <Badge tone="success">Linked ✓</Badge>
-              )
-            ) : null
-          }
-        />
-        <CardBody className="space-y-3">
-          {discordNoteResolved ? <StripQueryParam param="discord" /> : null}
-          {discordNoteResolved ? (
-            <p
-              role={discordNoteResolved.tone === "danger" ? "alert" : "status"}
-              className={
-                discordNoteResolved.tone === "success"
-                  ? "rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
-                  : discordNoteResolved.tone === "danger"
-                    ? "rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
-                    : "rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm text-muted"
-              }
-            >
-              {discordNoteResolved.text}
-            </p>
-          ) : null}
-          {/* Both of these leave the player linked but not actually reachable,
-              so the note must come with the way out of it. Only rendered when
-              the live membership check below couldn't run (membership null) —
-              when it could, the durable strip carries the same CTA and two
-              stacked join buttons would fight over one click. */}
-          {(discordParam === "join_failed" ||
-            discordParam === "joined_pending") &&
-          membership === null ? (
-            <DiscordButton
-              size="sm"
-              label={
-                discordParam === "joined_pending"
-                  ? "Open the server"
-                  : "Join the server"
-              }
-            />
-          ) : null}
-          {/* Durable membership state — unlike the one-shot ?discord= note,
-              this is re-derived live on every render, so it survives the
-              scrubbed query param and disappears the moment the join (or the
-              rules screen) is actually done. */}
-          {membership === "not-member" ? (
-            <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm">
-              <p className="text-danger">
-                {/* "The account you linked", never "you" — the check is about
-                    the linked account BY ID, and the commonest cause of this
-                    state is a player sitting in the server on a DIFFERENT
-                    account than the one they linked. Naming the handle makes
-                    that self-diagnosable. */}
-                The Discord account you linked
-                {dbUser?.discordName ? ` (@${dbUser.discordName})` : ""}
-                {/* Quoted string: JSX line-trimming eats a plain leading
-                    space after an expression across a source-line break. */}
-                {
-                  " isn't in the league's server — that's where scheduling, match-night check-ins and standin scrambles happen, and nothing can reach you until it is. In the server on a different account? Use the Join button above — it re-links whichever account your browser is signed into, so one click fixes both."
-                }
-              </p>
-              <div className="mt-2">
-                {/* The INVITE, deliberately not the one-click OAuth join. This
-                    strip sits directly under the ?discord=join_failed note
-                    ("join it with the button below"), i.e. it renders for the
-                    player whose auto-join just FAILED — offering them the same
-                    OAuth round-trip again is a loop, and the invite works
-                    regardless of the bot's health. The one-click join lives in
-                    the DiscordJoinCard at the top of the page; the distinct
-                    label keeps one accessible name per control. */}
-                <DiscordButton size="sm" label="Join via the invite" />
-              </div>
-            </div>
-          ) : membership === "pending" ? (
-            <div className="rounded-lg border border-line bg-surface-2/50 px-3 py-2 text-sm">
-              <p className="text-muted">
-                You&apos;re in the server but haven&apos;t accepted its rules
-                yet — until you do, nothing can ping you: not match found, not
-                {isCaptain ? " your team." : " your captain."}
-              </p>
-              <div className="mt-2">
-                {/* "Open Discord", not "Open the server" — the top-of-page
-                    DiscordJoinCard's pending CTA already carries that name,
-                    and two controls with one accessible name is the /players
-                    "Clear filters" defect. */}
-                <DiscordButton size="sm" label="Open Discord" />
-              </div>
-            </div>
-          ) : null}
-          {dbUser?.discordId ? (
-            <>
-              <div className="flex flex-wrap items-center gap-3">
-                <DiscordTag name={dbUser.discordName} verified />
-                <ActionForm action={unlinkDiscord}>
-                  <SubmitButton
-                    variant="secondary"
-                    size="sm"
-                    confirm="Unlink Discord? Your handle disappears from rosters until you link or type one again."
-                  >
-                    Unlink
-                  </SubmitButton>
-                </ActionForm>
-              </div>
-
-              {/* Self-serve opt-in to the inhouse ping role. Only offered when
-                  the league has actually configured one — advertising a
-                  notification that can't fire is worse than not offering it. */}
-              {pingOptIn.available ? (
-                <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-[14rem] flex-1">
-                      <p className="text-sm font-medium">
-                        Ping me for inhouse games
-                      </p>
-                      <p className="text-xs text-muted">
-                        Get a Discord notification when a queue is filling up
-                        and when your match is found. Off by default, and you
-                        can turn it back off here any time.
-                      </p>
-                    </div>
-                    <ActionForm action={setInhousePingOptIn}>
-                      <input
-                        type="hidden"
-                        name="on"
-                        value={pingOptIn.on ? "0" : "1"}
-                      />
-                      <SubmitButton
-                        variant={pingOptIn.on ? "secondary" : "primary"}
-                        size="sm"
-                      >
-                        {pingOptIn.on ? "Turn off" : "Turn on"}
-                      </SubmitButton>
-                    </ActionForm>
-                  </div>
-                  {pingOptIn.on === null ? (
-                    <p className="mt-2 text-xs text-muted">
-                      Couldn&apos;t check your current setting — either Discord
-                      is slow right now, or you&apos;re not in the league&apos;s
-                      server yet.
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-xs text-muted">
-                      Currently <b>{pingOptIn.on ? "on" : "off"}</b>.
-                    </p>
-                  )}
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <>
-              {discordLinkAvailable ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <a
-                    href="/api/auth/discord"
-                    className={buttonClasses("primary", "sm")}
-                  >
-                    {discordAutoJoins
-                      ? "Link Discord & join the server"
-                      : "Link Discord"}
-                  </a>
-                  <span className="text-xs text-muted">
-                    {/* This has to describe the real consent screen. With
-                        guilds.join in the scope, the copy must name both the
-                        stable identity we store and the server write it permits. */}
-                    {discordAutoJoins
-                      ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
-                      : "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."}
-                  </span>
-                  {!isRegistered && signupsOpen ? (
-                    <span className="text-xs text-muted">
-                      This leaves the page — if you&apos;ve started filling in
-                      the signup below, save it first.
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-              <ActionForm
-                action={updateDiscordName}
-                className="flex flex-wrap items-center gap-2"
-              >
-                <input
-                  name="discordName"
-                  defaultValue={dbUser?.discordName ?? ""}
-                  placeholder="or type it — e.g. dendi_official"
-                  aria-label="Discord username"
-                  maxLength={40}
-                  className="h-10 w-full max-w-xs rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-                />
-                <SubmitButton variant="secondary" size="sm">
-                  Save
-                </SubmitButton>
-                <span className="text-xs text-muted">
-                  Blank clears it. Legacy Name#1234 tags work too.
-                </span>
-              </ActionForm>
-            </>
-          )}
-        </CardBody>
-      </Card>
-
-  </section>;
+/**
+ * The one line that says what joining makes public. Said once, in neutral
+ * colours: the accent box this used to be looked exactly like the
+ * "Confirmation needed" box, and each field then repeated "shown publicly".
+ * Rendered wherever a Join button is, since joining is the consent.
+ */
+function SignupPublicNotice() {
+  return (
+    <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-xs leading-relaxed text-muted">
+      Everything in your signup, and your medal, is public in the player
+      pool and on your profile. Your Discord is only shown to league admins and
+      players signed up this season. Keep contact, health and availability
+      details out of the About you box. Joining lets the league refresh your
+      public Steam and Dota data.
+    </p>
+  );
 }
 
 function RadioTile({
@@ -1354,27 +1237,23 @@ function RadioTile({
   title,
   desc,
   defaultChecked,
-  disabled,
+  required,
 }: {
   name: string;
   value: string;
   title: string;
   desc: string;
   defaultChecked?: boolean;
-  disabled?: boolean;
+  required?: boolean;
 }) {
   return (
-    <label
-      className={`flex cursor-pointer gap-3 rounded-lg border p-3 transition-colors has-[:checked]:border-accent has-[:checked]:bg-accent/10 ${
-        disabled ? "opacity-50" : "border-line hover:border-muted/60"
-      }`}
-    >
+    <label className="flex cursor-pointer gap-3 rounded-lg border border-line p-3 transition-colors hover:border-muted/60 has-[:checked]:border-accent has-[:checked]:bg-accent/10">
       <input
         type="radio"
         name={name}
         value={value}
         defaultChecked={defaultChecked}
-        disabled={disabled}
+        required={required}
         className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
       />
       <span>
@@ -1385,13 +1264,33 @@ function RadioTile({
   );
 }
 
-function DotaAccountCard({
+const PUBLIC_MATCH_DATA_PATH =
+  "Settings → Options → Advanced → Social → Expose Public Match Data";
+
+/**
+ * Steam and Dota in one short card: who you are, your medal, the three
+ * outside profiles and one refresh button. Steam already refreshes the name
+ * and avatar on every sign-in, so the long ids and the per-provider buttons
+ * were noise; the match-data how-to shows only when it is the likely fix
+ * (data private, or no medal yet).
+ */
+function SteamDotaCard({
+  userId,
+  name,
+  avatar,
+  isAdmin,
+  steamUrl,
   effectiveId,
   steamAccountId,
   override,
   rankTier,
   fhUnavailable,
 }: {
+  userId: string;
+  name: string;
+  avatar: string | null;
+  isAdmin: boolean;
+  steamUrl: string;
   effectiveId: number | null;
   steamAccountId: number | null;
   override: number | null;
@@ -1403,75 +1302,86 @@ function DotaAccountCard({
     <Card id="profile-dota" className="scroll-mt-24">
       <CardHeader
         headingLevel={2}
-        title="Dota / Dotabuff account"
-        subtitle="Your Steam sign-in verifies the account used for ranks, scouting, and match imports."
-        action={
-          effectiveId ? (
-            <div className="flex items-center gap-3 text-sm">
-              <a
-                href={`https://www.dotabuff.com/players/${effectiveId}`}
-                target="_blank"
-                rel="noreferrer"
-                className={textLink()}
-              >
-                Dotabuff ↗
-              </a>
-              <a
-                href={`https://www.opendota.com/players/${effectiveId}`}
-                target="_blank"
-                rel="noreferrer"
-                className={textLink()}
-              >
-                OpenDota ↗
-              </a>
-            </div>
-          ) : null
-        }
+        title="Steam & Dota"
+        subtitle="Your Steam sign-in verifies your Dota account, which your medal, scouting stats and match imports come from. To use another Dota account, sign in with the Steam account that owns it."
       />
       <CardBody className="space-y-3">
         {fhUnavailable === true ? (
           <div
             role="alert"
-            className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
+            className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger-soft"
           >
             <b>Your Dota match data is private</b> — league results can&apos;t
             auto-import your games, and your medal/stats stay invisible. In Dota
-            2:{" "}
-            <b>
-              Settings → Options → Advanced → Social → Expose Public Match Data
-            </b>
-            , play a game, then hit Refresh medal below.
+            2: <b>{PUBLIC_MATCH_DATA_PATH}</b>, play a game, then press Refresh
+            my Steam &amp; Dota info below.
           </div>
         ) : null}
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
-          {effectiveId ? (
-            <>
-              <span>
-                Account <span className="font-mono text-fg">{effectiveId}</span>{" "}
-                {override == null ? "(verified by Steam)" : "(legacy manual link)"}
+        {/* shrink-0 on the avatar: Avatar sets width/height but no shrink
+            floor, and beside the name it rendered 19px wide in its 56px box.
+            min-w-0 lets a long Steam name wrap instead of widening the card. */}
+        <div className="flex items-center gap-4">
+          <Avatar name={name} src={avatar} size={56} className="shrink-0" />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-display text-xl font-semibold [overflow-wrap:anywhere]">
+                {name}
               </span>
-              <span>·</span>
-              <span>Medal:</span>
+              {isAdmin ? <Badge tone="accent">Admin</Badge> : null}
               {rankTier ? (
-                <RankBadge rankTier={rankTier} />
+                <RankMedal rankTier={rankTier} showLabel />
               ) : (
-                <span>not synced yet</span>
+                <span className="text-xs text-muted">No medal yet</span>
               )}
-            </>
-          ) : (
-            <span>
-              We couldn&apos;t derive a Dota account from this Steam identity.
-              Contact a league admin before playing.
-            </span>
-          )}
+            </div>
+            {/* Stacked TAP_SAFE links need real spacing between them. */}
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+              <a
+                href={steamUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={textLink()}
+              >
+                Steam <span aria-hidden>↗</span>
+              </a>
+              {effectiveId ? (
+                <>
+                  <a
+                    href={`https://www.dotabuff.com/players/${effectiveId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={textLink()}
+                  >
+                    Dotabuff <span aria-hidden>↗</span>
+                  </a>
+                  <a
+                    href={`https://www.opendota.com/players/${effectiveId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={textLink()}
+                  >
+                    OpenDota <span aria-hidden>↗</span>
+                  </a>
+                </>
+              ) : null}
+            </div>
+          </div>
         </div>
 
+        {!effectiveId ? (
+          <p className="text-sm text-muted">
+            We couldn&apos;t derive a Dota account from this Steam identity.
+            Contact a league admin before playing.
+          </p>
+        ) : null}
+
         {override != null ? (
-          <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
+          <div className="space-y-2 rounded-lg border border-accent/30 bg-accent/10 p-3 text-sm">
             <p>
-              This manual link came from an older version of the league site
-              and is not ownership-verified. You can keep refreshing it, or
-              switch permanently to the account verified by your Steam sign-in.
+              Your Dota account ({override}) is a manual link from an older
+              version of the league site and is not ownership-verified. You
+              can keep refreshing it, or switch permanently to the account
+              verified by your Steam sign-in.
             </p>
             {steamAccountId != null ? (
               <ActionForm action={updateDotaAccount}>
@@ -1481,26 +1391,27 @@ function DotaAccountCard({
               </ActionForm>
             ) : null}
           </div>
-        ) : steamAccountId != null ? (
+        ) : null}
+
+        {effectiveId && !rankTier && fhUnavailable !== true ? (
           <p className="text-xs text-muted">
-            Need to use a different Dota account? Sign out, then sign in with
-            the Steam account that owns it so the league can verify it.
+            No medal showing? In Dota 2, turn on{" "}
+            <b>{PUBLIC_MATCH_DATA_PATH}</b>, play a game, then refresh.
           </p>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-3">
-          <ActionForm action={refreshRank}>
-            <SubmitButton variant="ghost" size="sm">
-              Refresh medal
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <ActionForm action={refreshMyAccounts}>
+            <SubmitButton variant="secondary" size="sm">
+              Refresh my Steam &amp; Dota info
             </SubmitButton>
           </ActionForm>
-          <p className="text-xs text-muted">
-            Medal needs{" "}
-            <b>
-              Settings → Options → Advanced → Social → Expose Public Match Data
-            </b>{" "}
-            enabled in Dota 2.
-          </p>
+          <Link
+            href={`/players/${userId}`}
+            className={textLink("whitespace-nowrap text-sm")}
+          >
+            View my public profile →
+          </Link>
         </div>
       </CardBody>
     </Card>

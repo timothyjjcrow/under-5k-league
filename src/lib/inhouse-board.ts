@@ -1,7 +1,6 @@
 import { LEAGUE_CONFIG } from "./league-config";
-import { INHOUSE_STATUS } from "./constants";
+import { INHOUSE, INHOUSE_STATUS } from "./constants";
 import { escapeDiscordText } from "./discord-escape";
-import { potTier, tierLabel } from "./inhouse-bets";
 
 // The live inhouse queue board: ONE Discord message the site rewrites in place
 // instead of posting a new "6/10 queued" line every time somebody joins.
@@ -51,18 +50,6 @@ export type BoardLobby = {
    *  loads — no extra query. Dota shows this grid for a reason. */
   acceptedNames: string[];
   pendingNames: string[];
-  /**
-   * Total Cred staked on this lobby (both sides, matched or not), or null when
-   * nobody bet. Rendered on the LIVE state ONLY — see the pot line below for
-   * why it appears nowhere else.
-   *
-   * REQUIRED, not optional, on purpose: the service is the only thing that can
-   * count the bets, and an optional field would let a call site forget to pass
-   * it while the board silently kept rendering a game with no pot on it. Same
-   * class as the standin announcement's four call sites — the compiler naming
-   * the caller is the cheapest guard available here.
-   */
-  potCred: number | null;
 };
 
 /**
@@ -130,9 +117,10 @@ export type BoardRender = { digest: string; embed: BoardEmbed };
  * sequence reads as escalation. Notably EMPTY is steel blue rather than grey:
  * grey is the colour of a disabled button, and this is the state that has to
  * sell the league. READY_CHECK deliberately breaks the gold ramp with the
- * client's own accept green — it is the one state demanding a click inside 45
- * seconds. LIVE red means "broadcast", never Dire: which side is Radiant isn't
- * known until the match imports, so nothing here is ever side-labelled.
+ * client's own accept green — it is the one state demanding a click inside
+ * the short accept window. LIVE red means "broadcast", never Dire: which
+ * side is Radiant isn't known until the match imports, so nothing here is
+ * ever side-labelled.
  */
 const COLOR = {
   EMPTY: 0x4e6e8e,
@@ -346,7 +334,7 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
           ].join("\n"),
           fields,
           footer: {
-            text: "45 seconds to accept. No-shows are dropped from the queue.",
+            text: `${INHOUSE.ACCEPT_SECONDS} seconds to accept. No-shows are dropped from the queue.`,
           },
         },
       };
@@ -368,7 +356,9 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
               }
             : {
                 head: "## Teams are set.",
-                body: "The Dota lobby is going up now.",
+                // Start is optional, so a game can be played start to finish
+                // in this state — the copy must hold for the whole game.
+                body: "The Dota lobby is going up now. The result imports itself when the game ends.",
               };
       return {
         digest: [
@@ -404,35 +394,12 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
     const started = lobby.startedAtMs
       ? `Started ${relative(lobby.startedAtMs)}. `
       : "";
-    // THE POT, AND ONLY HERE. It is deliberately absent from the picking state,
-    // which is where the 45-second betting window actually sits: there the
-    // figure moves with every tap, and a number that moves on a pinned message
-    // is a live counter — one PATCH per bet, on the surface whose entire cost
-    // model is "a motionless queue costs zero edits".
-    //
-    // By LIVE it is safe by this file's own test for a digest key (see
-    // BoardStats): Σ confirmed stakes only ever grows, and it freezes for good
-    // at `betsCloseAt`. Pressing Start does NOT close betting, so a late bet can
-    // still land here — that is a handful of edits inside one 45-second overlap
-    // and then never again, which is a different animal from a clock, and the
-    // alternative is a pinned message quietly under-reporting the pot forever.
-    // Elapsed time still renders as <t:…:R> and is still kept out of the digest.
-    const priced =
-      lobby.potCred && lobby.potCred > 0
-        ? // The tier REPLACES the neutral word rather than sitting beside it —
-          // "PRICED · HIGH STAKES · 400" would be three ways of saying one
-          // thing, and `tierLabel` returns "" for a casual pot precisely so a
-          // label doesn't ride along on every single game and become wallpaper.
-          [
-            `${tierLabel(potTier(lobby.potCred)) || "PRICED"} · ${lobby.potCred} CRED ON THE LINE`,
-          ]
-        : [];
+    // Elapsed time renders as <t:…:R> and is kept out of the digest.
     return {
       digest: [
         "live",
         lobby.playerCount,
         lobby.startedAtMs ?? "",
-        lobby.potCred ?? "",
         present,
         rosterKey(s.presentNames),
       ].join("|"),
@@ -444,7 +411,6 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
         description: [
           "## Live now.",
           splitRack(lobby.playerCount),
-          ...priced,
           "",
           `${started}The result imports itself and the ladder moves.`,
           "",

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { membershipChipView, signupFlags } from "./signup-readiness";
+import {
+  membershipChipView,
+  signupFlags,
+  signupNeedsReview,
+} from "./signup-readiness";
 import { mmrRangeForRankTier } from "./rank";
 
 const baseReg = {
@@ -87,6 +91,47 @@ describe("signupFlags", () => {
       captainNote: "will be there every week",
     });
     expect(flags.find((f) => f.key === "blank-signup")).toBeUndefined();
+  });
+
+  it("flags an MMR above the soft limit, as a review note and never a refusal", () => {
+    const flags = signupFlags({ ...baseReg, mmr: 4600 }, { maxMmr: 4500 });
+    const over = flags.find((f) => f.key === "over-soft-limit");
+    expect(over).toMatchObject({ label: "over soft limit", tone: "accent" });
+    expect(over!.detail).toContain("4600 MMR, above this season's soft limit of 4500");
+    expect(over!.detail).toContain("in the pool like everyone else");
+    // The soft limit is advisory: the copy must not read as a block.
+    expect(over!.detail).not.toMatch(/refus|reject|block|on hold|not allowed/i);
+  });
+
+  it("stays silent at the limit, with no limit, or with the limit unset", () => {
+    const key = (mmr: number, maxMmr?: number) =>
+      signupFlags({ ...baseReg, mmr }, maxMmr === undefined ? {} : { maxMmr })
+        .map((f) => f.key);
+    expect(key(4500, 4500)).not.toContain("over-soft-limit");
+    expect(key(9000, 0)).not.toContain("over-soft-limit");
+    expect(key(9000)).not.toContain("over-soft-limit");
+  });
+});
+
+describe("signupNeedsReview", () => {
+  it("wants a look for any accent flag or a missing Discord link", () => {
+    const over = signupFlags({ ...baseReg, mmr: 4600 }, { maxMmr: 4500 });
+    const blank = signupFlags({
+      ...baseReg,
+      roles: "",
+      favoriteHeroes: "",
+      statement: "",
+    });
+    expect(signupNeedsReview(over, true)).toBe(true);
+    expect(signupNeedsReview(blank, true)).toBe(true);
+    expect(signupNeedsReview([], false)).toBe(true);
+  });
+
+  it("leaves a filled-in, linked signup alone, and unknown MMR is only context", () => {
+    expect(signupNeedsReview(signupFlags(baseReg), true)).toBe(false);
+    const unknown = signupFlags({ ...baseReg, mmr: 0 });
+    expect(unknown.map((f) => f.key)).toEqual(["no-mmr"]);
+    expect(signupNeedsReview(unknown, true)).toBe(false);
   });
 });
 

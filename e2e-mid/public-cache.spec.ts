@@ -153,9 +153,30 @@ async function originalMetaSample(read: PublicRead) {
   // The visible browser may already have received a ResultSyncPing refresh.
   return read.page.evaluate((html) => {
     const document = new DOMParser().parseFromString(html, "text/html");
-    const label = [...document.querySelectorAll("p")].find((p) => p.textContent?.trim() === "eligible games");
-    return label?.parentElement?.querySelector("p")?.textContent?.replace(/\s+/g, " ").trim() ?? null;
+    const text = document.getElementById("meta-sample")?.textContent ?? "";
+    return /across (\d+) complete games?/.exec(text)?.[1] ?? null;
   }, read.html);
+}
+
+// A game record lays each team out as its own flex item (so each truncates on
+// its own), which means the HTML never holds "Home vs Away" as one string.
+// Parse a detached copy of the first document, as above, and join each row's
+// text nodes the way the row reads on screen.
+async function originalRecordRows(read: PublicRead) {
+  return read.page.evaluate((html) => {
+    const document = new DOMParser().parseFromString(html, "text/html");
+    return [...document.querySelectorAll("li")].map((row) => {
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      const parts: string[] = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) parts.push(node.textContent ?? "");
+      return parts.join(" ").replace(/\s+/g, " ").trim();
+    });
+  }, read.html);
+}
+
+async function expectOriginalMatchup(read: PublicRead, matchup: string) {
+  const rows = await originalRecordRows(read);
+  expect(rows.some((row) => row.includes(matchup)), `a game record reads "${matchup}"`).toBe(true);
 }
 
 function playerLink(playerId: string) { return `href="/players/${playerId}"`; }
@@ -172,7 +193,8 @@ test("warm public statistics refresh on the first read after real admin correcti
         seasonRecords: `/records?season=${fixture.seasonId}`,
         leaders: `/leaders?season=${fixture.seasonId}`,
         meta: `/meta?season=${fixture.seasonId}`,
-        recap: `/recap?season=${fixture.seasonId}`,
+        // No recap: season awards live on a FINISHED season's own page, and
+        // this regular-season fixture's /recap just redirects to Leaders.
         scouting: `/matches/${fixture.scoutingId}#match-scouting`,
       };
       await page.goto(`/api/auth/dev?name=Public+cache+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin`);
@@ -189,17 +211,23 @@ test("warm public statistics refresh on the first read after real admin correcti
       const warmedAt = Date.now();
       const warm = await readTogether(context, paths);
       for (const key of ["records", "seasonRecords"]) {
-        expect(warm[key].html).toContain(`${fixture.playerName} set the kills mark at 9999.`);
-        expect(warm[key].html).toContain(`${fixture.homeName} vs Cache Away`);
+        expect(warm[key].html).toContain(playerLink(fixture.playerId));
+        expect(warm[key].text).toContain("9,999");
+        await expectOriginalMatchup(warm[key], `${fixture.homeName} vs Cache Away`);
       }
-      for (const key of ["career", "leaders", "recap"]) {
-        expect(warm[key].html, `${key} includes the owned imported game before removal`).toContain(playerLink(fixture.playerId));
-      }
+      // /hall-of-fame (career) is only its "No champion yet" note in this
+      // regular-season fixture, so it is read for errors but carries no
+      // player statistics to compare.
+      expect(warm.leaders.html, "leaders includes the owned imported game before removal").toContain(playerLink(fixture.playerId));
       expect(warm.player.html).toContain(`href="/matches/${fixture.matchId}"`);
-      const sample = /^(\d+)\s*\/\s*(\d+)$/.exec(await originalMetaSample(warm.meta) ?? "");
-      expect(sample, "the season meta displays eligible and imported sample sizes").not.toBeNull();
+      const sample = await originalMetaSample(warm.meta);
+      expect(sample, "the season meta states how many complete games it counts").not.toBeNull();
       await expect(warm.scouting.page.getByRole("heading", { name: "Scouting report", exact: true })).toBeVisible();
       expect(warm.scouting.html).toContain("Scouting report");
+      // Before removal the dossier has the game (one pick per hero, below the
+      // two-game floor), so it is not the no-history state.
+      expect(warm.scouting.html).toContain("No hero played twice in league games yet");
+      expect(warm.scouting.html).not.toContain("No league history yet");
       expect(warm.scouting.text).toContain(fixture.playerName);
       for (const { page: publicPage } of Object.values(warm)) {
         await expect(publicPage.getByRole("link", { name: "Admin", exact: true })).toHaveCount(0);
@@ -215,7 +243,7 @@ test("warm public statistics refresh on the first read after real admin correcti
       expect(afterRename?.value).not.toBe(beforeRename?.value);
       const renamed = await readTogether(context, { records: paths.records, seasonRecords: paths.seasonRecords, player: paths.player });
       for (const key of ["records", "seasonRecords"]) {
-        expect(renamed[key].html).toContain(`${fixture.renamedHome} vs Cache Away`);
+        await expectOriginalMatchup(renamed[key], `${fixture.renamedHome} vs Cache Away`);
         expect(renamed[key].html).not.toContain(fixture.homeName);
       }
       expect(renamed.player.text).toContain(fixture.renamedHome);
@@ -237,12 +265,12 @@ test("warm public statistics refresh on the first read after real admin correcti
       expect(afterRemove?.value, "game correction commits a new public data revision").toBeTruthy();
       expect(afterRemove?.value).not.toBe(afterRename?.value);
       const corrected = await readTogether(context, paths);
-      for (const key of ["career", "records", "seasonRecords", "leaders", "recap"]) {
+      for (const key of ["records", "seasonRecords", "leaders"]) {
         expect(corrected[key].html, `${key} first response excludes the removed game's participant statistics`).not.toContain(playerLink(fixture.playerId));
       }
-      expect(corrected.player.html).toContain("No games recorded yet");
+      expect(corrected.player.html).toContain("No league games yet");
       expect(corrected.player.text).not.toContain("9999");
-      expect(await originalMetaSample(corrected.meta)).toBe(`${Number(sample![1]) - 1} / ${Number(sample![2]) - 1}`);
+      expect(await originalMetaSample(corrected.meta)).toBe(`${Number(sample) - 1}`);
       await expect(corrected.scouting.page.getByRole("heading", { name: "Scouting report", exact: true })).toBeVisible();
       expect(corrected.scouting.html).toContain("No league history yet");
       expect(Date.now() - warmedAt, "all first reads reflect both corrections before the original 60-second TTL").toBeLessThan(60_000);

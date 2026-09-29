@@ -27,8 +27,9 @@ export function TeamLogoImage({
   if (!shouldRenderTeamLogo(src, failedSrc)) return null;
 
   return (
-    // Admin-configured logos can use arbitrary remote hosts, so the image
-    // optimizer cannot safely predeclare every allowed remote pattern.
+    // Admins can set a logo on any HTTPS host (captains only Imgur or the
+    // site's own artwork: isCaptainLogoHost), so the image optimizer cannot
+    // safely predeclare every allowed remote pattern.
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src}

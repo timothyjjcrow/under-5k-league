@@ -1,11 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
+  calledItCount,
   groupOpenByWeek,
+  pickemControlFor,
   pickemStandings,
+  pickHistory,
+  pickResult,
   pickSplit,
   partitionPickemMatches,
   predictionOpen,
   predictionOpenWhere,
+  weekOracles,
 } from "./pickem";
 
 const m = (
@@ -74,6 +79,54 @@ describe("pickemStandings", () => {
       matches,
     );
     expect(rows.map((r) => r.userId)).toEqual(["sniper", "spray"]);
+    expect(rows.map((r) => r.place)).toEqual([1, 2]);
+  });
+
+  it("ranks more correct picks above a better rate", () => {
+    const many = [1, 2, 3, 4, 5].map((i) => m(`w${i}`, "COMPLETED", "A"));
+    const rows = pickemStandings(
+      [
+        p("w1", "volume", "A"),
+        p("w2", "volume", "A"),
+        p("w3", "volume", "A"),
+        p("w4", "volume", "B"),
+        p("w5", "volume", "B"), // 3/5
+        p("w1", "sniper", "A"),
+        p("w2", "sniper", "A"), // 2/2
+      ],
+      many,
+    );
+    expect(rows.map((r) => [r.userId, r.place])).toEqual([
+      ["volume", 1],
+      ["sniper", 2],
+    ]);
+  });
+
+  it("lets equal records share a place and never splits them by id", () => {
+    const many = [1, 2, 3, 4].map((i) => m(`w${i}`, "COMPLETED", "A"));
+    const rows = pickemStandings(
+      [
+        // "zed" and "amy" are both 2/3; "bob" is 2/4; "cat" 0/1; "dan" 0/4.
+        ...["w1", "w2"].map((id) => p(id, "zed", "A")),
+        p("w3", "zed", "B"),
+        ...["w1", "w2"].map((id) => p(id, "amy", "A")),
+        p("w4", "amy", "B"),
+        ...["w1", "w2"].map((id) => p(id, "bob", "A")),
+        p("w3", "bob", "B"),
+        p("w4", "bob", "B"),
+        p("w1", "cat", "B"),
+        ...["w1", "w2", "w3", "w4"].map((id) => p(id, "dan", "B")),
+      ],
+      many,
+    );
+    expect(rows.map((r) => [r.userId, r.place])).toEqual([
+      ["amy", 1],
+      ["zed", 1],
+      ["bob", 3],
+      // No correct picks: fewer misses still ranks higher.
+      ["cat", 4],
+      ["dan", 5],
+    ]);
   });
 });
 
@@ -85,6 +138,136 @@ describe("pickSplit", () => {
       "home",
     );
     expect(split).toEqual({ home: 2, away: 1 });
+  });
+});
+
+describe("weekOracles", () => {
+  const week = [
+    m("m1", "COMPLETED", "A"),
+    m("m2", "COMPLETED", "B"),
+    m("m3", "COMPLETED", null), // draw: nobody's pick counts
+  ];
+
+  it("names everyone sharing the best record, and only them", () => {
+    const oracles = weekOracles(
+      [
+        p("m1", "amy", "A"),
+        p("m2", "amy", "B"), // 2/2
+        p("m1", "bob", "A"),
+        p("m2", "bob", "B"),
+        p("m3", "bob", "A"), // 2/2 (the draw is void)
+        p("m1", "cat", "A"),
+        p("m2", "cat", "A"), // 1/2
+      ],
+      week,
+    );
+    expect(oracles.map((o) => [o.userId, o.correct, o.graded])).toEqual([
+      ["amy", 2, 2],
+      ["bob", 2, 2],
+    ]);
+  });
+
+  it("is empty when nobody picked or nobody called one", () => {
+    expect(weekOracles([], week)).toEqual([]);
+    expect(weekOracles([p("m1", "amy", "B"), p("m3", "bob", "A")], week)).toEqual(
+      [],
+    );
+  });
+});
+
+describe("pickResult", () => {
+  it("grades right, wrong and void, and waits on an undecided match", () => {
+    expect(pickResult(m("m1", "COMPLETED", "A"), "A")).toBe("right");
+    expect(pickResult(m("m1", "COMPLETED", "A"), "B")).toBe("wrong");
+    expect(pickResult(m("m1", "COMPLETED", null), "A")).toBe("void");
+    expect(pickResult(m("m1", "LIVE"), "A")).toBeNull();
+    expect(pickResult(m("m1", "SCHEDULED"), "A")).toBeNull();
+  });
+
+  it("agrees with the oracle board's grading", () => {
+    const matches = [
+      m("m1", "COMPLETED", "A"),
+      m("m2", "COMPLETED", null),
+      m("m3", "LIVE"),
+      m("m4", "COMPLETED", "B"),
+    ];
+    const picks = [p("m1", "u", "A"), p("m2", "u", "A"), p("m3", "u", "A"), p("m4", "u", "A")];
+    const [row] = pickemStandings(picks, matches);
+    const results = picks.map((pick) =>
+      pickResult(matches.find((match) => match.id === pick.matchId)!, pick.pickedTeamId),
+    );
+    expect(results.filter((r) => r === "right")).toHaveLength(row.correct);
+    expect(results.filter((r) => r === "right" || r === "wrong")).toHaveLength(row.graded);
+  });
+});
+
+describe("calledItCount", () => {
+  const picks = [
+    p("m1", "u1", "A"),
+    p("m1", "u2", "A"),
+    p("m1", "u3", "B"),
+    p("m2", "u1", "B"),
+  ];
+
+  it("counts who named the winner out of everyone who picked", () => {
+    expect(calledItCount(picks, m("m1", "COMPLETED", "A"))).toEqual({ called: 2, total: 3 });
+    expect(calledItCount(picks, m("m1", "COMPLETED", "B"))).toEqual({ called: 1, total: 3 });
+  });
+
+  it("has nothing to say without a winner or without picks", () => {
+    expect(calledItCount(picks, m("m1", "COMPLETED", null))).toBeNull();
+    expect(calledItCount(picks, m("m1", "LIVE"))).toBeNull();
+    expect(calledItCount(picks, m("m9", "COMPLETED", "A"))).toBeNull();
+  });
+});
+
+describe("pickHistory", () => {
+  const at = (iso: string) => new Date(iso);
+  const row = (
+    id: string,
+    week: number,
+    status: string,
+    winnerTeamId: string | null,
+    scheduledAt: Date | null,
+  ) => ({ ...m(id, status, winnerTeamId, scheduledAt), week });
+
+  it("lists only picked matches, newest first, each with how it came out", () => {
+    const matches = [
+      row("w1", 1, "COMPLETED", "A", at("2026-08-01T20:00:00Z")),
+      row("w2a", 2, "COMPLETED", null, at("2026-08-08T20:00:00Z")),
+      row("w2b", 2, "COMPLETED", "B", at("2026-08-08T22:00:00Z")),
+      row("w3", 3, "LIVE", null, at("2026-08-15T20:00:00Z")),
+      row("unpicked", 3, "COMPLETED", "A", at("2026-08-15T20:00:00Z")),
+    ];
+    const picks = new Map([
+      ["w1", "A"],
+      ["w2a", "A"],
+      ["w2b", "A"],
+      ["w3", "B"],
+    ]);
+    expect(
+      pickHistory(matches, picks).map((h) => [h.match.id, h.result]),
+    ).toEqual([
+      ["w3", null],
+      ["w2b", "wrong"],
+      ["w2a", "void"],
+      ["w1", "right"],
+    ]);
+  });
+
+  it("puts a TBD kickoff after the timed ones in its week", () => {
+    const matches = [
+      row("tbd", 4, "COMPLETED", "A", null),
+      row("timed", 4, "COMPLETED", "A", at("2026-08-22T20:00:00Z")),
+    ];
+    const picks = new Map([
+      ["tbd", "A"],
+      ["timed", "A"],
+    ]);
+    expect(pickHistory(matches, picks).map((h) => h.match.id)).toEqual([
+      "timed",
+      "tbd",
+    ]);
   });
 });
 
@@ -184,5 +367,100 @@ describe("predictionOpen and predictionOpenWhere agree on every state", () => {
         ).toBe(predictionOpen(m, now));
       }
     }
+  });
+});
+
+describe("pickemControlFor", () => {
+  const now = new Date("2026-08-03T20:00:00Z");
+  const fixture = (
+    status: string,
+    scheduledAt: Date | null,
+    winnerTeamId: string | null = null,
+  ) => ({
+    id: "m1",
+    status,
+    winnerTeamId,
+    scheduledAt,
+    homeTeamId: "home",
+    awayTeamId: "away",
+  });
+  const later = new Date("2026-08-03T21:00:00Z");
+  const earlier = new Date("2026-08-03T19:00:00Z");
+  const viewer = (pickedTeamId: string | null = null, canPlay = true) => ({
+    signedIn: true,
+    canPlay,
+    pickedTeamId,
+  });
+
+  it("shows signed-out viewers nothing, even on an open match", () => {
+    expect(
+      pickemControlFor(
+        fixture("SCHEDULED", later),
+        { signedIn: false, canPlay: true, pickedTeamId: null },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("offers the control on an open match, pressed on the viewer's pick", () => {
+    expect(pickemControlFor(fixture("SCHEDULED", later), viewer(), now)).toEqual({
+      kind: "open",
+      pickedTeamId: null,
+    });
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer("away"), now),
+    ).toEqual({ kind: "open", pickedTeamId: "away" });
+    // TBD kickoff stays open until the series goes LIVE (predictionOpen).
+    expect(pickemControlFor(fixture("SCHEDULED", null), viewer(), now)).toEqual({
+      kind: "open",
+      pickedTeamId: null,
+    });
+  });
+
+  it("locks at kickoff: the pick becomes plain text, no pick means nothing", () => {
+    expect(
+      pickemControlFor(fixture("SCHEDULED", earlier), viewer("home"), now),
+    ).toEqual({ kind: "locked", pickedTeamId: "home", result: null });
+    expect(
+      pickemControlFor(fixture("SCHEDULED", earlier), viewer(), now),
+    ).toBeNull();
+    // Exactly at kickoff is already locked, like predictionOpen.
+    expect(pickemControlFor(fixture("SCHEDULED", now), viewer(), now)).toBeNull();
+  });
+
+  it("treats LIVE, graded and void matches as locked whatever the kickoff says", () => {
+    for (const [match, result] of [
+      [fixture("LIVE", later), null],
+      [fixture("COMPLETED", earlier, "home"), "wrong"],
+      [fixture("COMPLETED", earlier, "away"), "right"],
+      [fixture("COMPLETED", earlier, null), "void"],
+    ] as const) {
+      expect(pickemControlFor(match, viewer("away"), now)).toEqual({
+        kind: "locked",
+        pickedTeamId: "away",
+        result,
+      });
+      expect(pickemControlFor(match, viewer(), now)).toBeNull();
+    }
+  });
+
+  it("never offers the control when the season gate is closed", () => {
+    // predictionOpen is true here; canPlay is what keeps an archived season
+    // (or a closed phase) from rendering buttons savePrediction would refuse.
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer(null, false), now),
+    ).toBeNull();
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer("home", false), now),
+    ).toEqual({ kind: "locked", pickedTeamId: "home", result: null });
+  });
+
+  it("ignores a pick that names neither side", () => {
+    expect(
+      pickemControlFor(fixture("SCHEDULED", later), viewer("other"), now),
+    ).toEqual({ kind: "open", pickedTeamId: null });
+    expect(
+      pickemControlFor(fixture("LIVE", later), viewer("other"), now),
+    ).toBeNull();
   });
 });

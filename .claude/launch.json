@@ -10,12 +10,27 @@
     },
     {
       "name": "signups-fixture",
-      "runtimeExecutable": "sh",
-      "runtimeArgs": [
-        "-c",
-        "DATABASE_URL=file:./signups-fixture.db ALLOW_DEV_LOGIN=true npx next dev -p 3111"
-      ],
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "fixture:signups"],
       "port": 3111
+    },
+    {
+      "name": "regular-fixture",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "fixture:regular"],
+      "port": 3116
+    },
+    {
+      "name": "playoffs-fixture",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "fixture:playoffs"],
+      "port": 3117
+    },
+    {
+      "name": "complete-fixture",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "fixture:complete"],
+      "port": 3118
     },
     {
       "name": "e2e-fixture",

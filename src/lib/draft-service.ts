@@ -10,6 +10,7 @@ import {
 } from "./constants";
 import { effectiveDotaAccountId } from "./dota-account";
 import {
+  bidClockSeconds,
   canBid,
   canNominate,
   maxBid,
@@ -18,6 +19,8 @@ import {
   type DraftTeam,
 } from "./draft";
 import { draftBudgetsForDisplay } from "./draft-budgets";
+import { draftPresenceTracked } from "./draft-presence";
+import { readCaptainPresence } from "./draft-presence-service";
 import type { SessionUser } from "./auth";
 import { raceHook } from "./race-hook";
 import { draftRecap } from "./draft-recap";
@@ -25,13 +28,15 @@ import type {
   DraftLotExpectation,
   DraftTurnExpectation,
 } from "./draft-http";
-import { weekReminderPrefix } from "./settings";
+import { draftTeamsPingKey, weekReminderPrefix } from "./settings";
 import {
-  draftCompleteMessage,
+  draftCompleteAnnouncement,
+  draftLiveAnnouncementGroup,
   draftRecapMessage,
-  playerSoldMessage,
   sendDiscordMessage,
 } from "./discord";
+import { expireLeagueAnnouncementGroup } from "./league-announcement-outbox";
+import { mentionsOf } from "./discord-mentions";
 import { canViewLeagueContact } from "./visibility";
 import { captureRosterTenure, closeRosterTenure } from "./roster-history";
 import {
@@ -40,9 +45,52 @@ import {
   openDraftLot, readDraftSales, setDraftRunStatus, settleDraftLot,
   undoDraftSaleHistory, voidDraftLot,
 } from "./draft-history";
-import { invalidateTeamLineups } from "./match-lineups";
+import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * When the bid clock runs out on a lot about to stand at `price`, held by
+ * `highBidderTeamId`: the full clock, or the short one when no other team can
+ * top that price (bidClockSeconds). Every caller reads this inside its own
+ * transaction and writes it in its own guarded claim, and that claim is what
+ * keeps the deadline honest:
+ *
+ * - The price and the high bidder are what the claim itself writes, and the
+ *   claim re-asserts the lot/turn it read, so a rival bid or nomination that
+ *   landed first makes it match no row — a clock is never committed next to a
+ *   price it wasn't computed for.
+ * - Team budgets and rosters, the other input, change only when a lot sells
+ *   (resolveExpiredNomination clears the lot and moves the turn) or a sale is
+ *   undone (undoLastSale repoints the turn and refuses a live lot at its own
+ *   write). Both rewrite the Draft row the caller's claim re-asserts. Admin
+ *   roster moves (sign, release) are refused until the auction is complete.
+ */
+async function bidDeadline(
+  tx: Prisma.TransactionClient,
+  lot: {
+    seasonId: string;
+    teamSize: number;
+    price: number;
+    highBidderTeamId: string | null;
+  },
+): Promise<Date> {
+  const teams = await tx.team.findMany({
+    where: { seasonId: lot.seasonId },
+    select: { id: true, budget: true, _count: { select: { members: true } } },
+  });
+  const seconds = bidClockSeconds({
+    teams: teams.map((t) => ({
+      id: t.id,
+      budget: t.budget,
+      rosterCount: t._count.members,
+    })),
+    teamSize: lot.teamSize,
+    price: lot.price,
+    highBidderTeamId: lot.highBidderTeamId,
+  });
+  return new Date(Date.now() + seconds * 1000);
+}
 
 /**
  * Finalize a nomination whose clock has expired: the current high bidder wins
@@ -53,9 +101,10 @@ export type DraftActionResult = { ok: true } | { ok: false; error: string };
  */
 export async function resolveExpiredNomination(seasonId: string): Promise<boolean> {
   // Set inside the transaction when this call is the one that finishes the
-  // draft / lands the sale; Discord pings go out only after the commit.
-  let completedSeasonName: string | null = null;
-  let sale: { player: string; team: string; price: number } | null = null;
+  // draft; the Discord posts go out only after the commit. A single sale posts
+  // nothing: the room shows it live, and the teams post at the end tags every
+  // drafted player once instead of ~25 one-line posts that tagged nobody.
+  let completed: CompletedDraft | null = null;
   const resolved = await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (
@@ -126,18 +175,10 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         },
       });
       await settleDraftLot(tx, draft, member, nomReg.mmr, nomReg.roles);
-      await invalidateTeamLineups(tx, member.teamId, "ROSTER_AUCTION_ACQUISITION");
       await tx.team.update({
         where: { id: draft.currentBidTeamId },
         data: { budget: { decrement: draft.currentBid } },
       });
-      const [soldUser, soldTeam] = await Promise.all([
-        tx.user.findUnique({ where: { id: draft.nominatedUserId } }),
-        tx.team.findUnique({ where: { id: draft.currentBidTeamId } }),
-      ]);
-      if (soldUser && soldTeam) {
-        sale = { player: soldUser.name, team: soldTeam.name, price: draft.currentBid };
-      }
     } else {
       await voidDraftLot(tx, draft, "NOMINEE_NO_LONGER_ELIGIBLE", null);
       await tx.bid.deleteMany({ where: { draftId: draft.id, userId: draft.nominatedUserId } });
@@ -181,8 +222,11 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         where: { seasonId },
         data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
       });
-      await setDraftRunStatus(tx, draft, "COMPLETE");
-      completedSeasonName = season.name;
+      completed = {
+        name: season.name,
+        teamSize: season.teamSize,
+        runId: await setDraftRunStatus(tx, draft, "COMPLETE"),
+      };
     } else {
       await tx.draft.update({
         where: { seasonId },
@@ -197,15 +241,109 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     }
     return true;
   });
-  if (sale) {
-    const s = sale as { player: string; team: string; price: number };
-    await sendDiscordMessage(playerSoldMessage(s.player, s.team, s.price));
-  }
-  if (completedSeasonName) {
-    await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
-    await sendDraftRecap(seasonId);
-  }
+  if (completed) await announceDraftComplete(seasonId, completed);
   return resolved;
+}
+
+/** The season a resolver just finished the draft for, and the run it closed. */
+type CompletedDraft = { name: string; teamSize: number; runId: string };
+
+/**
+ * Claim the run's one mention-bearing teams post. The Setting row is CREATED,
+ * so exactly one completion of a run wins it; false means an earlier
+ * completion of this run already pinged everyone.
+ */
+async function claimDraftTeamsPing(key: string): Promise<boolean> {
+  try {
+    await prisma.setting.create({
+      data: { key, value: new Date().toISOString() },
+    });
+    return true;
+  } catch (e) {
+    if (isUniqueViolation(e)) return false;
+    throw e;
+  }
+}
+
+/**
+ * The draft-complete posts, after the commit: the teams (every drafted player
+ * who linked Discord mentioned once), then the draft-night recap. Best-effort
+ * like every send: a failed read or send never touches the finished draft.
+ *
+ * Undo can reopen a finished auction, and the run then completes a second
+ * time. Only its first completion pings: the repeat posts the updated teams
+ * with every name in plain text and skips the recap, instead of buzzing the
+ * phones of ~30 players for a roster that changed by one. The marker is
+ * released when nothing was queued (no webhook, a failed read), because then
+ * nobody was pinged.
+ *
+ * This runs on the live draft's hot path (the tick, bid and nominate routes
+ * resolve expired clocks), so both posts are queued now and delivered after
+ * the response: the captain whose request closed the last lot never waits on
+ * Discord. The queue keeps them in order, and the minute worker delivers them
+ * if the after-response attempt is lost.
+ */
+async function announceDraftComplete(
+  seasonId: string,
+  season: CompletedDraft,
+): Promise<void> {
+  const pingKey = draftTeamsPingKey(seasonId, season.runId);
+  let unqueuedClaim = false;
+  // The draft is over: live-draft posts still waiting (a webhook outage) are
+  // stale, and must not land after the teams post as if the auction were on.
+  await expireLeagueAnnouncementGroup(
+    draftLiveAnnouncementGroup(seasonId),
+  ).catch(() => 0);
+  try {
+    const first = await claimDraftTeamsPing(pingKey);
+    unqueuedClaim = first;
+    const teams = await prisma.team.findMany({
+      where: { seasonId },
+      orderBy: [{ draftOrder: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: {
+        name: true,
+        captain: { select: { name: true } },
+        _count: { select: { members: true } },
+        members: {
+          where: { isCaptain: false },
+          orderBy: [{ price: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+          select: {
+            price: true,
+            user: { select: { name: true, discordId: true } },
+          },
+        },
+      },
+    });
+    const announcement = draftCompleteAnnouncement({
+      seasonName: season.name,
+      teams: teams.map((team) => ({
+        name: team.name,
+        captainName: team.captain.name,
+        players: team.members.map((member) => ({
+          name: member.user.name,
+          discordId: member.user.discordId,
+          price: member.price,
+        })),
+        openSeats: Math.max(0, season.teamSize - team._count.members),
+      })),
+      again: !first,
+    });
+    const queued = await sendDiscordMessage(
+      announcement.content,
+      mentionsOf(announcement.mentionUserIds),
+      { afterResponse: true },
+    );
+    if (queued) unqueuedClaim = false;
+    if (first) await sendDraftRecap(seasonId);
+  } catch {
+    // The draft is already committed; a lost post is the only cost.
+  } finally {
+    if (unqueuedClaim) {
+      await prisma.setting
+        .deleteMany({ where: { key: pingKey } })
+        .catch(() => undefined);
+    }
+  }
 }
 
 /**
@@ -226,7 +364,11 @@ async function sendDraftRecap(seasonId: string): Promise<void> {
         mmr: null,
       })));
   const recap = draftRecap(players);
-  if (recap.totalSpent > 0) await sendDiscordMessage(draftRecapMessage(recap));
+  if (recap.totalSpent > 0) {
+    await sendDiscordMessage(draftRecapMessage(recap), undefined, {
+      afterResponse: true,
+    });
+  }
 }
 
 /**
@@ -237,7 +379,7 @@ async function sendDraftRecap(seasonId: string): Promise<void> {
 export async function resolveStalledNomination(
   seasonId: string,
 ): Promise<boolean> {
-  let completedSeasonName: string | null = null;
+  let completed: CompletedDraft | null = null;
   const resolved = await prisma.$transaction(async (tx) => {
     const draft = await tx.draft.findUnique({ where: { seasonId } });
     if (
@@ -308,8 +450,11 @@ export async function resolveStalledNomination(
           data: { nominationEndsAt: null, status: DRAFT_STATUS.COMPLETE },
         });
         if (done.count === 0) return false;
-        await setDraftRunStatus(tx, draft, "COMPLETE");
-        completedSeasonName = season.name;
+        completed = {
+          name: season.name,
+          teamSize: season.teamSize,
+          runId: await setDraftRunStatus(tx, draft, "COMPLETE"),
+        };
       } else {
         const adv = await tx.draft.updateMany({
           where: {
@@ -359,15 +504,26 @@ export async function resolveStalledNomination(
         },
       });
       if (done.count === 0) return false;
-      await setDraftRunStatus(tx, draft, "COMPLETE");
-      completedSeasonName = season.name;
+      completed = {
+        name: season.name,
+        teamSize: season.teamSize,
+        runId: await setDraftRunStatus(tx, draft, "COMPLETE"),
+      };
       return true;
     }
 
     const amount = DEFAULTS.MIN_BID;
+    const bidEndsAt = await bidDeadline(tx, {
+      seasonId,
+      teamSize: season.teamSize,
+      price: amount,
+      highBidderTeamId: nominator.id,
+    });
     // Claim the auto-nomination: only fire if nothing else nominated (or a
     // rival resolver already fired) since our read — two concurrent pollers
-    // must open ONE auction with ONE opening Bid row.
+    // must open ONE auction with ONE opening Bid row. The turn's clock in the
+    // WHERE is also what vouches for bidEndsAt: a sale or an undo, the only
+    // writes that move a team's budget or roster, each move this clock too.
     const claim = await tx.draft.updateMany({
       where: {
         seasonId,
@@ -379,7 +535,7 @@ export async function resolveStalledNomination(
         nominatedUserId: pick.userId,
         currentBid: amount,
         currentBidTeamId: nominator.id,
-        bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000),
+        bidEndsAt,
         nominationEndsAt: null,
       },
     });
@@ -397,10 +553,7 @@ export async function resolveStalledNomination(
     await appendAcceptedDraftBid(tx, lot, bid, nominator.name);
     return true;
   });
-  if (completedSeasonName) {
-    await sendDiscordMessage(draftCompleteMessage(completedSeasonName));
-    await sendDraftRecap(seasonId);
-  }
+  if (completed) await announceDraftComplete(seasonId, completed);
   return resolved;
 }
 
@@ -438,7 +591,10 @@ export async function pauseDraft(
   });
 }
 
-/** Admin: resume a paused auction with a fresh full clock for the live lot. */
+/**
+ * Admin: resume a paused auction with a fresh clock for the live lot (the
+ * short one when no other team can top its price, as when a lot opens).
+ */
 export async function resumeDraft(
   seasonId: string,
   viewer: SessionUser,
@@ -456,7 +612,14 @@ export async function resumeDraft(
       return { ok: false as const, error: "The draft isn't paused" };
     }
     const clock = draft.nominatedUserId
-      ? { bidEndsAt: new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000) }
+      ? {
+          bidEndsAt: await bidDeadline(tx, {
+            seasonId,
+            teamSize: season.teamSize,
+            price: draft.currentBid,
+            highBidderTeamId: draft.currentBidTeamId,
+          }),
+        }
       : {
           nominationEndsAt: new Date(
             Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
@@ -465,6 +628,9 @@ export async function resumeDraft(
     // Cancellation deliberately touches even an already-PAUSED draft. A
     // Resume that authorized itself just before that lifecycle write must lose
     // this updatedAt claim instead of rearming clocks on an archived season.
+    // The same updatedAt vouches for the lot's price and high bidder behind
+    // the bid clock above; a paused lot's teams cannot change (Undo refuses
+    // while a lot is on the block, and Void clears the lot, moving updatedAt).
     await raceHook("draft.resume.beforeClaim");
     const claim = await tx.draft.updateMany({
       where: {
@@ -668,7 +834,6 @@ export async function undoLastSale(
     }
     await undoDraftSaleHistory(tx, draft, last, viewer);
     await closeRosterTenure(tx, last, "DRAFT_UNDO", viewer.id);
-    await invalidateTeamLineups(tx, last.teamId, "ROSTER_DRAFT_UNDO");
     // Clear only the operational trail; immutable lot receipts survive. The Bid rows are keyed by
     // (draftId, userId) with no per-nomination id, so leaving them meant the
     // re-run auction's "Bid trail" replayed the VOIDED sale's prices — every
@@ -746,7 +911,7 @@ export async function undoLastSale(
     if (e instanceof UndoRaceError || e instanceof DraftHistoryRaceError) {
       return { ok: false as const, error: e.message };
     }
-    if ((e as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(e)) {
       return {
         ok: false as const,
         error: "The phase, roster, or auction just changed — reload and try again.",
@@ -910,7 +1075,6 @@ export async function abortDraft(
         await abortDraftHistory(tx, draft, roster, viewer, historyAt);
         for (const member of retainedCaptains) await captureRosterTenure(tx, member, undefined, historyAt);
         for (const member of returned) await closeRosterTenure(tx, member, "DRAFT_ABORT", viewer.id, historyAt);
-        for (const team of teamAuthorities) await invalidateTeamLineups(tx, team.id, "ROSTER_DRAFT_ABORT", historyAt);
         if (returned.length > 0) {
           await tx.teamMember.deleteMany({
             where: { id: { in: returned.map((member) => member.id) } },
@@ -1020,7 +1184,7 @@ export async function abortDraft(
   } catch (error) {
     if (
       error instanceof AbortRaceError ||
-      (error as { code?: string }).code === "P2034"
+      isSerializationConflict(error)
     ) {
       return {
         ok: false,
@@ -1048,12 +1212,22 @@ export async function getDraftState(
   // a sale between them could return a new roster with an old budget, or a new
   // lot with the previous lot's Bid trail. SERIALIZABLE is the only isolation
   // level shared by this repository's SQLite dev/test DB and PostgreSQL.
-  return prisma.$transaction(
+  const state = await prisma.$transaction(
     async (tx) => {
       const [season, draft, teams, playerRegs, viewerRegistration] =
         await Promise.all([
           tx.season.findUnique({ where: { id: seasonId } }),
-          tx.draft.findUnique({ where: { seasonId } }),
+          tx.draft.findUnique({
+            where: { seasonId },
+            // One PK join: whether the live lot was opened by the clock, so
+            // the room can say "auto-picked" instead of passing it off as the
+            // captain's own choice.
+            include: {
+              currentLot: {
+                select: { openingKind: true, nominatedUserId: true },
+              },
+            },
+          }),
           tx.team.findMany({
             where: { seasonId },
             orderBy: { draftOrder: "asc" },
@@ -1140,6 +1314,14 @@ export async function getDraftState(
         teams,
         captainMmrs: playerRegs,
       });
+      // Members' self-declared roles, for the captain's "roles to cover"
+      // hint. Already selected for the pool, so this costs no query.
+      const rolesByUser = new Map(
+        playerRegs.map((registration) => [
+          registration.userId,
+          registration.roles,
+        ]),
+      );
       const teamViews = teams.map((team) => ({
         id: team.id,
         name: team.name,
@@ -1147,6 +1329,8 @@ export async function getDraftState(
         budget: displayBudgets.byTeam.get(team.id) ?? team.budget,
         draftOrder: team.draftOrder,
         captainId: team.captainId,
+        // Filled in below, outside the snapshot.
+        captainInRoom: null as boolean | null,
         need: teamNeed(season.teamSize, team.members.length),
         members: team.members.map((member) => ({
           userId: member.userId,
@@ -1155,6 +1339,7 @@ export async function getDraftState(
           price: member.price,
           isCaptain: member.isCaptain,
           rankTier: member.user.rankTier,
+          roles: rolesByUser.get(member.userId) ?? "",
         })),
       }));
 
@@ -1197,13 +1382,25 @@ export async function getDraftState(
               teamName: team.name,
               price: member.price,
               at: member.createdAt.getTime(),
+              // Legacy observation: how the lot opened was never recorded.
+              auto: false,
             })),
         )
         .sort((a, b) => b.at - a.at)
         .slice(0, 8);
-      const recentSales = historyRun?.provenance === "COMMAND"
-        ? (await readDraftSales(tx, historyRun.id)).slice(0, 8)
-        : observedSales;
+      const commandSales = historyRun?.provenance === "COMMAND"
+        ? await readDraftSales(tx, historyRun.id)
+        : null;
+      const recentSales = commandSales ? commandSales.slice(0, 8) : observedSales;
+      // The finished room's recap: the same draftRecap math over the same
+      // auction records as the /teams "Draft night" card and the Discord
+      // recap. Only once the auction is over, and only from a recorded run
+      // (a draft that predates auction records has no original prices or
+      // MMR to recap; its rosters still show what each player cost).
+      const recap =
+        draft?.status === DRAFT_STATUS.COMPLETE && commandSales
+          ? draftRecap(commandSales)
+          : null;
       const nominatedPlayer = draft?.nominatedUserId
         ? (playerRegs.find(
             (registration) => registration.userId === draft.nominatedUserId,
@@ -1249,6 +1446,12 @@ export async function getDraftState(
         nominatedUserId: draft?.nominatedUserId ?? null,
         currentBid: draft?.currentBid ?? 0,
         currentBidTeamId: draft?.currentBidTeamId ?? null,
+        // The live lot was opened by resolveStalledNomination because the
+        // nominator's clock ran out — not a player that captain chose.
+        lotAutoNominated:
+          !!draft?.nominatedUserId &&
+          draft.currentLot?.openingKind === "AUTOMATIC" &&
+          draft.currentLot.nominatedUserId === draft.nominatedUserId,
         lotBids: lotBidRows.slice(0, 8).map((bid) => ({
           teamId: bid.teamId,
           amount: bid.amount,
@@ -1256,6 +1459,7 @@ export async function getDraftState(
         })),
         lotBidsTruncated: lotBidRows.length > 8,
         recentSales,
+        recap,
         nominatedPlayer: nominatedPlayer
           ? {
               userId: nominatedPlayer.userId,
@@ -1305,6 +1509,26 @@ export async function getDraftState(
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
+  // Which captains have the room open (their own polls record it), in the
+  // waiting room and while the auction runs. Read after the snapshot on
+  // purpose: it is a label, not part of what must agree with the rosters and
+  // the lot, and keeping the heartbeat rows out of the serializable read set
+  // means a captain's poll can never cost anyone else's a retry.
+  if (!state || !draftPresenceTracked(state.seasonStatus, state.status)) {
+    return state;
+  }
+  const captainsHere = await readCaptainPresence(
+    prisma,
+    seasonId,
+    state.teams.map((team) => team.captainId),
+  );
+  return {
+    ...state,
+    teams: state.teams.map((team) => ({
+      ...team,
+      captainInRoom: captainsHere.has(team.captainId),
+    })),
+  };
 }
 
 export type DraftState = NonNullable<Awaited<ReturnType<typeof getDraftState>>>;
@@ -1375,10 +1599,23 @@ export async function nominatePlayer(
     };
     if (!Number.isInteger(amount) || amount < DEFAULTS.MIN_BID)
       return { ok: false as const, error: "Bid too low" };
-    if (amount > maxBid(team, season.teamSize))
-      return { ok: false as const, error: "You can't afford that opening bid" };
+    const openingCap = maxBid(team, season.teamSize);
+    if (amount > openingCap)
+      return {
+        ok: false as const,
+        // An admin nominating for the team on the clock needs that TEAM's cap.
+        error:
+          nominator.captainId === viewer.id
+            ? "You can't afford that opening bid"
+            : `${nominator.name} can open at $${openingCap} at most`,
+      };
 
-    const bidEndsAt = new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000);
+    const bidEndsAt = await bidDeadline(tx, {
+      seasonId,
+      teamSize: season.teamSize,
+      price: amount,
+      highBidderTeamId: nominator.id,
+    });
     // Claim the nomination slot: if the auto-skip resolver (or an admin
     // nomination) landed between our read and this write, reject instead of
     // silently replacing a live auction.
@@ -1438,7 +1675,7 @@ export async function nominatePlayer(
     return { ok: true as const };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if ((error as { code?: string }).code === "P2034") {
+    if (isSerializationConflict(error)) {
       return {
         ok: false,
         error: "The player pool or nomination turn just changed — review the room.",
@@ -1509,11 +1746,18 @@ export async function placeBid(
     if (!canBid(team, season.teamSize, amount, draft.currentBid))
       return { ok: false as const, error: "Invalid bid amount" };
 
-    const bidEndsAt = new Date(Date.now() + DEFAULTS.BID_TIMER_SECONDS * 1000);
+    // The short clock when this bid leaves no other team able to top it.
+    const bidEndsAt = await bidDeadline(tx, {
+      seasonId,
+      teamSize: season.teamSize,
+      price: amount,
+      highBidderTeamId: myTeam.id,
+    });
     // Optimistic lock: only apply the bid if the auction is still exactly as we
     // read it. If a concurrent bid landed first (possible under Postgres's
     // connection pool), the WHERE matches no rows and we reject — so two
-    // simultaneous bids can never both "win".
+    // simultaneous bids can never both "win", and the clock written here is
+    // always the one computed for the price and bidder that actually stand.
     const applied = await tx.draft.updateMany({
       where: {
         seasonId,

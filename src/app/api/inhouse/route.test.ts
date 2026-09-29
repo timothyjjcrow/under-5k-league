@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   autoDetectResult: vi.fn(),
   cancelLobby: vi.fn(),
   voidLastResult: vi.fn(),
-  placeInhouseBet: vi.fn(),
   claimThrottle: vi.fn(),
 }));
 
@@ -44,9 +43,6 @@ vi.mock("@/lib/inhouse-service", () => ({
   cancelLobby: mocks.cancelLobby,
   voidLastResult: mocks.voidLastResult,
 }));
-vi.mock("@/lib/inhouse-bet-service", () => ({
-  placeInhouseBet: mocks.placeInhouseBet,
-}));
 vi.mock("@/lib/settings", () => ({
   claimThrottle: mocks.claimThrottle,
   SETTING_KEYS: {
@@ -70,7 +66,6 @@ const actionMocks = [
   mocks.autoDetectResult,
   mocks.cancelLobby,
   mocks.voidLastResult,
-  mocks.placeInhouseBet,
 ];
 
 function request(body: unknown) {
@@ -233,7 +228,7 @@ describe("POST /api/inhouse request boundary", () => {
       syncBoard: false,
     });
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -245,7 +240,7 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -256,7 +251,7 @@ describe("POST /api/inhouse request boundary", () => {
     await expect(POST(request({ action: "leave" }))).rejects.toThrow(
       "read failed",
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -275,7 +270,7 @@ describe("POST /api/inhouse request boundary", () => {
       detectResults: false,
       syncBoard: true,
     });
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v6", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v9", {
       expire: 0,
     });
   });
@@ -311,16 +306,21 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
-  it("treats a force string as false and only literal true as forced", async () => {
-    await POST(request({ action: "cancel", force: "false" }));
+  it("cancels with the viewer alone, ignoring a stale force flag", async () => {
+    // The forced cancel existed only for live games with Cred staked on them.
+    // Betting is gone, so an old tab's `force` must not reach the service.
     await POST(request({ action: "cancel", force: true }));
 
-    expect(mocks.cancelLobby).toHaveBeenNthCalledWith(1, user, {
-      force: false,
-    });
-    expect(mocks.cancelLobby).toHaveBeenNthCalledWith(2, user, {
-      force: true,
-    });
+    expect(mocks.cancelLobby).toHaveBeenCalledOnce();
+    expect(mocks.cancelLobby).toHaveBeenCalledWith(user);
+  });
+
+  it("refuses the retired bet action as unknown", async () => {
+    const response = await POST(request({ action: "bet", stake: 20 }));
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/unknown action/i);
+    expect(mocks.getInhouseState).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown explicit action without reading fresh state", async () => {

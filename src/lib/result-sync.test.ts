@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AUTO_SYNC, MATCH_STATUS } from "./constants";
+import { AUTO_SYNC, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import {
+  AUTO_CHECK_BACKED_OFF_SCANS,
+  autoCheckCopy,
+  autoCheckStatus,
   autoSyncClaimCutoff,
   autoSyncClosesAt,
   autoSyncIntervalSeconds,
@@ -8,7 +11,7 @@ import {
   isAutoSyncDue,
   leagueFallbackOpensAt,
   minutesSinceAutoSyncOpen,
-  nextAutoSyncAt,
+  nextRosterScanAt,
   syncPingStep,
 } from "./result-sync";
 
@@ -122,16 +125,265 @@ describe("autoSyncClaimCutoff", () => {
   });
 });
 
-describe("nextAutoSyncAt", () => {
-  it("projects the next scan from the last one plus the backoff interval", () => {
-    const last = new Date(NOW);
-    expect(nextAutoSyncAt(last, 0)?.getTime()).toBe(
-      NOW + AUTO_SYNC.MATCH_INTERVAL_SECONDS * 1000,
+describe("nextRosterScanAt", () => {
+  const MIN = 60_000;
+  const base = AUTO_SYNC.MATCH_INTERVAL_SECONDS * 1000;
+
+  it("uses the capped young-match interval while the grace lasts", () => {
+    const kickoff = NOW - 60 * MIN;
+    // Five empty scans would mean 32 x the interval, but the match is young.
+    expect(nextRosterScanAt(kickoff, NOW, 5, NOW)).toBe(
+      NOW + base * 2 ** AUTO_SYNC.BACKOFF_GRACE_DOUBLINGS + 1,
     );
-    expect(nextAutoSyncAt(last, 3)?.getTime()).toBe(
-      NOW + AUTO_SYNC.MATCH_INTERVAL_SECONDS * 8 * 1000,
+  });
+
+  it("switches to the full backoff when the young deadline falls past the grace", () => {
+    const graceEndsAt = NOW + 5 * MIN;
+    const kickoff =
+      graceEndsAt -
+      (AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF + AUTO_SYNC.BACKOFF_GRACE_MINUTES) *
+        MIN;
+    expect(nextRosterScanAt(kickoff, NOW, 5, NOW)).toBe(NOW + base * 32 + 1);
+  });
+
+  it("is the last scan plus the backoff interval for an older match", () => {
+    const kickoff = NOW - 10 * HOUR;
+    expect(nextRosterScanAt(kickoff, NOW, 0, NOW)).toBe(NOW + base + 1);
+    expect(nextRosterScanAt(kickoff, NOW, 3, NOW)).toBe(NOW + base * 8 + 1);
+  });
+
+  it("is the first instant the service's claim cutoff admits the match", () => {
+    const kickoff = NOW - 10 * HOUR;
+    const at = nextRosterScanAt(kickoff, NOW, 2, NOW);
+    const minutes = minutesSinceAutoSyncOpen(kickoff, at);
+    expect(autoSyncClaimCutoff(at, 2, minutes).getTime()).toBeGreaterThan(NOW);
+    expect(autoSyncClaimCutoff(at - 1, 2, minutes).getTime()).toBe(NOW);
+  });
+});
+
+describe("autoCheckStatus", () => {
+  const MIN = 60_000;
+  const regular = { status: SEASON_STATUS.REGULAR_SEASON, dotaLeagueId: null };
+  const ticketed = {
+    status: SEASON_STATUS.REGULAR_SEASON,
+    dotaLeagueId: "18000",
+  };
+  const fixture = (
+    kickoffOffsetMs: number | null,
+    over: Partial<{
+      status: string;
+      autoSyncedAt: Date | null;
+      autoSyncAttempts: number;
+    }> = {},
+  ) => ({
+    status: MATCH_STATUS.SCHEDULED,
+    scheduledAt:
+      kickoffOffsetMs === null ? null : new Date(NOW + kickoffOffsetMs),
+    autoSyncedAt: null,
+    autoSyncAttempts: 0,
+    ...over,
+  });
+
+  it("has nothing to say about a finished match", () => {
+    expect(
+      autoCheckStatus(
+        fixture(-HOUR, { status: MATCH_STATUS.COMPLETED }),
+        regular,
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
+  it("names the phase when the worker does not run for it", () => {
+    for (const status of [SEASON_STATUS.SIGNUPS, SEASON_STATUS.DRAFT]) {
+      expect(
+        autoCheckStatus(fixture(-HOUR), { status, dotaLeagueId: null }, NOW),
+      ).toEqual({ kind: "none", reason: "before-season" });
+    }
+    expect(
+      autoCheckStatus(
+        fixture(-HOUR),
+        { status: SEASON_STATUS.COMPLETE, dotaLeagueId: null },
+        NOW,
+      ),
+    ).toEqual({ kind: "none", reason: "season-over" });
+    expect(
+      autoCheckStatus(
+        fixture(-HOUR),
+        { status: SEASON_STATUS.PLAYOFFS, dotaLeagueId: null },
+        NOW,
+      ),
+    ).toEqual({ kind: "due", league: false });
+  });
+
+  it("flags a match with no kickoff time", () => {
+    expect(autoCheckStatus(fixture(null), regular, NOW)).toEqual({
+      kind: "none",
+      reason: "no-kickoff",
+    });
+  });
+
+  it("gives the window's opening before kickoff", () => {
+    expect(autoCheckStatus(fixture(10 * MIN), regular, NOW)).toEqual({
+      kind: "opens",
+      at: autoSyncOpensAt(NOW + 10 * MIN),
+    });
+  });
+
+  it("says the window closed once it has", () => {
+    expect(autoCheckStatus(fixture(-49 * HOUR), regular, NOW)).toEqual({
+      kind: "ended",
+      at: autoSyncClosesAt(NOW - 49 * HOUR),
+    });
+  });
+
+  it("is due now for a match never scanned, or scanned long enough ago", () => {
+    expect(autoCheckStatus(fixture(-HOUR), regular, NOW)).toEqual({
+      kind: "due",
+      league: false,
+    });
+    expect(
+      autoCheckStatus(
+        fixture(-10 * HOUR, { autoSyncedAt: new Date(NOW - HOUR) }),
+        regular,
+        NOW,
+      ),
+    ).toEqual({ kind: "due", league: false });
+  });
+
+  it("gives the next scan time with the empty-scan count", () => {
+    const syncedAt = new Date(NOW - MIN);
+    expect(
+      autoCheckStatus(
+        fixture(-10 * HOUR, { autoSyncedAt: syncedAt, autoSyncAttempts: 4 }),
+        regular,
+        NOW,
+      ),
+    ).toEqual({
+      kind: "next",
+      at: nextRosterScanAt(NOW - 10 * HOUR, syncedAt.getTime(), 4, NOW),
+      emptyScans: 4,
+      league: false,
+    });
+  });
+
+  it("says no scan is left when the backoff runs past the window", () => {
+    const kickoff = -(AUTO_SYNC.WINDOW_HOURS * HOUR - 30 * MIN);
+    expect(
+      autoCheckStatus(
+        fixture(kickoff, {
+          autoSyncedAt: new Date(NOW - MIN),
+          autoSyncAttempts: AUTO_SYNC.BACKOFF_DOUBLINGS,
+        }),
+        regular,
+        NOW,
+      ),
+    ).toEqual({
+      kind: "ending",
+      at: autoSyncClosesAt(NOW + kickoff),
+      league: false,
+    });
+  });
+
+  it("reads only the league feed until the fallback on a ticketed season", () => {
+    expect(autoCheckStatus(fixture(-HOUR), ticketed, NOW)).toEqual({
+      kind: "league-only",
+      fallbackAt: leagueFallbackOpensAt(NOW - HOUR),
+    });
+    // A LIVE series is scanned at once, not after the fallback.
+    expect(
+      autoCheckStatus(
+        fixture(-HOUR, { status: MATCH_STATUS.LIVE }),
+        ticketed,
+        NOW,
+      ),
+    ).toEqual({ kind: "due", league: true });
+    expect(autoCheckStatus(fixture(-4 * HOUR), ticketed, NOW)).toEqual({
+      kind: "due",
+      league: true,
+    });
+    // A blank ticket is no ticket.
+    expect(
+      autoCheckStatus(
+        fixture(-HOUR),
+        { status: SEASON_STATUS.REGULAR_SEASON, dotaLeagueId: "  " },
+        NOW,
+      ),
+    ).toEqual({ kind: "due", league: false });
+  });
+});
+
+describe("autoCheckCopy", () => {
+  it("marks only the states no automatic check will fix as problems", () => {
+    expect(autoCheckCopy({ kind: "none", reason: "no-kickoff" }).problem).toBe(
+      true,
     );
-    expect(nextAutoSyncAt(null, 5)).toBeNull(); // never scanned → due now
+    expect(autoCheckCopy({ kind: "ended", at: NOW }).problem).toBe(true);
+    expect(
+      autoCheckCopy({ kind: "none", reason: "before-season" }).problem,
+    ).toBe(false);
+    expect(autoCheckCopy({ kind: "due", league: false }).problem).toBe(false);
+    expect(
+      autoCheckCopy({ kind: "ending", at: NOW, league: false }).problem,
+    ).toBe(false);
+  });
+
+  it("carries the one time separately so the page can localise it", () => {
+    const next = autoCheckCopy({
+      kind: "next",
+      at: NOW,
+      emptyScans: 0,
+      league: false,
+    });
+    expect(next).toEqual({
+      lead: "Next automatic check ",
+      at: NOW,
+      tail: ".",
+      problem: false,
+    });
+    expect(autoCheckCopy({ kind: "due", league: false })).toEqual({
+      lead: "Next automatic check: due now.",
+      at: null,
+      tail: "",
+      problem: false,
+    });
+  });
+
+  it("says when checks have slowed down after empty scans", () => {
+    const quiet = autoCheckCopy({
+      kind: "next",
+      at: NOW,
+      emptyScans: AUTO_CHECK_BACKED_OFF_SCANS - 1,
+      league: false,
+    });
+    expect(quiet.tail).toBe(".");
+    const slowed = autoCheckCopy({
+      kind: "next",
+      at: NOW,
+      emptyScans: AUTO_CHECK_BACKED_OFF_SCANS,
+      league: false,
+    });
+    expect(slowed.tail).toBe(
+      ` (slowed down after ${AUTO_CHECK_BACKED_OFF_SCANS} checks found nothing).`,
+    );
+  });
+
+  it("mentions the league feed only on a ticketed season", () => {
+    expect(
+      autoCheckCopy({ kind: "league-only", fallbackAt: NOW }).lead,
+    ).toMatch(/^League feed checks about every 3 minutes; /);
+    expect(autoCheckCopy({ kind: "due", league: true }).lead).toMatch(
+      /^League feed checks/,
+    );
+    expect(autoCheckCopy({ kind: "due", league: false }).lead).not.toMatch(
+      /League feed/,
+    );
+  });
+
+  it("points a closed window at the manual tools by their real names", () => {
+    const ended = autoCheckCopy({ kind: "ended", at: NOW });
+    expect(ended.tail).toContain("Auto-fetch games");
+    expect(ended.tail).toContain("Add game");
   });
 });
 

@@ -33,3 +33,23 @@ export function shareMetadata(
     },
   };
 }
+
+/**
+ * A player profile's share metadata. Profiles stay out of search results: a
+ * search for someone's Steam name shouldn't bring up the MMR they typed,
+ * their goals and their note for captains. Links still unfurl in Discord, and
+ * crawlers still follow the profile's links. Don't also block /players/ in
+ * robots.txt: a crawler that can't fetch the page never sees the noindex.
+ */
+export function playerProfileMetadata(
+  name: string,
+  highlights: readonly string[],
+): Metadata {
+  return {
+    ...shareMetadata(
+      `${name} · Player`,
+      `${name}'s player profile${highlights.length > 0 ? ` · ${highlights.join(" · ")}` : ""} — match history in ${LEAGUE_CONFIG.name}.`,
+    ),
+    robots: { index: false, follow: true },
+  };
+}

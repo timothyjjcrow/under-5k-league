@@ -66,8 +66,6 @@ export const MATCH_PHASE = {
 export const TEAM_STAFF_ROLE = {
   COACH: "COACH",
 } as const;
-export type TeamStaffRole =
-  (typeof TEAM_STAFF_ROLE)[keyof typeof TEAM_STAFF_ROLE];
 
 export const SCRIM_STATUS = {
   OPEN: "OPEN",
@@ -76,14 +74,11 @@ export const SCRIM_STATUS = {
   COMPLETED: "COMPLETED",
   CANCELLED: "CANCELLED",
 } as const;
-export type ScrimStatus = (typeof SCRIM_STATUS)[keyof typeof SCRIM_STATUS];
 
 export const DOTA_MATCH_KIND = {
   LEAGUE: "LEAGUE",
   SCRIM: "SCRIM",
 } as const;
-export type DotaMatchKind =
-  (typeof DOTA_MATCH_KIND)[keyof typeof DOTA_MATCH_KIND];
 
 export const ROLE = {
   USER: "USER",
@@ -97,6 +92,10 @@ export const DEFAULTS = {
   DRAFT_BUDGET: 100,
   // Seconds the auction clock runs for a nominated player; each new bid resets it.
   BID_TIMER_SECONDS: 30,
+  // The bid clock instead, when no team other than the high bidder can top the
+  // price (full rosters, or not enough money). Late in a draft most lots are
+  // like that: nothing is left to decide, so they close quickly.
+  UNCONTESTED_BID_TIMER_SECONDS: 5,
   // Seconds the team on the clock has to nominate before the draft auto-picks
   // the top available player for them (keeps a live draft from stalling).
   NOMINATION_TIMER_SECONDS: 90,
@@ -148,16 +147,16 @@ export const ROOM_ACTION_TIMEOUT_MS = 15_000;
 
 /**
  * …and the deadline for the inhouse actions that are OpenDota-bound BY DESIGN:
- * `detect` fans out ten 8s recent-match lookups and then up to six 12s match
- * fetches, and `applyResult` adds a 5s Discord send — ~25s worst case, all
- * bounded (dota.ts never retries). `record` is one 12s fetch plus the same
- * tail.
+ * `detect` first asks the lobby bot for its match id (a 3s status read, then
+ * one 12s match fetch when it has one), then fans out ten 8s recent-match
+ * lookups and up to six 12s match fetches, and `applyResult` adds a 5s
+ * Discord send — ~40s worst case, all bounded (dota.ts never retries).
+ * `record` is one 12s fetch plus the same tail.
  *
  * Deliberately NOT applied to every action. Sizing one ceiling to the slowest
  * action would punish the most time-critical one: a hung ACCEPT would sit
- * disabled for the WHOLE 45-second ready check, i.e. exactly as broken as
- * having no deadline at all. Slow paths get slack; second-sensitive ones get
- * released fast.
+ * disabled for half of the ready check. Slow paths get slack;
+ * second-sensitive ones get released fast.
  */
 export const INHOUSE_SCAN_ACTION_TIMEOUT_MS = 45_000;
 /** The inhouse actions that legitimately go to OpenDota (see above). */
@@ -231,6 +230,14 @@ export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.IN_PROGRESS,
 ];
 
+// A lobby counts as being PLAYED from the moment teams lock (READY), whether or
+// not anyone presses the optional Start: the automatic OpenDota scan, the
+// manual "Record by match ID" path and the result claim all accept both.
+export const INHOUSE_PLAYING_STATUSES: InhouseStatus[] = [
+  INHOUSE_STATUS.READY,
+  INHOUSE_STATUS.IN_PROGRESS,
+];
+
 export const INHOUSE = {
   TEAM_SIZE: 5,
   LOBBY_SIZE: 10, // players needed before a lobby forms
@@ -246,7 +253,7 @@ export const INHOUSE = {
   LOBBY_PASSWORD: "ggd2l",
   LOBBY_TICKET: LEAGUE_CONFIG.inhouseLeagueName,
   LOBBY_TICKET_CONFIGURED: LEAGUE_CONFIG.inhouseLeagueConfigured,
-  // Keep the fast room rate for ready checks, captain votes, picks and bets.
+  // Keep the fast room rate for ready checks, captain votes and picks.
   // Waiting rosters and games in progress need fewer database round trips.
   POLL_QUEUE_MS: 5000,
   POLL_GAME_MS: 10000,
@@ -258,13 +265,16 @@ export const INHOUSE = {
   // it. Membership does not depend on these browser timers. It must also
   // be shorter than BOTH action windows: a lobby can form just after a queued
   // player's poll, and a long keepalive could otherwise consume the entire
-  // 45s accept window (and skip the 25s captain vote altogether). 10s leaves time
+  // accept window (and skip the 25s captain vote altogether). 10s leaves time
   // to notice and act when the browser allows background execution.
   POLL_KEEPALIVE_MS: 10000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
-  // Generous vs. the client's ~10s: web players may be in another tab — the
-  // chime + "(!)" tab title have to reach them first.
-  ACCEPT_SECONDS: 45,
+  // The queue holds a spot for hours with the tab closed, so the tenth join
+  // can land while the others are in a pub game or away from the desk: they
+  // have to see the Discord ping (which carries this deadline), open the site
+  // and press Accept. 45s was too tight for that, and a failed check wastes a
+  // lobby that took a long time to fill; no-shows are still dropped.
+  ACCEPT_SECONDS: 90,
   // Seconds players get to vote on how captains are chosen once everyone accepts.
   VOTE_SECONDS: 25,
   // Seconds a captain has to pick before the draft auto-picks the top player.
@@ -277,15 +287,31 @@ export const INHOUSE = {
   // Auto result detection (OpenDota): don't scan until a game could plausibly be
   // over, and don't scan more than once per interval (there's only ever one
   // active lobby, so this bounds API usage globally). The interval grows with
-  // the game's age — an abandoned IN_PROGRESS lobby nobody cancels must not
-  // scan every 3 minutes forever — up to the cap.
+  // the game's age — an abandoned lobby nobody cancels must not scan every 3
+  // minutes forever — up to the cap.
+  //
+  // Two clocks, one per playing status (inhouseDetectWindow in inhouse.ts):
+  // an IN_PROGRESS game is timed from Start (or the bot's launch), a READY one
+  // from lobby FORMATION. Teams lock a few minutes after formation and the
+  // group still has to host and launch the Dota lobby, so the READY floor is
+  // longer: the first scan lands a few minutes after teams lock, not while
+  // the draft is still running. A late Start never pushes the scan back: an
+  // IN_PROGRESS game keeps the formation window when that opens first.
   DETECT_MIN_MINUTES: 8,
+  DETECT_READY_MIN_MINUTES: 15,
   DETECT_INTERVAL_SECONDS: 180,
-  // Floor between MANUAL "Auto-detect result" presses. Short enough that the
+  // Floor between MANUAL "Check now" presses. Short enough that the
   // button still feels responsive, long enough that ten players spamming it
   // can't drain the shared OpenDota budget the league's result sync needs.
   DETECT_MANUAL_GAP_SECONDS: 20,
   DETECT_INTERVAL_MAX_SECONDS: 1800,
+  // When the lobby bot launched the game it knows the Dota match id, so each
+  // scan looks up that ONE match instead of ten players' histories. While
+  // OpenDota doesn't have it yet the history scan is skipped — for this long
+  // after the detect clock starts. Past it, something happened to the bot's
+  // game (a crashed launch, a remake hosted by hand), so the history scan
+  // runs again as well.
+  DETECT_BOT_MATCH_WAIT_MINUTES: 120,
   // Heartbeats describe availability; they never own queue membership. A
   // browser may suspend a hidden tab for minutes or hours without a leave.
   QUEUE_HEARTBEAT_SECONDS: 30,
@@ -304,12 +330,15 @@ export const INHOUSE = {
   // active-lobby slot indefinitely: no new lobby can form, and its own ten
   // players are refused the queue ("You're already in a live inhouse"). Only
   // an admin could recover it. These are the staleness floors for the lazy
-  // resolveAbandonedLobby teardown, deliberately far past any legitimate use:
-  // a group may sit in READY for a long time hosting the in-client lobby and
-  // waiting on a straggler (Start can be pressed late — even after the game,
-  // which is how a forgotten Start is still recoverable), and IN_PROGRESS must
-  // outlast the longest imaginable game plus OpenDota's indexing lag.
-  ABANDON_READY_HOURS: 3,
+  // resolveAbandonedLobby teardown, deliberately far past any legitimate use.
+  //
+  // Both phases are "being played" now (Start is optional), so both get the
+  // same window: the longest imaginable wait for a straggler, plus the game,
+  // plus OpenDota's indexing lag. READY is measured from lobby FORMATION and
+  // IN_PROGRESS from Start — never from `updatedAt`, which every result scan's
+  // `detectedAt` claim bumps, so an updatedAt floor would never fire while the
+  // scan keeps looking.
+  ABANDON_READY_HOURS: 6,
   ABANDON_IN_PROGRESS_HOURS: 6,
   // Discord "queue is filling" ping: fires when a join crosses this many
   // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.
@@ -333,103 +362,6 @@ export const INHOUSE = {
   BOARD_MIN_SECONDS: 10,
 } as const;
 
-// ---------- Inhouse betting (play money — see CLAUDE.md) -------------------
-//
-// THE TRIPWIRE, stated first because every safety argument below rests on it:
-// Cred is WORTHLESS. It cannot be bought, sold, transferred, gifted or spent
-// on anything. The moment anyone proposes making it buy something real, this
-// whole feature has to be reconsidered from scratch — the anti-collusion
-// reasoning is only sound while there is nothing to collude FOR.
-
-/** Per-lobby settlement state (`InhouseLobby.betSettlement`; null = no bets). */
-export const INHOUSE_BET_STATUS = {
-  PENDING: "PENDING",
-  SETTLED: "SETTLED",
-  REFUNDED: "REFUNDED",
-  REVERSED: "REVERSED",
-} as const;
-export type InhouseBetSettlement =
-  (typeof INHOUSE_BET_STATUS)[keyof typeof INHOUSE_BET_STATUS];
-
-/** Per-bet outcome (`InhouseBet.outcome`). */
-export const INHOUSE_BET_OUTCOME = {
-  WON: "WON",
-  LOST: "LOST",
-  /** The bettor's post-teamFixes side ≠ the side they bet on — full refund. */
-  VOID_LINEUP: "VOID_LINEUP",
-  /** Placed after the played game's own start_time — full refund. */
-  VOID_LATE: "VOID_LATE",
-  /** Lobby died before a result (cancel / abandon / void) — full refund. */
-  REFUNDED: "REFUNDED",
-} as const;
-export type InhouseBetOutcome =
-  (typeof INHOUSE_BET_OUTCOME)[keyof typeof INHOUSE_BET_OUTCOME];
-
-/** Ledger reasons (`InhouseCreditEntry.reason`). */
-export const INHOUSE_CRED_REASON = {
-  GRANT: "GRANT", // opening balance, once per account
-  STAKE: "STAKE", // debit when the bet is placed
-  RETURN: "RETURN", // unmatched portion handed back at settlement
-  WIN: "WIN",
-  LOSS: "LOSS",
-  REFUND: "REFUND", // voided bet / dead lobby
-  REVERSAL: "REVERSAL", // admin voided an already-settled result
-  FLOOR: "FLOOR", // bankruptcy top-up
-  ADJUST: "ADJUST", // admin correction
-} as const;
-export type InhouseCredReason =
-  (typeof INHOUSE_CRED_REASON)[keyof typeof INHOUSE_CRED_REASON];
-
-/**
- * Reasons that count toward the PROFIT board. Deliberately excludes GRANT,
- * FLOOR and ADJUST: the ladder ranks what you took off other players, never
- * what the system handed you. That single choice is what makes the bankruptcy
- * floor safe — a player who parks at the floor and loses forever mints
- * liquidity, but can never mint SCORE, so there is nothing to farm.
- *
- * Never add a "total staked" board beside it. Volume is the one number a
- * behaviour like "bet max every game regardless" farms perfectly.
- */
-export const INHOUSE_CRED_PROFIT_REASONS: InhouseCredReason[] = [
-  INHOUSE_CRED_REASON.STAKE,
-  INHOUSE_CRED_REASON.RETURN,
-  INHOUSE_CRED_REASON.WIN,
-  INHOUSE_CRED_REASON.LOSS,
-  INHOUSE_CRED_REASON.REFUND,
-  INHOUSE_CRED_REASON.REVERSAL,
-];
-
-export const INHOUSE_BETS = {
-  /** Opening balance — five max bets. A column default, so an existing
-   *  account is funded by the schema push itself, with no backfill script. */
-  START_BALANCE: 500,
-  /** Stakes are chips, never a text input: a bet that needs typing doesn't
-   *  happen inside a 45-second window with Dota already open. */
-  MIN_STAKE: 10,
-  STEP: 10,
-  /**
-   * FLAT, and never a fraction of balance. Two reasons, both load-bearing:
-   * a newcomer and the ladder leader max out at the same number on night one
-   * (so the economy can't compound into a rich-get-richer spiral), and a
-   * throw conspiracy's take is bounded at five stakes — 500 Cred — per game.
-   */
-  MAX_STAKE: 100,
-  /** The betting window, opened on the DRAFTING→READY transition. Matched to
-   *  ACCEPT_SECONDS so the room keeps one rhythm; longer is a real toll on the
-   *  one phase where ten people are trying to leave the browser. */
-  WINDOW_SECONDS: 45,
-  /** Bankruptcy net: a participant below this is topped up TO this, at most
-   *  once per UTC day (enforced by the ledger's @@unique([reason, refId])). */
-  FLOOR: 100,
-  /** …and only after a game that looks like a game. Without this the floor
-   *  pays out on 4-minute feed-fests, which is a faucet with a crank on it. */
-  REAL_GAME_SECONDS: 600,
-  /** Pot tiers, for the room's label and the pinned board's LIVE line. */
-  TIER_CONTESTED: 200,
-  TIER_HIGH: 500,
-  TIER_MARQUEE: 800,
-} as const;
-
 // Match-night Discord reminder: announced by the leased maintenance worker for
 // the next week whose matches kick off inside the window. Sent at most once per
 // season+week (atomic Setting-row claim).
@@ -438,12 +370,28 @@ export const WEEK_REMINDER = {
   BEHIND_HOURS: 3, // still worth announcing shortly after kickoff
 } as const;
 
+// Draft-night Discord reminder: announced by the same leased worker once the
+// scheduled Season.draftAt is inside the window. Sent at most once per draftAt
+// REVISION (atomic Setting-row claim keyed on season + draftRevision), so
+// moving the draft re-arms it: every old confirmation just went stale and the
+// league needs telling again. Unlike the match-night reminder there is NO
+// "behind" allowance: the admin presses Start, the draft-started post takes
+// over, and a reminder about a time that has already passed is only noise.
+export const DRAFT_REMINDER = {
+  AHEAD_HOURS: 24, // same lead as the match-night reminder
+} as const;
+
 // A player declaring OUT pings their captain. The "was it already OUT?" check
 // alone doesn't cover a player flipping OUT→IN→OUT while they decide, and that
 // used to be a harmless duplicate channel post — now it's a repeat phone buzz
 // for the one person who has to find cover. Long enough to absorb the
 // deciding, short enough that a genuine second withdrawal still gets through.
 export const RSVP_OUT_PING_THROTTLE_SECONDS = 6 * 60 * 60;
+
+// A captain can ping their own team's unanswered players about one match from
+// its page. Once per team per match in this window: enough for a morning nudge
+// and a last call before kickoff, never a way to spam the channel.
+export const CHECKIN_NUDGE_THROTTLE_SECONDS = 3 * 60 * 60;
 
 // Automatic result sync: league games are pulled from OpenDota without anyone
 // pressing a button. The bearer-authenticated maintenance worker owns writes;

@@ -4,7 +4,10 @@ import {
   avgKnownMmr,
   detectIntervalSeconds,
   inhouseAlerts,
+  inhouseDetectWindow,
   inhouseLobbyCode,
+  inhouseReadyInPlay,
+  inhouseScanStatus,
   inhouseTitleFlag,
   mmrBalance,
   readyCheckEndedToast,
@@ -16,12 +19,13 @@ import {
   queueSlots,
   requeueLastSeenAt,
   seedOrder,
+  shouldFocusStage,
   tallyMethod,
   wasInReadyCheck,
   type CaptainCandidate,
   type InhouseAlertSnapshot,
 } from "./inhouse";
-import { INHOUSE } from "./constants";
+import { INHOUSE, INHOUSE_STATUS } from "./constants";
 
 const p = (userId: string, mmr: number, joinedAt: number) => ({
   userId,
@@ -91,9 +95,63 @@ describe("orderCaptains", () => {
     const ordered = orderCaptains("RECORD", [
       cand("a", { wins: 1, winRate: 0.5, games: 2, mmr: 5000 }),
       cand("b", { wins: 3, winRate: 0.6, games: 5, mmr: 1000 }),
-      cand("c", { wins: 0, winRate: 0, games: 0, mmr: 9000 }), // no games → last
+      cand("c", { wins: 0, winRate: 0, games: 0, mmr: 9000 }), // no wins → last
     ]);
     expect(ordered.map((x) => x.userId)).toEqual(["b", "a", "c"]);
+  });
+
+  it("RECORD never ranks a winless player above a newcomer on games played", () => {
+    // The bug: a 0-3 player tied every newcomer on wins and win rate, then
+    // won the tie on games played, so "Best record" named the one player who
+    // had lost every game. Winless players now follow plain MMR order.
+    const ordered = orderCaptains("RECORD", [
+      cand("loser", { wins: 0, winRate: 0, games: 3, mmr: 2000 }),
+      cand("newHigh", { mmr: 4000 }),
+      cand("newLow", { mmr: 1000 }),
+    ]);
+    expect(ordered.map((x) => x.userId)).toEqual([
+      "newHigh",
+      "loser",
+      "newLow",
+    ]);
+  });
+
+  it("RECORD puts every player with a win ahead of the winless, then MMR", () => {
+    const ordered = orderCaptains("RECORD", [
+      cand("new9k", { mmr: 9000 }),
+      cand("oneWin", { wins: 1, winRate: 0.25, games: 4, mmr: 1000 }),
+      cand("zeroThree", { wins: 0, winRate: 0, games: 3, mmr: 5000 }),
+      cand("new3k", { mmr: 3000 }),
+    ]);
+    // One player has a win and captains; the second captain is the highest
+    // MMR of everyone else, whatever their games played.
+    expect(ordered.map((x) => x.userId)).toEqual([
+      "oneWin",
+      "new9k",
+      "zeroThree",
+      "new3k",
+    ]);
+  });
+
+  it("RECORD with no wins in the lobby is exactly the MMR order", () => {
+    const lobby = [
+      cand("zeroThree", { games: 3, mmr: 2500, joinedAt: 1 }),
+      cand("zeroOne", { games: 1, mmr: 2500, joinedAt: 2 }),
+      cand("fresh", { mmr: 6000, joinedAt: 3 }),
+      cand("unknown", { mmr: 0, joinedAt: 4 }),
+      cand("tieA", { mmr: 0, joinedAt: 4 }),
+    ];
+    const ids = (xs: CaptainCandidate[]) => xs.map((x) => x.userId);
+    expect(ids(orderCaptains("RECORD", lobby))).toEqual(
+      ids(orderCaptains("MMR", lobby)),
+    );
+    expect(ids(orderCaptains("RECORD", lobby))).toEqual([
+      "fresh",
+      "zeroThree",
+      "zeroOne",
+      "tieA",
+      "unknown",
+    ]);
   });
 
   it("VOTE ranks by nominations, breaking ties by MMR", () => {
@@ -127,6 +185,16 @@ describe("orderCaptains", () => {
       expect(orderCaptains(method, [...tied].reverse()).map((x) => x.userId)).toEqual(
         ["alpha", "mid", "zeta"],
       );
+    }
+    // RECORD's winners are sorted separately from the winless; that half
+    // must be total too.
+    const tiedWinners = tied.map((c) => ({ ...c, wins: 1, winRate: 1, games: 1 }));
+    for (const input of [tiedWinners, [...tiedWinners].reverse()]) {
+      expect(orderCaptains("RECORD", input).map((x) => x.userId)).toEqual([
+        "alpha",
+        "mid",
+        "zeta",
+      ]);
     }
   });
 
@@ -242,47 +310,66 @@ describe("queueSlots", () => {
       q("real2"),
       q("real3"),
     ];
-    const { slots, overflow } = queueSlots(queue, 3);
+    const { slots, overflow, away } = queueSlots(queue, 3);
     expect(slots.map((s) => s?.name)).toEqual(["real1", "real2", "real3"]);
-    expect(overflow.map((s) => s.name)).toEqual(["demo1", "demo2"]);
+    expect(overflow).toEqual([]);
+    expect(away.map((s) => s.name)).toEqual(["demo1", "demo2"]);
   });
 
-  it("keeps away players visible in the leftover slots", () => {
-    // They are still queued — the grace window is the point. They just can't
-    // displace someone who is here.
-    const { slots } = queueSlots([q("away1", true), q("here")], 4);
-    expect(slots.map((s) => s?.name)).toEqual(["here", "away1", undefined, undefined]);
+  it("never puts an away player in a slot, even when slots are open", () => {
+    // After an admin cancel all ten come back away until their tabs check in.
+    // Ten names in the slots over "0 of 10 players" read as a full queue.
+    const { slots, away } = queueSlots([q("away1", true), q("here")], 4);
+    expect(slots.map((s) => s?.name)).toEqual([
+      "here",
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(away.map((s) => s.name)).toEqual(["away1"]);
+
+    const cancelled = Array.from({ length: 10 }, (_, i) => q(`p${i}`, true));
+    const after = queueSlots(cancelled, 10);
+    expect(after.slots.every((s) => s === null)).toBe(true);
+    expect(after.away).toHaveLength(10);
   });
 
   it("pads out to the lobby size with empty slots", () => {
-    const { slots, overflow } = queueSlots([q("a")], 10);
+    const { slots, overflow, away } = queueSlots([q("a")], 10);
     expect(slots).toHaveLength(10);
     expect(slots.filter(Boolean)).toHaveLength(1);
     expect(overflow).toEqual([]);
+    expect(away).toEqual([]);
   });
 
   it("preserves join order within each group, and in the overflow", () => {
-    const queue = [q("a"), q("b"), q("c"), q("d")];
-    const { slots, overflow } = queueSlots(queue, 2);
+    const queue = [q("a"), q("x", true), q("b"), q("c"), q("y", true), q("d")];
+    const { slots, overflow, away } = queueSlots(queue, 2);
     expect(slots.map((s) => s?.name)).toEqual(["a", "b"]);
     // The overflow is a waiting LINE; its order is who queued when.
     expect(overflow.map((s) => s.name)).toEqual(["c", "d"]);
+    expect(away.map((s) => s.name)).toEqual(["x", "y"]);
   });
 
   it("never drops or duplicates an entry", () => {
     const queue = [q("a", true), q("b"), q("c", true), q("d"), q("e")];
     for (const size of [0, 1, 3, 5, 9]) {
-      const { slots, overflow } = queueSlots(queue, size);
-      const seen = [...slots.filter(Boolean), ...overflow];
+      const { slots, overflow, away } = queueSlots(queue, size);
+      const seen = [...slots.filter(Boolean), ...overflow, ...away];
       expect(new Set(seen).size).toBe(seen.length);
       expect(seen).toHaveLength(queue.length);
+      // Only present players ever sit in a slot or the line behind it.
+      expect([...slots.filter(Boolean), ...overflow].some((s) => s!.away)).toBe(
+        false,
+      );
     }
   });
 
   it("survives a zero lobby size instead of dividing by it", () => {
-    expect(queueSlots([q("a")], 0)).toEqual({
+    expect(queueSlots([q("a"), q("b", true)], 0)).toEqual({
       slots: [],
       overflow: [{ name: "a", away: false }],
+      away: [{ name: "b", away: true }],
     });
   });
 });
@@ -328,7 +415,7 @@ describe("autoJoinDecision", () => {
   });
 
   it("refuses to touch the queue for someone already IN the lobby", () => {
-    // The teeth: queue membership can drag you into a 45-second ready check.
+    // The teeth: queue membership can drag you into a timed ready check.
     // Never do that to someone from a link they may have tapped by accident.
     expect(autoJoinDecision(me({ inLobby: true }))).toBe("already-in");
   });
@@ -373,7 +460,7 @@ describe("inhouseAlerts", () => {
   });
 
   it("rings for a hidden tab that first SEES the lobby already past the check", () => {
-    // The keyed-on-prevStatus-null rule. A hidden tab polls on the 45s
+    // The keyed-on-prevStatus-null rule. A hidden tab polls on the slow
     // keepalive, so its first sight of the lobby can be CAPTAIN_VOTE or
     // DRAFTING — and that player still needs the bell. Exactly once, though:
     // "vote-opened" requires the PREVIOUS status to have been READY_CHECK,
@@ -383,7 +470,7 @@ describe("inhouseAlerts", () => {
 
   it("rings AGAIN when the vote opens after the ready check", () => {
     // Deliberate second bell: a player may have accepted early and tabbed
-    // away, which is precisely what the 45s ACCEPT_SECONDS anticipates.
+    // away, which is precisely what ACCEPT_SECONDS anticipates.
     expect(inhouseAlerts(inCheck, inVote)).toEqual(["vote-opened"]);
   });
 
@@ -484,12 +571,16 @@ describe("wasInReadyCheck", () => {
 // The tab title. Unlike the chime it is STATE-derived and ungated by the sound
 // toggle, so it reaches a backgrounded tab that has never had a user gesture.
 describe("inhouseTitleFlag", () => {
+  // Teams locked a few minutes ago; the result scan opens in a minute.
+  const SCAN_OPENS = Date.UTC(2026, 8, 28, 20, 15);
   const s = (over: Partial<Parameters<typeof inhouseTitleFlag>[0]> = {}) => ({
     status: null as string | null,
     inLobby: true,
     isOnClock: false,
     hasAccepted: false,
     hasVoted: false,
+    scanOpensAt: SCAN_OPENS as number | null,
+    serverNow: SCAN_OPENS - 60_000,
     ...over,
   });
 
@@ -527,6 +618,23 @@ describe("inhouseTitleFlag", () => {
 
   it("announces locked teams (the cue to go host the Dota lobby)", () => {
     expect(inhouseTitleFlag(s({ status: "READY" }))).toBe("(!) Teams locked");
+    // An unknown scan window keeps the cue rather than guessing.
+    expect(
+      inhouseTitleFlag(s({ status: "READY", scanOpensAt: null, serverNow: SCAN_OPENS })),
+    ).toBe("(!) Teams locked");
+  });
+
+  it("drops the locked-teams cue once the game is plausibly being played", () => {
+    // Start is optional, so a game hosted by hand stays READY until its
+    // result imports. A "(!)" for the whole game would outlive the thing it
+    // asks for, so it ends when the result scan's window opens.
+    for (const serverNow of [SCAN_OPENS, SCAN_OPENS + 45 * 60_000]) {
+      expect(inhouseTitleFlag(s({ status: "READY", serverNow }))).toBeNull();
+    }
+    // Your pick still wins (the flag ordering is untouched).
+    expect(
+      inhouseTitleFlag(s({ status: "READY", isOnClock: true, serverNow: SCAN_OPENS })),
+    ).toBe("(!) Your pick");
   });
 
   it("says nothing to a spectator, whatever the lobby is doing", () => {
@@ -691,5 +799,276 @@ describe("detectIntervalSeconds", () => {
     expect(detectIntervalSeconds(400 * HOUR)).toBe(
       INHOUSE.DETECT_INTERVAL_MAX_SECONDS,
     );
+  });
+});
+
+describe("inhouseDetectWindow", () => {
+  const FORMED = Date.UTC(2026, 8, 20, 18, 0);
+  const MIN = 60_000;
+
+  it("times a game started right after teams lock from Start", () => {
+    const started = FORMED + 5 * MIN;
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        createdAtMs: FORMED,
+        startedAtMs: started,
+      }),
+    ).toEqual({
+      clockMs: started,
+      opensAtMs: started + INHOUSE.DETECT_MIN_MINUTES * MIN,
+    });
+  });
+
+  it("never lets a late Start close a scan window formation already opened", () => {
+    // Formed at FORMED, the READY scan opened 15 minutes in, and the game
+    // ended while OpenDota was still publishing. A player presses Start (or
+    // the bot panel first notices the launch) 56 minutes in: the scan and
+    // "Check now" must stay open, on the formation clock.
+    const fromFormation = {
+      clockMs: FORMED,
+      opensAtMs: FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+    };
+    for (const late of [
+      INHOUSE.DETECT_READY_MIN_MINUTES + 1,
+      56,
+      3 * 60,
+    ]) {
+      expect(
+        inhouseDetectWindow({
+          status: INHOUSE_STATUS.IN_PROGRESS,
+          createdAtMs: FORMED,
+          startedAtMs: FORMED + late * MIN,
+        }),
+      ).toEqual(fromFormation);
+    }
+  });
+
+  it("lets Start bring the scan forward but never push it back", () => {
+    // Pressed before the formation window opens, Start still can't move the
+    // opening later than formation would have put it.
+    const window = inhouseDetectWindow({
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      createdAtMs: FORMED,
+      startedAtMs: FORMED + 10 * MIN,
+    });
+    expect(window?.opensAtMs).toBe(
+      FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+    );
+    for (let startedMin = 0; startedMin <= 120; startedMin += 1) {
+      const started = inhouseDetectWindow({
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        createdAtMs: FORMED,
+        startedAtMs: FORMED + startedMin * MIN,
+      })!;
+      expect(started.opensAtMs).toBeLessThanOrEqual(
+        FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+      );
+      // The clock always matches the floor it opened on.
+      expect([
+        started.clockMs + INHOUSE.DETECT_MIN_MINUTES * MIN,
+        started.clockMs + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+      ]).toContain(started.opensAtMs);
+    }
+  });
+
+  it("scans a game nobody pressed Start on, timed from formation", () => {
+    // The bug this closes: ten players who go straight into Dota after the
+    // draft used to be invisible to the scan until someone pressed Start.
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.READY,
+        createdAtMs: FORMED,
+        startedAtMs: null,
+      }),
+    ).toEqual({
+      clockMs: FORMED,
+      opensAtMs: FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+    });
+  });
+
+  it("gives a READY lobby longer than a started one: teams still have to host", () => {
+    expect(INHOUSE.DETECT_READY_MIN_MINUTES).toBeGreaterThan(
+      INHOUSE.DETECT_MIN_MINUTES,
+    );
+  });
+
+  it("never lets the abandon floor cut a played lobby's scan short", () => {
+    // A READY lobby is being played now, so it gets the same window as a
+    // started one — and both outlast the moment the scan first opens.
+    expect(INHOUSE.ABANDON_READY_HOURS).toBeGreaterThanOrEqual(
+      INHOUSE.ABANDON_IN_PROGRESS_HOURS,
+    );
+    expect(INHOUSE.ABANDON_READY_HOURS * 60).toBeGreaterThan(
+      INHOUSE.DETECT_READY_MIN_MINUTES,
+    );
+  });
+
+  it("falls back to formation for an IN_PROGRESS row with no start stamp", () => {
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.IN_PROGRESS,
+        createdAtMs: FORMED,
+        startedAtMs: null,
+      })?.clockMs,
+    ).toBe(FORMED);
+  });
+
+  it.each([
+    INHOUSE_STATUS.READY_CHECK,
+    INHOUSE_STATUS.CAPTAIN_VOTE,
+    INHOUSE_STATUS.DRAFTING,
+    INHOUSE_STATUS.COMPLETED,
+    INHOUSE_STATUS.CANCELLED,
+  ])("does not scan a %s lobby", (status) => {
+    expect(
+      inhouseDetectWindow({ status, createdAtMs: FORMED, startedAtMs: null }),
+    ).toBeNull();
+  });
+});
+
+describe("inhouseScanStatus", () => {
+  const OPENS = Date.UTC(2026, 8, 20, 18, 8);
+  const MIN = 60_000;
+
+  it("counts whole minutes up to the scan window, never below one", () => {
+    expect(inhouseScanStatus(OPENS, OPENS - 8 * MIN)).toEqual({
+      live: false,
+      minutesLeft: 8,
+    });
+    expect(inhouseScanStatus(OPENS, OPENS - 7 * MIN - 1)).toEqual({
+      live: false,
+      minutesLeft: 8,
+    });
+    expect(inhouseScanStatus(OPENS, OPENS - 1)).toEqual({
+      live: false,
+      minutesLeft: 1,
+    });
+  });
+
+  it("is live from the moment the window opens", () => {
+    expect(inhouseScanStatus(OPENS, OPENS)).toEqual({
+      live: true,
+      minutesLeft: 0,
+    });
+    expect(inhouseScanStatus(OPENS, OPENS + 30 * MIN).live).toBe(true);
+  });
+
+  it("treats an unknown window as open rather than hiding the check", () => {
+    expect(inhouseScanStatus(null, OPENS).live).toBe(true);
+  });
+
+  it("keeps a game that just started out of the manual check", () => {
+    // The room hides "Game over? Check now" until `live`: a game Start was
+    // pressed on a moment ago, right after teams locked, can't be over yet.
+    const started = OPENS - INHOUSE.DETECT_MIN_MINUTES * MIN;
+    const window = inhouseDetectWindow({
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      createdAtMs: started - 5 * MIN,
+      startedAtMs: started,
+    });
+    expect(inhouseScanStatus(window!.opensAtMs, started + 3_000).live).toBe(
+      false,
+    );
+  });
+
+  it("keeps the manual check on a finished game when Start is pressed late", () => {
+    // The Play screen must not lose "Check now" because someone pressed the
+    // optional Start (or the bot's launch was first noticed) after the game.
+    const formed = OPENS - 60 * MIN;
+    const lateStart = OPENS;
+    const window = inhouseDetectWindow({
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      createdAtMs: formed,
+      startedAtMs: lateStart,
+    });
+    expect(inhouseScanStatus(window!.opensAtMs, lateStart + 3_000).live).toBe(
+      true,
+    );
+  });
+});
+
+describe("inhouseReadyInPlay", () => {
+  const FORMED = Date.UTC(2026, 8, 28, 20, 0);
+
+  it("ends READY's setup when the formation scan window opens", () => {
+    const opens = inhouseDetectWindow({
+      status: INHOUSE_STATUS.READY,
+      createdAtMs: FORMED,
+      startedAtMs: null,
+    })!.opensAtMs;
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, opens - 1)).toBe(false);
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, opens)).toBe(true);
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, opens + 3_600_000)).toBe(true);
+  });
+
+  it("speaks only for READY, and never on an unknown window or clock", () => {
+    const opens = FORMED;
+    for (const status of [
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CAPTAIN_VOTE,
+      INHOUSE_STATUS.DRAFTING,
+      INHOUSE_STATUS.IN_PROGRESS,
+      null,
+      undefined,
+    ]) {
+      expect(inhouseReadyInPlay(status, opens, opens + 1)).toBe(false);
+    }
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, null, opens)).toBe(false);
+    expect(inhouseReadyInPlay(INHOUSE_STATUS.READY, opens, null)).toBe(false);
+  });
+});
+
+describe("shouldFocusStage", () => {
+  const snap = (
+    status: string | null,
+    inLobby = true,
+    lobbyId: string | null = status ? "lobby-1" : null,
+  ) => ({ lobbyId, status, inLobby });
+
+  it("brings each stage that needs a member into view once", () => {
+    expect(shouldFocusStage(snap(null), snap("READY_CHECK"))).toBe(true);
+    expect(shouldFocusStage(snap("READY_CHECK"), snap("CAPTAIN_VOTE"))).toBe(
+      true,
+    );
+    expect(shouldFocusStage(snap("CAPTAIN_VOTE"), snap("DRAFTING"))).toBe(
+      true,
+    );
+    expect(shouldFocusStage(snap("DRAFTING"), snap("READY"))).toBe(true);
+  });
+
+  it("stays put within a stage, so a viewer who scrolled keeps their place", () => {
+    for (const status of ["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "READY"])
+      expect(shouldFocusStage(snap(status), snap(status))).toBe(false);
+  });
+
+  it("focuses a member's first sight of their lobby, including a reload", () => {
+    expect(shouldFocusStage(null, snap("DRAFTING"))).toBe(true);
+    // Queued when the lobby formed: the previous poll had no lobby for them.
+    expect(shouldFocusStage(snap(null, false), snap("READY_CHECK"))).toBe(
+      true,
+    );
+  });
+
+  it("focuses a new lobby even at the same stage", () => {
+    expect(
+      shouldFocusStage(
+        snap("READY_CHECK", true, "lobby-1"),
+        snap("READY_CHECK", true, "lobby-2"),
+      ),
+    ).toBe(true);
+  });
+
+  it("never scrolls a spectator", () => {
+    expect(shouldFocusStage(null, snap("DRAFTING", false))).toBe(false);
+    expect(
+      shouldFocusStage(snap("CAPTAIN_VOTE", false), snap("DRAFTING", false)),
+    ).toBe(false);
+  });
+
+  it("leaves a game in progress and the empty queue alone", () => {
+    expect(shouldFocusStage(snap("READY"), snap("IN_PROGRESS"))).toBe(false);
+    expect(shouldFocusStage(null, snap("IN_PROGRESS"))).toBe(false);
+    expect(shouldFocusStage(snap("READY"), snap(null, false))).toBe(false);
   });
 });

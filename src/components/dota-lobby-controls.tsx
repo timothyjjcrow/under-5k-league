@@ -16,14 +16,46 @@ const labels = {
   released: "Bot released",
 };
 
+/**
+ * Whether the bot can host this game, for a page that lays itself out around
+ * the panel: still asking, not set up at all, answering with a lobby state, or
+ * set up but failing (its error explains why).
+ */
+export type LobbyBotAvailability = "checking" | "off" | "on" | "unavailable";
+
+/**
+ * Who the panel is for. "host": the people who make the lobby (inhouse
+ * players and season captains, beside the manual setup steps), who need to
+ * hear that the bot is missing or failing. "player": the season match page's
+ * copy for the players, standins and admins who join it. Captain tools, where
+ * the manual steps live, is not on their page, and they can't connect the bot
+ * or set a ticket, so their panel shows only once the bot answers with a
+ * lobby.
+ */
+export type LobbyPanelAudience = "host" | "player";
+
+/** Whether the panel renders at all for this audience right now. */
+export function lobbyPanelVisible(
+  audience: LobbyPanelAudience,
+  availability: LobbyBotAvailability,
+): boolean {
+  return audience === "host" || availability === "on";
+}
+
 export function DotaLobbyControls({
   kind,
   id,
   recoveryOnly = false,
+  onAvailability,
+  audience = "host",
 }: {
   kind: LobbyKind;
   id: string;
   recoveryOnly?: boolean;
+  /** Defaults to "host"; see LobbyPanelAudience. */
+  audience?: LobbyPanelAudience;
+  /** Called whenever the bot's availability changes (see LobbyBotAvailability). */
+  onAvailability?: (availability: LobbyBotAvailability) => void;
 }) {
   const [view, setView] = useState<DotaLobbyView | null>(null);
   const [error, setError] = useState("");
@@ -71,6 +103,17 @@ export function DotaLobbyControls({
     };
   }, [request]);
   const state = view?.status?.state;
+  const availability: LobbyBotAvailability =
+    view?.enabled === false
+      ? "off"
+      : view?.enabled && state
+        ? "on"
+        : error
+          ? "unavailable"
+          : "checking";
+  useEffect(() => {
+    onAvailability?.(availability);
+  }, [availability, onAvailability]);
   useEffect(() => {
     if (!state || ["idle", "released"].includes(state)) return;
     const timer = setInterval(() => {
@@ -78,6 +121,11 @@ export function DotaLobbyControls({
     }, 5000);
     return () => clearInterval(timer);
   }, [state, request]);
+
+  if (!lobbyPanelVisible(audience, availability)) return null;
+  // Joiners can't create, start or release the lobby, so their copy says who
+  // does. An admin on the players' panel can, and gets the hosts' copy.
+  const joiner = audience === "player" && !view?.canRelease;
 
   return (
     <section
@@ -122,6 +170,11 @@ export function DotaLobbyControls({
               <dd>{view.direName}</dd>
             </div>
           </dl>
+          {joiner && ["idle", "released"].includes(state) ? (
+            <p className="text-xs text-muted">
+              Once a captain creates it, join with this name and password.
+            </p>
+          ) : null}
           <p className="text-xs text-muted">
             Ticket {view.leagueId}. Join through Dota → Play → Custom Lobbies.
             The bot checks the ticket, mode, region, and rosters before
@@ -135,15 +188,21 @@ export function DotaLobbyControls({
           ) : null}
           {state === "blocked" ? (
             <p className="text-sm text-muted">
-              Check that the bot is online and has permission to use this
-              ticket. Refresh before retrying. Release the bot only after
-              checking the existing lobby in Dota.
+              {joiner
+                ? "The bot can't run this lobby right now. Your captains can fix it or host the lobby by hand."
+                : "Check that the bot is online and has permission to use this ticket. Refresh before retrying. Release the bot only after checking the existing lobby in Dota."}
             </p>
           ) : null}
           {state === "started" && kind === "season" ? (
             <p className="text-xs text-muted">
               After this result is imported, this page offers the next game in
               the series.
+            </p>
+          ) : null}
+          {state === "started" && kind === "inhouse" && !recoveryOnly ? (
+            <p className="text-xs text-muted">
+              The bot will record this result automatically once the game
+              ends.
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">

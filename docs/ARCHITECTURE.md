@@ -1,16 +1,16 @@
-# LD2L Architecture
+# GGD2L Architecture
 
 A structural map of the codebase for developers adding features. This document
-describes what exists and where; `CLAUDE.md` is the companion file of working
-notes, concurrency doctrine, and hard-won gotchas — read both, but this one
-first. Facts here are anchored to source paths; when this document and the code
-disagree, the code wins and this file should be fixed.
+describes what exists and where; `CLAUDE.md` holds the working rules and
+`docs/features/` the per-area notes and the reasons behind them — read those
+too, but this one first. Facts here are anchored to source paths; when this
+document and the code disagree, the code wins and this file should be fixed.
 
 ---
 
 ## 1. What this is
 
-LD2L ("GGD2L") is an amateur Dota 2 league site: players sign in with Steam,
+GGD2L is an amateur Dota 2 league site: players sign in with Steam,
 register for a season, get bought onto teams in a live auction draft, and play
 a weekly round-robin into single-elimination playoffs until a champion is
 crowned. It is a Next.js 16 App Router app (React 19, TypeScript, Tailwind v4)
@@ -21,7 +21,7 @@ season** (when a drafted league is running, it hangs off the at-most-one
 `SIGNUPS → DRAFT → REGULAR_SEASON → PLAYOFFS → COMPLETE` and gates which pages
 and nav links exist; zero active rows is the real offseason), and **inhouses** — a
 season-independent pick-up mode with its own queue, lobby state machine, Elo
-ladder, and play-money betting, coupled to the league only through the shared
+ladder, and pinned Discord queue board, coupled to the league only through the shared
 identity and opportunistic reuse of the latest trusted `Registration.mmr`; it
 has no `seasonId` or league-phase gate. There is no websocket. Interactive
 rooms still use HTTP polling; anonymous polls are side-effect-free, while
@@ -53,15 +53,18 @@ keyed on `steamId` (`src/lib/users.ts` — role from the authoritative
 unique administrator before deployment, while the atomic
 `bootstrapAdminSteamId` Setting claim is local-development fallback only),
 best-effort backfills the OpenDota rank medal (`ensureRankTier`), and mints a stateless
-jose HS256 JWT session cookie (`src/lib/auth.ts`, claims `{uid, ep}`, 30
-days). Production session and one-shot OAuth cookies use browser-enforced
+jose HS256 JWT session cookie (`src/lib/auth.ts` over `session-token.ts`,
+claims `{uid, ep, at}`, 30 days). `src/proxy.ts` re-issues a session more
+than a week old on GET page loads, keeping uid, epoch and the sign-in time
+`at`, and stops 180 days after sign-in, so active players stay signed in
+through a season. Production session and one-shot OAuth cookies use browser-enforced
 `__Host-` names (Secure, host-only, `Path=/`), preventing a sibling subdomain
 from tossing a competing identity/state cookie. The first hardened deployment
 therefore intentionally signs out sessions minted under the legacy name.
 Production `getSessionUser` re-evaluates the allowlist on every
 authenticated request, so removing an administrator revokes the existing
 cookie's authority on the next request instead of waiting for another login.
-There is no middleware: every page, action, and route calls
+The proxy never authorizes anything: every page, action, and route calls
 `getSessionUser`/`requireUser`/`requireAdmin` itself. Revocation is a global
 session epoch in the `Setting` table (`src/lib/session-epoch.ts`), bumped by
 the admin "revoke all sessions" action. A dev/mock login exists at
@@ -79,8 +82,9 @@ path onto the retry URL.
 plus the OpenDota medal — the hard ceiling `HARD_MMR_CEILING` and a
 Divine-3+/Immortal medal reject outright; `Season.maxMmr` is a **soft review
 threshold that blocks nobody** (a recurring documentation trap — see
-CLAUDE.md). Only gate-approved claims are then clamped to the medal's
-plausibility window (`clampMmrToRank`, `src/lib/rank.ts`). Registrations carry
+`docs/features/players-and-registration.md`). Only gate-approved claims are
+then clamped to the medal's plausibility window (`clampMmrToRank`,
+`src/lib/rank.ts`). Registrations carry
 a questionnaire (roles via `src/lib/roles.ts`, favorite heroes, statement,
 captain note) surfaced publicly in the pool/profile and again in the draft
 room. `type` is `PLAYER` or
@@ -99,7 +103,7 @@ Signups are
 display-only math, never a gate.
 
 **Admin review.** The `/admin` Captains card supports MMR corrections
-(`setRegistrationMmr`, never clamped), bulk medal sync (`syncPlayerRanks`,
+(`setRegistrationMmr`, never clamped), bulk medal refresh (`refreshPlayerData`,
 which flags over-ceiling medals via `medalProvesIneligible` but never
 auto-removes), `withdrawSignup`/`reinstateSignup`, and `setMaxMmr`. Review
 writes re-check the active season and registration state in Serializable
@@ -109,8 +113,9 @@ auction, and completed-season records are read-only.
 **Captains and draft creation.** Captaincy is `Team.captainId` +
 `TeamMember.isCaptain` (there is no CAPTAIN registration type). Admin actions
 `addCaptain`/`removeCaptain`/`transferCaptaincy`/`randomizeDraftOrder`/
-`setDraftSettings`/`setDraftNight` (all `src/app/actions/admin.ts`) configure
-the field. `src/lib/draft-setup.ts` is the shared capability policy: setup is
+`setDraftNight` (`src/app/actions/admin-captains-draft.ts`) and
+`setDraftSettings` (`src/app/actions/admin-season.ts`) configure the field.
+`src/lib/draft-setup.ts` is the shared capability policy: setup is
 open in SIGNUPS or DRAFT only while the Draft row is missing/NOT_STARTED;
 captain handover is allowed after the auction but never live/paused or in a
 completed season. Every setup action carries the active-season id rendered by
@@ -191,7 +196,8 @@ forfeits. Every path re-reads lifecycle and row authority in its Serializable
 write so it cannot race Start/Abort, phase changes, standin cover, or another
 roster command.
 
-**Schedule generation.** `generateSchedule` (`src/app/actions/admin.ts`) runs
+**Schedule generation.** `generateSchedule`
+(`src/app/actions/admin-schedule-results.ts`) runs
 the pure circle-method round robin (`roundRobin` in `src/lib/schedule.ts`,
 home/away fairness, rotating BYE, optional mirrored second leg) and stamps
 kickoffs as pure arithmetic off `Season.firstMatchNight`
@@ -200,7 +206,8 @@ id is a required mutation claim. Active season, lifecycle/Draft, teams,
 withdrawal flags, played rows, attached games, and replacement collateral are
 read in the same Serializable transaction that deletes/recreates fixtures and
 their reminder markers. Generation refuses stale authority, withdrawn teams,
-landed results, and fewer than two teams. Replacement counts its dependent
+landed results, fewer than two teams, and a missing first match night (an
+untimed fixture gets no check-in, reminder, auto-import or pick'em lock). Replacement counts its dependent
 RSVP/prediction/standin/proposal rows, and displaced standins are told after
 commit. During SIGNUPS/DRAFT, `src/lib/league-lifecycle.ts` requires a
 completed auction before schedule or fantasy work opens;
@@ -210,7 +217,7 @@ legacy Draft row. Result imports require REGULAR_SEASON or PLAYOFFS inside
 their write transaction, which makes them race safely with Abort.
 `DRAFT → REGULAR_SEASON` has **no automatic writer** — the auction finishing
 does not advance the phase; the admin uses the positive-policy
-`setSeasonPhase` handoff. That control is not a generic state editor: it
+`setSeasonPhase` handoff, which refuses until fixtures exist. That control is not a generic state editor: it
 permits safe adjacent moves and narrowly proven recovery shapes, while Start/
 Abort draft, Start/Return playoffs, and crowning own transitions that also
 change dependent data. `/api/calendar` serves every timed active-season fixture
@@ -271,11 +278,13 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   then removes withdrawn teams from eligibility, preserving every survivor's
   played/ruled results while producing the cut, one-indexed seed map, and
   first-round pairings used by every page and the write service. Unresolved
-  qualification/seeding ties require a tiebreaker week (two teams BO3; three teams BO1 double elimination): `TIEBREAKER`
+  qualification/seeding ties require a tiebreaker week (BO1 single-elimination
+  brackets, at most three games per team; ties published before 20 September
+  2026 keep their BO3 / BO1 double-elimination rules): `TIEBREAKER`
   fixtures settle only the tied group's order without changing regular points.
   The projection applies those results, and the seeding transaction refuses
-  unresolved or stale ties. See [Tiebreaker week](TIEBREAKER-WEEK.md) for the
-  competition rules and admin recovery workflow. The playoff
+  unresolved or stale ties. See [Playoff tiebreakers](TIEBREAKER-WEEK.md) for
+  the competition rules and admin recovery workflow. The playoff
   scenario engine (`src/lib/scenarios.ts` + `src/lib/stakes.ts`) enumerates
   equal-weight result combinations for clinch and “win and in” guidance; the
   UI explicitly does not present those combinations as predictive odds. The
@@ -304,7 +313,12 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   save concurrently, while import, phase, and archive writers remain
   exclusive; transient serialization conflicts retry from a fresh snapshot.
   COMPLETE and `?season=` archive views show read-only standings and roster
-  breakdowns.
+  breakdowns. After the lock the page is the standings and player scores:
+  only a manager's own five gets a lineup section, and the subtitle tells
+  everyone else why they cannot pick. The picker opens the pool most
+  expensive first and keeps count, salary and the one Save button in a bar
+  that sticks above the phone tab bar (`src/lib/fantasy-picker.ts`). The
+  scoring card explains that fantasy scores impact points.
 - _Pick'em_: `/pickem` uses the same post-auction lifecycle boundary. Each
   prediction locks at scheduled kickoff or as soon as the fixture is LIVE or
   COMPLETED. `savePrediction` re-reads the active Season, optional Draft,
@@ -317,6 +331,18 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   community split before lock, and preserves the viewer's locked or void pick.
   A deadline refresh moves the whole card into its authoritative locked state.
   COMPLETE and archive views are structurally read-only.
+- _Scrims_: `/scrims` is casual practice outside every league table. A
+  captain posts an OPEN time; another captain claims it in one click from the
+  list or the scrim's own page (`scrimJoinCheck` explains a refusal there),
+  which books it and withdraws both teams' other open times within four
+  hours. Games import by player IDs (`scrim-result-service.ts`); either
+  captain or an admin can end a LIVE series at its current score through one
+  guarded claim that re-asserts status and score. A booking with no games
+  36 hours after kickoff is listed as "Not played" (display only, so a late
+  game can still be added). Posts, claims and cancels ping only the captains
+  who must act. League fixtures win: a playoff round build cancels booked
+  scrims within four hours of its night and reports LIVE ones, and every
+  schedule refusal names the scrim that caused it.
 
 **Playoffs.** `startPlayoffs` calls `createPlayoffBracket`
 (`src/lib/playoff-service.ts`). The rendered Start, Reset, and Return-to-regular
@@ -359,18 +385,20 @@ decided authoritative grand final. `resolveChampionPresentation`
 (`src/lib/champion-presentation.ts`) is the shared public boundary: when saved
 postseason rows exist it requires one latest completed FINAL whose participant
 and winner match the stored id; champion-only legacy archives remain trusted.
-Dashboard, schedule, teams, match detail, recap, archive, player careers, Hall
+Dashboard, schedule, teams, match detail, season page, player careers, Hall
 of Fame, feature metrics, bracket trophies, and Discord champion sends all use
 that proof. A hand-entered final can be reopened and an imported final game can
 be removed through dedicated correction commands even when the stored title
 incorrectly names the losing finalist: both atomically clear the
 champion/announcement marker, return to PLAYOFFS, preserve earlier rounds, and
 recrown if the recomputed series is still decided. Earlier rounds are locked by
-the shared `hasLaterBracketRound` rule. `/recap` keeps the champion, bracket,
-and completed series even when there are zero imported Dota games; only
-player-stat awards become unavailable. `/seasons` and `/seasons/[id]` recompute
+the shared `hasLaterBracketRound` rule. A finished season's page
+(`/seasons/[id]`) keeps the champion, bracket, and completed series even when
+there are zero imported Dota games; only its player-stat awards become
+unavailable. `/recap` only redirects there (`src/app/recap/route.ts`,
+`recapDestination`), so old links and Discord champion posts keep working. `/seasons` and `/seasons/[id]` recompute
 archived standings and brackets from stored rows; `/hall-of-fame` rolls up
-cross-season careers (`src/lib/hall-of-fame.ts`, career fantasy points,
+cross-season careers (`src/lib/hall-of-fame.ts`, career impact points,
 all-time oracle). `/seasons` also hosts a non-restorable JSON audit archive
 (`/api/admin/season-export`) and `deleteSeason` behind the strongest confirm
 tier plus a recent full-database backup receipt in production.
@@ -385,7 +413,7 @@ can either `archiveCompletedSeason` and deliberately stop in offseason, or
 season in one Serializable transaction. `createSeason` cannot conceal an
 unfinished league cancellation.
 
-`archiveIncompleteSeasonAction` (`src/app/actions/admin.ts`) is the separate,
+`archiveIncompleteSeasonAction` (`src/app/actions/admin-season.ts`) is the separate,
 explicit and reversible cancellation path. It deactivates the claimed
 unfinished Season without deleting or changing its phase; in the same
 transaction it parks an IN_PROGRESS/PAUSED auction, clears only its clocks,
@@ -397,7 +425,12 @@ Opening a season from offseason is either `createSeason` with no active id or
 the offseason-only `reactivateSeason` (`src/lib/season.ts`). Reactivation
 compare-and-sets the archived target's rendered `updatedAt`, restores its exact
 phase, and parks legacy live auction clocks before activation; it never
-silently archives a different active season. Every season-settings form also
+silently archives a different active season. The season-scoped public pages
+(Leaders, Hero meta, Pick'em, Fantasy) resolve `?season=` or the active season
+through `resolveSeasonScope` (`src/lib/season-scope.ts`); in offseason they
+open the most recent season (side games read-only) rather than an empty
+screen, and one season switcher appears only when two or more seasons have
+that page's data. Every season-settings form also
 claims the rendered active id and revision. These lifecycle commands run at
 Serializable isolation because "at most one active season" has no database
 constraint. `resultChangedAt` invalidates dependent reads after each committed
@@ -421,7 +454,8 @@ DRAFTING → READY → IN_PROGRESS → COMPLETED | CANCELLED`, one active lobby 
 time. Pure rules in `src/lib/inhouse.ts`, the engine in
 `src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery, and
 the viewer payload builder `getInhouseState`), the client in
-`src/components/inhouse-room.tsx`, one dispatch endpoint `POST /api/inhouse`.
+`src/components/inhouse-room.tsx` (poll loop and actions) with one file per
+stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`.
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
@@ -436,7 +470,7 @@ completion, and the real no-active-season offseason.
    `[joinedAt, userId]` order, snapshots `joinedAt` as each player's immutable
    `queuedAt` plus their W/L record, and Discord-mentions all ten by
    `<@discordId>`. The state payload uses the same total queue order.
-3. **Ready check** — 45s; all ten must `acceptMatch` (claim guarded on both
+3. **Ready check** — 90s; all ten must `acceptMatch` (claim guarded on both
    `acceptedAt: null` and the lobby still being in READY_CHECK). Decline or
    expiry fails the check. A decline drops the decliner, keeps accepters at the
    front, and backdates still-pending players so they must reconfirm; expiry
@@ -454,52 +488,36 @@ completion, and the real no-active-season offseason.
    Captains act normally; timed auto-pick and the displayed pool both rank MMR
    descending, then exact `[queuedAt, userId]`. An admin has an explicitly
    labelled recovery pick without receiving captain-only title/chime attention.
-6. **Betting window** — the `DRAFTING → READY` transition stamps
-   `betsCloseAt` (+45s) via one shared `readyTransitionData` at both write
-   sites. Players bet Cred **only on their own team, once, immutably**
-   (`src/lib/inhouse-bets.ts` pure matched-pool math,
-   `src/lib/inhouse-bet-service.ts` for every money write). Pressing Start
-   never closes the window.
-7. **Game setup** — READY/IN_PROGRESS render the fixed `GGD2L Inhouse` lobby
+6. **Game setup** — READY/IN_PROGRESS render the fixed `GGD2L Inhouse` lobby
    name, `ggd2l` password, required `Under 5K In-House League` ticket, and team
    voice channels. Player-account matching remains authoritative; the ticket
    is what makes the private game available to OpenDota for that scan.
-8. **Result detection and publication** — OpenDota only, no manual winner:
+7. **Result detection and publication** — OpenDota only, no manual winner:
    background scan
    (`maybeAutoDetectResult`), the detect button, or a pasted match id all
    converge on `buildResult` (league `classifyGame` reuse; emits `teamFixes`
    when players sat on the opposite side they were drafted to — the played game
    is the truth). `applyResult` first commits the guarded
-   `IN_PROGRESS → COMPLETED` claim plus side fixes and immutable `completedAt`,
-   tries the canonical bet settlement, computes full-history Elo, then claims
-   that exact completed match again to store `eloDeltas` and the exact durable
-   RESULT payload in one transaction. A leased outbox worker sends only after
+   `IN_PROGRESS → COMPLETED` claim plus side fixes, immutable `completedAt` and
+   the exact durable RESULT payload in one transaction, computes full-history
+   Elo, then claims that exact completed match again to store `eloDeltas`. A leased outbox worker sends only after
    commit and outside every transaction. A racing void cancels the RESULT only
    while it is still PENDING; if it is already SENDING or SENT, the durable
    sequence-2 correction waits behind or follows it. `updatedAt` is not result
    chronology; it remains mutable operational state.
-9. **Corrections and settlement** — every successful admin cancel is audited;
-   every successful void is audited and posts a correction even with no bets.
-   Cancel and void contain no bespoke money math, but each explicitly invokes
-   the same single-winner `resolveUnsettledBets` with its own lobby id before
-   returning. That targeted call prevents an older stranded pot from consuming
-   the action's immediate consistency attempt. Global state reads select up to
-   25 eligible rows oldest-first by `[updatedAt, id]`; each row is isolated so
-   later rows still run after a failure, and a failed row is best-effort touched
-   to rotate it behind the backlog. `completedAt` remains immutable throughout.
-   A bettor sees an explicit pending settlement instead of a silently missing
-   Cred delta.
-10. **Ladders and history** — Elo is derive-don't-store
+8. **Corrections** — every successful admin cancel is audited; every
+   successful void is audited and posts a correction.
+9. **Ladders and history** — Elo is derive-don't-store
     (`summarizeInhouse`, K=32, recomputed from all COMPLETED lobbies on ladder
     and stat reads); the live room reads the stored per-game delta. `/inhouse`
-    shows Elo plus the zero-sum Cred-profit ladder. `/inhouse/history` includes
+    shows the Elo ladder. `/inhouse/history` includes
     every completed lobby, 100 per page, displays
     `matchStartTime ?? startedAt ?? createdAt`, and gives admins an exact-row
     void. Cancelled/voided lobbies are excluded. The shared site/Discord
     proof-of-life loader chooses the newest formed completed lobby by
     `[createdAt desc, id desc]` and reports played start plus duration, falling
-    back to `completedAt`; it never uses settlement cursor `updatedAt`.
-11. **The board** — a single pinned, self-editing Discord message
+    back to `completedAt`; it never uses the mutable `updatedAt`.
+10. **The board** — a single pinned, self-editing Discord message
     (`src/lib/inhouse-board.ts` render / `inhouse-board-service.ts` service)
     showing the live queue; digest-gated so a motionless queue costs zero
     Discord requests. A pre-POST compare-and-swap reservation prevents duplicate
@@ -511,7 +529,7 @@ completion, and the real no-active-season offseason.
     it. Repainted from both resolver chains.
 
 Lazy resolution mirrors the draft. A state read runs heartbeat → abandoned-
-lobby sweep → bet sweep → formation → ready check → captain vote → stalled
+lobby sweep → formation → ready check → captain vote → stalled
 pick → auto-detect → board repaint; the tenth join also attempts formation
 synchronously. The authenticated maintenance worker runs the equivalent chain
 sitewide so an unwatched lobby still resolves. Inhouse result and void Discord messages use the durable
@@ -527,14 +545,22 @@ before `sentAt` commits. Routine queue/cancel notifications remain best-effort.
 
 | Layer                       | Convention                                                                                                                                                   | Examples                                                                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Pure logic (no DB, no IO)   | `src/lib/<name>.ts` + sibling `<name>.test.ts`                                                                                                               | `draft.ts`, `standings.ts`, `schedule.ts`, `inhouse.ts`, `inhouse-bets.ts`, `rank.ts`, `scenarios.ts`                                   |
+| Pure logic (no DB, no IO)   | `src/lib/<name>.ts` + sibling `<name>.test.ts`                                                                                                               | `draft.ts`, `standings.ts`, `schedule.ts`, `inhouse.ts`, `rank.ts`, `scenarios.ts`                                                    |
 | DB services (transactional) | `src/lib/<name>-service.ts`, covered by `test/integration/*.itest.ts`                                                                                        | `draft-service.ts`, `inhouse-service.ts`, `playoff-service.ts`, `standin-service.ts`, `reschedule-service.ts`, `result-sync-service.ts` |
-| Thin mutations              | `src/app/actions/*.ts` (server actions: auth + parse + delegate + toast + Discord send + revalidate) and `src/app/api/*` route handlers for the polled rooms | `actions/admin.ts`, `actions/registration.ts`, `api/draft/*`, `api/inhouse`                                                             |
+| Thin mutations              | `src/app/actions/*.ts` (server actions: auth + parse + delegate + toast + Discord send + revalidate) and `src/app/api/*` route handlers for the polled rooms | `actions/admin-*.ts`, `actions/registration.ts`, `api/draft/*`, `api/inhouse`                                                           |
 | Server pages                | `src/app/**/page.tsx` — query Prisma directly (no read API), run pure libs, serialize plain props                                                            | `page.tsx` (dashboard), `schedule/page.tsx`                                                                                             |
 | Client leaves               | `src/components/*.tsx` `"use client"` — polling rooms, forms, clocks, toasts                                                                                 | `draft-room.tsx`, `inhouse-room.tsx`, `action-form.tsx`, `local-time.tsx`                                                               |
 
 Rules that follow from the layering:
 
+- **Big pages keep a thin route file.** The dashboard's `page.tsx` loads the
+  data and picks the phase; its hero and per-phase views live in
+  `src/components/home/`. `/matches/[id]` reads the match once in `load.ts`
+  (roster, draft and check-in reads are request-cached) and renders one card
+  file per section beside `page.tsx`. Admin server actions are split by job
+  (`actions/admin-*.ts`, shared helpers in the non-`"use server"`
+  `admin-shared.ts`). Source guards read these through `homePageSource()` and
+  `folderSourceFiles` (`test/support/source-files.ts`).
 - **Prefer adding logic to a pure lib with a test beside it.** Services should
   be thin transactions over pure decisions; the room components have had every
   behavioral rule extracted into pure modules precisely because there is no
@@ -570,17 +596,11 @@ Rules that follow from the layering:
   at read time (through `src/lib/cached-queries.ts` for the whole-table
   scans — `unstable_cache`, 60s TTL, tag `"games"`, busted by every import
   path). Deliberate exceptions, each with a stated reason:
-  `InhouseLobby.eloDeltas`/`betDeltas` (stamped once at completion so the
+  `InhouseLobby.eloDeltas` (stamped once at completion so the
   1.5s poll path never scans history), immutable `InhouseLobby.completedAt`
-  (stable result recency while retryable work mutates `updatedAt`),
+  (stable result recency while later writes move `updatedAt`), and
   `InhouseLobbyPlayer.wins/losses/games` plus `queuedAt` (record/queue snapshots
-  frozen at formation), and
-  `InhouseCredit.balance` (a
-  mutable column because the affordability check must be re-assertable in the
-  WHERE of the debit — `InhouseCreditEntry` is the provenance ledger). The
-  ledger has one deliberate non-append exception: reversing a voided game's
-  FLOOR top-up deletes that FLOOR receipt so its once-per-UTC-day key is
-  released and the admin's correction does not consume the player's safety net.
+  frozen at formation).
 - **Feedback contract.** Mutations return `ActionResult`
   (`src/lib/action-result.ts`), rendered through `<ActionForm>` /
   `<SubmitButton>` (`src/components/action-form.tsx`) into the global
@@ -607,35 +627,35 @@ Rules that follow from the layering:
 ## 5. Page inventory
 
 25 pages. "Nav from X" = the link appears from that phase onward
-(`src/components/site-header.tsx`); most pages still render if visited
-directly.
+(`src/lib/site-nav.ts`, the one page list behind the header, Explore, the
+phone tab bar and the footer); most pages still render if visited directly.
 
 | Route              | Purpose                                                                                        | Gating                                                                                             | Notable data sources                                                                                          |
 | ------------------ | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `/`                | Phase/offseason-aware dashboard (five league phases plus offseason)                            | Always                                                                                             | `getSeasonSnapshot`, `computeStandings`, `scenarioReport`, `focusSlate`, cached leaders scan                  |
 | `/login`           | Steam login + dev quick-login, return-path/error/logout feedback                               | Signed out; available in every phase                                                               | —                                                                                                             |
-| `/me`              | Profile: signup, Steam-derived Dota metadata refresh, Discord linking, withdraw, prefill       | Signed in; identity controls available in every phase, signup interaction follows season phase     | Registration, prior-season prefill, live Discord membership, rank/medal hint (independent reads parallelized) |
-| `/players`         | Signup pool (URL-mirrored filters) + rosters                                                   | Always                                                                                             | 4 inline queries → client `PlayerPool`                                                                        |
+| `/me`              | My account: signup, Steam-derived Dota metadata refresh, Discord linking, withdraw, prefill    | Signed in; identity controls available in every phase, signup interaction follows season phase     | Registration, prior-season prefill, live Discord membership, rank/medal hint (independent reads parallelized) |
+| `/players`         | Player pool table with standins as rows (URL-mirrored filters)                                 | Always                                                                                             | 4 inline queries → client `PlayerPool`                                                                        |
 | `/players/[id]`    | Player profile: career stats, report card, achievements, seasons, inhouse card                 | Always                                                                                             | Cached `getAllGameLines` two-pass scan                                                                        |
 | `/players/compare` | GET-form two-player career comparison with invalid/missing/same-player states                  | Always                                                                                             | Trusted `getAllGameScores`, `meetings`; metadata uses the same career eligibility                             |
 | `/teams`           | Teams index + power rankings + draft recap                                                     | Nav from DRAFT                                                                                     | Standings order post-results; `powerRankings`                                                                 |
-| `/teams/[id]`      | Team detail: scenario card, roster, hero pool, H2H                                             | Always (archived works)                                                                            | `seasonScenarioReport`, cached season scan                                                                    |
-| `/draft`           | Live auction room                                                                              | Gates only on "no active season"                                                                   | Polls `/api/draft/tick`                                                                                       |
-| `/schedule`        | Standings, weeks, bracket, season grid, playoff picture                                        | Nav from DRAFT; phase-specific published/locked/read-only states                                   | `computeStandings`, `crossTable`, `buildBracketRounds`, `matchCheckinOpen`                                    |
-| `/matches/[id]`    | Box scores or pre-match preview (scouting, stakes, RSVP, standins, reschedule, captain report) | Always                                                                                             | Game JSON, `scouting.ts`, `matchStakes`                                                                       |
-| `/leaders`         | 8 stat boards + report-card board + evidence-gated weekly honors                               | Nav from REGULAR_SEASON; direct/archive reads always work                                          | Trusted `getSeasonGameLeaders`, `topBy`, `getSeasonHonorReadiness`                                            |
-| `/meta`            | Trusted hero meta report with known-pool coverage and signature owners                         | Nav from REGULAR_SEASON; direct/archive reads always work                                          | `getSeasonGameScores`, `heroMeta`, bundled hero catalogue                                                     |
-| `/fantasy`         | Fantasy-five picker, final fives, scoring, and standings                                       | Nav from DRAFT; interaction after completed auction until first import; COMPLETE/archive read-only | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
-| `/pickem`          | Match predictions, locked/void-pick review, and oracle board                                   | Nav from DRAFT; interaction after completed auction until each kickoff; COMPLETE/archive read-only | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
-| `/records`         | All-time trusted single-game record book with first-achiever tie policy                        | Evergreen: Statistics nav, Explore, footer                                                         | `getAllGamesForRecords` (deterministic chronology), `leagueRecords`                                           |
-| `/hall-of-fame`    | Cross-season career boards                                                                     | Footer link                                                                                        | `careerCounts`, all-seasons scans                                                                             |
-| `/recap`           | Season awards page                                                                             | Nav on COMPLETE; `?season=`                                                                        | `computeSeasonAwards`                                                                                         |
+| `/teams/[id]`      | Team detail: scenario card, roster, hero pool, H2H, captain's name/logo form                   | Always (archived works)                                                                            | `seasonScenarioReport`, cached season scan                                                                    |
+| `/draft`           | Live auction room                                                                              | Active season; redirects to /teams after DRAFT unless the auction is live/paused                   | Polls `/api/draft/tick`                                                                                       |
+| `/schedule`        | Standings, weeks, bracket, season grid, playoff picture                                        | Nav once the auction is complete; phase-specific published/locked/read-only states                 | `computeStandings`, `crossTable`, `buildBracketRounds`, `matchCheckinOpen`                                    |
+| `/matches/[id]`    | Box scores or pre-match preview (scouting, stakes, RSVP, standins, reschedule, captain report) | Always                                                                                             | Game JSON, `scouting.ts`, `PlayoffOutlook`                                                                    |
+| `/leaders`         | 8 stat boards + report-card board + evidence-gated weekly honors                               | Nav from REGULAR_SEASON once a game exists; direct/archive reads always work                       | Trusted `getSeasonGameLeaders`, `topBy`, `getSeasonHonorReadiness`                                            |
+| `/meta`            | One sortable table of picked heroes; unpicked pool in one line; 8+ pick win-rate headline      | Nav from REGULAR_SEASON once a game exists; direct/archive reads always work                       | `getSeasonGameScores`, `heroMeta`, bundled hero catalogue                                                     |
+| `/fantasy`         | Fantasy-five picker (sticky Save bar), standings, player scores, impact-points explainer       | Nav while picks are open, then for entrants; COMPLETE/archive read-only                            | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
+| `/pickem`          | Match predictions, one "Your picks" history, and oracle board (shared places)                  | Nav once the auction is complete; picks until each kickoff; COMPLETE/archive read-only             | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
+| `/records`         | Compact trusted single-game record book (no Most deaths), first-achiever tie policy            | Nav (Statistics, Explore) once a game exists                                                       | `getAllGamesForRecords` (deterministic chronology), `leagueRecords`                                           |
+| `/hall-of-fame`    | Short note until a champion exists; then champions first and shared-place career boards        | Nav once a season has an official champion (`hasOfficialChampion`)                                 | `appearanceCareers`, all-seasons scans                                                                        |
+| `/recap`           | Redirect only: to a finished season's page, or Leaders while the season runs                   | Old links and Discord posts; `?season=`                                                            | `recapDestination`                                                                                            |
 | `/seasons`         | Season history + audit archive/delete; offseason-only reactivation                              | Nav once an archive exists; reactivation disabled while a season is active                         | —                                                                                                             |
-| `/seasons/[id]`    | Season archive: standings, bracket, rosters                                                    | Same                                                                                               | Recomputed from archived rows                                                                                 |
-| `/inhouse`         | Inhouse room + scene stats + Elo/Cred ladder + results                                         | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`, `credProfitBoard`                                                   |
+| `/seasons/[id]`    | Season page: champion, standings, bracket, awards once finished, results, rosters              | Same                                                                                               | Recomputed from archived rows; `computeSeasonAwards`                                                          |
+| `/inhouse`         | Inhouse room + scene stats + Elo ladder + results                                              | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`                                                                      |
 | `/inhouse/history` | Complete completed-lobby archive, 100 rows per `?page=N`, exact-row admin void                 | Always                                                                                             | Stable formation ordering; authoritative played-time fallback                                                 |
-| `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Evergreen: Explore, mobile menu, footer                                                            | `NewsPost`; create request receipts; `NewsMedia`                                                              |
-| `/features`        | Phase-aware feature tour with honest live/locked destinations                                  | Always                                                                                             | `featureAvailability`, live counts, viewer-aware closing CTA                                                  |
+| `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Always: Explore (also the phone tab bar's sheet), footer                                           | `NewsPost`; create request receipts; `NewsMedia`                                                              |
+| `/how-it-works`    | One-screen explainer: steps, who can join, match night, standins, FAQ, one phase-aware button  | Always: Explore, footer, signups hero; `/features` redirects here                                  | `howItWorksAction` (join / standin / Discord), `seasonMatchNightLabel`                                        |
 | `/admin`           | The control panel (§8)                                                                         | Admin only                                                                                         | `loadSeasonAdminData`                                                                                         |
 
 API routes (19): `/api/auth/steam` + `/callback`, `/api/auth/discord` +
@@ -646,7 +666,7 @@ tick takes a 1,200/min/IP preflight before session or database work, then a
 signed-in user also takes a 300/min/user allowance. Bid, nominate, and
 admin-nominate share one 120/min-per-user mutation bucket;
 `/api/inhouse` — single POST dispatch (`{action: state|join|leave|accept|
-decline|vote|pick|start|detect|record|bet|cancel|void}`); valid JSON object and
+decline|vote|pick|start|detect|record|cancel|void}`); valid JSON object and
 explicit action required. Every call requires the JSON media type. Public state
 reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
@@ -686,7 +706,7 @@ browsers must revalidate; room state remains personalized and `no-store`.
 
 ## 6. Database models
 
-27 models in `prisma/schema.prisma`, committed on the sqlite provider
+40 models in `prisma/schema.prisma`, committed on the sqlite provider
 (`scripts/switch-db-provider.mjs` swaps to postgresql at build). SQLite has no
 enums, so every status column is a string whose allowed values live in
 `src/lib/constants.ts`. Uniques double as concurrency guards throughout.
@@ -733,6 +753,9 @@ enums, so every status column is a string whose allowed values live in
   this row.
 - `Bid` — per-lot audit trail (swept by undo/abort; `AdminAction` is the
   surviving record).
+- `TeamStaff` — optional additive team roles (such as COACH) that can manage
+  casual scrims without touching the drafted roster; `Team.captainId` stays
+  authoritative.
 
 **Fixtures & results**
 
@@ -748,6 +771,35 @@ enums, so every status column is a string whose allowed values live in
 - `Game` — an imported Dota game; `dotaMatchId` @unique is the import dedupe;
   per-player stats live in the `players` JSON column (hence the whole-table
   scans in `cached-queries.ts`).
+- `ImportCandidate` — bounded, expiring provider evidence for the resumable
+  importer (PENDING/READY/RETRYABLE/IGNORED/NEEDS_REVIEW);
+  `@@unique([seasonId, dotaMatchId])`, and fixture eligibility is rechecked at
+  commit. A retryable failure never becomes a deliberate exclusion.
+- `ImportSuppression` — deliberate per-season exclusions (an admin-removed or
+  ignored game), `@@unique([seasonId, dotaMatchId])`; they survive retries so
+  auto-sync cannot re-import them.
+- `DotaMatchClaim` — global ownership guard keyed by `dotaMatchId`: one Dota
+  match belongs to exactly one league `Match` or `Scrim` (`kind` + `contextId`).
+
+**History** (see [Historical participation](HISTORICAL-PARTICIPATION.md))
+
+- `RosterTenure` — when each roster membership began and ended, with the
+  acquisition facts known at the time; outlives today's `TeamMember` row.
+- `DraftRun` / `DraftLot` — each draft start's frozen rules, opening budgets and
+  pool, then one row per nomination with its accepted bids and outcome. Undo
+  and abort annotate lots instead of deleting them.
+- `GameParticipant` — an indexed projection of each validated `Game.players`
+  line for player queries; the JSON stays canonical.
+- `MatchLineup` / `MatchLineupSeat` — retired. The Playing lineups card was
+  removed on 2026-09-26; nothing writes these rows, and existing ones are only
+  copied by the season export and the postseason reset receipt.
+
+**Scrims**
+
+- `Scrim` / `ScrimParticipant` / `ScrimGame` — casual team-vs-team practice.
+  A scrim belongs to a season so it can use that season's Valve league ticket,
+  but its games live in their own table so standings, fantasy, records and
+  awards never read them.
 
 **Engagement**
 
@@ -763,10 +815,10 @@ enums, so every status column is a string whose allowed values live in
 - `InhouseQueueEntry` — userId-unique rolling queue with `lastSeenAt`
   presence heartbeat.
 - `InhouseLobby` — the game + state machine + result columns (`boxScore`
-  JSON, `winnerTeam`, `eloDeltas`, `betDeltas`, `betsCloseAt`,
-  `matchStartTime`, immutable result clock `completedAt`, `betSettlement` —
-  indexed, the bet sweeper's probe). Its mutable `updatedAt` orders oldest-first
-  settlement retries and is never result chronology.
+  JSON, `winnerTeam`, `eloDeltas`, `matchStartTime`, immutable result clock
+  `completedAt`). Its mutable `updatedAt` is never result chronology. The
+  retired Cred columns (`betDeltas`, `betsCloseAt`, `betSettlement`) remain in
+  the schema, dormant.
 - `InhouseLobbyPlayer` — `@@unique([lobbyId, userId])`; team, captaincy,
   pick order, MMR + record + exact original `queuedAt` snapshot, vote,
   ready-check `acceptedAt`.
@@ -774,13 +826,10 @@ enums, so every status column is a string whose allowed values live in
   `@@unique([lobbyId, kind])` deduplicates events, sequence preserves
   result-before-correction order, and a 30-second claim lease makes failed or
   interrupted sends retryable without holding a database transaction open.
-- `InhouseBet` — `@@unique([lobbyId, userId])` **is** the double-spend guard;
-  team frozen at placement for lineup-void grading.
-- `InhouseCredit` — the mutable balance column (deliberate exception, §4).
-- `InhouseCreditEntry` — provenance ledger; `@@unique([reason, refId])` is the
-  idempotence key (wager legs, the once-per-day floor, the one-time grant).
-  Result reversal preserves wager history with REVERSAL rows but deletes that
-  lobby's FLOOR receipt to release the daily key. **No FK on purpose.**
+- `InhouseBet`, `InhouseCredit`, `InhouseCreditEntry` — dormant. Cred betting
+  was removed on 2026-09-27 by the owner's decision; the tables were left
+  in place (no destructive migration) and nothing in the app reads or writes
+  them.
 
 **Infrastructure**
 
@@ -797,7 +846,13 @@ enums, so every status column is a string whose allowed values live in
   recoverable. Earlier non-terminal rows block later rows so related messages
   cannot intentionally overtake one another. Discord has no idempotency key,
   so a crash after webhook acceptance but before `SENT` commits retains the
-  unavoidable at-least-once duplicate gap.
+  unavoidable at-least-once duplicate gap. Discord's answer decides the row
+  (`discordRefusalKind`): 400/413 cancels that post, 401/403/404 keeps it
+  and pauses the queue at the slowest retry until a working webhook is
+  saved (saving one, or a test post, resumes it), and anything else backs
+  off. A time-bound post carries `expiresAt` and is cancelled rather than
+  sent late; the admin Discord card and Needs attention show the queue's
+  delivery health.
 - `AdminAction` — append-only audit log; deliberately no FKs (records outlive
   what they describe; every table wipe must name it explicitly). Coverage
   includes phase/draft/playoff recovery, session revocation, league and Discord
@@ -821,8 +876,9 @@ enums, so every status column is a string whose allowed values live in
   transactionally revalidated round-build marker;
   (4) JSON state blobs written by compare-and-swap — `inhouseBoard` (a live
   message state or leased pre-POST reservation; a row means on or posting),
-  `importSkip:<seasonId>`,
-  `leagueSyncSkip:<seasonId>`, `playoffGamesArchive:<seasonId>` (merge-only).
+  `importSkip:<seasonId>` and
+  `leagueSyncSkip:<seasonId>` (legacy, still read, never written),
+  `playoffGamesArchive:<seasonId>` (merge-only).
   (5) the monotonic `resultChangedAt` freshness cursor, written in the same
   command as result imports/corrections, bracket start/reset/removal, round
   creation, crowning, and generic phase changes. Each open tab compares it to
@@ -863,14 +919,14 @@ an expired RUNNING lease before taking ownership.
 | Scheduled maintenance (`runAutomation` → `runResultSync`) | Owns unattended league, draft, inhouse, reminder, playoff, Discord, and cursor work | Private Cloudflare Cron Trigger every minute; Admin → Automation → **Run maintenance now** uses the same election path | One global 90s tokened lease; 45s work budget; independent steps report stable issue/deferred codes instead of suppressing unrelated work |
 | Draft clock resolver (`resolveExpiredNomination` / `resolveStalledNomination`) | Resolves an expired nomination or bid clock when no draft-room client remains open | Every maintenance pass; draft-room reads also resolve immediately | Cheap due-time preflight plus phase/turn/lot write claims; duplicate room/worker attempts are harmless |
 | Result sync, roster scan (`syncDueMatches` → `autoDetectGamesForMatch`) | Claims one due fixture and roster-scans OpenDota | Every pass in REGULAR_SEASON/PLAYOFFS when the match throttle permits | Global `rosterAutoSyncAt`, per-match compare-and-set, exponential empty-scan backoff; recent-list and match calls receive the worker deadline/abort signal, and an unreachable/deadline scan releases its throttle for recovery |
-| Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, per-season skip memory, and the same deadline/abort propagation; manual admin sync remains a bounded override |
+| Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, revision-fenced `ImportCandidate` decisions (reconsidered each pass; the legacy `leagueSyncSkip` Setting is read-only), and the same deadline/abort propagation; manual admin sync remains a bounded override |
 | Playoff reconciliation (`advancePlayoffBracket`) | Repairs a committed result whose immediate round-build/crown handoff was interrupted | Every maintenance pass while PLAYOFFS | Round claims plus Serializable revalidation of current source winners/final; committed work is idempotently rediscovered |
-| Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, bet sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; `/api/inhouse` state reads retain immediate interactive resolution | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor |
-| Bet sweeper (`resolveUnsettledBets`) | Settles, refunds, or reverses stranded pots | Maintenance/inhouse resolver chains; cancel/void also target their own lobby immediately | Global calls attempt ≤25 oldest-first, isolate failures per row, and rotate a failed row; immutable `completedAt` remains result chronology |
+| Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; `/api/inhouse` state reads retain immediate interactive resolution | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor |
 | League marker reconciliation | Recovers series, champion, reminder, and honor announcement generations | Immediate domain path plus bounded maintenance retry sweep | 90s marker leases recover pre-enqueue death; stable generation/dedupe keys reuse the same `LeagueAnnouncement` after enqueue-before-finalize death; exact-value finalization cannot overwrite a newer claim |
 | League outbox (`deliverLeagueAnnouncements`) | Sends all league-channel webhook work in global creation order | One immediate bounded attempt after enqueue; maintenance drains existing work before creating/retrying later marker events | PENDING/SENDING/SENT/CANCELLED, tokened 30s claims, bounded batches, exponential backoff; an earlier non-terminal row blocks later rows. Discord accept-before-`SENT` death can still duplicate once on recovery (at-least-once) |
 | Inhouse result recovery/outbox (`reconcileMissingInhouseResultAnnouncements` / `deliverInhouseAnnouncements`) | Reconstructs missing completion-derived Elo/result work, then sends RESULT/RESULT_VOIDED in per-lobby order | Maintenance/inhouse reconciliation plus an immediate post-commit delivery attempt | Source completion and `dotaMatchId` are revalidated; unique `(lobbyId, kind)`, sequence, tokened 30s claims, cancellation of invalidated unsent results, and backoff. The same unavoidable Discord accept/commit duplicate gap applies |
 | Week reminder (`maybeAnnounceUpcomingWeek`) | Announces each kickoff cluster in the 24-hour window and mentions only linked players who still owe an RSVP | Maintenance pass only | Exact `(season, week, kickoff)` key, 90s recoverable marker lease, stable outbox dedupe generation, and exact-delimiter cleanup on retime |
+| Draft-night reminder (`maybeAnnounceDraftNight`) | Posts the draft time and pool/captain counts in the 24 hours before draft night, mentioning the captains and the linked players who haven't confirmed that time | Maintenance pass only; the automation gate wakes the worker when `draftReminderDue` opens | One `draftReminder:<season>:<revision>` marker on the week reminder's claim machinery; moving draft night re-arms under the new revision, and `setDraftNight` drops the old revision's in-flight markers. Exception: when a reminder was already delivered and the new time is still inside the `draftReminderDue` window, `setDraftNight` records the new revision as covered, so no second reminder posts (the "draft rescheduled" message carries the change) |
 | Weekly honors (`maybeAnnounceWeekHonors`) | Announces Player/Team of the Week only from publication-ready attributed 5v5 evidence | Result recomputation/correction plus maintenance retry | Generation-preserving CAS supports initial, stale, corrected, failed, and expired-claim recovery; reopen/remove marks previous awards stale |
 | Board repaint (`syncInhouseBoard`) | PATCHes the pinned Discord queue board when its semantic digest changes | Inhouse state reads and scheduled `syncInhouse` | Pre-POST CAS reservation + 30s lease; ambiguous/no-id POST requires explicit admin recovery; digest gate; `inhouseBoardAt` (10s); permanent gone handling |
 | Session epoch (`src/lib/session-epoch.ts`) | Invalidates all signed sessions | Admin `revokeAllSessions` | 30s in-process cache; tokens carry the epoch minted into them |
@@ -893,18 +949,17 @@ season/team name) — reserved for exactly the five actions with no in-app undo.
 | Card                       | Key controls (action → tier)                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Season controls            | `setSeasonPhase` (confirm, positive policy-approved handoff/recovery), `renameSeason`/`setMaxMmr`/`setSeriesLengths`/`setMatchSchedule` (plain), `setDraftSettings`                                                                                                                                                                                                                                                                                                                   |
-| Captains & draft           | `addCaptain` (confirm), **`removeCaptain` (DangerSubmit)**, `transferCaptaincy`, `randomizeDraftOrder`, `startDraft` (confirm names the seat math), `pauseDraft`/`resumeDraft`, `voidCurrentLot` (confirm, paused lot), `undoLastSale` (confirm), **`abortDraft` (DangerSubmit, enumerates roster/schedule/fantasy/reminder collateral)**, `setDraftNight`, `setRegistrationMmr`, `withdrawSignup`/`reinstateSignup`, `syncPlayerRanks`, `syncSteamProfiles`                           |
+| Captains & draft           | `addCaptain` (confirm), **`removeCaptain` (DangerSubmit)**, `transferCaptaincy`, `randomizeDraftOrder`, `startDraft` (confirm names the seat math), `pauseDraft`/`resumeDraft`, `voidCurrentLot` (confirm, paused lot), `undoLastSale` (confirm), **`abortDraft` (DangerSubmit, enumerates roster/schedule/fantasy/reminder collateral)**, `setDraftNight`, `setRegistrationMmr`, `withdrawSignup`/`reinstateSignup`, `refreshPlayerData` (one "Refresh player data now" button: Steam names, signup medals, stalest scouting snapshots, a few games), `changeCaptain` (pre-draft swap that keeps the team row; plain confirm) |
 | Schedule & results         | Generate (confirm, only when empty) vs **Regenerate (DangerSubmit, names collateral)** as separate controls; `setWeekNight` (confirm); per match: phase-aware `recordResult`/ruling, `reopenMatch`, `setMatchTime`, `removeGame`, import/auto-detect, and pending-reschedule Clear. Imported scores and off-phase fixtures are read-only; archive corrections require reactivation/phase restoration (and regular corrections require playoff reseeding).                              |
 | Playoffs                   | Start (confirm) vs **Reset (DangerSubmit)** with explicit intent + revision claims; **Return to regular season (DangerSubmit)** removes the bracket/champion through the shared teardown; postseason-game archive listing. The result card separately supports grand-final-only reopen/import correction without discarding earlier rounds.                                                                                                                                            |
 | Roster moves               | `signFreeAgent`, `promoteStandinToPlayer`, `releasePlayer` (confirm — names refund + cover effects), REGULAR-only `withdrawTeam`/`reinstateTeam`                                                                                                                                                                                                                                                                                                                                   |
 | Standins                   | `assignStandin` (incl. empty-seat `seat:<teamId>` form), `removeStandin` (confirm)                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Automation runner (evergreen) | Persisted last attempt/success/source/duration, failure streak, safe issue/deferred codes, active/expired lease signal, and expected one-minute/four-minute-stale cadence. **Run maintenance now** is admin-only and uses the same lease as cron: it can recover an expired owner but is visibly disabled and cannot force or overlap an active run. This card remains available in every phase and offseason. |
-| Auto-sync health           | Read-only: per-match scan state, league throttle, cursor, skip memory                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Dota league integration    | `setLeagueId`, `syncLeagueAction`, `enrichGamesAction`, `syncAllRanks`                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Auto-sync health           | Read-only: per-match scan state, league throttle, cursor, league-feed games set aside, private-data players                                                                                                                                                                                                                                                                                                                                                                             |
+| Dota league integration    | `setLeagueId`, `syncLeagueAction`, history backfills; player data refreshes itself hourly (`refreshPlayerDataAutomatically`)                                                                                                                                                                                                                                                                                                                                                           |
 | Discord (streamed)         | Webhook set/clear ×3 (league / inhouse board / inhouse alerts; board-webhook moves attempt teardown, alert moves never touch it), ping role, test sends, board post/remove/interrupted-post recovery, ping-health checklist + reach count                                                                                                                                                                                                                                              |
-| Inhouse betting (streamed) | Zero-sum + ledger drift alarms, stranded pots, negative balances, `adjustCredAction` (confirm — deliberately not DangerSubmit; reversible)                                                                                                                                                                                                                                                                                                                                             |
 | Admin activity (streamed)  | `recentAdminActions(40)` — the append-only `AdminAction` log (coverage is partial; see the log's call sites)                                                                                                                                                                                                                                                                                                                                                                           |
-| League news                | create/pin/delete (`src/app/actions/news.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| League news                | create/edit/pin/delete (`src/app/actions/news.ts`); optional Discord copy tracked by `discordMessageId` (edit PATCHes it, delete removes it), `@everyone` only when ticked                                                                                                                                                                                                                                                                                                             |
 | Security                   | `revokeAllSessions` (confirm)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Season handoff             | A completed authoritative season can be **closed into offseason** with `archiveCompletedSeasonAction`, or closed and replaced by `createSeason`; both use the shared completion/champion gate. From offseason, `createSeason` opens fresh SIGNUPS. An unfinished season uses the separate **Cancel season and enter offseason** `DangerSubmit`, which preserves saved data and parks any live auction. All controls carry rendered lifecycle claims; stale/replayed forms are refused. |
 
@@ -1012,7 +1067,8 @@ they must not be described as outbox-exact.
 
 ## 10. Testing model
 
-Five layers (depth and the doctrine behind each in CLAUDE.md):
+Five layers (depth and the doctrine behind each in CLAUDE.md and
+`docs/features/concurrency-and-testing.md`):
 
 1. **Unit** — `npm test` (`vitest.config.mts`, node environment, no jsdom):
    `src/**/*.test.ts` beside every pure lib. Because components can't render,
@@ -1074,7 +1130,10 @@ integration suite on a Postgres service container; the 4-shard mutation
 matrix; and all three Playwright suites sequentially. CI invokes the release
 classifier against the PR/push event base as a conservative job-selection
 optimization; only a narrow presentation-path allowlist may skip the Postgres
-and mutation jobs. Release authorization separately extracts the classifier
+job, and the mutation job also skips when `needs_mutation` is false (only
+pages/components, assets, docs, or tests the Postgres suite never loads
+changed; `mutation-nightly.yml` re-verifies main daily). Release
+authorization separately extracts the classifier
 blob from the resolved canonical production commit and runs it against the
 candidate, requires a fetchable ancestor base, and parses the exact
 NUL-delimited Git status stream. If the trusted blob is unavailable, every
@@ -1256,8 +1315,9 @@ database-identity metadata files are `0600`. They are renamed from
 same-directory temporaries only after checksum creation, and every
 partial/published piece is removed if any step fails. SQLite uses its online
 backup API and verifies the resulting snapshot with `PRAGMA integrity_check`
-instead of byte-copying a potentially live WAL database; it requires the
-`sqlite3` CLI and fails rather than falling back to an inconsistent copy.
+instead of byte-copying a potentially live WAL database; it uses Node's
+built-in `node:sqlite` (22.16+, no `sqlite3` CLI) and fails rather than
+falling back to an inconsistent copy.
 `npm run db:backup:verify -- backups/<file>` checks the sidecar
 filename/digest and artifact modes. With `BACKUP_RECEIPT_SECRET` configured it
 also signs a portable receipt naming the artifact digest, kind, creation and

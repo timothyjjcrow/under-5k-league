@@ -14,6 +14,7 @@ import {
 } from "@/lib/import-candidates";
 import { raceHook } from "@/lib/race-hook";
 import { actionErrorMessage, UserFacingError } from "@/lib/user-facing-error";
+import { isSerializationConflict, isUniqueViolation, isRecordNotFound } from "@/lib/prisma-errors";
 
 const OPEN_STATUSES = ["PENDING", "READY", "RETRYABLE", "NEEDS_REVIEW"];
 const STALE_MESSAGE = "Import progress changed — reload and review it before trying again.";
@@ -143,9 +144,7 @@ async function changeImportCandidate(
       });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    const code = error as { code?: string; meta?: { code?: string } };
-    if (code.code === "P2034" || code.code === "P2002" || code.code === "P2025" ||
-      (code.code === "P2010" && code.meta?.code === "40001")) {
+    if (isSerializationConflict(error) || isUniqueViolation(error) || isRecordNotFound(error)) {
       return { error: STALE_MESSAGE };
     }
     return {

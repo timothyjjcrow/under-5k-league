@@ -1,10 +1,22 @@
 import { describe, it, expect } from "vitest";
 import {
+  CHECKIN_REFUSAL,
+  CHECKIN_REFUSAL_MESSAGE,
+  checkinClosedReason,
+  checkinNudgeAnnouncementGroup,
+  checkinNudgeExpiresAt,
   matchNightRoster,
+  outPingThrottleKey,
   parseAvailabilityStatus,
   teamAvailability,
   expectedSideSize,
 } from "./availability";
+import {
+  AUTO_SYNC,
+  DRAFT_STATUS,
+  MATCH_STATUS,
+  SEASON_STATUS,
+} from "./constants";
 
 describe("teamAvailability", () => {
   const roster = ["a", "b", "c", "d", "e"];
@@ -200,5 +212,101 @@ describe("expectedSideSize", () => {
 
   it("handles an empty roster without inventing a denominator of 0", () => {
     expect(expectedSideSize(5, 0)).toBe(5);
+  });
+});
+
+describe("checkinClosedReason — the fixture half of the check-in gate", () => {
+  const NOW = Date.UTC(2026, 9, 1, 12);
+  const soon = new Date(NOW + 24 * 3600_000);
+  const regular = SEASON_STATUS.REGULAR_SEASON;
+  const scheduled = (scheduledAt: Date | null) => ({
+    status: MATCH_STATUS.SCHEDULED,
+    scheduledAt,
+  });
+
+  it("is null exactly when matchCheckinOpen lets the fixture be answered", () => {
+    expect(checkinClosedReason(regular, null, scheduled(soon), NOW)).toBeNull();
+    expect(
+      checkinClosedReason(regular, null, { status: MATCH_STATUS.LIVE, scheduledAt: soon }, NOW),
+    ).toBeNull();
+    // Still inside the result window after kickoff: check-in stays open.
+    expect(
+      checkinClosedReason(regular, null, scheduled(new Date(NOW - 3600_000)), NOW),
+    ).toBeNull();
+  });
+
+  it("names the most specific reason when it isn't", () => {
+    expect(
+      checkinClosedReason(regular, null, { status: MATCH_STATUS.COMPLETED, scheduledAt: soon }, NOW),
+    ).toBe(CHECKIN_REFUSAL.FINISHED);
+    expect(
+      checkinClosedReason(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS, scheduled(soon), NOW),
+    ).toBe(CHECKIN_REFUSAL.PHASE);
+    expect(
+      checkinClosedReason(SEASON_STATUS.COMPLETE, null, scheduled(soon), NOW),
+    ).toBe(CHECKIN_REFUSAL.PHASE);
+    expect(
+      checkinClosedReason(
+        regular,
+        null,
+        scheduled(new Date(NOW - (AUTO_SYNC.WINDOW_HOURS + 1) * 3600_000)),
+        NOW,
+      ),
+    ).toBe(CHECKIN_REFUSAL.KICKOFF_PASSED);
+    expect(checkinClosedReason(regular, null, scheduled(null), NOW)).toBe(
+      CHECKIN_REFUSAL.NO_KICKOFF,
+    );
+  });
+
+  it("keeps setAvailability's refusal copy word for word", () => {
+    expect(CHECKIN_REFUSAL_MESSAGE.FINISHED).toBe("That match is already finished");
+    expect(CHECKIN_REFUSAL_MESSAGE.NOT_PLAYING).toBe("You're not playing in this match");
+    expect(CHECKIN_REFUSAL_MESSAGE.WITHDRAWN).toBe(
+      "A withdrawn team cannot check in for this match.",
+    );
+    for (const reason of Object.values(CHECKIN_REFUSAL)) {
+      expect(CHECKIN_REFUSAL_MESSAGE[reason], reason).toBeTruthy();
+    }
+  });
+});
+
+describe("outPingThrottleKey", () => {
+  it("is the one key both the single OUT and an away range claim", () => {
+    // Changing it strands every live throttle row and lets one OUT ping twice.
+    expect(outPingThrottleKey("m1", "u1")).toBe("outPing:m1:u1");
+  });
+});
+
+describe("checkinNudgeExpiresAt", () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.UTC(2026, 9, 1, 18, 0);
+
+  it("drops a queued reminder at kickoff", () => {
+    const kickoff = now + 26 * HOUR;
+    expect(checkinNudgeExpiresAt(kickoff, now).getTime()).toBe(kickoff);
+  });
+
+  it("still gives a reminder sent near or after kickoff an hour", () => {
+    // Check-in stays open after kickoff for a late lobby; a reminder sent then
+    // must get a delivery attempt, not be dropped before its first one.
+    expect(checkinNudgeExpiresAt(now + 10 * 60 * 1000, now).getTime()).toBe(
+      now + HOUR,
+    );
+    expect(checkinNudgeExpiresAt(now - 2 * HOUR, now).getTime()).toBe(
+      now + HOUR,
+    );
+  });
+});
+
+describe("checkinNudgeAnnouncementGroup", () => {
+  it("is a per-match group that can't match another match's", () => {
+    // expireLeagueAnnouncementGroup refuses a group without the trailing ":",
+    // and "m1:" must not be a prefix of "m10:".
+    expect(checkinNudgeAnnouncementGroup("m1")).toBe("checkin-nudge:m1:");
+    expect(
+      checkinNudgeAnnouncementGroup("m10").startsWith(
+        checkinNudgeAnnouncementGroup("m1"),
+      ),
+    ).toBe(false);
   });
 });

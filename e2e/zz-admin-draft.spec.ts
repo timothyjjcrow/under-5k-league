@@ -44,26 +44,30 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   ).toBeVisible();
 
   // Promote exactly OUR two players to captains (Cap One first → they get
-  // draft order 0 and the opening nomination). Rows are divs in the
-  // "Eligible players" scroller.
+  // draft order 0 and the opening nomination). Rows are the items of the
+  // "Eligible players" list.
   await page
-    .locator(".max-h-80 div.rounded-lg", { hasText: "Cap One" })
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Cap One" })
     .getByRole("button", { name: "make captain" })
     .click();
   await expect(
     page.getByRole("heading", { name: /Captains \(1\)/ }),
   ).toBeVisible();
   await page
-    .locator(".max-h-80 div.rounded-lg", { hasText: "Cap Two" })
+    .getByRole("list", { name: "Eligible players" })
+    .getByRole("listitem")
+    .filter({ hasText: "Cap Two" })
     .getByRole("button", { name: "make captain" })
     .click();
   await expect(
     page.getByRole("heading", { name: /Captains \(2\)/ }),
   ).toBeVisible();
 
-  // Move the season into DRAFT without starting the auction: /draft must be
-  // a live waiting room for players, not a static dead end.
-  await page.getByRole("button", { name: "Draft", exact: true }).click();
+  // Close signups moves the season into DRAFT without starting the auction:
+  // /draft must be a live waiting room for players, not a static dead end.
+  await page.getByRole("button", { name: "Close signups", exact: true }).click();
   // The header nav gains "Teams" only once the season is in DRAFT — a
   // reliable signal that the phase move committed before we proceed.
   await expect(
@@ -77,7 +81,10 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // Before Start draft, the dashboard must say setup/waiting rather than tell
   // every visitor that captains are actively bidding.
   await page.goto("/");
-  await expect(page.getByText("Draft setup", { exact: true })).toBeVisible();
+  // The phase badge appears in the hero and the footer — scope to main.
+  await expect(
+    page.locator("#main").getByText("Draft setup", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/draft is being prepared/i)).toBeVisible();
   await expect(
     page.getByRole("link", { name: "View the draft room →" }),
@@ -110,31 +117,66 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     capOnePage.getByText("Waiting for the admin to start the auction"),
   ).toBeVisible();
 
-  // Start the auction and jump into the draft room.
+  // Start the auction from the draft room's waiting room: an admin gets the
+  // same Start draft button as /admin (same action, same confirm), and the
+  // team cards show the opening nomination order (Cap One was made captain
+  // first, so they open).
+  await page.goto("/draft");
+  await expect(
+    page.getByText("Waiting for the admin to start the auction"),
+  ).toBeVisible();
+  const rosterCards = page.locator('section[aria-label="Team rosters"] > div');
+  await expect(
+    rosterCards.filter({ hasText: "Cap One" }).getByText("Nominates 1st"),
+  ).toBeVisible();
+  await expect(
+    rosterCards.filter({ hasText: "Cap Two" }).getByText("Nominates 2nd"),
+  ).toBeVisible();
+  // Both captains are parked on /draft, so their own polls mark them as in
+  // the room: the admin sees it above Start draft and on each team card.
+  await expect(
+    page.getByText("All 2 captains are in the draft room."),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    rosterCards
+      .filter({ hasText: "Cap One" })
+      .getByText("in room", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Captains & draft setup on the admin panel" }),
+  ).toHaveAttribute("href", "/admin#adm-captains");
   await page.getByRole("button", { name: "Start draft" }).click();
-  await page.getByRole("link", { name: /draft room/i }).click();
 
   // The parked player's page flips live via its own poll — NO reload.
   await expect(playerPage.getByText(/Available ·/)).toBeVisible({
     timeout: 15_000,
   });
+  // Every page loaded from now on says the auction is live in its header,
+  // and the chip opens the draft room.
+  await playerPage.goto("/news");
+  await expect(
+    playerPage
+      .getByRole("banner")
+      .getByRole("link", { name: /^League status: .+ — Draft live$/ }),
+  ).toHaveAttribute("href", "/draft");
   await playerContext.close();
 
   await expect(page).toHaveURL(/\/draft/);
   await expect(page.getByText(/On the clock/)).toBeVisible();
   await expect(page.getByText(/Available ·/)).toBeVisible();
-  // The auction has the same persisted sound toggle as the inhouse room.
-  await expect(
-    page.getByRole("button", { name: /Sound on|Muted/ }),
-  ).toBeVisible();
   // Admin recovery travels with the live room; an operator should not have to
   // leave the clock to pause or correct the auction.
   await expect(
     page.getByRole("button", { name: "Pause auction" }),
   ).toBeVisible();
+  // The room's admin bar shows only buttons that work right now: nothing has
+  // sold yet, so there is no Undo, and the full set is one link away.
   await expect(
     page.getByRole("button", { name: "Undo last sale" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "More controls" }),
+  ).toHaveAttribute("href", "/admin#adm-captains");
 
   // --- The live auction, driven from the captains' own browsers ------------
 
@@ -143,6 +185,13 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(capOnePage.getByText("You're on the clock")).toBeVisible({
     timeout: 15_000,
   });
+  // The auction has the same persisted sound toggle as the inhouse room. It
+  // renders only for viewers the room can ring for — a captain always — so
+  // it is checked here rather than on the admin's page (whether the admin
+  // qualifies depends on the seed putting them in the pool).
+  await expect(
+    capOnePage.getByRole("button", { name: /Sound on|Muted/ }),
+  ).toBeVisible();
 
   // REGRESSION (2026-08-01): a tab that parked on /draft pre-start and
   // flipped live via its own poll never attached the compact clock bar's
@@ -216,7 +265,13 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // would reset budgets over drafted rosters), no captain management — just
   // the way into the live room, plus the night-of controls.
   await page.goto("/admin");
-  await expect(page.getByRole("link", { name: /draft room/i })).toBeVisible();
+  // Both the next-step line under the title and the Captains & draft card
+  // lead into the live room.
+  for (const room of ["Open the draft room", "Go to draft room"]) {
+    const link = page.getByRole("link", { name: room });
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", "/draft");
+  }
   await expect(page.getByRole("button", { name: "Start draft" })).toHaveCount(
     0,
   );

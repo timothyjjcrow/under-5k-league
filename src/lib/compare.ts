@@ -42,83 +42,42 @@ export function meetings(
   return result;
 }
 
-export type AffinityRow = {
-  userId: string;
-  /** Shared games (same side for duo, opposite sides for nemesis). */
-  games: number;
-  /** SELF's wins across those games — a nemesis row reads "wins–losses against". */
-  wins: number;
-  losses: number;
-};
-
-export type Affinities = {
-  /** The player SELF has faced most (self's record against them). */
-  nemesis: AffinityRow | null;
-  /** The player SELF has shared a side with most (their record together). */
-  duo: AffinityRow | null;
+export type SharedSeries = {
+  matchId: string;
+  /** Epoch seconds of the earliest dated game they shared there; 0 = unknown. */
+  startTime: number;
+  meetings: Meetings;
 };
 
 /**
- * The profile page's rivalry math: fold SELF's games into per-other-player
- * same-side/opposite-side tallies and pick the most-met player on each side of
- * the ball. Classification is identical to `meetings` (side vs side, win =
- * self's side won); games where SELF has no mapped line are skipped, as are
- * unmapped (null-userId) lines. `minMeetings` keeps one shared game from
- * minting a "nemesis" — below the floor a slot is null, and callers render
- * nothing. Ties are deterministic: most games, then (nemesis) fewest self wins
- * — the rival who beats you is the story — / (duo) most wins together, then
- * userId as the last resort.
+ * Every series A and B both played in, newest first, with how they met in it
+ * (the same side/opposite side rule as `meetings`). Feeds the head-to-head
+ * card's links to each match page. Games without both players are ignored.
  */
-export function topAffinities(
-  games: MeetingGame[],
-  selfId: string,
-  minMeetings = 3,
-): Affinities {
-  const together = new Map<string, AffinityRow>();
-  const against = new Map<string, AffinityRow>();
-
+export function sharedSeries(
+  games: (MeetingGame & { matchId: string; startTime: number })[],
+  a: string,
+  b: string,
+): SharedSeries[] {
+  const byMatch = new Map<string, typeof games>();
   for (const game of games) {
-    const self = game.lines.find((l) => l.userId === selfId);
-    if (!self) continue;
-    const selfWon = self.isRadiant === game.radiantWin;
-    // A userId can't legitimately appear twice in one game's lines, but a
-    // hand-imported box score might — count each other player once per game.
-    const seen = new Set<string>();
-    for (const line of game.lines) {
-      if (!line.userId || line.userId === selfId || seen.has(line.userId)) {
-        continue;
-      }
-      seen.add(line.userId);
-      const map = line.isRadiant === self.isRadiant ? together : against;
-      const row = map.get(line.userId) ?? {
-        userId: line.userId,
-        games: 0,
-        wins: 0,
-        losses: 0,
-      };
-      row.games++;
-      if (selfWon) row.wins++;
-      else row.losses++;
-      map.set(line.userId, row);
-    }
+    const hasA = game.lines.some((l) => l.userId === a);
+    const hasB = game.lines.some((l) => l.userId === b);
+    if (!hasA || !hasB) continue;
+    byMatch.set(game.matchId, [...(byMatch.get(game.matchId) ?? []), game]);
   }
-
-  const top = (
-    map: Map<string, AffinityRow>,
-    winTiebreak: (a: AffinityRow, b: AffinityRow) => number,
-  ): AffinityRow | null => {
-    const rows = [...map.values()].filter((r) => r.games >= minMeetings);
-    rows.sort(
-      (a, b) =>
-        b.games - a.games || winTiebreak(a, b) || a.userId.localeCompare(b.userId),
+  return [...byMatch]
+    .map(([matchId, series]) => {
+      const dated = series.map((g) => g.startTime).filter((t) => t > 0);
+      return {
+        matchId,
+        startTime: dated.length ? Math.min(...dated) : 0,
+        meetings: meetings(series, a, b),
+      };
+    })
+    .sort(
+      (x, y) => y.startTime - x.startTime || x.matchId.localeCompare(y.matchId),
     );
-    return rows[0] ?? null;
-  };
-
-  return {
-    nemesis: top(against, (a, b) => a.wins - b.wins),
-    duo: top(together, (a, b) => b.wins - a.wins),
-  };
 }
 
 /**

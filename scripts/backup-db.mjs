@@ -44,11 +44,7 @@ if (!databaseUrl) {
   try {
     await createBackup(databaseUrl);
   } catch (error) {
-    if (error?.code === "ENOENT" && databaseUrl.startsWith("file:")) {
-      console.error(
-        "sqlite3 not found — install the SQLite command-line client to create a consistent online snapshot.",
-      );
-    } else if (error?.code === "ENOENT") {
+    if (error?.code === "ENOENT" && !databaseUrl.startsWith("file:")) {
       console.error(
         "pg_dump not found — install a PostgreSQL client at least as new as the server and retry.",
       );
@@ -87,16 +83,27 @@ async function createBackup(raw) {
       // committed WAL pages or capture files from different instants. The
       // online backup API takes one coherent snapshot while the source stays
       // live; then integrity_check validates the artifact, not the source.
-      execFileSync(
-        "sqlite3",
-        ["-cmd", ".timeout 10000", source, `.backup ${JSON.stringify(temporary)}`],
-        { stdio: ["ignore", "pipe", "pipe"] },
-      );
-      const integrity = execFileSync(
-        "sqlite3",
-        [temporary, "PRAGMA integrity_check;"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      ).trim();
+      // Both run through Node's built-in SQLite, so no sqlite3 program is
+      // needed. The 10s busy timeout matches the old `sqlite3 .timeout 10000`.
+      const { DatabaseSync, backup } = await loadNodeSqlite();
+      const sourceDb = new DatabaseSync(source, { timeout: 10000 });
+      try {
+        await backup(sourceDb, temporary);
+      } finally {
+        sourceDb.close();
+      }
+      const snapshotDb = new DatabaseSync(temporary);
+      let integrity;
+      try {
+        integrity = snapshotDb
+          .prepare("PRAGMA integrity_check;")
+          .all()
+          .map((row) => row.integrity_check)
+          .join("\n")
+          .trim();
+      } finally {
+        snapshotDb.close();
+      }
       if (integrity !== "ok") {
         throw new Error("SQLite snapshot failed PRAGMA integrity_check");
       }
@@ -164,6 +171,10 @@ async function createBackup(raw) {
   } catch (error) {
     for (const file of [
       temporary,
+      // SQLite side files, should a failed snapshot or check leave any behind.
+      `${temporary}-journal`,
+      `${temporary}-wal`,
+      `${temporary}-shm`,
       checksumTemporary,
       metadataTemporary,
       output,
@@ -178,6 +189,38 @@ async function createBackup(raw) {
     }
     throw error;
   }
+}
+
+// node:sqlite ships with Node 22 but still announces itself with a one-line
+// ExperimentalWarning when first loaded. The snapshot and the integrity check
+// are SQLite's own C APIs, so hide only that notice instead of printing an
+// alarming line into every local backup; any other warning still prints.
+async function loadNodeSqlite() {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function (warning, ...rest) {
+    const type = typeof rest[0] === "string" ? rest[0] : rest[0]?.type;
+    if (
+      type === "ExperimentalWarning" &&
+      String(warning).startsWith("SQLite ")
+    ) {
+      return;
+    }
+    return emitWarning.call(process, warning, ...rest);
+  };
+  let sqlite = null;
+  try {
+    sqlite = await import("node:sqlite");
+  } catch {
+    // Reported below with the version that is actually running.
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+  if (typeof sqlite?.backup !== "function") {
+    throw new Error(
+      `SQLite backups need Node.js 22.16 or newer for the built-in node:sqlite backup API (running ${process.version}).`,
+    );
+  }
+  return sqlite;
 }
 
 function normalizeExistingBackupModes(outDir) {

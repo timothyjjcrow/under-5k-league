@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
+  allowLegacyDuplicateActives,
   sessionFor as asSession,
   makeCaptain,
   makeSeason,
@@ -104,6 +105,12 @@ describe("Dota lobby authorization and settings", () => {
         dire: [away.user.steamId],
       },
     });
+    // Players type the name into Dota's lobby browser, so it names the league
+    // the way the site and Discord do, never the old "LD2L".
+    expect(first.spec.name).toBe(
+      `${LEAGUE_CONFIG.name} ${home.team.name} vs ${away.team.name} G1 ${match.id.slice(-8)}`,
+    );
+    expect(first.spec.name).not.toContain("LD2L");
     const repeat = await resolveDotaLobby(
       asSession(away.user),
       "season",
@@ -209,6 +216,10 @@ describe("Dota lobby authorization and settings", () => {
         serverRegion: LEAGUE_CONFIG.gameServerRegionId,
         radiant: [player.steamId],
         dire: [captain.steamId],
+        // Sides read as the captain's team; a side with no captain on the
+        // roster falls back to its number.
+        radiantName: "Team 2",
+        direName: "Captain's team",
       },
     });
     expect(
@@ -305,13 +316,11 @@ describe("Dota lobby authorization and settings", () => {
     }
     expect(fetch).not.toHaveBeenCalled();
   });
-  it("marks only the confirmed in-house game started without extending bets", async () => {
+  it("marks only the confirmed in-house game started", async () => {
     const user = await makeUser("Captain");
-    const deadline = new Date(Date.now() + 120000);
     const lobby = await prisma.inhouseLobby.create({
       data: {
         status: "READY",
-        betsCloseAt: deadline,
         players: { create: { userId: user.id, team: 1, isCaptain: true } },
       },
     });
@@ -327,7 +336,7 @@ describe("Dota lobby authorization and settings", () => {
     await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
     expect(
       await prisma.inhouseLobby.findUnique({ where: { id: lobby.id } }),
-    ).toMatchObject({ status: "IN_PROGRESS", betsCloseAt: deadline });
+    ).toMatchObject({ status: "IN_PROGRESS", startedAt: expect.any(Date) });
     await prisma.inhouseLobby.update({
       where: { id: lobby.id },
       data: { status: "CANCELLED" },
@@ -433,6 +442,7 @@ describe("Dota lobby authorization and settings", () => {
         .rejects.toMatchObject({ code: "P2002" });
       return;
     }
+    await allowLegacyDuplicateActives();
     await prisma.inhouseLobby.create({ data: { status: "READY_CHECK" } });
     vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
     const fetch = vi.fn();
@@ -441,6 +451,45 @@ describe("Dota lobby authorization and settings", () => {
       expect((await POST(request({ kind: "inhouse", id: lobby.id, action }))).status).toBe(400);
     }
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it("words the bot's roster refusal for the kind of game", async () => {
+    const { match, home } = await fixture();
+    const season = await resolveDotaLobby(
+      asSession(home.user),
+      "season",
+      match.id,
+    );
+    const captain = await makeUser("Roster Captain");
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: "READY",
+        players: {
+          create: [{ userId: captain.id, team: 1, isCaptain: true }],
+        },
+      },
+    });
+    const inhouse = await resolveDotaLobby(
+      asSession(captain),
+      "inhouse",
+      lobby.id,
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ code: "ROSTER" }), { status: 409 }),
+      ),
+    );
+    // Inhouses have no match page or stand-ins to point at.
+    const inhouseError = await callLobbyBot(inhouse.spec, "start").catch(
+      (e: Error) => e.message,
+    );
+    expect(inhouseError).toBe(
+      "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start.",
+    );
+    await expect(callLobbyBot(season.spec, "start")).rejects.toThrow(
+      "Check stand-ins on the match page.",
+    );
   });
   it("handles unreachable workers without disclosing service credentials", async () => {
     const { match, home } = await fixture();

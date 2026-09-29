@@ -2,17 +2,38 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { SCRIM_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  MATCH_STATUS,
+  REGISTRATION_STATUS,
+  SCRIM_STATUS,
+  SEASON_STATUS,
+} from "@/lib/constants";
 import { formatMatchTime } from "@/lib/match-time";
 import { heroById } from "@/lib/heroes";
 import { parseGamePlayers } from "@/lib/player-stats";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+import {
+  isScrimNotPlayed,
+  scrimEndConfirm,
+  scrimHostLine,
+  scrimJoinCheck,
+} from "@/lib/scrim-view";
+import {
+  describeScrimConflict,
+  findConfirmedScrimConflict,
+  scrimCollisionRange,
+} from "@/lib/scrim-schedule-conflict";
+import { canViewLeagueContact } from "@/lib/visibility";
 import { LocalTime } from "@/components/local-time";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { DiscordTag } from "@/components/discord-tag";
 import {
   addScrimGuest,
   autoDetectScrimGames,
   cancelScrim,
+  endScrimSeries,
   importScrimGame,
+  joinScrim,
   removeScrimGuest,
   removeScrimGame,
 } from "@/app/actions/scrims";
@@ -54,14 +75,147 @@ export async function generateMetadata({
 const inputClass =
   "h-10 min-w-0 rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60";
 
-function statusBadge(status: string) {
+const captainSelect = {
+  select: { id: true, name: true, discordName: true, discordId: true },
+} as const;
+
+type ScrimCaptain = {
+  id: string;
+  name: string;
+  discordName: string;
+  discordId: string | null;
+};
+
+/**
+ * One side of the matchup: team, its captain, and — for league members only
+ * (the DiscordTag rule) — the captain's copyable Discord handle, so the two
+ * captains can find each other without a trip through the team pages.
+ */
+function ScrimSide({
+  team,
+  label,
+  captain,
+  showContact,
+}: {
+  team: { id: string; name: string; logoUrl: string | null };
+  label: string;
+  captain: ScrimCaptain;
+  showContact: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <TeamCrest
+        seed={team.id}
+        name={team.name}
+        logoUrl={team.logoUrl}
+        size={48}
+      />
+      <div className="min-w-0">
+        <p className="truncate font-display text-lg font-semibold">
+          {team.name}
+        </p>
+        <p className="text-xs text-muted">{label}</p>
+        <p className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2 text-sm">
+          <span className="text-muted">Captain</span>
+          <PlayerLink userId={captain.id} className="min-w-6 max-w-full truncate">
+            {captain.name}
+          </PlayerLink>
+          {showContact ? (
+            captain.discordName ? (
+              <DiscordTag
+                name={captain.discordName}
+                verified={!!captain.discordId}
+                className="min-w-0"
+              />
+            ) : (
+              <span className="text-xs text-muted">no Discord</span>
+            )
+          ) : null}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function statusBadge(status: string, notPlayed: boolean) {
+  if (notPlayed) return <Badge>Not played</Badge>;
   if (status === SCRIM_STATUS.OPEN) return <Badge tone="info">Open</Badge>;
   if (status === SCRIM_STATUS.SCHEDULED)
     return <Badge tone="success">Booked</Badge>;
   if (status === SCRIM_STATUS.LIVE) return <Badge tone="accent">Live</Badge>;
   if (status === SCRIM_STATUS.COMPLETED)
-    return <Badge tone="brand">Completed</Badge>;
+    return <Badge tone="success">Completed</Badge>;
   return <Badge>Cancelled</Badge>;
+}
+
+/**
+ * The Join button's verdict for an OPEN time: the viewer's own team (when
+ * they captain one) and anything it already has within four hours, so the
+ * page gives the same answer the service would instead of a button that
+ * errors or no control at all.
+ */
+async function openScrimJoinCheck(
+  scrim: {
+    id: string;
+    seasonId: string;
+    status: string;
+    scheduledAt: Date;
+    hostTeamId: string;
+    hostTeam: { withdrawn: boolean };
+  },
+  viewerId: string | null,
+  seasonOpen: boolean,
+  nowMs: number,
+) {
+  const viewerTeam = viewerId
+    ? await prisma.team.findUnique({
+        where: {
+          seasonId_captainId: { seasonId: scrim.seasonId, captainId: viewerId },
+        },
+        select: { id: true, name: true, withdrawn: true },
+      })
+    : null;
+  let viewerTeamClash: string | null = null;
+  if (
+    seasonOpen &&
+    viewerTeam &&
+    viewerTeam.id !== scrim.hostTeamId &&
+    !viewerTeam.withdrawn
+  ) {
+    const [leagueMatch, scrimClash] = await Promise.all([
+      prisma.match.findFirst({
+        where: {
+          seasonId: scrim.seasonId,
+          scheduledAt: scrimCollisionRange(scrim.scheduledAt),
+          status: { not: MATCH_STATUS.COMPLETED },
+          OR: [{ homeTeamId: viewerTeam.id }, { awayTeamId: viewerTeam.id }],
+        },
+        select: { id: true },
+      }),
+      findConfirmedScrimConflict(prisma, {
+        seasonId: scrim.seasonId,
+        teamIds: [viewerTeam.id],
+        scheduledAt: scrim.scheduledAt,
+        exceptScrimId: scrim.id,
+      }),
+    ]);
+    viewerTeamClash = leagueMatch
+      ? "a league match"
+      : scrimClash
+        ? describeScrimConflict(scrimClash)
+        : null;
+  }
+  return scrimJoinCheck({
+    status: scrim.status,
+    seasonOpen,
+    signedIn: !!viewerId,
+    viewerTeam,
+    hostTeamId: scrim.hostTeamId,
+    hostWithdrawn: scrim.hostTeam.withdrawn,
+    scheduledAtMs: scrim.scheduledAt.getTime(),
+    nowMs,
+    viewerTeamClash,
+  });
 }
 
 export default async function ScrimDetailPage({
@@ -77,8 +231,8 @@ export default async function ScrimDetailPage({
         season: {
           select: { id: true, name: true, isActive: true, status: true },
         },
-        hostTeam: { include: { staff: true } },
-        opponentTeam: { include: { staff: true } },
+        hostTeam: { include: { staff: true, captain: captainSelect } },
+        opponentTeam: { include: { staff: true, captain: captainSelect } },
         winnerTeam: true,
         participants: {
           orderBy: [{ teamId: "asc" }, { guest: "asc" }, { createdAt: "asc" }],
@@ -90,6 +244,30 @@ export default async function ScrimDetailPage({
     getSessionUser(),
   ]);
   if (!scrim) notFound();
+  const viewerRegistration =
+    viewer && scrim.season.isActive
+      ? await prisma.registration.findUnique({
+          where: {
+            seasonId_userId: { seasonId: scrim.seasonId, userId: viewer.id },
+          },
+          select: { status: true },
+        })
+      : null;
+
+  const seasonOpen =
+    scrim.season.isActive && scrim.season.status !== SEASON_STATUS.COMPLETE;
+  // One server snapshot for the join verdict and the "Not played" label.
+  // eslint-disable-next-line react-hooks/purity -- async server component
+  const nowMs = Date.now();
+  const joinCheck =
+    scrim.status === SCRIM_STATUS.OPEN
+      ? await openScrimJoinCheck(scrim, viewer?.id ?? null, seasonOpen, nowMs)
+      : null;
+  const notPlayed = isScrimNotPlayed(
+    scrim.status,
+    scrim.scheduledAt.getTime(),
+    nowMs,
+  );
 
   const teamManager = (team: typeof scrim.hostTeam | null) =>
     !!viewer &&
@@ -98,6 +276,21 @@ export default async function ScrimDetailPage({
       team.staff.some((staff) => staff.userId === viewer.id));
   const managesHost = teamManager(scrim.hostTeam);
   const managesAway = teamManager(scrim.opponentTeam);
+  // Captains and coaches of either side always get the other captain's
+  // handle: arranging the lobby is the whole point of this page for them.
+  const contactFor = (userId: string) =>
+    canViewLeagueContact(
+      viewer,
+      userId,
+      viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE ||
+        managesHost ||
+        managesAway,
+    );
+  const booked =
+    !!scrim.opponentTeam &&
+    !notPlayed &&
+    (scrim.status === SCRIM_STATUS.SCHEDULED ||
+      scrim.status === SCRIM_STATUS.LIVE);
   const canManageResults =
     viewer?.role === "ADMIN" || managesHost || managesAway;
   const canCancel =
@@ -105,6 +298,10 @@ export default async function ScrimDetailPage({
     (viewer.role === "ADMIN" ||
       scrim.hostTeam.captainId === viewer.id ||
       scrim.opponentTeam?.captainId === viewer.id);
+  // Same people as Cancel: a series that can't be finished is called at its
+  // current score rather than left LIVE forever (a live scrim can't cancel).
+  const canEndSeries =
+    canCancel && scrim.status === SCRIM_STATUS.LIVE && !!scrim.opponentTeam;
   const participantByAccount = new Map(
     scrim.participants.map((participant) => [
       participant.dotaAccountId,
@@ -127,6 +324,9 @@ export default async function ScrimDetailPage({
         (scrim.season.isActive &&
           scrim.season.status !== SEASON_STATUS.COMPLETE)));
 
+  const showResultTools =
+    !!scrim.opponentTeam && canManageResults && canRecordResults;
+
   return (
     <div className="space-y-6">
       <PageTitle
@@ -147,55 +347,142 @@ export default async function ScrimDetailPage({
       />
 
       <Card tone="feature">
-        <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <TeamCrest
-              seed={scrim.hostTeam.id}
-              name={scrim.hostTeam.name}
-              logoUrl={scrim.hostTeam.logoUrl}
-              size={48}
-            />
-            <div className="min-w-0">
-              <p className="truncate font-display text-lg font-semibold">
-                {scrim.hostTeam.name}
-              </p>
-              <p className="text-xs text-muted">Posting team</p>
-            </div>
-            <span className="text-sm font-medium uppercase text-muted">vs</span>
-            {scrim.opponentTeam ? (
-              <>
-                <TeamCrest
-                  seed={scrim.opponentTeam.id}
-                  name={scrim.opponentTeam.name}
-                  logoUrl={scrim.opponentTeam.logoUrl}
-                  size={48}
-                />
-                <p className="min-w-0 truncate font-display text-lg font-semibold">
-                  {scrim.opponentTeam.name}
-                </p>
-              </>
-            ) : (
-              <span className="text-muted">Waiting for an opponent</span>
-            )}
-          </div>
-          <div className="space-y-1 text-left sm:text-right">
-            <div>{statusBadge(scrim.status)}</div>
-            <p className="text-sm text-muted">
-              <LocalTime
-                ts={scrim.scheduledAt.getTime()}
-                variant="full"
-                initial={formatMatchTime(scrim.scheduledAt, "full")}
+        <CardBody className="space-y-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="grid min-w-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2">
+              <ScrimSide
+                team={scrim.hostTeam}
+                label="Posting team"
+                captain={scrim.hostTeam.captain}
+                showContact={contactFor(scrim.hostTeam.captainId)}
               />
-            </p>
-            {scrim.status === SCRIM_STATUS.LIVE ||
-            scrim.status === SCRIM_STATUS.COMPLETED ? (
-              <p className="font-display text-2xl font-bold tabular-nums">
-                {scrim.hostScore}–{scrim.awayScore}
+              {scrim.opponentTeam ? (
+                <ScrimSide
+                  team={scrim.opponentTeam}
+                  label="Claimed the time"
+                  captain={scrim.opponentTeam.captain}
+                  showContact={contactFor(scrim.opponentTeam.captainId)}
+                />
+              ) : (
+                <div className="min-w-0 space-y-2 self-center text-sm">
+                  <p className="text-muted">Waiting for an opponent</p>
+                  {joinCheck?.canJoin ? (
+                    <ActionForm
+                      action={joinScrim}
+                      hidden={{ scrimId: scrim.id }}
+                      className="space-y-1"
+                    >
+                      <SubmitButton size="sm">Join scrim</SubmitButton>
+                      <p className="text-xs text-muted">
+                        Books this time for {joinCheck.teamName}.
+                      </p>
+                    </ActionForm>
+                  ) : joinCheck ? (
+                    <p>
+                      {joinCheck.signIn ? (
+                        <>
+                          <Link
+                            href={`/login?next=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
+                            className={textLink()}
+                          >
+                            Sign in
+                          </Link>{" "}
+                          as a team captain to claim this time.
+                        </>
+                      ) : (
+                        joinCheck.reason
+                      )}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+            <div className="space-y-1 text-left sm:text-right">
+              <div>{statusBadge(scrim.status, notPlayed)}</div>
+              <p className="text-sm text-muted">
+                <LocalTime
+                  ts={scrim.scheduledAt.getTime()}
+                  variant="full"
+                  initial={formatMatchTime(scrim.scheduledAt, "full")}
+                />
               </p>
-            ) : null}
+              {scrim.status === SCRIM_STATUS.LIVE ||
+              scrim.status === SCRIM_STATUS.COMPLETED ? (
+                <p className="font-display text-2xl font-bold tabular-nums">
+                  {scrim.hostScore}–{scrim.awayScore}
+                </p>
+              ) : null}
+            </div>
           </div>
+          {notPlayed ? (
+            <p className="border-t border-line-soft pt-3 text-sm text-muted">
+              No games were recorded within 36 hours of the start, so this
+              booking is listed as not played.
+              {showResultTools ? (
+                <>
+                  {" "}If you did play it,{" "}
+                  <Link href="#results" className={textLink()}>
+                    add the game by its match ID
+                  </Link>
+                  .
+                </>
+              ) : null}
+            </p>
+          ) : null}
+          {booked && scrim.opponentTeam ? (
+            <div className="space-y-1 border-t border-line-soft pt-3 text-sm">
+              <p>
+                {scrimHostLine({
+                  hostTeamName: scrim.hostTeam.name,
+                  hostCaptainName: scrim.hostTeam.captain.name,
+                  opponentCaptainName: scrim.opponentTeam.captain.name,
+                  bestOf: scrim.bestOf,
+                  region: LEAGUE_CONFIG.gameServerRegion,
+                })}
+              </p>
+              {!viewer ? (
+                <p className="text-xs text-muted">
+                  <Link
+                    href={`/login?next=${encodeURIComponent(`/scrims/${scrim.id}`)}`}
+                    className={textLink()}
+                  >
+                    Sign in
+                  </Link>
+                  {/* Name who the handles are for: contactFor opens them
+                      only to this season's signed-up players (active
+                      seasons only) and both teams' captains and coaches. */}
+                  {scrim.season.isActive
+                    ? " to see the captains' Discord handles if you're signed up this season or captain or coach one of these teams."
+                    : " to see the captains' Discord handles if you captain or coach one of these teams."}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </CardBody>
       </Card>
+
+      {canEndSeries && scrim.opponentTeam ? (
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <ActionForm action={endScrimSeries} hidden={{ scrimId: scrim.id }}>
+            <SubmitButton
+              variant="secondary"
+              size="sm"
+              confirm={scrimEndConfirm({
+                hostTeamName: scrim.hostTeam.name,
+                awayTeamName: scrim.opponentTeam.name,
+                hostScore: scrim.hostScore,
+                awayScore: scrim.awayScore,
+              })}
+            >
+              End series at {scrim.hostScore}–{scrim.awayScore}
+            </SubmitButton>
+          </ActionForm>
+          <p className="text-xs text-muted">
+            Can&apos;t play the rest? Either captain can end the series at the
+            current score.
+          </p>
+        </div>
+      ) : null}
 
       {canCancel &&
       mutable &&
@@ -237,7 +524,10 @@ export default async function ScrimDetailPage({
                     size={30}
                   />
                   <h2 className="font-display font-semibold">{team.name}</h2>
-                  <Badge>{participants.length} known IDs</Badge>
+                  <Badge>
+                    {participants.length}{" "}
+                    {participants.length === 1 ? "player" : "players"}
+                  </Badge>
                 </div>
                 <ul className="divide-y divide-line/60 rounded-lg border border-line/70">
                   {participants.map((participant) => (
@@ -258,11 +548,18 @@ export default async function ScrimDetailPage({
                             {participant.displayName}
                           </span>
                         )}
-                        <p className="font-mono text-[11px] text-muted">
-                          Dota {participant.dotaAccountId}
-                        </p>
+                        {/* A guest has no profile, so the account they were
+                            added with is the only way to tell who they are. */}
+                        {participant.guest ? (
+                          <p className="font-mono text-[11px] text-muted">
+                            Dota {participant.dotaAccountId}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex items-center gap-2">
+                        {participant.userId === team.captainId ? (
+                          <Badge tone="accent">Captain</Badge>
+                        ) : null}
                         {participant.guest ? <Badge tone="info">Guest</Badge> : null}
                         {participant.guest && manages && mutable ? (
                           <ActionForm
@@ -321,7 +618,7 @@ export default async function ScrimDetailPage({
         </CardBody>
       </Card>
 
-      {scrim.opponentTeam && canManageResults && canRecordResults ? (
+      {showResultTools ? (
         <Card id="results">
           <CardHeader
             title="Find scrim games"

@@ -11,6 +11,9 @@ test("team sections jump to the roster and retain the team in its schedule link"
   await expect(page).toHaveURL(/\/teams\/[^/]+$/);
   const teamId = new URL(page.url()).pathname.split("/").pop();
   const sections = page.getByRole("navigation", { name: "Team sections" });
+  // Below desktop width the bar scrolls away with the page; only the header
+  // stays pinned, so the chips don't take another slice of a phone screen.
+  await expect(sections).toHaveCSS("position", "static");
   await sections.getByRole("link", { name: "Roster", exact: true }).click();
   await expect(page).toHaveURL(/#team-roster$/);
   await expect(page.locator("#team-roster h2").first()).toBeFocused();
@@ -18,7 +21,7 @@ test("team sections jump to the roster and retain the team in its schedule link"
   await expect(page.locator("#team-matches h2").first()).toBeFocused();
   await expectNoHorizontalOverflow(page, "team sections");
   await page
-    .getByRole("link", { name: "Team schedule →", exact: true })
+    .getByRole("link", { name: "Team schedule", exact: true })
     .click();
   await expect(page).toHaveURL(
     new RegExp(`/schedule\\?team=${teamId}#fixtures$`),
@@ -31,7 +34,9 @@ test("player match history has a reloadable section link without changing career
 }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/players");
+  // Start from a leaderboard so the profile belongs to someone with league
+  // games: the Matches section only exists once there are games to list.
+  await page.goto("/leaders");
   await page
     .locator('#main a[href^="/players/"]:not([href*="compare"])')
     .first()

@@ -79,6 +79,9 @@ export async function reportImportGame(
     expectedCaptainId: viewerId,
     enforceFixtureWindow: true,
     providerActorId: viewerId,
+    // A game an admin removed stays removed: only the admin's Add game and
+    // Auto-fetch games can bring it back.
+    respectImportSkips: true,
   });
   if (!res.ok) return { ok: false, error: res.error };
   return {

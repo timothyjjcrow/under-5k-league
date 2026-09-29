@@ -53,3 +53,56 @@ export function inhouseHistoryPage(
   const page = Math.min(requested, pages);
   return { page, pages, skip: (page - 1) * pageSize };
 }
+
+/** A lobby player as the archive needs them: side, captaincy and name. */
+export type InhouseHistorySidePlayer = {
+  userId: string;
+  team: number | null;
+  isCaptain: boolean;
+  name: string;
+};
+
+/**
+ * Who a completed game was between, and how it went for the viewer.
+ *
+ * Sides are named after their captains ("Ember's team beat Wisp's team"),
+ * which is how the ten players remember a game. `isCaptain` records who
+ * captained the draft, while `team` is the side each player actually played
+ * on (the result import can move a player who sat on the wrong side), so the
+ * names are only given when each side has exactly one captain on it. Anything
+ * else returns null names and the row keeps its plain Radiant/Dire label.
+ *
+ * `viewer` is "won"/"lost" only for a player who was in the game.
+ */
+export function inhouseHistorySides(
+  players: InhouseHistorySidePlayer[],
+  winnerTeam: number | null,
+  viewerId: string | null,
+): {
+  winnerCaptain: string | null;
+  loserCaptain: string | null;
+  viewer: "won" | "lost" | null;
+} {
+  let winnerCaptain: string | null = null;
+  let loserCaptain: string | null = null;
+  if (winnerTeam != null) {
+    const captainsOn = (won: boolean) =>
+      players.filter(
+        (p) => p.isCaptain && p.team != null && (p.team === winnerTeam) === won,
+      );
+    const winners = captainsOn(true);
+    const losers = captainsOn(false);
+    if (winners.length === 1 && losers.length === 1) {
+      winnerCaptain = winners[0].name;
+      loserCaptain = losers[0].name;
+    }
+  }
+  const mine = viewerId ? players.find((p) => p.userId === viewerId) : null;
+  const viewer =
+    winnerTeam == null || mine?.team == null
+      ? null
+      : mine.team === winnerTeam
+        ? "won"
+        : "lost";
+  return { winnerCaptain, loserCaptain, viewer };
+}

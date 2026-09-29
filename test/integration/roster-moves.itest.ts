@@ -22,13 +22,13 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { sendDiscordMessage } from "@/lib/discord";
 const mockSend = vi.mocked(sendDiscordMessage);
+import { startDraft } from "@/app/actions/admin-captains-draft";
 import {
   promoteStandinToPlayer,
   releasePlayer,
   signFreeAgent,
-  startDraft,
   withdrawSignup,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-roster";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
   DRAFT_STATUS,

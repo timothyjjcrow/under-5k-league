@@ -56,6 +56,27 @@ export function formByTeam(
   return map;
 }
 
+export type SeriesRecordCounts = {
+  wins: number;
+  draws: number;
+  losses: number;
+};
+
+/**
+ * A team's series record in the standings' order (wins, draws, losses) with
+ * the letters attached: "5W 1D 2L". Every page that shows a team's record
+ * uses this, because bare numbers in another order ("5–2–1") read as draws
+ * where the losses are to anyone used to the standings.
+ */
+export function seriesRecordText(r: SeriesRecordCounts): string {
+  return `${r.wins}W ${r.draws}D ${r.losses}L`;
+}
+
+/** The same record for a screen reader: "5 won, 1 drawn, 2 lost". */
+export function seriesRecordSpoken(r: SeriesRecordCounts): string {
+  return `${r.wins} won, ${r.draws} drawn, ${r.losses} lost`;
+}
+
 export type HeadToHead = {
   opponentId: string;
   wins: number;
@@ -95,4 +116,53 @@ export function headToHead(
     map.set(oppId, h);
   }
   return [...map.values()];
+}
+
+/**
+ * The head-to-head rows worth their own card: opponents met in more than one
+ * completed series (a tiebreaker week, a playoff rematch, a double round
+ * robin). A single meeting is already the result on the team's match list.
+ */
+export function rematches(rows: readonly HeadToHead[]): HeadToHead[] {
+  return rows.filter((r) => r.wins + r.draws + r.losses > 1);
+}
+
+export type FixtureOrderMatch = {
+  id: string;
+  status: string;
+  week: number;
+  scheduledAt: Date | null;
+};
+
+/**
+ * A team page's fixture list, most useful first: a live series, then the
+ * series still to play by kickoff (untimed ones last), then results newest
+ * first. Results sort by kickoff (untimed as oldest), then week, the same
+ * "latest result" rule as the team's match spotlight.
+ */
+export function teamFixtureOrder<T extends FixtureOrderMatch>(
+  matches: readonly T[],
+): T[] {
+  const kickoff = (m: T, missing: number) =>
+    m.scheduledAt?.getTime() ?? missing;
+  const upcoming = (a: T, b: T) =>
+    kickoff(a, Number.MAX_SAFE_INTEGER) - kickoff(b, Number.MAX_SAFE_INTEGER) ||
+    a.week - b.week ||
+    a.id.localeCompare(b.id);
+  const live = matches.filter((m) => m.status === MATCH_STATUS.LIVE);
+  const open = matches.filter(
+    (m) =>
+      m.status !== MATCH_STATUS.LIVE && m.status !== MATCH_STATUS.COMPLETED,
+  );
+  const done = matches.filter((m) => m.status === MATCH_STATUS.COMPLETED);
+  return [
+    ...live.sort(upcoming),
+    ...open.sort(upcoming),
+    ...done.sort(
+      (a, b) =>
+        kickoff(b, 0) - kickoff(a, 0) ||
+        b.week - a.week ||
+        b.id.localeCompare(a.id),
+    ),
+  ];
 }

@@ -235,7 +235,7 @@ describe("clinchStatuses", () => {
     // Degenerate but reachable (any power-of-two team count): with cut >= field
     // size, nobody can miss the bracket, so every team "clinches" on day one.
     // The UI relies on the adapters' cutIsReal/totalTeams guard to hide this —
-    // see StandingsTable in src/app/page.tsx.
+    // see StandingsTable in src/components/standings-table-server.tsx.
     const matches = [
       open("a", "b"),
       open("c", "d"),

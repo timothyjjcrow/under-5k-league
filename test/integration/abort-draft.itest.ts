@@ -23,7 +23,7 @@ import {
   resolveStalledNomination,
   undoLastSale,
 } from "@/lib/draft-service";
-import { addCaptain, startDraft } from "@/app/actions/admin";
+import { addCaptain, startDraft } from "@/app/actions/admin-captains-draft";
 import {
   DRAFT_STATUS,
   MATCH_PHASE,

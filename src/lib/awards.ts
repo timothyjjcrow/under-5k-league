@@ -3,6 +3,7 @@
 // the UI; this module only decides *who/what* wins each award.
 
 import { fantasyPoints, type FantasyStatLine } from "./fantasy";
+import { PER_GAME_MIN_GAMES } from "./player-stats";
 
 /** One stored box-score line. The optional FantasyStatLine fields (last hits,
  *  damage, healing, denies) feed the MVP's points, so pass them when known. */
@@ -55,6 +56,9 @@ type Agg = {
 
 const kdaOf = (a: Agg) => (a.kills + a.assists) / Math.max(1, a.deaths);
 const avgGpmOf = (a: Agg) => (a.gpmGames > 0 ? a.gpmSum / a.gpmGames : 0);
+/** Per game to one decimal, the value /leaders ranks and shows (topBy). */
+const perGameOf = (total: number, games: number) =>
+  Math.round((total / games) * 10) / 10;
 
 /**
  * Compute the season's award slate from every recorded game. Returns only
@@ -159,33 +163,40 @@ export function computeSeasonAwards(games: AwardGame[]): Award[] {
       key: "mvp",
       title: "MVP",
       emoji: "🏆",
-      blurb: `Most points per game, scored like Player of the Week (min ${n(mvpFloor, "game")})`,
+      blurb: `Most impact points per game, the Player of the Week score (min ${n(mvpFloor, "game")})`,
       value: `${(a.pointsTenths / a.games / 10).toFixed(1)} pts/game`,
       detail: `over ${n(a.games, "game")}`,
     }),
   );
+  // Kills and assists PER GAME, with the /leaders boards' flat minimum: a
+  // season total rewarded whoever's team played extra series, and the recap
+  // must crown the player the "Kills per game" and "Assists per game" boards
+  // put first. Ranked on the same one-decimal average with the same
+  // tiebreaks (more games, then id), and skipped until someone has played
+  // PER_GAME_MIN_GAMES games, just as those boards stay empty.
+  const perGameQualified = aggs.filter((a) => a.games >= PER_GAME_MIN_GAMES);
   pick(
-    aggs,
-    (a) => a.kills,
+    perGameQualified,
+    (a) => perGameOf(a.kills, a.games),
     (a) => ({
       key: "killLeader",
       title: "Kill Leader",
       emoji: "⚔️",
-      blurb: "Most total kills",
-      value: n(a.kills, "kill"),
-      detail: `${(a.kills / a.games).toFixed(1)} per game`,
+      blurb: `Most kills per game (min ${n(PER_GAME_MIN_GAMES, "game")})`,
+      value: `${perGameOf(a.kills, a.games).toFixed(1)} kills/game`,
+      detail: `${n(a.kills, "kill")} in ${n(a.games, "game")}`,
     }),
   );
   pick(
-    aggs,
-    (a) => a.assists,
+    perGameQualified,
+    (a) => perGameOf(a.assists, a.games),
     (a) => ({
       key: "playmaker",
       title: "Playmaker",
       emoji: "🤝",
-      blurb: "Most total assists",
-      value: n(a.assists, "assist"),
-      detail: `${(a.assists / a.games).toFixed(1)} per game`,
+      blurb: `Most assists per game (min ${n(PER_GAME_MIN_GAMES, "game")})`,
+      value: `${perGameOf(a.assists, a.games).toFixed(1)} assists/game`,
+      detail: `${n(a.assists, "assist")} in ${n(a.games, "game")}`,
     }),
   );
   pick(

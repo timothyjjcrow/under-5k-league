@@ -1,30 +1,11 @@
-// League news/announcements: pure ordering + validation, DB-free and tested.
-// Posting/pinning/deleting lives in src/app/actions/news.ts.
+// League news/announcements: pure validation, DB-free and tested. Pages order
+// posts in the query (pinned, then newest, then id). Posting/pinning/deleting
+// lives in src/app/actions/news.ts.
 
 export const NEWS_LIMITS = {
   TITLE_MAX: 120,
   BODY_MAX: 4000,
 } as const;
-
-export type NewsLike = {
-  id?: string;
-  pinned: boolean;
-  createdAt: Date | number;
-};
-
-function toMs(v: Date | number): number {
-  return typeof v === "number" ? v : v.getTime();
-}
-
-/** Pinned posts first, newest first within each group. */
-export function sortNews<T extends NewsLike>(posts: T[]): T[] {
-  return [...posts].sort(
-    (a, b) =>
-      Number(b.pinned) - Number(a.pinned) ||
-      toMs(b.createdAt) - toMs(a.createdAt) ||
-      (b.id ?? "").localeCompare(a.id ?? ""),
-  );
-}
 
 // Klipy (unlike Giphy/Tenor) exposes no embeddable page URL: its pages sit
 // behind Cloudflare (403 to any server fetch) and its media is content-addressed
@@ -39,9 +20,12 @@ const KLIPY_PAGE_RE =
  * nothing needs saying. Surfaced in the post-success toast so the admin learns
  * how to fix it instead of silently getting a bare link.
  */
-export function newsMediaHint(body: string): string | null {
+export function newsMediaHint(
+  body: string,
+  done: "Posted" | "Saved" = "Posted",
+): string | null {
   if (KLIPY_PAGE_RE.test(body)) {
-    return "Posted — but a Klipy page link won't show as a GIF (Klipy blocks embedding). On klipy.com, right-click the GIF → “Copy image address” (a static.klipy.com/…​.gif URL) and paste that, or use a Giphy/Tenor link — those embed from the page URL.";
+    return `${done} — but a Klipy page link won't show as a GIF (Klipy blocks embedding). On klipy.com, right-click the GIF → “Copy image address” (a static.klipy.com/…​.gif URL) and paste that, or use a Giphy/Tenor link — those embed from the page URL.`;
   }
   return null;
 }
@@ -55,4 +39,102 @@ export function newsPostError(title: string, body: string): string | null {
   if (body.trim().length > NEWS_LIMITS.BODY_MAX)
     return `Keep the body under ${NEWS_LIMITS.BODY_MAX} characters.`;
   return null;
+}
+
+type DecidedFinal = { scheduledAt: Date | null; completedAt: Date | null };
+type DecidedGame = { startTime: number; durationSecs: number };
+
+/**
+ * When a season's grand final was decided, the line between last season's
+ * pinned news ("Grand final this Sunday") and what was pinned after it
+ * ("Signups for next season are open"), which unpinNewsBeforeFinal keeps.
+ *
+ * The played games are the best clock: the end of the latest one, on Valve's
+ * clock, which nobody edits later. A final with no imported game (a forfeit,
+ * private match data) falls back to when its result was stored, then to its
+ * kickoff. Null when nothing dates it, and then nothing is unpinned.
+ */
+export function finalDecidedAt(
+  final: DecidedFinal,
+  games: readonly DecidedGame[],
+): Date | null {
+  const ends = games
+    .filter((game) => Number.isSafeInteger(game.startTime) && game.startTime > 0)
+    .map(
+      (game) =>
+        (game.startTime +
+          (Number.isSafeInteger(game.durationSecs)
+            ? Math.max(0, game.durationSecs)
+            : 0)) *
+        1000,
+    );
+  if (ends.length > 0) return new Date(Math.max(...ends));
+  return final.completedAt ?? final.scheduledAt ?? null;
+}
+
+const UNPINNED_NAMED = 3;
+
+/**
+ * The line Create season adds to its success message when it unpinned last
+ * season's posts, naming them so an evergreen one (the rules) can be pinned
+ * again in one click. Null when nothing was unpinned.
+ */
+export function unpinnedNewsNote(titles: readonly string[]): string | null {
+  if (titles.length === 0) return null;
+  const quoted = titles.slice(0, UNPINNED_NAMED).map((title) => `“${title}”`);
+  const more = titles.length - quoted.length;
+  const named =
+    more > 0
+      ? `${quoted.join(", ")} and ${more} more`
+      : quoted.length === 1
+        ? quoted[0]
+        : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+  return titles.length === 1
+    ? `Unpinned last season's news: ${named}. Pin it again under League news if it still matters.`
+    : `Unpinned last season's news: ${named}. Pin any of them again under League news if they still matter.`;
+}
+
+/**
+ * NewsPost.discordMessageId holds one of three things: null (the post has no
+ * Discord copy), a Discord message id (the copy an edit rewrites and a delete
+ * removes), or a "posting:<ms>" mark while a post to Discord is in flight.
+ * Requests claim the column with a compare-and-set before they call Discord,
+ * so a double-click or two admins can't post the same announcement twice.
+ */
+const NEWS_DISCORD_POSTING_PREFIX = "posting:";
+
+/**
+ * A mark older than this belongs to a request that died mid-post (Discord
+ * answers in seconds and the post times out at 5s). Discord may still have
+ * the message, so the admin is told to check the channel before posting again.
+ */
+export const NEWS_DISCORD_POST_STALE_MS = 60_000;
+
+export function newsDiscordPostingMark(nowMs: number): string {
+  return `${NEWS_DISCORD_POSTING_PREFIX}${nowMs}`;
+}
+
+export type NewsDiscordCopy =
+  | { state: "none" }
+  | { state: "posted"; messageId: string }
+  | { state: "posting"; interrupted: boolean };
+
+/** What the stored column says about a post's Discord copy. */
+export function newsDiscordCopy(
+  stored: string | null,
+  nowMs: number,
+): NewsDiscordCopy {
+  if (!stored) return { state: "none" };
+  if (/^\d{1,25}$/.test(stored)) return { state: "posted", messageId: stored };
+  if (stored.startsWith(NEWS_DISCORD_POSTING_PREFIX)) {
+    const at = Number(stored.slice(NEWS_DISCORD_POSTING_PREFIX.length));
+    if (Number.isFinite(at)) {
+      return {
+        state: "posting",
+        interrupted: nowMs - at > NEWS_DISCORD_POST_STALE_MS,
+      };
+    }
+  }
+  // Anything else can't be edited or removed; treat it as no copy.
+  return { state: "none" };
 }

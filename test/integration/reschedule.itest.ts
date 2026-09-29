@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { resultNudgeKey } from "@/lib/settings";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+  LEAGUE_ANNOUNCEMENT_STATUS,
+} from "@/lib/league-announcement-outbox";
 import {
   cancelReschedule,
+  loadRescheduleDeadline,
   proposeReschedule,
   respondReschedule,
 } from "@/lib/reschedule-service";
@@ -55,6 +63,8 @@ describe("reschedule service (integration)", () => {
     // The service returns announcement data (the action's Discord ping).
     const proposed = await proposeReschedule(home.captainId, match.id, NIGHT);
     expect(proposed).toMatchObject({
+      // The announcement links the match's Reschedule card.
+      matchId: match.id,
       homeName: "Home",
       awayName: "Away",
       isPlayoff: false,
@@ -97,7 +107,26 @@ describe("reschedule service (integration)", () => {
 
     await expect(
       proposeReschedule(home.captainId, match.id, NIGHT),
-    ).rejects.toThrow(/booked scrim within four hours/i);
+    ).rejects.toThrow(
+      `That time is within four hours of the ${home.name} vs ${practiceOpponent.name} scrim on `,
+    );
+    await expect(
+      proposeReschedule(home.captainId, match.id, NIGHT),
+    ).rejects.toThrow(/\. Cancel that scrim on its page first, or pick another time\.$/);
+    expect(await pendingFor(match.id)).toBeNull();
+
+    // A LIVE scrim has no Cancel button (only "End series"), so the refusal
+    // must not send the captain looking for one.
+    await prisma.scrim.update({
+      where: { id: booked.id },
+      data: { status: SCRIM_STATUS.LIVE },
+    });
+    const live = await proposeReschedule(home.captainId, match.id, NIGHT).then(
+      () => null,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(live).toMatch(/\. End that series on its scrim page first, or pick another time\.$/);
+    expect(live).not.toMatch(/cancel/i);
     expect(await pendingFor(match.id)).toBeNull();
 
     await prisma.scrim.update({
@@ -113,7 +142,16 @@ describe("reschedule service (integration)", () => {
 
     await expect(
       respondReschedule(away.captainId, pending!.id, true),
-    ).rejects.toThrow(/now has a booked scrim within four hours/i);
+    ).rejects.toThrow(
+      `That time is now within four hours of the ${home.name} vs ${practiceOpponent.name} scrim on `,
+    );
+    await prisma.scrim.update({
+      where: { id: booked.id },
+      data: { status: SCRIM_STATUS.LIVE },
+    });
+    await expect(
+      respondReschedule(away.captainId, pending!.id, true),
+    ).rejects.toThrow(/\. End that series on its scrim page first, or propose another time\.$/);
     expect(
       (await prisma.match.findUniqueOrThrow({ where: { id: match.id } }))
         .scheduledAt,
@@ -217,6 +255,40 @@ describe("reschedule service (integration)", () => {
         await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
       ).scheduledAt?.getTime(),
     ).toBe(NIGHT.getTime());
+  });
+
+  it("an accepted reschedule drops a queued result nudge about the old kickoff", async () => {
+    const { home, away, match } = await setupMatch();
+    // Queued by the worker, not yet delivered (the outbox paused or backing
+    // off): marker finalized, row still pending.
+    const key = resultNudgeKey(match.id, match.scheduleRevision);
+    const eventId = randomUUID();
+    await prisma.setting.create({
+      data: { key, value: `sent:v2:${eventId}:${Date.now()}` },
+    });
+    const queued = await enqueueLeagueAnnouncement({
+      content: "We couldn't find the games — captains: report them",
+      dedupeKey: `nudge-source-${match.id}`,
+      marker: { key, eventId },
+    });
+
+    await proposeReschedule(home.captainId, match.id, NIGHT);
+    const pending = await pendingFor(match.id);
+    expect(
+      (await respondReschedule(away.captainId, pending!.id, true)).accepted,
+    ).toBe(true);
+
+    const send = vi.fn(async () => true);
+    await deliverLeagueAnnouncements({ send, limit: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      await prisma.leagueAnnouncement.findUniqueOrThrow({
+        where: { id: queued.id },
+      }),
+    ).toMatchObject({
+      status: LEAGUE_ANNOUNCEMENT_STATUS.CANCELLED,
+      lastErrorCode: "STALE_SOURCE",
+    });
   });
 
   it("opposing captain accepts → match retimed, request ACCEPTED", async () => {
@@ -329,7 +401,7 @@ describe("reschedule service (integration)", () => {
     ).rejects.toThrow(/opposing captain/i);
     await expect(
       respondReschedule(replacementCaptain.id, pending!.id, false),
-    ).resolves.toMatchObject({ accepted: false });
+    ).resolves.toMatchObject({ accepted: false, matchId: match.id });
   });
 
   it("proposer cannot accept their own proposal", async () => {
@@ -769,6 +841,7 @@ describe("reschedule — the acceptance carries the match's booked standins", ()
 
     if (!outcome.accepted) throw new Error("expected an acceptance");
     expect(outcome.standinUserIds).toEqual([standin.id]);
+    expect(outcome.matchId).toBe(match.id);
   });
 
   it("a decline carries no standinUserIds — nothing moved, nobody needs a new time", async () => {
@@ -856,6 +929,42 @@ describe("reschedule league-calendar rules (integration)", () => {
     ).rejects.toThrow(/within four hours of Alpha vs Delta \(Semifinal\)/);
   });
 
+  it("hands the accepted post a playoff fixture's round name", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.PLAYOFFS });
+    const [a, b, c, d] = await Promise.all(
+      ["Alpha", "Bravo", "Charlie", "Delta"].map((n, i) => makeTeam(season.id, n, i)),
+    );
+    // A 4-team bracket: its two first-round slots are the semifinals.
+    const semi = await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 6, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M0", homeTeamId: a.id, awayTeamId: b.id,
+        scheduledAt: ORIGINAL_NIGHT,
+      },
+    });
+    await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 6, phase: MATCH_PHASE.PLAYOFF,
+        bracketSlot: "R0M1", homeTeamId: c.id, awayTeamId: d.id,
+        scheduledAt: ORIGINAL_NIGHT,
+      },
+    });
+    const proposed = await proposeReschedule(a.captainId, semi.id, NIGHT);
+    // The proposal post names the round too, so the whole thread agrees.
+    expect(proposed.roundLabel).toBe("Semifinal");
+    const pending = await pendingFor(semi.id);
+    const accepted = await respondReschedule(b.captainId, pending!.id, true);
+    if (!accepted.accepted) throw new Error("expected an acceptance");
+    expect(accepted.isPlayoff).toBe(true);
+    expect(accepted.roundLabel).toBe("Semifinal");
+
+    await proposeReschedule(a.captainId, semi.id, ORIGINAL_NIGHT);
+    const again = await pendingFor(semi.id);
+    const declined = await respondReschedule(b.captainId, again!.id, false);
+    expect(declined.accepted).toBe(false);
+    expect(declined.roundLabel).toBe("Semifinal");
+  });
+
   it("re-checks the clash at acceptance, after the rest of the schedule moved", async () => {
     const { a, b, ab, ac } = await setupThreeTeams();
     const target = new Date(ORIGINAL_NIGHT.getTime() + 24 * HOUR);
@@ -898,6 +1007,41 @@ describe("reschedule league-calendar rules (integration)", () => {
     const inTime = new Date(playoffNight.getTime() - 24 * HOUR);
     await proposeReschedule(b.captainId, ab.id, inTime);
     expect(await pendingFor(ab.id)).not.toBeNull();
+  });
+
+  it("gives the match page's form the same deadline the proposal check enforces", async () => {
+    const { season, a, b, ab } = await setupThreeTeams(ORIGINAL_NIGHT);
+    const deadline = await loadRescheduleDeadline(
+      prisma,
+      ab,
+      season.firstMatchNight,
+      Date.now(),
+    );
+    expect(deadline).not.toBeNull();
+    // The planned playoff night: one week after the last regular week (an
+    // hour's slack for a daylight-saving change on the league's clock).
+    expect(
+      Math.abs(deadline!.getTime() - (ORIGINAL_NIGHT.getTime() + 2 * WEEK)),
+    ).toBeLessThanOrEqual(HOUR);
+    await expect(
+      proposeReschedule(a.captainId, ab.id, deadline!),
+    ).rejects.toThrow(/before the playoffs start/);
+    // The form's latest allowed entry is a minute earlier, and it is accepted.
+    await proposeReschedule(
+      b.captainId,
+      ab.id,
+      new Date(deadline!.getTime() - 60_000),
+    );
+    expect(await pendingFor(ab.id)).not.toBeNull();
+    // Playoff series have no such limit.
+    expect(
+      await loadRescheduleDeadline(
+        prisma,
+        { seasonId: season.id, phase: MATCH_PHASE.PLAYOFF },
+        season.firstMatchNight,
+        Date.now(),
+      ),
+    ).toBeNull();
   });
 
   it("uses a playoff kickoff already on the calendar as the limit", async () => {

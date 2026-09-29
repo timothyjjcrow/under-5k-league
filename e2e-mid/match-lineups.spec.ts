@@ -116,7 +116,7 @@ test("players check in and captains bring in standins without any lineup confirm
       await expect(target.getByRole("button", { name: "Confirm playing lineup" })).toHaveCount(0);
     };
     await login(page, f.users[0], path);
-    await expect(page.getByRole("heading", { name: "Match center", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `${f.homeName} vs ${f.awayName}`, level: 1, exact: true })).toBeVisible();
     await noLineupCard(page);
 
     await login(page, f.users[f.teamSize - 1], path);
@@ -145,12 +145,20 @@ test("players check in and captains bring in standins without any lineup confirm
     await page.reload();
     await expect(page.getByRole("heading", { name: "Game 1", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "✓ Ready for the next game", exact: true })).toHaveCount(1);
+    // The readiness prompt sits under the scoreboard, above the finished box score.
+    const readyTop = (await page.locator("#match-live-checkin").boundingBox())!.y;
+    const gameTop = (await page.getByRole("heading", { name: "Game 1", exact: true }).boundingBox())!.y;
+    expect(readyTop).toBeLessThan(gameTop);
     await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(f.users[f.teamSize * 2].id);
     await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
     await page.getByRole("button", { name: "Assign standin", exact: true }).click();
     await expect.poll(() => db.standinAssignment.count({ where: {
       matchId: f.matchId, teamId: f.homeId, standinUserId: f.users[f.teamSize * 2].id, replacingUserId: f.users[1].id,
     } })).toBe(1);
+    // Game 1 is in, so the server refuses removing that cover: the card says
+    // it is locked instead of offering a Remove that can only fail.
+    await expect(page.getByText("Locked: series already started", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
     await noLineupCard(page);
 
     await login(page, f.users[f.teamSize * 2], path);
@@ -178,11 +186,13 @@ test("former players retain actual appearances and auction receipts while identi
   await withFixture(request, true, async (f) => {
     const noErrors = trackPageErrors(page);
     await page.goto(`/players/${f.users[1].id}`);
-    await expect(page.getByRole("heading", { name: "Seasons played", exact: true })).toBeVisible();
-    await expect(page.getByText("1 games · 1 map wins", { exact: true })).toBeVisible();
-    await expect(page.getByText("1–0–0 series", { exact: true })).toBeVisible();
-    await expect(page.getByText("🏆 Championship contribution", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Original auction purchase: \$47/)).toBeVisible();
+    // One Seasons row carries the released player's appearance, their
+    // original auction price and the title they played for.
+    await expect(page.getByRole("heading", { name: "Seasons", exact: true })).toBeVisible();
+    const seasonRow = page.locator("#player-seasons li").filter({ hasText: f.homeName });
+    await expect(seasonRow.getByText("Drafted for $47", { exact: true })).toBeVisible();
+    await expect(seasonRow.getByText("1W 0D 0L series · 1 game", { exact: true })).toBeVisible();
+    await expect(seasonRow.getByTitle("Won the title", { exact: true })).toBeVisible();
     expect(await db.teamMember.count({ where: { userId: f.users[1].id } })).toBe(0);
 
     await page.goto(`/seasons/${f.seasonId}`);
@@ -195,7 +205,10 @@ test("former players retain actual appearances and auction receipts while identi
     expect(await page.content()).not.toContain("privateMarker");
 
     await page.goto("/hall-of-fame");
-    await expect(page.getByRole("heading", { name: "🏆 Championship contributions", exact: true })).toBeVisible();
+    // The history season crowned a champion, so the Hall of Fame opens on it.
+    await expect(page.getByRole("heading", { name: "Champion history" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: f.homeName, exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Championship contributions", exact: true })).toBeVisible();
     await page.goto(`/matches/${f.matchId}`);
     await expect(page.getByText("Correct player attribution · Admin", { exact: true })).toHaveCount(0);
     await login(page, f.users[1], `/matches/${f.matchId}`);

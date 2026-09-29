@@ -1,4 +1,5 @@
 import { DEFAULTS } from "./constants";
+import { roleCoverage } from "./pool-stats";
 
 // Pure auction-draft rules. DB effects live in the server actions; these
 // functions just encode the math so they can be unit-tested in isolation.
@@ -22,7 +23,7 @@ export function teamNeed(teamSize: number, rosterCount: number): number {
 export function maxBid(
   team: DraftTeam,
   teamSize: number,
-  minBid = DEFAULTS.MIN_BID,
+  minBid: number = DEFAULTS.MIN_BID,
 ): number {
   const need = teamNeed(teamSize, team.rosterCount);
   if (need <= 0) return 0;
@@ -48,6 +49,61 @@ export function canNominate(
     teamNeed(teamSize, team.rosterCount) > 0 &&
     maxBid(team, teamSize, minBid) >= minBid
   );
+}
+
+/**
+ * Could this team top `price` on the live lot? An open seat and a max bid
+ * above the price: the same rule canBid applies to a bid of `price + 1`.
+ * One definition for the room's "Can still outbid" line and the server's
+ * short clock for a lot nobody else can contest.
+ */
+function canTopPrice(
+  team: DraftTeam,
+  teamSize: number,
+  price: number,
+  minBid: number,
+): boolean {
+  return (
+    teamNeed(teamSize, team.rosterCount) > 0 &&
+    maxBid(team, teamSize, minBid) > price
+  );
+}
+
+/**
+ * Can any team other than the high bidder still top the price? False when
+ * every other team is full or priced out, which is most lots late in a draft:
+ * the high bidder wins whatever happens, so there is nothing to wait for.
+ */
+export function lotContested(s: {
+  teams: readonly DraftTeam[];
+  teamSize: number;
+  price: number;
+  highBidderTeamId: string | null;
+  minBid?: number;
+}): boolean {
+  const minBid = s.minBid ?? DEFAULTS.MIN_BID;
+  return s.teams.some(
+    (t) =>
+      t.id !== s.highBidderTeamId &&
+      canTopPrice(t, s.teamSize, s.price, minBid),
+  );
+}
+
+/**
+ * Seconds to put on the bid clock when a lot opens, a bid lands or a paused
+ * lot resumes: the full BID_TIMER_SECONDS while another team can still bid,
+ * UNCONTESTED_BID_TIMER_SECONDS when nobody can (see lotContested).
+ */
+export function bidClockSeconds(s: {
+  teams: readonly DraftTeam[];
+  teamSize: number;
+  price: number;
+  highBidderTeamId: string | null;
+  minBid?: number;
+}): number {
+  return lotContested(s)
+    ? DEFAULTS.BID_TIMER_SECONDS
+    : DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS;
 }
 
 /** Whether `amount` is a legal bid for this team given the current high bid. */
@@ -270,7 +326,384 @@ export function draftViewerStake(s: {
   me: { userId: string | null; myTeamId: string | null; isAdmin: boolean };
   available: { userId: string }[];
 }): boolean {
-  if (s.me.myTeamId || s.me.isAdmin) return true;
+  return s.me.isAdmin || draftAlertsReachViewer(s);
+}
+
+/**
+ * Can the draft room ever ring for this viewer? It decides whether the room
+ * shows its sound toggle at all — a toggle for a bell that never rings is
+ * clutter at the top of the busiest screen in the app.
+ *
+ * Mirrors what actually rings (draft-feed.ts's alerts plus the outbid latch):
+ * a CAPTAIN gets "your turn to nominate" and "outbid"; a player still IN THE
+ * POOL gets "you're on the block" and "you were drafted". Nobody else gets
+ * anything — not a signed-out visitor, not a drafted player, and not an admin
+ * as such (an admin who is also a captain or a pool player qualifies through
+ * that). Being an admin is why draftViewerStake keeps polling a hidden tab;
+ * it is not a reason to offer a bell.
+ */
+export function draftAlertsReachViewer(s: {
+  me: { userId: string | null; myTeamId: string | null };
+  available: { userId: string }[];
+}): boolean {
+  if (s.me.myTeamId) return true;
   const id = s.me.userId;
   return !!id && s.available.some((p) => p.userId === id);
+}
+
+/**
+ * A team card's roster in reading order: the captain first, then everyone else
+ * in the order they arrived (the payload sorts members by price, highest
+ * first).
+ *
+ * Keyed on the captain FLAG, never on price. Captains are usually the $0 row,
+ * which is why a price sort put them at the bottom of their own team — but a
+ * captaincy transfer promotes a player who was bought, and that row keeps its
+ * nonzero price. Stable: the non-captain order is left exactly as given.
+ */
+export function rosterDisplayOrder<M extends { isCaptain: boolean }>(
+  members: readonly M[],
+): M[] {
+  return [
+    ...members.filter((m) => m.isCaptain),
+    ...members.filter((m) => !m.isCaptain),
+  ];
+}
+
+/** "3 open seats" / "1 open seat" for a team card, or null when full. */
+export function openSeatsLabel(need: number): string | null {
+  if (need <= 0) return null;
+  return `${need} open ${need === 1 ? "seat" : "seats"}`;
+}
+
+/**
+ * The one line above a captain's bid buttons: how high they can go, and why
+ * not higher. `need` counts the seats still to fill INCLUDING the one being
+ * auctioned; the cap keeps `minBid` back for each of the others (see maxBid).
+ *
+ * It deliberately does not mention the current price. The old line did
+ * ("winning at $4 leaves $100 for 3 more seats"), so its length changed with
+ * every bid and it re-wrapped — moving the buttons under a captain's thumb.
+ */
+export function bidAllowanceLine(o: {
+  maxBid: number;
+  need: number;
+  minBid?: number;
+}): string {
+  const minBid = o.minBid ?? DEFAULTS.MIN_BID;
+  const others = o.need - 1;
+  const head = `You can bid up to $${o.maxBid}`;
+  if (others <= 0) return `${head}. This is your last open seat.`;
+  if (others === 1) return `${head} (keeps $${minBid} for 1 more seat).`;
+  return `${head} (keeps $${minBid} for each of ${others} more seats).`;
+}
+
+/**
+ * The team the room shows as ON THE CLOCK, or null.
+ *
+ * Only while that team still has a nomination to make. Once its player is on
+ * the block the countdown is the BIDDING clock, and a gold "on clock" badge on
+ * the nominator read as though that team were winning, or had to act, while a
+ * rival held the high bid. PAUSED is excluded too: nothing is ticking.
+ */
+export function nominationTurnTeamId(s: {
+  status: string;
+  nominatorTeamId: string | null;
+  nominatedPlayer: unknown;
+}): string | null {
+  return s.status === "IN_PROGRESS" && !s.nominatedPlayer
+    ? s.nominatorTeamId
+    : null;
+}
+
+/**
+ * The words before the nominating team's name in the lot card's header.
+ * "On the clock" belongs to the nomination turn only; while a lot is live the
+ * team is just who put the player up, and the clock beside it is the bidding
+ * clock. A lot the clock opened for an absent captain says so — it used to
+ * read exactly like their own choice.
+ */
+export function lotHeadingLead(o: {
+  lotLive: boolean;
+  autoNominated?: boolean;
+}): string {
+  if (!o.lotLive) return "On the clock:";
+  return o.autoNominated ? "Clock ran out: auto-picked for" : "Nominated by";
+}
+
+type AuctionTeam = {
+  id: string;
+  name: string;
+  budget: number;
+  /** Everyone on the roster, the captain included. */
+  members: readonly unknown[];
+};
+
+/**
+ * The teams that can still top the current price on the live lot, in draft
+ * order, each with the most it may bid. Same rule the server applies to a bid
+ * (canBid) and the team cards show as "max $N": an open seat, a cap above the
+ * price, and not already holding the high bid.
+ */
+export function outbidders(s: {
+  teams: readonly AuctionTeam[];
+  teamSize: number;
+  minBid?: number;
+  currentBid: number;
+  currentBidTeamId: string | null;
+}): { id: string; name: string; cap: number }[] {
+  const minBid = s.minBid ?? DEFAULTS.MIN_BID;
+  return s.teams
+    .filter((t) => t.id !== s.currentBidTeamId)
+    .map((t) => ({
+      id: t.id,
+      name: t.name,
+      team: { id: t.id, budget: t.budget, rosterCount: t.members.length },
+    }))
+    .filter((t) => canTopPrice(t.team, s.teamSize, s.currentBid, minBid))
+    .map(({ id, name, team }) => ({
+      id,
+      name,
+      cap: maxBid(team, s.teamSize, minBid),
+    }));
+}
+
+/**
+ * One line under a live lot: who can still respond to this price, or that
+ * nobody can. Deciding whether to go higher turns on exactly this, and it used
+ * to mean scanning every team card for a 10px "max $N" turning red.
+ * Null when there is no high bid to outbid.
+ */
+export function outbidLine(s: {
+  teams: readonly AuctionTeam[];
+  teamSize: number;
+  minBid?: number;
+  currentBid: number;
+  currentBidTeamId: string | null;
+  myTeamId: string | null;
+}): string | null {
+  if (!s.currentBidTeamId) return null;
+  const rivals = outbidders(s);
+  if (rivals.length > 0) {
+    const names = rivals.map(
+      (t) => `${t.id === s.myTeamId ? "you" : t.name} (up to $${t.cap})`,
+    );
+    return `Can still outbid: ${names.join(", ")}.`;
+  }
+  if (s.currentBidTeamId === s.myTeamId) {
+    return `No one can outbid you: you win at $${s.currentBid} when the clock runs out.`;
+  }
+  const leader =
+    s.teams.find((t) => t.id === s.currentBidTeamId)?.name ?? "the high bidder";
+  return `No one can outbid ${leader}: sells at $${s.currentBid} when the clock runs out.`;
+}
+
+/**
+ * The line under a live lot for a signed-in viewer who is not a captain: the
+ * player being auctioned, or a player still waiting in the pool. Everyone else
+ * — a visitor, a drafted player, an admin — gets no line (null). They all used
+ * to read the captains' bidding rule on every lot, twenty-odd times a night,
+ * the player on the block included, at their big moment.
+ *
+ * Captains are left to the room's own lines (bid controls, "You hold the high
+ * bid", priced out, roster full); a captain who reaches none of those is
+ * looking at a paused or closing lot, which the banner and clock already say.
+ */
+export function lotWatcherLine(s: {
+  me: { userId: string | null; myTeamId: string | null };
+  nominatedPlayer: { userId: string } | null;
+  available: readonly { userId: string }[];
+  currentBid: number;
+  highBidderName: string | null;
+}): string | null {
+  const id = s.me.userId;
+  if (!s.nominatedPlayer || !id || s.me.myTeamId) return null;
+  if (s.nominatedPlayer.userId === id) {
+    return s.highBidderName
+      ? `Captains are bidding on you: ${s.highBidderName} leads at $${s.currentBid}.`
+      : "Captains are bidding on you.";
+  }
+  if (!s.available.some((p) => p.userId === id)) return null;
+  const left = s.available.length;
+  return `You're still available: ${left} ${left === 1 ? "player" : "players"} left in the pool.`;
+}
+
+/**
+ * A captain's own standing, in one line at the top of the live room: money
+ * left, seats to fill and the most they can bid. It used to show only inside a
+ * lot while they could bid — never during their own nomination turn, when they
+ * set the opening price.
+ */
+export function captainStatusLine(o: {
+  budget: number;
+  need: number;
+  maxBid: number;
+}): string {
+  if (o.need <= 0) return `$${o.budget} left · roster full`;
+  return `$${o.budget} left · ${openSeatsLabel(o.need)} · max bid $${o.maxBid}`;
+}
+
+/**
+ * Position keys ("1".."5") that nobody on this roster lists. Roles are
+ * self-declared and most players list several, so this is a guide to where to
+ * look, never a requirement. Empty when nobody on the roster has listed any
+ * role: five "missing" chips for a captain who skipped the question is noise.
+ */
+export function uncoveredRoles(
+  members: readonly { roles: string | null }[],
+): string[] {
+  const coverage = roleCoverage(
+    members.map((m) => ({ roles: m.roles ?? "" })),
+  );
+  if (coverage.every((role) => role.count === 0)) return [];
+  return coverage.filter((role) => role.count === 0).map((role) => role.key);
+}
+
+/**
+ * The team that nominates AFTER the current turn: after the live lot sells, or
+ * after the team now on the clock puts its player up. Null when there is no
+ * such turn to announce — the auction isn't running, the pool will be empty by
+ * then, or the same team would go again.
+ *
+ * It reads the rosters as they stand, the same rotation the server runs
+ * (nextNominatorIndex from the current nominator). That can be wrong in one
+ * case: a next team with a single open seat that wins the live lot is full
+ * afterwards, and the turn skips it. Predicting from the high bidder instead
+ * would make the answer change with every bid, on a line that sits above the
+ * bid buttons.
+ */
+export function upcomingNominatorTeamId(s: {
+  status: string;
+  teams: readonly { id: string; budget: number; members: readonly unknown[] }[];
+  teamSize: number;
+  nominatorTeamId: string | null;
+  /** Players not yet drafted — the player on the block included. */
+  available: readonly unknown[];
+}): string | null {
+  if (s.status !== "IN_PROGRESS" && s.status !== "PAUSED") return null;
+  // One player left means this turn takes the last of them and the draft ends.
+  if (!s.nominatorTeamId || s.available.length < 2) return null;
+  const current = s.teams.findIndex((t) => t.id === s.nominatorTeamId);
+  const idx = nextNominatorIndex(
+    s.teams.map((t) => ({
+      id: t.id,
+      budget: t.budget,
+      rosterCount: t.members.length,
+    })),
+    s.teamSize,
+    current < 0 ? 0 : current,
+  );
+  const next = idx >= 0 ? s.teams[idx] : undefined;
+  return next && next.id !== s.nominatorTeamId ? next.id : null;
+}
+
+/**
+ * When the nomination turn moves, does the player a captain lined up survive?
+ * Only when the turn has just passed TO that captain — that is what lining up
+ * a pick while "next" is for. Any other hand-over clears it: a pick chosen for
+ * a turn that went to someone else must not sit there looking live.
+ */
+export function keepsLinedUpPick(o: {
+  nominatorTeamId: string | null;
+  myTeamId: string | null;
+}): boolean {
+  return !!o.myTeamId && o.nominatorTeamId === o.myTeamId;
+}
+
+/** "Lined up: X." or how to line someone up. */
+export function lineUpHint(linedUpName: string | null): string {
+  return linedUpName
+    ? `Lined up: ${linedUpName}.`
+    : "Tap a player in the pool to line them up.";
+}
+
+/**
+ * The notice for the captain whose nomination turn comes next, on every screen
+ * size. Their 90 seconds used to start with searching the pool, and the only
+ * hint ("next: Team 3" in the lot header) was hidden on phones.
+ */
+export function upNextLine(linedUpName: string | null): string {
+  return `You're next to nominate. ${lineUpHint(linedUpName)}`;
+}
+
+/**
+ * The line under a nomination turn for everyone who isn't nominating right now.
+ * During a pause the captain on the clock used to read "Waiting for <their own
+ * team> to nominate a player…".
+ */
+export function nominationWaitLine(o: {
+  paused: boolean;
+  myTurn: boolean;
+  nominatorName: string;
+}): string {
+  if (o.myTurn && o.paused) {
+    return "It's your turn to nominate. Your clock restarts when the admin unpauses the auction.";
+  }
+  if (o.paused) {
+    return `${o.nominatorName} nominates when the admin unpauses the auction.`;
+  }
+  return `Waiting for ${o.nominatorName} to nominate a player…`;
+}
+
+/**
+ * The team an ADMIN can nominate for right now: the team on the clock, when a
+ * captain has dropped off (phone died, still in voice) and asks the admin to
+ * put up a player at a price. The server already lets an admin nominate for
+ * the team on the clock (nominatePlayer); this decides when the room offers it
+ * and what the opening bid is capped at — that TEAM's max bid, never the
+ * admin's own (an admin without a team has none).
+ *
+ * Null when the viewer isn't an admin, when they are the captain on the clock
+ * (their own nominate bar covers it), when no nomination turn is running, or
+ * when the team on the clock couldn't open a lot at the minimum bid.
+ */
+export function adminNominationTeam(s: {
+  status: string;
+  seasonStatus: string;
+  nominatedUserId: string | null;
+  nominatorTeamId: string | null;
+  teams: readonly {
+    id: string;
+    name: string;
+    budget: number;
+    members: readonly unknown[];
+  }[];
+  teamSize: number;
+  minBid: number;
+  me: { isAdmin: boolean; canNominate: boolean };
+}): { id: string; name: string; maxBid: number } | null {
+  if (!s.me.isAdmin || s.me.canNominate) return null;
+  if (s.seasonStatus !== "DRAFT" || s.status !== "IN_PROGRESS") return null;
+  if (s.nominatedUserId || !s.nominatorTeamId) return null;
+  const team = s.teams.find((t) => t.id === s.nominatorTeamId);
+  if (!team) return null;
+  const cap = maxBid(
+    { id: team.id, budget: team.budget, rosterCount: team.members.length },
+    s.teamSize,
+    s.minBid,
+  );
+  if (cap < s.minBid) return null;
+  return { id: team.id, name: team.name, maxBid: cap };
+}
+
+/**
+ * "Nominates 1st", "Nominates 2nd", …: a team's place in the opening
+ * nomination order, by its 0-based index in draft order (the order Start
+ * draft hands out the first nomination, and the waiting room lists teams in).
+ */
+export function nominationOrderLabel(index: number): string {
+  const n = Math.max(0, Math.trunc(index)) + 1;
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  const suffix =
+    mod100 >= 11 && mod100 <= 13
+      ? "th"
+      : mod10 === 1
+        ? "st"
+        : mod10 === 2
+          ? "nd"
+          : mod10 === 3
+            ? "rd"
+            : "th";
+  return `Nominates ${n}${suffix}`;
 }

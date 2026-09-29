@@ -1,3 +1,10 @@
+/**
+ * How long after its start a scrim time can still be posted or claimed:
+ * "tonight, an hour ago" is fine. The service and the Join button share it so
+ * the page never offers a claim the service would refuse.
+ */
+export const SCRIM_PAST_GRACE_MS = 60 * 60 * 1000;
+
 /** Shared ownership window for casual scrim result discovery. */
 export const SCRIM_DETECT_WINDOW_BEFORE_MS = 12 * 60 * 60 * 1000;
 export const SCRIM_DETECT_WINDOW_AFTER_MS = 36 * 60 * 60 * 1000;

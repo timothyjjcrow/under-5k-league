@@ -9,8 +9,9 @@ import { defineConfig, devices } from "@playwright/test";
 // both this config's e2e guard and seed-fixture's "must contain fixture"
 // guard) seeded to FIXTURE_MODE=regular (6 teams, last week open, box scores
 // with report cards) plus a staged LIVE match, on its own port. Run with
-// `npm run test:e2e:mid`; can't run SIMULTANEOUSLY with the main e2e (Next's
-// project-dir lock allows one dev server per repo) — run them sequentially.
+// `npm run test:e2e:mid`; can't run SIMULTANEOUSLY with the main e2e (both
+// build into .next and Next allows one dev server per build folder) — run
+// them sequentially.
 export const MID_DB_URL = `file:${path.resolve(
   process.cwd(),
   "prisma/e2e-fixture.db",

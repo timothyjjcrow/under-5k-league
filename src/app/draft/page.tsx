@@ -1,15 +1,38 @@
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { getActiveSeason } from "@/lib/season";
+import { getSessionUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
+import {
+  DRAFT_DONE_NEEDS_SCHEDULE_TITLE,
+  DRAFT_DONE_START_SEASON_TITLE,
+} from "@/lib/admin-next-step";
+import {
+  loadRegularSeasonStep,
+  loadStartDraftPreflight,
+} from "@/lib/draft-room-admin";
 import { DraftRoom } from "@/components/draft-room";
+import { ActionForm, SubmitButton } from "@/components/action-form";
+import {
+  StartDraftControl,
+  StartDraftForm,
+} from "@/components/admin-start-draft";
 import { EmptyState, PageTitle, buttonClasses } from "@/components/ui";
+import { setSeasonPhase } from "@/app/actions/admin-season";
 import {
   pauseDraftAction,
   resumeDraftAction,
   undoLastSaleAction,
   voidCurrentLotAction,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-captains-draft";
 
-export const metadata = { title: "Draft" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("draft");
+}
 
 export default async function DraftPage() {
   const season = await getActiveSeason();
@@ -35,12 +58,119 @@ export default async function DraftPage() {
     );
   }
 
+  // Once the season has left the Draft phase, the draft is history and its
+  // home is /teams (rosters, prices and the draft-night recap). A live or
+  // paused auction outside Draft is a stranded state an admin must still be
+  // able to see, so that one keeps the room.
+  if (
+    season.status !== SEASON_STATUS.SIGNUPS &&
+    season.status !== SEASON_STATUS.DRAFT
+  ) {
+    const draft = await prisma.draft.findUnique({
+      where: { seasonId: season.id },
+      select: { status: true },
+    });
+    if (
+      draft?.status !== DRAFT_STATUS.IN_PROGRESS &&
+      draft?.status !== DRAFT_STATUS.PAUSED
+    ) {
+      redirect("/teams");
+    }
+  }
+
+  // Admins get Start draft in the waiting room: the same form, action and
+  // confirm as /admin's Captains & draft card (see admin-start-draft.tsx),
+  // loaded only for them and only while there is something to start. Once
+  // the auction is finished, the room offers them the next step instead.
+  const user = await getSessionUser();
+  const isAdmin = user?.role === "ADMIN";
+  const [preflight, regularSeasonStep] = isAdmin
+    ? await Promise.all([
+        loadStartDraftPreflight(season),
+        loadRegularSeasonStep(season),
+      ])
+    : [null, null];
+  const adminStart = preflight
+    ? {
+        blocker: preflight.blocker,
+        // Same Suspense shape as /admin: the button is there at once with the
+        // base confirm, and gains the Discord line when that lookup lands.
+        control: (
+          <Suspense
+            fallback={
+              <StartDraftForm
+                seasonId={season.id}
+                confirm={preflight.confirm}
+                disabled={!preflight.canStart}
+                size="md"
+              />
+            }
+          >
+            <StartDraftControl
+              seasonId={season.id}
+              confirmBase={preflight.confirm}
+              disabled={!preflight.canStart}
+              size="md"
+            />
+          </Suspense>
+        ),
+      }
+    : undefined;
+  // Same action and confirm as the Regular season phase button on /admin.
+  // The season waits for fixtures, so a finished auction with no schedule
+  // points at the schedule card instead.
+  // Titled like /admin's next-step banner for the same state, so the room's
+  // heading and its button name the same step.
+  const adminFinish =
+    regularSeasonStep && "needsSchedule" in regularSeasonStep
+      ? {
+          title: DRAFT_DONE_NEEDS_SCHEDULE_TITLE,
+          detail:
+            "The Regular season can't start without fixtures. Generate them in Schedule & results on the admin page.",
+          control: (
+            <Link
+              href="/admin#adm-schedule"
+              className={buttonClasses("accent", "md")}
+            >
+              Generate the schedule first
+            </Link>
+          ),
+        }
+      : regularSeasonStep
+        ? {
+            title: DRAFT_DONE_START_SEASON_TITLE,
+            detail:
+              "Until you do, automatic result sync and the weekly Discord reminder stay off.",
+            control: (
+              <ActionForm
+                action={setSeasonPhase}
+                hidden={{
+                  expectedActiveSeasonId: season.id,
+                  phase: SEASON_STATUS.REGULAR_SEASON,
+                }}
+              >
+                <SubmitButton
+                  variant="accent"
+                  confirm={regularSeasonStep.confirmation}
+                >
+                  Start the Regular season
+                </SubmitButton>
+              </ActionForm>
+            ),
+          }
+        : undefined;
+
   return (
-    <div className="space-y-6">
-      <PageTitle
-        title="Draft room"
-        subtitle={`${season.name} · live auction draft`}
-      />
+    <div className="space-y-4">
+      {/* One line, not the site's two-line PageTitle: on a phone the old
+          title, subtitle and divider sat ~120px above the auction clock on a
+          screen where every pixel above the bid buttons costs time. */}
+      <h1 className="flex min-w-0 items-baseline gap-2 font-display text-2xl font-semibold leading-tight tracking-tight text-fg">
+        <span className="shrink-0">Draft room</span>{" "}
+        <span className="min-w-0 truncate font-sans text-sm font-normal text-muted">
+          {season.name}
+        </span>
+      </h1>
       {/* The room handles every draft status itself (waiting → live →
           complete) via its poll. A server-rendered gate here went stale the
           moment the admin clicked start, stranding the whole league on a
@@ -51,6 +181,8 @@ export default async function DraftPage() {
         resumeAction={resumeDraftAction}
         undoAction={undoLastSaleAction}
         voidLotAction={voidCurrentLotAction}
+        adminStart={adminStart}
+        adminFinish={adminFinish}
       />
     </div>
   );

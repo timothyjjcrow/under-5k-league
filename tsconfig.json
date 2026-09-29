@@ -28,6 +28,14 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
+    ".next-fixture-signups/types/**/*.ts",
+    ".next-fixture-signups/dev/types/**/*.ts",
+    ".next-fixture-regular/types/**/*.ts",
+    ".next-fixture-regular/dev/types/**/*.ts",
+    ".next-fixture-playoffs/types/**/*.ts",
+    ".next-fixture-playoffs/dev/types/**/*.ts",
+    ".next-fixture-complete/types/**/*.ts",
+    ".next-fixture-complete/dev/types/**/*.ts",
     "**/*.mts"
   ],
   "exclude": ["node_modules"]

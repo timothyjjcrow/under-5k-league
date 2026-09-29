@@ -4,12 +4,11 @@
 // "37 / 30 players to start" over a pegged progress bar — signups are uncapped,
 // so that is the state the league actually sits in for most of signup week.
 //
-//   DATABASE_URL="file:$PWD/prisma/signups-fixture.db" npx prisma db push
-//   DATABASE_URL="file:$PWD/prisma/signups-fixture.db" PLAYERS=37 CAPTAINS=7 \
-//     npx tsx scripts/seed-signups-fixture.ts
+//   npm run fixture:signups                       # push, seed, serve on :3111
+//   PLAYERS=37 CAPTAINS=7 npm run fixture:signups
 //
-// Then serve it: the `signups-fixture` entry in .claude/launch.json runs
-// `next dev -p 3111` against this DB with dev login on (/api/auth/dev?admin=1).
+// (scripts/fixture-server.ts; the `signups-fixture` entry in .claude/launch.json
+// runs the same command.) Dev login is on: /api/auth/dev?admin=1.
 //
 // PLAYERS (default 37) and CAPTAINS (default 0) set the shape. CAPTAINS also
 // drives /admin's Start-draft seat math: pool = PLAYERS - CAPTAINS, seats =
@@ -32,14 +31,13 @@ async function main() {
   // A fixture DB is reused across runs, so the reset has to reach everything a
   // browsing session can create — not just what this script writes. /inhouse is
   // reachable from every phase (the nav link is season-independent), so a poke
-  // at the queue leaves lobbies, credit accounts and ledger rows behind.
+  // at the queue leaves lobbies behind.
   //
-  // InhouseCreditEntry and AdminAction carry NO foreign key on purpose (a
-  // staking record and an audit record outlive the account — see the model
-  // comments in schema.prisma) and NewsPost's author is SetNull, so
-  // `user.deleteMany()` does not clear these rows, so they have to be named.
-  // Left out, a reseeded "empty" fixture still shows a Cred board with betting
-  // history on it.
+  // InhouseCreditEntry (the retired Cred betting ledger, whose tables are
+  // kept) and AdminAction carry NO foreign key on purpose (those records
+  // outlive the account — see the model comments in schema.prisma) and
+  // NewsPost's author is SetNull, so `user.deleteMany()` does not clear these
+  // rows, so they have to be named.
   await prisma.inhouseCreditEntry.deleteMany({});
   await prisma.adminAction.deleteMany({});
   await prisma.newsPost.deleteMany({});

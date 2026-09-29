@@ -28,6 +28,7 @@ vi.mock("@/lib/reschedule-service", () => ({
   cancelReschedule: mocks.cancelReschedule,
 }));
 vi.mock("@/lib/discord", () => ({
+  playerAwayMessage: vi.fn(() => "player away"),
   playerOutMessage: vi.fn(() => "player out"),
   rescheduleDeclinedMessage: vi.fn(() => "declined"),
   rescheduleMessage: vi.fn(() => "accepted"),
@@ -39,7 +40,7 @@ vi.mock("@/lib/discord-mentions", () => ({
 }));
 vi.mock("@/lib/settings", () => ({ claimThrottle: vi.fn() }));
 
-import { setAvailability } from "./availability";
+import { markAwayDates, setAvailability } from "./availability";
 import { captainAutoDetect, captainImportGame } from "./match-report";
 import {
   cancelReschedule,
@@ -57,6 +58,13 @@ function form(fields: Record<string, string>): FormData {
 }
 
 const availabilityForm = () => form({ matchId: "match-1", status: "IN", expectedScheduleRevision: "0" });
+const awayForm = () =>
+  form({
+    awayFromTs: String(Date.now() + 86_400_000),
+    awayBackTs: String(Date.now() + 8 * 86_400_000),
+    expectedSeasonId: "season-1",
+    seen: `match-1:0:${Date.now() + 2 * 86_400_000}`,
+  });
 const importForm = () =>
   form({ matchId: "match-1", dotaMatchRef: "123456789" });
 const detectForm = () => form({ matchId: "match-1" });
@@ -88,6 +96,13 @@ describe("Server Action error boundaries", () => {
       invoke: () => setAvailability({}, availabilityForm()),
       fallback: "Could not save that RSVP — reload and try again",
       eventCode: "availability.set",
+    },
+    {
+      name: "away dates database failure",
+      reject: (error: Error) => mocks.transaction.mockRejectedValueOnce(error),
+      invoke: () => markAwayDates({}, awayForm()),
+      fallback: "Could not save your away dates. Reload and try again.",
+      eventCode: "availability.away",
     },
     {
       name: "specific match import failure",

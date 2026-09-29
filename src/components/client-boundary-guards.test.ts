@@ -1,6 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { sourceFiles } from "../../test/support/source-files";
 
 /**
  * No "use client" component may import a server-only module.
@@ -17,22 +16,26 @@ import { describe, it, expect } from "vitest";
  * ANY plain-Node context — vitest, tsx scripts, the seeders — so it cannot
  * be added to a repo whose prisma module is imported by all three.
  */
-const DIR = __dirname;
-
 // Modules that must never appear in a client bundle. discord-roles is listed
 // by name (not just prisma) because it is the one server module whose PURE
 // siblings (discord-reach) make the wrong import an easy reflex.
 const SERVER_ONLY = ["@/lib/prisma", "@/lib/discord-roles", "@/lib/settings"];
 
-const clientFiles = readdirSync(DIR)
-  .filter((f) => f.endsWith(".tsx"))
-  .map((f) => ({ name: f, src: readFileSync(join(DIR, f), "utf8") }))
-  .filter(({ src }) => /^["']use client["']/m.test(src));
+// Every "use client" file anywhere under src/, not just src/components: a
+// client component living beside its page (src/app/**) ships to the browser
+// just the same, and a fixed folder would stop seeing one the moment it moved.
+const clientFiles = sourceFiles("src/**/*.{ts,tsx}", 300)
+  .filter(({ text }) => /^["']use client["']/m.test(text))
+  .map(({ path, text }) => ({ name: path, src: text }));
 
 describe("client components stay on their side of the server boundary", () => {
   it("found the client components (guard is not vacuous)", () => {
-    expect(clientFiles.length).toBeGreaterThan(5);
-    expect(clientFiles.some((f) => f.name === "chase-copy.tsx")).toBe(true);
+    // 44 today, three of them outside src/components.
+    expect(clientFiles.length).toBeGreaterThanOrEqual(40);
+    expect(
+      clientFiles.some((f) => f.name === "src/components/chase-copy.tsx"),
+    ).toBe(true);
+    expect(clientFiles.some((f) => f.name.startsWith("src/app/"))).toBe(true);
   });
 
   it.each(clientFiles.map(({ name, src }) => [name, src]))(

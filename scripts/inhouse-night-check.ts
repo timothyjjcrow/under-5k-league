@@ -2,9 +2,9 @@
  * A full inhouse night, end to end, against a REAL OpenDota match.
  *
  * Everything the integration suite stubs is real here: the OpenDota fetch, the
- * classification, the box score, the settlement. It is the one check the test
+ * classification, the box score, the Elo swing. It is the one check the test
  * suite structurally cannot make — every itest mocks `fetchOpenDotaMatch`, so
- * "settlement works" has only ever meant "settlement works on a payload we
+ * "recording works" has only ever meant "recording works on a payload we
  * wrote ourselves".
  *
  * REFUSES to run against any DATABASE_URL without "night-check" in it. This
@@ -38,13 +38,7 @@ import {
   startGame,
   recordMatch,
 } from "../src/lib/inhouse-service";
-import {
-  placeInhouseBet,
-  credProfitBoard,
-  resolveUnsettledBets,
-} from "../src/lib/inhouse-bet-service";
 import { summarizeInhouse } from "../src/lib/inhouse-stats";
-import { INHOUSE_BETS, INHOUSE_CRED_PROFIT_REASONS } from "../src/lib/constants";
 import { accountIdToSteamId64 } from "../src/lib/dota";
 import type { SessionUser } from "../src/lib/auth";
 
@@ -73,6 +67,8 @@ const step = (s: string) => console.log(`\n── ${s} ──`);
 
 async function main() {
   step("Reset");
+  // The Cred tables are kept (betting was retired, its data was not) and a
+  // stale night-check DB may still hold rows that reference its lobbies.
   for (const t of [
     prisma.inhouseCreditEntry, prisma.inhouseCredit, prisma.inhouseBet,
     prisma.inhouseLobbyPlayer, prisma.inhouseLobby, prisma.inhouseQueueEntry,
@@ -125,7 +121,6 @@ async function main() {
   }
   st = await getInhouseState(users[0].u);
   ok("vote resolved → DRAFTING", st.lobby?.status === "DRAFTING");
-  ok("no betting window yet", st.lobby?.pot == null || st.lobby?.pot?.closesAt == null);
 
   step("Draft — captains take their real sides");
   const admin = users[0].u;
@@ -145,53 +140,20 @@ async function main() {
   st = await getInhouseState(admin);
   ok("draft complete → READY", st.lobby?.status === "READY");
 
-  step("Betting window");
-  ok("window is open", st.lobby?.pot?.closesAt != null,
-     `closesAt=${st.lobby?.pot?.closesAt}`);
-  const t1 = users.filter((x) => x.side === "R");
-  const t2 = users.filter((x) => x.side === "D");
-  // Deliberately lopsided: 3 stakes vs 2, so matching actually has work to do.
-  const stakes: [SessionUser, number][] = [
-    [t1[0].u, 100], [t1[1].u, 50], [t1[2].u, 30],
-    [t2[0].u, 100], [t2[1].u, 20],
-  ];
-  for (const [u, amt] of stakes) {
-    const b = await placeInhouseBet(u, amt);
-    if (!b.ok) throw new Error(`bet failed for ${u.id}: ${b.error}`);
-  }
-  st = await getInhouseState(t1[0].u);
-  const pot = st.lobby!.pot!;
-  console.log(`  pool1=${pot.pool1} pool2=${pot.pool2} matched=${pot.matched} tier=${pot.tier}`);
-  ok("pools add up", pot.pool1 === 180 && pot.pool2 === 120);
-  ok("matched = min(pools)", pot.matched === 120);
-  ok("slips are public", pot.slips.length === 5);
-  ok("viewer sees their own slip", st.me.myBet?.stake === 100);
-  ok("balance debited", st.me.cred === INHOUSE_BETS.START_BALANCE - 100);
-
-  step("Refusals the window must enforce");
-  const dbl = await placeInhouseBet(t1[0].u, 10);
-  ok("second bet refused", !dbl.ok, dbl.ok ? "" : dbl.error);
-  const over = await placeInhouseBet(t1[3].u, INHOUSE_BETS.MAX_STAKE + 10);
-  ok("over MAX refused", !over.ok, over.ok ? "" : over.error);
-  const odd = await placeInhouseBet(t1[3].u, 15);
-  ok("non-STEP refused", !odd.ok, odd.ok ? "" : odd.error);
-
   step("Start the game");
-  const sg = await startGame(t1[0].u);
+  const sg = await startGame(admin);
   ok("started", sg.ok, sg.ok ? "" : sg.error);
-  st = await getInhouseState(t1[0].u);
+  st = await getInhouseState(admin);
   ok("IN_PROGRESS", st.lobby?.status === "IN_PROGRESS");
-  ok("window still open after Start", st.lobby?.pot?.closesAt != null);
 
   step("Backdate so a historical match is admissible");
-  // recordMatch floors on `start_time >= lobby.createdAt`, and bets after the
-  // game's own start are VOID_LATE. Both are correct; a real match played in the
-  // past simply cannot satisfy them, so the fixture moves the lobby and the
-  // slips to before the real kickoff. This is the ONLY thing faked here.
+  // recordMatch floors on `start_time >= lobby.createdAt`. That is correct; a
+  // real match played in the past simply cannot satisfy it, so the fixture
+  // moves the lobby to before the real kickoff. This is the ONLY thing faked
+  // here.
   const before = new Date((real.start_time - 3600) * 1000);
   await prisma.inhouseLobby.updateMany({ data: { createdAt: before } });
-  await prisma.inhouseBet.updateMany({ data: { placedAt: before } });
-  console.log(`  lobby + slips moved to ${before.toISOString()}`);
+  console.log(`  lobby moved to ${before.toISOString()}`);
 
   step("Record the REAL match — live OpenDota, no mock");
   const rec = await recordMatch(admin, String(real.match_id));
@@ -199,7 +161,7 @@ async function main() {
 
   const lobby = await prisma.inhouseLobby.findFirstOrThrow({
     where: { status: "COMPLETED" },
-    include: { players: { include: { user: true } }, bets: true },
+    include: { players: { include: { user: true } } },
   });
   ok("COMPLETED", lobby.status === "COMPLETED");
   ok("winner recorded", lobby.winnerTeam === 1 || lobby.winnerTeam === 2, `team ${lobby.winnerTeam}`);
@@ -214,45 +176,7 @@ async function main() {
      `${box.filter((b) => b.userId).length}/10 mapped`);
   ok("matchStartTime persisted", lobby.matchStartTime?.getTime() === real.start_time * 1000);
 
-  step("Settlement");
-  ok("settled", lobby.betSettlement === "SETTLED", String(lobby.betSettlement));
-  const deltas = JSON.parse(lobby.betDeltas) as Record<string, number>;
-  const sum = Object.values(deltas).reduce((a, b) => a + b, 0);
-  ok("ZERO-SUM: Σ deltas === 0", sum === 0, `sum=${sum}`);
-  for (const b of lobby.bets.sort((x, y) => y.stake - x.stake)) {
-    const who = lobby.players.find((p) => p.userId === b.userId)!;
-    console.log(`    ${who.user.name.padEnd(22)} team ${who.team}  staked ${String(b.stake).padStart(3)}  ` +
-      `matched ${String(b.matched).padStart(3)}  ${b.outcome!.padEnd(11)} net ${b.payout! >= 0 ? "+" : ""}${b.payout}`);
-  }
-  const winners = lobby.bets.filter((b) => b.outcome === "WON");
-  const losers = lobby.bets.filter((b) => b.outcome === "LOST");
-  ok("winners matched === losers matched",
-     winners.reduce((s, b) => s + (b.matched ?? 0), 0) ===
-     losers.reduce((s, b) => s + (b.matched ?? 0), 0));
-
-  step("The books");
-  const accts = await prisma.inhouseCredit.findMany();
-  for (const a of accts) {
-    const led = await prisma.inhouseCreditEntry.aggregate({
-      where: { userId: a.userId }, _sum: { delta: true },
-    });
-    const expect = INHOUSE_BETS.START_BALANCE + (led._sum.delta ?? 0) - INHOUSE_BETS.START_BALANCE;
-    if (a.balance !== (led._sum.delta ?? 0)) {
-      ok(`ledger closes for ${a.userId}`, false,
-         `balance ${a.balance} vs Σ deltas ${led._sum.delta}`);
-    }
-    void expect;
-  }
-  ok("balance === Σ ledger deltas for all accounts", process.exitCode !== 1);
-  const board = await credProfitBoard();
-  const boardSum = [...board.values()].reduce((a, b) => a + b, 0);
-  ok("PROFIT BOARD SUMS TO ZERO", boardSum === 0, `sum=${boardSum}`);
-  const circulation = accts.reduce((s, a) => s + a.balance, 0);
-  const movement = await prisma.inhouseCreditEntry.aggregate({ _sum: { delta: true } });
-  ok("circulation === recorded movement", circulation === (movement._sum.delta ?? 0),
-     `${circulation} vs ${movement._sum.delta}`);
-
-  step("Elo — must be untouched by stakes");
+  step("Elo");
   const hist = await prisma.inhouseLobby.findMany({
     where: { status: "COMPLETED" },
     select: { id: true, winnerTeam: true, createdAt: true,
@@ -264,17 +188,9 @@ async function main() {
   })));
   const swing = new Set(ladder.map((r) => Math.abs(r.lastChange)));
   console.log(`    distinct |Elo swing| across all ten: ${[...swing].join(", ")}`);
-  ok("every player moved by the SAME amount regardless of stake", swing.size === 1);
+  ok("every player moved by the SAME amount", swing.size === 1);
   const eloD = JSON.parse(lobby.eloDeltas) as Record<string, number>;
   ok("eloDeltas stamped for all ten", Object.keys(eloD).length === 10);
-
-  step("Sweeper is idle");
-  ok("nothing left unsettled", (await resolveUnsettledBets()) === false);
-  const profitReasons = await prisma.inhouseCreditEntry.groupBy({
-    by: ["reason"], _count: true,
-  });
-  console.log("    ledger reasons:", profitReasons.map((r) => `${r.reason}×${r._count}`).join(" "));
-  void INHOUSE_CRED_PROFIT_REASONS;
 
   console.log(`\n${process.exitCode === 1 ? "✗ SOME CHECKS FAILED" : "✓ ALL CHECKS PASSED"}`);
   await prisma.$disconnect();

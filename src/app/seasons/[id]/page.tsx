@@ -1,29 +1,43 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import type { Metadata } from "next";
 import { ChampionBanner } from "@/components/champion-banner";
 import { AuctionHistory } from "@/components/auction-history";
-import { HISTORY_PHASE_LABEL as PHASE_LABEL } from "@/lib/season-copy";
+import { SeasonAwards } from "@/components/season-awards";
+import {
+  HISTORY_PHASE_LABEL as PHASE_LABEL,
+  seasonPhaseLabel,
+} from "@/lib/season-copy";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
+import { getSeasonDraftStatus, getViewerFantasyEntered } from "@/lib/queries";
+import { fantasyListed } from "@/lib/site-nav";
+import { SEASON_STATUS } from "@/lib/constants";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
 import { StandingsTable } from "@/components/standings-table-server";
-import { LeagueResultsMap } from "@/components/league-results-map";
+import { SeasonGrid } from "@/components/season-grid";
 import { LocalTime } from "@/components/local-time";
 import { formatMatchTime } from "@/lib/match-time";
+import { shareMetadata } from "@/lib/share-metadata";
 import {
   Avatar,
   Badge,
   Card,
   CardBody,
   CardHeader,
+  CardSkeleton,
   EmptyState,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
   SectionTitle,
   TeamCrest,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { Match } from "@prisma/client";
@@ -33,15 +47,31 @@ export async function generateMetadata({
   params,
 }: {
   params: Promise<{ id: string }>;
-}) {
+}): Promise<Metadata> {
   const { id } = await params;
   const season = await prisma.season.findUnique({
     where: { id },
-    select: { name: true },
+    select: { name: true, isActive: true, status: true },
   });
-  // notFound() in metadata runs before the shell streams → real 404 status.
+  // notFound() in metadata: crawlers wait for metadata, so they get a real
+  // 404 status. Browsers get streamed metadata, so the not-found page
+  // arrives with a 200 and Next's noindex tag (its documented streaming
+  // behaviour).
   if (!season) notFound();
-  return { title: `${season.name} · Season` };
+  // The champion post in Discord links here, so a finished season's preview
+  // says what the page holds.
+  return shareMetadata(
+    `${season.name} · Season`,
+    isFinishedSeason(season)
+      ? `Champion, final standings, bracket, awards and every result from ${season.name}.`
+      : `Standings, results and rosters from ${season.name}.`,
+    `/seasons/${encodeURIComponent(id)}`,
+  );
+}
+
+/** An archived season, or the current one once its final is played. */
+function isFinishedSeason(season: { isActive: boolean; status: string }) {
+  return !season.isActive || season.status === "COMPLETE";
 }
 
 function ResultRow({
@@ -145,7 +175,7 @@ function ResultRow({
           aria-label={matchLabel}
           className="inline-flex min-h-11 items-center text-xs font-medium text-info hover:underline"
         >
-          Match details ↗
+          Match details <LinkArrow />
         </Link>
       </div>
     </div>
@@ -158,7 +188,7 @@ export default async function SeasonArchivePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [season, gameCount] = await Promise.all([
+  const [season, gameCount, fantasyEntry] = await Promise.all([
     prisma.season.findUnique({
       where: { id },
       include: {
@@ -173,8 +203,34 @@ export default async function SeasonArchivePage({
       },
     }),
     prisma.game.count({ where: { match: { seasonId: id } } }),
+    // An archived season links Fantasy when it had managers; otherwise the
+    // page would open onto "Entries 0".
+    prisma.fantasyRoster.findFirst({
+      where: { seasonId: id },
+      select: { id: true },
+    }),
   ]);
   if (!season) notFound();
+
+  // The current season names its phase as the header and footer chips do,
+  // and links Fantasy by the menus' rule. Both reads are request-cached: the
+  // root layout already made them.
+  const draftStatus =
+    season.isActive && season.status === SEASON_STATUS.DRAFT
+      ? await getSeasonDraftStatus(season.id)
+      : null;
+  const fantasyLocked = season.fantasyLockedAt != null || gameCount > 0;
+  const viewer = season.isActive && fantasyLocked ? await getSessionUser() : null;
+  const showFantasy = season.isActive
+    ? fantasyListed({
+        phase: season.status,
+        draftStatus,
+        fantasyLocked,
+        fantasyEntered: viewer
+          ? await getViewerFantasyEntered(season.id, viewer.id)
+          : false,
+      })
+    : fantasyEntry !== null;
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
@@ -212,10 +268,19 @@ export default async function SeasonArchivePage({
     <div className="space-y-8">
       <PageTitle
         title={season.name}
-        subtitle={season.isActive ? "Current season" : "Season archive"}
+        subtitle={
+          // The badge already says "Current season"; the subtitle says where
+          // the season is, in the header chip's words, so a finished one
+          // stops reading as running.
+          season.isActive
+            ? season.status === SEASON_STATUS.COMPLETE
+              ? "Season complete"
+              : seasonPhaseLabel(season.status, draftStatus)
+            : "Archived season"
+        }
         action={
           season.isActive ? (
-            <Badge tone="brand">Current season</Badge>
+            <Badge tone="success">Current season</Badge>
           ) : (
             <Badge tone="neutral">
               {PHASE_LABEL[season.status] ?? season.status}
@@ -224,7 +289,10 @@ export default async function SeasonArchivePage({
         }
       />
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <Link href="/seasons" className="text-muted hover:text-info">
+        <Link
+          href="/seasons"
+          className={textLink("text-muted hover:text-info")}
+        >
           ← All seasons
         </Link>
         <div className="flex flex-wrap gap-2">
@@ -244,25 +312,21 @@ export default async function SeasonArchivePage({
               </Link>
             </>
           ) : null}
-          {/* Recap, fantasy, and pick'em can all have useful season state even
-              when no OpenDota Game rows were imported. */}
-          <Link
-            href={`/fantasy?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Fantasy
-          </Link>
+          {/* Fantasy and pick'em can have useful season state even when no
+              OpenDota Game rows were imported. */}
+          {showFantasy ? (
+            <Link
+              href={`/fantasy?season=${season.id}`}
+              className={buttonClasses("secondary", "sm")}
+            >
+              Fantasy
+            </Link>
+          ) : null}
           <Link
             href={`/pickem?season=${season.id}`}
             className={buttonClasses("secondary", "sm")}
           >
             Pick&rsquo;em
-          </Link>
-          <Link
-            href={`/recap?season=${season.id}`}
-            className={buttonClasses("secondary", "sm")}
-          >
-            Season recap →
           </Link>
         </div>
       </div>
@@ -311,7 +375,6 @@ export default async function SeasonArchivePage({
           />
           <CardBody className="p-0">
             <StandingsTable
-              overview
               standings={standings}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}
@@ -328,7 +391,8 @@ export default async function SeasonArchivePage({
       ) : null}
 
       {playoff.length > 0 ? (
-        <section className="space-y-4">
+        // #playoffs: the Discord playoff posts link straight to this bracket.
+        <section id="playoffs" className="scroll-mt-24 space-y-4">
           <SectionTitle>Playoffs</SectionTitle>
           {/* overflow-hidden: Bracket scrolls horizontally inside itself, and
               without this the card leaks that width into the page scroll. */}
@@ -371,15 +435,37 @@ export default async function SeasonArchivePage({
         </section>
       ) : null}
 
+      {/* The season's numbers and awards live here, not on a separate recap
+          page: /recap redirects to this page. Only for a finished season;
+          mid-season the Leaders boards are the running version. */}
+      {isFinishedSeason(season) && season.matches.length > 0 ? (
+        <Suspense fallback={<CardSkeleton rows={4} />}>
+          <SeasonAwards
+            seasonId={season.id}
+            completedSeries={
+              season.matches.filter((m) => m.status === "COMPLETED").length
+            }
+          />
+        </Suspense>
+      ) : null}
+
       {weeks.length > 0 ? (
         <section className="space-y-4">
           <SectionTitle>Regular season results</SectionTitle>
-          <LeagueResultsMap
-            standings={standings}
-            matches={regular}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-          />
+          <Card className="min-w-0 overflow-hidden">
+            <CardHeader
+              title="Head-to-head results"
+              subtitle="Each row shows that team's results"
+            />
+            <CardBody className="p-0">
+              <SeasonGrid
+                teamIds={standings.map((row) => row.teamId)}
+                teamName={teamName}
+                teamLogoUrl={teamLogoUrl}
+                matches={regular}
+              />
+            </CardBody>
+          </Card>
           <details className="group rounded-xl border border-line-soft bg-surface">
             <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden sm:px-5">
               <span>
@@ -482,9 +568,12 @@ export default async function SeasonArchivePage({
                           src={m.user.avatar}
                           size={24}
                         />
+                        {/* my-0 keeps the whole 44px target in the row's
+                            height; with TAP_SAFE's -my-1 each hit box hung
+                            over the next row's. */}
                         <PlayerLink
                           userId={m.userId}
-                          className="inline-flex min-h-11 min-w-0 items-center [overflow-wrap:anywhere]"
+                          className="my-0 inline-flex min-h-11 min-w-6 items-center [overflow-wrap:anywhere]"
                         >
                           {m.user.name}
                         </PlayerLink>

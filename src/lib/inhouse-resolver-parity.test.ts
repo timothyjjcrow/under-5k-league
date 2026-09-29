@@ -21,9 +21,8 @@ import { describe, expect, it } from "vitest";
 // PARITY OF SET ONLY. The ORDER deliberately differs between the chains, and
 // each ordering carries a load-bearing comment at its call site
 // (getInhouseState runs the abandon sweep first so the freed slot can re-form
-// on the same poll; syncInhouse runs the bet sweep ABOVE its empty-queue
-// early return, because "no lobby, empty queue" is the state a pot gets
-// stranded in). Do not extend this test to compare order.
+// on the same poll; syncInhouse skips the whole chain behind its "no lobby,
+// empty queue" early return). Do not extend this test to compare order.
 //
 // KNOWN LIMITATION: the extractor only sees calls named resolve*/maybe*.
 // A resolver under another naming shape (syncInhouseBoard,
@@ -57,7 +56,6 @@ const EXPECTED = [
   "resolveCaptainVote",
   "resolveReadyCheck",
   "resolveStalledPick",
-  "resolveUnsettledBets",
 ].sort();
 
 const readSource = (file: string) => readFileSync(join(__dirname, file), "utf8");

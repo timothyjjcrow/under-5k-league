@@ -204,6 +204,8 @@ export function DangerSubmit({
                   required
                   rows={3}
                   autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
                   spellCheck={false}
                   className="mt-2 w-full resize-y rounded-lg border border-line bg-surface-2/50 px-3 py-2 font-mono text-xs outline-none focus:border-danger/60 focus-visible:ring-2 focus-visible:ring-danger/40"
                 />
@@ -226,7 +228,11 @@ export function DangerSubmit({
               onKeyDown={(e) => {
                 if (e.key === "Enter") e.preventDefault();
               }}
+              // The match is exact, so a phone must not "help": a capitalised
+              // first letter or an autocorrected word fails it silently.
               autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
               spellCheck={false}
               className="mt-1 h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-danger/60 focus-visible:ring-2 focus-visible:ring-danger/40"
             />

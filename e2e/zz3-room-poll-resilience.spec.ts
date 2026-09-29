@@ -51,7 +51,9 @@ async function ensureLiveDraftFixture(page: Page) {
 
     for (const name of ["Dendi", "Puppey"]) {
       const makeCaptain = page
-        .locator(".max-h-80 div.rounded-lg", { hasText: name })
+        .getByRole("list", { name: "Eligible players" })
+        .getByRole("listitem")
+        .filter({ hasText: name })
         .getByRole("button", { name: "make captain" });
       if (await makeCaptain.isVisible()) {
         await makeCaptain.click();

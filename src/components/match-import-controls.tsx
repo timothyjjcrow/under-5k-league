@@ -15,13 +15,25 @@ export function MatchImportControls({
   matchId,
   importAction,
   detectAction,
+  idPrefix = "",
+  describedBy,
 }: {
   matchId: string;
   importAction: ImportFormAction;
   detectAction: ImportFormAction;
+  /** Keeps ids unique if a page ever shows two of these for one match. The
+   *  match page's Admin tools pass "admin-"; for an admin who captains the
+   *  match they point at Captain tools instead of rendering a second copy. */
+  idPrefix?: string;
+  /**
+   * The id of help text printed ONCE elsewhere on the page. The admin panel
+   * lists every fixture, so it says "paste an ID or URL" once per card and
+   * points each field at that; without it the hint renders under the field.
+   */
+  describedBy?: string;
 }) {
-  const inputId = `dota-match-ref-${matchId}`;
-  const helpId = `${inputId}-help`;
+  const inputId = `${idPrefix}dota-match-ref-${matchId}`;
+  const helpId = describedBy ?? `${inputId}-help`;
 
   async function submitImport(
     prev: ActionResult,
@@ -76,9 +88,11 @@ export function MatchImportControls({
             Add game
           </SubmitButton>
         </div>
-        <p id={helpId} className="text-xs text-muted">
-          Paste a numeric Dota match ID or an OpenDota/Dotabuff match URL.
-        </p>
+        {describedBy ? null : (
+          <p id={helpId} className="text-xs text-muted">
+            Paste a numeric Dota match ID or an OpenDota/Dotabuff match URL.
+          </p>
+        )}
       </div>
     </ActionForm>
   );

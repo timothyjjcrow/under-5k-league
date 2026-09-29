@@ -1,9 +1,11 @@
 import {
+  DRAFT_REMINDER,
   DRAFT_STATUS,
   SEASON_STATUS,
   type DraftStatus,
   type SeasonStatus,
 } from "./constants";
+import { hasPassed } from "./countdown";
 
 /**
  * The one pre-auction capability shared by the admin panel, /me, and every
@@ -20,6 +22,57 @@ export function draftSetupOpen(
   const auctionNotStarted =
     !draftStatus || draftStatus === DRAFT_STATUS.NOT_STARTED;
   return setupPhase && auctionNotStarted;
+}
+
+/** When the draft-night reminder window opens for a scheduled draft. */
+export function draftReminderOpensAt(draftAtMs: number): number {
+  return draftAtMs - DRAFT_REMINDER.AHEAD_HOURS * 3_600_000;
+}
+
+/**
+ * Is the draft-night reminder due right now? Setup must still be open (the
+ * auction hasn't started, see draftSetupOpen), a time must be scheduled, and
+ * that time must be inside the window and still AHEAD: the window closes at
+ * draftAt itself. One definition for the reminder service and the automation
+ * gate, so the worker wakes exactly when the service would act.
+ */
+export function draftReminderDue(
+  seasonStatus: SeasonStatus | string,
+  draftStatus: DraftStatus | string | null | undefined,
+  draftAtMs: number | null | undefined,
+  nowMs: number,
+): boolean {
+  if (draftAtMs == null || !draftSetupOpen(seasonStatus, draftStatus)) {
+    return false;
+  }
+  return nowMs >= draftReminderOpensAt(draftAtMs) && nowMs < draftAtMs;
+}
+
+/** How long before a scheduled draft night the site starts linking the room. */
+export const DRAFT_ROOM_LEAD_HOURS = 2;
+
+/**
+ * Is draft night close enough to point people at the draft room before the
+ * admin presses Start? The room is a live waiting room that flips to the
+ * auction by itself, but outside the Draft phase nothing linked it, so on
+ * draft night people waited on the home page and arrived after the first
+ * nominations. Signups only: Start moves the season to Draft, where the room
+ * is always linked. Open from DRAFT_ROOM_LEAD_HOURS before the scheduled time
+ * until that time has passed (hasPassed, the same boundary as the "passed"
+ * chip), so a slipped draft night stops advertising the room.
+ */
+export function draftNightSoon(
+  seasonStatus: SeasonStatus | string | null | undefined,
+  draftAtMs: number | null | undefined,
+  nowMs: number,
+): boolean {
+  if (seasonStatus !== SEASON_STATUS.SIGNUPS || draftAtMs == null) {
+    return false;
+  }
+  return (
+    nowMs >= draftAtMs - DRAFT_ROOM_LEAD_HOURS * 3_600_000 &&
+    !hasPassed(draftAtMs, nowMs)
+  );
 }
 
 /** Captaincy can change after the auction, but never while its turn state is
@@ -96,5 +149,124 @@ export function draftSeatPlan(
     overflow,
     canStart: blocker === null,
     blocker,
+  };
+}
+
+/**
+ * Can Start draft run, and if not, why not. One definition for the Captains &
+ * draft card on /admin and the Start button in the draft room's waiting room,
+ * so the two can never disagree about whether the auction can begin. Seats
+ * come from draftSeatPlan (startDraft's own arithmetic); on top of that, Start
+ * only accepts captain-only teams, so any non-captain already on a roster
+ * blocks it.
+ */
+export function startDraftCheck(o: {
+  captainCount: number;
+  teamSize: number;
+  poolCount: number;
+  /** Non-captain roster rows already on the season's teams. */
+  boughtCount: number;
+}): { seats: DraftSeatPlan; canStart: boolean; blocker: string | null } {
+  const seats = draftSeatPlan(o.captainCount, o.teamSize, o.poolCount);
+  const rosterAlreadyBuilt = o.boughtCount > 0;
+  const blocker = rosterAlreadyBuilt
+    ? `${o.boughtCount} non-captain roster member${o.boughtCount === 1 ? " is" : "s are"} already assigned. Return to the appropriate season phase and use roster tools; Start only accepts captain-only teams.`
+    : seats.blocker;
+  return { seats, canStart: seats.canStart && !rosterAlreadyBuilt, blocker };
+}
+
+const plural = (n: number, one: string, many: string) =>
+  `${n} ${n === 1 ? one : many}`;
+
+/**
+ * How the pool fits the seats, in one sentence that always names which of
+ * the three shapes applies: an exact fit, seats left empty (standins cover
+ * them), or extra players who become free agents. Signups are uncapped, so
+ * this is where the count gets settled. The preflight on /admin and the
+ * Start-draft confirm both print THIS sentence, so they can't describe the
+ * same pool two different ways.
+ */
+export function seatFitSentence(
+  seats: { openSeats: number; poolCount: number },
+  teamSize: number,
+): string {
+  const { openSeats, poolCount } = seats;
+  const fit = `${plural(poolCount, "player", "players")} for ${plural(openSeats, "seat", "seats")}`;
+  if (openSeats === poolCount) return `exact fit, ${fit}`;
+  if (openSeats > poolCount) {
+    return `${plural(openSeats - poolCount, "seat stays", "seats stay")} empty (${fit}); standins cover them`;
+  }
+  return `${plural(poolCount - openSeats, "extra player becomes a free agent", "extra players become free agents")} (${fit}); another captain adds ${Math.max(0, teamSize - 1)} seats`;
+}
+
+/**
+ * The Start-draft confirm, before the Discord reachability line (appended by
+ * StartDraftControl once its lookup resolves). House rule: a consequential
+ * confirm states the real numbers BEFORE the click. Shared by /admin and the
+ * draft room so an admin starting from either place reads the same warning.
+ *
+ * ONE SHORT LINE PER RISK. It used to be a single paragraph with the Discord
+ * and MMR warnings run on after it, which is the kind of dialog that gets
+ * clicked through. The pool line always names which of the three shapes
+ * applies (exact fit, empty seats, extra free agents): signups are uncapped
+ * and this is the moment the count is settled. Every appended warning starts
+ * its own line ("\n…") the same way.
+ *
+ * Starting is NOT a one-way door: abortDraft writes the draft back to
+ * NOT_STARTED, drops the season to Signups, refunds every purchase and keeps
+ * the captains. The team count is final only once a result exists, which is
+ * the line abort itself guards on, so the confirm says exactly that.
+ */
+export function startDraftConfirm(o: {
+  captainCount: number;
+  minTeams: number;
+  teamSize: number;
+  seats: Pick<DraftSeatPlan, "openSeats" | "poolCount">;
+  draftScheduled: boolean;
+  confirmations: {
+    ready: number;
+    awaiting: number;
+    stale: number;
+    total: number;
+  };
+  /** captainMmrWarning(...) for the captains, "" when there is none. */
+  mmrWarning: string;
+}): string {
+  const c = o.confirmations;
+  const lines = [
+    `Start the draft with ${plural(o.captainCount, "captain", "captains")}?`,
+    "",
+    `Pool: ${seatFitSentence(o.seats, o.teamSize)}.`,
+    ...(o.captainCount < o.minTeams
+      ? [`Teams: ${o.captainCount}, below this season's ${o.minTeams}-team target.`]
+      : []),
+    o.draftScheduled
+      ? `Confirmations: ${c.ready} of ${c.total} ready, ${c.awaiting} awaiting${c.stale ? `, ${c.stale} must reconfirm` : ""}. A warning only; it doesn't block the draft.`
+      : "Confirmations: none yet, because no draft night is set.",
+    "Undo: captains lock when the auction starts. Abort draft returns every player and refund and keeps the captains, until a result is recorded.",
+  ];
+  return lines.join("\n") + o.mmrWarning;
+}
+
+/**
+ * The three counts the Start-draft preflight reads, from the season's teams
+ * and its ACTIVE PLAYER registrations: one team per captain, the non-captain
+ * rows already on rosters, and the pool (signups not on any roster, which is
+ * startDraft's own pool). Shared by /admin and the draft room.
+ */
+export function draftRosterCounts(
+  teams: readonly {
+    members: readonly { userId: string; isCaptain: boolean }[];
+  }[],
+  players: readonly { userId: string }[],
+): { captainCount: number; boughtCount: number; poolCount: number } {
+  const rostered = new Set(teams.flatMap((t) => t.members.map((m) => m.userId)));
+  return {
+    captainCount: teams.length,
+    boughtCount: teams.reduce(
+      (n, t) => n + t.members.filter((m) => !m.isCaptain).length,
+      0,
+    ),
+    poolCount: players.filter((p) => !rostered.has(p.userId)).length,
   };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bracketColumnCount,
   buildBracketRounds,
   mirrorLayout,
   type BracketMatchView,
@@ -88,6 +89,31 @@ describe("mirrorLayout", () => {
     expect(layout.right[0].slots).toEqual([null]);
     expect(layout.final).toBeNull();
     expect(layout.finalName).toBe("Grand final");
+  });
+});
+
+describe("bracketColumnCount", () => {
+  it("counts the final alone for a 2-team bracket", () => {
+    expect(bracketColumnCount([])).toBe(0);
+    expect(bracketColumnCount([round("Final", [match()])])).toBe(1);
+  });
+
+  it("counts every earlier round once per wing", () => {
+    const four = [round("Semifinals", [match(), match()]), round("Final", [null])];
+    const eight = [
+      round("Quarterfinals", [match(), match(), match(), match()]),
+      round("Semifinals", [null, null]),
+      round("Final", [null]),
+    ];
+    expect(bracketColumnCount(four)).toBe(3);
+    expect(bracketColumnCount(eight)).toBe(5);
+    // The same columns the drawn bracket renders: both wings plus the final.
+    for (const rounds of [four, eight]) {
+      const layout = mirrorLayout(rounds)!;
+      expect(bracketColumnCount(rounds)).toBe(
+        layout.left.length + layout.right.length + 1,
+      );
+    }
   });
 });
 

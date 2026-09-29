@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { MID_DB_URL } from "../playwright.midseason.config";
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // This suite writes only to the explicitly configured disposable fixture.
@@ -46,16 +47,17 @@ test("schedule selection survives reload and back navigation on a phone", async 
   const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/schedule");
+  // Fixture cards name their teams as plain text (the card itself opens the
+  // match), so check the long name wraps inside its card on a phone.
   const longName = page
-    .locator("#fixtures")
-    .getByRole("link", {
-      name: "The Couriers of Catastrophe With Very Long Name",
+    .locator("#fixtures article")
+    .getByText("The Couriers of Catastrophe With Very Long Name", {
       exact: true,
     })
     .first();
   await expect(longName).toBeVisible();
   expect(
-    await longName.evaluate((link) => link.scrollWidth <= link.clientWidth + 1),
+    await longName.evaluate((name) => name.scrollWidth <= name.clientWidth + 1),
   ).toBe(true);
   const team = page.getByRole("combobox", { name: "Show matches for" });
   await team.selectOption({ label: "Dire Straits" });
@@ -66,7 +68,7 @@ test("schedule selection survives reload and back navigation on a phone", async 
   await expect(team).toHaveValue(selectedTeam);
   await team.selectOption({ label: "Dire Straits" });
   await expect(team).toHaveValue(selectedTeam);
-  await page.getByRole("button", { name: "All teams", exact: true }).click();
+  await team.selectOption({ label: "All teams" });
   await expect(page).toHaveURL(/team=all/);
   await page.goBack();
   await expect(page).toHaveURL(filteredUrl);
@@ -85,7 +87,7 @@ test("schedule selection survives reload and back navigation on a phone", async 
   noErrors();
 });
 
-test("admin jumps reveal closed sections clear of both sticky bars", async ({
+test("admin jumps reveal closed sections clear of the sticky header", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
@@ -118,54 +120,57 @@ test("admin jumps reveal closed sections clear of both sticky bars", async ({
   noErrors();
 });
 
-test("hero explorer exposes the full pool and filters without navigating", async ({
+test("hero table sorts in place and folds unpicked heroes into one line", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meta");
   const initialUrl = page.url();
-  const explorer = page.locator("#explore-heroes");
-  const cards = explorer.locator("article");
-  const status = explorer.getByRole("status");
-  const sampleFilters = explorer.getByRole("group", { name: "Hero sample filter" });
-  const allHeroes = sampleFilters.getByRole("button", { name: /All heroes/ });
-  const poolSize = Number((await allHeroes.innerText()).match(/\d+/)?.[0]);
-  expect(poolSize).toBeGreaterThan(12);
-  await expect(allHeroes).toHaveAttribute("aria-pressed", "true");
-  await expect(status).toContainText(`of ${poolSize} matching heroes`);
-  await expect(cards).toHaveCount(12);
-  await explorer.getByRole("button", { name: /Show more heroes/ }).click();
-  await expect(cards).toHaveCount(24);
+  const table = page.getByRole("table");
+  const rows = table.locator("tbody tr");
+  const heroNames = () =>
+    rows.evaluateAll((nodes) =>
+      nodes.map((node) => node.querySelector("th p")?.textContent?.trim() ?? ""),
+    );
+  const picks = () =>
+    rows.evaluateAll((nodes) =>
+      nodes.map((node) => Number(node.querySelector("td")?.textContent?.trim())),
+    );
+  // count() doesn't auto-wait, and the page streams in behind the root
+  // loading screen: wait for the table itself before counting its rows.
+  await expect(rows.first()).toBeVisible();
+  expect(await rows.count()).toBeGreaterThan(1);
 
-  // The leading picked hero opens its per-pick stats without leaving the page.
-  await cards.first().getByRole("button").click();
-  await expect(cards.first()).toContainText("Kills / pick");
+  // Most picked first by default.
+  const picksHeader = table.getByRole("columnheader", { name: "Picks" });
+  await expect(picksHeader).toHaveAttribute("aria-sort", "descending");
+  const byPicks = await picks();
+  expect(byPicks).toEqual([...byPicks].sort((a, b) => b - a));
 
-  const search = explorer.getByRole("searchbox", { name: "Find a hero" });
-  await search.fill("Axe");
-  await expect(cards).toHaveCount(1);
-  await expect(cards.first()).toContainText("Axe");
-  await search.fill("");
-
-  const untouched = sampleFilters.getByRole("button", { name: /Untouched/ });
-  await untouched.click();
-  await expect(untouched).toHaveAttribute("aria-pressed", "true");
-  await expect(cards.first()).toContainText("No recorded picks");
-  await search.fill("no-such-hero");
-  await expect(cards).toHaveCount(0);
-  await expect(explorer.getByText("No heroes match these filters")).toBeVisible();
-  await explorer.getByRole("button", { name: "Clear filters" }).click();
-  await expect(allHeroes).toHaveAttribute("aria-pressed", "true");
-  await expect(status).toContainText(`of ${poolSize} matching heroes`);
-
-  await explorer.getByRole("combobox", { name: "Sort by" }).selectOption("name");
-  const names = await cards.evaluateAll((nodes) =>
-    nodes.map((node) => node.querySelector("button")?.innerText.split("\n")[0]?.trim() ?? ""),
-  );
+  await table.getByRole("button", { name: "Hero", exact: true }).click();
+  await expect(table.getByRole("columnheader", { name: "Hero", exact: true })).toHaveAttribute("aria-sort", "ascending");
+  await expect(picksHeader).not.toHaveAttribute("aria-sort", /.+/);
+  const names = await heroNames();
   expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+
+  await table.getByRole("button", { name: "Win %", exact: true }).click();
+  await expect(table.getByRole("columnheader", { name: "Win %" })).toHaveAttribute("aria-sort", "descending");
+
+  // Every hero nobody has picked is listed once, behind one summary line.
+  const unpicked = page.locator("details").filter({
+    has: page.locator("summary", { hasText: /not picked yet$/ }),
+  });
+  const count = Number((await unpicked.locator("summary").innerText()).match(/\d+/)?.[0]);
+  expect(count + (await rows.count())).toBeGreaterThan(100);
+  await unpicked.locator("summary").click();
+  await expect(unpicked.locator("p")).toBeVisible();
+  const listed = (await unpicked.locator("p").innerText()).split(", ");
+  expect(listed).toHaveLength(count);
+  expect(listed.some((name) => names.includes(name))).toBe(false);
+
   expect(page.url()).toBe(initialUrl);
-  await expectNoHorizontalOverflow(page, "hero explorer");
+  await expectNoHorizontalOverflow(page, "hero table");
   noErrors();
 });
 
@@ -175,7 +180,12 @@ test("profile saves optional details with clear dirty state", async ({
   await page.goto(
     "/api/auth/dev?name=QoL+Player&steamId=76561190000991998&redirect=/me",
   );
-  await expect(page.getByRole("heading", { name: "Your setup" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "My account", level: 1 }),
+  ).toBeVisible();
+  // The old four-tile setup checklist is gone; nothing is asked of someone
+  // who hasn't signed up (their only step is the season card itself).
+  await expect(page.locator("#signup-next-steps")).toHaveCount(0);
   const optional = page
     .locator("details:has(> summary)")
     .filter({
@@ -184,20 +194,32 @@ test("profile saves optional details with clear dirty state", async ({
     .last();
   await optional.locator("summary").click();
   await page
-    .getByLabel("What you want from the league (public)")
+    .getByLabel("About you (public, shown to captains)")
     .fill("Practice communication");
   await expect(
     page.getByText("Unsaved changes", { exact: true }),
   ).toBeVisible();
   // Closed details retain successful controls in the form submission.
   await optional.locator("summary").click();
+  // Mid-season a newcomer can only register as a standin, and the button
+  // says so.
   await page
-    .getByRole("button", { name: "Join the season", exact: true })
+    .getByRole("button", { name: "Register as a standin", exact: true })
     .click();
   await expect(
     page.getByRole("button", { name: "Update signup" }),
   ).toBeVisible();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  // Right under the button they just pressed: what is still left to do.
+  const nextSteps = page.locator("#signup-next-steps");
+  await expect(
+    nextSteps.getByRole("heading", { name: "You're signed up. Next:" }),
+  ).toBeVisible();
+  await expect(
+    nextSteps.getByRole("link", {
+      name: /^(Link|Add) your Discord so captains can reach you$/,
+    }),
+  ).toHaveAttribute("href", "#profile-discord");
   await page.reload();
   // Returning players see their current participation without the full form.
   const savedSignup = page.locator("#signup-details");
@@ -211,7 +233,7 @@ test("profile saves optional details with clear dirty state", async ({
   ).toBeVisible();
   await optional.locator("summary").click();
   await expect(
-    page.getByLabel("What you want from the league (public)"),
+    page.getByLabel("About you (public, shown to captains)"),
   ).toHaveValue("Practice communication");
 });
 
@@ -335,5 +357,33 @@ test("scrim history pages preserve full team records and invalid season links fa
     }
   } finally {
     await db.scrim.deleteMany({ where: { id: { in: ids } } });
+  }
+});
+
+test("a broken link lands on a titled 404 with a way on", async ({ page }) => {
+  // An unknown address, and an old Discord link to a fixture that no longer
+  // exists: both used to show just the league name in the tab.
+  for (const path of ["/this-page-does-not-exist", "/matches/no-such-match"]) {
+    await page.goto(path);
+    await expect(page).toHaveTitle(`Page not found · ${LEAGUE_CONFIG.name}`);
+    const main = page.locator("#main");
+    await expect(
+      main.getByRole("heading", { name: "Page not found", exact: true }),
+    ).toBeVisible();
+    await expect(
+      main.getByRole("link", { name: "Back to home" }),
+    ).toHaveAttribute("href", "/");
+    await expect(
+      main.getByRole("link", { name: "Schedule", exact: true }),
+    ).toHaveAttribute("href", "/schedule");
+    const discord = main.getByRole("link", { name: "Ask on Discord" });
+    if (LEAGUE_CONFIG.discordInviteUrl) {
+      await expect(discord).toHaveAttribute(
+        "href",
+        LEAGUE_CONFIG.discordInviteUrl,
+      );
+    } else {
+      await expect(discord).toHaveCount(0);
+    }
   }
 });

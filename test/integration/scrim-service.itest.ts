@@ -264,7 +264,10 @@ describe("scrim scheduling service (integration)", () => {
     });
     await expect(
       createScrim(host.user.id, liveScrim.scheduledAt, 1),
-    ).rejects.toThrow(/confirmed scrim within four hours/i);
+    ).rejects.toThrow(
+      // The refusal names the booking it collides with, not just "a scrim".
+      `already has the ${host.team.name} vs ${opponent.team.name} scrim on `,
+    );
 
     await prisma.season.update({
       where: { id: season.id },

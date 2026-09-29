@@ -1,5 +1,6 @@
-// Seed one of the browser suites' dedicated SQLite databases into a mid-season
-// or mid-playoffs state for UI verification. Every other target is refused.
+// Seed one of the browser suites' dedicated SQLite databases (or a demo
+// server's, see scripts/fixture-server.ts) into a mid-season or mid-playoffs
+// state for UI verification. Every other target is refused.
 // Modes: FIXTURE_MODE=regular (last week open, clinch/bye demo, 6 teams or
 // FIXTURE_TEAMS=n) | complete (whole bracket played) | default (mid-playoffs).
 import { prisma } from "@/lib/prisma";
@@ -35,7 +36,7 @@ async function main() {
   const url = process.env.DATABASE_URL ?? "";
   assertExpectedFixtureDatabase(
     url,
-    ["midseason", "postseason"],
+    ["midseason", "postseason", "demoRegular", "demoPlayoffs", "demoComplete"],
     "seed fixture data",
   );
 

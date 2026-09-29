@@ -16,13 +16,12 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { reinstateTeam, withdrawTeam } from "@/app/actions/admin-roster";
 import {
   recordResult,
-  reinstateTeam,
   removeGame,
   reopenMatch,
-  withdrawTeam,
-} from "@/app/actions/admin";
+} from "@/app/actions/admin-schedule-results";
 import { matchResultLockReason } from "@/lib/league-lifecycle";
 import { makeSeason, makeTeam } from "./factories";
 

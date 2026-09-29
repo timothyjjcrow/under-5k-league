@@ -46,7 +46,7 @@ export function Toaster() {
           className={cn(
             "toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm shadow-lg backdrop-blur",
             t.type === "error"
-              ? "border-danger/40 bg-danger/15 text-danger"
+              ? "border-danger/40 bg-danger/15 text-danger-soft"
               : t.type === "success"
                 ? "border-success/40 bg-success/15 text-success"
                 : "border-info/40 bg-info/15 text-info",

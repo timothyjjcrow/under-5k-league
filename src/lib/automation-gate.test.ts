@@ -60,10 +60,16 @@ import {
   type AutomationGateSeason,
 } from "./automation-gate";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
-import { AUTO_SYNC, INHOUSE, WEEK_REMINDER } from "./constants";
+import { announcementClaimValue } from "./announcement-marker";
+import { honorsClaimValue } from "./honors-service";
+import { AUTO_SYNC, DRAFT_REMINDER, INHOUSE, WEEK_REMINDER } from "./constants";
+import { RESULT_NUDGE } from "./result-nudge";
+import { detectIntervalSeconds } from "./inhouse";
 import {
+  draftReminderKey,
   honorsAnnouncedKey,
   resultAnnouncedKey,
+  resultNudgeKey,
   SETTING_KEYS,
   weekReminderKey,
 } from "./settings";
@@ -86,6 +92,8 @@ function match(
     winnerTeamId: null,
     homeTeamId: "home",
     awayTeamId: "away",
+    scheduleRevision: 0,
+    games: [],
     ...overrides,
   };
 }
@@ -98,6 +106,8 @@ function season(
     status: "SIGNUPS",
     dotaLeagueId: null,
     championTeamId: null,
+    draftAt: null,
+    draftRevision: 0,
     draft: null,
     matches: [],
     ...overrides,
@@ -121,7 +131,6 @@ function inputs(
     leagueDeliveryAvailable: false,
     activeLobbies: [],
     queue: [],
-    unsettledBet: false,
     repairableInhouseResult: false,
     leagueOutbox: [],
     inhouseOutboxes: [],
@@ -149,7 +158,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 6,
+      version: 9,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -243,7 +252,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 6,
+      version: 9,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -458,8 +467,7 @@ describe("computeAutomationGateSnapshot", () => {
             pickEndsAt: null,
             startedAt: null,
             detectedAt: null,
-            updatedAt: new Date(NOW),
-            betsCloseAt: null,
+            createdAt: new Date(NOW),
           },
         ],
       }),
@@ -490,8 +498,7 @@ describe("computeAutomationGateSnapshot", () => {
               pickEndsAt: null,
               startedAt: new Date(startedAt),
               detectedAt: null,
-              updatedAt: new Date(NOW),
-              betsCloseAt: null,
+              createdAt: new Date(NOW),
             },
           ],
         }),
@@ -607,7 +614,7 @@ describe("computeAutomationGateSnapshot", () => {
     ).toMatchObject({ nextWakeAtMs: idleExpiresAt + 1, reason: "INHOUSE" });
   });
 
-  it("keeps an in-progress betting close ahead of result detection", () => {
+  it("sleeps a just-started game until result detection opens", () => {
     const snapshot = computeAutomationGateSnapshot(
       inputs({
         activeLobbies: [
@@ -618,8 +625,7 @@ describe("computeAutomationGateSnapshot", () => {
             pickEndsAt: null,
             startedAt: new Date(NOW),
             detectedAt: null,
-            updatedAt: new Date(NOW),
-            betsCloseAt: new Date(NOW + 45_000),
+            createdAt: new Date(NOW),
           },
         ],
       }),
@@ -627,7 +633,142 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toMatchObject({
-      nextWakeAtMs: NOW + 45_000,
+      nextWakeAtMs: NOW + INHOUSE.DETECT_MIN_MINUTES * 60_000,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("keeps scanning a game whose Start was pressed late", () => {
+    // Formed an hour ago, scanned a minute ago, Start pressed just now: the
+    // scan the READY window opened keeps its backoff instead of sleeping
+    // another DETECT_MIN_MINUTES from the press.
+    const formed = NOW - 60 * 60_000;
+    const scannedAt = NOW - 60_000;
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        activeLobbies: [
+          {
+            status: "IN_PROGRESS",
+            acceptEndsAt: null,
+            voteEndsAt: null,
+            pickEndsAt: null,
+            startedAt: new Date(NOW),
+            detectedAt: new Date(scannedAt),
+            createdAt: new Date(formed),
+          },
+        ],
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs:
+        scannedAt + detectIntervalSeconds(NOW - formed) * 1_000 + 1,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("measures a late-started game's teardown from Start, as the resolver does", () => {
+    // The scan runs on the formation clock here, but resolveAbandonedLobby
+    // floors IN_PROGRESS on startedAt: waking on formation would pin the
+    // worker on a teardown that cannot happen yet.
+    const startedAt =
+      NOW - (INHOUSE.ABANDON_IN_PROGRESS_HOURS * 60 - 1) * 60_000;
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        activeLobbies: [
+          {
+            status: "IN_PROGRESS",
+            acceptEndsAt: null,
+            voteEndsAt: null,
+            pickEndsAt: null,
+            startedAt: new Date(startedAt),
+            // A scan just ran, so the next one is a full (grown) interval out.
+            detectedAt: new Date(NOW),
+            createdAt: new Date(startedAt - 60 * 60_000),
+          },
+        ],
+      }),
+      NOW,
+    );
+
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs:
+        startedAt + INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 + 1,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("wakes for a READY game's scan even though nobody pressed Start", () => {
+    // Teams locked five minutes ago; nobody pressed the optional Start. The
+    // worker must still come back to look for the result — it used to sleep
+    // until a three-hour teardown.
+    const readyLobby = (overrides: { detectedAt?: Date | null; createdAt: Date }) => ({
+      status: "READY",
+      acceptEndsAt: null,
+      voteEndsAt: null,
+      pickEndsAt: null,
+      startedAt: null,
+      detectedAt: null,
+      ...overrides,
+    });
+    const formed = NOW - 10 * 60_000;
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({ activeLobbies: [readyLobby({ createdAt: new Date(formed) })] }),
+        NOW,
+      ),
+    ).toMatchObject({
+      nextWakeAtMs: formed + INHOUSE.DETECT_READY_MIN_MINUTES * 60_000,
+      reason: "INHOUSE",
+    });
+
+    // Past the opening, a scanned READY lobby wakes on the scan's backoff,
+    // not on the abandonment floor hours away.
+    const oldFormed = NOW - 30 * 60_000;
+    const scannedAt = NOW - 60_000;
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({
+          activeLobbies: [
+            readyLobby({
+              createdAt: new Date(oldFormed),
+              detectedAt: new Date(scannedAt),
+            }),
+          ],
+        }),
+        NOW,
+      ),
+    ).toMatchObject({
+      nextWakeAtMs: scannedAt + INHOUSE.DETECT_INTERVAL_SECONDS * 1_000 + 1,
+      reason: "INHOUSE",
+    });
+  });
+
+  it("measures a READY lobby's teardown from formation, never from a scan stamp", () => {
+    // The scan's detectedAt claim bumps updatedAt every few minutes, so the
+    // floor has to run off a clock nothing rewrites.
+    const formed = NOW - (INHOUSE.ABANDON_READY_HOURS * 60 - 1) * 60_000;
+    const snapshot = computeAutomationGateSnapshot(
+      inputs({
+        activeLobbies: [
+          {
+            status: "READY",
+            acceptEndsAt: null,
+            voteEndsAt: null,
+            pickEndsAt: null,
+            startedAt: null,
+            // A scan just ran, so the next one is a full (grown) interval out
+            // — later than the floor.
+            detectedAt: new Date(NOW),
+            createdAt: new Date(formed),
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(snapshot).toMatchObject({
+      nextWakeAtMs: formed + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1,
       reason: "INHOUSE",
     });
   });
@@ -716,6 +857,87 @@ describe("computeAutomationGateSnapshot", () => {
       reason: "REMINDER",
     });
     expect(kickoff - WEEK_REMINDER.AHEAD_HOURS * 3_600_000).toBeLessThan(NOW);
+  });
+
+  it("wakes for the draft-night reminder window and follows its revision marker", () => {
+    const uuidA = "11111111-1111-4111-8111-111111111111";
+    const uuidB = "22222222-2222-4222-8222-222222222222";
+    const quiet = {
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      reason: null,
+    };
+    const gate = (
+      seasonOverrides: Partial<AutomationGateSeason>,
+      settings: Record<string, string> = {},
+      leagueWebhookConfigured = true,
+    ) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          seasons: [season({ draftRevision: 3, ...seasonOverrides })],
+          leagueWebhookConfigured,
+          settings,
+        }),
+        NOW,
+      );
+    const window = DRAFT_REMINDER.AHEAD_HOURS * 3_600_000;
+
+    // Before the window: wake exactly when it opens.
+    const later = NOW + window + 6 * 3_600_000;
+    expect(gate({ draftAt: new Date(later) })).toMatchObject({
+      nextWakeAtMs: later - window,
+      reason: "REMINDER",
+    });
+
+    // Inside the window with no marker (or a failed one): due now, in both
+    // setup phases.
+    const soon = NOW + 2 * 3_600_000;
+    const key = draftReminderKey("season-1", 3);
+    expect(gate({ draftAt: new Date(soon) })).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "REMINDER",
+    });
+    expect(
+      gate(
+        {
+          status: "DRAFT",
+          draftAt: new Date(soon),
+          draft: { status: "NOT_STARTED", bidEndsAt: null, nominationEndsAt: null },
+        },
+        { [key]: `failed:v2:${uuidA}:${NOW - 1_000}` },
+      ),
+    ).toMatchObject({ nextWakeAtMs: NOW, reason: "REMINDER" });
+
+    // A live claim wakes at its lease expiry; a sent marker is done. A marker
+    // for an OLD revision says nothing about the current one.
+    const claimExpiry = NOW + 55_000;
+    expect(
+      gate(
+        { draftAt: new Date(soon) },
+        { [key]: `claim:v2:${claimExpiry}:${uuidA}:${uuidB}` },
+      ),
+    ).toMatchObject({ nextWakeAtMs: claimExpiry, reason: "REMINDER" });
+    expect(
+      gate({ draftAt: new Date(soon) }, { [key]: `sent:v2:${uuidA}:${NOW}` }),
+    ).toMatchObject(quiet);
+    expect(
+      gate(
+        { draftAt: new Date(soon) },
+        { [draftReminderKey("season-1", 2)]: `sent:v2:${uuidA}:${NOW}` },
+      ),
+    ).toMatchObject({ nextWakeAtMs: NOW, reason: "REMINDER" });
+
+    // Silent once the draft time has passed, once the auction started, with
+    // no draft time, and with no league webhook to post through.
+    expect(gate({ draftAt: new Date(NOW - 1_000) })).toMatchObject(quiet);
+    expect(
+      gate({
+        status: "DRAFT",
+        draftAt: new Date(soon),
+        draft: { status: "COMPLETE", bidEndsAt: null, nominationEndsAt: null },
+      }),
+    ).toMatchObject(quiet);
+    expect(gate({ draftAt: null })).toMatchObject(quiet);
+    expect(gate({ draftAt: new Date(soon) }, {}, false)).toMatchObject(quiet);
   });
 
   it("detects a decided playoff round and missing series-result recovery", () => {
@@ -950,6 +1172,63 @@ describe("computeAutomationGateSnapshot", () => {
     });
   });
 
+  it("recognises claims minted by announcement-marker and honors-service", () => {
+    // The markers are minted by the real writers, never hand-typed here: if a
+    // writer's claim format drifts from what the gate parses, the gate would
+    // treat a stuck claim as finished (or as legacy) and its announcement
+    // would never be retried, with no error anywhere.
+    const eventId = "11111111-1111-4111-8111-111111111111";
+    const completed = match({
+      status: "COMPLETED",
+      scheduledAt: null,
+      completedAt: new Date(NOW - 1_000),
+      winnerTeamId: "home",
+    });
+    const snapshot = (resultMarker: string, honorsMarker: string) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          seasons: [season({ status: "REGULAR_SEASON", matches: [completed] })],
+          leagueWebhookConfigured: true,
+          settings: {
+            [resultAnnouncedKey(completed.id)]: resultMarker,
+            [honorsAnnouncedKey("season-1", 1)]: honorsMarker,
+          },
+        }),
+        NOW,
+      );
+    const resultSent = `sent:v2:${eventId}:${NOW}`;
+    const honorsSent = `sent:honors:v2:${eventId}:digest`;
+    expect(snapshot(resultSent, honorsSent)).toMatchObject({
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      reason: null,
+    });
+
+    // A live lease is waited out: the gate wakes when it expires, not now
+    // (an unrecognised honors claim reads as legacy and is due at once; an
+    // unrecognised generic claim is rejected as malformed).
+    for (const live of [
+      snapshot(announcementClaimValue(NOW, eventId), honorsSent),
+      snapshot(resultSent, honorsClaimValue(NOW, eventId, "initial")),
+      snapshot(resultSent, honorsClaimValue(NOW, eventId, "corrected")),
+    ]) {
+      expect(live.reason).toBe("ANNOUNCEMENT_RETRY");
+      expect(live.nextWakeAtMs).toBeGreaterThan(NOW);
+      expect(live.nextWakeAtMs).toBeLessThanOrEqual(NOW + 5 * 60_000);
+    }
+
+    // Once the lease has expired the same claims are due immediately.
+    const longAgo = NOW - 60 * 60_000;
+    for (const expired of [
+      snapshot(announcementClaimValue(longAgo, eventId), honorsSent),
+      snapshot(resultSent, honorsClaimValue(longAgo, eventId, "initial")),
+    ]) {
+      expect(expired).toMatchObject({
+        nextWakeAtMs: NOW,
+        reason: "ANNOUNCEMENT_RETRY",
+      });
+    }
+  });
+
   it("does not hide recoverable result markers outside the active season", () => {
     const snapshot = computeAutomationGateSnapshot(
       inputs({
@@ -967,6 +1246,163 @@ describe("computeAutomationGateSnapshot", () => {
     expect(snapshot).toMatchObject({
       nextWakeAtMs: NOW,
       reason: "ANNOUNCEMENT_RETRY",
+    });
+  });
+
+  it("wakes for a failed playoff-round post, behind the retry throttle and only when Discord can take it", () => {
+    const marker = {
+      key: "playoffRoundAnnounced:season-1:2",
+      value: "failed:v2:11111111-1111-4111-8111-111111111111:1786910400000",
+    };
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({ globalAnnouncementMarkers: [marker] }),
+        NOW,
+      ),
+    ).toMatchObject({ nextWakeAtMs: Number.MAX_SAFE_INTEGER, reason: null });
+
+    const delivery = { leagueWebhookConfigured: true, leagueDeliveryAvailable: true };
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({ ...delivery, globalAnnouncementMarkers: [marker] }),
+        NOW,
+      ),
+    ).toMatchObject({ nextWakeAtMs: NOW, reason: "ANNOUNCEMENT_RETRY" });
+
+    // The worker retries it inside the throttled announcement sweep.
+    const throttled = computeAutomationGateSnapshot(
+      inputs({
+        ...delivery,
+        globalAnnouncementMarkers: [marker],
+        settings: {
+          [SETTING_KEYS.ANNOUNCE_RETRY_AT]: new Date(NOW - 60_000).toISOString(),
+        },
+      }),
+      NOW,
+    );
+    expect(throttled).toMatchObject({
+      nextWakeAtMs:
+        NOW - 60_000 + AUTO_SYNC.LEAGUE_INTERVAL_SECONDS * 1_000 + 1,
+      reason: "ANNOUNCEMENT_RETRY",
+    });
+
+    // A crashed worker's claim is retried once its lease runs out.
+    const claimed = computeAutomationGateSnapshot(
+      inputs({
+        ...delivery,
+        globalAnnouncementMarkers: [
+          {
+            key: marker.key,
+            value: announcementClaimValue(NOW, "11111111-1111-4111-8111-111111111111"),
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(claimed.reason).toBe("ANNOUNCEMENT_RETRY");
+    expect(claimed.nextWakeAtMs).toBeGreaterThan(NOW);
+  });
+
+  describe("the 'we couldn't find your games' nudge", () => {
+    const HOUR = 3_600_000;
+    // Kicked off 3.5h ago: the week reminder has closed, and the fixture's
+    // automatic scans are backed off for hours, so nothing else wakes the
+    // worker before the nudge falls due at kickoff + 4h.
+    const kickoff = NOW - 3.5 * HOUR;
+    const dueAt = kickoff + RESULT_NUDGE.HOURS_AFTER_KICKOFF * HOUR;
+    const fixture = (overrides: Partial<AutomationGateMatch> = {}) =>
+      match({
+        scheduledAt: new Date(kickoff),
+        autoSyncedAt: new Date(NOW - 60_000),
+        autoSyncAttempts: AUTO_SYNC.BACKOFF_DOUBLINGS,
+        ...overrides,
+      });
+    const snapshot = (
+      m: AutomationGateMatch,
+      options: {
+        status?: string;
+        settings?: Record<string, string>;
+        delivery?: boolean;
+        now?: number;
+      } = {},
+    ) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          seasons: [
+            season({ status: options.status ?? "REGULAR_SEASON", matches: [m] }),
+          ],
+          settings: options.settings ?? {},
+          leagueWebhookConfigured: options.delivery ?? true,
+          leagueDeliveryAvailable: options.delivery ?? true,
+        }),
+        options.now ?? NOW,
+      );
+
+    it("sleeps until a fixture with no games falls due", () => {
+      expect(snapshot(fixture())).toMatchObject({
+        nextWakeAtMs: dueAt,
+        reason: "REMINDER",
+      });
+      // Otherwise the worker would next look hours later.
+      const quiet = snapshot(fixture(), { delivery: false });
+      expect(quiet.reason).toBe("LEAGUE");
+      expect(quiet.nextWakeAtMs).toBeGreaterThan(dueAt + HOUR);
+    });
+
+    it("sleeps until a part-played series has stalled", () => {
+      const lastEnded = kickoff + 2 * HOUR;
+      const live = fixture({
+        status: "LIVE",
+        games: [
+          {
+            startTime: Math.floor((lastEnded - 40 * 60_000) / 1000),
+            durationSecs: 40 * 60,
+            fetchedAt: new Date(lastEnded + 60_000),
+          },
+        ],
+      });
+      expect(snapshot(live)).toMatchObject({
+        nextWakeAtMs: lastEnded + RESULT_NUDGE.HOURS_SINCE_LAST_GAME * HOUR,
+        reason: "REMINDER",
+      });
+    });
+
+    it("follows the fixture's marker for its current kickoff", () => {
+      const key = resultNudgeKey("match-1", 2);
+      const moved = fixture({ scheduleRevision: 2 });
+      expect(
+        snapshot(moved, { settings: { [key]: "sent:v2:event:message" } }).reason,
+      ).toBe("LEAGUE");
+      // A marker from an earlier kickoff says nothing about this one.
+      expect(
+        snapshot(moved, {
+          settings: { [resultNudgeKey("match-1", 1)]: "sent:v2:event:message" },
+        }),
+      ).toMatchObject({ nextWakeAtMs: dueAt, reason: "REMINDER" });
+      // A post that could not be queued is retried on the next pass.
+      expect(
+        snapshot(moved, {
+          now: dueAt + HOUR,
+          settings: {
+            [key]: "failed:v2:11111111-1111-4111-8111-111111111111:1",
+          },
+        }),
+      ).toMatchObject({ nextWakeAtMs: dueAt + HOUR, reason: "REMINDER" });
+    });
+
+    it("never wakes for a nudge the worker would refuse", () => {
+      const notReminder = (s: ReturnType<typeof snapshot>) =>
+        expect(s.reason).not.toBe("REMINDER");
+      notReminder(snapshot(fixture({ status: "COMPLETED", winnerTeamId: "home" })));
+      notReminder(snapshot(fixture({ scheduledAt: null })));
+      // A regular week left open once the playoffs start is not theirs.
+      notReminder(snapshot(fixture(), { status: "PLAYOFFS" }));
+      // Past the automatic import's window it is an admin matter.
+      notReminder(
+        snapshot(fixture(), {
+          now: kickoff + AUTO_SYNC.WINDOW_HOURS * HOUR + 1,
+        }),
+      );
     });
   });
 
@@ -1192,7 +1628,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 6,
+      version: 9,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

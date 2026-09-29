@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { runResultSync } from "@/lib/result-sync-service";
-import { makeSeason, ON_POSTGRES } from "./factories";
+import { allowLegacyDuplicateActives, makeSeason, ON_POSTGRES } from "./factories";
 
 describe("active-season read integrity", () => {
   it.skipIf(ON_POSTGRES)(
     "fails closed instead of silently choosing one of two active seasons",
     async () => {
+      await allowLegacyDuplicateActives();
       await makeSeason({ name: "First" });
       await makeSeason({ name: "Second" });
 
@@ -18,6 +19,7 @@ describe("active-season read integrity", () => {
   it.skipIf(ON_POSTGRES)(
     "reports bounded failures instead of mutating the newest active season",
     async () => {
+      await allowLegacyDuplicateActives();
       const first = await makeSeason({ name: "First" });
       const second = await makeSeason({ name: "Second" });
 

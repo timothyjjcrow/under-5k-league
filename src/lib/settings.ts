@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
+import { checkinNudgePrefix, outPingPrefix } from "./availability";
 
 // Tiny key-value store (the `Setting` model) for league-global config that an
 // admin edits at runtime — anything per-season belongs on `Season` instead.
@@ -64,20 +65,35 @@ export const SETTING_KEYS = {
   // a ping people can't opt out of gets the whole channel muted, which is
   // permanently worse than silence.
   INHOUSE_PING_ROLE_ID: "inhousePingRoleId",
+  // ISO timestamp claimed by the automation worker's hourly player data
+  // refresh (medals, scouting stats, Steam names, report-card backfill). A
+  // failed OpenDota call writes a FUTURE timestamp here, which is the
+  // back-off: claimThrottle refuses until it has aged a full interval.
+  PLAYER_DATA_REFRESH_AT: "playerDataRefreshAt",
+  // User id whose fetch failed on the last player data refresh; the next
+  // pass tries that account last so it can't hold up everyone else.
+  PLAYER_DATA_REFRESH_FAILED_USER: "playerDataRefreshFailedUser",
 } as const;
 
 // ---------------------------------------------------------------------------
 // The DYNAMIC keyspace. Beyond the fixed keys above, the Setting table hosts
 // per-entity rows: exactly-once markers (resultAnnounced:<matchId>,
-// weekReminder:<season>:<week>:<kickoffMs>, honorsAnnounced:<season>:<week>,
-// playoffRoundBuilt:<season>:<round>), JSON state blobs
-// (playoffGamesArchive:<season>, importSkip:<season>, leagueSyncSkip:<season>)
-// and per-pair throttles (outPing:<matchId>:<userId>, providerCooldown:*).
-// Multi-file key formats
-// are built ONLY through the helpers below — a prefix that drifts between the
-// writer and the sweep that startsWith-matches it fails silently, with no
-// compile error. Single-file keys (importSkip, playoffRoundBuilt, outPing)
-// keep their local builders beside their one call site.
+// resultNudge:<matchId>:<scheduleRevision>,
+// weekReminder:<season>:<week>:<kickoffMs>, draftReminder:<season>:<revision>,
+// honorsAnnounced:<season>:<week>, playoffRoundBuilt:<season>:<round>,
+// playoffRoundAnnounced:<season>:<round>, signupsOpenAnnounced:<season>), JSON
+// state blobs (playoffGamesArchive:<season>, importSkip:<season>,
+// leagueSyncSkip:<season>) and per-pair throttles
+// (outPing:<matchId>:<userId>, providerCooldown:*), plus tiebreakerDraw:
+// <season>:<group> opening draws.
+// Every key format is built ONLY through the helpers below — a prefix that
+// drifts between the writer and the sweep that startsWith-matches it fails
+// silently, with no compile error. seasonSettingScopeWhere sweeps every
+// season-scoped key, so each has at least two users and no writer keeps a
+// private copy. The one exception is outPing, whose builder lives in the pure
+// availability.ts (a client component imports it) and is imported here. The
+// key strings are stored in production databases: never change one without
+// migrating the rows.
 // ---------------------------------------------------------------------------
 
 /**
@@ -102,6 +118,20 @@ export function resultAnnouncedKey(matchId: string): string {
 }
 
 /**
+ * Exactly-once marker for the "we couldn't find your games" nudge to a
+ * fixture's captains (result-nudge-service), one per kickoff: the schedule
+ * revision is part of the key, so a fixture moved to a new night can be
+ * nudged again for that night.
+ */
+export function resultNudgeKey(matchId: string, scheduleRevision: number): string {
+  return `${resultNudgePrefix(matchId)}${scheduleRevision}`;
+}
+
+export function resultNudgePrefix(matchId: string): string {
+  return `resultNudge:${matchId}:`;
+}
+
+/**
  * Exactly-once marker for the champion announcement. The crowning has exactly
  * ONE natural trigger, ever — advancePlayoffBracket early-returns unless the
  * season is PLAYOFFS and the crowning claim has just set it COMPLETE — so
@@ -112,6 +142,14 @@ export const CHAMPION_ANNOUNCED_PREFIX = "championAnnounced:";
 
 export function championAnnouncedKey(seasonId: string): string {
   return `${CHAMPION_ANNOUNCED_PREFIX}${seasonId}`;
+}
+
+/**
+ * Exactly-once marker for "signups are open" — posted once when an admin
+ * creates the season (announceSignupsOpenOnce).
+ */
+export function signupsOpenAnnouncedKey(seasonId: string): string {
+  return `signupsOpenAnnounced:${seasonId}`;
 }
 
 /**
@@ -130,6 +168,47 @@ export function weekReminderKey(
 
 export function weekReminderPrefix(seasonId: string): string {
   return `weekReminder:${seasonId}:`;
+}
+
+/**
+ * Exactly-once marker for the draft-night reminder, one per draftAt REVISION.
+ * The revision (not the timestamp) is the identity: it bumps on every real
+ * change, including change-away-then-back, which is exactly when the old
+ * confirmations went stale and the league needs a fresh reminder.
+ */
+export function draftReminderKey(seasonId: string, revision: number): string {
+  return `${draftReminderPrefix(seasonId)}${revision}`;
+}
+
+export function draftReminderPrefix(seasonId: string): string {
+  return `draftReminder:${seasonId}:`;
+}
+
+/**
+ * When a captain last polled the draft room (ISO time): the "in room" marker
+ * on team cards and in the Start-draft confirm. Written through claimThrottle,
+ * so a room polling every second costs one write per throttle window.
+ */
+export function draftPresenceKey(seasonId: string, userId: string): string {
+  return `${draftPresencePrefix(seasonId)}${userId}`;
+}
+
+export function draftPresencePrefix(seasonId: string): string {
+  return `draftPresence:${seasonId}:`;
+}
+
+/**
+ * One per draft RUN: the draft-complete teams post that mentioned the drafted
+ * players went out. Undo can reopen a finished auction; when it completes
+ * again, the updated teams post names people instead of pinging them all a
+ * second time. An abort starts a new run on restart, which pings again.
+ */
+export function draftTeamsPingKey(seasonId: string, runId: string): string {
+  return `${draftTeamsPingPrefix(seasonId)}${runId}`;
+}
+
+export function draftTeamsPingPrefix(seasonId: string): string {
+  return `draftTeamsPing:${seasonId}:`;
 }
 
 /**
@@ -160,6 +239,66 @@ export function tiebreakerGamesArchiveKey(seasonId: string): string {
 /** League-feed ids fetched but not imported — never refetched (JSON array). */
 export function leagueSyncSkipKey(seasonId: string): string {
   return `leagueSyncSkip:${seasonId}`;
+}
+
+/**
+ * Legacy per-season memory of removed games (JSON array). ImportSuppression
+ * rows replaced it; import-candidates still honours an old row and season
+ * delete/export still sweeps it.
+ */
+export function importSkipKey(seasonId: string): string {
+  return `importSkip:${seasonId}`;
+}
+
+/**
+ * Exactly-once marker for "round N of this season's bracket has been built".
+ * Cleared by createPlayoffBracket so Reset playoffs can rebuild from scratch.
+ */
+export function playoffRoundBuiltKey(seasonId: string, round: number): string {
+  return `${playoffRoundBuiltPrefix(seasonId)}${round}`;
+}
+
+export function playoffRoundBuiltPrefix(seasonId: string): string {
+  return `playoffRoundBuilt:${seasonId}:`;
+}
+
+/**
+ * Exactly-once marker for the "next playoff round is set" post
+ * (announcePlayoffRoundOnce). A bracket reset deletes these with the round
+ * markers above, which cancels a still-queued post for a round that no longer
+ * exists and lets the rebuilt round announce itself afresh.
+ */
+export const PLAYOFF_ROUND_ANNOUNCED_PREFIX = "playoffRoundAnnounced:";
+
+export function playoffRoundAnnouncedKey(
+  seasonId: string,
+  round: number,
+): string {
+  return `${playoffRoundAnnouncedPrefix(seasonId)}${round}`;
+}
+
+export function playoffRoundAnnouncedPrefix(seasonId: string): string {
+  return `${PLAYOFF_ROUND_ANNOUNCED_PREFIX}${seasonId}:`;
+}
+
+/** The season and round a playoffRoundAnnouncedKey names (for the retry sweep). */
+export function parsePlayoffRoundAnnouncedKey(
+  key: string,
+): { seasonId: string; round: number } | null {
+  if (!key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX)) return null;
+  const match = /^(.+):(\d{1,4})$/.exec(
+    key.slice(PLAYOFF_ROUND_ANNOUNCED_PREFIX.length),
+  );
+  return match ? { seasonId: match[1], round: Number(match[2]) } : null;
+}
+
+/** The saved opening draw of one tiebreaker group (JSON array of team ids). */
+export function tiebreakerDrawKey(seasonId: string, groupKey: string): string {
+  return `${tiebreakerDrawPrefix(seasonId)}${groupKey}`;
+}
+
+export function tiebreakerDrawPrefix(seasonId: string): string {
+  return `tiebreakerDraw:${seasonId}:`;
 }
 
 /** Dynamic Setting rows that bound authenticated, user-triggered API work. */
@@ -202,9 +341,27 @@ export function providerCooldownKey(
   ) {
     throw new Error("Invalid provider cooldown identity");
   }
-  // Resource precedes user so deleting/exporting a season can select every
-  // captain claim for one match without knowing which users made the calls.
-  return `${PROVIDER_COOLDOWN_PREFIX}${action}:${encodeURIComponent(resource)}:${encodeURIComponent(user)}`;
+  return `${providerCooldownResourcePrefix(action, resource)}${encodeURIComponent(user)}`;
+}
+
+/**
+ * The cooldown resource for a pasted match-id import on one league fixture.
+ * Keyed to the fixture, never the submitted id, which the caller can vary.
+ */
+export function fixtureImportCooldownResource(matchId: string): string {
+  return `fixture:${matchId}`;
+}
+
+/**
+ * Every user's cooldown row for one provider resource. Resource precedes user
+ * so deleting/exporting a season can select every captain claim for one match
+ * without knowing which users made the calls.
+ */
+export function providerCooldownResourcePrefix(
+  action: ProviderCooldownAction,
+  resourceId: string | number,
+): string {
+  return `${PROVIDER_COOLDOWN_PREFIX}${action}:${encodeURIComponent(String(resourceId))}:`;
 }
 
 /**
@@ -248,26 +405,36 @@ export function seasonSettingScopeWhere(
 ): Prisma.SettingWhereInput {
   const seasonScope: Prisma.SettingWhereInput[] = [
     { key: championAnnouncedKey(seasonId) },
+    { key: signupsOpenAnnouncedKey(seasonId) },
     { key: { startsWith: weekReminderPrefix(seasonId) } },
+    { key: { startsWith: draftReminderPrefix(seasonId) } },
+    { key: { startsWith: draftPresencePrefix(seasonId) } },
+    { key: { startsWith: draftTeamsPingPrefix(seasonId) } },
     { key: { startsWith: honorsAnnouncedPrefix(seasonId) } },
     { key: playoffGamesArchiveKey(seasonId) },
     { key: tiebreakerGamesArchiveKey(seasonId) },
-    { key: { startsWith: `tiebreakerDraw:${seasonId}:` } },
+    { key: { startsWith: tiebreakerDrawPrefix(seasonId) } },
     { key: leagueSyncSkipKey(seasonId) },
-    { key: `importSkip:${seasonId}` },
-    { key: { startsWith: `playoffRoundBuilt:${seasonId}:` } },
+    { key: importSkipKey(seasonId) },
+    { key: { startsWith: playoffRoundBuiltPrefix(seasonId) } },
+    { key: { startsWith: playoffRoundAnnouncedPrefix(seasonId) } },
   ];
   const matchScope = matchIds.flatMap<Prisma.SettingWhereInput>((matchId) => [
     { key: resultAnnouncedKey(matchId) },
-    { key: { startsWith: `outPing:${matchId}:` } },
+    { key: { startsWith: resultNudgePrefix(matchId) } },
+    { key: { startsWith: outPingPrefix(matchId) } },
+    { key: { startsWith: checkinNudgePrefix(matchId) } },
     {
       key: {
-        startsWith: `${PROVIDER_COOLDOWN_PREFIX}open-dota-match-scan:${encodeURIComponent(matchId)}:`,
+        startsWith: providerCooldownResourcePrefix("open-dota-match-scan", matchId),
       },
     },
     {
       key: {
-        startsWith: `${PROVIDER_COOLDOWN_PREFIX}open-dota-match-import:${encodeURIComponent(`fixture:${matchId}`)}:`,
+        startsWith: providerCooldownResourcePrefix(
+          "open-dota-match-import",
+          fixtureImportCooldownResource(matchId),
+        ),
       },
     },
   ]);
@@ -310,6 +477,39 @@ export async function claimThrottle(
     WHERE "Setting"."value" < ${staleBefore}
   `;
   return claimed > 0;
+}
+
+/**
+ * Claim the right to ANSWER an earlier throttled announcement, such as "can
+ * make it after all" after an OUT ping. Only an announcement whose throttle
+ * row still exists can be answered, and a successful claim deletes that row
+ * (value-scoped), so the next real announcement goes out again. The answer has
+ * its own throttle at `answerKey`, claimed FIRST: losing that race never
+ * removes the announcement row without an answer being sent, and someone
+ * flipping back and forth gets at most one answer per interval.
+ */
+export async function claimThrottleAnswer(
+  announcedKey: string,
+  answerKey: string,
+  intervalSeconds: number,
+  nowMs: number,
+): Promise<boolean> {
+  const announced = await prisma.setting.findUnique({
+    where: { key: announcedKey },
+    select: { value: true },
+  });
+  if (!announced) return false;
+  if (!(await claimThrottle(answerKey, intervalSeconds, nowMs))) return false;
+  const consumed = await prisma.setting.deleteMany({
+    where: { key: announcedKey, value: announced.value },
+  });
+  if (consumed.count === 1) return true;
+  // The announcement was re-stamped (or answered) after our read: it is news
+  // again, so say nothing and hand the answer throttle back for next time.
+  await prisma.setting.deleteMany({
+    where: { key: answerKey, value: new Date(nowMs).toISOString() },
+  });
+  return false;
 }
 
 /**

@@ -1,26 +1,49 @@
+import type { ReactNode } from "react";
+import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
+import { getSessionUser } from "@/lib/auth";
+import { getPublicLeagueContent } from "@/lib/public-navigation";
 import { prisma } from "@/lib/prisma";
-import { projectPlayoffField } from "@/lib/playoff-field";
+import {
+  projectPlayoffField,
+  publicDeadHeatTeamIds,
+} from "@/lib/playoff-field";
+import { TiedChip } from "@/components/standings-table";
 import { draftRecap } from "@/lib/draft-recap";
 import { readDraftSales } from "@/lib/draft-history";
 import { AuctionHistory } from "@/components/auction-history";
+import { DraftRecapCard } from "@/components/draft-recap-card";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
 import { formByTeam } from "@/lib/team-matches";
-import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
+import { rosterOrder } from "@/lib/team-roster";
+import { SeriesRecord } from "@/components/series-record";
+import {
+  MATCH_PHASE,
+  REGISTRATION_STATUS,
+  REGISTRATION_TYPE,
+  SEASON_STATUS,
+} from "@/lib/constants";
+import {
+  orderByPlayoffRun,
+  playoffStatuses,
+  type TeamPlayoffStatus,
+} from "@/lib/playoff-status";
+import { seedsFromFirstRound } from "@/lib/bracket-view";
+import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { cn } from "@/lib/utils";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { getTeamJersey } from "@/lib/team-jerseys";
-import { TeamJerseyPreview } from "@/components/team-jersey-preview";
+import { PowerRankingsCard } from "@/components/power-rankings-card";
 import {
   Avatar,
   Badge,
   Card,
   CardBody,
-  CardHeader,
   EmptyState,
   FormStrip,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   RankBadge,
@@ -29,11 +52,16 @@ import {
   textLink,
 } from "@/components/ui";
 
-export const metadata = { title: "Teams" };
+// The link preview names the page and the season.
+export function generateMetadata() {
+  return seasonPageMetadata("teams");
+}
 
 export default async function TeamsPage() {
   const season = await getActiveSeason();
   if (!season) {
+    // The Hall of Fame is linked once a season has a champion.
+    const { hasChampion } = await getPublicLeagueContent(null);
     return (
       <div className="space-y-6">
         <PageTitle title="Teams" />
@@ -48,12 +76,14 @@ export default async function TeamsPage() {
               >
                 Season history
               </Link>
-              <Link
-                href="/hall-of-fame"
-                className={buttonClasses("secondary", "sm")}
-              >
-                Hall of Fame
-              </Link>
+              {hasChampion ? (
+                <Link
+                  href="/hall-of-fame"
+                  className={buttonClasses("secondary", "sm")}
+                >
+                  Hall of Fame
+                </Link>
+              ) : null}
               <Link href="/inhouse" className={buttonClasses("accent", "sm")}>
                 Play an inhouse →
               </Link>
@@ -64,7 +94,7 @@ export default async function TeamsPage() {
     );
   }
 
-  const [teams, matches, draft] = await Promise.all([
+  const [teams, matches, draft, viewer] = await Promise.all([
     prisma.team.findMany({
       where: { seasonId: season.id },
       orderBy: { draftOrder: "asc" },
@@ -81,6 +111,7 @@ export default async function TeamsPage() {
       where: { seasonId: season.id },
       select: { status: true, activeRunId: true, activeRun: { select: { provenance: true } } },
     }),
+    getSessionUser(),
   ]);
 
   if (teams.length === 0) {
@@ -99,7 +130,11 @@ export default async function TeamsPage() {
     );
   }
 
-  const standings = projectPlayoffField(teams, matches).standings;
+  const field = projectPlayoffField(teams, matches);
+  const standings = field.standings;
+  // Level teams waiting on a tiebreaker match: the standings table swaps
+  // their "Tied" chip for the tiebreaker badge, so these cards drop it too.
+  const tiebreakerPending = new Set(publicDeadHeatTeamIds(field, matches));
   const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
   const rowOf = new Map(standings.map((s) => [s.teamId, s]));
   const played = matches.some(
@@ -112,7 +147,7 @@ export default async function TeamsPage() {
     matches,
   );
 
-  // Draft-night superlatives (biggest spend, best steal, …) — MMR from signups.
+  // Captains' signup MMR sets the projected (MMR-weighted) draft budgets.
   const registrationUserIds = [
     ...new Set([
       ...teams.map((team) => team.captainId),
@@ -139,48 +174,84 @@ export default async function TeamsPage() {
         registration.type === REGISTRATION_TYPE.PLAYER,
     ),
   });
-  const hasAuctionReceipts = draft?.activeRunId && draft.activeRun?.provenance === "COMMAND";
-  const recap = draftRecap(hasAuctionReceipts
-    ? await readDraftSales(prisma, draft.activeRunId!)
-    : teams.flatMap((t) =>
-      t.members.map((m) => ({
-        name: m.user.name,
-        teamName: t.name,
-        teamId: t.id,
-        price: m.price,
-        isCaptain: m.isCaptain,
-        mmr: null,
-      })),
+  // Draft-night superlatives come from the auction's own receipts. A season
+  // drafted before receipts were recorded has no card: today's roster prices
+  // aren't the auction's (moves and refunds change them), and the full
+  // "Draft night" recap returns with the next draft.
+  const recap =
+    draft?.activeRunId && draft.activeRun?.provenance === "COMMAND"
+      ? draftRecap(await readDraftSales(prisma, draft.activeRunId))
+      : null;
+
+  const championPresentation = resolveChampionPresentation(season, matches);
+  // Once the bracket exists, each card says where the team stands in it.
+  const postseason =
+    season.status === SEASON_STATUS.PLAYOFFS ||
+    season.status === SEASON_STATUS.COMPLETE;
+  const playoffStatus = postseason
+    ? playoffStatuses(
+        teams,
+        matches,
+        championPresentation.championTeamId,
+        // eslint-disable-next-line react-hooks/purity -- async server component
+        Date.now(),
+      )
+    : new Map<string, TeamPlayoffStatus>();
+  const seedOf = seedsFromFirstRound(
+    matches.filter(
+      (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
     ),
   );
-
-  // After matches start, order by standings; before that, keep draft order.
-  const ordered = played
-    ? [...teams].sort(
-        (a, b) => (rankOf.get(a.id) ?? 99) - (rankOf.get(b.id) ?? 99),
+  const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  // The signed-in player's own card gets a "Your team" tag.
+  const viewerTeamId = viewer
+    ? teams.find(
+        (t) =>
+          t.captainId === viewer.id ||
+          t.members.some((m) => m.userId === viewer.id),
+      )?.id
+    : undefined;
+  // Playoffs: teams still alive first by seed, then the deepest runs. After
+  // matches start, standings order; before that, draft order.
+  const teamById = new Map(teams.map((t) => [t.id, t]));
+  const ordered =
+    playoffStatus.size > 0
+      ? orderByPlayoffRun(
+          teams.map((t) => t.id),
+          playoffStatus,
+          seedOf,
+          rankOf,
+        ).map((id) => teamById.get(id)!)
+      : played
+        ? [...teams].sort(
+            (a, b) => (rankOf.get(a.id) ?? 99) - (rankOf.get(b.id) ?? 99),
+          )
+        : teams;
+  // Teams with a Fourthwall jersey link to its preview on their own page.
+  const withJersey = new Set(
+    teams
+      .filter((team) =>
+        getTeamJersey({
+          id: team.id,
+          roster: team.members.map((m) => m.user),
+        }),
       )
-    : teams;
-  const jerseys = ordered.flatMap((team) => {
-    const jersey = getTeamJersey(team.name);
-    return jersey ? [jersey] : [];
-  });
+      .map((team) => team.id),
+  );
 
-  // Elo power rankings — only regular-season series feed the rating.
+  // Elo power rankings: only regular-season series feed the rating, so it
+  // stops moving once the regular season is over.
   const power = powerRankings(
     matches.filter((m) => m.phase === "REGULAR"),
     teams.map((t) => t.id),
   );
-  const powerChangeScale = Math.max(
-    10,
-    Math.ceil(Math.max(0, ...power.map((row) => Math.abs(row.delta))) / 10) *
-      10,
+  const powerTeams = new Map(
+    teams.map((t) => [
+      t.id,
+      { name: t.name, logoUrl: t.logoUrl, withdrawn: t.withdrawn },
+    ]),
   );
-  const powerName = new Map(teams.map((t) => [t.id, t.name]));
-  const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
-  const withdrawnTeamIds = new Set(
-    teams.filter((team) => team.withdrawn).map((team) => team.id),
-  );
-  const championPresentation = resolveChampionPresentation(season, matches);
+  const powerFrozen = postseason;
 
   return (
     <div className="space-y-6">
@@ -188,7 +259,12 @@ export default async function TeamsPage() {
         title="Teams"
         subtitle={`${season.name} · ${teams.length} teams`}
         action={
-          isDraft ? (
+          // Signup week has no standings yet; captains are scouting the pool.
+          season.status === SEASON_STATUS.SIGNUPS ? (
+            <Link href="/players" className={textLink("text-sm")}>
+              Player pool →
+            </Link>
+          ) : isDraft ? (
             <Link href="/draft" className={textLink("text-sm")}>
               Draft room →
             </Link>
@@ -200,165 +276,6 @@ export default async function TeamsPage() {
         }
       />
 
-      {power.length > 0 ? (
-        <Card className="overflow-hidden">
-          <CardHeader
-            title="Power rankings"
-            headingLevel={2}
-            subtitle="Elo rating · latest week's movement"
-            action={
-              <span className="inline-flex items-center gap-3 text-[10px] font-medium uppercase tracking-wider text-muted">
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full bg-danger"
-                    aria-hidden
-                  />
-                  Lost
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full bg-cyan-300"
-                    aria-hidden
-                  />
-                  Gained
-                </span>
-              </span>
-            }
-          />
-          <CardBody className="p-3 sm:p-4">
-            <ol className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
-              {power.map((row) => {
-                const hasMovement = row.prevRank > 0;
-                const moved = hasMovement ? row.prevRank - row.rank : 0;
-                const name = powerName.get(row.teamId) ?? "?";
-                return (
-                  <li
-                    key={row.teamId}
-                    className="min-w-0 rounded-lg border border-line-soft bg-surface-2/35 px-3 py-3 sm:px-4"
-                  >
-                    <div className="grid grid-cols-[1.25rem_1.75rem_minmax(0,1fr)_auto] items-center gap-2.5">
-                      <span
-                        className="font-display text-xl tabular-nums text-muted"
-                        aria-label={`Power rank ${row.rank}`}
-                      >
-                        {String(row.rank).padStart(2, "0")}
-                      </span>
-                      <TeamCrest
-                        name={name}
-                        seed={row.teamId}
-                        logoUrl={teamLogoUrl.get(row.teamId)}
-                        size={28}
-                        className="shrink-0 rounded-md"
-                      />
-                      <div className="min-w-0">
-                        <Link
-                          href={`/teams/${row.teamId}`}
-                          className="inline-flex min-h-11 items-center text-sm font-semibold leading-snug hover:text-info [overflow-wrap:anywhere]"
-                        >
-                          {name}
-                        </Link>
-                        {withdrawnTeamIds.has(row.teamId) ? (
-                          <Badge
-                            tone="danger"
-                            className="mt-1 px-1.5 py-0 text-[10px]"
-                            title="Withdrawn teams retain played results but cannot qualify for playoffs"
-                          >
-                            Withdrawn
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <div className="text-right">
-                        <span
-                          className="font-display text-2xl leading-none tabular-nums text-fg"
-                          title="Elo rating: higher is stronger"
-                        >
-                          {row.rating}
-                        </span>
-                        <span
-                          className={cn(
-                            "mt-1 block font-mono text-[10px] tabular-nums",
-                            moved > 0
-                              ? "text-cyan-300"
-                              : moved < 0
-                                ? "text-danger"
-                                : "text-muted",
-                          )}
-                          title={
-                            row.prevRank > 0
-                              ? `Power rank last week: ${row.prevRank}`
-                              : "No previous week to compare"
-                          }
-                          aria-label={
-                            row.prevRank > 0
-                              ? `Power rank ${moved > 0 ? "up" : moved < 0 ? "down" : "unchanged"}${moved ? ` ${Math.abs(moved)}` : ""} since last week`
-                              : "No previous rank"
-                          }
-                        >
-                          {moved > 0
-                            ? `▲ ${moved}`
-                            : moved < 0
-                              ? `▼ ${-moved}`
-                              : "—"}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-[minmax(0,1fr)_2.75rem] items-center gap-3">
-                      <div
-                        role="img"
-                        aria-label={
-                          hasMovement
-                            ? `Weekly Elo change: ${row.delta > 0 ? "+" : ""}${row.delta}`
-                            : "No previous completed week to compare"
-                        }
-                        className="relative h-2 rounded-full bg-bg/80"
-                      >
-                        <span
-                          aria-hidden
-                          className="absolute -top-1 bottom-[-4px] left-1/2 w-px bg-muted/50"
-                        />
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "absolute inset-y-0 rounded-full",
-                            row.delta < 0 ? "bg-danger" : "bg-cyan-300",
-                          )}
-                          style={{
-                            left: `${row.delta < 0 ? 50 - (Math.abs(row.delta) / powerChangeScale) * 50 : 50}%`,
-                            width: `${(Math.abs(row.delta) / powerChangeScale) * 50}%`,
-                          }}
-                        />
-                      </div>
-                      <span
-                        className={cn(
-                          "text-right font-mono text-xs font-semibold tabular-nums",
-                          row.delta > 0
-                            ? "text-cyan-300"
-                            : row.delta < 0
-                              ? "text-danger"
-                              : "text-muted",
-                        )}
-                      >
-                        {hasMovement
-                          ? `${row.delta > 0 ? "+" : ""}${row.delta}`
-                          : "—"}
-                      </span>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-            <div className="mt-3 flex items-center justify-between gap-3 px-1 text-[10px] text-muted">
-              <span>Weekly Elo change</span>
-              <span className="font-mono tabular-nums">
-                −{powerChangeScale}{" "}
-                <span className="px-2 text-muted/60">/ 0 /</span> +
-                {powerChangeScale}
-              </span>
-            </div>
-          </CardBody>
-        </Card>
-      ) : null}
-
       <section aria-label="Team rosters" className="space-y-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Rosters</h2>
@@ -369,13 +286,54 @@ export default async function TeamsPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {ordered.map((t) => {
             const rank = rankOf.get(t.id) ?? 0;
-            const row = rowOf.get(t.id);
+            const seed = playoffStatus.size > 0 ? seedOf.get(t.id) : undefined;
+            const status = playoffStatus.get(t.id);
+            const row = played ? rowOf.get(t.id) : undefined;
             const isChampion = championPresentation.championTeamId === t.id;
             const budget = displayBudgets.byTeam.get(t.id) ?? t.budget;
+            const showBudget = isDraft || displayBudgets.isProjected;
+            const form = forms.get(t.id) ?? [];
+            const short = t.members.length < season.teamSize;
+            // One line in place of the standings: where the team sits, its
+            // record and points. Before any result, how full the roster is.
+            const summary: ReactNode[] = [];
+            if (seed) {
+              summary.push(
+                <span key="seed" className="font-medium text-fg">
+                  Seed {seed}
+                </span>,
+              );
+            } else if (row && rank > 0) {
+              summary.push(
+                <span key="rank" className="font-medium text-fg">
+                  Rank {rank}
+                </span>,
+              );
+            }
+            if (row) {
+              summary.push(
+                <span key="record" className="tabular-nums">
+                  {seed ? "Regular season " : null}
+                  <span className="font-medium text-fg">
+                    <SeriesRecord record={row} />
+                  </span>
+                </span>,
+                <span key="points" className="tabular-nums">
+                  <span className="font-medium text-fg">{row.points}</span>{" "}
+                  {row.points === 1 ? "pt" : "pts"}
+                </span>,
+              );
+            }
+            if (!row || short) {
+              summary.push(
+                <span key="players" className="tabular-nums">
+                  {t.members.length}/{season.teamSize} players
+                </span>,
+              );
+            }
             return (
               <Card
                 key={t.id}
-                interactive
                 className={cn(
                   "min-w-0 overflow-hidden border-t-2",
                   isChampion
@@ -386,31 +344,31 @@ export default async function TeamsPage() {
                 )}
               >
                 <div className="border-b border-line-soft bg-gradient-to-br from-surface-2/65 to-surface px-4 py-4 sm:px-5">
-                  <div className="grid grid-cols-[4rem_minmax(0,1fr)_auto] items-center gap-3">
-                    <TeamCrest
-                      name={t.name}
-                      seed={t.id}
-                      logoUrl={t.logoUrl}
-                      size={64}
-                      imageFit="cover"
-                    />
+                  <div
+                    className={cn(
+                      "grid items-center gap-3",
+                      showBudget
+                        ? "grid-cols-[4rem_minmax(0,1fr)_auto]"
+                        : "grid-cols-[4rem_minmax(0,1fr)]",
+                    )}
+                  >
+                    {/* The crest opens the team too. Only the name is
+                        announced and focusable, so the team is one stop. */}
+                    <Link
+                      href={`/teams/${t.id}`}
+                      tabIndex={-1}
+                      aria-hidden
+                      className="block rounded-xl"
+                    >
+                      <TeamCrest
+                        name={t.name}
+                        seed={t.id}
+                        logoUrl={t.logoUrl}
+                        size={64}
+                        imageFit="cover"
+                      />
+                    </Link>
                     <div className="min-w-0">
-                      {played && rank > 0 ? (
-                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                          Rank{" "}
-                          <span className="text-cyan-300">
-                            {String(rank).padStart(2, "0")}
-                          </span>
-                          {row?.idDecided ? (
-                            <span
-                              className="ml-2 text-accent"
-                              title="Points, game differential, wins and head-to-head are tied"
-                            >
-                              Tied
-                            </span>
-                          ) : null}
-                        </p>
-                      ) : null}
                       <Link
                         href={`/teams/${t.id}`}
                         className="inline-flex min-h-11 items-center gap-1.5 font-display text-xl font-semibold leading-tight hover:text-info sm:text-2xl [overflow-wrap:anywhere]"
@@ -426,189 +384,118 @@ export default async function TeamsPage() {
                           </span>
                         ) : null}
                       </Link>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      {isDraft || displayBudgets.isProjected ? (
-                        <div
-                          title={
-                            displayBudgets.isProjected
-                              ? "Projected starting budget; finalized when the auction starts"
-                              : "Remaining auction budget"
-                          }
-                        >
-                          <span className="font-display text-2xl font-semibold leading-none tabular-nums text-accent">
-                            ${budget}
-                          </span>
-                          <span className="mt-1 block text-[10px] text-muted">
-                            {displayBudgets.isProjected ? "projected" : "left"}
-                          </span>
-                        </div>
-                      ) : played && row ? (
-                        <div>
-                          <span className="font-display text-3xl font-semibold leading-none tabular-nums text-fg">
-                            {row.points}
-                          </span>
-                          <span className="mt-1 block text-[10px] uppercase tracking-wider text-muted">
-                            Pts
-                          </span>
-                        </div>
-                      ) : (
-                        <div>
-                          <span className="font-display text-2xl tabular-nums">
-                            {t.members.length}
-                            <span className="text-base text-muted">
-                              /{season.teamSize}
-                            </span>
-                          </span>
-                          <span className="mt-1 block text-[10px] text-muted">
-                            Players
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-                    <span>Captain</span>
-                    <PlayerLink
-                      userId={t.captainId}
-                      className="my-0 min-w-0 py-1 font-medium text-fg [overflow-wrap:anywhere]"
-                    >
-                      {t.captain.name}
-                    </PlayerLink>
-                    {t.withdrawn ? (
-                      <Badge
-                        tone="danger"
-                        className="ml-auto shrink-0"
-                        title="Remaining fixtures were forfeited; this team is excluded from playoff seeding"
-                      >
-                        Withdrawn
-                      </Badge>
-                    ) : null}
-                  </div>
-                  {played && row ? (
-                    <div className="mt-3">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                        <span className="text-muted">
-                          Regular season ·{" "}
-                          <span className="tabular-nums">{row.played}</span>{" "}
-                          series
-                        </span>
-                        <span
-                          className="flex items-center gap-3 font-mono tabular-nums"
-                          aria-label={`${row.wins} wins, ${row.draws} draws, ${row.losses} losses`}
-                        >
-                          <span className="text-cyan-300">
-                            {row.wins}
-                            <span className="ml-0.5 text-muted">W</span>
-                          </span>
-                          <span className="text-muted">
-                            {row.draws}
-                            <span className="ml-0.5">D</span>
-                          </span>
-                          <span className="text-danger">
-                            {row.losses}
-                            <span className="ml-0.5 text-muted">L</span>
-                          </span>
-                        </span>
-                      </div>
-                      <div
-                        aria-hidden
-                        className="flex h-1.5 gap-0.5 overflow-hidden rounded-full bg-bg/75"
-                      >
-                        {row.wins > 0 ? (
-                          <span
-                            className="bg-cyan-300"
-                            style={{ flex: row.wins }}
-                          />
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                        {summary.flatMap((part, i) =>
+                          i === 0
+                            ? [part]
+                            : [
+                                <span key={`dot-${i}`} aria-hidden>
+                                  ·
+                                </span>,
+                                part,
+                              ],
+                        )}
+                        {row?.idDecided &&
+                        !seed &&
+                        !(tiebreakerPending.has(t.id) && !t.withdrawn) ? (
+                          <TiedChip className="font-medium" />
                         ) : null}
-                        {row.draws > 0 ? (
-                          <span
-                            className="bg-slate-400"
-                            style={{ flex: row.draws }}
-                          />
+                        {form.length > 0 ? (
+                          <FormStrip form={form} size={4} />
                         ) : null}
-                        {row.losses > 0 ? (
-                          <span
-                            className="bg-danger"
-                            style={{ flex: row.losses }}
-                          />
+                        {t.id === viewerTeamId ? (
+                          // Neutral, as in the standings: blue reads as a link.
+                          <span className="rounded bg-surface-3 px-1.5 py-0.5 font-medium text-fg">
+                            Your team
+                          </span>
                         ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-                <CardBody className="space-y-4 p-4 sm:p-5">
-                  {/* Custom padding must reset PlayerLink's TAP_SAFE outdent so
-                      wrapped roster links never overlap another tap target. */}
-                  <div className="flex flex-wrap gap-2">
-                    {t.members.map((m) => (
-                      <PlayerLink
-                        key={m.id}
-                        userId={m.userId}
-                        className="my-0 flex max-w-full min-w-0 items-center gap-1.5 rounded-lg border border-line-soft bg-surface-2/40 py-1 pl-1 pr-2 text-xs hover:border-muted/60 hover:no-underline"
-                      >
-                        <Avatar
-                          name={m.user.name}
-                          src={m.user.avatar}
-                          size={24}
-                        />
-                        <span className="min-w-0 [overflow-wrap:anywhere]">
-                          {m.user.name}
-                        </span>
-                        {m.isCaptain ? (
-                          <Badge tone="accent" className="px-1.5 py-0">
-                            C
+                        {t.withdrawn ? (
+                          <Badge
+                            tone="danger"
+                            title="Remaining fixtures were forfeited; this team is excluded from playoff seeding"
+                          >
+                            Withdrawn
                           </Badge>
                         ) : null}
-                        <RankBadge rankTier={m.user.rankTier} />
-                        {isDraft && !m.isCaptain ? (
-                          <span className="tabular-nums text-muted">
-                            ${m.price}
-                          </span>
-                        ) : null}
-                      </PlayerLink>
-                    ))}
-                    {Array.from({
-                      length: Math.max(0, season.teamSize - t.members.length),
-                    }).map((_, i) => (
-                      <span
-                        key={`empty-${i}`}
-                        className="inline-flex min-h-8 items-center rounded-lg border border-dashed border-line/70 px-3 py-1 text-xs text-muted"
+                      </div>
+                    </div>
+                    {showBudget ? (
+                      <div
+                        className="shrink-0 text-right"
+                        title={
+                          displayBudgets.isProjected
+                            ? "Projected starting budget; finalized when the auction starts"
+                            : "Remaining auction budget"
+                        }
                       >
-                        Open slot
-                      </span>
-                    ))}
+                        <span className="font-display text-2xl font-semibold leading-none tabular-nums text-accent">
+                          ${budget}
+                        </span>
+                        <span className="mt-1 block text-[10px] text-muted">
+                          {displayBudgets.isProjected ? "projected" : "left"}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
-                  {played && row ? (
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line-soft pt-3 text-xs">
-                      <div className="flex items-center gap-4">
-                        <span className="text-muted">
-                          Games{" "}
-                          <span className="ml-1 font-mono tabular-nums text-fg">
-                            {row.gameWins}–{row.gameLosses}
+                  {status ? (
+                    <PlayoffStatusLine
+                      status={status}
+                      teamName={teamName}
+                      className="mt-2 text-sm"
+                    />
+                  ) : null}
+                </div>
+                <CardBody className="p-4 sm:p-5">
+                  {/* Custom padding must reset PlayerLink's TAP_SAFE outdent so
+                      wrapped roster links never overlap another tap target. */}
+                  {t.members.length === 0 ? (
+                    <p className="text-sm text-muted">No players yet.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {rosterOrder(t.members).map((m) => (
+                        <PlayerLink
+                          key={m.id}
+                          userId={m.userId}
+                          className="my-0 flex max-w-full min-w-6 items-center gap-1.5 rounded-lg border border-line-soft bg-surface-2/40 py-1 pl-1 pr-2 text-xs hover:border-muted/60 hover:no-underline"
+                        >
+                          <Avatar
+                            name={m.user.name}
+                            src={m.user.avatar}
+                            size={24}
+                          />
+                          <span className="min-w-0 [overflow-wrap:anywhere]">
+                            {m.user.name}
                           </span>
-                        </span>
-                        <span className="text-muted">
-                          Diff{" "}
-                          <span
-                            className={cn(
-                              "ml-1 font-mono tabular-nums",
-                              row.gameDiff > 0
-                                ? "text-cyan-300"
-                                : row.gameDiff < 0
-                                  ? "text-danger"
-                                  : "text-fg",
-                            )}
-                          >
-                            {row.gameDiff > 0 ? "+" : ""}
-                            {row.gameDiff}
-                          </span>
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-muted">Recent</span>
-                        <FormStrip form={forms.get(t.id) ?? []} size={5} />
-                      </div>
+                          {m.isCaptain ? (
+                            <Badge
+                              tone="accent"
+                              className="px-1.5 py-0"
+                              title="Captain"
+                            >
+                              <span aria-hidden>C</span>
+                              <span className="sr-only">Captain</span>
+                            </Badge>
+                          ) : null}
+                          <RankBadge rankTier={m.user.rankTier} />
+                          {isDraft && !m.isCaptain ? (
+                            <span className="tabular-nums text-muted">
+                              ${m.price}
+                            </span>
+                          ) : null}
+                        </PlayerLink>
+                      ))}
+                    </div>
+                  )}
+                  {withJersey.has(t.id) ? (
+                    <div className="mt-3 flex justify-end">
+                      <Link
+                        href={`/teams/${t.id}#team-jersey`}
+                        className={textLink("text-xs")}
+                      >
+                        Team jersey
+                        <span className="sr-only"> for {t.name}</span>{" "}
+                        <LinkArrow />
+                      </Link>
                     </div>
                   ) : null}
                 </CardBody>
@@ -618,88 +505,16 @@ export default async function TeamsPage() {
         </div>
       </section>
 
-      {recap.totalSpent > 0 ? (
-        <Card>
-          <CardHeader
-            title={hasAuctionReceipts ? (isDraft ? "Draft night — so far" : "Draft night") : "Surviving roster prices"}
-            subtitle={hasAuctionReceipts ? `$${recap.totalSpent} total spent · original auction values` : `$${recap.totalSpent} in current roster rows · original auction history is incomplete`}
-          />
-          <CardBody className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            {recap.biggestSpend ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  💸 Biggest spend
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.biggestSpend.name} · ${recap.biggestSpend.price}
-                </div>
-                <div className="truncate text-xs text-muted">
-                  {recap.biggestSpend.teamName}
-                </div>
-              </div>
-            ) : null}
-            {recap.bestValue ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  🕵️ Best steal
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.bestValue.name} · ${recap.bestValue.price}
-                </div>
-                <div className="truncate text-xs text-muted">
-                  {recap.bestValue.mmr} MMR for {recap.bestValue.teamName}
-                </div>
-              </div>
-            ) : null}
-            {recap.topSpender ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  🐳 Top spender
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.topSpender.teamName}
-                </div>
-                <div className="text-xs text-muted">
-                  ${recap.topSpender.spent} total
-                </div>
-              </div>
-            ) : null}
-            {recap.bargainHunter &&
-            (recap.bargainHunter.teamId ?? recap.bargainHunter.teamName) !== (recap.topSpender?.teamId ?? recap.topSpender?.teamName) ? (
-              <div className="min-w-0 rounded-lg border border-line bg-surface-2/40 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-muted">
-                  🧾 Bargain hunter
-                </div>
-                <div className="mt-1 truncate font-medium">
-                  {recap.bargainHunter.teamName}
-                </div>
-                <div className="text-xs text-muted">
-                  ${recap.bargainHunter.spent} total
-                </div>
-              </div>
-            ) : null}
-          </CardBody>
-        </Card>
+      <PowerRankingsCard rows={power} teams={powerTeams} frozen={powerFrozen} />
+
+      {/* The finished draft room renders the same card. */}
+      {recap ? (
+        <DraftRecapCard
+          recap={recap}
+          title={isDraft ? "Draft night — so far" : "Draft night"}
+        />
       ) : null}
 
-      {jerseys.length > 0 ? (
-        <section aria-labelledby="team-jerseys-title" className="space-y-4">
-          <div>
-            <h2 id="team-jerseys-title" className="text-lg font-semibold">
-              Team jerseys
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
-              Your team, front and back. Explore the Fourthwall previews, then
-              choose a player&apos;s personalized jersey.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
-            {jerseys.map((jersey) => (
-              <TeamJerseyPreview key={jersey.teamName} jersey={jersey} />
-            ))}
-          </div>
-        </section>
-      ) : null}
       <AuctionHistory seasonId={season.id} />
     </div>
   );

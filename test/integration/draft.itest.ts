@@ -11,7 +11,8 @@ import {
   resumeDraft,
   undoLastSale,
 } from "@/lib/draft-service";
-import { DRAFT_STATUS } from "@/lib/constants";
+import { DEFAULTS, DRAFT_STATUS } from "@/lib/constants";
+import { bidClockSeconds } from "@/lib/draft";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
   ON_POSTGRES,
@@ -23,6 +24,7 @@ import {
   makeUser,
   raceAll,
   raceN,
+  resetDb,
   sessionFor,
   startDraftState,
 } from "./factories";
@@ -357,12 +359,13 @@ describe("draft auction — claim guards", () => {
     });
     expect(teamA.budget).toBe(93); // decremented exactly once
 
-    // The 💰 sale announcement fires once (the recap may also name the
-    // player — that's a different message).
-    const saleSends = mockSend.mock.calls
+    // Star was the whole pool, so this sale finished the draft: the teams
+    // post fires once (the recap may also name the player; that's a
+    // different message).
+    const teamsPosts = mockSend.mock.calls
       .map((c) => String(c[0]))
-      .filter((m) => m.startsWith("💰") && m.includes("Star"));
-    expect(saleSends).toHaveLength(1);
+      .filter((m) => m.includes("Here are the teams") && m.includes("Star"));
+    expect(teamsPosts).toHaveLength(1);
   });
 
   it("the stall resolver auto-nominates once — one opening bid row, second call no-ops", async () => {
@@ -412,18 +415,29 @@ describe("draft auction — claim guards", () => {
     expect(draft.nominatedUserId).toBe(p1.id); // the live lot survived
   });
 
-  it("completion announces the recap alongside the complete message", async () => {
+  it("a sale posts nothing; completion posts the teams, then the recap", async () => {
     // teamSize 2 → each captain needs exactly one player.
     const season = await makeSeason({ teamSize: 2, draftBudget: 50 });
     const capA = await makeCaptain(season.id, "Captain A", 100, 0);
     const capB = await makeCaptain(season.id, "Captain B", 100, 1);
     const p1 = await makePlayer(season.id, "First Buy", 4000);
     const p2 = await makePlayer(season.id, "Last Buy", 3000);
+    await prisma.user.update({
+      where: { id: p1.id },
+      data: { discordId: "910000000000000001" },
+    });
+    await prisma.user.update({
+      where: { id: capA.user.id },
+      data: { discordId: "910000000000000002" },
+    });
     await startDraftState(season.id);
 
     await nominatePlayer(season.id, sessionFor(capA.user), p1.id, 9);
     await expireClock(season.id);
     expect(await resolveExpiredNomination(season.id)).toBe(true);
+    // One sale mid-draft: the room shows it, Discord hears nothing.
+    expect(mockSend).not.toHaveBeenCalled();
+
     await nominatePlayer(season.id, sessionFor(capB.user), p2.id, 3);
     await expireClock(season.id);
     expect(await resolveExpiredNomination(season.id)).toBe(true);
@@ -433,11 +447,105 @@ describe("draft auction — claim guards", () => {
         .status,
     ).toBe(DRAFT_STATUS.COMPLETE);
 
-    const sends = mockSend.mock.calls.map((c) => String(c[0]));
-    expect(sends.some((m) => m.includes("draft is complete"))).toBe(true);
-    const recap = sends.find((m) => m.includes("Draft night in numbers"));
-    expect(recap).toBeTruthy();
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    const [teamsPost, teamsMentions] = mockSend.mock.calls[0];
+    expect(teamsPost).toContain("draft is complete! Here are the teams:");
+    expect(teamsPost).toContain(
+      "**Captain A's Team** (captain Captain A): <@910000000000000001> $9",
+    );
+    expect(teamsPost).toContain(
+      "**Captain B's Team** (captain Captain B): Last Buy $3",
+    );
+    // The drafted player who linked is pinged; the linked captain is not.
+    expect(teamsMentions).toEqual({ users: ["910000000000000001"] });
+
+    const recap = String(mockSend.mock.calls[1][0]);
+    expect(recap).toContain("Draft night in numbers");
     expect(recap).toContain("First Buy"); // $9 — the biggest buy
+
+    // Both are queued now and delivered after the response, so the captain
+    // whose request closed the last lot never waits on Discord.
+    for (const call of mockSend.mock.calls) {
+      expect(call[2]).toEqual({ afterResponse: true });
+    }
+  });
+
+  // Undo works on a finished draft, and the reopened run then completes again.
+  async function completeUndoAndRecomplete() {
+    const season = await makeSeason({ teamSize: 2, draftBudget: 50 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const p1 = await makePlayer(season.id, "First Buy", 4000);
+    const p2 = await makePlayer(season.id, "Disputed Buy", 3000);
+    const p3 = await makePlayer(season.id, "Replacement", 2000);
+    for (const [user, discordId] of [
+      [p1, "920000000000000001"],
+      [p2, "920000000000000002"],
+      [p3, "920000000000000003"],
+    ] as const) {
+      await prisma.user.update({ where: { id: user.id }, data: { discordId } });
+    }
+    await startDraftState(season.id);
+
+    await nominatePlayer(season.id, sessionFor(capA.user), p1.id, 9);
+    await expireClock(season.id);
+    await resolveExpiredNomination(season.id);
+    await nominatePlayer(season.id, sessionFor(capB.user), p2.id, 3);
+    await expireClock(season.id);
+    await resolveExpiredNomination(season.id);
+    const firstCalls = [...mockSend.mock.calls];
+
+    const admin = sessionFor(await makeUser("Boss", "ADMIN"));
+    expect((await undoLastSale(season.id, admin)).ok).toBe(true);
+    mockSend.mockClear();
+    expect(
+      (await nominatePlayer(season.id, sessionFor(capB.user), p3.id, 2)).ok,
+    ).toBe(true);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+    expect(
+      (await prisma.draft.findUniqueOrThrow({ where: { seasonId: season.id } }))
+        .status,
+    ).toBe(DRAFT_STATUS.COMPLETE);
+    return { firstCalls, secondCalls: [...mockSend.mock.calls] };
+  }
+
+  it("completing again after an undo posts the updated teams without pinging anyone", async () => {
+    const { firstCalls, secondCalls } = await completeUndoAndRecomplete();
+    // The first completion pinged the drafted players and posted the recap.
+    expect(firstCalls).toHaveLength(2);
+    expect(firstCalls[0][1]).toEqual({
+      users: ["920000000000000001", "920000000000000002"],
+    });
+
+    // The repeat: one teams post, every name in plain text, nobody allowlisted,
+    // and no second recap.
+    expect(secondCalls).toHaveLength(1);
+    const [content, mentions, options] = secondCalls[0];
+    expect(content).toContain("draft is complete again. Here are the updated teams:");
+    expect(content).toContain("First Buy $9");
+    expect(content).toContain("Replacement $2");
+    expect(content).not.toContain("Disputed Buy");
+    expect(content).not.toContain("<@");
+    expect(mentions).toBeUndefined();
+    expect(options).toEqual({ afterResponse: true });
+  });
+
+  it("a first teams post that was never queued leaves the ping for the next completion", async () => {
+    // No webhook (or a failed enqueue) at the first completion: nobody heard.
+    mockSend.mockResolvedValueOnce(false);
+    const { firstCalls, secondCalls } = await completeUndoAndRecomplete();
+    expect(firstCalls[0][1]).toEqual({
+      users: ["920000000000000001", "920000000000000002"],
+    });
+
+    expect(secondCalls).toHaveLength(2);
+    const [content, mentions] = secondCalls[0];
+    expect(content).toContain("draft is complete! Here are the teams:");
+    expect(mentions).toEqual({
+      users: ["920000000000000001", "920000000000000003"],
+    });
+    expect(String(secondCalls[1][0])).toContain("Draft night in numbers");
   });
 });
 
@@ -567,6 +675,195 @@ describe("draft auction — clocks, rotation, pause", () => {
     expect(resumed.status).toBe(DRAFT_STATUS.IN_PROGRESS);
     expect(resumed.bidEndsAt!.getTime()).toBeGreaterThan(Date.now());
     expect((await placeBid(season.id, sessionFor(capB.user), 9)).ok).toBe(true);
+  });
+});
+
+/**
+ * Run `act` and return which clock it put on the live lot: the full one or
+ * the short one. bidEndsAt is `now + seconds` at the write, so it lands
+ * between `before + seconds` and `after + seconds`; the two clocks are far
+ * enough apart that exactly one of them fits unless the call took longer
+ * than the gap between them.
+ */
+async function clockSetBy(
+  seasonId: string,
+  act: () => Promise<unknown>,
+): Promise<number> {
+  const before = Date.now();
+  await act();
+  const after = Date.now();
+  const draft = await prisma.draft.findUniqueOrThrow({ where: { seasonId } });
+  expect(draft.bidEndsAt, "a live lot has a bid clock").not.toBeNull();
+  const ends = draft.bidEndsAt!.getTime();
+  const fits = [
+    DEFAULTS.BID_TIMER_SECONDS,
+    DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
+  ].filter((s) => ends >= before + s * 1000 && ends <= after + s * 1000);
+  expect(fits, "the clock was set during this call").toHaveLength(1);
+  return fits[0];
+}
+
+/** The clock the committed lot SHOULD have, from its committed price and holder. */
+async function expectedClockFor(seasonId: string): Promise<number> {
+  const [draft, season, teams] = await Promise.all([
+    prisma.draft.findUniqueOrThrow({ where: { seasonId } }),
+    prisma.season.findUniqueOrThrow({ where: { id: seasonId } }),
+    prisma.team.findMany({
+      where: { seasonId },
+      include: { _count: { select: { members: true } } },
+    }),
+  ]);
+  return bidClockSeconds({
+    teams: teams.map((t) => ({
+      id: t.id,
+      budget: t.budget,
+      rosterCount: t._count.members,
+    })),
+    teamSize: season.teamSize,
+    price: draft.currentBid,
+    highBidderTeamId: draft.currentBidTeamId,
+  });
+}
+
+const FULL = DEFAULTS.BID_TIMER_SECONDS;
+const SHORT = DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS;
+
+describe("draft auction — the short clock when nobody else can bid", () => {
+  it("a nomination another team can top keeps the full clock", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    await startDraftState(season.id);
+
+    expect(
+      await clockSetBy(season.id, () =>
+        nominatePlayer(season.id, sessionFor(capA.user), star.id, 20),
+      ),
+    ).toBe(FULL);
+  });
+
+  it("a nomination no other team can top closes in seconds", async () => {
+    // B needs two players, so it keeps $1 back and can bid $9 at most.
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 10, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    await startDraftState(season.id);
+
+    expect(
+      await clockSetBy(season.id, () =>
+        nominatePlayer(season.id, sessionFor(capA.user), star.id, 20),
+      ),
+    ).toBe(SHORT);
+  });
+
+  it("a bid that leaves every rival priced out drops the clock; one they can answer keeps it", async () => {
+    // Caps (teamSize 3, $1 kept back for the second seat): A $9, B $99, C $29.
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 10, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const capC = await makeCaptain(season.id, "Captain C", 30, 2);
+    const star = await makePlayer(season.id, "Star", 5000);
+    await startDraftState(season.id);
+
+    expect(
+      await clockSetBy(season.id, () =>
+        nominatePlayer(season.id, sessionFor(capA.user), star.id, 1),
+      ),
+    ).toBe(FULL);
+    // C leads at $20: B can still go to $99.
+    expect(
+      await clockSetBy(season.id, async () => {
+        expect((await placeBid(season.id, sessionFor(capC.user), 20)).ok).toBe(
+          true,
+        );
+      }),
+    ).toBe(FULL);
+    // B leads at $30: A tops out at $9 and C at $29, so nothing is left to
+    // decide.
+    expect(
+      await clockSetBy(season.id, async () => {
+        expect((await placeBid(season.id, sessionFor(capB.user), 30)).ok).toBe(
+          true,
+        );
+      }),
+    ).toBe(SHORT);
+
+    // It is still an ordinary lot: it sells to B at $30 when the clock ends.
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+    const teamB = await prisma.team.findUniqueOrThrow({
+      where: { id: capB.team.id },
+      include: { members: true },
+    });
+    expect(teamB.budget).toBe(70);
+    expect(teamB.members.some((m) => m.userId === star.id)).toBe(true);
+  });
+
+  it("the auto-pick for an idle nominator gets the short clock when every other roster is full", async () => {
+    // Late in a draft: B is full, so only A still needs players.
+    const season = await makeSeason({ teamSize: 2 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    const bought = await makePlayer(season.id, "Bought", 3000);
+    await prisma.teamMember.create({
+      data: {
+        seasonId: season.id,
+        teamId: capB.team.id,
+        userId: bought.id,
+        isCaptain: false,
+        price: 5,
+      },
+    });
+    const last = await makePlayer(season.id, "Last", 2500);
+    await startDraftState(season.id);
+    await expireNominationClock(season.id);
+
+    expect(
+      await clockSetBy(season.id, async () => {
+        expect(await resolveStalledNomination(season.id)).toBe(true);
+      }),
+    ).toBe(SHORT);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatedUserId).toBe(last.id);
+    expect(draft.currentBidTeamId).toBe(capA.team.id);
+  });
+
+  it("resume puts the short clock back on a lot nobody else can top", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 10, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    const admin = sessionFor(await makeUser("Boss", "ADMIN"));
+    await startDraftState(season.id);
+
+    await nominatePlayer(season.id, sessionFor(capA.user), star.id, 20);
+    expect((await pauseDraft(season.id, admin)).ok).toBe(true);
+    expect(
+      await clockSetBy(season.id, async () => {
+        expect((await resumeDraft(season.id, admin)).ok).toBe(true);
+      }),
+    ).toBe(SHORT);
+  });
+
+  it("resume keeps the full clock on a lot another team can top", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    const admin = sessionFor(await makeUser("Boss", "ADMIN"));
+    await startDraftState(season.id);
+
+    await nominatePlayer(season.id, sessionFor(capA.user), star.id, 20);
+    expect((await pauseDraft(season.id, admin)).ok).toBe(true);
+    expect(
+      await clockSetBy(season.id, async () => {
+        expect((await resumeDraft(season.id, admin)).ok).toBe(true);
+      }),
+    ).toBe(FULL);
   });
 });
 
@@ -1081,6 +1378,100 @@ describe.skipIf(!ON_POSTGRES)(
           where: { seasonId: season.id, userId: next.id },
         }),
       ).toBe(0);
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// The short clock under real contention. Every writer of bidEndsAt computes it
+// from the price and high bidder it is about to write, and its guarded claim
+// re-asserts the lot it read — so whichever rival wins, the committed clock
+// must be the one computed for the committed lot. Promise.all, looped, and
+// the invariant asserted each round. Postgres-only: SQLite serializes the
+// callers, so there is no race to survive there (`npm run test:pg`).
+// ---------------------------------------------------------------------------
+describe.skipIf(!ON_POSTGRES)(
+  "bid clock — the committed clock matches the committed lot under contention",
+  () => {
+    it("racing bids: one that prices everyone out vs one a rival can answer", async () => {
+      for (let round = 0; round < 6; round++) {
+        await resetDb();
+        // Caps (teamSize 3, $1 kept back): A $9, B $99, C $29.
+        const season = await makeSeason({ teamSize: 3 });
+        const capA = await makeCaptain(season.id, `A${round}`, 10, 0);
+        const capB = await makeCaptain(season.id, `B${round}`, 100, 1);
+        const capC = await makeCaptain(season.id, `C${round}`, 30, 2);
+        const star = await makePlayer(season.id, `Star${round}`, 5000);
+        await startDraftState(season.id);
+        expect(
+          (await nominatePlayer(season.id, sessionFor(capA.user), star.id, 1))
+            .ok,
+        ).toBe(true);
+
+        // B at $40 leaves nobody able to top it (short clock); C at $20
+        // leaves B able to (full clock). C's bid can land first and then be
+        // topped, or lose to B's; either way the clock on the lot that
+        // stands must be the one computed for it.
+        const before = Date.now();
+        const res = await Promise.all([
+          placeBid(season.id, sessionFor(capB.user), 40),
+          placeBid(season.id, sessionFor(capC.user), 20),
+        ]);
+        const after = Date.now();
+        expect(res.some((r) => r.ok)).toBe(true);
+
+        const draft = await prisma.draft.findUniqueOrThrow({
+          where: { seasonId: season.id },
+        });
+        const expected = await expectedClockFor(season.id);
+        const ends = draft.bidEndsAt!.getTime();
+        expect(ends).toBeGreaterThanOrEqual(before + expected * 1000);
+        expect(ends).toBeLessThanOrEqual(after + expected * 1000);
+        // And the bid trail agrees with the lot: the standing bid is its top.
+        const top = await prisma.bid.findFirst({
+          where: { seasonId: season.id, userId: star.id },
+          orderBy: { amount: "desc" },
+        });
+        expect(top?.amount).toBe(draft.currentBid);
+        expect(top?.teamId).toBe(draft.currentBidTeamId);
+      }
+    });
+
+    it("racing openers: a captain's high nomination vs the auto-pick at the minimum", async () => {
+      for (let round = 0; round < 6; round++) {
+        await resetDb();
+        // A is on the clock with a $99 cap; B's cap is $29. A's own $50
+        // opener leaves B priced out (short clock); the auto-pick's $1 does
+        // not (full clock). Exactly one of them opens the lot.
+        const season = await makeSeason({ teamSize: 3 });
+        const capA = await makeCaptain(season.id, `A${round}`, 100, 0);
+        await makeCaptain(season.id, `B${round}`, 30, 1);
+        const chosen = await makePlayer(season.id, `Chosen${round}`, 3000);
+        await makePlayer(season.id, `Top${round}`, 5000);
+        await startDraftState(season.id);
+        await expireNominationClock(season.id);
+
+        const before = Date.now();
+        const [manual, auto] = await Promise.all([
+          nominatePlayer(season.id, sessionFor(capA.user), chosen.id, 50),
+          resolveStalledNomination(season.id),
+        ]);
+        const after = Date.now();
+        expect(Number(manual.ok) + Number(auto)).toBe(1);
+
+        const draft = await prisma.draft.findUniqueOrThrow({
+          where: { seasonId: season.id },
+        });
+        const expected = await expectedClockFor(season.id);
+        expect(expected).toBe(manual.ok ? SHORT : FULL);
+        const ends = draft.bidEndsAt!.getTime();
+        expect(ends).toBeGreaterThanOrEqual(before + expected * 1000);
+        expect(ends).toBeLessThanOrEqual(after + expected * 1000);
+        // One lot, one opening bid.
+        expect(await prisma.bid.count({ where: { seasonId: season.id } })).toBe(
+          1,
+        );
+      }
     });
   },
 );

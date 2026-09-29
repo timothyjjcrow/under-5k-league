@@ -4,7 +4,6 @@ import {
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
-  INHOUSE_BET_STATUS,
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -14,34 +13,48 @@ import {
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { databaseNow } from "./database-time";
-import { detectIntervalSeconds } from "./inhouse";
+import { draftReminderOpensAt, draftSetupOpen } from "./draft-setup";
+import { detectIntervalSeconds, inhouseDetectWindow } from "./inhouse";
 import { inhouseBoardNeedsSync } from "./inhouse-board-service";
 import { prisma } from "./prisma";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "./tiebreaker-format";
 import { singleEliminationPlan } from "./single-elimination";
 import {
   autoSyncClosesAt,
-  autoSyncIntervalSeconds,
   autoSyncOpensAt,
   leagueFallbackOpensAt,
-  minutesSinceAutoSyncOpen,
+  nextRosterScanAt,
 } from "./result-sync";
 import {
   ANNOUNCE_FAILED_PREFIX,
   CHAMPION_ANNOUNCED_PREFIX,
   championAnnouncedKey,
+  draftReminderKey,
   honorsAnnouncedKey,
+  PLAYOFF_ROUND_ANNOUNCED_PREFIX,
   RESULT_ANNOUNCED_PREFIX,
   resultAnnouncedKey,
+  resultNudgeKey,
   SETTING_KEYS,
   weekReminderKey,
 } from "./settings";
+import { matchResultsOpen } from "./league-lifecycle";
+import { resultNudgeDueAt, type NudgeFixture } from "./result-nudge";
 import {
   AUTOMATION_GATE_CACHE_KEY,
   AUTOMATION_GATE_HARD_HORIZON_MS,
   AUTOMATION_GATE_TAG,
   AUTOMATION_GATE_VERSION,
 } from "./automation-gate-constants";
+import {
+  ANNOUNCEMENT_CLAIM_PATTERN,
+  ANNOUNCEMENT_CLAIM_PREFIX,
+  HONORS_CLAIM_PATTERN,
+  HONORS_CLAIM_PREFIX,
+  HONORS_FAILED_PREFIX,
+  HONORS_STALE_PREFIX,
+} from "./announcement-marker";
+import { LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS } from "./league-announcement-outbox";
 
 export {
   AUTOMATION_GATE_CACHE_KEY,
@@ -50,21 +63,10 @@ export {
   AUTOMATION_GATE_VERSION,
 } from "./automation-gate-constants";
 
-const OUTBOX_CLAIM_LEASE_MS = 30_000;
+// Mirrors CLAIM_LEASE_MS in inhouse-announcement-outbox.ts, which does not
+// export it yet. Import it from there once it does, as the league lease is.
+const INHOUSE_OUTBOX_CLAIM_LEASE_MS = 30_000;
 const AUTOMATION_GATE_CLOCK_SKEW_MS = 60_000;
-const ANNOUNCEMENT_CLAIM_PREFIX = "claim:v2:";
-const HONORS_CLAIM_PREFIX = "claim:honors:";
-const HONORS_STALE_PREFIX = "stale:";
-const UUID =
-  "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const ANNOUNCEMENT_CLAIM_PATTERN = new RegExp(
-  `^claim:v2:(\\d{1,16}):${UUID}:${UUID}$`,
-  "i",
-);
-const HONORS_CLAIM_PATTERN = new RegExp(
-  `^claim:honors:v2:(\\d{1,16}):${UUID}:${UUID}:(?:initial|corrected)$`,
-  "i",
-);
 const PLAYOFF_SLOT_PATTERN = /^R(\d+)M(\d+)$/;
 
 export const AUTOMATION_GATE_REASONS = [
@@ -115,6 +117,10 @@ export type AutomationGateMatch = {
   winnerTeamId: string | null;
   homeTeamId: string;
   awayTeamId: string;
+  /** Keys the result nudge's once-per-kickoff marker. */
+  scheduleRevision: number;
+  /** Imported games; the loader fills them for unfinished fixtures only. */
+  games: NudgeFixture["games"];
 };
 
 export type AutomationGateSeason = {
@@ -122,6 +128,8 @@ export type AutomationGateSeason = {
   status: string;
   dotaLeagueId: string | null;
   championTeamId: string | null;
+  draftAt: Date | null;
+  draftRevision: number;
   draft: {
     status: string;
     bidEndsAt: Date | null;
@@ -150,15 +158,13 @@ export type AutomationGateInputs = {
     pickEndsAt: Date | null;
     startedAt: Date | null;
     detectedAt: Date | null;
-    updatedAt: Date;
-    betsCloseAt: Date | null;
+    createdAt: Date;
   }>;
   queue: Array<{
     joinedAt: Date;
     lastSeenAt: Date;
     idleExpiresAt: Date | null;
   }>;
-  unsettledBet: boolean;
   repairableInhouseResult: boolean;
   leagueOutbox: Array<{
     id: string;
@@ -181,7 +187,10 @@ export type AutomationGateInputs = {
    * timestamps are present. Other deadlines are application-owned.
    */
   outboxClock: { databaseNowMs: number; appNowMs: number };
-  /** Recoverable result/champion markers are global, including orphan rows. */
+  /**
+   * Recoverable result/champion/playoff-round markers are global, including
+   * orphan rows.
+   */
   globalAnnouncementMarkers: Array<{ key: string; value: string }>;
   /** Result of a fresh canonical board digest probe on cache fills. */
   boardNeedsSync: boolean;
@@ -228,33 +237,6 @@ function nextThrottleAt(
   return stampedAt === null ? 0 : stampedAt + intervalMs + 1;
 }
 
-function nextMatchScanAt(
-  scheduledAt: number,
-  autoSyncedAt: number,
-  attempts: number,
-  nowMs: number,
-): number {
-  const graceEndsAt =
-    autoSyncOpensAt(scheduledAt) + AUTO_SYNC.BACKOFF_GRACE_MINUTES * 60_000;
-  if (nowMs < graceEndsAt) {
-    const youngAt =
-      autoSyncedAt + autoSyncIntervalSeconds(attempts, 0) * 1_000 + 1;
-    // At graceEndsAt the service switches to its full backoff. If the young
-    // deadline has not become strictly claimable before that discontinuity,
-    // sleeping to it would wake the worker only to discover a longer delay.
-    if (youngAt < graceEndsAt) return youngAt;
-  }
-  return (
-    autoSyncedAt +
-    autoSyncIntervalSeconds(
-      attempts,
-      minutesSinceAutoSyncOpen(scheduledAt, Math.max(nowMs, graceEndsAt)),
-    ) *
-      1_000 +
-    1
-  );
-}
-
 function addCandidate(
   candidates: Candidate[],
   nowMs: number,
@@ -286,7 +268,7 @@ function honorsMarkerWakeAt(value: string | undefined, nowMs: number) {
   if (value === undefined) return nowMs;
   if (
     value.startsWith(HONORS_STALE_PREFIX) ||
-    value.startsWith(`${ANNOUNCE_FAILED_PREFIX}honors:`)
+    value.startsWith(HONORS_FAILED_PREFIX)
   ) {
     return nowMs;
   }
@@ -306,6 +288,7 @@ function outboxWakeAt(
   label: string,
   nowMs: number,
   outboxClock: AutomationGateInputs["outboxClock"],
+  claimLeaseMs: number,
 ): number {
   invariant(
     validTimestamp(outboxClock.databaseNowMs) &&
@@ -325,7 +308,7 @@ function outboxWakeAt(
   invariant(row.status === "SENDING", `${label}.status is unknown`);
   const claimedAt = optionalDateMs(row.claimedAt, `${label}.claimedAt`);
   invariant(claimedAt !== null, `${label} SENDING row has no claim`);
-  return appDeadline(claimedAt + OUTBOX_CLAIM_LEASE_MS + 1);
+  return appDeadline(claimedAt + claimLeaseMs + 1);
 }
 
 function latestPlayoffRound(matches: AutomationGateMatch[]) {
@@ -627,7 +610,7 @@ export function computeAutomationGateSnapshot(
       const matchThrottle =
         syncedAt === null
           ? 0
-          : nextMatchScanAt(
+          : nextRosterScanAt(
               scheduledAt,
               syncedAt,
               match.autoSyncAttempts,
@@ -697,51 +680,54 @@ export function computeAutomationGateSnapshot(
       const deadline = optionalDateMs(value, label);
       addCandidate(candidates, nowMs, deadline ?? nowMs, "INHOUSE");
     };
-    if (
-      (lobby.status === INHOUSE_STATUS.READY ||
-        lobby.status === INHOUSE_STATUS.IN_PROGRESS) &&
-      lobby.betsCloseAt
-    ) {
-      const betsCloseAt = dateMs(lobby.betsCloseAt, "lobby.betsCloseAt");
-      if (betsCloseAt > nowMs) {
-        addCandidate(candidates, nowMs, betsCloseAt, "INHOUSE");
-      }
-    }
     if (lobby.status === INHOUSE_STATUS.READY_CHECK) {
       lobbyDeadline(lobby.acceptEndsAt, "lobby.acceptEndsAt");
     } else if (lobby.status === INHOUSE_STATUS.CAPTAIN_VOTE) {
       lobbyDeadline(lobby.voteEndsAt, "lobby.voteEndsAt");
     } else if (lobby.status === INHOUSE_STATUS.DRAFTING) {
       lobbyDeadline(lobby.pickEndsAt, "lobby.pickEndsAt");
-    } else if (lobby.status === INHOUSE_STATUS.READY) {
-      const updatedAt = dateMs(lobby.updatedAt, "lobby.updatedAt");
-      addCandidate(
-        candidates,
-        nowMs,
-        updatedAt + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1,
-        "INHOUSE",
-      );
-    } else if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
+    } else {
+      // READY and IN_PROGRESS are both "being played": the result scan runs
+      // from either (Start is optional), on the clock inhouseDetectWindow
+      // picks, and each has an abandonment floor on the clock
+      // resolveAbandonedLobby reads — formation for READY, Start for
+      // IN_PROGRESS. The scan's clock can be formation for an IN_PROGRESS game
+      // too (a late Start), so the floor must not borrow `detect.clockMs`.
+      // Never `updatedAt`: every scan's detectedAt claim bumps it.
+      const createdAt = dateMs(lobby.createdAt, "lobby.createdAt");
       const startedAt = optionalDateMs(lobby.startedAt, "lobby.startedAt");
-      invariant(startedAt !== null, "in-progress lobby has no start time");
-      const detectOpensAt = startedAt + INHOUSE.DETECT_MIN_MINUTES * 60_000;
+      if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
+        invariant(startedAt !== null, "in-progress lobby has no start time");
+      }
+      const detect = inhouseDetectWindow({
+        status: lobby.status,
+        createdAtMs: createdAt,
+        startedAtMs: startedAt,
+      });
+      invariant(detect !== null, "playing lobby has no detection window");
       const detectedAt = optionalDateMs(lobby.detectedAt, "lobby.detectedAt");
       const detectAt =
-        nowMs < detectOpensAt
-          ? detectOpensAt
+        nowMs < detect.opensAtMs
+          ? detect.opensAtMs
           : detectedAt === null
             ? nowMs
-            : detectedAt + detectIntervalSeconds(nowMs - startedAt) * 1_000 + 1;
+            : detectedAt +
+              detectIntervalSeconds(nowMs - detect.clockMs) * 1_000 +
+              1;
       addCandidate(candidates, nowMs, detectAt, "INHOUSE");
       addCandidate(
         candidates,
         nowMs,
-        startedAt + INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 + 1,
+        lobby.status === INHOUSE_STATUS.READY
+          ? createdAt + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1
+          : (startedAt ?? createdAt) +
+              INHOUSE.ABANDON_IN_PROGRESS_HOURS * 3_600_000 +
+              1,
         "INHOUSE",
       );
     }
   }
-  if (inputs.unsettledBet || inputs.repairableInhouseResult) {
+  if (inputs.repairableInhouseResult) {
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
   }
 
@@ -752,6 +738,7 @@ export function computeAutomationGateSnapshot(
         "leagueOutbox",
         nowMs,
         inputs.outboxClock,
+        LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS,
       );
       dateMs(row.createdAt, "leagueOutbox.createdAt");
     }
@@ -769,6 +756,7 @@ export function computeAutomationGateSnapshot(
         "leagueOutbox",
         nowMs,
         inputs.outboxClock,
+        LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS,
       ),
       "LEAGUE_OUTBOX",
     );
@@ -795,6 +783,7 @@ export function computeAutomationGateSnapshot(
       "inhouseOutbox",
       nowMs,
       inputs.outboxClock,
+      INHOUSE_OUTBOX_CLAIM_LEASE_MS,
     );
     dateMs(row.createdAt, "inhouseOutbox.createdAt");
     const current = inhouseHeads.get(row.lobbyId);
@@ -819,6 +808,7 @@ export function computeAutomationGateSnapshot(
         "inhouseOutbox",
         nowMs,
         inputs.outboxClock,
+        INHOUSE_OUTBOX_CLAIM_LEASE_MS,
       ),
       "INHOUSE_OUTBOX",
     );
@@ -854,6 +844,73 @@ export function computeAutomationGateSnapshot(
     }
   }
 
+  // The draft-night reminder (maybeAnnounceDraftNight): wake when its window
+  // opens, then follow its per-revision marker like a week-reminder cluster.
+  // The window closes at draftAt itself, and only while setup is open.
+  if (
+    season &&
+    inputs.leagueWebhookConfigured &&
+    season.draftAt &&
+    draftSetupOpen(season.status, season.draft?.status)
+  ) {
+    invariant(
+      Number.isSafeInteger(season.draftRevision) && season.draftRevision >= 0,
+      "draft revision is invalid",
+    );
+    const draftAtMs = dateMs(season.draftAt, "season.draftAt");
+    const opensAt = draftReminderOpensAt(draftAtMs);
+    if (nowMs < opensAt) {
+      addCandidate(candidates, nowMs, opensAt, "REMINDER");
+    } else if (nowMs < draftAtMs) {
+      const markerAt = genericMarkerWakeAt(
+        inputs.settings[draftReminderKey(season.id, season.draftRevision)],
+        nowMs,
+      );
+      if (markerAt !== null && markerAt < draftAtMs) {
+        addCandidate(candidates, nowMs, markerAt, "REMINDER");
+      }
+    }
+  }
+
+  // The "we couldn't find your games" nudge (maybeNudgeMissingResults): wake
+  // when a fixture falls due, then follow its per-kickoff marker. Same rules
+  // as the worker (resultNudgeDueAt is what resultNudgeReason is built on), so
+  // the gate never wakes it for a nudge it would refuse. A preview cannot post,
+  // so it is not woken to fail.
+  if (
+    season &&
+    inputs.leagueDeliveryAvailable &&
+    (season.status === SEASON_STATUS.REGULAR_SEASON ||
+      season.status === SEASON_STATUS.PLAYOFFS)
+  ) {
+    for (const match of season.matches) {
+      if (!matchResultsOpen(season.status, match.phase)) continue;
+      invariant(Array.isArray(match.games), "match games are missing");
+      for (const game of match.games) {
+        invariant(
+          Number.isSafeInteger(game.startTime) &&
+            Number.isSafeInteger(game.durationSecs),
+          "game timing is invalid",
+        );
+        dateMs(game.fetchedAt, "game.fetchedAt");
+      }
+      const dueAt = resultNudgeDueAt(match, nowMs);
+      if (dueAt === null) continue;
+      invariant(
+        Number.isSafeInteger(match.scheduleRevision) &&
+          match.scheduleRevision >= 0,
+        "match schedule revision is invalid",
+      );
+      const markerAt = genericMarkerWakeAt(
+        inputs.settings[resultNudgeKey(match.id, match.scheduleRevision)],
+        nowMs,
+      );
+      if (markerAt !== null) {
+        addCandidate(candidates, nowMs, Math.max(dueAt, markerAt), "REMINDER");
+      }
+    }
+  }
+
   if (season?.status === SEASON_STATUS.REGULAR_SEASON &&
       tiebreakerNeedsAdvancement(season.matches)) {
     addCandidate(candidates, nowMs, nowMs, "TIEBREAKER_REPAIR");
@@ -884,15 +941,18 @@ export function computeAutomationGateSnapshot(
   for (const marker of inputs.globalAnnouncementMarkers) {
     invariant(
       marker.key.startsWith(RESULT_ANNOUNCED_PREFIX) ||
-        marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX),
+        marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) ||
+        marker.key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX),
       "global announcement marker has an unknown key",
     );
-    // Champion recovery deliberately preserves its marker while Discord is
-    // unavailable so the winner can still be announced after configuration
-    // returns. Retrying before then cannot make progress; the webhook mutation
-    // invalidates this gate, and the hard wake covers runtime env changes.
+    // Champion and playoff-round recovery deliberately preserve their marker
+    // while Discord is unavailable so the post can still go out after
+    // configuration returns. Retrying before then cannot make progress; the
+    // webhook mutation invalidates this gate, and the hard wake covers runtime
+    // env changes.
     if (
-      marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) &&
+      (marker.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) ||
+        marker.key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX)) &&
       !inputs.leagueDeliveryAvailable
     ) {
       continue;
@@ -1045,6 +1105,8 @@ export async function loadAutomationGateSnapshot(
         status: true,
         dotaLeagueId: true,
         championTeamId: true,
+        draftAt: true,
+        draftRevision: true,
         draft: {
           select: {
             status: true,
@@ -1066,6 +1128,12 @@ export async function loadAutomationGateSnapshot(
             winnerTeamId: true,
             homeTeamId: true,
             awayTeamId: true,
+            scheduleRevision: true,
+            // Only an unfinished fixture can still be nudged.
+            games: {
+              where: { match: { status: { not: MATCH_STATUS.COMPLETED } } },
+              select: { startTime: true, durationSecs: true, fetchedAt: true },
+            },
           },
         },
       },
@@ -1076,11 +1144,15 @@ export async function loadAutomationGateSnapshot(
   // Only these exact per-season markers can affect the calculator. Old
   // rescheduled kickoff markers and unrelated honors weeks are immutable
   // history, so fetching their entire prefixes grows work without changing
-  // any deadline. Global failed/claimed result and champion recovery remains
-  // below, including markers whose match or season was deleted.
+  // any deadline. Global failed/claimed result, champion and playoff-round
+  // recovery remains below, including markers whose match or season was
+  // deleted.
   const markerKeys = new Set<string>();
   if (season) {
     markerKeys.add(championAnnouncedKey(season.id));
+    if (season.draftAt && draftSetupOpen(season.status, season.draft?.status)) {
+      markerKeys.add(draftReminderKey(season.id, season.draftRevision));
+    }
     for (const match of season.matches) {
       if (match.status === MATCH_STATUS.COMPLETED) {
         markerKeys.add(resultAnnouncedKey(match.id));
@@ -1089,6 +1161,9 @@ export async function loadAutomationGateSnapshot(
         markerKeys.add(
           weekReminderKey(season.id, match.week, match.scheduledAt.getTime()),
         );
+      }
+      if (match.status !== MATCH_STATUS.COMPLETED && match.scheduledAt) {
+        markerKeys.add(resultNudgeKey(match.id, match.scheduleRevision));
       }
       if (match.phase === MATCH_PHASE.REGULAR) {
         markerKeys.add(honorsAnnouncedKey(season.id, match.week));
@@ -1099,7 +1174,6 @@ export async function loadAutomationGateSnapshot(
     settingRows,
     activeLobbies,
     queue,
-    unsettledBet,
     repairableInhouseResult,
     leagueOutbox,
     inhouseOutboxes,
@@ -1136,6 +1210,14 @@ export async function loadAutomationGateSnapshot(
             key: { startsWith: CHAMPION_ANNOUNCED_PREFIX },
             value: { startsWith: ANNOUNCEMENT_CLAIM_PREFIX },
           },
+          {
+            key: { startsWith: PLAYOFF_ROUND_ANNOUNCED_PREFIX },
+            value: { startsWith: ANNOUNCE_FAILED_PREFIX },
+          },
+          {
+            key: { startsWith: PLAYOFF_ROUND_ANNOUNCED_PREFIX },
+            value: { startsWith: ANNOUNCEMENT_CLAIM_PREFIX },
+          },
         ],
       },
       select: { key: true, value: true },
@@ -1151,8 +1233,7 @@ export async function loadAutomationGateSnapshot(
         pickEndsAt: true,
         startedAt: true,
         detectedAt: true,
-        updatedAt: true,
-        betsCloseAt: true,
+        createdAt: true,
       },
     }),
     prisma.inhouseQueueEntry.findMany({
@@ -1161,23 +1242,6 @@ export async function loadAutomationGateSnapshot(
         lastSeenAt: true,
         idleExpiresAt: true,
       },
-    }),
-    prisma.inhouseLobby.findFirst({
-      where: {
-        OR: [
-          {
-            betSettlement: INHOUSE_BET_STATUS.PENDING,
-            status: {
-              in: [INHOUSE_STATUS.COMPLETED, INHOUSE_STATUS.CANCELLED],
-            },
-          },
-          {
-            betSettlement: INHOUSE_BET_STATUS.SETTLED,
-            status: INHOUSE_STATUS.CANCELLED,
-          },
-        ],
-      },
-      select: { id: true },
     }),
     prisma.inhouseLobby.findFirst({
       where: {
@@ -1235,7 +1299,8 @@ export async function loadAutomationGateSnapshot(
   const globalAnnouncementMarkers = settingRows.filter(
     (row) =>
       (row.key.startsWith(RESULT_ANNOUNCED_PREFIX) ||
-        row.key.startsWith(CHAMPION_ANNOUNCED_PREFIX)) &&
+        row.key.startsWith(CHAMPION_ANNOUNCED_PREFIX) ||
+        row.key.startsWith(PLAYOFF_ROUND_ANNOUNCED_PREFIX)) &&
       (row.value.startsWith(ANNOUNCE_FAILED_PREFIX) ||
         row.value.startsWith(ANNOUNCEMENT_CLAIM_PREFIX)),
   );
@@ -1257,7 +1322,6 @@ export async function loadAutomationGateSnapshot(
         leagueWebhookConfigured && discordMutationsAllowed(),
       activeLobbies,
       queue,
-      unsettledBet: unsettledBet !== null,
       repairableInhouseResult: repairableInhouseResult !== null,
       leagueOutbox,
       inhouseOutboxes,

@@ -1,0 +1,105 @@
+# Decisions register
+
+One line per settled decision or deliberate deferral: when it was made, what
+was decided, why, and what would reopen it. Check here before proposing a
+change. If your idea is listed, bring the new evidence its "Revisit when" asks
+for, or ask Tim (the league owner).
+
+Keep it current. When a decision changes, edit its row and its date. When a
+deferral is done, move it to [Closed since](#closed-since) with what closed it.
+The longer reasoning lives in the linked docs, `CLAUDE.md` and the feature notes
+in `docs/features/`; where a note there disagrees with this list, this list is
+current.
+
+## Product decisions
+
+Tim's calls in the 2026-09-27 site review unless the date says otherwise. The
+usage figures are the US site's as of 2026-09-26.
+
+| Date | Decision | Reason | Revisit when |
+| --- | --- | --- | --- |
+| 2026-09-27 | **Scrims stay.** The booking flow was fixed instead: a booked scrim shows both captains, their Discord and who hosts, an open scrim's page has its own Join button, and pings go only to the captains who must act. | Tim's call. The review proposed retiring Scrims (2 scrims and no games recorded in its first six weeks). | Tim asks. |
+| 2026-09-27 | **Fantasy stays for good.** The nav and home show it only from the draft until rosters lock, and after the lock only to people who entered. `/fantasy` stays reachable by URL for everyone. | 3 of 95 users entered, so everyone else saw "Rosters locked" on every visit. The review proposed retiring it; Tim kept it. | Tim asks. Never retire it. |
+| 2026-09-27 | **Inhouses stay: nothing is removed except Cred betting, and bug fixes and improvements are fine.** No adoption features for now (no rally button, no plan-a-time), and the queue is not hidden or de-promoted. | Tim's call. There have been 2 lobbies and no completed games; the review proposed a retire checkpoint and several adoption features. | Tim asks. |
+| 2026-09-27 | **Cred betting is removed:** code, UI, copy, the Discord pot line, the admin card, the profile board and the tests. Its tables and bet columns stay, unused, as history (no destructive migration). | 1 bet ever and no completed games, while betting was the biggest block of new ideas on the inhouse screen, shown just when ten people need to get into Dota. | Only by Tim's decision. If it comes back, start from [the archived design](archive/inhouse-betting-design.md); its "rejected outright" list still holds: no odds, rake, house, MMR or Elo in the price, spectator bets, transfers, or Elo effect from stake size. |
+| 2026-09-27 | **The Discord inhouse queue board stays.** | Tim's call. The review proposed retiring it and its separate alerts channel (about 1,550 lines, and it has only ever shown an empty queue). | Tim asks. |
+| 2026-09-27 | **`/features` is replaced by a one-screen `/how-it-works` page** that shows the match night the admin set, not a built-in default. | The feature tour ran to about 9,700px on desktop and 17,800px on phones, with the join steps 15,500px down, and it showed a different match night from the one the admin set. | New visitors keep asking something the page doesn't answer. |
+| 2026-09-27 | **The inhouse captain vote stays, and "Best record" is fixed:** it ranks only players with at least one inhouse win, by record, and everyone else falls back to MMR. | Tim kept the vote (the review proposed always using the two highest-MMR players). Best record could make a 0-3 player captain over newcomers. | Tim asks. |
+| 2026-09-27 | **Captains can rename their own team all season,** once jersey previews follow the team id instead of its name. No approval step; the admin override stays; every rename is logged in the admin activity log and announced on Discord. | Admins renamed teams 12 times for 5 teams, typing names for captains. Jerseys were matched by name, so a rename silently dropped a team's jerseys. | A rename is abused. |
+| 2026-09-27 | **Leaders drops "Most wins", "Highest win rate" and the "Winningest player" highlight.** Kills and assists become per game with a 3-game minimum. "Most games" stays. | Wins and win rate mostly ranked a team's record, which the standings and Team of the Week already show, and season totals favoured players whose team played extra series. | Tim asks. |
+| 2026-09-27 | **Between seasons the league rests in "Season complete"; the offseason is skipped by default.** The next-season handoff card comes first on `/admin` once the season is complete, and the champion stays visible. The offseason (no active season) is kept only for cancelling an unfinished season and for reactivating an older one; for a long break, stay in Season complete and pin a news post. | Entering the offseason turned the finished league into empty pages: Players said "offseason", home dropped the champion, and old Leaders and Recap links landed on "No active season". | Tim asks. |
+| 2026-09-27 | **Power rankings stay, below the rosters on `/teams`.** | The card filled the top of `/teams` (about 470px on desktop and 1,050px on phones) above the rosters people open Teams for. The review proposed deleting it; Tim kept it. | Tim asks. |
+| 2026-09-26 | **The Playing lineups card is removed** from match pages. Its tables stay as history and nothing writes them; the season export and the postseason reset receipt still copy their rows. Dropping the tables is not decided. | Tim found it unnecessary. | Tim asks for lineups again. A drop needs its own row here, with the export and the reset receipt changed first. |
+| 2026-09-26 | **Don't add a step captains must confirm without asking Tim.** Captain flows stay low-friction, and captains' standin tools and check-ins must keep working. | The lineup card was such a step, and Tim removed it. | Tim asks. |
+
+## Deferred on purpose
+
+| Date | Not doing | Reason | Revisit when |
+| --- | --- | --- | --- |
+| 2026-09-27 | Retiring Scrims, or trimming its entry points and stat boards. | Tim keeps Scrims; fixing the booking flow was the change. | Tim asks. |
+| 2026-09-27 | A date to decide whether inhouse stays (a "retire checkpoint"). | Tim keeps inhouses. | Tim asks. |
+| 2026-09-27 | Inhouse adoption features: planning a game for a set time, and a rally ping or button when the first player queues. Plan-a-time was also deferred on 2026-09-24, as Stage 7 of the [league-upgrade plan](archive/LEAGUE-UPGRADE-IMPLEMENTATION.md). | Tim's call: no adoption features for now. | Tim asks. |
+| 2026-09-27 | Hiding or de-promoting the inhouse queue while nobody is queuing. | Tim's call: keep the queue where it is. | Tim asks. |
+| 2026-09-27 | Hiding Europe's inhouse until its league ticket is set. | Tim's call. The room already says tracked games start once the ticket is provided. | Europe players fill a queue before the ticket exists. |
+| 2026-09-27 | Retiring the Discord queue board and its separate alerts channel. | Kept; see Product decisions. | Tim asks. |
+| 2026-09-27 | Closing the August rollback window: one Dota-account column instead of the old and V2 columns, and one import-skip list. | It needs one reviewed data migration per league, after counting the manual Dota links in each database. | There is a maintenance release with room for those migrations. |
+| 2026-09-27 | Developing and testing on Postgres only, retiring the SQLite path. | Tim's call: not now. It changes every local and CI workflow. | Tim asks. The review suggested after a US season at the earliest. |
+| 2026-09-27 | Merging the two Discord retry systems (the exactly-once markers and the announcement queue). | Both work today, and merging needs raced Postgres tests before the old sweeps can go. | A bug is traced to the overlap. |
+| 2026-09-27 | Correcting a finished playoff series after its next-round fixture exists (the playoff correction lock). | Tim's call. Reset playoffs stays the repair, and it keeps the removed games' ids for re-import. | A wrong playoff result actually has to be fixed mid-bracket. |
+| 2026-09-24 | Stages 4 to 8 of the [September league-upgrade plan](archive/LEAGUE-UPGRADE-IMPLEMENTATION.md): standin requests and offers, deeper analysis, captain draft planning, scheduled inhouses and scrim RSVPs, and versioned side-game rules. | Deferred at Tim's request once Stages 1 to 3 shipped. | Tim asks. |
+| 2026-08-02 | A mid-series standin swap tool. | Removing a standin is refused once a series has games, and the copy says the remaining games record whoever actually plays. | A real season hits that emergency twice. |
+| 2026-08-02 | Letting a withdrawn team's rostered players stand in without being released. | `reinstateTeam` would bring back the double-agent hazard. Release them, then book them; the withdraw toast says so. | `reinstateTeam` changes. |
+| 2026-08-02 | Putting the standin MMR advisory in the Discord announcement. | It is a toast for the person booking only. | The other captain needs to see it too. |
+| 2026-08-02 | Auto-cancelling surplus standin bookings after a partial roster refill. | The signing toast reports the surplus, and the captain chooses which booking goes. | Captains ask for it. |
+| 2026-07-31 | An exclusion or ban layer (no inhouse queue ban, no points-dock tool). | Deferred until the league actually has a griefer. Standin removal, the urgent case, is fixed. | The league has a griefer. |
+| 2026-07-31 | A captain-initiated forfeit claim. | `Match.forfeit` exists, but only the admin `recordResult` sets it, so an admin rules on every forfeit. An open product question; nobody has asked for it. | Captains ask to concede a match themselves. |
+| 2026-07-31 | A player-visible rules page (series length, tiebreakers, forfeits, standin rules). | `/how-it-works` covers joining and match night only. An open product question; nobody has asked for it. | Players ask where the rules are written down. |
+| 2026-07-30 | Replacing raw status strings in `src/app` with `MATCH_STATUS` / `MATCH_PHASE` (the second half of refactor R29). | Three times the churn, in display code where a wrong string shows up on screen. | Someone is already editing those files. |
+| 2026-07-30 | Signing out one account's sessions. | The only revocation is the global session epoch (`src/lib/session-epoch.ts`), a break-glass that signs everyone out. | One account must be signed out without signing out everyone. |
+
+## Code and schema
+
+| Date | Decision | Reason | Revisit when |
+| --- | --- | --- | --- |
+| 2026-09-27 | **No unique constraint on `Team(seasonId, draftOrder)`.** | Duplicates can't reach a draft: `addCaptain` runs Serializable and takes one past the highest order, and `startDraft` refuses duplicates ("Two captains share the same draft order — randomize the order once, then start again."). The constraint would break `randomizeDraftOrder`, which rewrites orders one team at a time and would collide with itself mid-shuffle (`removeCaptain`'s renumbering has the same shape), and it would need a guarded migration in both leagues. | A duplicate order reaches a started draft. |
+
+## July 2026 refactor: rejected
+
+Carried from the "Rejected — decisions of record" section of
+[REFACTORING-2026-07.md](REFACTORING-2026-07.md) (2026-07-30), which has the
+full reasoning. "Blocks real work" means a concrete change is harder because of
+the current shape, not tidiness.
+
+| Date | Rejected | Reason | Revisit when |
+| --- | --- | --- | --- |
+| 2026-07-30 | Splitting `src/app/admin/page.tsx` into card components. | Already structured for its size (jump bar, anchors, disclosures). The July source-guard reason no longer holds. | It blocks real work. |
+| 2026-07-30 | Moving `getInhouseState`'s view assembly out of `inhouse-service.ts`. | No claims live there, but the assembly reads state threaded through the resolver chain; moving it means restructuring a 450-line function for looks. | It blocks real work. |
+| 2026-07-30 | Domain subfolders for `src/lib`. | A pure rename, and ratchet claim ids embed file paths. | Claim ids stop embedding paths. |
+| 2026-07-30 | One phase-label map for header, footer and dashboard. | The surfaces word the phase differently on purpose. Since 2026-09 the maps live together in `src/lib/season-copy.ts` and the public surfaces share `seasonPhaseLabel`; admin and history keep their own maps. | The surfaces should say the same thing. |
+| 2026-07-30 | Unifying `parseSlot` with `slotRound` / `slotIndex`. | They differ only on malformed slots, but unifying changes behaviour inside the claim-guarded playoff engine. | The playoff engine is rewritten. |
+| 2026-07-30 | A three-way return from `sendTo`. | About 28 call sites of churn; the pre-read pattern works and is tested at each marker-managing caller. | A caller can't be served by the pre-read. |
+| 2026-07-30 | Folding admin `recordResult`'s announcement into `announceSeriesResultOnce`. | An explicit admin save must announce even when the marker exists (corrections); the once-only claim would swallow them. | Admin corrections should stop announcing. |
+| 2026-07-30 | Fixing the first-user admin bootstrap race and the non-atomic `bumpSessionEpoch`. | Both failure modes are harmless by their own contracts, and the bootstrap is a local-development fallback only. | Either can cause harm in production. |
+| 2026-07-30 | Closing a `resolveCaptainVote` crash window. | Disproven: the claim and the captain installs share one transaction. | They are split. |
+| 2026-07-30 | Smaller items: a pot-aggregate helper, `potFrom`, the inhouse mention literal, a nav-config module, PlayerPool popstate, Playwright config dedup, schema-default and constants pairing, `/fantasy` lock-flag alignment, `InhouseCareerCard` caching, `pickSplit` and compare-page loads, layout query consolidation beyond `cache()`, and splitting `schedule.ts`. | Each has its reason in the July record. The Cred items are moot since betting was removed, and a nav module was built anyway on 2026-09-27 (`src/lib/site-nav.ts`) to give every page one name. | New evidence for a specific item. |
+
+## Closed since
+
+Deferrals that have been done. Don't cite them as open. Checked against the
+code on 2026-09-28.
+
+| Deferred | What | How it was closed |
+| --- | --- | --- |
+| 2026-07-30 | Splitting `src/app/actions/admin.ts` by domain (rejected in July). | Done 2026-09-28, once the file had grown to 61 actions and 38 ratchet claims and the baseline could carry moved claim ids through `renames`. It is split by job into `admin-season.ts`, `admin-captains-draft.ts`, `admin-roster.ts`, `admin-schedule-results.ts` and `admin-discord.ts`, with shared helpers in the non-server-action `admin-shared.ts`. |
+| 2026-07-30 | Splitting `src/app/page.tsx` per phase (rejected in July). | Done 2026-09-28: at 3,600 lines the file made every home change harder to review. `page.tsx` loads the data and picks the phase; the shared hero and one view file per phase live in `src/components/home/`, with `SeasonViewSkeleton` beside `SeasonView`, and the home source guards read the folder through `homePageSource()`. |
+| 2026-07-30 | `nominatePlayer`'s claim pinning the nominator's turn. | Its claim re-asserts `nominatorTeamId` and `nominationEndsAt` (2026-08-01). |
+| 2026-08-01 | Captain setup actions (add, remove, transfer, randomize order, draft settings) checked the draft status only before their transaction, so a concurrent Start draft could slip in. | Each re-reads the season and draft inside a Serializable transaction. |
+| 2026-08-01 | Two concurrent `addCaptain` calls could give two teams the same draft order. | `addCaptain` runs Serializable and `startDraft` refuses duplicates. The unique constraint was decided against (see Code and schema). |
+| 2026-08-01 | `setSeasonPhase` couldn't see a same-value DRAFT rival from `startDraft`. | `setSeasonPhase` re-judges the season and draft in one Serializable transaction. |
+| 2026-08-01 | `signFreeAgent` and `releasePlayer` checked "draft complete" only before their transaction, racing an Undo that reopens the draft. | Both re-read the draft status inside their Serializable transaction. |
+| 2026-07-31 | The champion announcement had no failure retry. | `retryFailedChampionAnnouncements` (`result-sync-service.ts`) retries it, as series results already were. |
+| 2026-07-31 | Fantasy and pick'em were keyed to the active season, so their final standings vanished once the next season began. | Both pages take `?season=` through `resolveSeasonScope`. |
+| 2026-07-31 | A Divine 3+ or Immortal medal learned after signup locked the admitted player's `/me` form. | `registrationGate` judges the medal only at admission; ACTIVE registrations are exempt. |
+| 2026-07-31 | `seasonScenarioReport` recomputed uncached on four hot pages. | `src/lib/stakes.ts` memoizes the report, keyed by the engine's inputs. |
+| 2026-07-31 | Syncing results from a Valve league id. | Built: `setLeagueId` stores the id and `syncLeagueGames` imports the feed. |
+| 2026-07-31 | Production deploy config (Postgres instead of SQLite, a real Steam key). | Production runs on Postgres (`npm run build:vercel`), and the environment check requires `STEAM_API_KEY`. |

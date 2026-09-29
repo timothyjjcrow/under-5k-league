@@ -170,3 +170,17 @@ export function clinchFromReport(
     [...report.teams.entries()].map(([teamId, s]) => [teamId, s.status]),
   );
 }
+
+/**
+ * Whether Home shows each team's playoff outlook yet. Before any
+ * regular-season series is final, every team reads "Playoff spot still
+ * open", seven times on one phone page, and that tells nobody anything.
+ */
+export function playoffOutlookShown(
+  matches: readonly Pick<StakesMatchRow, "phase" | "status">[],
+): boolean {
+  return matches.some(
+    (m) =>
+      m.phase === MATCH_PHASE.REGULAR && m.status === MATCH_STATUS.COMPLETED,
+  );
+}

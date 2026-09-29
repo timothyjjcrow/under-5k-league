@@ -8,7 +8,9 @@ import {
   validateFantasyPicks,
   pointsByPlayer,
   fantasyStandings,
+  impactPointsRule,
 } from "./fantasy";
+import { FANTASY } from "./constants";
 
 describe("fantasyPoints", () => {
   it("scores the common line plus only the strongest contribution bonus", () => {
@@ -39,6 +41,28 @@ describe("fantasyPoints", () => {
     const score = fantasyScore({ kills: 0, deaths: 0, assists: 0, gpm: 900, lastHits: 400, heroDamage: 80000, towerDamage: 12000 }, false);
     expect(score.bonus).toBe(8);
     expect(score.points).toBe(8);
+  });
+});
+
+describe("impactPointsRule", () => {
+  it("defines impact points in one plain line", () => {
+    expect(impactPointsRule()).toBe(
+      "+2 per kill, +2 per assist, \u22120.75 per death and +8 for a win, plus the best of a farm, playmaking or pressure bonus (up to +8) each game",
+    );
+  });
+
+  it("quotes the live scoring weights, so a reweight updates the copy", () => {
+    const rule = impactPointsRule();
+    expect(rule).toContain(`+${FANTASY.KILL} per kill`);
+    expect(rule).toContain(`+${FANTASY.ASSIST} per assist`);
+    expect(rule).toContain(`\u2212${Math.abs(FANTASY.DEATH)} per death`);
+    expect(rule).toContain(`+${FANTASY.WIN} for a win`);
+    expect(rule).toContain(`up to +${FANTASY.BONUS_CAP}`);
+    // And the base it describes is the base fantasyPoints actually scores:
+    // one kill, one assist, four deaths and a win, with no bonus stats.
+    expect(fantasyScore({ kills: 1, deaths: 4, assists: 1 }, true).base).toBe(
+      FANTASY.KILL + FANTASY.ASSIST + 4 * FANTASY.DEATH + FANTASY.WIN,
+    );
   });
 });
 

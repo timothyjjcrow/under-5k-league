@@ -28,17 +28,19 @@ import {
   resolveReadyCheck,
   resolveStalledPick,
 } from "./inhouse-service";
-import { resolveUnsettledBets } from "./inhouse-bet-service";
 import {
   CHAMPION_ANNOUNCED_PREFIX,
   championAnnouncedKey,
   claimThrottle,
   getSetting,
   HONORS_ANNOUNCED_PREFIX,
+  parsePlayoffRoundAnnouncedKey,
+  PLAYOFF_ROUND_ANNOUNCED_PREFIX,
   RESULT_ANNOUNCED_PREFIX,
   SETTING_KEYS,
 } from "./settings";
 import { advancePlayoffBracket, announceChampionOnce } from "./playoff-service";
+import { announcePlayoffRoundOnce } from "./playoff-round-announcement";
 import { advanceTiebreakerWeek } from "./tiebreaker-service";
 import { syncInhouseBoard } from "./inhouse-board-service";
 import {
@@ -57,8 +59,13 @@ import {
 import { getSeasonHonorReadiness } from "./honors-readiness-service";
 import { HONOR_WEEK_STATE } from "./honors-readiness";
 import { getActiveSeason, singleActiveSeason } from "./season";
-import { maybeAnnounceUpcomingWeek } from "./reminder-service";
+import {
+  maybeAnnounceDraftNight,
+  maybeAnnounceUpcomingWeek,
+} from "./reminder-service";
+import { maybeNudgeMissingResults } from "./result-nudge-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
+import { refreshPlayerDataAutomatically } from "./player-data-refresh";
 import { recoverableAnnouncementMarker } from "./announcement-marker";
 
 // Automatic result sync — the league updates itself instead of waiting on a
@@ -99,6 +106,12 @@ export type RunResultSyncOptions = {
   /** Absolute epoch-millisecond deadline supplied by the automation lease. */
   deadlineMs?: number;
   signal?: AbortSignal;
+  /**
+   * Finish with the hourly player data refresh (refreshPlayerDataAutomatically).
+   * Only the scheduled automation worker sets this; direct callers get result
+   * sync alone.
+   */
+  refreshPlayerData?: boolean;
 };
 
 const RESULT_SYNC_ISSUE = {
@@ -112,6 +125,7 @@ const RESULT_SYNC_ISSUE = {
   NOTIFICATIONS: "NOTIFICATION_RETRY_FAILED",
   OUTBOX: "LEAGUE_NOTIFICATION_DELIVERY_FAILED",
   CURSOR: "CURSOR_READ_FAILED",
+  PLAYER_DATA: "PLAYER_DATA_REFRESH_FAILED",
 } as const;
 
 const RESULT_SYNC_SKIPPED = {
@@ -462,32 +476,10 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
     prisma.inhouseQueueEntry.count(),
   ]);
 
-  // Settle/refund any stranded pot BEFORE the early return below — deliberately
-  // not down in the resolver chain past it, and for exactly the reason the board
-  // repaint inside that branch exists. "No lobby, empty queue" is not a quiet
-  // state for money: it is the state a pot gets stranded in. The request that
-  // won the COMPLETED claim can die before the payout, and every result path
-  // requires IN_PROGRESS, so nothing re-triggers it; meanwhile the ten who
-  // played have closed their tabs and the room has nobody polling it. Below the
-  // early return this sweep would first run whenever the NEXT lobby forms —
-  // hours or days of a debited stake with no outcome, on the one feature where
-  // "it caught up eventually" is not an acceptable answer.
-  //
-  // Wrapped, alone among the resolvers: the shared automation worker executes
-  // this chain, so a bug in a play-money feature must never
-  // be able to stop ten people playing Dota (or a league match importing).
-  if (canStartWork(options)) {
-    try {
-      await resolveUnsettledBets();
-    } catch (e) {
-      logStepFailure("inhouse-bet-sweep", e);
-    }
-  }
-
   // Repair the crash window from releases that committed COMPLETED before the
-  // durable outbox row existed. Bet settlement runs first because the rebuilt
-  // message includes its persisted receipt. Both repairs are best-effort; no
-  // notification plumbing may block live lobby state progression.
+  // durable outbox row existed. Best-effort: no notification plumbing may
+  // block live lobby state progression. It runs before the early return below
+  // because a finished game with nobody queued is exactly the state it repairs.
   if (canStartWork(options)) {
     try {
       const repaired = await reconcileMissingInhouseResultAnnouncements({
@@ -625,12 +617,6 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
   // five minutes behind on exactly the stretch that decides whether a game
   // happens. Present-only so a ghost row can't hold every client at the fast
   // cadence until the 180s prune catches it.
-  //
-  // An open BETTING window needs no clause of its own: `betsCloseAt` is stamped
-  // only on the DRAFTING→READY transition, and READY is one of
-  // INHOUSE_ACTIVE_STATUSES — so `stillActive` already pins every client to the
-  // fast cadence for the whole 45 seconds and beyond. A `betsCloseAt > now`
-  // test here would be dead code wearing the look of a live guard.
   return {
     recorded,
     watch: !!stillActive || present > 0 || announcementsPending,
@@ -904,6 +890,10 @@ async function retryFailedAnnouncements(
   if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
     return { deadlineReached: true };
   }
+  await retryFailedPlayoffRoundAnnouncement(options);
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    return { deadlineReached: true };
+  }
   await retryPendingHonorAnnouncements({
     limit: 1,
     shouldContinue: () => canStartWork(options, MIN_DISCORD_STEP_MS),
@@ -1016,6 +1006,31 @@ async function retryFailedChampionAnnouncements(
       await announceChampionOnce(activeChampion.id);
     }
   }
+}
+
+/**
+ * A "next playoff round is set" post whose send could not be queued, or whose
+ * claim outlived a crashed worker. One per pass; announcePlayoffRoundOnce
+ * re-checks the round and drops the marker when there is nothing left to say
+ * (the round was reset away or played out), so a stale marker cannot be
+ * retried forever.
+ */
+async function retryFailedPlayoffRoundAnnouncement(
+  options: RunResultSyncOptions,
+): Promise<void> {
+  const pending = await nextRecoverableMarker(
+    PLAYOFF_ROUND_ANNOUNCED_PREFIX,
+    Date.now(),
+  );
+  if (!pending || !canStartWork(options, MIN_DISCORD_STEP_MS)) return;
+  const target = parsePlayoffRoundAnnouncedKey(pending.key);
+  if (!target) {
+    await prisma.setting.deleteMany({
+      where: { key: pending.key, value: pending.value },
+    });
+    return;
+  }
+  await announcePlayoffRoundOnce(target.seasonId, target.round);
 }
 
 /**
@@ -1155,6 +1170,36 @@ export async function runResultSync(
     }
   }
 
+  // The draft-night reminder is phase-disjoint from the week reminder above
+  // (setup phases vs REGULAR_SEASON/PLAYOFFS), so at most one of them does any
+  // work in a run; it still gets its own budget check and failure isolation.
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    skipped.push(RESULT_SYNC_SKIPPED.REMINDER);
+  } else {
+    try {
+      const season = await getActiveSeason();
+      if (season) await maybeAnnounceDraftNight(season);
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.REMINDER);
+      logStepFailure("draft-reminder", error);
+    }
+  }
+
+  // After this run's own imports, so a series the league step just finished
+  // is judged on what it found rather than nudged about.
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    skipped.push(RESULT_SYNC_SKIPPED.REMINDER);
+  } else {
+    try {
+      await maybeNudgeMissingResults({
+        shouldContinue: () => canStartWork(options, MIN_DISCORD_STEP_MS),
+      });
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.REMINDER);
+      logStepFailure("result-nudge", error);
+    }
+  }
+
   if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
     skipped.push(RESULT_SYNC_SKIPPED.NOTIFICATIONS);
   } else {
@@ -1177,6 +1222,24 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.NOTIFICATIONS);
       logStepFailure("notifications", error);
+    }
+  }
+
+  // Lowest priority, last: the hourly player data refresh (medals, scouting
+  // stats, Steam names, report-card backfill). It shares OpenDota's budget
+  // with result sync, so it waits while result sync is watching a match or
+  // lobby. It throttles and times itself: not running, running short or
+  // backing off after a rate limit is normal, never a skipped step. Only an
+  // unexpected failure is reported.
+  if (
+    options.refreshPlayerData &&
+    !(league.watch || inhouse.watch || draft.watch)
+  ) {
+    try {
+      await refreshPlayerDataAutomatically(options);
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.PLAYER_DATA);
+      logStepFailure("player-data", error);
     }
   }
 

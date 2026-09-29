@@ -1,3 +1,5 @@
+import { AUTO_SYNC } from "./constants";
+
 /**
  * Match-night hosting copy, built from the league's own settings so it can't
  * drift from the rules it describes.
@@ -22,14 +24,20 @@ export const MISSING_LEAGUE_TICKET_WARNING =
   "This season has no Dota league ticket. Valve needs about 15 days to issue one; without it, league games may not reach OpenDota and results can't be imported.";
 
 /**
- * The ticketless season's note under "How to host": why the result may not
- * import by itself, pointing at the Report your result card, whose subtitle
- * (NO_TICKET_REPORT_SUBTITLE) says what to do. Each step is said once. Never
- * "make your match history public" — that is not enough for a private lobby
- * without a ticket.
+ * Why a ticketless season's result may not import by itself. The match page
+ * says it under "How to host" (NO_TICKET_RESULT_NOTE); How it works says it
+ * away from any match. Never "make your match history public" — that is not
+ * enough for a private lobby without a ticket.
  */
-export const NO_TICKET_RESULT_NOTE =
-  "This season has no league ticket yet, so your result may not appear on its own. If it doesn't, add it in Report your result below.";
+export const NO_TICKET_RESULT_LEAD =
+  "This season has no league ticket yet, so your result may not appear on its own.";
+
+/**
+ * The ticketless season's note under "How to host": NO_TICKET_RESULT_LEAD,
+ * pointing at the Report your result card, whose subtitle
+ * (NO_TICKET_REPORT_SUBTITLE) says what to do. Each step is said once.
+ */
+export const NO_TICKET_RESULT_NOTE = `${NO_TICKET_RESULT_LEAD} If it doesn't, add it in Report your result below.`;
 
 /**
  * The Report your result card on a ticketless season: paste the match ID or
@@ -73,4 +81,60 @@ export function howToHostParts({
     mode,
     seriesLobbyRule(bestOf),
   ];
+}
+
+/**
+ * The ticketed season's result-card copy, built from AUTO_SYNC so it can't
+ * drift from what result sync actually does. `lead` says when a game shows
+ * up by itself; `recovery` is the one place the wrong-ticket advice is given
+ * (the lobby checklist no longer repeats it).
+ *
+ * Timings are counted from the SCHEDULED kickoff, not from a game's end: the
+ * league feed is first read MIN_MINUTES_AFTER_KICKOFF after kickoff and then
+ * about every LEAGUE_INTERVAL_SECONDS. Roster scanning of the players' own
+ * match histories starts LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF after kickoff,
+ * or at once in a series that already has a game.
+ */
+export function leagueResultCopy(opts: { live: boolean }): {
+  lead: string;
+  recovery: string;
+} {
+  const every = Math.round(AUTO_SYNC.LEAGUE_INTERVAL_SECONDS / 60);
+  const fallbackHours = Math.round(
+    AUTO_SYNC.LEAGUE_FALLBACK_MINUTES_AFTER_KICKOFF / 60,
+  );
+  const sooner =
+    "To add a game sooner, press Auto-fetch games or paste its Dota match ID.";
+  if (opts.live) {
+    return {
+      lead: `The next game shows up here by itself a few minutes after it ends; the league feed is checked about every ${every} minutes.`,
+      recovery: `If the next lobby used the wrong ticket, we also look through the players' own recent matches. ${sooner}`,
+    };
+  }
+  return {
+    lead: `Games show up here by themselves: from ${AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF} minutes after kickoff the league feed is checked about every ${every} minutes, so a game usually appears a few minutes after it ends.`,
+    recovery: `If a lobby used the wrong ticket, we look through the players' own recent matches ${fallbackHours} ${fallbackHours === 1 ? "hour" : "hours"} after kickoff. ${sooner}`,
+  };
+}
+
+/**
+ * The last sentence of the match page's "Waiting for the result" strip, shown
+ * once kickoff has passed with no game recorded. Only a ticketed season can
+ * say results usually arrive by themselves: without a ticket a private lobby
+ * may never reach OpenDota (NO_TICKET_RESULT_NOTE), so the strip must not
+ * promise it, and a captain adds the result from this page. A captain is
+ * pointed at their own tools; everyone else is told who can fix it.
+ */
+export function waitingForResultNote(opts: {
+  hasLeagueTicket: boolean;
+  viewerIsCaptain: boolean;
+}): string {
+  if (opts.hasLeagueTicket) {
+    return opts.viewerIsCaptain
+      ? "Results usually appear here on their own; if one doesn't, add it in Captain tools below."
+      : "Results usually appear here on their own; if one doesn't, a captain can add it from this page.";
+  }
+  return opts.viewerIsCaptain
+    ? "This season has no league ticket, so add the result in Captain tools below."
+    : "This season has no league ticket, so a captain adds the result from this page.";
 }

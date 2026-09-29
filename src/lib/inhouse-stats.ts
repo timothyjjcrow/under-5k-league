@@ -186,3 +186,190 @@ export function rankInhouse(rows: InhouseRecord[]): RankedInhouse {
     provisional: rows.filter((r) => r.games < PROVISIONAL_GAMES),
   };
 }
+
+// ---------- The monthly form ladder ----------
+//
+// Career Elo is path-dependent from game one, so a newcomer can never catch a
+// veteran on it. The month board is the race anyone can win: RECORD over the
+// current calendar month (on the league's clock), reset on the 1st. It runs no
+// Elo of its own. The net swing is the SUM of the per-lobby `eloDeltas` that
+// finalization stamped, i.e. exactly what each post-game banner showed. That
+// is a fact about the moment each game finished: a later void of an EARLIER
+// game recomputes the career ladder but never restates those stamps.
+
+/** Games in the month before a player gets a rank on the monthly board. */
+export const MONTH_MIN_GAMES = 3;
+
+/**
+ * Parse a stored `InhouseLobby.eloDeltas` JSON map (userId → Elo swing).
+ * Anything that isn't a finite number is dropped rather than trusted, and
+ * unreadable JSON is an empty map: a missing swing must read as MISSING, not
+ * as a zero.
+ */
+export function parseEloDeltas(
+  json: string | null | undefined,
+): Record<string, number> {
+  try {
+    const value: unknown = JSON.parse(json ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === "number" && Number.isFinite(entry[1]),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export type MonthLobby = {
+  id: string;
+  winnerTeam: number | null;
+  /** The immutable result clock. null = pre-completedAt history (never counts). */
+  completedAt: Date | number | null;
+  /** Parsed `eloDeltas` (see parseEloDeltas). */
+  eloDeltas: Record<string, number>;
+  players: FinishedLobby["players"];
+};
+
+/** Map a prisma lobby row into a MonthLobby (the toFinishedLobby pattern). */
+export function toMonthLobby(l: {
+  id: string;
+  winnerTeam: number | null;
+  completedAt: Date | null;
+  eloDeltas: string;
+  players: {
+    userId: string;
+    team: number | null;
+    user: { name: string; avatar: string | null };
+  }[];
+}): MonthLobby {
+  return {
+    id: l.id,
+    winnerTeam: l.winnerTeam,
+    completedAt: l.completedAt,
+    eloDeltas: parseEloDeltas(l.eloDeltas),
+    players: l.players.map((p) => ({
+      userId: p.userId,
+      name: p.user.name,
+      avatar: p.user.avatar,
+      team: p.team,
+    })),
+  };
+}
+
+export type InhouseMonthRecord = {
+  userId: string;
+  name: string;
+  avatar: string | null;
+  games: number;
+  wins: number;
+  losses: number;
+  winRate: number; // 0..1
+  /**
+   * Summed stored Elo swings over the month's games. null when ANY counted
+   * game has no swing recorded for this player (a finalization that never
+   * stamped): a partial sum would read as the whole month.
+   */
+  eloNet: number | null;
+};
+
+export type InhouseMonthBoard = {
+  /** >= MONTH_MIN_GAMES this month, board order — rank = index+1. */
+  ranked: InhouseMonthRecord[];
+  /** Under the floor: listed after the ranked block, never ranked. */
+  unranked: InhouseMonthRecord[];
+  /** Lobbies that counted (completed in the window, with a winner). */
+  games: number;
+};
+
+/**
+ * Wins, then win rate, then games, then userId: a TOTAL order, so two players
+ * on an identical record never swap places between renders.
+ */
+function compareMonth(a: InhouseMonthRecord, b: InhouseMonthRecord): number {
+  return (
+    b.wins - a.wins ||
+    b.winRate - a.winRate ||
+    b.games - a.games ||
+    (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)
+  );
+}
+
+/**
+ * Roll the lobbies that COMPLETED inside [startMs, endMs) into the monthly
+ * board. Same counting rules as summarizeInhouse (a reported winner, players
+ * with an assigned side), keyed on `completedAt` because a month is about when
+ * results landed, never `createdAt` (formation) or `updatedAt` (the settlement
+ * retry cursor).
+ */
+export function summarizeInhouseMonth(
+  lobbies: MonthLobby[],
+  window: { startMs: number; endMs: number },
+): InhouseMonthBoard {
+  const inWindow = lobbies
+    .flatMap((l) => {
+      if (l.completedAt == null) return [];
+      const at = toMs(l.completedAt);
+      return at >= window.startMs && at < window.endMs ? [{ l, at }] : [];
+    })
+    // Oldest first, so the freshest display name wins (summarizeInhouse's rule).
+    .sort((a, b) => a.at - b.at || (a.l.id < b.l.id ? -1 : 1))
+    .map(({ l }) => l);
+
+  type Acc = Omit<InhouseMonthRecord, "winRate" | "eloNet"> & {
+    eloNet: number;
+    eloKnown: boolean;
+  };
+  const byUser = new Map<string, Acc>();
+  let games = 0;
+
+  for (const lobby of inWindow) {
+    if (lobby.winnerTeam !== 1 && lobby.winnerTeam !== 2) continue;
+    games += 1;
+    for (const pl of lobby.players) {
+      if (pl.team !== 1 && pl.team !== 2) continue;
+      const rec =
+        byUser.get(pl.userId) ??
+        ({
+          userId: pl.userId,
+          name: pl.name,
+          avatar: pl.avatar,
+          games: 0,
+          wins: 0,
+          losses: 0,
+          eloNet: 0,
+          eloKnown: true,
+        } satisfies Acc);
+      rec.name = pl.name;
+      rec.avatar = pl.avatar;
+      rec.games += 1;
+      if (pl.team === lobby.winnerTeam) rec.wins += 1;
+      else rec.losses += 1;
+      const swing = lobby.eloDeltas[pl.userId];
+      if (typeof swing === "number" && Number.isFinite(swing)) {
+        rec.eloNet += swing;
+      } else {
+        rec.eloKnown = false;
+      }
+      byUser.set(pl.userId, rec);
+    }
+  }
+
+  const rows = [...byUser.values()]
+    .map(
+      ({ eloKnown, eloNet, ...r }): InhouseMonthRecord => ({
+        ...r,
+        winRate: r.games > 0 ? r.wins / r.games : 0,
+        eloNet: eloKnown ? Math.round(eloNet) : null,
+      }),
+    )
+    .sort(compareMonth);
+
+  return {
+    ranked: rows.filter((r) => r.games >= MONTH_MIN_GAMES),
+    unranked: rows.filter((r) => r.games < MONTH_MIN_GAMES),
+    games,
+  };
+}
