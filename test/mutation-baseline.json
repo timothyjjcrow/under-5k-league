@@ -1,6 +1,6 @@
 {
-  "note": "Exact guarded-claim inventory. Stages 1–3 update retains the previously measured baseline and adds PostgreSQL sabotage evidence for all 27 new/renamed claims plus the result-sync ordinal rebind; new kills were confirmed twice. Reviewed equivalents retain their source justifications. Full CI re-mutates every protected claim in four shards; focused local probes do not claim a fresh full-sweep verification. Claim ids are anchored to the top-level declaration read from the TypeScript syntax tree (2026-09-28): 14 ids whose old regex anchor was a comment word or an inner helper were renamed with their classification unchanged; every other id is byte-identical. The admin actions file was split by job (2026-09-28): its 38 claim ids moved to src/app/actions/admin-{season,captains-draft,roster,schedule-results}.ts through the renames map, predicates and ordinals unchanged; the next full --discover folds them into the lists.",
-  "totalClaims": 174,
+  "note": "Exact guarded-claim inventory. Stages 1–3 update retains the previously measured baseline and adds PostgreSQL sabotage evidence for all 27 new/renamed claims plus the result-sync ordinal rebind; new kills were confirmed twice. Reviewed equivalents retain their source justifications. Full CI re-mutates every protected claim in four shards; focused local probes do not claim a fresh full-sweep verification. Claim ids are anchored to the top-level declaration read from the TypeScript syntax tree (2026-09-28): 14 ids whose old regex anchor was a comment word or an inner helper were renamed with their classification unchanged; every other id is byte-identical. The admin actions file was split by job (2026-09-28): its 38 claim ids moved to src/app/actions/admin-{season,captains-draft,roster,schedule-results}.ts through the renames map, predicates and ordinals unchanged; the next full --discover folds them into the lists. The check-in reminder expiry in invalidateMatchNudges (2026-09-29) is protected: its blind-write mutant expires another fixture's queued reminder, which checkin-nudge.itest.ts catches on SQLite; it has not yet been measured by a full PostgreSQL sweep.",
+  "totalClaims": 175,
   "equivalent": [
     "src/app/actions/admin.ts::archiveIncompleteSeasonAction::isActive+status+updatedAt#1",
     "src/app/actions/admin.ts::changeCaptain::captainId+season#1",
@@ -98,6 +98,7 @@
     "src/app/actions/registration.ts::updateDotaAccount::rankTierManual#3",
     "src/app/api/dota-lobby/route.ts::POST::status#1",
     "src/lib/announcement-marker.ts::claimAnnouncementMarker::value#1",
+    "src/lib/announcement-marker.ts::invalidateMatchNudges::dedupeKey+status#1",
     "src/lib/announcement-marker.ts::markAnnouncementFailed::value#1",
     "src/lib/announcement-marker.ts::markAnnouncementSent::value#1",
     "src/lib/automation-service.ts::acquireAutomationLease::lastStatus#1",

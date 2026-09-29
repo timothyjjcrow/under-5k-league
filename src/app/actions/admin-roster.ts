@@ -59,7 +59,7 @@ import {
 import { maybeAnnounceWeekHonors } from "@/lib/honors-service";
 import {
   invalidatePendingAnnouncementMarkers,
-  invalidateResultNudges,
+  invalidateMatchNudges,
 } from "@/lib/announcement-marker";
 import {
   medalProvesIneligible,
@@ -1542,7 +1542,7 @@ export async function withdrawTeam(
                 ),
               );
             }
-            await invalidateResultNudges(tx, match.id);
+            await invalidateMatchNudges(tx, match.id);
             // The single team-withdrawal broadcast replaces noisy per-series
             // result posts. Persist that decision with the result so generic
             // completedAt crash recovery cannot replay these ruled fixtures;

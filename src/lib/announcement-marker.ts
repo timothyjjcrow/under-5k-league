@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { ANNOUNCE_FAILED_PREFIX, resultNudgePrefix } from "./settings";
 import { raceHook } from "./race-hook";
+import { checkinNudgeAnnouncementGroup } from "./availability";
 
 // ---------------------------------------------------------------------------
 // Marker VALUE formats. These strings are stored in production databases, so
@@ -162,19 +163,34 @@ export async function invalidatePendingAnnouncementMarkers(
 }
 
 /**
- * A queued "we couldn't find your games" nudge (result-nudge-service) speaks
- * for the fixture as it stood when it was queued. Once a game or a result
- * lands, or the fixture moves to another kickoff, a nudge still waiting in the
- * outbox would ask the captains for work they already did, or about a night
- * nobody is playing. Call this inside the result or retime transaction: the
- * queued post then fails its outbox source check and is dropped. A nudge that
- * was already delivered stays recorded, so the same kickoff is never nudged
- * twice.
+ * A queued nudge speaks for the fixture as it stood when it was queued: the
+ * "we couldn't find your games" nudge (result-nudge-service) and a captain's
+ * check-in reminder (checkin-nudge-service). Once a game or a result lands,
+ * or the fixture moves to another kickoff, a nudge still waiting in the
+ * outbox would ask for work already done, or about a night nobody is
+ * playing. Call this inside the result, retime or forfeit transaction:
+ *
+ * - a queued result nudge then fails its outbox source check and is dropped.
+ *   One that was already delivered stays recorded, so the same kickoff is
+ *   never nudged twice.
+ * - a queued check-in reminder is expired, so the next delivery pass drops
+ *   it (a post already mid-send may still go out). Its throttle is keyed by
+ *   schedule revision, so a retime already gives the captain a new window.
  */
-export function invalidateResultNudges(
+export async function invalidateMatchNudges(
   tx: Pick<Prisma.TransactionClient, "setting" | "leagueAnnouncement">,
   matchId: string,
 ): Promise<number> {
+  // The epoch, not this server's clock: the outbox compares against the
+  // database clock, and a server running ahead of it must not leave the
+  // reminder deliverable for a few more seconds.
+  await tx.leagueAnnouncement.updateMany({
+    where: {
+      dedupeKey: { startsWith: checkinNudgeAnnouncementGroup(matchId) },
+      status: { in: NON_TERMINAL_ANNOUNCEMENT_STATUSES },
+    },
+    data: { expiresAt: new Date(0) },
+  });
   return invalidatePendingAnnouncementMarkers(tx, resultNudgePrefix(matchId), {
     prefix: true,
   });

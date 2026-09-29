@@ -7,6 +7,8 @@ import {
 import {
   CHECKIN_REFUSAL_MESSAGE,
   checkinClosedReason,
+  checkinNudgeAnnouncementGroup,
+  checkinNudgeExpiresAt,
   checkinNudgeKey,
   teamAvailability,
 } from "./availability";
@@ -35,7 +37,10 @@ import { claimThrottle } from "./settings";
 // other check so a refused attempt never burns it, and released only if the
 // post could not be queued. sendDiscordMessage is durable: once the post is
 // queued it returns true whatever Discord answers, and the outbox retries it,
-// so a Discord outage keeps the window and the post goes out late.
+// so a Discord outage keeps the window and the post goes out late. Not too
+// late: it is dropped at kickoff (an hour after a reminder sent past kickoff,
+// checkinNudgeExpiresAt), or as soon as the kickoff moves or a result lands
+// (those transactions expire checkinNudgeAnnouncementGroup).
 
 export type CheckinNudgeResult =
   | {
@@ -180,6 +185,14 @@ export async function sendCheckinNudge(opts: {
     sent = await sendDiscordMessage(
       announcement.content,
       mentionsOf(announcement.mentionUserIds),
+      {
+        // checkinClosedReason already refused a match with no kickoff.
+        expiresAt: checkinNudgeExpiresAt(
+          match.scheduledAt?.getTime() ?? nowMs,
+          nowMs,
+        ),
+        expiryGroup: checkinNudgeAnnouncementGroup(match.id),
+      },
     );
   } finally {
     if (!sent) {

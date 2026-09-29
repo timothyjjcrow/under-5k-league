@@ -3,6 +3,8 @@ import {
   CHECKIN_REFUSAL,
   CHECKIN_REFUSAL_MESSAGE,
   checkinClosedReason,
+  checkinNudgeAnnouncementGroup,
+  checkinNudgeExpiresAt,
   matchNightRoster,
   outPingThrottleKey,
   parseAvailabilityStatus,
@@ -272,5 +274,39 @@ describe("outPingThrottleKey", () => {
   it("is the one key both the single OUT and an away range claim", () => {
     // Changing it strands every live throttle row and lets one OUT ping twice.
     expect(outPingThrottleKey("m1", "u1")).toBe("outPing:m1:u1");
+  });
+});
+
+describe("checkinNudgeExpiresAt", () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.UTC(2026, 9, 1, 18, 0);
+
+  it("drops a queued reminder at kickoff", () => {
+    const kickoff = now + 26 * HOUR;
+    expect(checkinNudgeExpiresAt(kickoff, now).getTime()).toBe(kickoff);
+  });
+
+  it("still gives a reminder sent near or after kickoff an hour", () => {
+    // Check-in stays open after kickoff for a late lobby; a reminder sent then
+    // must get a delivery attempt, not be dropped before its first one.
+    expect(checkinNudgeExpiresAt(now + 10 * 60 * 1000, now).getTime()).toBe(
+      now + HOUR,
+    );
+    expect(checkinNudgeExpiresAt(now - 2 * HOUR, now).getTime()).toBe(
+      now + HOUR,
+    );
+  });
+});
+
+describe("checkinNudgeAnnouncementGroup", () => {
+  it("is a per-match group that can't match another match's", () => {
+    // expireLeagueAnnouncementGroup refuses a group without the trailing ":",
+    // and "m1:" must not be a prefix of "m10:".
+    expect(checkinNudgeAnnouncementGroup("m1")).toBe("checkin-nudge:m1:");
+    expect(
+      checkinNudgeAnnouncementGroup("m10").startsWith(
+        checkinNudgeAnnouncementGroup("m1"),
+      ),
+    ).toBe(false);
   });
 });

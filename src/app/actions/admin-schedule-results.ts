@@ -76,7 +76,7 @@ import {
 } from "@/lib/honors-service";
 import {
   invalidatePendingAnnouncementMarkers,
-  invalidateResultNudges,
+  invalidateMatchNudges,
 } from "@/lib/announcement-marker";
 import type { ActionResult } from "@/lib/action-result";
 import {
@@ -932,7 +932,7 @@ export async function recordResult(
           );
         }
         // A queued "we couldn't find your games" nudge is answered now.
-        await invalidateResultNudges(tx, match.id);
+        await invalidateMatchNudges(tx, match.id);
         if (
           match.phase === MATCH_PHASE.REGULAR &&
           match.status === MATCH_STATUS.COMPLETED
@@ -1947,7 +1947,7 @@ export async function setWeekNight(
           });
           if (updated.count !== 1) throw new ScheduleMatchChangedError();
           // A nudge queued for the old kickoff must not post about it.
-          await invalidateResultNudges(tx, match.id);
+          await invalidateMatchNudges(tx, match.id);
         }
 
         // Keep the arithmetic anchor used for future playoff rounds aligned with
@@ -2222,7 +2222,7 @@ export async function setMatchTime(
         });
         if (updated.count !== 1) throw new ScheduleMatchChangedError();
         // A nudge queued for the old kickoff must not post about it.
-        await invalidateResultNudges(tx, matchId);
+        await invalidateMatchNudges(tx, matchId);
 
         const [rsvps, proposals] = await Promise.all([
           tx.matchAvailability.deleteMany({ where: { matchId } }),

@@ -167,6 +167,31 @@ export function checkinNudgePrefix(matchId: string): string {
 }
 
 /**
+ * The outbox group of one match's check-in reminders (sendDiscordMessage's
+ * expiryGroup). The retime, reschedule, result and forfeit transactions expire
+ * it (invalidateMatchNudges), so a reminder still queued behind a Discord
+ * outage never asks players to check in for a kickoff that moved or a match
+ * that was already decided.
+ */
+export function checkinNudgeAnnouncementGroup(matchId: string): string {
+  return `checkin-nudge:${matchId}:`;
+}
+
+/** How long a reminder sent after kickoff may wait in the outbox. */
+const CHECKIN_NUDGE_LATE_GRACE_MS = 60 * 60 * 1000;
+
+/**
+ * When a queued check-in reminder stops being worth posting: at kickoff, so a
+ * Discord outage can't deliver "please check in" for a match already played.
+ * Every reminder still gets at least an hour: check-in stays open after
+ * kickoff for a late lobby, and a reminder sent then must not be dropped
+ * before its first delivery attempt while the captain is told it went out.
+ */
+export function checkinNudgeExpiresAt(kickoffMs: number, nowMs: number): Date {
+  return new Date(Math.max(kickoffMs, nowMs + CHECKIN_NUDGE_LATE_GRACE_MS));
+}
+
+/**
  * Why a player can't answer a fixture's check-in. setAvailability refuses with
  * the long message; the away-dates action reports a short label per fixture.
  * One list, so the two paths can never disagree about who may answer.

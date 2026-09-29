@@ -195,8 +195,12 @@ standin cover, and match-night check-ins. Main files:
   `claimThrottle` on `checkinNudge:<match>:<team>:<scheduleRevision>` for
   `CHECKIN_NUDGE_THROTTLE_SECONDS` (a retime gets a fresh window). Claim after
   every other check (webhook included); release only if the post was not queued
-  (once queued it is durable, so an outage keeps the window). Render the button
-  only when the action would accept; once used, it says when the next is allowed.
+  (once queued it is durable, so an outage keeps the window). A queued reminder
+  is dropped at kickoff (`checkinNudgeExpiresAt`; one sent after kickoff gets an
+  hour) and as soon as the kickoff moves or a result or forfeit lands: those
+  transactions call `invalidateMatchNudges`, which expires the match's
+  `checkinNudgeAnnouncementGroup`. Render the button only when the action would
+  accept; once used, it says when the next is allowed.
 - **Playing lineups are retired.** Nothing writes `MatchLineup`, `MatchLineupSeat`
   or `Match.logisticsRevision`; only the season export and the postseason reset
   receipt copy old rows. Don't build on them; dropping them is not decided

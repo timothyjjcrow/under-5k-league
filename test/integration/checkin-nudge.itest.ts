@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // real server action against the test DB with Discord and auth stubbed.
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
+  revalidateTag: vi.fn(),
   updateTag: vi.fn(),
 }));
 vi.mock("@/lib/auth", () => ({
@@ -19,11 +20,23 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
+import { randomUUID } from "node:crypto";
 import { remindUnansweredCheckins } from "@/app/actions/availability";
-import { requireUser } from "@/lib/auth";
+import {
+  recordResult,
+  setMatchTime,
+} from "@/app/actions/admin-schedule-results";
+import { requireAdmin, requireUser } from "@/lib/auth";
 import { getWebhookUrl, sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
-import { checkinNudgeKey } from "@/lib/availability";
+import {
+  checkinNudgeAnnouncementGroup,
+  checkinNudgeKey,
+} from "@/lib/availability";
+import {
+  deliverLeagueAnnouncements,
+  enqueueLeagueAnnouncement,
+} from "@/lib/league-announcement-outbox";
 import {
   proposeReschedule,
   respondReschedule,
@@ -133,7 +146,13 @@ async function setup() {
 function lastSend() {
   const call = mockSend.mock.calls.at(-1);
   if (!call) throw new Error("no Discord send");
-  return { content: call[0] as string, mentions: call[1] };
+  return { content: call[0] as string, mentions: call[1], options: call[2] };
+}
+
+function form(values: Record<string, string>): FormData {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(values)) fd.set(k, v);
+  return fd;
 }
 
 describe("remindUnansweredCheckins", () => {
@@ -167,6 +186,12 @@ describe("remindUnansweredCheckins", () => {
     expect(content).not.toContain(`<@${AWAY_LINKED_ID}>`);
     expect(content).not.toContain("Away Andy");
     expect(mentions).toEqual({ users: [LINKED_ID] });
+    // Dropped from the outbox at kickoff, and grouped so a retime or a result
+    // can drop it earlier.
+    expect(lastSend().options).toEqual({
+      expiresAt: s.match.scheduledAt,
+      expiryGroup: `checkin-nudge:${s.match.id}:`,
+    });
     expect(
       await prisma.setting.findUnique({
         where: {
@@ -275,6 +300,112 @@ describe("remindUnansweredCheckins", () => {
     );
     // The new kickoff's window is held like any other.
     expect((await nudge(s.match.id)).error).toMatch(/already got a check-in reminder/);
+  });
+
+  it("gives a reminder sent after kickoff an hour in the outbox", async () => {
+    const s = await setup();
+    // Check-in stays open after kickoff while the lobby is late.
+    const kickoff = new Date(Date.now() - 30 * 60 * 1000);
+    await prisma.match.update({
+      where: { id: s.match.id },
+      data: { scheduledAt: kickoff },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(s.homeCaptain));
+
+    const before = Date.now();
+    expect((await nudge(s.match.id)).message).toBeTruthy();
+    const expiresAt = (lastSend().options as { expiresAt: Date }).expiresAt;
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 60 * 60 * 1000);
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000);
+  });
+
+  // A Discord outage holds the reminder in the outbox. When the kickoff moves
+  // or a result lands before it goes out, it must be dropped: it would ping
+  // players to check in for a night nobody is playing or a decided match.
+  it.each([
+    {
+      event: "a reschedule is accepted",
+      run: async (s: Awaited<ReturnType<typeof setup>>) => {
+        await proposeReschedule(
+          s.awayCaptain.id,
+          s.match.id,
+          new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        );
+        const request = await prisma.rescheduleRequest.findFirstOrThrow({
+          where: { matchId: s.match.id, status: "PENDING" },
+        });
+        await respondReschedule(s.homeCaptain.id, request.id, true);
+      },
+    },
+    {
+      event: "an admin moves the kickoff",
+      run: async (s: Awaited<ReturnType<typeof setup>>) => {
+        const when = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000);
+        const res = await setMatchTime(
+          {},
+          form({
+            matchId: s.match.id,
+            expectedActiveSeasonId: s.season.id,
+            scheduledAt: when.toISOString(),
+            scheduledAtTs: String(when.getTime()),
+          }),
+        );
+        expect(res?.error).toBeUndefined();
+      },
+    },
+    {
+      event: "an admin records the result",
+      run: async (s: Awaited<ReturnType<typeof setup>>) => {
+        const res = await recordResult(
+          {},
+          form({ matchId: s.match.id, homeScore: "2", awayScore: "0" }),
+        );
+        expect(res?.error).toBeUndefined();
+      },
+    },
+  ])("drops a queued reminder when $event", async ({ run }) => {
+    const s = await setup();
+    const admin = await makeUser("Admin Ada");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(s.homeCaptain));
+    // Queue the reminder the way sendDiscordMessage does, then let Discord be
+    // down: nothing is delivered yet.
+    mockSend.mockImplementationOnce(async (content, mentions, options) => {
+      await enqueueLeagueAnnouncement({
+        content,
+        mentions,
+        dedupeKey: `${options?.expiryGroup}${randomUUID()}`,
+        expiresAt: options?.expiresAt ?? null,
+      });
+      return true;
+    });
+    expect((await nudge(s.match.id)).message).toBeTruthy();
+    // Another fixture's reminder is not this event's business.
+    const other = await enqueueLeagueAnnouncement({
+      content: "other fixture reminder",
+      dedupeKey: `${checkinNudgeAnnouncementGroup("other-match")}${randomUUID()}`,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+
+    await run(s);
+
+    const send = vi.fn(async () => true);
+    await deliverLeagueAnnouncements({ send, limit: 5 });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("other fixture reminder", undefined);
+    const queued = await prisma.leagueAnnouncement.findFirstOrThrow({
+      where: {
+        dedupeKey: { startsWith: checkinNudgeAnnouncementGroup(s.match.id) },
+      },
+    });
+    expect(queued.status).toBe("CANCELLED");
+    expect(
+      (
+        await prisma.leagueAnnouncement.findUniqueOrThrow({
+          where: { id: other.id },
+        })
+      ).status,
+    ).toBe("SENT");
   });
 
   it("sends exactly once when a captain double-clicks", async () => {

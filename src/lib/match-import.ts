@@ -55,7 +55,7 @@ import {
   announcementDedupeKey,
   claimAnnouncementMarker,
   invalidatePendingAnnouncementMarkers,
-  invalidateResultNudges,
+  invalidateMatchNudges,
   markAnnouncementFailed,
   markAnnouncementSent,
   recoverableAnnouncementMarker,
@@ -801,7 +801,7 @@ export async function recomputeSeries(matchId: string) {
       // together. A crash can no longer leave an obsolete reminder/result/
       // honors/nudge marker authorized after the winning score projection
       // commits.
-      await invalidateResultNudges(tx, matchId);
+      await invalidateMatchNudges(tx, matchId);
       if (
         match.scheduledAt &&
         match.status === MATCH_STATUS.SCHEDULED &&
@@ -1273,7 +1273,7 @@ export async function importGameForMatch(
           });
           // A "we couldn't find your games" nudge still queued for this
           // fixture is answered by this game.
-          await invalidateResultNudges(tx, matchId);
+          await invalidateMatchNudges(tx, matchId);
           if (
             fresh.scheduledAt &&
             fresh.status === MATCH_STATUS.SCHEDULED &&

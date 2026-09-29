@@ -65,7 +65,8 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
 - **Every retime follows one contract.** Set time (`setMatchTime`), "Move a match
   night" (`setWeekNight`) and a reschedule accept each, in their transaction:
   re-assert SCHEDULED, bump `Match.scheduleRevision`, reset
-  `autoSyncedAt`/`autoSyncAttempts`, invalidate result nudges, delete the match's
+  `autoSyncedAt`/`autoSyncAttempts`, invalidate queued result nudges and
+  check-in reminders (`invalidateMatchNudges`), delete the match's
   check-ins, cancel open proposals (admin paths) and delete the week-reminder
   markers (`weekReminderKey(season, week)` and its `:<kickoffMs>` keys).
   Check-ins answered the old night, and the reminder quoted the old kickoff (a
