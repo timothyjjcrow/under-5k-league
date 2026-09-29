@@ -159,17 +159,20 @@ function SeriesList({
             {showSeasonHeaders && seasonId !== prior ? (
               <Link
                 href={`/seasons/${seasonId}`}
-                className="flex items-center justify-between border-b border-line/60 bg-surface-2/40 px-5 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
+                className="flex items-center justify-between border-b border-line/60 bg-surface-2/40 px-4 py-1.5 text-xs font-medium uppercase tracking-wide text-muted hover:text-info"
               >
                 <span className="truncate">{entry.match.season.name}</span>
                 <span className="shrink-0 tabular-nums">{count} series</span>
               </Link>
             ) : null}
+            {/* Wide enough (the profile's main column is an @container),
+                the games sit beside the opponent instead of under it, so a
+                series is one band rather than two. */}
             <Link
               href={`/matches/${entry.matchId}`}
-              className="block px-5 py-3 text-sm hover:bg-surface-2/40"
+              className="block px-4 py-3 text-sm hover:bg-surface-2/40 @2xl:flex @2xl:items-start @2xl:gap-6"
             >
-              <span className="flex items-center gap-3">
+              <span className="flex items-center gap-3 @2xl:min-w-0 @2xl:flex-1">
                 {/* min-w-7 + gap-3 = the pl-10 of the hero lines below, so
                     "vs <team>" and every game line share one left edge
                     whether the badge reads W, L or D (a bare badge's width
@@ -208,7 +211,7 @@ function SeriesList({
                   </span>
                 </span>
               </span>
-              <span className="mt-2 block space-y-1.5 pl-10">
+              <span className="mt-2 block space-y-1.5 pl-10 @2xl:mt-0 @2xl:w-72 @2xl:shrink-0 @2xl:pl-0">
                 {/* Only the games THEY played, so no "Game 2" numbering: a
                     standin who covered one game of three has one line. */}
                 {entry.games.map(({ game, stat, won }) => {

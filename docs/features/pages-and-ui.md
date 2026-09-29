@@ -356,6 +356,26 @@ the league is already draftable and many visitors have joined. Write for both.
   `replaceState`). React is the source of truth. `sort` is not a filter, so
   `resetFilters` and `filtersActive` ignore it. `e2e/pages.spec.ts` reopens the
   URL cold, because seeding from it is the half that rots.
+- **"Scouting details" sets row density, not a filter:** on, each row carries
+  the scouting line (last season, pubs, Dotabuff, Discord) and the player's
+  own words; off, a row is one line. The default is `poolDetailsByDefault`
+  (on until the auction ends, when the pool turns into "who is where"), and
+  the viewer's choice persists on their device (`usePersistedFlag
+  "playerPoolDetails"`). It stays out of the URL and "Clear filters".
+
+## Player profile and compare (`/players/[id]`, `/players/compare`)
+
+- **A profile is two columns from `xl`:** form, match history and "How they
+  play" in the main column, and a 24rem rail with the hero pool, records,
+  achievements and seasons. A phone reads them in that order. Both columns
+  are `@container`s: the overview's stats and spotlight split at `@2xl`, a
+  series row puts its games beside the opponent at `@2xl`, and the hero pool
+  (`columns="container"`) and achievements step with the rail's width.
+- **Compare is two columns from `lg`:** career numbers on the left, the
+  head-to-head and both hero cards on the right, by grid placement, so the
+  DOM and a phone keep head-to-head, numbers, heroes. The rows are
+  `auto_1fr`, so a taller numbers card grows the heroes' row, never the
+  head-to-head's. Player B's name heads the right-hand column of figures.
 
 ## The inhouse page (`/inhouse`)
 

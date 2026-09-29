@@ -115,6 +115,16 @@ export function playerDirectoryPresentation(
 }
 
 /**
+ * Whether /players opens its rows with the scouting line (last season, pubs,
+ * Discord) and the player's own words. Until the auction ends the pool is a
+ * scouting board; after it the question is "who is where", one line a player.
+ * The viewer's "Scouting details" toggle overrides this on their device.
+ */
+export function poolDetailsByDefault(stage: PlayerDirectoryStage): boolean {
+  return stage === "CAPTAIN_SELECTION" || stage === "AUCTION";
+}
+
+/**
  * Whether a player's profile still shows "Wants to captain". It is news only
  * while captains are being picked, the same window the /players badge and
  * filter use, and only for a full player who isn't on a team yet (a

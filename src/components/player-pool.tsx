@@ -39,6 +39,7 @@ import { pubLastPlayed, type PubHero } from "@/lib/pub-stats";
 import { aboutText } from "@/lib/about-you";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
+import { usePersistedFlag } from "@/components/room-clock";
 
 /** Which team drafted a player, keyed by userId (parallel to the frozen
  * PoolPlayer type). `price` is null for captains — no draft price shown.
@@ -72,6 +73,7 @@ export function PlayerPool({
   scout,
   now,
   showContact = false,
+  detailsByDefault = true,
 }: {
   players: PoolPlayer[];
   /** Which rows are STANDIN registrations. A parallel list rather than a
@@ -95,7 +97,17 @@ export function PlayerPool({
    *  for outsiders, so without this flag the component cannot distinguish a
    *  hidden handle from a player who has no Discord. */
   showContact?: boolean;
+  /**
+   * Whether rows open with the scouting line and the player's own words
+   * under the name (`poolDetailsByDefault`: until the auction ends). The
+   * "Scouting details" toggle flips it, remembered on this device.
+   */
+  detailsByDefault?: boolean;
 }) {
+  const [details, setDetails] = usePersistedFlag(
+    "playerPoolDetails",
+    detailsByDefault,
+  );
   // Data-presence gates (the anyDrafted precedent — never season phase).
   // Computed before the state hooks: the sort seeding below reads anyInhouse.
   const anyInhouse = players.some((p) => !!scout?.[p.userId]?.inhouse);
@@ -326,6 +338,22 @@ export function PlayerPool({
           <option value="rank">Sort: Medal</option>
           <option value="name">Sort: Name</option>
         </select>
+
+        {/* Density, not a filter: one line per player, or the scouting line
+            and their own words under each name. Not in the URL or "Clear
+            filters"; it is the reader's preference. */}
+        <button
+          type="button"
+          onClick={() => setDetails(!details)}
+          aria-pressed={details}
+          className={cn(
+            CHIP_BASE,
+            "h-11 px-3 sm:h-9 lg:ml-auto",
+            details ? CHIP_ON : CHIP_OFF,
+          )}
+        >
+          Scouting details
+        </button>
       </div>
 
       {/* aria-live: filtering is a keyboard action whose only feedback used to
@@ -408,7 +436,8 @@ export function PlayerPool({
                   key={p.userId}
                   className={cn(
                     grid,
-                    "grid items-center px-4 py-3 transition-colors hover:bg-surface-2/40",
+                    "grid items-center px-4 transition-colors hover:bg-surface-2/40",
+                    details ? "py-3" : "py-2",
                   )}
                 >
                   {/* 1 — avatar */}
@@ -434,74 +463,76 @@ export function PlayerPool({
                       routine, and two TAP_SAFE targets on wrapped lines 4px
                       apart overlap by ~4px (each grows 4px toward the other).
                       8px of real spacing is the stacked-TAP_SAFE floor. */}
-                    <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
-                      {/* Facts before actions: the scouting tokens lead, the
-                        outbound links follow. Plain text — no new tap targets
-                        on a line already carrying two. The league's own
-                        history goes first: for a returning player it is the
-                        most direct evidence a captain has. */}
-                      {sc?.lastSeason ? (
-                        // Free text (season and team names), so it may break
-                        // anywhere rather than widen a phone row.
-                        <span
-                          className="min-w-0 tabular-nums [overflow-wrap:anywhere]"
-                          title={lastSeasonTitle(sc.lastSeason)}
-                        >
-                          {lastSeasonToken(sc.lastSeason)}
-                        </span>
-                      ) : null}
-                      {ih ? (
-                        <span
-                          className="tabular-nums lg:hidden"
-                          title={inhouseTitle(ih)}
-                        >
-                          {inhouseToken(ih)}
-                        </span>
-                      ) : null}
-                      {pub ? (
-                        <span
-                          className="tabular-nums"
-                          title={pubTitle(pub, nowMs)}
-                        >
-                          {pubToken(pub, nowMs)}
-                        </span>
-                      ) : null}
-                      {pub && pub.topHeroes.length > 0 ? (
-                        <PubHeroStrip heroes={pub.topHeroes} />
-                      ) : null}
-                      {activity?.quiet ? (
-                        <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
-                          last played {activity.label}
-                        </span>
-                      ) : null}
-                      {p.accountId ? (
-                        <a
-                          href={`https://www.dotabuff.com/players/${p.accountId}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={textLink()}
-                        >
-                          Dotabuff <LinkArrow out />
-                        </a>
-                      ) : null}
-                      <DiscordTag
-                        name={p.discordName}
-                        verified={p.discordVerified}
-                      />
-                      {showContact && !p.discordName ? (
-                        /* The absence IS the information on draft night: this
-                         player can't be reached where the league lives. Only
-                         for authorized league viewers — hidden handles must
-                         never be presented as missing data. */
-                        <span
-                          className="text-muted"
-                          title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
-                        >
-                          no Discord
-                        </span>
-                      ) : null}
-                    </span>
-                    {quote ? (
+                    {details ? (
+                      <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
+                        {/* Facts before actions: the scouting tokens lead, the
+                          outbound links follow. Plain text — no new tap targets
+                          on a line already carrying two. The league's own
+                          history goes first: for a returning player it is the
+                          most direct evidence a captain has. */}
+                        {sc?.lastSeason ? (
+                          // Free text (season and team names), so it may break
+                          // anywhere rather than widen a phone row.
+                          <span
+                            className="min-w-0 tabular-nums [overflow-wrap:anywhere]"
+                            title={lastSeasonTitle(sc.lastSeason)}
+                          >
+                            {lastSeasonToken(sc.lastSeason)}
+                          </span>
+                        ) : null}
+                        {ih ? (
+                          <span
+                            className="tabular-nums lg:hidden"
+                            title={inhouseTitle(ih)}
+                          >
+                            {inhouseToken(ih)}
+                          </span>
+                        ) : null}
+                        {pub ? (
+                          <span
+                            className="tabular-nums"
+                            title={pubTitle(pub, nowMs)}
+                          >
+                            {pubToken(pub, nowMs)}
+                          </span>
+                        ) : null}
+                        {pub && pub.topHeroes.length > 0 ? (
+                          <PubHeroStrip heroes={pub.topHeroes} />
+                        ) : null}
+                        {activity?.quiet ? (
+                          <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
+                            last played {activity.label}
+                          </span>
+                        ) : null}
+                        {p.accountId ? (
+                          <a
+                            href={`https://www.dotabuff.com/players/${p.accountId}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={textLink()}
+                          >
+                            Dotabuff <LinkArrow out />
+                          </a>
+                        ) : null}
+                        <DiscordTag
+                          name={p.discordName}
+                          verified={p.discordVerified}
+                        />
+                        {showContact && !p.discordName ? (
+                          /* The absence IS the information on draft night: this
+                           player can't be reached where the league lives. Only
+                           for authorized league viewers — hidden handles must
+                           never be presented as missing data. */
+                          <span
+                            className="text-muted"
+                            title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
+                          >
+                            no Discord
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                    {details && quote ? (
                       <span
                         className="mt-1 block truncate text-xs italic text-muted"
                         title={quote.label}

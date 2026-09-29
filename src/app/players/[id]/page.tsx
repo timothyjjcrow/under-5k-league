@@ -38,7 +38,7 @@ import {
 } from "@/lib/player-stats";
 import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
 import { leagueRecords, toRecordGames } from "@/lib/records";
-import { hasText } from "@/lib/utils";
+import { cn, hasText } from "@/lib/utils";
 import { aboutText } from "@/lib/about-you";
 import { rankMedalName } from "@/lib/rank";
 import {
@@ -637,8 +637,13 @@ export default async function PlayerProfilePage({
     inhouse: !!recentInhouse,
   });
 
+  // From xl the profile is two columns: their league form, games and play on
+  // the left, and a rail with the hero pool, records, achievements and
+  // seasons. A phone reads them in the same order, one column.
+  const hasRail = sections.profile || sections.career;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <ProfileHeader
         user={user}
         isSelf={isSelf}
@@ -669,60 +674,72 @@ export default async function PlayerProfilePage({
         <SectionNav items={sections.nav} label="Player sections" sticky />
       ) : null}
 
-      <ProfileOverview
-        hasLeagueGames={hasLeagueGames}
-        hasSeasonGames={hasSeasonGames}
-        seasonName={season?.name}
-        seasonSummary={seasonSummary}
-        careerSummary={careerSummary}
-        streakLabel={streakLabel}
-        team={team ? { rank: teamRank, row: teamRow, playoffTile } : null}
-        featured={featured}
-        inhouseUserId={sections.inhouseInOverview ? user.id : null}
-      />
+      <div
+        className={cn(
+          "grid grid-cols-1 items-start gap-5",
+          hasRail && "xl:grid-cols-[minmax(0,1fr)_24rem]",
+        )}
+      >
+        <div className="@container min-w-0 space-y-5">
+          <ProfileOverview
+            hasLeagueGames={hasLeagueGames}
+            hasSeasonGames={hasSeasonGames}
+            seasonName={season?.name}
+            seasonSummary={seasonSummary}
+            careerSummary={careerSummary}
+            streakLabel={streakLabel}
+            team={team ? { rank: teamRank, row: teamRow, playoffTile } : null}
+            featured={featured}
+            inhouseUserId={sections.inhouseInOverview ? user.id : null}
+          />
 
-      {sections.matches ? (
-        <ProfileMatchHistory
-          playerId={id}
-          history={history}
-          recentForm={recentFormStrip}
-        />
-      ) : null}
+          {sections.matches ? (
+            <ProfileMatchHistory
+              playerId={id}
+              history={history}
+              recentForm={recentFormStrip}
+            />
+          ) : null}
 
-      {sections.performance ? (
-        <ProfilePerformance
-          showPerformance={sections.performanceCard}
-          showReportCard={sections.reportCard}
-          avgNet={avgNet}
-          avgGpm={avgGpm}
-          avgLh={avgLh}
-          kdaByGame={kdaByGame}
-          bestView={bestView}
-          reportCard={reportCard}
-          verdicts={verdicts}
-        />
-      ) : null}
+          {sections.performance ? (
+            <ProfilePerformance
+              showPerformance={sections.performanceCard}
+              showReportCard={sections.reportCard}
+              avgNet={avgNet}
+              avgGpm={avgGpm}
+              avgLh={avgLh}
+              kdaByGame={kdaByGame}
+              bestView={bestView}
+              reportCard={reportCard}
+              verdicts={verdicts}
+            />
+          ) : null}
+        </div>
+        {hasRail ? (
+          <div className="@container min-w-0 space-y-5">
+            {sections.profile ? (
+              <ProfileHeroesAndRecords
+                showHeroes={sections.heroes}
+                showRecords={sections.records}
+                leagueHeroes={leagueHeroes}
+                selfPickedHeroes={selfPickedHeroes}
+                pubHeroes={pubHeroes}
+                pubCheckedLabel={pubCheckedLabel}
+                heldRecords={heldRecords}
+              />
+            ) : null}
 
-      {sections.profile ? (
-        <ProfileHeroesAndRecords
-          showHeroes={sections.heroes}
-          showRecords={sections.records}
-          leagueHeroes={leagueHeroes}
-          selfPickedHeroes={selfPickedHeroes}
-          pubHeroes={pubHeroes}
-          pubCheckedLabel={pubCheckedLabel}
-          heldRecords={heldRecords}
-        />
-      ) : null}
-
-      {sections.career ? (
-        <ProfileCareer
-          badges={badges}
-          seasonRows={seasonRows}
-          teamLogos={teamLogos}
-          inhouseUserId={sections.inhouseInCareer ? user.id : null}
-        />
-      ) : null}
+            {sections.career ? (
+              <ProfileCareer
+                badges={badges}
+                seasonRows={seasonRows}
+                teamLogos={teamLogos}
+                inhouseUserId={sections.inhouseInCareer ? user.id : null}
+              />
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
