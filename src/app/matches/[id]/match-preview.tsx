@@ -28,6 +28,7 @@ import {
 import { MatchupCard, type MatchupSide } from "./matchup-card";
 import { ScoutingReport } from "./scouting-report";
 import { StakesBanner } from "./stakes-banner";
+import { TaleOfTheTape } from "./tale-of-the-tape";
 
 // Pre-match scouting: rosters, recent form, prior meetings, and who's
 // confirmed for match night — shown until the first game is recorded.
@@ -46,11 +47,16 @@ export async function MatchPreview({
     match.homeTeam.captainId,
     match.awayTeam.captainId,
   );
-  const [rosterRows, seasonMatches, rsvps] = await Promise.all([
+  const [rosterRows, seasonMatches, seasonTeams, rsvps] = await Promise.all([
     loadRosters(match),
     prisma.match.findMany({
       where: { seasonId: match.seasonId },
       orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+    }),
+    // The tale of the tape's table place and the opponents on each road.
+    prisma.team.findMany({
+      where: { seasonId: match.seasonId },
+      select: { id: true, name: true, logoUrl: true, withdrawn: true },
     }),
     viewer
       ? prisma.matchAvailability.findMany({
@@ -74,6 +80,10 @@ export async function MatchPreview({
     select: { userId: true, roles: true, mmr: true },
   });
   const regByUser = new Map(regs.map((r) => [r.userId, r]));
+  const rosterMmrs = (teamId: string) =>
+    members
+      .filter((m) => m.teamId === teamId)
+      .map((m) => regByUser.get(m.userId)?.mmr ?? 0);
   const rsvpByUser = new Map(rsvps.map((r) => [r.userId, r.status]));
 
   // Mirror setAvailability's decisive capability gate: an RSVP is about one
@@ -270,6 +280,17 @@ export async function MatchPreview({
       ) : null}
 
       <StakesBanner match={match} seasonMatches={seasonMatches} />
+
+      <TaleOfTheTape
+        match={match}
+        roundLabel={roundLabel}
+        seasonMatches={seasonMatches}
+        teams={seasonTeams}
+        mmrs={{
+          home: rosterMmrs(match.homeTeamId),
+          away: rosterMmrs(match.awayTeamId),
+        }}
+      />
 
       {/* Full width, one above the other: each card is split home | away
           inside, and their heights follow the data (check-ins, how many

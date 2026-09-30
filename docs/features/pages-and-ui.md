@@ -458,9 +458,21 @@ the league is already draftable and many visitors have joined. Write for both.
   own. `GameIdentityEditor` gets the viewer from the `cache()`d
   `getSessionUser`.
 - **`MatchPreview` renders while a match has no games and is not COMPLETED:**
-  rosters, recent form, prior meetings, stakes banner, scouting report, and the
-  `/schedule` check-in banner. A COMPLETED match with no games says it was a
-  forfeit ruling or a manual score.
+  rosters, recent form, prior meetings, stakes banner, tale of the tape,
+  scouting report, and the `/schedule` check-in banner. A COMPLETED match with
+  no games says it was a forfeit ruling or a manual score.
+- **The tale of the tape** (`tale-of-the-tape.tsx` over the pure
+  `src/lib/tale-of-the-tape.ts`) compares the two teams' season: the regular
+  season's record with the table place (a playoff seed from
+  `seedsFromFirstRound` in the knockouts), games won across every completed
+  series, roster MMR, and kills, KDA, GPM and game length from the box scores
+  of each team's own side (`radiantTeamId`/`direTeamId`, complete box scores
+  only). A row shows only when both sides have its number, and the card only
+  with two rows or a road, so week one goes straight to the rosters. Bars
+  grow outwards from the label column in each team's hue; the leader's is
+  solid. A knockout series adds each side's road (`playoffRoad`): the series
+  it won in the rounds before this one, each linking to its match. It never
+  shows the community pick'em split (`pickemControlFor`'s rule).
 - **The season lobby bot's panel has two render sites, never both for one
   viewer** (off unless `DOTA_SEASON_LOBBY_BOT_ENABLED`): captains get it with
   Create/Start in Captain tools; other players, booked standins and admins get
