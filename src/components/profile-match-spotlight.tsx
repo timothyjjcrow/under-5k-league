@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LocalTime } from "@/components/local-time";
 import { Badge, LinkArrow, TeamCrest } from "@/components/ui";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { profileMatchState } from "@/lib/profile-match";
 import { matchRoundLabel, type SlateMatch } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
@@ -109,7 +109,7 @@ export function ProfileMatchSpotlight({
             <LocalTime
               ts={match.scheduledAt.getTime()}
               variant="short"
-              initial={formatMatchTime(match.scheduledAt, "short")}
+              initial={formatLeagueMatchTime(match.scheduledAt, "short")}
             />
           ) : (
             <span>{done ? "Time not recorded" : "Time TBD"}</span>

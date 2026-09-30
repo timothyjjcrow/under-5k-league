@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { shouldRenderTeamLogo } from "./team-logo-image";
+import { shouldRenderTeamLogo, teamLogoBackingShown } from "./team-logo-image";
 import { TeamCrest } from "./ui";
 import { hashHue } from "@/lib/team-hues";
 
@@ -114,6 +114,42 @@ describe("TeamCrest", () => {
     const crestSource = readFileSync(join(__dirname, "ui.tsx"), "utf8");
     expect(crestSource).toContain(
       "<TeamLogoImage key={src} src={src} size={size} fit={imageFit} />",
+    );
+  });
+
+  it("shows the monogram until the logo has loaded", () => {
+    // The logo's dark backing used to paint from the first frame, so a lazy
+    // logo read as an empty box in the bracket and results until it arrived.
+    const html = renderToStaticMarkup(
+      createElement(TeamCrest, {
+        name: "Vegan Squadron",
+        seed: "team-vs",
+        logoUrl: "https://i.imgur.com/logo.png",
+      }),
+    );
+    expect(html).toContain("<img");
+    expect(html).not.toContain("bg-surface-2");
+    expect(html).toContain("VS");
+
+    const src = "https://i.imgur.com/logo.png";
+    expect(teamLogoBackingShown(src, null)).toBe(false);
+    expect(teamLogoBackingShown(src, src)).toBe(true);
+    // A new URL starts over: its own load decides.
+    expect(teamLogoBackingShown("https://i.imgur.com/new.png", src)).toBe(false);
+
+    // No DOM image loader here: pin the wiring from the browser's load events
+    // (and a logo that settled before hydration) to the tested rule.
+    const source = readFileSync(
+      join(__dirname, "team-logo-image.tsx"),
+      "utf8",
+    );
+    expect(source).toContain("onLoad={() => setLoadedSrc(src)}");
+    expect(source).toContain("ref={readSettled}");
+    expect(source).toContain(
+      'teamLogoBackingShown(src, loadedSrc) ? "bg-surface-2" : ""',
+    );
+    expect(source).toMatch(
+      /if \(img\.naturalWidth > 0\) setLoadedSrc\(src\);\s*else setFailedSrc\(src\);/,
     );
   });
 

@@ -22,7 +22,7 @@ import {
 } from "@/lib/pickem";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
   Avatar,
   Badge,
@@ -322,7 +322,7 @@ export default async function PickemPage({
                                       <LocalTime
                                         ts={m.scheduledAt.getTime()}
                                         variant="full"
-                                        initial={formatMatchTime(
+                                        initial={formatLeagueMatchTime(
                                           m.scheduledAt,
                                           "full",
                                         )}
@@ -401,7 +401,7 @@ export default async function PickemPage({
                             <LocalTime
                               ts={nextKickoff.getTime()}
                               variant="short"
-                              initial={formatMatchTime(nextKickoff, "short")}
+                              initial={formatLeagueMatchTime(nextKickoff, "short")}
                             />
                           </span>
                         ) : null}

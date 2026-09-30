@@ -3,6 +3,7 @@
 // and server-formatted dates (so hydration never disagrees on locale).
 
 import { MATCH_STATUS } from "./constants";
+import { formatLeagueMatchTime } from "./match-time";
 import {
   bracketSkeleton,
   roundName,
@@ -30,6 +31,12 @@ export type BracketMatchView = {
   winnerTeamId: string | null;
   /** Pre-formatted on the server. */
   when: string | null;
+  /**
+   * The same kickoff in the short variant, the bracket box's LocalTime
+   * initial: the full one ("Sat, Oct 3, 3:00 PM Pacific") wrapped the narrow
+   * box until the page loaded.
+   */
+  whenShort?: string | null;
   /** Epoch ms — lets the client re-render times in the viewer's timezone. */
   whenTs: number | null;
   bestOf: number;
@@ -62,6 +69,8 @@ export function buildBracketRounds(
   seedByTeam: Map<string, number>,
   formatWhen: (d: Date) => string,
   teamLogoUrl: Map<string, string | null> = new Map(),
+  formatWhenShort: (d: Date) => string = (d) =>
+    formatLeagueMatchTime(d, "short"),
 ): BracketRound[] {
   const { totalRounds, rounds } = bracketSkeleton(matches);
   const side = (teamId: string): BracketSide => ({
@@ -89,6 +98,7 @@ export function buildBracketRounds(
             completed: m.status === MATCH_STATUS.COMPLETED,
             winnerTeamId: m.winnerTeamId,
             when: m.scheduledAt ? formatWhen(m.scheduledAt) : null,
+            whenShort: m.scheduledAt ? formatWhenShort(m.scheduledAt) : null,
             whenTs: m.scheduledAt?.getTime() ?? null,
             bestOf: m.bestOf,
           }

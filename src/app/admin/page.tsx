@@ -124,7 +124,7 @@ import {
   updateNewsPost,
 } from "@/app/actions/news";
 import { NEWS_LIMITS, newsDiscordCopy, type NewsDiscordCopy } from "@/lib/news";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
@@ -1287,7 +1287,7 @@ function TonightMatches({
                       <LocalTime
                         ts={m.scheduledAt.getTime()}
                         variant="short"
-                        initial={formatMatchTime(m.scheduledAt, "short")}
+                        initial={formatLeagueMatchTime(m.scheduledAt, "short")}
                       />
                     </p>
                   ) : null}
@@ -4651,7 +4651,7 @@ function AutomationTimestamp({
     <LocalTime
       ts={value.getTime()}
       variant="short"
-      initial={formatMatchTime(value, "short")}
+      initial={formatLeagueMatchTime(value, "short")}
     />
   ) : (
     emptyLabel
@@ -5110,7 +5110,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                       <LocalTime
                         ts={m.autoSyncedAt.getTime()}
                         variant="short"
-                        initial={formatMatchTime(m.autoSyncedAt, "short")}
+                        initial={formatLeagueMatchTime(m.autoSyncedAt, "short")}
                       />
                       {" · "}
                       {m.autoSyncAttempts} empty scan
@@ -5152,7 +5152,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
             <LocalTime
               ts={cursorTs}
               variant="full"
-              initial={formatMatchTime(new Date(cursorTs), "full")}
+              initial={formatLeagueMatchTime(new Date(cursorTs), "full")}
             />
           ) : (
             "never"
@@ -5164,7 +5164,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                 <LocalTime
                   ts={leagueTs}
                   variant="short"
-                  initial={formatMatchTime(new Date(leagueTs), "short")}
+                  initial={formatLeagueMatchTime(new Date(leagueTs), "short")}
                 />
               ) : (
                 "never"
@@ -6437,7 +6437,7 @@ function DiscordControls({
                 <LocalTime
                   ts={new Date(board.lastEdit).getTime()}
                   variant="full"
-                  initial={formatMatchTime(new Date(board.lastEdit), "full")}
+                  initial={formatLeagueMatchTime(new Date(board.lastEdit), "full")}
                 />
               </span>
             ) : null}
@@ -6582,7 +6582,7 @@ async function AdminActivity() {
                 <LocalTime
                   ts={r.createdAt.getTime()}
                   variant="short"
-                  initial={formatMatchTime(r.createdAt, "short")}
+                  initial={formatLeagueMatchTime(r.createdAt, "short")}
                   className="shrink-0 text-xs text-muted tabular-nums"
                 />
               </li>
@@ -6737,7 +6737,7 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
                     <LocalTime
                       ts={p.createdAt.getTime()}
                       variant="short"
-                      initial={formatMatchTime(p.createdAt, "short")}
+                      initial={formatLeagueMatchTime(p.createdAt, "short")}
                     />
                     {p.author ? ` · ${p.author.name}` : ""}
                     {` · ${newsDiscordLabel(p.discord)}`}
@@ -6989,7 +6989,7 @@ async function PendingReschedules({
             <LocalTime
               ts={r.proposedTime.getTime()}
               variant="full"
-              initial={formatMatchTime(r.proposedTime, "full")}
+              initial={formatLeagueMatchTime(r.proposedTime, "full")}
             />
           </span>
           <ActionForm action={cancelReschedule} hidden={{ requestId: r.id }}>

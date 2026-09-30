@@ -7,10 +7,11 @@ import {
 } from "@/components/playoff-outlook";
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
+import { ShareButton } from "@/components/share-button";
 import { SectionNav } from "@/components/section-nav";
 import { ProfileMatchSpotlight } from "@/components/profile-match-spotlight";
 import { profileMatch, profileMatchState } from "@/lib/profile-match";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { getSeasonGameScores } from "@/lib/cached-queries";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -102,6 +103,9 @@ export async function generateMetadata({
   return shareMetadata(
     team.name,
     `${team.name} — roster, results, and stats in ${LEAGUE_CONFIG.name}.`,
+    undefined,
+    // The team's own picture (./opengraph-image.tsx).
+    { pageImage: true },
   );
 }
 
@@ -403,6 +407,7 @@ export default async function TeamPage({
           {/* The standings sit behind the rank badge beside the team's
               name, and the calendar in the Matches card. */}
           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <ShareButton path={`/teams/${team.id}`} title={team.name} />
             {team.season.isActive ? (
               <Link href="/scrims" className={textLink("text-sm")}>
                 Scrims <LinkArrow />
@@ -823,7 +828,7 @@ export default async function TeamPage({
                         <LocalTime
                           ts={team.season.draftAt.getTime()}
                           variant="full"
-                          initial={formatMatchTime(team.season.draftAt, "full")}
+                          initial={formatLeagueMatchTime(team.season.draftAt, "full")}
                         />
                       </strong>{" "}
                       <Countdown
@@ -915,7 +920,7 @@ export default async function TeamPage({
                                 <LocalTime
                                   ts={m.scheduledAt.getTime()}
                                   variant="short"
-                                  initial={formatMatchTime(m.scheduledAt, "short")}
+                                  initial={formatLeagueMatchTime(m.scheduledAt, "short")}
                                 />
                               ) : done ? (
                                 "Time not recorded"

@@ -7,7 +7,7 @@ import {
   SteamSignInLink,
 } from "@/components/steam-sign-in";
 import { LinkArrow, PlayerLink, buttonClasses, textLink } from "@/components/ui";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
@@ -93,7 +93,7 @@ export function CaptainLine({
           <LocalTime
             ts={draftAt.getTime()}
             variant="short"
-            initial={formatMatchTime(draftAt, "short")}
+            initial={formatLeagueMatchTime(draftAt, "short")}
           />
           <Countdown
             targetMs={draftAt.getTime()}

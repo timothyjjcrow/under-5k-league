@@ -298,8 +298,11 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   (prefill with `defaultTs`) and `localDate(fd, raw, ts)` in the action. Admin
   boxes pass `timeZone={LEAGUE_CONFIG.timeZone}` (source-guarded).
 - **Show times in the viewer's zone** with `<LocalTime>`, passing a
-  `formatMatchTime` `initial` and the epoch `ts`. Discord times are
-  `<t:epoch:F>`, never formatted strings.
+  `formatLeagueMatchTime` `initial` (the league's clock, zone named, which a
+  slow phone shows first) and the epoch `ts`. Server code never calls
+  `formatMatchTime` (the host clock, UTC in production;
+  `match-time.test.ts` guards it). Discord times are `<t:epoch:F>`, never
+  formatted strings.
 - **Do week math on the league's clock** (`LEAGUE_CONFIG.timeZone`) through
   `matchNightForWeek`, `shiftMatchNight` and `upcomingMatchNight`, so "Sundays
   6 PM" survives daylight saving. `null` gives fixed intervals, for tests only.

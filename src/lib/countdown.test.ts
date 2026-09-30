@@ -4,6 +4,8 @@ import {
   countdownLabel,
   elapsedSince,
   hasPassed,
+  kickoffClock,
+  kickoffClockSpoken,
   LIVE_WINDOW_MS,
   nextClockOffset,
   secondsUntil,
@@ -143,5 +145,57 @@ describe("nextClockOffset", () => {
     expect(offset).toBe(0);
     offset = nextClockOffset(offset, T + 40 * 25, T);
     expect(offset).toBe(1000);
+  });
+});
+
+describe("kickoffClock", () => {
+  it("splits the time left into days, hours, minutes and seconds", () => {
+    expect(
+      kickoffClock(T + 2 * DAY + 5 * HOUR + 12 * MIN + 33_000, T),
+    ).toEqual({ state: "upcoming", days: 2, hours: 5, minutes: 12, seconds: 33 });
+  });
+
+  it("rounds a part second up, so it never reads zero before kickoff", () => {
+    expect(kickoffClock(T + 400, T)).toEqual({
+      state: "upcoming",
+      days: 0,
+      hours: 0,
+      minutes: 0,
+      seconds: 1,
+    });
+  });
+
+  it("agrees with the chip on when kickoff is now and when it is over", () => {
+    for (const offset of [0, -1, -LIVE_WINDOW_MS + 1, -LIVE_WINDOW_MS, -DAY]) {
+      const clock = kickoffClock(T + offset, T);
+      const label = countdownLabel(T + offset, T);
+      expect(clock.state === "now").toBe(label === "happening now");
+      expect(clock.state === "over").toBe(label === null);
+      expect(clock.state === "over").toBe(hasPassed(T + offset, T));
+    }
+  });
+});
+
+describe("kickoffClockSpoken", () => {
+  const upcoming = (ms: number) => {
+    const clock = kickoffClock(T + ms, T);
+    if (clock.state !== "upcoming") throw new Error("expected upcoming");
+    return kickoffClockSpoken(clock);
+  };
+
+  it("says days, hours and minutes, and never the seconds", () => {
+    expect(upcoming(2 * DAY + 5 * HOUR + 12 * MIN + 33_000)).toBe(
+      "2 days, 5 hours and 12 minutes",
+    );
+    expect(upcoming(DAY + MIN)).toBe("1 day, 0 hours and 1 minute");
+  });
+
+  it("drops empty leading units", () => {
+    expect(upcoming(3 * HOUR + 4 * MIN)).toBe("3 hours and 4 minutes");
+  });
+
+  it("rounds the last hour up to whole minutes", () => {
+    expect(upcoming(12 * MIN + 30_000)).toBe("13 minutes");
+    expect(upcoming(20_000)).toBe("1 minute");
   });
 });

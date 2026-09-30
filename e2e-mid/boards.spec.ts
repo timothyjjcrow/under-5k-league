@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { MID_DB_URL } from "../playwright.midseason.config";
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import {
   expectNoCollapsedTruncation,
   expectNoHorizontalOverflow,
@@ -487,6 +488,103 @@ test("league pages unfurl with their page name, the season and the fixture", asy
     "content",
     / · (.+ won \d+–\d+|Drawn \d+–\d+|Live · \d+–\d+ · Best of \d+|.+ · Best of \d+)/,
   );
+});
+
+test("match, team, player and season links unfurl with their own picture", async ({
+  page,
+}) => {
+  // Each render compiles its route on first hit in the dev server.
+  test.setTimeout(120_000);
+  const assertNoErrors = trackPageErrors(page);
+  // Discord draws og:image and X twitter:image. These four pages draw their
+  // own (the opengraph-image and twitter-image files beside each page). The
+  // failure is silent: a page whose metadata names an image keeps the
+  // league's, so the tags are checked here, in the rendered head.
+  const picturePath = async (selector: string) => {
+    const content = await page.locator(selector).getAttribute("content");
+    const url = new URL(content!);
+    return url.pathname + url.search;
+  };
+  const expectPicture = async (path: string) => {
+    const picture = await page.request.get(path);
+    expect(picture.status(), path).toBe(200);
+    expect(picture.headers()["content-type"]).toBe("image/png");
+    expect(picture.headers()["cache-control"]).toMatch(/max-age=300/);
+    expect([...(await picture.body()).subarray(0, 4)]).toEqual([
+      0x89, 0x50, 0x4e, 0x47,
+    ]);
+  };
+  const expectOwnPicture = async (path: string, kind: string) => {
+    await page.goto(path);
+    const og = await picturePath('meta[property="og:image"]');
+    expect(og, path).toMatch(new RegExp(`^/${kind}/[^/]+/opengraph-image(\\?|$)`));
+    expect(await picturePath('meta[name="twitter:image"]'), path).toMatch(
+      new RegExp(`^/${kind}/[^/]+/twitter-image(\\?|$)`),
+    );
+    await expectPicture(og);
+  };
+
+  await page.goto("/schedule");
+  const matchHref = await page
+    .locator('#main a[href^="/matches/"]')
+    .first()
+    .getAttribute("href");
+  await expectOwnPicture(matchHref!, "matches");
+  // X's copy is its own route.
+  await expectPicture(await picturePath('meta[name="twitter:image"]'));
+
+  await page.goto("/teams");
+  const teamHref = await page
+    .locator('#main a[href^="/teams/"]')
+    .first()
+    .getAttribute("href");
+  await expectOwnPicture(teamHref!, "teams");
+  const playerHref = await page
+    .locator('#main a[href^="/players/"]:not([href="/players/compare"])')
+    .first()
+    .getAttribute("href");
+  await expectOwnPicture(playerHref!, "players");
+
+  const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
+  await expectOwnPicture(`/seasons/${season.id}`, "seasons");
+
+  // Every other page keeps the league's own picture (each region has its own).
+  await page.goto("/schedule");
+  expect(
+    (await picturePath('meta[property="og:image"]')).split("?")[0],
+  ).toBe(LEAGUE_CONFIG.branding.openGraphImage);
+  // A page that doesn't exist has no picture either.
+  expect(
+    (await page.request.get("/matches/not-a-match/opengraph-image")).status(),
+  ).toBe(404);
+  assertNoErrors();
+});
+
+test("Share copies the page's own link on a desktop", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/schedule");
+  const matchHref = await page
+    .locator('#main a[href^="/matches/"]')
+    .first()
+    .getAttribute("href");
+  // A query on the address the viewer is at stays out of the shared link.
+  await page.goto(`${matchHref}?ref=e2e`);
+  await page.getByRole("button", { name: "Share", exact: true }).click();
+  await expect(
+    page.getByText("Link copied. Paste it in Discord to show its preview."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Copied", exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    new URL(matchHref!, baseURL).href,
+  );
+  assertNoErrors();
 });
 
 test("public stat and content pages stay inside a 360px viewport", async ({

@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { singleActiveSeason } from "@/lib/season";
 import { SCRIM_STATUS, SEASON_STATUS } from "@/lib/constants";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
   isScrimNotPlayed,
   scrimJoinCheck,
@@ -52,7 +52,7 @@ function ScrimTime({ date }: { date: Date }) {
     <LocalTime
       ts={date.getTime()}
       variant="full"
-      initial={formatMatchTime(date, "full")}
+      initial={formatLeagueMatchTime(date, "full")}
     />
   );
 }

@@ -193,6 +193,45 @@ export type MatchPreviewInput = {
   bestOf: number;
 };
 
+type SeriesResult = Pick<
+  MatchPreviewInput,
+  "homeTeamId" | "awayTeamId" | "homeScore" | "awayScore" | "winnerTeamId"
+>;
+
+/**
+ * The side that won a completed series: the recorded winner, else the higher
+ * score (older rows may not name one). Null for a draw.
+ */
+export function seriesWinnerSide(match: SeriesResult): "home" | "away" | null {
+  const h = match.homeScore;
+  const a = match.awayScore;
+  if (match.winnerTeamId === match.homeTeamId || (!match.winnerTeamId && h > a)) {
+    return "home";
+  }
+  if (match.winnerTeamId === match.awayTeamId || (!match.winnerTeamId && a > h)) {
+    return "away";
+  }
+  return null;
+}
+
+/**
+ * A completed series in words: "Radiant Rascals won 2–1", "Drawn 1–1", with
+ * "(ruled result)" after a forfeit or manual result. The link preview's text
+ * and its picture both say it this way.
+ */
+export function seriesResultText(
+  match: SeriesResult & { forfeit: boolean },
+  names: { home: string; away: string },
+): string {
+  const h = match.homeScore;
+  const a = match.awayScore;
+  const winner = seriesWinnerSide(match);
+  const result = winner
+    ? `${names[winner]} won ${Math.max(h, a)}–${Math.min(h, a)}`
+    : `Drawn ${h}–${a}`;
+  return match.forfeit ? `${result} (ruled result)` : result;
+}
+
 /**
  * A match's preview: the round and teams, then the kickoff before it's
  * played, the live score during it, or the result after.
@@ -204,16 +243,10 @@ export function matchPreview(match: MatchPreviewInput): LinkPreview {
   const a = match.awayScore;
   let state: string;
   if (match.status === MATCH_STATUS.COMPLETED) {
-    const winner =
-      match.winnerTeamId === match.homeTeamId || (!match.winnerTeamId && h > a)
-        ? match.homeName
-        : match.winnerTeamId === match.awayTeamId || (!match.winnerTeamId && a > h)
-          ? match.awayName
-          : null;
-    state = winner
-      ? `${winner} won ${Math.max(h, a)}–${Math.min(h, a)}`
-      : `Drawn ${h}–${a}`;
-    if (match.forfeit) state += " (ruled result)";
+    state = seriesResultText(match, {
+      home: match.homeName,
+      away: match.awayName,
+    });
   } else if (match.status === MATCH_STATUS.LIVE || h + a > 0) {
     state = `Live · ${h}–${a} · ${series}`;
   } else {

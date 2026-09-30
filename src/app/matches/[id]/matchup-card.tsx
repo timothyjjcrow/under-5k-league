@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { CHECKIN_NUDGE_THROTTLE_SECONDS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import type { PickemControl } from "@/lib/pickem";
 import type { FormResult, HeadToHead } from "@/lib/team-matches";
 import { remindUnansweredCheckins } from "@/app/actions/availability";
@@ -208,7 +208,7 @@ export function MatchupCard({
                   <LocalTime
                     ts={nudge.sentAt.getTime()}
                     variant="short"
-                    initial={formatMatchTime(nudge.sentAt, "short")}
+                    initial={formatLeagueMatchTime(nudge.sentAt, "short")}
                   />
                   . You can send another from{" "}
                   <LocalTime
@@ -217,7 +217,7 @@ export function MatchupCard({
                       CHECKIN_NUDGE_THROTTLE_SECONDS * 1000
                     }
                     variant="short"
-                    initial={formatMatchTime(
+                    initial={formatLeagueMatchTime(
                       new Date(
                         nudge.sentAt.getTime() +
                           CHECKIN_NUDGE_THROTTLE_SECONDS * 1000,

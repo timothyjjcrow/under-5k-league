@@ -44,6 +44,47 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   (`howItWorksAction`) reuses the header's join label and Home's "Register as
   a standin" (`standinSignupOpen`), so the three pages name one action one way.
 
+## Link previews (Discord, X, Slack)
+
+- **Preview text comes from `link-preview.ts`** (pure, tested), loaded by
+  `link-preview-metadata.ts`; a result reads the same everywhere through
+  `seriesResultText`.
+- **The match, team, player and season pages draw their own picture:** an
+  `opengraph-image.tsx` and a `twitter-image.tsx` beside each page, one line
+  each over `src/components/og-share-images.tsx`. The layouts are
+  `src/components/og-card.tsx` (Satori: an element with more than one child
+  needs `display: flex`, colours are plain hex); the facts come from
+  `link-preview-images.ts` over the rules the pages use (standings, seeds,
+  `playoffStatusChip`, `resolveChampionPresentation`, the season's crest hues).
+  A kickoff is on the league's clock with its zone named: a picture can't
+  adapt to the viewer.
+- **Leave the images out of those pages' metadata**
+  (`shareMetadata(..., { pageImage: true })`): Next uses a folder's image files
+  only where the page's metadata names no images at all, so the failure is
+  silent. Every other page, and an account that only signed in, keeps the
+  league's picture. `e2e-mid/boards.spec.ts` checks the rendered tags.
+- **Draw per request and cache five minutes** (`force-dynamic`,
+  `OG_CACHE_CONTROL`): a match's picture follows it from the kickoff to the
+  live score to the result. `share-image-guards.test.ts` pins every route.
+- **The server fetches a crest or avatar only through `fetchOgImage`:** HTTPS
+  on Imgur or Steam's avatar hosts (`ogImageUrlAllowed`), no redirects, a
+  2.5-second timeout, a 1.5 MB cap and PNG or JPEG bytes. Anything else draws
+  the team's initials on its hue. A picture that fails to draw redirects to
+  the league's own image; a missing page's picture is a 404.
+- **The font is Oswald** (SIL Open Font License, `src/lib/og-fonts/`), read
+  at request time; without it next/og falls back to its built-in font, so
+  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist.
+  Keep files like these under `src/`: the release classifier
+  (`scripts/classify-release.mjs`) treats a new top-level folder, or a
+  `public/` file that isn't an image, video or web font, as an unknown path,
+  which turns a routine release into a maintenance one.
+- **Match, team and player pages carry a Share control** on the back link's
+  row, so it costs no height (`share-button.tsx` over `share-link.ts`). A
+  phone opens its share sheet; a mouse copies the link, since a desktop sheet
+  rarely offers Discord. It shares the page's own address on the viewer's
+  host, with no query or hash, and closing the sheet is not an error. Only a
+  copy the clipboard accepted says "Link copied".
+
 ## The shared UI kit
 
 - **Change the kit additively.** `Card`, `CardHeader`, `Stat`, `EmptyState`,
@@ -251,6 +292,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **This week faces a lone fixture's sides off** (home left, away right,
   "vs" or the live score between) instead of stretching one card built for a
   third of the width across all of it.
+- **A lone series on This week gets the big kickoff clock**
+  (`<KickoffCountdown>`) in place of the header chip; when it is the grand
+  final the card is titled "The grand final" and the clock wears gold.
 - **The Your team card** shows only the stakes of the next series (the table
   already highlights rank and record), aligned to the engine's `nextMatchId`
   and naming the opponent. It sits in the auto-fit band (the rail from `xl`)
@@ -455,9 +499,21 @@ the league is already draftable and many visitors have joined. Write for both.
   own. `GameIdentityEditor` gets the viewer from the `cache()`d
   `getSessionUser`.
 - **`MatchPreview` renders while a match has no games and is not COMPLETED:**
-  rosters, recent form, prior meetings, stakes banner, scouting report, and the
-  `/schedule` check-in banner. A COMPLETED match with no games says it was a
-  forfeit ruling or a manual score.
+  rosters, recent form, prior meetings, stakes banner, tale of the tape,
+  scouting report, and the `/schedule` check-in banner. A COMPLETED match with
+  no games says it was a forfeit ruling or a manual score.
+- **The tale of the tape** (`tale-of-the-tape.tsx` over the pure
+  `src/lib/tale-of-the-tape.ts`) compares the two teams' season: the regular
+  season's record with the table place (a playoff seed from
+  `seedsFromFirstRound` in the knockouts), games won across every completed
+  series, roster MMR, and kills, KDA, GPM and game length from the box scores
+  of each team's own side (`radiantTeamId`/`direTeamId`, complete box scores
+  only). A row shows only when both sides have its number, and the card only
+  with two rows or a road, so week one goes straight to the rosters. Bars
+  grow outwards from the label column in each team's hue; the leader's is
+  solid. A knockout series adds each side's road (`playoffRoad`): the series
+  it won in the rounds before this one, each linking to its match. It never
+  shows the community pick'em split (`pickemControlFor`'s rule).
 - **The season lobby bot's panel has two render sites, never both for one
   viewer** (off unless `DOTA_SEASON_LOBBY_BOT_ENABLED`): captains get it with
   Create/Start in Captain tools; other players, booked standins and admins get
@@ -466,6 +522,13 @@ the league is already draftable and many visitors have joined. Write for both.
 - **The scoreboard is one row from `lg`:** name, crest, score, crest, name
   (`TeamSide side`, the crest beside the score). Below `lg` each crest sits
   over its name, as long names need the width.
+- **Before kickoff everyone gets the ticking clock** under the scoreboard
+  (`<KickoffCountdown>` over `kickoffClock` in `countdown.ts`), not only the
+  two teams' players: an unplayed fixture of the active season, gone once
+  there is a score, a live game or "Awaiting result". The server renders
+  empty boxes and the browser fills them (`getServerSnapshot` is null), so
+  hydration never mismatches; its spoken name gives minutes, never seconds.
+  `kickoff-countdown.test.ts` pins both render sites.
 - **A box score line is `BoxScoreLine`** (`box-score-line.tsx`, the page's
   one client piece of a box score): the server renders every part and the
   line lays them out. Each side is an `@container`; from `@lg` a player is

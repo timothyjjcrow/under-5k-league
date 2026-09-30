@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { coverChoices } from "@/lib/standin";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
   matchLogisticsOpen,
   standinAssignmentOpen,
@@ -105,7 +105,7 @@ export async function CaptainTodos({
               <LocalTime
                 ts={answer.proposedTime.getTime()}
                 variant="full"
-                initial={formatMatchTime(answer.proposedTime, "full")}
+                initial={formatLeagueMatchTime(answer.proposedTime, "full")}
               />
             </strong>
             .

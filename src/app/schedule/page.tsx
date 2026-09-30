@@ -38,7 +38,7 @@ import {
   roundName,
   teamByeWeek,
 } from "@/lib/schedule";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { ChampionBanner } from "@/components/champion-banner";
 import { ByeWeekNote } from "@/components/bye-week-note";
 import {
@@ -105,16 +105,17 @@ type MatchStandin = StandinAssignment & {
   replaced: User | null;
 };
 
-// Both delegate to formatMatchTime — these strings are LocalTime hydration
-// snapshots, so drifting from the client's formatter causes flicker.
+// Both delegate to formatLeagueMatchTime: these strings are LocalTime
+// hydration snapshots, the league's clock with its zone named until the
+// viewer's own clock takes over.
 // "full" keeps the weekday ("Sat" is what players actually plan around);
 // "short" is the phone-width variant where it doesn't fit between team names.
 function fmtWhen(d: Date | null): string | null {
-  return d ? formatMatchTime(d, "full") : null;
+  return d ? formatLeagueMatchTime(d, "full") : null;
 }
 
 function fmtWhenShort(d: Date): string {
-  return formatMatchTime(d, "short");
+  return formatLeagueMatchTime(d, "short");
 }
 
 // Strip the RSVP summary to the two numbers the row badge shows.
@@ -530,7 +531,7 @@ export default async function SchedulePage() {
         name: teamName.get(id) ?? "?",
       })),
       nightTs: night?.getTime() ?? null,
-      nightInitial: night ? formatMatchTime(night, "date") : null,
+      nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
     };
   });
 
@@ -557,7 +558,7 @@ export default async function SchedulePage() {
       matches: weekMatches.map(toMatchView),
       byes: [],
       nightTs: night?.getTime() ?? null,
-      nightInitial: night ? formatMatchTime(night, "date") : null,
+      nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
     };
   });
   const tiebreakerBrackets = buildTiebreakerBrackets({ projection: playoffField, teams, matches });
@@ -574,7 +575,7 @@ export default async function SchedulePage() {
       matches: r.matches.map(toMatchView),
       byes: [],
       nightTs: night?.getTime() ?? null,
-      nightInitial: night ? formatMatchTime(night, "date") : null,
+      nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
     };
   });
 

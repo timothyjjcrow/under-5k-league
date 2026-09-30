@@ -133,3 +133,72 @@ export function playoffRunTile(run: PlayoffRun): {
       return { value: "Missed", hint: "Didn't make the playoffs" };
   }
 }
+
+/** One completed series on a team's way through the bracket. */
+export type PlayoffRoadStep = {
+  matchId: string;
+  /** "Quarterfinal", "Semifinal" (matchRoundLabel). */
+  round: string;
+  opponentId: string;
+  /** Games this team won and lost in the series. */
+  won: number;
+  lost: number;
+  /** Whether this team took the series. */
+  wonSeries: boolean;
+};
+
+/**
+ * The postseason series `teamId` finished before `match`'s round, earliest
+ * first: a finalist's road to the final, a semifinalist's quarterfinal. Empty
+ * in the first round, for a team the draw sent straight into this round, and
+ * for a match with no bracket slot. Only rounds BEFORE this one count, so a
+ * rematch in a later round never shows up as part of the way here.
+ */
+export function playoffRoad(
+  teamId: string,
+  match: { id: string; phase: string; bracketSlot: string | null },
+  matches: readonly (PlayoffRunMatch & { homeScore: number; awayScore: number })[],
+): PlayoffRoadStep[] {
+  if (!isPostseason(match) || !match.bracketSlot) return [];
+  const postseason = matches.filter(isPostseason);
+  const totalRounds = playoffTotalRounds(postseason);
+  const thisRound = slotRound(match.bracketSlot);
+  return postseason
+    .filter(
+      (m) =>
+        m.id !== match.id &&
+        m.status === MATCH_STATUS.COMPLETED &&
+        m.bracketSlot != null &&
+        slotRound(m.bracketSlot) < thisRound &&
+        (m.homeTeamId === teamId || m.awayTeamId === teamId),
+    )
+    .sort(
+      (a, b) =>
+        slotRound(a.bracketSlot) - slotRound(b.bracketSlot) ||
+        a.id.localeCompare(b.id),
+    )
+    .map((m) => {
+      const home = m.homeTeamId === teamId;
+      return {
+        matchId: m.id,
+        round: matchRoundLabel(m, totalRounds),
+        opponentId: home ? m.awayTeamId : m.homeTeamId,
+        won: home ? m.homeScore : m.awayScore,
+        lost: home ? m.awayScore : m.homeScore,
+        wonSeries: m.winnerTeamId === teamId,
+      };
+    });
+}
+
+/**
+ * The heading over both teams' roads, from the match's round label: "Road to
+ * the grand final", "Road to the semifinal", "Road to round 2". A label it
+ * can't place ("Playoffs") gives "Road here".
+ */
+export function playoffRoadTitle(roundLabel: string): string {
+  if (/^(Grand final|Semifinal|Quarterfinal)$/.test(roundLabel)) {
+    return `Road to the ${roundLabel.toLowerCase()}`;
+  }
+  if (/^Round \d+$/.test(roundLabel)) return `Road to ${roundLabel.toLowerCase()}`;
+  return "Road here";
+}

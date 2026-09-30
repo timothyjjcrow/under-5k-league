@@ -34,6 +34,19 @@ describe("shareMetadata", () => {
     expect(meta.description).toBe("");
   });
 
+  it("leaves the images out for a page that draws its own picture", () => {
+    // Next uses a folder's opengraph-image and twitter-image files only when
+    // the page's metadata names no images (mergeStaticMetadata checks for an
+    // `images` key at all), so the key must be absent, not empty.
+    const meta = shareMetadata("Week 3 · A vs B", "Season 7", undefined, {
+      pageImage: true,
+    });
+    expect(meta.openGraph).not.toHaveProperty("images");
+    expect(meta.twitter).not.toHaveProperty("images");
+    expect(meta.openGraph).toMatchObject({ title: "Week 3 · A vs B", siteName: "GGD2L" });
+    expect(meta.twitter).toMatchObject({ card: "summary_large_image" });
+  });
+
   it("adds a canonical and Open Graph URL when the route supplies a pathname", () => {
     const meta = shareMetadata(
       "Record book",
@@ -53,10 +66,14 @@ describe("playerProfileMetadata", () => {
     expect(meta.description).toBe(
       "Player 3's player profile · Legend medal · Bane player — match history in GGD2L.",
     );
-    expect(meta.openGraph).toMatchObject({
-      title: "Player 3 · Player",
-      images: ["/opengraph-image.png"],
-    });
+    expect(meta.openGraph).toMatchObject({ title: "Player 3 · Player" });
+  });
+
+  it("leaves the images to the profile's own picture files", () => {
+    const meta = playerProfileMetadata("Player 3", []);
+    expect(meta.openGraph).not.toHaveProperty("images");
+    expect(meta.twitter).not.toHaveProperty("images");
+    expect(meta.twitter).toMatchObject({ card: "summary_large_image" });
   });
 
   it("leaves the highlights off when there are none", () => {

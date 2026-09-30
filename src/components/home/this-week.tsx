@@ -1,6 +1,8 @@
 import type { Match } from "@prisma/client";
 import Link from "next/link";
 import { Fragment } from "react";
+import { Countdown } from "@/components/countdown";
+import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
@@ -17,6 +19,7 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "@/lib/availability";
+import { MATCH_PHASE } from "@/lib/constants";
 import { pickemControlFor } from "@/lib/pickem";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
@@ -62,6 +65,10 @@ export async function ThisWeek({
   const { slate: focus, title } = focusSlate(season.status, matches);
   if (focus.length === 0) return null;
   const playoffRounds = playoffTotalRounds(matches);
+  // The last series standing is the grand final: say so, and give it the
+  // gold clock, instead of dressing it like any other round.
+  const finalOnly =
+    focus.length === 1 && focus[0].phase === MATCH_PHASE.FINAL;
 
   const [avail, standinRows] = await Promise.all([
     showCheckins
@@ -111,7 +118,7 @@ export async function ThisWeek({
     <Card>
       <CardHeader
         headingLevel={2}
-        title={title}
+        title={finalOnly ? "The grand final" : title}
         action={
           <Link href="/schedule#fixtures" className={textLink("text-sm")}>
             Full schedule <LinkArrow />
@@ -174,11 +181,17 @@ export async function ThisWeek({
                       <span aria-hidden>LIVE</span>
                     </span>
                   ) : m.scheduledAt ? (
-                    <LocalTime
-                      ts={m.scheduledAt.getTime()}
-                      variant="full"
-                      initial={fmtWhen(m.scheduledAt) ?? ""}
-                    />
+                    <span>
+                      <LocalTime
+                        ts={m.scheduledAt.getTime()}
+                        variant="full"
+                        initial={fmtWhen(m.scheduledAt) ?? ""}
+                      />
+                      {/* A lone series gets the big clock below instead. */}
+                      {solo ? null : (
+                        <Countdown targetMs={m.scheduledAt.getTime()} />
+                      )}
+                    </span>
                   ) : (
                     <span>Kickoff time not set</span>
                   )}
@@ -331,6 +344,18 @@ export async function ThisWeek({
                     );
                   })}
                 </div>
+                {solo && m.status !== "LIVE" && m.scheduledAt ? (
+                  <KickoffCountdown
+                    targetMs={m.scheduledAt.getTime()}
+                    tone={m.phase === MATCH_PHASE.FINAL ? "final" : "default"}
+                    nowText={
+                      m.phase === MATCH_PHASE.FINAL
+                        ? "The grand final is on"
+                        : "It's kickoff time"
+                    }
+                    className="mb-4"
+                  />
+                ) : null}
                 <p className="flex items-center justify-between border-t border-line-soft pt-3 text-xs text-muted group-hover/match:text-info">
                   <span>Match details & check-in</span>
                   <span aria-hidden>→</span>

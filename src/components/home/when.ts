@@ -1,10 +1,10 @@
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 
 /**
- * A kickoff as Home prints it, or null. Delegates to formatMatchTime: these
- * strings are LocalTime hydration snapshots, so drifting from the client's
- * formatter causes flicker.
+ * A kickoff as Home prints it, or null. Delegates to formatLeagueMatchTime:
+ * these strings are LocalTime hydration snapshots, the league's clock with its
+ * zone named until the viewer's own clock takes over.
  */
 export function fmtWhen(d: Date | null): string | null {
-  return d ? formatMatchTime(d, "full") : null;
+  return d ? formatLeagueMatchTime(d, "full") : null;
 }

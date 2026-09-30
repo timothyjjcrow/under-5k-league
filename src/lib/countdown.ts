@@ -42,6 +42,62 @@ export function hasPassed(targetMs: number, nowMs: number): boolean {
   return targetMs - nowMs <= -LIVE_WINDOW_MS;
 }
 
+/**
+ * A kickoff countdown split into whole units, for the segmented clock on a
+ * match page ("2 d 05 h 12 m 33 s"). "now" runs through the same live window
+ * as `countdownLabel`'s "happening now"; "over" is past it, where the clock
+ * hides. Seconds round UP, so the clock reads 00:00:01 in the last second and
+ * never 00:00:00 before kickoff.
+ */
+export type KickoffClock =
+  | {
+      state: "upcoming";
+      days: number;
+      hours: number;
+      minutes: number;
+      seconds: number;
+    }
+  | { state: "now" }
+  | { state: "over" };
+
+export function kickoffClock(targetMs: number, nowMs: number): KickoffClock {
+  const d = targetMs - nowMs;
+  if (d <= -LIVE_WINDOW_MS) return { state: "over" };
+  if (d <= 0) return { state: "now" };
+  const total = Math.ceil(d / 1000);
+  return {
+    state: "upcoming",
+    days: Math.floor(total / 86_400),
+    hours: Math.floor((total % 86_400) / 3_600),
+    minutes: Math.floor((total % 3_600) / 60),
+    seconds: total % 60,
+  };
+}
+
+/**
+ * What a screen reader hears for the clock, to the minute: "2 days, 5 hours
+ * and 12 minutes". The seconds stay visual; a label that changed every
+ * second would be noise.
+ */
+export function kickoffClockSpoken(
+  clock: Extract<KickoffClock, { state: "upcoming" }>,
+): string {
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const parts = [
+    clock.days > 0 ? unit(clock.days, "day") : null,
+    clock.days > 0 || clock.hours > 0 ? unit(clock.hours, "hour") : null,
+    unit(
+      clock.days === 0 && clock.hours === 0
+        ? Math.max(1, clock.minutes + (clock.seconds > 0 ? 1 : 0))
+        : clock.minutes,
+      "minute",
+    ),
+  ].filter((part): part is string => part !== null);
+  return parts.length === 1
+    ? parts[0]
+    : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
 // --- Live-room clocks (auction bid/nomination, inhouse vote/pick/elapsed) ----
 // The draft & inhouse rooms drive their countdowns off a SERVER deadline
 // (epoch ms) corrected by `offsetMs` (= serverNow − clientNow, captured on each

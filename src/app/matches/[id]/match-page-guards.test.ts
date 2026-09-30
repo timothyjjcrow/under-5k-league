@@ -354,6 +354,36 @@ describe("match page admin tools", () => {
   });
 });
 
+describe("match page tale of the tape", () => {
+  const TAPE = CARD("tale-of-the-tape.tsx");
+
+  it("sits in the preview after the stakes and before the Matchup card", () => {
+    const preview = CARD("match-preview.tsx");
+    const stakes = preview.indexOf("<StakesBanner");
+    const tape = preview.indexOf("<TaleOfTheTape");
+    expect(stakes).toBeGreaterThan(-1);
+    expect(tape).toBeGreaterThan(stakes);
+    expect(preview.indexOf("<MatchupCard")).toBeGreaterThan(tape);
+    // The season's matches come from the preview's one read.
+    expect(preview).toMatch(/<TaleOfTheTape[\s\S]*?seasonMatches=\{seasonMatches\}/);
+  });
+
+  it("takes every number from the tested helpers", () => {
+    expect(TAPE).toContain("const rows = taleOfTheTape({");
+    expect(TAPE).toContain("playoffRoad(match.homeTeamId, match, seasonMatches)");
+    expect(TAPE).toContain("playoffRoad(match.awayTeamId, match, seasonMatches)");
+    expect(TAPE).toContain("{playoffRoadTitle(roundLabel)}");
+  });
+
+  it("stays away until it has two numbers to compare or a road", () => {
+    expect(TAPE).toContain("if (rows.length < 2 && !hasRoad) return null;");
+  });
+
+  it("stays out of the jump bar, whose chips e2e pins", () => {
+    expect(CARD("page.tsx")).not.toContain('"match-tape"');
+  });
+});
+
 describe("match page shared reads", () => {
   it("reads the match, season, draft and viewer once, not per card", () => {
     // Every card used to re-read the season (five places), the draft (three)

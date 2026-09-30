@@ -1,5 +1,5 @@
 import { LocalTime } from "@/components/local-time";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
   playoffStatusText,
   type TeamPlayoffStatus,
@@ -53,7 +53,7 @@ export function PlayoffStatusLine({
           <LocalTime
             ts={kickoff.getTime()}
             variant="short"
-            initial={formatMatchTime(kickoff, "short")}
+            initial={formatLeagueMatchTime(kickoff, "short")}
           />
         </>
       ) : null}

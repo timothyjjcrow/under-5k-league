@@ -18,7 +18,7 @@ import { parseInhouseBox } from "@/lib/inhouse-box";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { loadInhouseLadder } from "@/lib/inhouse-ladder";
 import { PROVISIONAL_GAMES } from "@/lib/inhouse-stats";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -129,7 +129,7 @@ async function InhouseCareer({ userId }: { userId: string }) {
                   <LocalTime
                     ts={playedAt.getTime()}
                     variant="short"
-                    initial={formatMatchTime(playedAt, "short")}
+                    initial={formatLeagueMatchTime(playedAt, "short")}
                   />
                 </span>
                 <Badge tone={won ? "success" : "danger"}>

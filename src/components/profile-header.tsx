@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
+import { ShareButton } from "@/components/share-button";
 import { DiscordTag } from "@/components/discord-tag";
 import {
   Avatar,
@@ -86,26 +87,27 @@ export function ProfileHeader({
   const roles = roleLabels(signup?.roles);
   return (
     <div>
-      {poolListed || comparable ? (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          {poolListed ? (
-            <ContextBackLink href="/players" className={textLink("text-sm")}>
-              ← All players
-            </ContextBackLink>
-          ) : null}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        {poolListed ? (
+          <ContextBackLink href="/players" className={textLink("text-sm")}>
+            ← All players
+          </ContextBackLink>
+        ) : null}
+        <span className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
           {/* Compare lists players with an imported league game (the same
               trusted lines as gameRows); anyone else, such as a standin who
               never played, would open onto "Player unavailable". */}
           {comparable ? (
             <Link
               href={`/players/compare?a=${user.id}`}
-              className={textLink("ml-auto text-sm")}
+              className={textLink("text-sm")}
             >
               Compare vs… <LinkArrow />
             </Link>
           ) : null}
-        </div>
-      ) : null}
+          <ShareButton path={`/players/${user.id}`} title={user.name} />
+        </span>
+      </div>
       <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
         {/* Signature hero portrait fading in from the right. */}
         {signatureHero ? (
