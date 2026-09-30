@@ -34,7 +34,7 @@ import {
   type DraftReadiness,
 } from "@/lib/draft-readiness";
 import { draftNightSoon, draftSetupOpen } from "@/lib/draft-setup";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
@@ -164,7 +164,7 @@ export function signupsHero(
             <LocalTime
               ts={season.draftAt.getTime()}
               variant="short"
-              initial={formatMatchTime(season.draftAt, "short")}
+              initial={formatLeagueMatchTime(season.draftAt, "short")}
             />
           </strong>
           {/* passedLabel, because this chip owns the date it prints. Without
@@ -243,7 +243,7 @@ function SignupsAside({
               <LocalTime
                 ts={draftAt.getTime()}
                 variant="full"
-                initial={formatMatchTime(draftAt, "full")}
+                initial={formatLeagueMatchTime(draftAt, "full")}
               />
             </strong>
             <Countdown

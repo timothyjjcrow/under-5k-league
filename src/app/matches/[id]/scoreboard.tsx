@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { cn } from "@/lib/utils";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchResultsOpen } from "@/lib/league-lifecycle";
 import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
@@ -195,7 +195,7 @@ export async function MatchScoreboard({
             <LocalTime
               ts={match.scheduledAt.getTime()}
               variant="full"
-              initial={formatMatchTime(match.scheduledAt, "full")}
+              initial={formatLeagueMatchTime(match.scheduledAt, "full")}
             />
           ) : (
             <span>Kickoff time TBD</span>

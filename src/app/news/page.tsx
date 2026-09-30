@@ -5,7 +5,7 @@ import { listPage } from "@/lib/list-page";
 import { singleSearchParam } from "@/lib/search-params";
 import { NewsHashLink } from "@/components/news-hash-link";
 import { prisma } from "@/lib/prisma";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { shareMetadata } from "@/lib/share-metadata";
 import { LocalTime } from "@/components/local-time";
 import {
@@ -75,7 +75,7 @@ export default async function NewsPage({ searchParams }: { searchParams: Promise
                     <LocalTime
                       ts={p.createdAt.getTime()}
                       variant="full"
-                      initial={formatMatchTime(p.createdAt, "full")}
+                      initial={formatLeagueMatchTime(p.createdAt, "full")}
                     />
                     {p.author ? ` · ${p.author.name}` : ""}
                   </div>

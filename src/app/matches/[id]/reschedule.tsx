@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchLogisticsOpen } from "@/lib/league-lifecycle";
 import { loadRescheduleDeadline } from "@/lib/reschedule-service";
 import { FIXTURE_CONFLICT_WINDOW_MS } from "@/lib/fixture-conflict";
@@ -84,7 +84,7 @@ export async function RescheduleSection({
               <LocalTime
                 ts={pending.proposedTime.getTime()}
                 variant="full"
-                initial={formatMatchTime(pending.proposedTime, "full")}
+                initial={formatLeagueMatchTime(pending.proposedTime, "full")}
               />
             </strong>
             .
@@ -120,7 +120,7 @@ export async function RescheduleSection({
           <LocalTime
             ts={pending.proposedTime.getTime()}
             variant="full"
-            initial={formatMatchTime(pending.proposedTime, "full")}
+            initial={formatLeagueMatchTime(pending.proposedTime, "full")}
           />
         </strong>{" "}
         pending the captains&apos; agreement.
@@ -187,7 +187,7 @@ async function RescheduleCard({
                   <LocalTime
                     ts={match.scheduledAt.getTime()}
                     variant="full"
-                    initial={formatMatchTime(match.scheduledAt, "full")}
+                    initial={formatLeagueMatchTime(match.scheduledAt, "full")}
                   />{" "}
                   to{" "}
                 </>
@@ -196,7 +196,7 @@ async function RescheduleCard({
                 <LocalTime
                   ts={pending.proposedTime.getTime()}
                   variant="full"
-                  initial={formatMatchTime(pending.proposedTime, "full")}
+                  initial={formatLeagueMatchTime(pending.proposedTime, "full")}
                 />
               </strong>
               {mine ? " — waiting on the other captain." : "."}
@@ -282,7 +282,7 @@ async function RescheduleCard({
                   <LocalTime
                     ts={deadline.getTime()}
                     variant="full"
-                    initial={formatMatchTime(deadline, "full")}
+                    initial={formatLeagueMatchTime(deadline, "full")}
                   />
                   , when the playoffs start, and not within {clashHours}{" "}
                   hours of another match or scrim for either team.

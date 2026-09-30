@@ -311,8 +311,9 @@ function MatchCard({
   const awayName = m.away?.name ?? "TBD";
   // The link's aria-label replaces its content as the accessible name, so the
   // <LocalTime> below never reaches a screen reader. m.when was formatted on
-  // the server (UTC in production); read the kickoff in the viewer's zone
-  // here too. Called unconditionally (a hook); the server snapshot is m.when.
+  // the server (the league's clock, zone named); read the kickoff in the
+  // viewer's zone here too. Called unconditionally (a hook); the server
+  // snapshot is m.when.
   const localWhen = useLocalTimeText(m.whenTs ?? 0, "full", m.when ?? "");
   const matchState = live
     ? `live at ${m.homeScore} to ${m.awayScore}`
@@ -373,7 +374,11 @@ function MatchCard({
           ) : m.completed ? (
             "Box score"
           ) : m.when && m.whenTs != null ? (
-            <LocalTime ts={m.whenTs} variant="short" initial={m.when} />
+            <LocalTime
+              ts={m.whenTs}
+              variant="short"
+              initial={m.whenShort ?? m.when}
+            />
           ) : (
             (m.when ?? "Details")
           )}

@@ -18,7 +18,7 @@ import {
   standinAssignmentOpen,
 } from "@/lib/league-lifecycle";
 import { MATCH_ANCHOR, adminMatchRowId } from "@/lib/match-anchors";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { getSeasonDraftStatus } from "@/lib/queries";
 import { type AutoCheck, autoCheckCopy, autoCheckStatus } from "@/lib/result-sync";
 import {
@@ -154,7 +154,7 @@ export function AutoCheckLine({
         <LocalTime
           ts={copy.at}
           variant="short"
-          initial={formatMatchTime(new Date(copy.at), "short")}
+          initial={formatLeagueMatchTime(new Date(copy.at), "short")}
         />
       ) : null}
       {copy.tail}
@@ -542,7 +542,7 @@ export function MatchResultRow({
             <LocalTime
               ts={m.scheduledAt.getTime()}
               variant="full"
-              initial={formatMatchTime(m.scheduledAt, "full")}
+              initial={formatLeagueMatchTime(m.scheduledAt, "full")}
             />
           ) : (
             "not set"
@@ -1072,7 +1072,7 @@ export async function AdminMatchTools({
                 <LocalTime
                   ts={pending.proposedTime.getTime()}
                   variant="full"
-                  initial={formatMatchTime(pending.proposedTime, "full")}
+                  initial={formatLeagueMatchTime(pending.proposedTime, "full")}
                 />{" "}
                 — awaiting the other captain.
               </span>

@@ -6,7 +6,7 @@ import { INHOUSE_STATUS } from "@/lib/constants";
 import { parseInhouseBox } from "@/lib/inhouse-box";
 import { gameMvp } from "@/lib/achievements";
 import { heroById } from "@/lib/heroes";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
   INHOUSE_HISTORY_PAGE_SIZE,
   inhouseHistoryPage,
@@ -284,7 +284,7 @@ export default async function InhouseHistoryPage({
                               <LocalTime
                                 ts={playedAt.getTime()}
                                 variant="short"
-                                initial={formatMatchTime(playedAt, "short")}
+                                initial={formatLeagueMatchTime(playedAt, "short")}
                               />
                               {durationLabel ? (
                                 <span className="tabular-nums">
@@ -322,7 +322,7 @@ export default async function InhouseHistoryPage({
                             scroll={false}
                             prefetch={false}
                             aria-expanded={isExpanded}
-                            aria-label={`${isExpanded ? "Close" : "Open"} box score for ${formatMatchTime(playedAt, "short")}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""}`}
+                            aria-label={`${isExpanded ? "Close" : "Open"} box score for ${formatLeagueMatchTime(playedAt, "short")}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""}`}
                             className={buttonClasses(
                               isExpanded ? "secondary" : "ghost",
                               "sm",
@@ -352,7 +352,7 @@ export default async function InhouseHistoryPage({
                                 variant="ghost"
                                 size="sm"
                                 className="min-h-11 text-danger-soft hover:underline"
-                                confirm={`Void the ${formatMatchTime(playedAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, and everyone's Elo recalculates without it.`}
+                                confirm={`Void the ${formatLeagueMatchTime(playedAt, "short")} game (${lobby.radiantScore ?? 0}–${lobby.direScore ?? 0}${lobby.dotaMatchId ? `, match ${lobby.dotaMatchId}` : ""})? It leaves the ladder and history, and everyone's Elo recalculates without it.`}
                               >
                                 void
                               </SubmitButton>
@@ -481,7 +481,7 @@ async function RecentFailedLobbies() {
                   <LocalTime
                     ts={lobby.createdAt.getTime()}
                     variant="short"
-                    initial={formatMatchTime(lobby.createdAt, "short")}
+                    initial={formatLeagueMatchTime(lobby.createdAt, "short")}
                   />
                   <span className="font-mono">
                     {" "}

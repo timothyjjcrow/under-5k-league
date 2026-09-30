@@ -1,4 +1,4 @@
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -179,7 +179,7 @@ export default async function ActivityPage({
                     <LocalTime
                       ts={row.createdAt.getTime()}
                       variant="full"
-                      initial={formatMatchTime(row.createdAt, "full")}
+                      initial={formatLeagueMatchTime(row.createdAt, "full")}
                     />{" "}
                     ·{" "}
                     {row.seasonId ? (

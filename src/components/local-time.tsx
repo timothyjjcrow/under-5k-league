@@ -1,8 +1,9 @@
 "use client";
 
 // Renders a match time in the *viewer's* timezone. The server passes its own
-// formatted string as the initial text (identical in dev, UTC in production);
-// after mount we reformat from the timestamp with the browser's locale and
+// text as the initial one: the league's clock with its zone named
+// (formatLeagueMatchTime), which is also all a visitor without scripts sees.
+// After mount we reformat from the timestamp with the browser's locale and
 // timezone, so players always see their local match night.
 
 import { useSyncExternalStore } from "react";
@@ -36,7 +37,7 @@ export function LocalTime({
 }: {
   ts: number;
   variant: TimeVariant;
-  /** Server-formatted fallback shown until the client clock takes over. */
+  /** formatLeagueMatchTime's text, shown until the client clock takes over. */
   initial: string;
   className?: string;
 }) {

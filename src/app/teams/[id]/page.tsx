@@ -10,7 +10,7 @@ import { ContextBackLink } from "@/components/context-back-link";
 import { SectionNav } from "@/components/section-nav";
 import { ProfileMatchSpotlight } from "@/components/profile-match-spotlight";
 import { profileMatch, profileMatchState } from "@/lib/profile-match";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { getSeasonGameScores } from "@/lib/cached-queries";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -823,7 +823,7 @@ export default async function TeamPage({
                         <LocalTime
                           ts={team.season.draftAt.getTime()}
                           variant="full"
-                          initial={formatMatchTime(team.season.draftAt, "full")}
+                          initial={formatLeagueMatchTime(team.season.draftAt, "full")}
                         />
                       </strong>{" "}
                       <Countdown
@@ -915,7 +915,7 @@ export default async function TeamPage({
                                 <LocalTime
                                   ts={m.scheduledAt.getTime()}
                                   variant="short"
-                                  initial={formatMatchTime(m.scheduledAt, "short")}
+                                  initial={formatLeagueMatchTime(m.scheduledAt, "short")}
                                 />
                               ) : done ? (
                                 "Time not recorded"

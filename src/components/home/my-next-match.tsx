@@ -6,7 +6,7 @@ import { LocalTime } from "@/components/local-time";
 import { Card, LinkArrow, buttonClasses, textLink } from "@/components/ui";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
@@ -255,7 +255,7 @@ export async function MyNextMatch({
               <LocalTime
                 ts={pendingReschedule.proposedTime.getTime()}
                 variant="full"
-                initial={formatMatchTime(
+                initial={formatLeagueMatchTime(
                   pendingReschedule.proposedTime,
                   "full",
                 )}

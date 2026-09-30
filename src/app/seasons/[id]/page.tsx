@@ -20,7 +20,7 @@ import { Bracket } from "@/components/bracket";
 import { StandingsTable } from "@/components/standings-table-server";
 import { SeasonGrid } from "@/components/season-grid";
 import { LocalTime } from "@/components/local-time";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
   Avatar,
@@ -120,7 +120,7 @@ function ResultRow({
           <LocalTime
             ts={m.scheduledAt.getTime()}
             variant="short"
-            initial={formatMatchTime(m.scheduledAt, "short")}
+            initial={formatLeagueMatchTime(m.scheduledAt, "short")}
           />
         ) : null}
       </div>
@@ -251,13 +251,7 @@ export default async function SeasonArchivePage({
     playoff,
     teamName,
     seedsFromFirstRound(playoff),
-    (d) =>
-      d.toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      }),
+    (d) => formatLeagueMatchTime(d, "full"),
     teamLogoUrl,
   );
   const champion = championPresentation.championTeamId

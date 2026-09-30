@@ -273,9 +273,13 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   ROW team's view over REGULAR matches (a list per pair for double round
   robins); `SeasonGrid` scrolls inside its own box.
 - **Show times in the viewer's zone.** `<LocalTime ts initial>` uses the server
-  string as the hydration snapshot and the browser zone after, both via
-  `formatMatchTime`. Server `toLocaleString` alone is wrong in production (UTC
-  host). `<Countdown>` (`countdownLabel`) runs to "happening now". A time
+  string as the hydration snapshot and the browser zone after. The server
+  string is `formatLeagueMatchTime`: the league's clock with its zone named
+  ("Sat, Oct 3, 3:00 PM Pacific", "Wed 7 Oct, 20:00 Berlin"), which is what a
+  slow phone shows until the page loads and all a visitor without scripts
+  sees; the browser half is `formatMatchTime`, which server code never calls
+  (it printed UTC with no zone in production; `match-time.test.ts` guards
+  both). `<Countdown>` (`countdownLabel`) runs to "happening now". A time
   inside an attribute (an `aria-label` replaces the element's content, so a
   `<LocalTime>` inside never reaches a screen reader) uses `useLocalTimeText`,
   as the bracket's match links and the schedule rows do.

@@ -11,7 +11,7 @@ import {
   textLink,
 } from "@/components/ui";
 import { firstMedia } from "@/lib/linkify";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { prisma } from "@/lib/prisma";
 import { cn } from "@/lib/utils";
 
@@ -99,7 +99,7 @@ export async function LeagueNews({ className }: { className?: string }) {
                   <LocalTime
                     ts={p.createdAt.getTime()}
                     variant="short"
-                    initial={formatMatchTime(p.createdAt, "short")}
+                    initial={formatLeagueMatchTime(p.createdAt, "short")}
                   />
                 </span>
               </div>

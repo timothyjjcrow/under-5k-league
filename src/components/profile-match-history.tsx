@@ -13,7 +13,7 @@ import {
 } from "@/components/ui";
 import { heroById } from "@/lib/heroes";
 import type { PlayerStat } from "@/lib/match-import";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import type { SeasonHistoryView, SeriesOutcome } from "@/lib/profile-history";
 import type { FormResult } from "@/lib/team-matches";
 import { cn } from "@/lib/utils";
@@ -204,7 +204,7 @@ function SeriesList({
                         <LocalTime
                           ts={entry.playedAt.getTime()}
                           variant="date"
-                          initial={formatMatchTime(entry.playedAt, "date")}
+                          initial={formatLeagueMatchTime(entry.playedAt, "date")}
                         />
                       </>
                     ) : null}

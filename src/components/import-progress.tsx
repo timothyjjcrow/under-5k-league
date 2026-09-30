@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { LocalTime } from "@/components/local-time";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { ImportProgressControls } from "@/components/import-progress-controls";
 import Link from "next/link";
 
@@ -71,9 +71,9 @@ export async function ImportProgress({ seasonId, page, query = {} }: {
               {row.reason ? ` · ${row.reason.replaceAll("_", " ").toLowerCase()}` : ""}
             </p>
             <p className="text-xs text-muted">
-              Last activity: <LocalTime ts={row.updatedAt.getTime()} variant="short" initial={formatMatchTime(row.updatedAt, "short")} />
+              Last activity: <LocalTime ts={row.updatedAt.getTime()} variant="short" initial={formatLeagueMatchTime(row.updatedAt, "short")} />
               {row.nextAttemptAt && row.status !== "NEEDS_REVIEW" ? (
-                <> · Retry after <LocalTime ts={row.nextAttemptAt.getTime()} variant="short" initial={formatMatchTime(row.nextAttemptAt, "short")} /></>
+                <> · Retry after <LocalTime ts={row.nextAttemptAt.getTime()} variant="short" initial={formatLeagueMatchTime(row.nextAttemptAt, "short")} /></>
               ) : null}
             </p>
             <ImportProgressControls candidateId={row.id} seasonId={seasonId} revision={row.revision} />

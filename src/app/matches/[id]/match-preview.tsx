@@ -5,7 +5,7 @@ import { recentForm, headToHead } from "@/lib/team-matches";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { signInHref } from "@/lib/sign-in";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchNightRoster, teamAvailability } from "@/lib/availability";
 import { checkinNudgeBlockedSince } from "@/lib/checkin-nudge-service";
 import { getWebhookUrl } from "@/lib/discord";
@@ -251,7 +251,7 @@ export async function MatchPreview({
           }
           when={
             match.scheduledAt
-              ? formatMatchTime(match.scheduledAt, "full")
+              ? formatLeagueMatchTime(match.scheduledAt, "full")
               : undefined
           }
           whenTs={match.scheduledAt?.getTime()}

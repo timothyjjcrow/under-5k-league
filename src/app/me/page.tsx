@@ -68,7 +68,7 @@ import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchRoundLabel } from "@/lib/schedule";
 import { seasonMatchNightLabel } from "@/lib/match-night";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import { Countdown } from "@/components/countdown";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -421,7 +421,7 @@ export default async function MePage({
                   <LocalTime
                     ts={season.draftAt.getTime()}
                     variant="full"
-                    initial={formatMatchTime(season.draftAt, "full")}
+                    initial={formatLeagueMatchTime(season.draftAt, "full")}
                   />
                 </strong>
                 <Countdown
@@ -477,7 +477,7 @@ export default async function MePage({
                             <LocalTime
                               ts={reg.draftConfirmedAt.getTime()}
                               variant="short"
-                              initial={formatMatchTime(
+                              initial={formatLeagueMatchTime(
                                 reg.draftConfirmedAt,
                                 "short",
                               )}
@@ -500,7 +500,7 @@ export default async function MePage({
                             <LocalTime
                               ts={reg.draftConfirmedFor.getTime()}
                               variant="full"
-                              initial={formatMatchTime(
+                              initial={formatLeagueMatchTime(
                                 reg.draftConfirmedFor,
                                 "full",
                               )}
@@ -605,7 +605,7 @@ export default async function MePage({
                     <LocalTime
                       ts={nextTeamMatch.scheduledAt.getTime()}
                       variant="full"
-                      initial={formatMatchTime(nextTeamMatch.scheduledAt, "full")}
+                      initial={formatLeagueMatchTime(nextTeamMatch.scheduledAt, "full")}
                     />
                   ) : (
                     "Time TBD"
@@ -690,7 +690,7 @@ export default async function MePage({
                                 <LocalTime
                                   ts={a.match.scheduledAt.getTime()}
                                   variant="short"
-                                  initial={formatMatchTime(
+                                  initial={formatLeagueMatchTime(
                                     a.match.scheduledAt,
                                     "short",
                                   )}
@@ -1124,7 +1124,7 @@ async function AwayDatesSection({ userId }: { userId: string }) {
       seasonId={away.seasonId}
       fixtures={away.fixtures.map((f) => ({
         ...f,
-        whenLabel: formatMatchTime(new Date(f.kickoffMs), "short"),
+        whenLabel: formatLeagueMatchTime(new Date(f.kickoffMs), "short"),
       }))}
     />
   );

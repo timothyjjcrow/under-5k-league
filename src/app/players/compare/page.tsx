@@ -19,7 +19,7 @@ import {
 import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { matchRoundLabel } from "@/lib/schedule";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import Link from "next/link";
 import { heroById } from "@/lib/heroes";
@@ -616,7 +616,7 @@ function SeriesLinks({
           <LocalTime
             ts={s.playedAt.getTime()}
             variant="date"
-            initial={formatMatchTime(s.playedAt, "date")}
+            initial={formatLeagueMatchTime(s.playedAt, "date")}
           />
         </span>
       ) : null}
