@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { MID_DB_URL } from "../playwright.midseason.config";
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import {
   expectNoCollapsedTruncation,
   expectNoHorizontalOverflow,
@@ -547,11 +548,11 @@ test("match, team, player and season links unfurl with their own picture", async
   const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
   await expectOwnPicture(`/seasons/${season.id}`, "seasons");
 
-  // Every other page keeps the league's own picture.
+  // Every other page keeps the league's own picture (each region has its own).
   await page.goto("/schedule");
-  expect(await picturePath('meta[property="og:image"]')).toMatch(
-    /^\/opengraph-image\.png/,
-  );
+  expect(
+    (await picturePath('meta[property="og:image"]')).split("?")[0],
+  ).toBe(LEAGUE_CONFIG.branding.openGraphImage);
   // A page that doesn't exist has no picture either.
   expect(
     (await page.request.get("/matches/not-a-match/opengraph-image")).status(),
