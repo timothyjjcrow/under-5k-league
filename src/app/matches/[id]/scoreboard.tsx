@@ -7,6 +7,7 @@ import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
 import { teamHueVar } from "@/lib/team-hues";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
+import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
 import {
@@ -65,6 +66,16 @@ export async function MatchScoreboard({
     match.status === "LIVE" ||
     games.length > 0 ||
     match.homeScore + match.awayScore > 0;
+  // Everyone gets the ticking clock before kickoff, not only the two teams'
+  // players (their check-in banner has its own chip). An archived season's
+  // unplayed fixture never ticks.
+  const kickoffAt =
+    match.scheduledAt &&
+    match.season.isActive &&
+    !hasSeriesScore &&
+    !resultPending
+      ? match.scheduledAt.getTime()
+      : null;
 
   return (
     <Card className="relative overflow-hidden">
@@ -190,6 +201,17 @@ export async function MatchScoreboard({
             win={match.winnerTeamId === match.awayTeamId}
           />
         </div>
+        {kickoffAt != null ? (
+          <KickoffCountdown
+            targetMs={kickoffAt}
+            tone={match.phase === "FINAL" ? "final" : "default"}
+            nowText={
+              match.phase === "FINAL"
+                ? "The grand final is on"
+                : "It's kickoff time"
+            }
+          />
+        ) : null}
         <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-3 border-t border-line/60 pt-4 text-center text-sm text-muted">
           {match.scheduledAt ? (
             <LocalTime

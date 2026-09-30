@@ -251,6 +251,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **This week faces a lone fixture's sides off** (home left, away right,
   "vs" or the live score between) instead of stretching one card built for a
   third of the width across all of it.
+- **A lone series on This week gets the big kickoff clock**
+  (`<KickoffCountdown>`) in place of the header chip; when it is the grand
+  final the card is titled "The grand final" and the clock wears gold.
 - **The Your team card** shows only the stakes of the next series (the table
   already highlights rank and record), aligned to the engine's `nextMatchId`
   and naming the opponent. It sits in the auto-fit band (the rail from `xl`)
@@ -466,6 +469,13 @@ the league is already draftable and many visitors have joined. Write for both.
 - **The scoreboard is one row from `lg`:** name, crest, score, crest, name
   (`TeamSide side`, the crest beside the score). Below `lg` each crest sits
   over its name, as long names need the width.
+- **Before kickoff everyone gets the ticking clock** under the scoreboard
+  (`<KickoffCountdown>` over `kickoffClock` in `countdown.ts`), not only the
+  two teams' players: an unplayed fixture of the active season, gone once
+  there is a score, a live game or "Awaiting result". The server renders
+  empty boxes and the browser fills them (`getServerSnapshot` is null), so
+  hydration never mismatches; its spoken name gives minutes, never seconds.
+  `kickoff-countdown.test.ts` pins both render sites.
 - **A box score line is `BoxScoreLine`** (`box-score-line.tsx`, the page's
   one client piece of a box score): the server renders every part and the
   line lays them out. Each side is an `@container`; from `@lg` a player is
