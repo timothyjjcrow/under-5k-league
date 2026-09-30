@@ -24,12 +24,15 @@ type OgFont = {
 };
 
 // Read once per server instance. The paths are literal so the build's file
-// tracing ships the files with the routes that read them.
+// tracing ships the files with the routes that read them. The fonts sit under
+// src/ on purpose: the release classifier treats a new top-level folder as an
+// unknown path and asks for a maintenance release (share-image-guards.test.ts
+// checks every path here exists).
 let fonts: Promise<OgFont[] | null> | null = null;
 function loadOgFonts(): Promise<OgFont[] | null> {
   fonts ??= Promise.all([
-    readFile(join(process.cwd(), "assets", "og", "Oswald-Regular.ttf")),
-    readFile(join(process.cwd(), "assets", "og", "Oswald-SemiBold.ttf")),
+    readFile(join(process.cwd(), "src", "lib", "og-fonts", "Oswald-Regular.ttf")),
+    readFile(join(process.cwd(), "src", "lib", "og-fonts", "Oswald-SemiBold.ttf")),
   ]).then(
     ([regular, semibold]): OgFont[] => [
       { name: "Oswald", data: regular, weight: 400, style: "normal" },

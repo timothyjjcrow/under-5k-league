@@ -1,6 +1,8 @@
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  REPO_ROOT,
   sourceFile,
   sourceFiles,
   stripLineComments,
@@ -67,6 +69,29 @@ describe("link preview picture reads", () => {
     expect(fetchOgImage).toMatch(/if \(!ogImageUrlAllowed\(url\)\) return null;\s*try \{\s*const res = await fetch\(/);
     expect(fetchOgImage).toContain('redirect: "error"');
     expect(fetchOgImage).toContain("signal: AbortSignal.timeout(");
+  });
+
+  it("read the bundled fonts and emblems from files that exist", () => {
+    // A wrong path fails quietly: the picture falls back to next/og's own
+    // font or leaves the emblem out. So every literal path is checked here.
+    const assets = stripLineComments(sourceFile("src/lib/og-assets.ts").text);
+    const files = [
+      ...assets.matchAll(/join\(process\.cwd\(\),((?:\s*"[^"]+",?)+)\s*\)/g),
+    ].map((call) => [...call[1].matchAll(/"([^"]+)"/g)].map((s) => s[1]));
+    const fonts = files.filter((f) => f.at(-1)!.endsWith(".ttf"));
+    expect(fonts).toHaveLength(2);
+    expect(files.filter((f) => f.at(-1)!.endsWith(".png"))).toHaveLength(2);
+    for (const file of files) {
+      expect(existsSync(path.join(REPO_ROOT, ...file)), file.join("/")).toBe(true);
+    }
+    for (const font of fonts) {
+      // TrueType's magic number, and the licence travels with the fonts.
+      const bytes = readFileSync(path.join(REPO_ROOT, ...font));
+      expect([...bytes.subarray(0, 4)], font.join("/")).toEqual([0, 1, 0, 0]);
+      expect(
+        existsSync(path.join(REPO_ROOT, ...font.slice(0, -1), "OFL.txt")),
+      ).toBe(true);
+    }
   });
 
   it("draw every picture through renderOgImage, which falls back to the league's", () => {

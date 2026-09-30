@@ -71,8 +71,13 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   2.5-second timeout, a 1.5 MB cap and PNG or JPEG bytes. Anything else draws
   the team's initials on its hue. A picture that fails to draw redirects to
   the league's own image; a missing page's picture is a 404.
-- **The font is Oswald** (SIL Open Font License, `assets/og/`), read at
-  request time; without it next/og falls back to its built-in font.
+- **The font is Oswald** (SIL Open Font License, `src/lib/og-fonts/`), read
+  at request time; without it next/og falls back to its built-in font, so
+  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist.
+  Keep files like these under `src/`: the release classifier
+  (`scripts/classify-release.mjs`) treats a new top-level folder, or a
+  `public/` file that isn't an image, video or web font, as an unknown path,
+  which turns a routine release into a maintenance one.
 - **Match, team and player pages carry a Share control** on the back link's
   row, so it costs no height (`share-button.tsx` over `share-link.ts`). A
   phone opens its share sheet; a mouse copies the link, since a desktop sheet
