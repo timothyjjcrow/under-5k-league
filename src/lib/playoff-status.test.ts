@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   orderByPlayoffRun,
+  playoffStatusChip,
   playoffStatusText,
   playoffStatuses,
   type PlayoffStatusMatch,
@@ -204,6 +205,64 @@ describe("playoffStatuses", () => {
     expect(
       playoffStatusText(playoffStatuses(teams, legacy, null, NOW).get("s1")!, name),
     ).toBe("Playoffs vs Dire Straits");
+  });
+});
+
+describe("playoffStatusChip", () => {
+  it("says where each team stands in a few words, no opponent or score", () => {
+    const chips = Object.fromEntries(
+      [...playoffStatuses(teams, midPlayoffs, null, NOW)].map(([id, status]) => [
+        id,
+        playoffStatusChip(status),
+      ]),
+    );
+    expect(chips).toMatchObject({
+      s1: "Through to the grand final",
+      s2: "In the semifinal",
+      s4: "Out in the semifinal",
+      s8: "Out in the quarterfinal",
+      x: "Missed the playoffs",
+    });
+  });
+
+  it("names the finalists once the title is confirmed, and a withdrawn team", () => {
+    expect(playoffStatusChip({ kind: "champion" })).toBe("Champion");
+    expect(
+      playoffStatusChip({
+        kind: "runner-up",
+        opponentId: "s2",
+        teamScore: 1,
+        opponentScore: 2,
+        forfeit: false,
+      }),
+    ).toBe("Runner-up");
+    expect(playoffStatusChip({ kind: "missed", withdrawn: true })).toBe("Withdrew");
+  });
+
+  it("keeps a numbered round's name without \"the\"", () => {
+    const playing: TeamPlayoffStatus = {
+      kind: "playing",
+      round: "Round 1",
+      roundIndex: 0,
+      matchId: "m",
+      opponentId: "s2",
+      teamScore: 0,
+      opponentScore: 0,
+      scheduledAt: null,
+      when: "tbd",
+    };
+    expect(playoffStatusChip(playing)).toBe("In round 1");
+    expect(
+      playoffStatusChip({
+        kind: "out",
+        round: "Round 1",
+        roundIndex: 0,
+        opponentId: "s2",
+        teamScore: 0,
+        opponentScore: 2,
+        forfeit: false,
+      }),
+    ).toBe("Out in round 1");
   });
 });
 

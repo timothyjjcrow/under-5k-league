@@ -1,7 +1,9 @@
-// generateMetadata for pages whose link preview names the season or the
-// fixture. Each loader reads only what its preview needs: request-cached
-// reads the page itself also makes (the active season, Home's snapshot), or
-// a few small rows. The sentences themselves live in link-preview.ts.
+// generateMetadata for pages whose link preview names the season, the
+// fixture or the player, and the facts a match's or player's preview text and
+// picture share (link-preview-images.ts). Each loader reads only what its
+// preview needs: request-cached reads the page itself also makes (the active
+// season, Home's snapshot), or a few small rows. The sentences themselves live
+// in link-preview.ts.
 
 import type { Metadata } from "next";
 import { prisma } from "./prisma";
@@ -13,6 +15,16 @@ import { shareMetadata } from "./share-metadata";
 import { MATCH_PHASE, SEASON_STATUS } from "./constants";
 import { resolveChampionPresentation } from "./champion-presentation";
 import { groupPlayoffRounds, matchRoundLabel } from "./schedule";
+import { getPlayerGameFacts } from "./player-game-history";
+import { hasJoinedLeague } from "./profile-footprint";
+import {
+  decodeGamePlayers,
+  summarizePlayerGames,
+  trustedGamePlayers,
+} from "./player-stats";
+import { heroById } from "./heroes";
+import { parsePubStats } from "./pub-stats";
+import { rankMedalName } from "./rank";
 import {
   homePreview,
   matchPreview,
@@ -99,10 +111,11 @@ export async function seasonPageMetadata(page: SeasonPage): Promise<Metadata> {
 }
 
 /**
- * A match: its round, teams and kickoff or result. Null when there is no such
- * match (the page's generateMetadata turns that into a real 404).
+ * A match's link preview facts, for its text and its picture: the fixture
+ * with both teams and its season, and its round's name ("Week 3",
+ * "Semifinal"). Null when there is no such match.
  */
-export async function matchMetadata(id: string): Promise<Metadata | null> {
+export async function loadMatchPreviewFacts(id: string) {
   const match = await prisma.match.findUnique({
     where: { id },
     select: {
@@ -119,8 +132,8 @@ export async function matchMetadata(id: string): Promise<Metadata | null> {
       scheduledAt: true,
       homeTeamId: true,
       awayTeamId: true,
-      homeTeam: { select: { name: true } },
-      awayTeam: { select: { name: true } },
+      homeTeam: { select: { name: true, logoUrl: true } },
+      awayTeam: { select: { name: true, logoUrl: true } },
       season: { select: { name: true } },
     },
   });
@@ -136,8 +149,22 @@ export async function matchMetadata(id: string): Promise<Metadata | null> {
           select: { phase: true, bracketSlot: true },
         })
       : [];
-  const preview = matchPreview({
+  return {
+    match,
     round: matchRoundLabel(match, groupPlayoffRounds(bracket).totalRounds),
+  };
+}
+
+/**
+ * A match: its round, teams and kickoff or result. Null when there is no such
+ * match (the page's generateMetadata turns that into a real 404).
+ */
+export async function matchMetadata(id: string): Promise<Metadata | null> {
+  const facts = await loadMatchPreviewFacts(id);
+  if (!facts) return null;
+  const { match, round } = facts;
+  const preview = matchPreview({
+    round,
     seasonName: match.season.name,
     homeTeamId: match.homeTeamId,
     awayTeamId: match.awayTeamId,
@@ -151,5 +178,63 @@ export async function matchMetadata(id: string): Promise<Metadata | null> {
     scheduledAt: match.scheduledAt,
     bestOf: match.bestOf,
   });
-  return shareMetadata(preview.title, preview.description);
+  // The match's own picture (matches/[id]/opengraph-image).
+  return shareMetadata(preview.title, preview.description, undefined, {
+    pageImage: true,
+  });
+}
+
+/**
+ * A player's link preview facts, for its text and its picture: name and
+ * avatar, whether they have joined anything the league records (an account
+ * that only signed in gets a plain preview, see UnjoinedProfile), and the
+ * highlights: medal, league record and most-played hero (else their pub
+ * favourite). Null when there is no such player.
+ */
+export async function loadPlayerPreviewFacts(id: string): Promise<{
+  name: string;
+  avatar: string | null;
+  joined: boolean;
+  highlights: string[];
+} | null> {
+  const [user, gameScores, joined] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id },
+      select: { name: true, avatar: true, rankTier: true, pubStats: true },
+    }),
+    getPlayerGameFacts(id),
+    hasJoinedLeague(id),
+  ]);
+  if (!user) return null;
+  if (!joined) {
+    return { name: user.name, avatar: user.avatar, joined: false, highlights: [] };
+  }
+  const rank = rankMedalName(user.rankTier);
+  const summary = summarizePlayerGames(
+    gameScores.flatMap(({ players, radiantWin }) =>
+      trustedGamePlayers(decodeGamePlayers(players))
+        .filter((player) => player.userId === id)
+        .map((player) => ({
+          radiantWin,
+          isRadiant: player.isRadiant,
+          kills: player.kills,
+          deaths: player.deaths,
+          assists: player.assists,
+          heroId: player.heroId,
+        })),
+    ),
+  );
+  const favoriteHero = heroById(
+    summary.topHeroes[0]?.heroId ??
+      parsePubStats(user.pubStats)?.topHeroes[0]?.heroId ??
+      0,
+  );
+  const highlights = [
+    rank !== "Unranked" ? `${rank} medal` : null,
+    summary.games > 0
+      ? `${summary.wins}–${summary.losses} league record`
+      : null,
+    favoriteHero ? `${favoriteHero.name} player` : null,
+  ].filter((highlight): highlight is string => highlight !== null);
+  return { name: user.name, avatar: user.avatar, joined: true, highlights };
 }

@@ -40,7 +40,6 @@ import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
 import { leagueRecords, toRecordGames } from "@/lib/records";
 import { cn, hasText } from "@/lib/utils";
 import { aboutText } from "@/lib/about-you";
-import { rankMedalName } from "@/lib/rank";
 import {
   parsePubStats,
   poolPubRecord,
@@ -68,6 +67,7 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { playoffRunTile, teamPlayoffRun } from "@/lib/playoff-run";
 import { canViewLeagueContact } from "@/lib/visibility";
 import { hasJoinedLeague } from "@/lib/profile-footprint";
+import { loadPlayerPreviewFacts } from "@/lib/link-preview-metadata";
 
 export async function generateMetadata({
   params,
@@ -75,58 +75,24 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [user, gameScores, joined] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id },
-      select: { name: true, rankTier: true, pubStats: true },
-    }),
-    getPlayerGameFacts(id),
-    hasJoinedLeague(id),
-  ]);
+  const player = await loadPlayerPreviewFacts(id);
   // notFound() in metadata: crawlers wait for metadata, so they get a real
   // 404 status. Browsers get streamed metadata, so the not-found page
   // arrives with a 200 and Next's noindex tag (its documented streaming
   // behaviour).
-  if (!user) notFound();
+  if (!player) notFound();
   // An account that only signed in: a plain, unindexed page, no medal or
   // hero highlights (see UnjoinedProfile).
-  if (!joined) {
+  if (!player.joined) {
     return {
       ...shareMetadata(
-        `${user.name} · Player`,
-        `${user.name} hasn't joined a ${LEAGUE_CONFIG.name} season yet.`,
+        `${player.name} · Player`,
+        `${player.name} hasn't joined a ${LEAGUE_CONFIG.name} season yet.`,
       ),
       robots: { index: false },
     };
   }
-  const rank = rankMedalName(user.rankTier);
-  const summary = summarizePlayerGames(
-    gameScores.flatMap(({ players, radiantWin }) =>
-      trustedGamePlayers(decodeGamePlayers(players))
-        .filter((player) => player.userId === id)
-        .map((player) => ({
-          radiantWin,
-          isRadiant: player.isRadiant,
-          kills: player.kills,
-          deaths: player.deaths,
-          assists: player.assists,
-          heroId: player.heroId,
-        })),
-    ),
-  );
-  const favoriteHero = heroById(
-    summary.topHeroes[0]?.heroId ??
-      parsePubStats(user.pubStats)?.topHeroes[0]?.heroId ??
-      0,
-  );
-  const highlights = [
-    rank !== "Unranked" ? `${rank} medal` : null,
-    summary.games > 0
-      ? `${summary.wins}–${summary.losses} league record`
-      : null,
-    favoriteHero ? `${favoriteHero.name} player` : null,
-  ].filter((highlight): highlight is string => highlight !== null);
-  return playerProfileMetadata(user.name, highlights);
+  return playerProfileMetadata(player.name, player.highlights);
 }
 
 export default async function PlayerProfilePage({

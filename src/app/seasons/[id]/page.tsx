@@ -66,6 +66,8 @@ export async function generateMetadata({
       ? `Champion, final standings, bracket, awards and every result from ${season.name}.`
       : `Standings, results and rosters from ${season.name}.`,
     `/seasons/${encodeURIComponent(id)}`,
+    // The season's own picture (./opengraph-image.tsx).
+    { pageImage: true },
   );
 }
 

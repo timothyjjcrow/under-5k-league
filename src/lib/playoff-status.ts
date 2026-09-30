@@ -195,6 +195,31 @@ export function playoffStatusText(
 }
 
 /**
+ * The status in a few words, for a chip on a team's link preview picture:
+ * "Champion", "Runner-up", "Out in the semifinal", "In the grand final",
+ * "Through to the semifinal", "Missed the playoffs". No opponent or score:
+ * the picture has room for one short fact.
+ */
+export function playoffStatusChip(status: TeamPlayoffStatus): string {
+  switch (status.kind) {
+    case "champion":
+      return "Champion";
+    case "runner-up":
+      return "Runner-up";
+    case "out":
+      return outIn(status.round);
+    case "playing":
+      return /^Round /.test(status.round)
+        ? `In ${status.round.toLowerCase()}`
+        : `In the ${status.round.toLowerCase()}`;
+    case "through":
+      return `Through to the ${status.nextRound.toLowerCase()}`;
+    case "missed":
+      return status.withdrawn ? "Withdrew" : "Missed the playoffs";
+  }
+}
+
+/**
  * Team order for a playoff-time list: teams still alive first, by seed; then
  * teams that are out, the furthest run first (seed breaks a tie); then teams
  * that missed the bracket, in standings order. Before a bracket exists every

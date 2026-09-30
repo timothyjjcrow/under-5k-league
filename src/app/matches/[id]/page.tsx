@@ -9,6 +9,7 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import { AdminMatchTools } from "@/components/admin-match-tools";
 import { ContextBackLink } from "@/components/context-back-link";
+import { ShareButton } from "@/components/share-button";
 import { SectionNav } from "@/components/section-nav";
 import { CardSkeleton, EmptyState, textLink } from "@/components/ui";
 import { CaptainTodos } from "./captain-todos";
@@ -103,7 +104,8 @@ export default async function MatchDetailPage({
           page's visible title, so a phone reaches it without scrolling past
           the team names printed twice. The destination still follows how
           the viewer arrived (schedule, bracket or a season's archive). */}
-      <p>
+      {/* Share sits on the back link's line, so it costs no height. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <ContextBackLink
           href={
             match.season.isActive
@@ -122,7 +124,11 @@ export default async function MatchDetailPage({
               : "← Playoff bracket"
             : `← ${match.season.name}`}
         </ContextBackLink>
-      </p>
+        <ShareButton
+          path={`/matches/${match.id}`}
+          title={`${postseasonLabel} · ${match.homeTeam.name} vs ${match.awayTeam.name}`}
+        />
+      </div>
 
       <TiebreakerNote match={match} />
 

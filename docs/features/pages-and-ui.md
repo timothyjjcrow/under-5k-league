@@ -44,6 +44,42 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   (`howItWorksAction`) reuses the header's join label and Home's "Register as
   a standin" (`standinSignupOpen`), so the three pages name one action one way.
 
+## Link previews (Discord, X, Slack)
+
+- **Preview text comes from `link-preview.ts`** (pure, tested), loaded by
+  `link-preview-metadata.ts`; a result reads the same everywhere through
+  `seriesResultText`.
+- **The match, team, player and season pages draw their own picture:** an
+  `opengraph-image.tsx` and a `twitter-image.tsx` beside each page, one line
+  each over `src/components/og-share-images.tsx`. The layouts are
+  `src/components/og-card.tsx` (Satori: an element with more than one child
+  needs `display: flex`, colours are plain hex); the facts come from
+  `link-preview-images.ts` over the rules the pages use (standings, seeds,
+  `playoffStatusChip`, `resolveChampionPresentation`, the season's crest hues).
+  A kickoff is on the league's clock with its zone named: a picture can't
+  adapt to the viewer.
+- **Leave the images out of those pages' metadata**
+  (`shareMetadata(..., { pageImage: true })`): Next uses a folder's image files
+  only where the page's metadata names no images at all, so the failure is
+  silent. Every other page, and an account that only signed in, keeps the
+  league's picture. `e2e-mid/boards.spec.ts` checks the rendered tags.
+- **Draw per request and cache five minutes** (`force-dynamic`,
+  `OG_CACHE_CONTROL`): a match's picture follows it from the kickoff to the
+  live score to the result. `share-image-guards.test.ts` pins every route.
+- **The server fetches a crest or avatar only through `fetchOgImage`:** HTTPS
+  on Imgur or Steam's avatar hosts (`ogImageUrlAllowed`), no redirects, a
+  2.5-second timeout, a 1.5 MB cap and PNG or JPEG bytes. Anything else draws
+  the team's initials on its hue. A picture that fails to draw redirects to
+  the league's own image; a missing page's picture is a 404.
+- **The font is Oswald** (SIL Open Font License, `assets/og/`), read at
+  request time; without it next/og falls back to its built-in font.
+- **Match, team and player pages carry a Share control** on the back link's
+  row, so it costs no height (`share-button.tsx` over `share-link.ts`). A
+  phone opens its share sheet; a mouse copies the link, since a desktop sheet
+  rarely offers Discord. It shares the page's own address on the viewer's
+  host, with no query or hash, and closing the sheet is not an error. Only a
+  copy the clipboard accepted says "Link copied".
+
 ## The shared UI kit
 
 - **Change the kit additively.** `Card`, `CardHeader`, `Stat`, `EmptyState`,
