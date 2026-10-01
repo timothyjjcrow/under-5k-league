@@ -6,6 +6,7 @@ import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
+import { WatchLink } from "@/components/watch-link";
 import {
   Card,
   CardBody,
@@ -19,10 +20,11 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "@/lib/availability";
+import { matchWatchWindow } from "@/lib/broadcast";
 import { MATCH_PHASE } from "@/lib/constants";
 import { pickemControlFor } from "@/lib/pickem";
 import { prisma } from "@/lib/prisma";
-import type { SeasonSnapshot } from "@/lib/queries";
+import { getLeagueStream, type SeasonSnapshot } from "@/lib/queries";
 import type { ScenarioReport } from "@/lib/scenarios";
 import {
   focusSlate,
@@ -69,6 +71,11 @@ export async function ThisWeek({
   // gold clock, instead of dressing it like any other round.
   const finalOnly =
     focus.length === 1 && focus[0].phase === MATCH_PHASE.FINAL;
+
+  // The league stream, read only when a playoff or final card could link it.
+  const stream = focus.some((m) => matchWatchWindow(m, season.isActive))
+    ? await getLeagueStream()
+    : null;
 
   const [avail, standinRows] = await Promise.all([
     showCheckins
@@ -142,6 +149,7 @@ export async function ThisWeek({
             canPlay: pickemPlayable,
             pickedTeamId: myPicks?.get(m.id),
           });
+          const watch = stream ? matchWatchWindow(m, season.isActive) : null;
           const pickSide = (teamId: string) => ({
             id: teamId,
             name: teamName.get(teamId) ?? "?",
@@ -361,6 +369,16 @@ export async function ThisWeek({
                   <span aria-hidden>→</span>
                 </p>
               </Link>
+              {/* Outside the card's link, like the pick tray: a link can't
+                  hold another. */}
+              {stream && watch ? (
+                <WatchLink
+                  stream={stream}
+                  watch={watch}
+                  matchLabel={`${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`}
+                  wrapperClassName="border-t border-line-soft px-4 py-3"
+                />
+              ) : null}
               {pick ? (
                 <PickemTray
                   control={pick}

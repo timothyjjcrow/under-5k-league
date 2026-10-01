@@ -606,6 +606,173 @@ test("complete champion and recap remain usable at 360px", async ({ page }) => {
   assertNoErrors();
 });
 
+/** Moves the open playoff series' kickoff `minutes` from now; returns its id. */
+function moveOpenKickoff(minutes: number): string {
+  const out = execFileSync(npx, ["tsx", "e2e-postseason/move-kickoff.ts"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DATABASE_URL: POSTSEASON_DB_URL,
+      KICKOFF_OFFSET_MIN: String(minutes),
+    },
+    stdio: "pipe",
+  }).toString();
+  const id = out.match(/\{"matchId":"([^"]+)"\}/)?.[1];
+  expect(id, out).toBeTruthy();
+  return id!;
+}
+
+test("after the final, Home says what's next and the champion's page shows the title", async ({
+  page,
+}) => {
+  await reseed(page, "complete");
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/");
+  const main = page.locator("#main");
+  const hero = main
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { level: 1 }) });
+  // Until an admin sets a date: "coming soon", and where it will be
+  // announced (the league Discord, or League news without an invite).
+  await expect(hero).toContainText("Next season: coming soon");
+  await expect(
+    hero.getByRole("link", { name: /^(Join our Discord|League news)$/ }),
+  ).toBeVisible();
+
+  // The champion banner: the final's score, the regular season and the
+  // winning five, captain first.
+  const champion = await championName(page);
+  const banner = page
+    .getByText("Season 9 (fixture) Champion", { exact: true })
+    .locator("..");
+  await expect(banner).toContainText(/Won the grand final \d–\d over \S/);
+  await expect(banner).toContainText(/regular season · \d+ pts?/);
+  const chips = banner.locator('a[href^="/players/"]');
+  await expect(chips).toHaveCount(5);
+  await expect(chips.first()).toContainText("Captain");
+
+  // The champion's own page carries the season and the final.
+  await banner.getByRole("link", { name: champion, exact: true }).click();
+  await expect(page).toHaveURL(/\/teams\/[^/?#]+$/);
+  await expect(
+    page.getByText("Season 9 (fixture) Champion", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/^Won the grand final \d–\d over \S/),
+  ).toBeVisible();
+
+  // An admin sets the next season's signup date on the handoff card.
+  await page.goto(
+    "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin",
+  );
+  const when = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  await page
+    .getByLabel("Signups open", { exact: true })
+    .fill(
+      `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T18:00`,
+    );
+  await page.getByRole("button", { name: "Set date" }).click();
+  await expect(
+    page.getByText(/^Home now says the next season's signups open /),
+  ).toBeVisible();
+
+  await page.goto("/");
+  await expect(hero).toContainText("Next season: signups open");
+  await expect(hero.getByRole("timer")).toHaveAccessibleName(
+    /^Signups open in \d+d/,
+  );
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expectNoHorizontalOverflow(page, "/ complete with the next date");
+
+  // Clearing it puts "coming soon" back.
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "Clear date" }).click();
+  await expect(
+    page.getByText("Next season's date cleared: Home says coming soon"),
+  ).toBeVisible();
+  await page.goto("/");
+  await expect(hero).toContainText("Next season: coming soon");
+  assertNoErrors();
+});
+
+test("playoff matches link the league stream an admin sets", async ({
+  page,
+}) => {
+  await reseed(page, "playoffs");
+  const assertNoErrors = trackPageErrors(page);
+  let matchId = moveOpenKickoff(90);
+  await expireFixtureCache(page);
+
+  // No stream set: nothing links to one.
+  await page.goto(`/matches/${matchId}`);
+  await expect(page.getByRole("heading", { level: 1 })).toBeAttached();
+  await expect(
+    page.getByRole("link", { name: /Streamed on|Live now/ }),
+  ).toHaveCount(0);
+
+  await page.goto(
+    "/api/auth/dev?name=Stream%20Admin&steamId=76561190000994001&admin=1&redirect=/admin",
+  );
+  await page.locator("#adm-stream summary").click();
+  await page.getByLabel("Stream link").fill("https://www.twitch.tv/ggd2l");
+  await page.getByRole("button", { name: "Save stream link" }).click();
+  await expect(
+    page.getByText(
+      "Stream link saved: playoff and final matches now link to https://www.twitch.tv/ggd2l",
+    ),
+  ).toBeVisible();
+
+  // Before the window: where it will be streamed, on all three surfaces.
+  await page.goto(`/matches/${matchId}`);
+  const soon = page.getByRole("link", { name: /^Streamed on Twitch/ });
+  await expect(soon).toHaveAttribute("href", "https://www.twitch.tv/ggd2l");
+  await expect(soon).toHaveAttribute("target", "_blank");
+  await expect(soon).toHaveAttribute("rel", "noreferrer");
+  await page.goto("/");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^Streamed on Twitch/ }),
+  ).toBeVisible();
+  await page.goto("/schedule");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^On Twitch\b/ }),
+  ).toBeVisible();
+
+  // Inside the window: "Live now".
+  matchId = moveOpenKickoff(-5);
+  await expireFixtureCache(page);
+  await page.goto(`/matches/${matchId}`);
+  await expect(
+    page.getByRole("link", { name: /^Live now · Watch on Twitch/ }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expectNoHorizontalOverflow(page, "/matches/[id] live stream link");
+  await page.goto("/");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^Live now · Watch on Twitch/ }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/ live stream link");
+  await page.goto("/schedule");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^Watch live\b/ }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/schedule live stream link");
+
+  // Removing the link takes it off every match.
+  await page.goto("/admin");
+  await page.locator("#adm-stream summary").click();
+  await page.getByRole("button", { name: "Remove stream link" }).click();
+  await expect(
+    page.getByText("Stream link removed: matches show no watch links"),
+  ).toBeVisible();
+  await page.goto(`/matches/${matchId}`);
+  await expect(page.getByRole("heading", { level: 1 })).toBeAttached();
+  await expect(
+    page.getByRole("link", { name: /Streamed on|Live now/ }),
+  ).toHaveCount(0);
+  assertNoErrors();
+});
+
 test("admin can enter a real offseason, browse it, and open the next season", async ({
   page,
 }) => {

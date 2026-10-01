@@ -96,6 +96,16 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   an admin box without the prop. Keep the label beside the field, not around
   it, or the hint joins the box's accessible name. Captain boxes stay on the
   viewer's clock and say "your time".
+- **The Match stream card is league-wide** (`#adm-stream`, first of the
+  evergreen sections): `setLeagueStreamUrl` (`admin-season.ts`) stores one
+  Twitch, YouTube or Kick link in `LEAGUE_STREAM_URL`, checked by
+  `normalizeStreamUrl` (`broadcast.ts`: https, exact host names, no
+  credentials or port). It works with no active season and survives the
+  handoff; a blank save (Remove stream link) clears it, and the toast repeats
+  what was stored. The next season's date on the Season handoff card
+  (`setNextSeasonDate`, `clearNextSeasonDate`) is the season-bound one: refused
+  outside Season complete and from a stale page, and it lapses at the handoff
+  because it names its season (`next-season.ts`).
 - **Render per-match controls only from `admin-match-tools.tsx`.**
   `MatchResultRow` (kickoff, score or ruling, reopen, games, Auto-fetch games,
   Add game) and `StandinMatchBlock` (any-team cover) render on /admin AND in

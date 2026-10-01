@@ -61,7 +61,12 @@ import {
   setLeagueId,
   revokeAllSessions,
   setDraftSettings,
+  setNextSeasonDate,
+  clearNextSeasonDate,
+  setLeagueStreamUrl,
 } from "@/app/actions/admin-season";
+import { parseNextSeasonPlan } from "@/lib/next-season";
+import { parseStoredStream } from "@/lib/broadcast";
 import {
   addCaptain,
   changeCaptain,
@@ -412,6 +417,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     ? (data?.teams.find((team) => team.id === handoffReadiness.championTeamId)
         ?.name ?? null)
     : null;
+  // The next season's signup date Home prints, set on the handoff card.
+  const nextSeasonPlan =
+    season?.status === SEASON_STATUS.COMPLETE && handoffReadiness?.ready
+      ? parseNextSeasonPlan(
+          await getSetting(SETTING_KEYS.NEXT_SEASON_PLAN),
+          season.id,
+        )
+      : null;
   const importQuery = await searchParams;
   // Chasing Discord links is a weekly people task, so it sits beside the
   // signups (before the draft) or the rosters (after it), not inside the
@@ -500,6 +513,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           { id: "adm-league", label: "League id" },
         ]
       : []),
+    { id: "adm-stream", label: "Match stream" },
     { id: "adm-history", label: "Historical records" },
     { id: "adm-automation", label: "Automation" },
     // Season-independent: inhouse alerts and the queue board are most
@@ -530,6 +544,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           season={season}
           previous={newSeasonDefaults}
           championName={championName}
+          nextSignupsAtMs={nextSeasonPlan?.signupsAtMs ?? null}
         />
       ) : null}
 
@@ -648,6 +663,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <LeagueControls season={season} />
         </>
       ) : null}
+
+      {/* League-wide, like everything below: the stream link outlives the
+          season and needs no active one. */}
+      <AdminAnchor id="adm-stream">
+        <Suspense fallback={<CardSkeleton rows={2} />}>
+          <StreamControls />
+        </Suspense>
+      </AdminAnchor>
 
       <AdminAnchor id="adm-history">
         <AdminSection
@@ -769,12 +792,15 @@ function OpenNextSeason({
   season,
   previous,
   championName,
+  nextSignupsAtMs,
 }: {
   /** The crowned active season; null in the offseason. */
   season: Season | null;
   /** The season the new one follows (carried settings); null for the first. */
   previous: CarriedSeasonSettings & { name: string } | null;
   championName: string | null;
+  /** The next season's planned signup date Home shows; null for none. */
+  nextSignupsAtMs: number | null;
 }) {
   const nextName = nextSeasonName(previous?.name ?? null);
   return (
@@ -833,6 +859,55 @@ function OpenNextSeason({
             Open signups
           </SubmitButton>
         </ActionForm>
+        {season ? (
+          <div className="space-y-3 border-t border-line-soft pt-4">
+            <h3 className="text-base font-semibold text-fg">
+              Next season&rsquo;s date
+            </h3>
+            <p className="text-sm text-muted">
+              Until you open signups, the home page tells players the next
+              season is coming soon. Set the date its signups will open and
+              Home shows that date with a countdown instead. It only informs
+              players: signups still open when you press Open signups above.
+            </p>
+            <ActionForm
+              action={setNextSeasonDate}
+              hidden={{ expectedActiveSeasonId: season.id }}
+              className="flex flex-wrap items-end gap-2"
+            >
+              <div className="flex min-w-0 flex-col gap-1">
+                <label htmlFor="nextSignupsAt" className="text-xs text-muted">
+                  Signups open
+                </label>
+                <LocalDatetimeField
+                  id="nextSignupsAt"
+                  name="nextSignupsAt"
+                  tsName="nextSignupsAtTs"
+                  required
+                  defaultTs={nextSignupsAtMs}
+                  timeZone={LEAGUE_CONFIG.timeZone}
+                  className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+                />
+              </div>
+              <SubmitButton variant="secondary" size="sm">
+                {nextSignupsAtMs != null ? "Update date" : "Set date"}
+              </SubmitButton>
+            </ActionForm>
+            {nextSignupsAtMs != null ? (
+              <ActionForm
+                action={clearNextSeasonDate}
+                className="flex flex-wrap items-center gap-2 text-xs text-muted"
+              >
+                <span>
+                  Home shows {formatLeagueTime(new Date(nextSignupsAtMs))}.
+                </span>
+                <SubmitButton variant="ghost" size="sm">
+                  Clear date
+                </SubmitButton>
+              </ActionForm>
+            ) : null}
+          </div>
+        ) : null}
         {season ? (
           <details className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm">
             <summary className="flex min-h-11 cursor-pointer items-center font-medium text-fg">
@@ -6592,6 +6667,68 @@ async function AdminActivity() {
         <Link href="/admin/activity" className={textLink()}>
           All admin activity →
         </Link>
+      </CardBody>
+    </AdminSection>
+  );
+}
+
+/**
+ * The league's stream channel (broadcast.ts). Playoff and final matches link
+ * to it on Home, the match page and /schedule: where they will be streamed,
+ * then "Live now" from 15 minutes before kickoff until the series should be
+ * over. One link for the whole league, kept across seasons.
+ */
+async function StreamControls() {
+  const stream = parseStoredStream(
+    await getSetting(SETTING_KEYS.LEAGUE_STREAM_URL),
+  );
+  return (
+    <AdminSection
+      title="Match stream"
+      subtitle={
+        stream
+          ? `On: playoff and final matches link to ${stream.platform}.`
+          : "Off: no match links to a stream."
+      }
+    >
+      <CardBody className="space-y-3">
+        <p className="text-sm text-muted">
+          One Twitch, YouTube or Kick channel for the league. Every playoff and
+          final match shows it on Home, its match page and the schedule:
+          &ldquo;Streamed on&rdquo; the channel before kickoff, then &ldquo;Live
+          now&rdquo; from 15 minutes before kickoff until the series should be
+          over. The regular season shows nothing. Remove it on playoff nights
+          nobody streams.
+        </p>
+        <ActionForm
+          action={setLeagueStreamUrl}
+          className="flex flex-wrap items-end gap-2"
+        >
+          <div className="min-w-0 flex-1 basis-64">
+            <label htmlFor="streamUrl" className="mb-1 block text-xs text-muted">
+              Stream link
+            </label>
+            <input
+              id="streamUrl"
+              name="streamUrl"
+              type="url"
+              inputMode="url"
+              defaultValue={stream?.url ?? ""}
+              placeholder="https://www.twitch.tv/yourchannel"
+              className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+            />
+          </div>
+          <SubmitButton variant="secondary" size="sm">
+            Save stream link
+          </SubmitButton>
+        </ActionForm>
+        {stream ? (
+          <ActionForm action={setLeagueStreamUrl} hidden={{ streamUrl: "" }}>
+            <SubmitButton variant="ghost" size="sm">
+              Remove stream link
+            </SubmitButton>
+          </ActionForm>
+        ) : null}
       </CardBody>
     </AdminSection>
   );

@@ -2,7 +2,9 @@ import { cache } from "react";
 import { prisma } from "./prisma";
 import { getActiveSeason } from "./season";
 import { capacityInfo } from "./capacity";
+import { parseStoredStream, type LeagueStream } from "./broadcast";
 import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
+import { getSetting, SETTING_KEYS } from "./settings";
 
 // The reads below are request-cached with React cache(): one query per render
 // pass however many of the root layout, a page and its generateMetadata ask
@@ -23,6 +25,17 @@ export const getSeasonDraftStatus = cache(async function getSeasonDraftStatus(
   });
   return draft?.status ?? null;
 });
+
+/**
+ * The league's stream channel, or null when none is set (or the stored value
+ * no longer passes broadcast.ts's check). Home's This week, the match page
+ * and /schedule read it only when a playoff or final match could link it.
+ */
+export const getLeagueStream = cache(
+  async function getLeagueStream(): Promise<LeagueStream | null> {
+    return parseStoredStream(await getSetting(SETTING_KEYS.LEAGUE_STREAM_URL));
+  },
+);
 
 /**
  * The viewer's signup in a season, or null. During signups the header's

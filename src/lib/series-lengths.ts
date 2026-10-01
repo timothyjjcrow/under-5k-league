@@ -13,6 +13,15 @@ export const SERIES_LENGTH_PHASES = [
 
 export type SeriesLengthPhase = (typeof SERIES_LENGTH_PHASES)[number]["phase"];
 
+/**
+ * How long a best-of-N series plausibly runs, in minutes: one rough hour per
+ * possible game, plus warm-up slack. The calendar feed's event length and the
+ * match stream's "Live now" window (broadcast.ts) both use it.
+ */
+export function seriesEstimateMinutes(bestOf: number): number {
+  return bestOf * 60 + 30;
+}
+
 export type SeriesLengths = Record<
   (typeof SERIES_LENGTH_PHASES)[number]["field"],
   number

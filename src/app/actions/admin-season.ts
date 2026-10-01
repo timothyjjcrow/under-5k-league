@@ -3,7 +3,8 @@
 // Admin actions for the season itself: create, archive, cancel, delete and
 // reactivate it, move its phase, and save the settings forms on its card
 // (name, MMR limit, draft settings, match night, series lengths, Valve league
-// id). Also the site-wide "sign out all users" switch.
+// id). Also the site-wide "sign out all users" switch, the next season's
+// signup date on Home and the league's stream link.
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -37,13 +38,24 @@ import {
   carriedSeasonSettings,
 } from "@/lib/season-handoff";
 import { draftSetupLockedMessage, draftSetupOpen } from "@/lib/draft-setup";
+import { normalizeStreamUrl } from "@/lib/broadcast";
 import { parseLeagueId } from "@/lib/dota";
-import { clampInt, str } from "@/lib/form";
+import { clampInt, localDate, str } from "@/lib/form";
+import {
+  nextSeasonDateProblem,
+  serializeNextSeasonPlan,
+} from "@/lib/next-season";
+import { formatLeagueTime } from "@/lib/zoned-time";
 import { regularSeasonStartedMessage, sendDiscordMessage } from "@/lib/discord";
 import { announceSignupsOpenOnce } from "@/lib/signups-open-announcement";
 import { logAdminAction } from "@/lib/admin-log";
 import { productionDeleteBackupError } from "@/lib/backup-receipt.mjs";
-import { seasonSettingScopeWhere, stampResultChange } from "@/lib/settings";
+import {
+  SETTING_KEYS,
+  seasonSettingScopeWhere,
+  setSetting,
+  stampResultChange,
+} from "@/lib/settings";
 import { bumpSessionEpoch } from "@/lib/session-epoch";
 import type { ActionResult } from "@/lib/action-result";
 import {
@@ -1257,5 +1269,119 @@ export async function setMatchSchedule(
     message: value
       ? `Match-night schedule saved: ${value}`
       : "Match-night schedule cleared — the league default now applies",
+  };
+}
+
+/**
+ * Set when the next season's signups are planned to open, from the Season
+ * handoff card while the league rests in Season complete. Home's hero prints
+ * it with a countdown ("Next season: signups open …"). Display only: it opens
+ * nothing, posts nothing and wakes no worker; "Open signups" stays the
+ * admin's button.
+ *
+ * Refused outside Season complete (the card that renders the field shows only
+ * there). The season check is read-time on purpose: the plan names the season
+ * it was saved during (next-season.ts), so a save that loses a race with the
+ * handoff lands on the old season's id and never shows.
+ */
+export async function setNextSeasonDate(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const season = await getActiveSeason();
+  if (!season || season.id !== str(formData, "expectedActiveSeasonId").trim()) {
+    return {
+      error:
+        "The active season changed while this page was open — reload before setting the next season's date.",
+    };
+  }
+  if (season.status !== SEASON_STATUS.COMPLETE) {
+    return {
+      error:
+        "The next season's date can be set once this season is complete.",
+    };
+  }
+  const when = localDate(formData, "nextSignupsAt", "nextSignupsAtTs");
+  if (!when) {
+    return { error: "Pick the date and time the next season's signups open." };
+  }
+  const problem = nextSeasonDateProblem(when.getTime(), Date.now());
+  if (problem) return { error: problem };
+  await setSetting(
+    SETTING_KEYS.NEXT_SEASON_PLAN,
+    serializeNextSeasonPlan({
+      seasonId: season.id,
+      signupsAtMs: when.getTime(),
+    }),
+  );
+  const label = formatLeagueTime(when);
+  await logAdminAction({
+    action: "setNextSeasonDate",
+    summary: `Set the next season's signup date shown on Home to ${label}`,
+    seasonId: season.id,
+  });
+  refresh();
+  return {
+    message: `Home now says the next season's signups open ${label}`,
+  };
+}
+
+/** Take the next season's date off Home; it says "coming soon" again. */
+export async function clearNextSeasonDate(
+  _prev: ActionResult,
+  _formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  await setSetting(SETTING_KEYS.NEXT_SEASON_PLAN, "");
+  const season = await getActiveSeason();
+  await logAdminAction({
+    action: "clearNextSeasonDate",
+    summary:
+      "Cleared the next season's signup date; Home says \"coming soon\" again",
+    seasonId: season?.id ?? null,
+  });
+  refresh();
+  return { message: "Next season's date cleared: Home says coming soon" };
+}
+
+/**
+ * Set or clear the league's stream channel (/admin's Match stream card).
+ * Playoff and final matches link to it: "Streamed on Twitch" before kickoff,
+ * "Live now · Watch on Twitch" through the series (broadcast.ts). It belongs
+ * to the league, not a season, so it needs no active season and survives the
+ * handoff. Blank clears it; anything else must pass normalizeStreamUrl, and
+ * the toast says what was stored.
+ */
+export async function setLeagueStreamUrl(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const result = normalizeStreamUrl(str(formData, "streamUrl"));
+  if ("error" in result) return { error: result.error };
+  const season = await getActiveSeason();
+  if (!result.stream) {
+    await setSetting(SETTING_KEYS.LEAGUE_STREAM_URL, "");
+    await logAdminAction({
+      action: "setLeagueStreamUrl",
+      summary: "Removed the league stream link; matches show no watch links",
+      seasonId: season?.id ?? null,
+    });
+    refresh();
+    return { message: "Stream link removed: matches show no watch links" };
+  }
+  await setSetting(SETTING_KEYS.LEAGUE_STREAM_URL, result.stream.url);
+  await logAdminAction({
+    action: "setLeagueStreamUrl",
+    summary: `Set the league stream link to ${result.stream.url}`,
+    seasonId: season?.id ?? null,
+  });
+  refresh();
+  return {
+    message: `Stream link saved: playoff and final matches now link to ${result.stream.url}`,
   };
 }

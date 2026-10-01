@@ -48,6 +48,8 @@ import { cn } from "@/lib/utils";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { draftSetupOpen } from "@/lib/draft-setup";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { championFinalLine } from "@/lib/champion-moment";
+import { ChampionStrip } from "@/components/champion-moment";
 import { getTeamJersey } from "@/lib/team-jerseys";
 import { TeamJerseyPreview } from "@/components/team-jersey-preview";
 import { TeamIdentityForm } from "@/components/team-identity-form";
@@ -391,6 +393,17 @@ export default async function TeamPage({
   ];
   const hasRail =
     teamHeroes.length > 0 || h2h.length > 0 || (showOutlookCard && !!myScenario);
+  // The crowned team's strip under its header: the resolved champion only
+  // (a COMPLETE season, archived ones included), with its final's score.
+  const crowned = championPresentation.championTeamId === team.id;
+  const championFinal = crowned
+    ? championFinalLine(
+        allMatches.find(
+          (m) => m.id === championPresentation.authoritativeFinalId,
+        ),
+        team.id,
+      )
+    : null;
 
   return (
     <div className="space-y-5">
@@ -611,6 +624,18 @@ export default async function TeamPage({
           </details>
         ) : null}
       </div>
+
+      {crowned ? (
+        <ChampionStrip
+          seasonName={team.season.name}
+          final={championFinal}
+          opponentName={
+            championFinal
+              ? (teamName.get(championFinal.opponentTeamId) ?? null)
+              : null
+          }
+        />
+      ) : null}
 
       {team.withdrawn ? (
         <div className="rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm">

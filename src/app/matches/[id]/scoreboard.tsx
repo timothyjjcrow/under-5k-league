@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { matchWatchWindow } from "@/lib/broadcast";
 import { prisma } from "@/lib/prisma";
+import { getLeagueStream } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchResultsOpen } from "@/lib/league-lifecycle";
@@ -10,6 +12,7 @@ import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
+import { WatchLink } from "@/components/watch-link";
 import {
   Badge,
   Card,
@@ -76,6 +79,10 @@ export async function MatchScoreboard({
     !resultPending
       ? match.scheduledAt.getTime()
       : null;
+  // The league stream on a playoff or final match still to be played:
+  // where it will be streamed, then "Live now" (broadcast.ts).
+  const watch = matchWatchWindow(match, match.season.isActive);
+  const stream = watch ? await getLeagueStream() : null;
 
   return (
     <Card className="relative overflow-hidden">
@@ -222,6 +229,7 @@ export async function MatchScoreboard({
           ) : (
             <span>Kickoff time TBD</span>
           )}
+          {watch && stream ? <WatchLink stream={stream} watch={watch} /> : null}
           {pickVerdict ? (
             <PickemTray
               control={pickVerdict}

@@ -27,6 +27,7 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { homeMetadata } from "@/lib/link-preview-metadata";
 import { announcedMatchNight } from "@/lib/match-night";
+import { parseNextSeasonPlan } from "@/lib/next-season";
 import { getDefendingChampion } from "@/lib/official-champion";
 import { prisma } from "@/lib/prisma";
 import { getSeasonMatches, getSeasonSnapshot } from "@/lib/queries";
@@ -35,6 +36,7 @@ import {
   phaseSubtitle,
   seasonPhaseLabel,
 } from "@/lib/season-copy";
+import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import {
   canViewAvailabilitySummary,
   hasActiveLeagueParticipation,
@@ -110,13 +112,18 @@ export default async function Home() {
     season.status === "REGULAR_SEASON" ||
     season.status === "PLAYOFFS" ||
     season.status === "COMPLETE";
-  const [matches, gamesOnRecord] = showsMatches
+  const [matches, gamesOnRecord, nextSeasonRaw] = showsMatches
     ? await Promise.all([
         // Request-cached: the link preview reads it for the champion.
         getSeasonMatches(season.id),
         prisma.game.count({ where: { match: { seasonId: season.id } } }),
+        // The next season's signup date, for the COMPLETE hero (set on
+        // /admin's Season handoff card).
+        season.status === "COMPLETE"
+          ? getSetting(SETTING_KEYS.NEXT_SEASON_PLAN)
+          : Promise.resolve(null),
       ])
-    : [[] as Match[], 0];
+    : [[] as Match[], 0, null];
   const championPresentation = resolveChampionPresentation(season, matches);
   // Until this season crowns someone, Home keeps naming the last champion.
   // Signups and the draft only: from the regular season on, the dashboard is
@@ -187,7 +194,10 @@ export default async function Home() {
       );
       break;
     case "COMPLETE":
-      heroParts = completeHero(season.id);
+      heroParts = completeHero(
+        season.id,
+        parseNextSeasonPlan(nextSeasonRaw, season.id)?.signupsAtMs ?? null,
+      );
       view = (
         <Suspense fallback={<CardSkeleton rows={4} />}>
           <CompleteView

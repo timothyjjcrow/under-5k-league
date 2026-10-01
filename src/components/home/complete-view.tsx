@@ -2,45 +2,102 @@ import type { Match } from "@prisma/client";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Bracket } from "@/components/bracket";
-import { SeriesRecord } from "@/components/series-record";
+import { ChampionMoment } from "@/components/champion-moment";
+import { Countdown } from "@/components/countdown";
+import { LocalTime } from "@/components/local-time";
 import { StandingsTable } from "@/components/standings-table-server";
 import {
-  Avatar,
   Card,
   CardBody,
   CardHeader,
+  DiscordButton,
   LinkArrow,
-  PlayerLink,
-  TeamCrest,
   buttonClasses,
   textLink,
 } from "@/components/ui";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
+import { championFinalLine } from "@/lib/champion-moment";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
+import { DISCORD_INVITE_URL } from "@/lib/constants";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import type { SeasonSnapshot } from "@/lib/queries";
+import { NEXT_SEASON_PASSED_LABEL } from "@/lib/season-copy";
 import { computeStandings } from "@/lib/standings";
 import { formByTeam } from "@/lib/team-matches";
 import type { HeroParts } from "./hero";
 import { fmtWhen } from "./when";
 
 /**
- * The hero once the season is complete. The champion card directly below is
- * the page's one champion block (it also carries the final's score and the
- * "needs review" state), so the hero names no team. Its button is the page's
- * one way to the season's page, where the recap lives; /recap redirects there
- * too.
+ * The hero once the season is complete. The champion banner directly below
+ * is the page's one champion block (the review card stands in for it while
+ * the title needs review), so the hero names no team. Its first button is the
+ * page's one way to the season's page, where the recap lives (/recap
+ * redirects there too); the second is where the next season gets announced:
+ * the league Discord, or League news in a region without an invite. Its meta
+ * line says when the next season's signups open, once an admin has set the
+ * date on /admin's Season handoff card, and "coming soon" until then.
  */
-export function completeHero(seasonId: string): HeroParts {
+export function completeHero(
+  seasonId: string,
+  nextSignupsAtMs: number | null,
+): HeroParts {
   return {
     action: (
-      <Link
-        href={`/seasons/${seasonId}`}
-        className={buttonClasses("accent", "lg")}
-      >
-        Relive the season <LinkArrow />
-      </Link>
+      <>
+        <Link
+          href={`/seasons/${seasonId}`}
+          className={buttonClasses("accent", "lg")}
+        >
+          Relive the season <LinkArrow />
+        </Link>
+        {DISCORD_INVITE_URL ? (
+          <DiscordButton size="lg" />
+        ) : (
+          <Link href="/news" className={buttonClasses("secondary", "lg")}>
+            League news <LinkArrow />
+          </Link>
+        )}
+      </>
     ),
+    meta: <NextSeasonLine signupsAtMs={nextSignupsAtMs} />,
   };
+}
+
+/**
+ * "Next season: signups open Sat, Oct 17, 6:00 PM" with a countdown, or
+ * "Next season: coming soon". The date is display-only (phases never advance
+ * themselves), so the countdown owns saying when it has slipped: past the
+ * date, Home is still in Season complete and the chip reads
+ * NEXT_SEASON_PASSED_LABEL, decided on the client like every countdown.
+ */
+function NextSeasonLine({ signupsAtMs }: { signupsAtMs: number | null }) {
+  if (signupsAtMs == null) {
+    return (
+      <span className="text-sm text-muted">
+        <span aria-hidden>🗓️</span> Next season:{" "}
+        <strong className="font-medium text-fg">coming soon</strong>
+      </span>
+    );
+  }
+  return (
+    <span className="text-sm text-muted">
+      <span aria-hidden>🗓️</span> Next season: signups open{" "}
+      <strong className="font-medium text-fg">
+        <LocalTime
+          ts={signupsAtMs}
+          variant="full"
+          initial={formatLeagueMatchTime(new Date(signupsAtMs), "full")}
+        />
+      </strong>
+      <Countdown
+        targetMs={signupsAtMs}
+        eventLabel="Signups"
+        futureVerb="open"
+        passedLabel={NEXT_SEASON_PASSED_LABEL}
+        passesAtTarget
+      />
+    </span>
+  );
 }
 
 export async function CompleteView({
@@ -80,119 +137,46 @@ export async function CompleteView({
         (match) => match.id === championPresentation.authoritativeFinalId,
       )
     : undefined;
-  const finalLine = finalMatch
-    ? {
-        score:
-          finalMatch.winnerTeamId === finalMatch.homeTeamId
-            ? `${finalMatch.homeScore}–${finalMatch.awayScore}`
-            : `${finalMatch.awayScore}–${finalMatch.homeScore}`,
-        loser: teamName.get(
-          finalMatch.winnerTeamId === finalMatch.homeTeamId
-            ? finalMatch.awayTeamId
-            : finalMatch.homeTeamId,
-        ),
-      }
-    : undefined;
+  const finalLine = champion
+    ? championFinalLine(finalMatch, champion.id)
+    : null;
 
   return (
     <div className="space-y-5">
-      {/* The champion as a banner: the crest beside the story rather than
-          stacked over it, which stood about 310px tall on a desktop. */}
-      <Card className="relative overflow-hidden">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute left-1/2 top-0 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-400/15 blur-3xl sm:left-16 sm:translate-x-0"
+      {champion ? (
+        <ChampionMoment
+          seasonName={season.name}
+          team={champion}
+          final={finalLine}
+          opponentName={
+            finalLine ? (teamName.get(finalLine.opponentTeamId) ?? null) : null
+          }
+          record={championRow ?? null}
+          roster={champion.members}
         />
-        <CardBody className="relative flex flex-col items-center gap-3 py-6 text-center sm:flex-row sm:items-center sm:gap-6 sm:px-6 sm:text-left">
-          {champion ? (
-            <div className="relative shrink-0">
-              <TeamCrest
-                name={champion.name}
-                seed={champion.id}
-                logoUrl={champion.logoUrl}
-                size={76}
-                className="rounded-2xl shadow-lg ring-2 ring-amber-400/50"
-              />
-              <span
-                aria-hidden
-                className="absolute -bottom-2 -right-2 grid h-8 w-8 place-items-center rounded-full border border-amber-400/40 bg-surface text-lg shadow-md"
-              >
-                🏆
-              </span>
-            </div>
-          ) : (
+      ) : (
+        // No authoritative champion: this card says why and what fixes it,
+        // where the banner would stand.
+        <Card>
+          <CardBody className="flex flex-col items-center gap-3 py-6 text-center sm:flex-row sm:items-center sm:gap-6 sm:px-6 sm:text-left">
             <div aria-hidden className="shrink-0 text-4xl">
               ⚠️
             </div>
-          )}
-          <div className="flex min-w-0 flex-col items-center gap-1.5 sm:items-start">
-            <div className="text-xs font-medium uppercase tracking-[0.2em] text-amber-300/90">
-              {champion
-                ? `${season.name} Champion`
-                : `${season.name} · review needed`}
-            </div>
-            <div className="text-2xl font-bold [overflow-wrap:anywhere]">
-              {champion ? (
-                <Link href={`/teams/${champion.id}`} className="hover:text-info">
-                  {champion.name}
-                </Link>
-              ) : (
-                "Champion needs review"
-              )}
-            </div>
-            {!champion ? (
+            <div className="flex min-w-0 flex-col items-center gap-1.5 sm:items-start">
+              <div className="max-w-full text-xs font-medium uppercase tracking-[0.2em] text-amber-300/90 [overflow-wrap:anywhere]">
+                {season.name} · review needed
+              </div>
+              <div className="text-2xl font-bold">Champion needs review</div>
               <p className="max-w-xl text-sm text-muted">
                 This season is marked complete without an authoritative champion.
                 {hasPostseason
                   ? " League administrators need to return it to Playoffs and reconcile the existing grand final before a title is shown."
                   : " No playoff bracket exists, so league administrators need to return it to Regular season, verify the table, and start a newly seeded bracket before a title is shown."}
               </p>
-            ) : null}
-            {finalLine || championRow ? (
-              <p className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-sm text-muted sm:justify-start">
-                {finalLine ? (
-                  <span>
-                    Won the grand final{" "}
-                    <span className="font-medium text-fg">{finalLine.score}</span>
-                    {finalLine.loser ? ` over ${finalLine.loser}` : ""}
-                  </span>
-                ) : null}
-                {finalLine && championRow ? (
-                  <span aria-hidden className="text-line">
-                    •
-                  </span>
-                ) : null}
-                {championRow ? (
-                  <span>
-                    <span className="font-medium text-fg">
-                      <SeriesRecord record={championRow} />
-                    </span>{" "}
-                    regular season · {championRow.points} pts
-                  </span>
-                ) : null}
-              </p>
-            ) : null}
-            {champion && champion.members.length > 0 ? (
-              // my-0 on the chips below: the py-0.5 orphans TAP_SAFE's -my-1
-              // through twMerge, so the chip reserves 8px less than it occupies
-              // (see teams/page.tsx for the measurement). The winning five's
-              // chips wrap on every phone, and this is the champion card.
-              <div className="mt-1 flex flex-wrap justify-center gap-1.5 sm:justify-start">
-                {champion.members.map((m) => (
-                  <PlayerLink
-                    key={m.id}
-                    userId={m.userId}
-                    className="my-0 flex items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-0.5 pl-0.5 pr-2.5 text-xs hover:border-muted/60 hover:no-underline"
-                  >
-                    <Avatar name={m.user.name} src={m.user.avatar} size={20} />
-                    <span>{m.user.name}</span>
-                  </PlayerLink>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </CardBody>
-      </Card>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       <CompleteBracket
         matches={matches}

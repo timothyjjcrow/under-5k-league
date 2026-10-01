@@ -64,7 +64,9 @@ import {
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { adminSeasonCards } from "@/lib/admin-sections";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { matchWatchWindow } from "@/lib/broadcast";
 import { AUTO_SYNC } from "@/lib/constants";
+import { getLeagueStream } from "@/lib/queries";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import {
@@ -444,6 +446,11 @@ export default async function SchedulePage() {
       ? teamName.get(championPresentation.championTeamId)
       : null;
 
+  // The league stream, read only when a playoff or final row could link it.
+  const stream = playoff.some((m) => matchWatchWindow(m, season.isActive))
+    ? await getLeagueStream()
+    : null;
+
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
   // collapsible weeks). Dates preformatted server-side. Shared with the
   // playoff round list below so RSVP/standin/reschedule chips work everywhere.
@@ -451,6 +458,7 @@ export default async function SchedulePage() {
     // Once per match — each call scans the season's whole assignment list
     // for both sides, and this used to run three times per row.
     const rsvp = rsvpFor(m);
+    const watchWindow = stream ? matchWatchWindow(m, season.isActive) : null;
     return {
       id: m.id,
       homeTeamId: m.homeTeamId,
@@ -492,6 +500,7 @@ export default async function SchedulePage() {
         away: pickRsvp(rsvp.away.summary, rsvp.away.expected),
       },
       reschedulePending: rescheduleByMatch.get(m.id) ?? null,
+      watch: stream && watchWindow ? { stream, window: watchWindow } : null,
     };
   };
   // The week's league night = its earliest kickoff (headers stay scannable

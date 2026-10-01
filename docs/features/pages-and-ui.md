@@ -268,9 +268,18 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   rides under the title; with no aside, meta takes the right half.
 - **The slot addresses the viewer.** Mid-season: `MyNextMatch` (their next
   check-in, `<CheckinBanner variant="panel">`), or for someone with no team and
-  no signup, the late standin signup plus the inhouse queue. COMPLETE: only
-  "Relive the season"; the champion card below is the page's one champion
-  block.
+  no signup, the late standin signup plus the inhouse queue. COMPLETE: "Relive
+  the season" and, under it, where the next season is announced (the league
+  Discord, or League news without an invite); the champion banner below is the
+  page's one champion block, so the hero names no team.
+- **COMPLETE's meta line says what's next:** "Next season: signups open
+  {date}" with a countdown once an admin sets the date on `/admin`'s Season
+  handoff card (`setNextSeasonDate`), else "Next season: coming soon". The
+  date is one Setting row (`NEXT_SEASON_PLAN`, parsed by `next-season.ts`)
+  naming the season it was set during, so the handoff makes it lapse without
+  a write. Display only: it opens nothing and posts nothing, and its
+  countdown carries `passedLabel={NEXT_SEASON_PASSED_LABEL}` for a date that
+  slips.
 - **The regular season is two columns from `xl`:** This week and the
   standings, then the honors line and the news under them; the rail holds the
   Your team / Coming up / Recent results band and the side games. The
@@ -295,6 +304,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **A lone series on This week gets the big kickoff clock**
   (`<KickoffCountdown>`) in place of the header chip; when it is the grand
   final the card is titled "The grand final" and the clock wears gold.
+- **A playoff or final card on This week carries the league stream** as a
+  strip under the card's link (see the match page's watch link below).
 - **The Your team card** shows only the stakes of the next series (the table
   already highlights rank and record), aligned to the engine's `nextMatchId`
   and naming the opponent. It sits in the auto-fit band (the rail from `xl`)
@@ -307,10 +318,19 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   plus the Needs attention count (`adminHomeLine`). Feed `adminNextStep` and
   `matchAttention` the same inputs as `/admin` or they drift. Database reads
   only, never Discord.
-- **PLAYOFFS shows a compact bracket; COMPLETE a champion banner (crest beside
-  the story) and "How it was won".** `<Bracket>` centres itself when its card
-  is wider than it. Round grouping is pure `slotRound`/`groupPlayoffRounds`
-  (`schedule.ts`), shared with `/schedule`.
+- **PLAYOFFS shows a compact bracket; COMPLETE the gold champion banner and
+  "How it was won".** `<ChampionMoment>` (`champion-moment.tsx`) is the
+  crowned state only: crest and trophy, "{season} Champion", the final's score
+  from `championFinalLine` (null for a legacy archive), the regular-season
+  record and the roster chips, captain first. The "needs review" card stays in
+  `complete-view.tsx`. The champion's own team page shows `<ChampionStrip>`
+  under its header (season and final only: the header and the roster card
+  already carry the rest). Keep the "{season} Champion" label and the one
+  `/teams/` link siblings under one parent, and never link the beaten
+  finalist there (the postseason e2e reads the champion that way).
+  `<Bracket>` centres itself when its card is wider than it. Round grouping is
+  pure `slotRound`/`groupPlayoffRounds` (`schedule.ts`), shared with
+  `/schedule`.
 
 ### The SIGNUPS view
 
@@ -529,6 +549,22 @@ the league is already draftable and many visitors have joined. Write for both.
   empty boxes and the browser fills them (`getServerSnapshot` is null), so
   hydration never mismatches; its spoken name gives minutes, never seconds.
   `kickoff-countdown.test.ts` pins both render sites.
+- **Playoff and final matches link the league stream** (`<WatchLink>` over
+  `src/lib/broadcast.ts`) once an admin sets one on /admin's Match stream
+  card: "Streamed on Twitch" before the window, "Live now · Watch on Twitch"
+  from 15 minutes before kickoff until the series estimate ends
+  (`seriesEstimateMinutes`, the calendar's event length), then nothing.
+  `matchWatchWindow` picks the matches (playoffs and the final of the active
+  season, kickoff set, not decided, not a forfeit), and the browser picks the
+  state (`getServerSnapshot` is null), so a parked tab crosses both edges.
+  Three render sites, each reading `getLeagueStream()` only when a match
+  qualifies: the scoreboard's footer, a strip under Home's This week card
+  (outside the card's link, like the pick tray) and `/schedule` rows ("On
+  Twitch" / "Watch live", `relative z-10` above the stretched link). It links
+  out in a new tab with `rel="noreferrer"` and never embeds a player:
+  `watch-link.test.ts` bans `<iframe` in `src`. One channel serves the
+  league, so two semifinals at once both point at it; per-match links and
+  replays need a `Match` column (DECISIONS.md).
 - **A box score line is `BoxScoreLine`** (`box-score-line.tsx`, the page's
   one client piece of a box score): the server renders every part and the
   line lays them out. Each side is an `@container`; from `@lg` a player is

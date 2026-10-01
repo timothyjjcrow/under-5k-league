@@ -63,6 +63,28 @@ describe("dashboard draft-night countdowns", () => {
 });
 
 /**
+ * The same rule for the next season's signup date on the Season complete
+ * hero: phases never advance themselves, so a date an admin set and then
+ * missed would otherwise stand on Home as a plan, or vanish with no word.
+ */
+describe("the next season's countdown", () => {
+  const nextSeason = FILES.flatMap((f) =>
+    f.text
+      .split("<Countdown")
+      .slice(1)
+      .map((c) => c.slice(0, c.indexOf("/>")))
+      .filter((props) => props.includes("signupsAtMs")),
+  );
+
+  it("says the date has passed", () => {
+    expect(nextSeason.length).toBeGreaterThanOrEqual(1);
+    for (const props of nextSeason) {
+      expect(props).toContain("passedLabel={NEXT_SEASON_PASSED_LABEL}");
+    }
+  });
+});
+
+/**
  * The viewer's "Your team" card prints the Win/Draw/Loss block for their next
  * series. When that series is on the This-week slate, the slate's own team
  * row already prints the identical block, so the card must stand down; and
