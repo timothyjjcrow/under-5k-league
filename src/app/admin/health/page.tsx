@@ -349,6 +349,9 @@ function AccountsSection({
 }) {
   const a = health.accounts;
   const earlier = a.earlier;
+  const weeks = a.weeks.length + (earlier?.weeks ?? 0);
+  const accounts = (n: number) =>
+    `${number.format(n)} ${n === 1 ? "account" : "accounts"}`;
   return (
     <Section
       title="New accounts"
@@ -356,14 +359,16 @@ function AccountsSection({
         <StatCell
           label="New accounts"
           value={number.format(a.total)}
-          hint={`over ${number.format(a.weeks.length + (earlier?.weeks ?? 0))} weeks`}
+          hint={`over ${number.format(weeks)} ${weeks === 1 ? "week" : "weeks"}`}
         />
       }
       notes={[
         `Accounts created ${span}, in weeks starting Monday, ${zone}.`,
         ...(earlier
           ? [
-              `The ${number.format(earlier.weeks)} earliest weeks are folded: ${number.format(earlier.count)} accounts between them.`,
+              earlier.weeks === 1
+                ? `The earliest week is folded: ${accounts(earlier.count)} in it.`
+                : `The ${number.format(earlier.weeks)} earliest weeks are folded: ${accounts(earlier.count)} between them.`,
             ]
           : []),
       ]}
