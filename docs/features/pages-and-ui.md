@@ -503,6 +503,11 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## The admin page layout (`/admin`)
 
+- **Season-wide diagnostics are their own pages:** `/admin/data-quality` and
+  `/admin/health`, linked side by side from Needs attention (a `flex-wrap`
+  row with `gap-y-2`). League health is server-rendered `SectionTitle` and
+  `StatStrip` bands with a note list under each; see
+  [admin-and-operations](admin-and-operations.md#league-health-adminhealth).
 - **Anchors plus disclosure.** `AdminJump` (a `SectionNav`, sticky from `lg`)
   jumps to `AdminAnchor` ids. Rarely touched cards (Discord, league id, news,
   security, historical records, database performance, season handoff and

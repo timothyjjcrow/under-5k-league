@@ -13,7 +13,7 @@ test.afterAll(async () => {
 test("admin diagnostic routes protect history and game details", async ({
   page,
 }) => {
-  for (const path of ["/admin/activity", "/admin/data-quality"]) {
+  for (const path of ["/admin/activity", "/admin/data-quality", "/admin/health"]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/login\?next=/);
   }
@@ -39,6 +39,79 @@ test("admin diagnostic routes protect history and game details", async ({
   await expect(
     page.getByRole("heading", { name: "Imported-game quality" }),
   ).toHaveCount(0);
+  // League health: the same 404 as a page that doesn't exist, so a signed-in
+  // player can't tell it is there.
+  await page.goto("/admin/health");
+  await expect(
+    page.locator('meta[name="robots"][content="noindex"]').first(),
+  ).toBeAttached();
+  await expect(
+    page.getByRole("heading", { name: "Page not found", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "League health" }),
+  ).toHaveCount(0);
+});
+
+test("League health counts the season for admins, on a phone", async ({
+  page,
+}) => {
+  const noErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(
+    "/api/auth/dev?name=QoL+Admin&steamId=76561190000991999&admin=1&redirect=/admin",
+  );
+  // Linked from Needs attention, beside the imported-game check.
+  await page
+    .getByRole("link", { name: "League health", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/admin\/health\?season=/);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "League health",
+  );
+  const main = page.locator("#main");
+  for (const name of [
+    "Signups and seats",
+    "Check-ins",
+    "Standins",
+    "Discord",
+    "New accounts",
+  ]) {
+    await expect(
+      main.getByRole("heading", { level: 2, name, exact: true }),
+    ).toBeVisible();
+  }
+  await expect(main).toContainText("Season 9 (fixture)");
+  // The fixture's rosters were written without an auction or roster
+  // history, so never-drafted is unknown rather than a guess.
+  await expect(main.getByText("Never drafted", { exact: true })).toBeVisible();
+  await expect(main).toContainText(
+    "Never drafted is unknown: this season has no finished auction on record",
+  );
+  // The fixture has played series, so the rate is a percentage.
+  await expect(main).toContainText(/Answered\s*\d+%/);
+  await expect(main).toContainText(
+    "A new kickoff clears check-ins, so a moved series counts only the answers given after it moved.",
+  );
+  await expect(main).toContainText(
+    "A booking that was removed is deleted, so it isn't counted here.",
+  );
+  await expect(main).toContainText("Posts carry no season");
+  await expect(main).toContainText(
+    "Withdrawals and removals carry no date",
+  );
+  await expectNoHorizontalOverflow(page, "league health");
+
+  // One season id or none: an unknown or repeated one is a 404.
+  await page.goto("/admin/health?season=no-such-season");
+  await expect(
+    page.getByRole("heading", { name: "Page not found", exact: true }),
+  ).toBeVisible();
+  await page.goto("/admin/health?season=a&season=b");
+  await expect(
+    page.getByRole("heading", { name: "Page not found", exact: true }),
+  ).toBeVisible();
+  noErrors();
 });
 
 test("schedule selection survives reload and back navigation on a phone", async ({

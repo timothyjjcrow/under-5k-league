@@ -973,6 +973,13 @@ adjacent JSON is explicitly not recovery; production deletion additionally
 requires a recent signed full-database backup receipt. While another season is active,
 reactivation is visibly locked and points the admin to the handoff controls.
 
+Off-page and read-only, each admin-only with the same 404 for everyone else:
+`/admin/activity` (the full admin log), `/admin/data-quality` (imported-game
+box-score issues) and `/admin/health` (one season's signups and seats, check-in
+rate, standin bookings and their lead time, Discord links and posts, and new
+accounts per week, as counts; `?season=` picks any season;
+`league-health-service.ts` over the pure `league-health.ts`).
+
 ## 9. External integrations
 
 **Steam** (`src/lib/steam.ts`): OpenID 2.0 login (one-shot browser state,
