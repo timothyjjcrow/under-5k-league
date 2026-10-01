@@ -147,6 +147,13 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   tiebreaker / "Your team", W-D-L, game difference, points, Last 5 from `sm`).
   Movement arrows (`standingsMovement`), ✓/✗ marks. Team names truncate on one
   line (full name in `title`) rather than wrap on phones.
+- **A win streak rides the status line, never a column** (`StreakChip`, "W3
+  streak", neutral, spoken "Won the last 3 series"): from two series wins,
+  and on live tables only. Home and /schedule pass `streakByTeam` from
+  `standingsForm` (the same play-ordered list as Last 5) under
+  `standingsStreaksShown`; the COMPLETE view and the archive never do, and a
+  withdrawn team is never badged (`standings-table.test.ts`). The rule:
+  `stats-and-side-games.md`.
 - **Public tables show a dead heat only once it can matter**
   (`publicDeadHeatTeamIds`, `playoff-field.ts`, tested): every regular fixture
   final, or tiebreaker fixtures exist. Before that only the quiet "Tied" chip

@@ -1,11 +1,12 @@
 # Stats pages, awards and side games
 
 What GGD2L builds on imported box scores (impact points, MVPs, weekly honors,
-Leaders, Hall of Fame, Record book, Hero meta, power rankings, scouting), the
-side games (fantasy, pick'em), scrims and league news. Rules are pure and
-tested in `src/lib/` (`fantasy.ts`, `achievements.ts`, `honors*.ts`,
-`pickem.ts`, `hall-of-fame.ts`, `records.ts`, `hero-meta.ts`,
-`power-rankings.ts`, `scouting.ts`, `scrim-*.ts`, `news*.ts`).
+Leaders, Hall of Fame, Record book, upsets, streaks and record watch, Hero
+meta, power rankings, scouting), the side games (fantasy, pick'em), scrims and
+league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
+`achievements.ts`, `honors*.ts`, `pickem.ts`, `hall-of-fame.ts`, `records.ts`,
+`upsets.ts`, `hero-meta.ts`, `power-rankings.ts`, `scouting.ts`, `scrim-*.ts`,
+`news*.ts`).
 
 ## Impact points, MVPs, achievements
 
@@ -107,6 +108,52 @@ tested in `src/lib/` (`fantasy.ts`, `achievements.ts`, `honors*.ts`,
   inside `announceSeriesResultOnce`'s marker (no new send). Silent until
   `RECORD_ANNOUNCE_MIN_GAMES` (20) complete games exist outside the series;
   strictly greater only. `seriesRecordLine` is best-effort.
+
+## Upsets, streaks and record watch
+
+Reasons to open the site between match nights, each a pure rule with its
+numbers in one named constant. Stored results only: no pace, averages or
+predictions. Where each one shows: `pages-and-ui.md` (Home, the profile, the
+match preview) and `season-schedule-playoffs.md` (the standings chip).
+
+- **An upset is judged on points going into the week, never places**
+  (`seriesUpset`, `upsets.ts`). Regular season: the winner had at least
+  `UPSET_MIN_POINTS_GAP` (3, a full win) fewer points than the loser in
+  `regularTableBeforeWeek` (`standings.ts`: completed REGULAR results from
+  earlier weeks, so a postponed fixture is judged against its own week; the
+  movement arrows use the same table). Places would invent upsets: teams
+  level on points are split by tiebreaks and finally team id. Nothing is
+  tagged until `UPSET_MIN_PRIOR_WEEKS` (2) earlier weeks have results (week 3
+  at the soonest); after one night the table only says who won.
+- **Playoffs judge the frozen seeds** (`seedsFromFirstRound` over PLAYOFF and
+  FINAL rows only, because a tiebreaker's `TB1` slot parses as round 0). The
+  higher seed number winning is the upset; a side without a seed gets no
+  tag. **Draws, forfeits and TIEBREAKER series are never upsets.**
+- **The upset of the week** (`biggestUpset`) comes from the latest week with
+  a completed series: the largest gap, then the lowest match id. When that
+  week had none there is no line; an older week's never stands in.
+- **A win streak is consecutive series wins in play order**
+  (`seriesWinStreak` through `standingsForm`, `team-matches.ts`): week,
+  kickoff (untimed last), then id, never a query's row order. A draw or a
+  loss ends it and every phase counts, as in the Last 5 strip, which reads
+  the same sorted list so the chip and the strip always agree. Shown from
+  `WIN_STREAK_MIN` (2), wins only (no losing streaks), and only on a live
+  table (`standingsStreaksShown`: the active season in REGULAR_SEASON or
+  PLAYOFFS), never a finished or archived one.
+- **Record watch is the league record minus a career best**
+  (`recordWatchBook`, `recordWatchFor`, `recordWatchLines` in `records.ts`),
+  both read through the record book's own mapping and metrics. Silent until
+  `RECORD_WATCH_MIN_GAMES` (20) complete games; a line only within
+  `RECORD_WATCH_WITHIN_PERCENT` (15, inclusive) of the record and never for
+  a record the player holds; one line a player, their closest by share of
+  the record (ties in book order); at most `RECORD_WATCH_PER_MATCH` (3) on a
+  match preview. An equalled mark reads "level with the record" because the
+  first achiever keeps a tie. `recordWatchText` states stored facts with
+  exact numbers ("Career best 18 kills · record 21, 3 short"). Player
+  records only: no game records, and deaths were never a record.
+- **None of it posts to Discord.** An upset line in the result post or a
+  record-watch line before match night would be a new message, so it waits
+  for Tim's call.
 
 ## Hero meta
 

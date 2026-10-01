@@ -2,7 +2,7 @@
 // (no DB). Unlike standings (regular season only), these summarize *all*
 // completed meetings, so playoff rematches show up in a team's history too.
 
-import { MATCH_STATUS } from "./constants";
+import { MATCH_STATUS, SEASON_STATUS } from "./constants";
 
 export type TeamMatchLike = {
   homeTeamId: string;
@@ -54,6 +54,88 @@ export function formByTeam(
     map.set(id, recentForm(id, mine, limit));
   }
   return map;
+}
+
+export type SeriesOrderMatch = TeamMatchLike & {
+  id: string;
+  week: number;
+  scheduledAt: Date | null;
+};
+
+/**
+ * Series in the order the league played them: week, then kickoff (an
+ * untimed fixture last in its week), then id. Never lean on a query's
+ * order: Home reads matches by week alone and /schedule by week then
+ * createdAt, so two series of one team in one week (a tiebreaker knockout)
+ * could come back either way round.
+ */
+export function compareSeriesOrder(
+  a: SeriesOrderMatch,
+  b: SeriesOrderMatch,
+): number {
+  const kickoff = (m: SeriesOrderMatch) =>
+    m.scheduledAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  return a.week - b.week || kickoff(a) - kickoff(b) || a.id.localeCompare(b.id);
+}
+
+/** A run of series wins is news from this many in a row. */
+export const WIN_STREAK_MIN = 2;
+
+/**
+ * Consecutive series wins up to the team's latest result: a draw or a loss
+ * ends it. `orderedMatches` must be in play order (`compareSeriesOrder`), the
+ * same list the Last 5 strip reads, so the chip and the strip always agree.
+ * Every phase counts, as in the strip.
+ */
+export function seriesWinStreak(
+  teamId: string,
+  orderedMatches: readonly TeamMatchLike[],
+): number {
+  const mine = orderedMatches.filter(
+    (m) =>
+      m.status === MATCH_STATUS.COMPLETED &&
+      (m.homeTeamId === teamId || m.awayTeamId === teamId),
+  );
+  let streak = 0;
+  for (let i = mine.length - 1; i >= 0; i--) {
+    if (resultFor(teamId, mine[i]) !== "W") break;
+    streak += 1;
+  }
+  return streak;
+}
+
+/**
+ * Streak chips belong on a live table: the active season's regular season or
+ * playoffs. A finished or archived season's last run is history, not news.
+ */
+export function standingsStreaksShown(season: {
+  isActive: boolean;
+  status: string;
+}): boolean {
+  return (
+    season.isActive &&
+    (season.status === SEASON_STATUS.REGULAR_SEASON ||
+      season.status === SEASON_STATUS.PLAYOFFS)
+  );
+}
+
+/**
+ * The standings' Last 5 strip and win streaks for every team, from ONE list
+ * in play order, so a "W3" chip always matches the strip beside it.
+ * `streaks` is set only when asked for (`standingsStreaksShown`).
+ */
+export function standingsForm(
+  teamIds: string[],
+  matches: readonly SeriesOrderMatch[],
+  options: { streaks: boolean },
+): { form: Map<string, FormResult[]>; streaks?: Map<string, number> } {
+  const ordered = [...matches].sort(compareSeriesOrder);
+  return {
+    form: formByTeam(teamIds, ordered),
+    streaks: options.streaks
+      ? new Map(teamIds.map((id) => [id, seriesWinStreak(id, ordered)]))
+      : undefined,
+  };
 }
 
 export type SeriesRecordCounts = {

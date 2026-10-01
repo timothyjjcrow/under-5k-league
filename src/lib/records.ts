@@ -449,6 +449,142 @@ export function formatRecordMark(key: string, value: number): string {
   return unit ? `${amount} ${unit}` : amount;
 }
 
+/** Complete games the book needs before record watch says anything. The
+ *  same floor as a broken-record line, for the same reason: in a young book
+ *  every mark is close, so "3 short of the record" would mean nothing. */
+export const RECORD_WATCH_MIN_GAMES = 20;
+
+/** How close a career best must be to make the watch: within this percent
+ *  of the league record (inclusive). */
+export const RECORD_WATCH_WITHIN_PERCENT = 15;
+
+/** Lines a match preview lists at most, across both rosters. */
+export const RECORD_WATCH_PER_MATCH = 3;
+
+/**
+ * Everything record watch reads, worked out once from the book's games:
+ * the player records and every player's career best for each, both through
+ * the book's own metrics (so a legacy box score can't give anyone a best the
+ * book would never count).
+ */
+export type RecordWatchBook = {
+  /** Complete games in the book. */
+  games: number;
+  /** The league's player records, in book order (kills first). */
+  records: PlayerRecord[];
+  /** userId → record key → that player's best single-game value. */
+  bests: Map<string, Map<string, number>>;
+};
+
+/** `games` in chronological order, as `leagueRecords` wants them. */
+export function recordWatchBook(games: RecordGame[]): RecordWatchBook {
+  const bests = new Map<string, Map<string, number>>();
+  for (const game of games) {
+    for (const line of game.lines) {
+      if (!line.userId) continue;
+      for (const spec of PLAYER_RECORDS) {
+        const value = spec.metric(line);
+        if (value == null) continue;
+        const mine = bests.get(line.userId) ?? new Map<string, number>();
+        bests.set(line.userId, mine);
+        if (value > (mine.get(spec.key) ?? -Infinity)) mine.set(spec.key, value);
+      }
+    }
+  }
+  return { games: games.length, records: leagueRecords(games).players, bests };
+}
+
+/** One player's distance from one league record: stored facts only. */
+export type RecordWatchLine = {
+  userId: string;
+  key: string;
+  title: string;
+  emoji: string;
+  /** Their best single game for this record. */
+  best: number;
+  /** The league record. */
+  record: number;
+  /** record − best; 0 means level (the first to reach a mark keeps it). */
+  gap: number;
+};
+
+/** Closer to its record: compares gap / record without division. */
+const closerThan = (a: RecordWatchLine, b: RecordWatchLine) =>
+  a.gap * b.record - b.gap * a.record;
+
+/**
+ * The record a player is closest to breaking, or null. Only once the book has
+ * RECORD_WATCH_MIN_GAMES complete games, only within
+ * RECORD_WATCH_WITHIN_PERCENT of the record, and never a record they hold
+ * themselves (the profile already lists those). One line per player: their
+ * closest, by share of the record; a tie keeps book order (kills first).
+ */
+export function recordWatchFor(
+  book: RecordWatchBook,
+  userId: string,
+): RecordWatchLine | null {
+  if (book.games < RECORD_WATCH_MIN_GAMES) return null;
+  const mine = book.bests.get(userId);
+  if (!mine) return null;
+  let closest: RecordWatchLine | null = null;
+  for (const record of book.records) {
+    if (record.userId === userId || record.value <= 0) continue;
+    const best = mine.get(record.key);
+    if (best == null) continue;
+    const gap = record.value - best;
+    if (gap < 0 || gap * 100 > record.value * RECORD_WATCH_WITHIN_PERCENT) {
+      continue;
+    }
+    const line: RecordWatchLine = {
+      userId,
+      key: record.key,
+      title: record.title,
+      emoji: record.emoji,
+      best,
+      record: record.value,
+      gap,
+    };
+    if (!closest || closerThan(line, closest) < 0) closest = line;
+  }
+  return closest;
+}
+
+/**
+ * A match preview's record watch: each listed player's closest line, closest
+ * first (then book order, then user id), at most `limit` in all.
+ */
+export function recordWatchLines(
+  book: RecordWatchBook,
+  userIds: readonly string[],
+  limit = RECORD_WATCH_PER_MATCH,
+): RecordWatchLine[] {
+  const bookOrder = new Map(book.records.map((record, i) => [record.key, i]));
+  return [...new Set(userIds)]
+    .flatMap((userId) => recordWatchFor(book, userId) ?? [])
+    .sort(
+      (a, b) =>
+        closerThan(a, b) ||
+        (bookOrder.get(a.key) ?? 0) - (bookOrder.get(b.key) ?? 0) ||
+        a.userId.localeCompare(b.userId),
+    )
+    .slice(0, limit);
+}
+
+/**
+ * "Career best 18 kills · record 21, 3 short", or "Career best 21 kills ·
+ * level with the record". Exact numbers (a rounded "32.1k" could print a
+ * best and a record that look equal), and nothing but the stored marks: no
+ * pace, no averages.
+ */
+export function recordWatchText(line: RecordWatchLine): string {
+  const amount = (value: number) => new Intl.NumberFormat("en-US").format(value);
+  const unit = MARK_UNIT[line.key];
+  const best = unit ? `${amount(line.best)} ${unit}` : amount(line.best);
+  return line.gap === 0
+    ? `Career best ${best} · level with the record`
+    : `Career best ${best} · record ${amount(line.record)}, ${amount(line.gap)} short`;
+}
+
 /** "43m 17s" — shared display format for duration records. */
 export function formatGameDuration(secs: number): string {
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;

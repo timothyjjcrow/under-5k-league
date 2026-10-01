@@ -314,6 +314,15 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **`WeeklyHonorsLine`** renders only official honors (the readiness rows
   Discord and `/leaders` use; `honorBestGame` picks the game), else nothing;
   the in-progress caveats live on `/leaders`.
+- **Upsets on Home** (rules: `stats-and-side-games.md`). A Recent results row
+  whose series was an upset carries an amber "Upset" chip (`UpsetChip`,
+  `aria-hidden`, the reason on hover), and its spoken sentence opens
+  "Upset:" yet still ends "won the series · Match details"
+  (`recentResultSpoken`). `WeekHighlights` (`week-highlights.tsx`) is one
+  line beside the honors line, never inside it: the latest week's biggest
+  upset ("Week 5 upset · X beat Y 2–0, from 6 points behind going into the
+  week"), else nothing. Both judge the matches Home already loaded and add
+  no query; `week-highlights.test.ts` pins the wiring.
 - **`AdminStrip` (admins only) repeats `/admin`'s next step word for word**
   plus the Needs attention count (`adminHomeLine`). Feed `adminNextStep` and
   `matchAttention` the same inputs as `/admin` or they drift. Database reads
@@ -450,6 +459,13 @@ the league is already draftable and many visitors have joined. Write for both.
   are `@container`s: the overview's stats and spotlight split at `@2xl`, a
   series row puts its games beside the opponent at `@2xl`, and the hero pool
   (`columns="container"`) and achievements step with the rail's width.
+- **The League records card also shows the record within reach**
+  (`recordWatchFor`, rules in `stats-and-side-games.md`): one "Within reach"
+  row under any held-record chips, stored marks only ("Most kills · Career
+  best 18 kills · record 21, 3 short"). `profileSections` opens the card and
+  its Records tab for a held record OR a within-reach line, and both come
+  from one `recordWatchBook` over the page's record-book read, so they can
+  never disagree with `/records`.
 - **Compare is two columns from `lg`:** career numbers on the left, the
   head-to-head and both hero cards on the right, by grid placement, so the
   DOM and a phone keep head-to-head, numbers, heroes. The rows are
@@ -520,7 +536,7 @@ the league is already draftable and many visitors have joined. Write for both.
   `getSessionUser`.
 - **`MatchPreview` renders while a match has no games and is not COMPLETED:**
   rosters, recent form, prior meetings, stakes banner, tale of the tape,
-  scouting report, and the `/schedule` check-in banner. A COMPLETED match with
+  record watch, scouting report, and the `/schedule` check-in banner. A COMPLETED match with
   no games says it was a forfeit ruling or a manual score.
 - **The tale of the tape** (`tale-of-the-tape.tsx` over the pure
   `src/lib/tale-of-the-tape.ts`) compares the two teams' season: the regular
@@ -534,6 +550,16 @@ the league is already draftable and many visitors have joined. Write for both.
   solid. A knockout series adds each side's road (`playoffRoad`): the series
   it won in the rounds before this one, each linking to its match. It never
   shows the community pick'em split (`pickemControlFor`'s rule).
+- **Record watch follows the tape, before the Matchup card**
+  (`record-watch.tsx`, rules in `stats-and-side-games.md`): up to three of
+  tonight's players (`matchNightRoster`: standins in, covered players out)
+  whose career best is within reach of a league record, each a profile link
+  and one line of stored marks. The card is props-only and stays out of the
+  jump bar. The record book is read in `page.tsx`'s body
+  (`loadRecordWatchBook`, the same cached read and mapping as `/records`),
+  only for an upcoming fixture of the active season, and passed down: inside
+  a card's Suspense the cached read once hung the stream.
+  `record-watch.test.ts` pins the order and the hand-off.
 - **The season lobby bot's panel has two render sites, never both for one
   viewer** (off unless `DOTA_SEASON_LOBBY_BOT_ENABLED`): captains get it with
   Create/Start in Captain tools; other players, booked standins and admins get

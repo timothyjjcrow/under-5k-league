@@ -15,7 +15,12 @@ import { CardSkeleton, EmptyState, textLink } from "@/components/ui";
 import { CaptainTodos } from "./captain-todos";
 import { CaptainTools } from "./captain-tools";
 import { LiveSeriesCheckin } from "./live-series-checkin";
-import { loadMatch, loadPostseason, parseMatchGames } from "./load";
+import {
+  loadMatch,
+  loadPostseason,
+  loadRecordWatchBook,
+  parseMatchGames,
+} from "./load";
 import { PlayerLobbyPanel } from "./lobby-panel";
 import { MatchGames } from "./match-games";
 import { MatchPreview } from "./match-preview";
@@ -55,6 +60,13 @@ export default async function MatchDetailPage({
   if (!match) notFound();
 
   const games = parseMatchGames(match);
+  // Record watch reads the whole record book, so only an upcoming fixture's
+  // preview asks for it, here in the page body: inside a card's Suspense the
+  // cached read once hung the stream.
+  const recordBook =
+    games.length === 0 && match.status !== "COMPLETED" && match.season.isActive
+      ? await loadRecordWatchBook()
+      : null;
   // Async server component: capture request time once for the overdue-result
   // explanation; this is not client render state.
   // eslint-disable-next-line react-hooks/purity
@@ -242,6 +254,7 @@ export default async function MatchDetailPage({
               match={match}
               viewer={viewer}
               roundLabel={postseasonLabel}
+              recordBook={recordBook}
             />
           </Suspense>
         ) : games.length === 0 ? (

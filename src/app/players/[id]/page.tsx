@@ -37,7 +37,11 @@ import {
   trustedGamePlayers,
 } from "@/lib/player-stats";
 import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
-import { leagueRecords, toRecordGames } from "@/lib/records";
+import {
+  recordWatchBook,
+  recordWatchFor,
+  toRecordGames,
+} from "@/lib/records";
 import { cn, hasText } from "@/lib/utils";
 import { aboutText } from "@/lib/about-you";
 import {
@@ -244,11 +248,12 @@ export default async function PlayerProfilePage({
     viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE,
   );
 
-  // All-time league records THIS player holds. Same mapping as /records
-  // (shared toRecordGames) so the chips can never disagree with the book.
-  const heldRecords = leagueRecords(toRecordGames(recordRows)).players.filter(
-    (r) => r.userId === id,
-  );
+  // All-time league records THIS player holds, and the one within reach.
+  // Same mapping as /records (shared toRecordGames) so neither can disagree
+  // with the book.
+  const recordBook = recordWatchBook(toRecordGames(recordRows));
+  const heldRecords = recordBook.records.filter((r) => r.userId === id);
+  const recordWatch = recordWatchFor(recordBook, id);
 
   // Pub scouting (public data — same visibility rule as the medal): the token
   // gate comes from poolPubRecord (null when nothing is scoutable), the hero
@@ -598,6 +603,7 @@ export default async function PlayerProfilePage({
       pubHeroes.length > 0 ||
       hasText(selfPickedHeroes),
     records: heldRecords.length > 0,
+    recordWatch: recordWatch != null,
     achievements: badges.length > 0,
     seasons: seasonRows.length > 0,
     inhouse: !!recentInhouse,
@@ -692,6 +698,7 @@ export default async function PlayerProfilePage({
                 pubHeroes={pubHeroes}
                 pubCheckedLabel={pubCheckedLabel}
                 heldRecords={heldRecords}
+                recordWatch={recordWatch}
               />
             ) : null}
 
