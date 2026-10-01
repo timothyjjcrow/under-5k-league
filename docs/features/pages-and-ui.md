@@ -43,6 +43,57 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   (`match-hosting.ts`), the match page's wording. Its one button
   (`howItWorksAction`) reuses the header's join label and Home's "Register as
   a standin" (`standinSignupOpen`), so the three pages name one action one way.
+  Its Questions card links to `/rules`.
+
+### The rules page (`/rules`)
+
+- **The rulebook is built, not written.** `leagueRules`
+  (`src/lib/league-rules.ts`, pure, tested beside it) builds all ten sections
+  from the code's constants, the season's settings and `LEAGUE_CONFIG`; the
+  page (`src/app/rules/page.tsx`, `force-dynamic`) only loads the season and
+  renders one card per section. A source guard in `league-rules.test.ts`
+  fails on any digit in the page's shown text, any number literal but
+  `headingLevel`, and any import outside its short list, so a rule number can
+  reach the page only through the builder.
+- **Which season:** the active one, else the latest (worded as how the league
+  played it, and that the next season starts with the same settings); with no
+  season at all, `carriedSeasonSettings(null)` under a "First-season defaults"
+  badge. The night comes from `announcedMatchNight`, so Europe without one
+  says it is to be announced. The team count ("the top N make the playoffs")
+  and the league-ticket sentences need an active season. Only the current
+  tiebreaker format is described (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
+- **Every sentence is derived or left out.** Points come from probing
+  `computeStandings`, bracket sizes from `pickBracketSize`, round one from
+  `playoffFirstRound`, the withdrawal forfeit score from
+  `withdrawalForfeitScore` (which the withdraw action uses too), the import
+  window from `league-result-window.ts`, the reschedule limits from
+  `schedule.ts`, the standin clash and MMR gap from the standin constants and
+  the draft clocks from `DEFAULTS`. Sentences that only hold while a function
+  decides them (`teamWithdrawalLockedReason`, `matchResultsOpen`) drop out
+  when it changes. The literal copy (the tiebreak order, the draw refusals,
+  standin and draft wording) is pinned by the "claims hold in the code" tests
+  in the same file: change the behaviour and they go red.
+- **Copy rules hold here too:** the soft MMR limit never blocks, signups are
+  uncapped (`minTeams` is a target), the league id stays on the match page,
+  and the page ends with exactly `RULES_CLOSING`, "Admins rule on anything
+  not written here."
+- **Links:** the League group of `site-nav.ts` (never the footer, which is
+  capped), `/how-it-works`, and both How to host lines (`report-result.tsx`,
+  `league-lobby-checklist.tsx`) to `/rules#hosting`, each source-guarded.
+  Sections are `<Card id>` with `scroll-mt-24` under the `h-16` header.
+  `e2e/rules.spec.ts` checks the sections, the jump links and no overflow at
+  320, 390 and 768px.
+- **Rules nothing encodes yet, so the page doesn't state them** (Tim's to
+  write; until then the closing line covers them): a no-show grace period and
+  when a no-show becomes a forfeit; double forfeits (a 0–0 ruling counts as a
+  draw, a point each); a cap on standins per match or season; a standin MMR
+  cap or the other captain's approval (a 500+ MMR gap only warns the person
+  booking); pauses, disconnects and remakes; side and first-pick choice; hero
+  or patch bans; conduct, smurfing, account sharing, disputes and appeals; a
+  roster lock (admin signings stay open through the playoffs); reschedule
+  notice and how many reschedules a team gets; prizes, lobby passwords and
+  spectators; and the away captain as backup host, which only the ticketed
+  checklist says.
 
 ## Link previews (Discord, X, Slack)
 

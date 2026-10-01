@@ -199,7 +199,15 @@ export default async function HowItWorksPage() {
       </Card>
 
       <Card id="faq" className="mt-6 scroll-mt-24">
-        <CardHeader title="Questions" headingLevel={2} />
+        <CardHeader
+          title="Questions"
+          headingLevel={2}
+          action={
+            <Link href="/rules" className={textLink("text-sm")}>
+              League rules <LinkArrow />
+            </Link>
+          }
+        />
         <ul className="divide-y divide-line-soft">
           {faq(results.faq).map((item) => (
             <li key={item.question}>
