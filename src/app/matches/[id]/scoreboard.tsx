@@ -6,6 +6,7 @@ import { matchResultsOpen } from "@/lib/league-lifecycle";
 import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
 import { teamHueVar } from "@/lib/team-hues";
+import { teamTint } from "@/lib/team-tint";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
@@ -79,6 +80,18 @@ export async function MatchScoreboard({
 
   return (
     <Card className="relative overflow-hidden">
+      {/* Each half washed faintly in its team's colour, clearing before the
+          score in the middle. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/2"
+        {...teamTint(match.homeTeamId, "to right")}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-1/2"
+        {...teamTint(match.awayTeamId, "to left")}
+      />
       <div
         aria-hidden
         className="hero-grid pointer-events-none absolute inset-0 opacity-40"

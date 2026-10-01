@@ -2,7 +2,7 @@ import * as React from "react";
 import Link from "next/link";
 import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
 import { cn, initials, teamInitials } from "@/lib/utils";
-import { teamHueVar } from "@/lib/team-hues";
+import { teamHueVar, teamInkVar } from "@/lib/team-hues";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { heroById, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
@@ -555,20 +555,22 @@ export function TeamCrest({
   className?: string;
 }) {
   const src = logoUrl?.trim();
-  // The season hue from the layout's stylesheet, else the hash hue.
+  // The season hue from the layout's stylesheet, else the hash hue. The
+  // initials' ink comes with it: white, or near-black on the yellows.
   const hue = teamHueVar(seed);
   return (
     <span
       aria-hidden
       data-team-hue={seed}
       className={cn(
-        "relative grid shrink-0 place-items-center overflow-hidden rounded-xl font-display font-bold uppercase text-white shadow ring-1 ring-white/15",
+        "relative grid shrink-0 place-items-center overflow-hidden rounded-xl font-display font-bold uppercase shadow ring-1 ring-white/15",
         className,
       )}
       style={{
         width: size,
         height: size,
         fontSize: Math.round(size * 0.4),
+        color: teamInkVar(seed),
         backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
       }}
     >

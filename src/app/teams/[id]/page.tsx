@@ -67,6 +67,7 @@ import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { SeriesRecord } from "@/components/series-record";
 import { rosterOrder } from "@/lib/team-roster";
 import { teamHueVar } from "@/lib/team-hues";
+import { teamTint } from "@/lib/team-tint";
 import {
   Avatar,
   Badge,
@@ -440,6 +441,12 @@ export default async function TeamPage({
           </span>
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
+          {/* A faint wash of the team's colour under everything else. */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            {...teamTint(team.id)}
+          />
           {/* The roster's signature hero, very faint on the right. */}
           {teamHero ? (
             <div

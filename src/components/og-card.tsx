@@ -12,6 +12,7 @@ import {
   type SeasonCardData,
   type TeamCardData,
 } from "@/lib/og-image";
+import { crestInk } from "@/lib/team-hues";
 import { teamInitials } from "@/lib/utils";
 
 const COLOR = {
@@ -183,7 +184,8 @@ function OgCrest({ team, size }: { team: OgTeam; size: number }) {
         boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
         fontSize: Math.round(size * 0.38),
         fontWeight: 600,
-        color: "#ffffff",
+        // The site crest's ink: white, or near-black on the yellows.
+        color: crestInk(team.hue),
       }}
     >
       {team.logo ? (

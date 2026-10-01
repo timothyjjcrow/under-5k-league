@@ -130,6 +130,44 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   is the h1 and dashboard cards pass `headingLevel={2}` (nested cards default to
   h3), or heading navigation skips what the page is for.
 
+## Team colours
+
+- **A team's colour is its crest hue, never a stored colour.**
+  `seasonTeamHues` spaces each season's teams round the wheel, and the root
+  layout publishes each team's `--team-hue` and crest ink `--team-ink`
+  (`teamHueStyleSheet`, a 60-second snapshot). A team the stylesheet doesn't
+  know yet falls back to its hash hue (`teamHueVar`, `teamInkVar`).
+- **Every element painted with a hue carries its own `data-team-hue`,** naming
+  the team its style reads. Custom properties reach an element only through
+  that attribute or inheritance, so without it an element shows the fallback,
+  or another team's hue inherited from an ancestor. `team-crest.test.ts`
+  parses every file under `src/` and fails on a hue read outside an element's
+  props, or on an element whose `data-team-hue` names another team. Build a new
+  paint with `src/lib/team-tint.ts`: its helpers return the attribute with the
+  style.
+- **A wash (`teamTint`) is an empty `pointer-events-none absolute` layer**
+  inside a `relative overflow-hidden` host: the team page header, each half of
+  the scoreboard (fading out before the score) and the player season card. It
+  is a layer of its own so the host keeps its gradient, and empty so its hue
+  can't reach a nested crest of another team. `TEAM_TINT_ALPHA` (the crest's
+  middle colour at 7%) keeps text, muted text, links and every Badge tone at
+  4.5:1 on every hue over the page, a card surface and the hero banners'
+  lightest corner (`team-tint.test.ts`). On `surface-2` the success and danger
+  Badges have no headroom left, so the same test reads each wash's host and
+  refuses any other background.
+- **A stripe (`teamStripe`) marks a box that belongs to one team:** the
+  Matchup and Scouting side boxes, and a box-score side when the game recorded
+  which team played it (`radiantTeamId`/`direTeamId`; an unknown side stays
+  plain Radiant or Dire, and keeps its win tint and the net-worth bar). It is
+  decorative: the team's name in the box says whose it is. It is an inset
+  shadow, so it sits inside the border and moves nothing.
+- **A generated crest's initials wear `crestInk(hue)`:** white, or the page's
+  near-black on the yellows through the cyans, where white fell to about 2:1.
+  The worst hue is now 3.8:1. The link pictures' `OgCrest` uses the same rule.
+- **Not built:** nudging two near-identical neighbouring hues apart, a
+  captain-chosen colour, and a colour taken from the logo (each needs new
+  data or an image decoder).
+
 ## Grids and bands
 
 - **A fixed two-column split sizes its row to the TALLER column,** leaving a
