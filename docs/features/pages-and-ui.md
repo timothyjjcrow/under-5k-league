@@ -439,6 +439,13 @@ the league is already draftable and many visitors have joined. Write for both.
   are `@container`s: the overview's stats and spotlight split at `@2xl`, a
   series row puts its games beside the opponent at `@2xl`, and the hero pool
   (`columns="container"`) and achievements step with the rail's width.
+- **The League records card also shows the record within reach**
+  (`recordWatchFor`, rules in `stats-and-side-games.md`): one "Within reach"
+  row under any held-record chips, stored marks only ("Most kills · Career
+  best 18 kills · record 21, 3 short"). `profileSections` opens the card and
+  its Records tab for a held record OR a within-reach line, and both come
+  from one `recordWatchBook` over the page's record-book read, so they can
+  never disagree with `/records`.
 - **Compare is two columns from `lg`:** career numbers on the left, the
   head-to-head and both hero cards on the right, by grid placement, so the
   DOM and a phone keep head-to-head, numbers, heroes. The rows are

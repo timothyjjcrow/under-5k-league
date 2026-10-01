@@ -7,6 +7,7 @@ const none: ProfileData = {
   gradedGames: false,
   heroes: false,
   records: false,
+  recordWatch: false,
   achievements: false,
   seasons: false,
   inhouse: false,
@@ -39,6 +40,7 @@ describe("profileSections", () => {
         gradedGames: true,
         heroes: true,
         records: true,
+        recordWatch: true,
         achievements: true,
         seasons: true,
         inhouse: true,
@@ -87,6 +89,23 @@ describe("profileSections", () => {
       "player-heroes",
     ]);
     expect(navIds({ records: true })).toEqual([
+      "player-overview",
+      "player-records",
+    ]);
+  });
+
+  it("opens the records card for a record within reach, held or not", () => {
+    // Someone chasing a record they don't hold still gets the card and tab.
+    expect(profileSections({ ...none, recordWatch: true })).toMatchObject({
+      profile: true,
+      records: true,
+      heroes: false,
+    });
+    expect(navIds({ recordWatch: true })).toEqual([
+      "player-overview",
+      "player-records",
+    ]);
+    expect(navIds({ records: true, recordWatch: true })).toEqual([
       "player-overview",
       "player-records",
     ]);
