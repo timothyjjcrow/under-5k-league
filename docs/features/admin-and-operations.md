@@ -151,7 +151,7 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
     `announcementDedupeKey` and the two expiry groups). News copies, webhook
     tests and inhouse posts aren't counted.
   - New accounts are counted in Monday weeks on `LEAGUE_CONFIG.timeZone`; the
-    last 26 weeks show and the rest fold into one line.
+    latest `MAX_WEEKS_SHOWN` weeks show and the rest fold into one line.
 
 ## Archives and recovery
 

@@ -48,7 +48,7 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 ### The rules page (`/rules`)
 
 - **The rulebook is built, not written.** `leagueRules`
-  (`src/lib/league-rules.ts`, pure, tested beside it) builds all ten sections
+  (`src/lib/league-rules.ts`, pure, tested beside it) builds every section
   from the code's constants, the season's settings and `LEAGUE_CONFIG`; the
   page (`src/app/rules/page.tsx`, `force-dynamic`) only loads the season and
   renders one card per section. A source guard in `league-rules.test.ts`
@@ -86,14 +86,14 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Rules nothing encodes yet, so the page doesn't state them** (Tim's to
   write; until then the closing line covers them): a no-show grace period and
   when a no-show becomes a forfeit; double forfeits (a 0–0 ruling counts as a
-  draw, a point each); a cap on standins per match or season; a standin MMR
-  cap or the other captain's approval (a 500+ MMR gap only warns the person
-  booking); pauses, disconnects and remakes; side and first-pick choice; hero
-  or patch bans; conduct, smurfing, account sharing, disputes and appeals; a
-  roster lock (admin signings stay open through the playoffs); reschedule
-  notice and how many reschedules a team gets; prizes, lobby passwords and
-  spectators; and the away captain as backup host, which only the ticketed
-  checklist says.
+  draw, so both teams get a draw's points); a cap on standins per match or
+  season; a standin MMR cap or the other captain's approval (a gap of
+  `STANDIN_MMR_FLAG_GAP` or more only warns the person booking); pauses,
+  disconnects and remakes; side and first-pick choice; hero or patch bans;
+  conduct, smurfing, account sharing, disputes and appeals; a roster lock
+  (admin signings stay open through the playoffs); reschedule notice and how
+  many reschedules a team gets; prizes, lobby passwords and spectators; and
+  the away captain as backup host, which only the ticketed checklist says.
 
 ## Link previews (Discord, X, Slack)
 
