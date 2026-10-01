@@ -137,6 +137,44 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   no Captain badge for that team. Add any new end reason that means "never
   really on this team" to `VOID_TENURE_ENDS`. The trophy needs the resolved
   champion (`resolveChampionPresentation`) and a real part in it.
+- **Load the rows through `loadProfileSeasonRows`**
+  (`profile-season-history.ts`): the profile and its link picture both call
+  it, so the Seasons card, the season card and the picture can't disagree.
+
+## Player season card (`/players/[id]` header and link picture)
+
+- **One pure rule draws the card and the picture:** `playerCardFacts`
+  (`src/lib/player-card.ts`). The profile computes it once and hands it to
+  `ProfileHeader`, which renders `PlayerSeasonCard`; the picture's
+  `loadPlayerCardFacts` (`link-preview-metadata.ts`) makes the same reads. Both
+  fold their games through `profileGameRows` and `profileGameFolds`
+  (`profile-games.ts`), so badges, report card and heroes are counted once.
+  `player-season-card.test.ts` and `profile-games.test.ts` guard the wiring.
+- **The season is the active one while they are in it** (an ACTIVE signup or
+  a roster spot), else their latest Seasons-card row, a title first within that
+  season. A past season's team comes from those rows, never today's roster.
+  Today's roster decides Captain (a handover moves the armband); the tenure
+  decides how they joined ("Drafted for $X", "Signed as a free agent"). A
+  season spent only standing in says "Stood in for X" and wears no crest or
+  colour: it was never their team.
+- **MMR shows only from an ACTIVE signup in the active season,** the header's
+  rule before the card. The medal shows only when known; unknown is left out,
+  never "Unranked".
+- **Heroes are what they play, never what they claim:** up to three, league
+  most-played first, then pub heroes marked "pubs". None until they have a
+  league game, so a card with no games shows its medal and MMR only.
+- **The grade is the career report card's overall grade** through
+  `reportVerdicts(report, false)` (as a visitor sees it, so no "Work on"),
+  only once it has enough graded games. "Strength:" names the best metric.
+- **Honors are Match MVPs and league records held.** Titles are the
+  picture's gold chips: the newest, then "+N more titles".
+- **Say each fact once.** The card owns the medal and MMR; the role line drops
+  a live Captain or Standin the name row already badges
+  (`profileCardRoleText`); the season name under the player's name shows only
+  when the card names no season.
+- **No contact detail of any kind, not even whether one exists:** the picture
+  is public and travels wherever the link is pasted. `player-card.test.ts`
+  pins the facts' exact keys.
 
 ## Player comparison (`/players/compare`)
 

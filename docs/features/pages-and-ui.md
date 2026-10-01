@@ -58,6 +58,19 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   `playoffStatusChip`, `resolveChampionPresentation`, the season's crest hues).
   A kickoff is on the league's clock with its zone named: a picture can't
   adapt to the viewer.
+- **A player's picture is their profile's season card** (`OgPlayerCard`, from
+  `playerCardFacts` through `playerPictureText`; rules in
+  `players-and-registration.md`): the season line as its kicker, avatar, name,
+  that season's team, then chips: one title and "+N more titles", the medal
+  drawn from `public/ranks` (`loadRankMedal`), the grade, heroes and honors.
+  No MMR: a picture travels without its date. `fitPictureFacts` drops chips
+  from the end (honors, then pub heroes, league heroes, the grade) until they
+  fit the frame beside a long name. The link's text keeps its own highlights
+  (`loadPlayerPreviewFacts`).
+- **Write no emoji or "×" in a picture:** next/og downloads any glyph its
+  bundled fonts lack while it draws (Twemoji for an emoji).
+  `share-image-guards.test.ts` checks the picture files and the card rules
+  they borrow words from.
 - **Leave the images out of those pages' metadata**
   (`shareMetadata(..., { pageImage: true })`): Next uses a folder's image files
   only where the page's metadata names no images at all, so the failure is
@@ -73,7 +86,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   the league's own image; a missing page's picture is a 404.
 - **The font is Oswald** (SIL Open Font License, `src/lib/og-fonts/`), read
   at request time; without it next/og falls back to its built-in font, so
-  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist.
+  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist
+  (the fonts, the league emblems and the medal files). Spell each path as a
+  literal `join(process.cwd(), ...)`: that is what the build's file tracing
+  bundles and what the guard reads.
   Keep files like these under `src/`: the release classifier
   (`scripts/classify-release.mjs`) treats a new top-level folder, or a
   `public/` file that isn't an image, video or web font, as an unknown path,
@@ -462,6 +478,15 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Player profile and compare (`/players/[id]`, `/players/compare`)
 
+- **The season card sits in the header's right slot from `lg`** (20rem beside
+  the name) and takes its own line below it. The line break is a `basis-full`
+  wrapper: the name column is `min-w-0`, so the row never overflows and
+  `flex-wrap` never fires on its own; the name would shrink to a letter a
+  line. The card's `max-w-md` sits inside the wrapper, because a max-width on
+  the flex item clamps the full basis the row wraps on.
+- **"Edit your signup" shows on a player's own profile** while they are in
+  the current season, or have no season yet; never under a past season's
+  card.
 - **A profile is two columns from `xl`:** form, match history and "How they
   play" in the main column, and a 24rem rail with the hero pool, records,
   achievements and seasons. A phone reads them in that order. Both columns

@@ -11,14 +11,16 @@ import { TEAM_TINT_ALPHA, teamStripe, teamTint } from "./team-tint";
 
 /**
  * A team's wash must never cost the text on it its contrast. Computed from the
- * real tokens in globals.css, the real Badge tones in ui.tsx and the colour
- * teamTint actually returns, for every hue a team can get, over every
- * background a wash is allowed to sit on. The yellows are the hard case: a
- * light hue lifts the background towards the light text.
+ * real tokens in globals.css, the real Badge tones in ui.tsx, the season
+ * card's grade colours and the colour teamTint actually returns, for every
+ * hue a team can get, over every background a wash is allowed to sit on. The
+ * yellows are the hard case: a light hue lifts the background towards the
+ * light text.
  */
 
 const css = sourceFile("src/app/globals.css").text;
 const ui = sourceFile("src/components/ui.tsx").text;
+const seasonCard = sourceFile("src/components/player-season-card.tsx").text;
 
 const TOKENS = new Map(
   [...css.matchAll(/--color-([a-z0-9-]+):\s*(#[0-9a-f]{6})\s*;/gi)].map(
@@ -79,9 +81,23 @@ function badgeTones() {
   });
 }
 
+/** `{ tone, text, alpha }` from player-season-card.tsx's GRADE_TEXT. */
+function gradeColours() {
+  const block = seasonCard.slice(seasonCard.indexOf("const GRADE_TEXT"));
+  const body = block.slice(block.indexOf("{") + 1, block.indexOf("}"));
+  return [
+    ...body.matchAll(/^\s*([a-z]+):\s*"text-([a-z0-9-]+?)(?:\/(\d+))?"/gm),
+  ].map((m) => ({
+    tone: m[1],
+    text: token(m[2]),
+    alpha: m[3] ? Number(m[3]) / 100 : 1,
+  }));
+}
+
 describe("a team's wash", () => {
   const flat = washOf(String(teamTint("cmteam").style.backgroundColor));
   const tones = badgeTones();
+  const grades = gradeColours();
 
   it("is the strength the module says, wherever it fades", () => {
     expect(flat.alpha).toBe(TEAM_TINT_ALPHA);
@@ -99,9 +115,12 @@ describe("a team's wash", () => {
     }
   });
 
-  it("finds the Badge tones it checks", () => {
+  it("finds the Badge tones and grade colours it checks", () => {
     expect(tones.map((t) => t.tone).sort()).toEqual(
       ["accent", "brand", "danger", "info", "neutral", "success"].sort(),
+    );
+    expect(grades.map((g) => g.tone).sort()).toEqual(
+      ["accent", "default", "muted", "success"].sort(),
     );
   });
 
@@ -123,6 +142,11 @@ describe("a team's wash", () => {
         check("text", token("fg"), fill);
         check("muted text", token("muted"), fill);
         check("a link", token("info"), fill);
+        // The season card's grade letters, checked on the bare wash although
+        // they sit on a darker box inside it.
+        for (const g of grades) {
+          check(`a ${g.tone} grade`, over(g.text, fill, g.alpha), fill);
+        }
         for (const t of tones) {
           check(`the ${t.tone} Badge`, t.text, over(t.bg, fill, t.alpha));
         }
