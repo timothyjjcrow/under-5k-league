@@ -211,7 +211,7 @@ describe("playerPictureText", () => {
   it("lists the grade, the heroes (pubs marked) and the honors, never the MMR", () => {
     const text = playerPictureText(card());
     expect(text.facts).toEqual([
-      "Grade A",
+      "Career grade A",
       "Axe",
       "Invoker · pubs",
       "3 Match MVPs",
@@ -230,7 +230,7 @@ describe("fitPictureFacts", () => {
     titles: ["Season 12 (Winter Invitational) champion", "+2 more titles"],
     medal: "Immortal",
     facts: [
-      "Grade S",
+      "Career grade S",
       "Keeper of the Light",
       "Outworld Destroyer",
       "Nature's Prophet · pubs",
@@ -255,7 +255,7 @@ describe("fitPictureFacts", () => {
   it("drops from the end (honors first) when a long name leaves less room", () => {
     const long = "An Extremely Long Steam Persona Name";
     expect(fitPictureFacts({ name: long, hasTeam: true, ...crowded })).toEqual([
-      "Grade S",
+      "Career grade S",
       "Keeper of the Light",
       "Outworld Destroyer",
       "Nature's Prophet · pubs",

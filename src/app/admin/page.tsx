@@ -66,7 +66,10 @@ import {
   setLeagueStreamUrl,
 } from "@/app/actions/admin-season";
 import { parseNextSeasonPlan } from "@/lib/next-season";
-import { parseStoredStream } from "@/lib/broadcast";
+import {
+  parseStoredStream,
+  WATCH_OPENS_BEFORE_KICKOFF_MS,
+} from "@/lib/broadcast";
 import {
   addCaptain,
   changeCaptain,
@@ -6682,8 +6685,9 @@ async function AdminActivity() {
 /**
  * The league's stream channel (broadcast.ts). Playoff and final matches link
  * to it on Home, the match page and /schedule: where they will be streamed,
- * then "Live now" from 15 minutes before kickoff until the series should be
- * over. One link for the whole league, kept across seasons.
+ * then a live link from WATCH_OPENS_BEFORE_KICKOFF_MS before kickoff until the
+ * series should be over, longer once a game is in (matchWatchWindow). One
+ * link for the whole league, kept across seasons.
  */
 async function StreamControls() {
   const stream = parseStoredStream(
@@ -6701,11 +6705,11 @@ async function StreamControls() {
       <CardBody className="space-y-3">
         <p className="text-sm text-muted">
           One Twitch, YouTube or Kick channel for the league. Every playoff and
-          final match shows it on Home, its match page and the schedule:
-          &ldquo;Streamed on&rdquo; the channel before kickoff, then &ldquo;Live
-          now&rdquo; from 15 minutes before kickoff until the series should be
-          over. The regular season shows nothing. Remove it on playoff nights
-          nobody streams.
+          final match links to it on Home, its match page and the schedule:
+          where it will be streamed before kickoff, then a live link from{" "}
+          {WATCH_OPENS_BEFORE_KICKOFF_MS / 60_000} minutes before kickoff until
+          the series should be over, or longer once a game is in. The regular
+          season shows nothing. Remove it on playoff nights nobody streams.
         </p>
         <ActionForm
           action={setLeagueStreamUrl}

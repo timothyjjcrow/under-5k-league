@@ -166,7 +166,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   inside a card whose header already names it; wins over `compact`);
   `CheckinBanner variant` (`strip` on `/schedule` and the match page, `panel`
   stacked for a narrow column); `StatStrip`/`StatCell` (the one-line summary
-  band under a page title).
+  band under a page title). One deliberate exception: `TeamCrest`'s initials
+  wear `crestInk` by default, not behind a prop, because an opt-in would leave
+  white initials at about 2:1 on every yellow crest that didn't pass it. A
+  contrast fix belongs at every call site.
 - **Tokens:** `--color-surface-3` is an OPAQUE elevation step (translucent
   lets scrolled rows show through a table header); `--color-line-soft` is a
   rule inside a dense list (`--color-line` boxes every row).
@@ -701,15 +704,18 @@ the league is already draftable and many visitors have joined. Write for both.
   `src/lib/broadcast.ts`) once an admin sets one on /admin's Match stream
   card: "Streamed on Twitch" before the window, "Live now · Watch on Twitch"
   from 15 minutes before kickoff until the series estimate ends
-  (`seriesEstimateMinutes`, the calendar's event length), then nothing.
-  `matchWatchWindow` picks the matches (playoffs and the final of the active
-  season, kickoff set, not decided, not a forfeit), and the browser picks the
-  state (`getServerSnapshot` is null), so a parked tab crosses both edges.
-  Three render sites, each reading `getLeagueStream()` only when a match
+  (`seriesEstimateMinutes`, the calendar's event length), then nothing. Once
+  a game is in (LIVE) the window runs a second estimate, so a series that
+  started late keeps its link to the end. `matchWatchWindow` picks the
+  matches (playoffs and the final of the active season, kickoff set, not
+  decided, not a forfeit), and the browser picks the state
+  (`getServerSnapshot` is null), so a parked tab crosses both edges. Three
+  render sites, each reading `getLeagueStream()` only when a match
   qualifies: the scoreboard's footer, a strip under Home's This week card
   (outside the card's link, like the pick tray) and `/schedule` rows ("On
-  Twitch" / "Watch live", `relative z-10` above the stretched link). It links
-  out in a new tab with `rel="noreferrer"` and never embeds a player:
+  Twitch" / "Watch live": a `textLink` with `my-0` on its 44px row, `relative
+  z-10` above the stretched link). It links out in a new tab with
+  `rel="noreferrer"` and never embeds a player:
   `watch-link.test.ts` bans `<iframe` in `src`. One channel serves the
   league, so two semifinals at once both point at it; per-match links and
   replays need a `Match` column (DECISIONS.md).

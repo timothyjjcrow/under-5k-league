@@ -5,10 +5,10 @@ import { seriesEstimateMinutes } from "./series-lengths";
 // sets on /admin (Setting LEAGUE_STREAM_URL; each league has its own database,
 // so its own channel). Playoff and final matches link to it: "Streamed on
 // Twitch" before kickoff, then "Live now · Watch on Twitch" from 15 minutes
-// before kickoff until the series should be over. It is an outbound link,
-// never an embedded player: a player would hand every visitor's address to
-// the streaming site. Per-match links and replays need a column on Match,
-// which is a database release, so they are not here.
+// before kickoff until the series should be over (longer once a game is in).
+// It is an outbound link, never an embedded player: a player would hand every
+// visitor's address to the streaming site. Per-match links and replays need a
+// column on Match, which is a database release, so they are not here.
 
 export const STREAM_URL_MAX_LENGTH = 2048;
 
@@ -91,9 +91,13 @@ export const WATCH_OPENS_BEFORE_KICKOFF_MS = 15 * 60_000;
 export type WatchWindow = {
   /** Kickoff minus 15 minutes: from here the link says "Live now". */
   opensAtMs: number;
-  /** Kickoff plus the series estimate: from here the link is gone. */
+  /** Kickoff plus the series estimate (twice it once a game is in): from
+   *  here the link is gone. */
   closesAtMs: number;
 };
+
+/** How many series estimates a match under way keeps its link for. */
+const LIVE_SERIES_ESTIMATES = 2;
 
 /**
  * When a match links the league stream, or null when it never does. Playoff
@@ -101,7 +105,9 @@ export type WatchWindow = {
  * season, with a kickoff, still to be decided and not ruled a forfeit. The
  * window ends when the series should be over (seriesEstimateMinutes, the
  * calendar's event length), so a series that never gets its result still
- * stops saying it is live. A retime moves the window with the kickoff.
+ * stops saying it is live. Once a game is in (LIVE), it runs for a second
+ * estimate, so a late start doesn't lose its link mid-series. A retime moves
+ * the window with the kickoff.
  */
 export function matchWatchWindow(
   match: {
@@ -120,9 +126,12 @@ export function matchWatchWindow(
   if (match.status === MATCH_STATUS.COMPLETED || match.forfeit) return null;
   if (!match.scheduledAt) return null;
   const kickoff = match.scheduledAt.getTime();
+  const estimates =
+    match.status === MATCH_STATUS.LIVE ? LIVE_SERIES_ESTIMATES : 1;
   return {
     opensAtMs: kickoff - WATCH_OPENS_BEFORE_KICKOFF_MS,
-    closesAtMs: kickoff + seriesEstimateMinutes(match.bestOf) * 60_000,
+    closesAtMs:
+      kickoff + estimates * seriesEstimateMinutes(match.bestOf) * 60_000,
   };
 }
 

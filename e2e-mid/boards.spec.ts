@@ -870,7 +870,7 @@ test("a player's season card names their season and team, and is their link pict
     card.locator(`[data-team-hue="${member.teamId}"]`).first(),
   ).toBeAttached();
   // They have league games, so the card shows what they played.
-  await expect(card.getByText("Most played", { exact: true })).toBeVisible();
+  await expect(card.getByText("Career heroes", { exact: true })).toBeVisible();
   const heroes = await card.getByRole("listitem").count();
   expect(heroes).toBeGreaterThanOrEqual(1);
   expect(heroes).toBeLessThanOrEqual(3);

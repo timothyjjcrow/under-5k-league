@@ -125,13 +125,23 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
   level on points are split by tiebreaks and finally team id. Nothing is
   tagged until `UPSET_MIN_PRIOR_WEEKS` (2) earlier weeks have results (week 3
   at the soonest); after one night the table only says who won.
+- **A series in hand raises the bar a full win.** Each series the loser had
+  played more than the winner adds `UPSET_MIN_POINTS_GAP` again: a team
+  with a bye or a postponed fixture trails on points without being worse.
+- **The table is what was known at kickoff.** An earlier week's result
+  counts only if it kicked off before the series being judged (untimed
+  results always count), so a postponed result played later never flips a
+  verdict after the fact (`upsetContext` builds one table per week and
+  kickoff).
 - **Playoffs judge the frozen seeds** (`seedsFromFirstRound` over PLAYOFF and
   FINAL rows only, because a tiebreaker's `TB1` slot parses as round 0). The
   higher seed number winning is the upset; a side without a seed gets no
   tag. **Draws, forfeits and TIEBREAKER series are never upsets.**
 - **The upset of the week** (`biggestUpset`) comes from the latest week with
-  a completed series: the largest gap, then the lowest match id. When that
-  week had none there is no line; an older week's never stands in.
+  a played series: the largest gap, then the lowest match id. When that
+  week had none there is no line; an older week's never stands in. Forfeits
+  don't make a week the latest: a withdrawal rules all of a team's later
+  fixtures at once, and those weeks hold nothing anyone played yet.
 - **A win streak is consecutive series wins in play order**
   (`seriesWinStreak` through `standingsForm`, `team-matches.ts`): week,
   kickoff (untimed last), then id, never a query's row order. A draw or a

@@ -158,6 +158,17 @@ describe("matchWatchWindow", () => {
     expect(matchWatchWindow({ ...final, status: "LIVE" }, true)).not.toBeNull();
   });
 
+  it("keeps a series under way live for a second estimate, then stops", () => {
+    // A Bo3 that started an hour late is still on its third game when the
+    // plain estimate runs out; once a game is in, the link stays up.
+    const live = matchWatchWindow({ ...final, status: "LIVE" }, true)!;
+    expect(live.opensAtMs).toBe(kickoff.getTime() - 15 * MIN);
+    expect(live.closesAtMs).toBe(kickoff.getTime() + 2 * 210 * MIN);
+    expect(watchState(live, kickoff.getTime() + 225 * MIN)).toBe("live");
+    // A series that never gets its result still stops saying it is live.
+    expect(watchState(live, kickoff.getTime() + 420 * MIN)).toBeNull();
+  });
+
   it("never links the regular season or a tiebreaker", () => {
     expect(matchWatchWindow({ ...final, phase: "REGULAR" }, true)).toBeNull();
     expect(matchWatchWindow({ ...final, phase: "TIEBREAKER" }, true)).toBeNull();

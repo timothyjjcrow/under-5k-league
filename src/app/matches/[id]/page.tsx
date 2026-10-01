@@ -60,18 +60,21 @@ export default async function MatchDetailPage({
   if (!match) notFound();
 
   const games = parseMatchGames(match);
-  // Record watch reads the whole record book, so only an upcoming fixture's
-  // preview asks for it, here in the page body: inside a card's Suspense the
-  // cached read once hung the stream.
-  const recordBook =
+  // Three reads that don't wait on each other. Record watch reads the whole
+  // record book, so only an upcoming fixture's preview asks for it, here in
+  // the page body: inside a card's Suspense the cached read once hung the
+  // stream.
+  const [recordBook, postseason, viewer] = await Promise.all([
     games.length === 0 && match.status !== "COMPLETED" && match.season.isActive
-      ? await loadRecordWatchBook()
-      : null;
+      ? loadRecordWatchBook()
+      : null,
+    loadPostseason(match),
+    getSessionUser(),
+  ]);
   // Async server component: capture request time once for the overdue-result
   // explanation; this is not client render state.
   // eslint-disable-next-line react-hooks/purity
   const renderedAt = Date.now();
-  const postseason = await loadPostseason(match);
   const championPresentation = resolveChampionPresentation(
     match.season,
     postseason,
@@ -80,7 +83,6 @@ export default async function MatchDetailPage({
     match,
     groupPlayoffRounds(postseason).totalRounds,
   );
-  const viewer = await getSessionUser();
   const isCaptain =
     !!viewer &&
     (match.homeTeam.captainId === viewer.id ||

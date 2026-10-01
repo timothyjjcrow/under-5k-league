@@ -166,6 +166,9 @@ Grid, filter and URL rules: `pages-and-ui.md`.
 - **The grade is the career report card's overall grade** through
   `reportVerdicts(report, false)` (as a visitor sees it, so no "Work on"),
   only once it has enough graded games. "Strength:" names the best metric.
+- **Say "Career" on what spans every season:** the card is headed with one
+  season's name, so its grade and heroes read "Career grade" and "Career
+  heroes", and the picture's chip "Career grade A".
 - **Honors are Match MVPs and league records held.** Titles are the
   picture's gold chips: the newest, then "+N more titles".
 - **Titles are badges beside the name on the profile:** "Season N champion",

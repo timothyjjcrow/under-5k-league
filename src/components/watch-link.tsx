@@ -2,7 +2,8 @@
 
 // The league stream's link on a playoff or final match (broadcast.ts):
 // "Streamed on Twitch" before the window, "Live now · Watch on Twitch" from
-// 15 minutes before kickoff until the series should be over, then nothing.
+// 15 minutes before kickoff until the series should be over (longer once a
+// game is in, matchWatchWindow), then nothing.
 //
 // Which of the three depends on the viewer's clock, so the server renders
 // nothing and the browser decides (no hydration mismatch), like <Countdown>.
@@ -16,7 +17,7 @@ import {
   type WatchWindow,
 } from "@/lib/broadcast";
 import { cn } from "@/lib/utils";
-import { LinkArrow, buttonClasses } from "./ui";
+import { LinkArrow, buttonClasses, textLink } from "./ui";
 
 const TICK_MS = 15_000;
 let nowMs: number | null = null;
@@ -93,10 +94,14 @@ export function WatchLink({
       rel="noreferrer"
       className={
         variant === "row"
-          ? cn(
-              "relative z-10 inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded px-1 text-xs font-semibold hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60",
-              live ? "text-danger-soft" : "text-info",
-              className,
+          ? // The kit's link, kept on its own 44px row: my-0 drops
+            // TAP_SAFE's negative margin, which would overhang the strip.
+            textLink(
+              cn(
+                "relative z-10 my-0 inline-flex min-h-11 shrink-0 items-center gap-1.5 px-1 text-xs font-semibold",
+                live && "text-danger-soft",
+                className,
+              ),
             )
           : buttonClasses(live ? "danger" : "secondary", "sm", className)
       }

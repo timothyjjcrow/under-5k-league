@@ -93,7 +93,7 @@ describe("the Record watch hand-off", () => {
   it("reads the book once in the page body, for an upcoming fixture only", () => {
     const page = CARD("page.tsx");
     expect(page).toMatch(
-      /const recordBook =\s*games\.length === 0 && match\.status !== "COMPLETED" && match\.season\.isActive\s*\? await loadRecordWatchBook\(\)\s*: null;/,
+      /const \[recordBook, postseason, viewer\] = await Promise\.all\(\[\s*games\.length === 0 && match\.status !== "COMPLETED" && match\.season\.isActive\s*\? loadRecordWatchBook\(\)\s*: null,/,
     );
     expect(page).toMatch(/<MatchPreview[\s\S]*?recordBook=\{recordBook\}/);
     // The book comes from /records' own cached read and mapping.

@@ -293,7 +293,7 @@ describe("leagueRules", () => {
   it("writes durations and clocks in words", () => {
     const rules = build();
     expect(section(rules, "match-night")).toContain(
-      "A new time can't be more than an hour in the past, more than 180 days ahead, or within 4 hours of either team's other league matches or booked scrims.",
+      "A proposed time can't be more than an hour in the past, more than 180 days ahead, or within 4 hours of either team's other league matches or booked scrims.",
     );
     expect(section(rules, "match-night")).toContain(
       `It stays open until ${AUTO_SYNC.WINDOW_HOURS} hours after kickoff.`,
@@ -312,6 +312,26 @@ describe("leagueRules", () => {
     );
     expect(section(rules, "draft")).toContain(
       `within ${DEFAULTS.NOMINATION_TIMER_SECONDS} seconds`,
+    );
+  });
+
+  it("says where admins aren't held to the captains' limits", () => {
+    const rules = build();
+    // Captains' proposals are checked (reschedule-service.ts); an admin's
+    // Set time is not, so the limits name the proposal.
+    expect(section(rules, "match-night")).not.toContain("A new time can't");
+    // A withdrawal rules a series under way too, over any game played
+    // (withdrawTeam), unlike a forfeit an admin enters on one match.
+    expect(section(rules, "forfeits")).toContain(
+      "forfeits every series it hasn't finished, one under way included: each opponent wins 2–0 in a best of 2, whatever was already played.",
+    );
+    // withdrawGateError refuses a booked standin as well as a roster spot.
+    expect(section(rules, "signups")).toContain(
+      "unless you're on a roster or booked to stand in for a match not yet played",
+    );
+    // An admin's Add game skips the result window (no enforceFixtureWindow).
+    expect(section(rules, "results")).toContain(
+      "after the scheduled kickoff. Admins can add a game from outside that window.",
     );
   });
 

@@ -169,7 +169,7 @@ export type PlayerCardData = {
   medal: OgMedal | null;
   /** Gold chips, newest first: "Season 9 champion", "+2 more titles". */
   titles: string[];
-  /** "Grade A", the heroes ("Axe", "Invoker · pubs"), "3 Match MVPs". */
+  /** "Career grade A", the heroes ("Axe", "Invoker · pubs"), "3 Match MVPs". */
   facts: string[];
 };
 
@@ -280,7 +280,7 @@ export function playerPictureText(
         : []),
     ],
     facts: [
-      ...(card.grade ? [`Grade ${card.grade.overall}`] : []),
+      ...(card.grade ? [`Career grade ${card.grade.overall}`] : []),
       ...card.heroes.map((h) => (h.pubs ? `${h.name} · pubs` : h.name)),
       ...playerCardHonors(card),
     ],

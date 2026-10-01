@@ -187,7 +187,7 @@ export function ProfileHeader({
                 {subtitle && editSignupLink ? " · " : null}
                 {editSignupLink ? (
                   <Link href="/me" className={textLink()}>
-                    Edit your signup →
+                    Edit your signup <LinkArrow />
                   </Link>
                 ) : null}
               </div>

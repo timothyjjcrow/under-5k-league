@@ -32,8 +32,10 @@ function CardStat({
 /**
  * A player's season card, in their profile header: the season and how they
  * took part, their team that season (the card washed in its colour), medal,
- * MMR, grade, most-played heroes and honors. Drawn only from
- * playerCardFacts, the same facts their link picture shows (OgPlayerCard).
+ * MMR, grade, most-played heroes and honors. The grade and heroes cover every
+ * season they played, so their labels say "Career" under a season's name.
+ * Drawn only from playerCardFacts, the same facts their link picture shows
+ * (OgPlayerCard).
  * `roleText` is profileCardRoleText's: the name row already badges a live
  * Captain or Standin.
  */
@@ -114,7 +116,7 @@ export function PlayerSeasonCard({
               </CardStat>
             ) : null}
             {facts.grade ? (
-              <CardStat label="Grade">
+              <CardStat label="Career grade">
                 <span
                   className={cn(
                     "font-display text-xl font-bold leading-none",
@@ -134,7 +136,7 @@ export function PlayerSeasonCard({
         ) : null}
         {facts.heroes.length > 0 ? (
           <div>
-            <p className="text-xs text-muted">Most played</p>
+            <p className="text-xs text-muted">Career heroes</p>
             <ul className="mt-1.5 grid grid-cols-3 gap-2">
               {facts.heroes.map((h) => {
                 const hero = heroById(h.heroId);

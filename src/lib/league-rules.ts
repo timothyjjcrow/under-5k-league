@@ -271,7 +271,7 @@ function forfeitsSection(s: CarriedSeasonSettings): RuleSection {
   if (teamWithdrawalLockedReason(SEASON_STATUS.REGULAR_SEASON) === null) {
     const score = withdrawalForfeitScore(s.regularBestOf);
     rules.push(
-      `A team that withdraws during the regular season forfeits every series it hasn't finished: each opponent wins ${score}–0 in a best of ${s.regularBestOf}.`,
+      `A team that withdraws during the regular season forfeits every series it hasn't finished, one under way included: each opponent wins ${score}–0 in a best of ${s.regularBestOf}, whatever was already played.`,
       "The results it already played still count for everyone else, and it can't enter the playoffs.",
     );
     if (teamWithdrawalLockedReason(SEASON_STATUS.PLAYOFFS) !== null) {
@@ -314,7 +314,7 @@ function matchNightSection(matchNight: string | null): RuleSection {
       `Once your match has a kickoff time, answer its check-in (I'm in, or Can't make it) so your captain can find cover. It stays open until ${plural(AUTO_SYNC.WINDOW_HOURS, "hour")} after kickoff.`,
       "A new kickoff time clears every check-in, so everyone answers again.",
       "Captains move a match together: one proposes a new time on the match page, and the other accepts or declines it. Admins can also move a match or a whole week.",
-      `A new time can't be more than ${span(RESCHEDULE_PAST_GRACE_MS)} in the past, more than ${span(RESCHEDULE_MAX_AHEAD_MS)} ahead, or ${clash}.`,
+      `A proposed time can't be more than ${span(RESCHEDULE_PAST_GRACE_MS)} in the past, more than ${span(RESCHEDULE_MAX_AHEAD_MS)} ahead, or ${clash}.`,
       "A regular-season match has to be played before the playoffs start.",
       "A series that has started can't be moved.",
     ],
@@ -345,7 +345,7 @@ function signupsSection(s: CarriedSeasonSettings): RuleSection {
       eligibilityText(s.maxMmr),
       `Signups are uncapped; the season's target is at least ${plural(s.minTeams, "team")}.`,
       "Players sign up while the season is taking signups. After that, new players can sign up as standins until the playoffs end.",
-      "You can withdraw your own signup until you're on a roster; after that, an admin has to release you first.",
+      "You can withdraw your own signup unless you're on a roster or booked to stand in for a match not yet played: an admin has to release you, or the booking has to come off, first.",
     ],
   };
 }
@@ -377,7 +377,7 @@ function resultsSection(
   const perSide = knownPlayersPerSide(s.teamSize);
   const rules = [
     resultsCopy(ticket).faq,
-    `A game counts for a match when at least ${perSide} of each team's players (its roster, or standins booked for that match) are on opposite sides, and it started between ${span(DETECT_WINDOW_BEFORE_MS)} before and ${span(DETECT_WINDOW_AFTER_MS)} after the scheduled kickoff.`,
+    `A game counts for a match when at least ${perSide} of each team's players (its roster, or standins booked for that match) are on opposite sides, and it started between ${span(DETECT_WINDOW_BEFORE_MS)} before and ${span(DETECT_WINDOW_AFTER_MS)} after the scheduled kickoff. Admins can add a game from outside that window.`,
     "Only admins enter a score by hand.",
   ];
   // matchResultsOpen pairs each result with its own phase; quote that only

@@ -32,9 +32,13 @@ function series(
     homeScore: hs,
     awayScore: as,
     winnerTeamId: hs > as ? home : as > hs ? away : null,
+    scheduledAt: null,
     ...extra,
   };
 }
+
+/** Kickoff of a night `day` days into the season. */
+const night = (day: number) => new Date(Date.UTC(2026, 6, 4 + day, 1));
 
 const judge = (matches: UpsetMatch[], match: UpsetMatch) =>
   seriesUpset(match, upsetContext(TEAMS, [...matches, match]));
@@ -151,6 +155,55 @@ describe("seriesUpset in the regular season", () => {
       series(4, "f", "b", 2, 0),
     ];
     expect(judge(matches, late)).toMatchObject({ winner: 0, loser: 6, gap: 6 });
+  });
+
+  it("raises the bar a full win for each series the loser played more", () => {
+    // Five teams play, so one sits out each week. b had the week-1 bye:
+    // going into week 3 a is 6 from 2 and b 3 from 1, both unbeaten.
+    const weeks = [
+      series(1, "a", "c", 2, 0),
+      series(1, "d", "e", 2, 0),
+      series(2, "a", "d", 2, 0),
+      series(2, "b", "c", 2, 0),
+    ];
+    expect(judge(weeks, series(3, "b", "a", 2, 0))).toBeNull();
+    // e lost its only series (0 from 1) to a team a then beat: e trails a
+    // by 6 with a series in hand, still a full win more than a bye explains.
+    expect(judge(weeks, series(3, "e", "a", 2, 0))).toMatchObject({
+      winnerId: "e",
+      winner: 0,
+      loser: 6,
+      gap: 6,
+    });
+    // The winner having played MORE never lowers the bar below one win.
+    expect(judge(weeks, series(3, "c", "b", 2, 0))).toMatchObject({
+      winnerId: "c",
+      gap: 3,
+    });
+  });
+
+  it("judges by what was known at kickoff, so a later result can't flip it", () => {
+    // a's week-2 fixture is moved past week 3 and won there. Going into
+    // week 3, a and f both had 3 points: f beating a was no upset, and the
+    // postponed win doesn't make it one afterwards.
+    const weeks = [
+      series(1, "a", "b", 2, 0, { scheduledAt: night(0) }),
+      series(1, "f", "c", 2, 0, { scheduledAt: night(0) }),
+      series(2, "f", "e", 0, 2, { scheduledAt: night(7) }),
+      series(2, "b", "c", 2, 0, { scheduledAt: night(7) }),
+      // Postponed from week 2 to after week 3's night, and won.
+      series(2, "a", "d", 2, 0, { scheduledAt: night(16) }),
+    ];
+    const week3 = series(3, "f", "a", 2, 0, { scheduledAt: night(14) });
+    expect(judge(weeks, week3)).toBeNull();
+    // Played before week 3's night, the same win would have counted.
+    const onTime = weeks.map((m, i) =>
+      i === 4 ? { ...m, scheduledAt: night(8) } : m,
+    );
+    expect(judge(onTime, week3)).toMatchObject({
+      winnerId: "f",
+      gap: 3,
+    });
   });
 
   it("treats a team missing from the table as unknown, never as zero", () => {
@@ -294,6 +347,22 @@ describe("biggestUpset", () => {
       series(4, "a", "e", 2, 0), // week 4 goes to form
     ];
     expect(biggestUpset(matches, upsetContext(TEAMS, matches))).toBeNull();
+  });
+
+  it("looks past later weeks that hold only forfeits", () => {
+    // e withdraws after week 3: its later fixtures are ruled at once, so
+    // weeks 4 and 5 hold forfeits nobody has played. Week 3 is still the
+    // latest week anyone played, and its upset still stands.
+    const matches = [
+      ...twoWeeks(),
+      series(3, "a", "f", 0, 2),
+      series(4, "c", "e", 2, 0, { forfeit: true }),
+      series(5, "a", "e", 2, 0, { forfeit: true }),
+    ];
+    expect(biggestUpset(matches, upsetContext(TEAMS, matches))).toMatchObject({
+      match: { id: matches[6].id },
+      upset: { winnerId: "f", gap: 6 },
+    });
   });
 
   it("waits for a completed series in the week, ignoring live ones", () => {
