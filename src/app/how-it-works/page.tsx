@@ -71,6 +71,11 @@ function faq(recording: string) {
       answer:
         "Yes. Anyone can browse teams, results and player pages. Sign in with Steam to play fantasy and pick'em while they're open.",
     },
+    {
+      question: "Can I cast or stream league matches?",
+      answer:
+        "Playoff and final match pages link the league's stream channel when there is one. If you'd like to cast a match, tell an admin.",
+    },
   ];
 }
 
