@@ -1,7 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  DETECT_WINDOW_AFTER_MS,
-  DETECT_WINDOW_BEFORE_MS,
   buildPlayers,
   claimsGame,
   classifyGame,
@@ -10,6 +8,10 @@ import {
   pickSeriesGames,
   sanitizeBenchmarks,
 } from "./match-import";
+import {
+  DETECT_WINDOW_AFTER_MS,
+  DETECT_WINDOW_BEFORE_MS,
+} from "./league-result-window";
 import {
   SCRIM_DETECT_WINDOW_AFTER_MS,
   SCRIM_DETECT_WINDOW_BEFORE_MS,

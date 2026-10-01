@@ -18,7 +18,11 @@ import {
   scrimConflictFix,
 } from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
-import { rescheduleDeadline } from "./schedule";
+import {
+  RESCHEDULE_MAX_AHEAD_MS,
+  RESCHEDULE_PAST_GRACE_MS,
+  rescheduleDeadline,
+} from "./schedule";
 import { roundLabelsForPost } from "./playoff-rounds";
 import { isSerializationConflict } from "./prisma-errors";
 
@@ -108,18 +112,14 @@ export type RespondRescheduleOptions = {
   onAcceptedCommit?: () => void;
 };
 
-// Sanity bounds for a proposed time: a datetime-local typo (year 0002 from
-// typing "2", 20268 from a stray digit) or a past date would otherwise sail
-// straight into Match.scheduledAt on acceptance.
-const PAST_GRACE_MS = 60 * 60 * 1000; // "tonight, an hour ago" is fine
-const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000; // no league pauses half a year
-
+// Sanity bounds for a proposed time (`schedule.ts` explains them; /rules
+// quotes them).
 function assertSaneProposedTime(proposedTime: Date, now = new Date()): void {
   if (!Number.isFinite(proposedTime.getTime()))
     throw new UserFacingError("Choose a valid proposed time");
-  if (proposedTime.getTime() < now.getTime() - PAST_GRACE_MS)
+  if (proposedTime.getTime() < now.getTime() - RESCHEDULE_PAST_GRACE_MS)
     throw new UserFacingError("That time is in the past");
-  if (proposedTime.getTime() > now.getTime() + MAX_AHEAD_MS)
+  if (proposedTime.getTime() > now.getTime() + RESCHEDULE_MAX_AHEAD_MS)
     throw new UserFacingError("That time is too far out — check the year");
 }
 

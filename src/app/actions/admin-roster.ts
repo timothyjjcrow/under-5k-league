@@ -67,7 +67,10 @@ import {
   withdrawGateError,
 } from "@/lib/registration";
 import type { ActionResult } from "@/lib/action-result";
-import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
+import {
+  teamWithdrawalLockedReason,
+  withdrawalForfeitScore,
+} from "@/lib/team-withdrawal";
 import { saveTeamIdentity } from "@/lib/team-identity-service";
 import { expectedTeamIdentity, teamIdentitySummary } from "@/lib/team-identity";
 import {
@@ -94,13 +97,6 @@ class TeamWithdrawalLifecycleChangedError extends Error {}
 class TeamAlreadyWithdrawnError extends Error {}
 
 class TeamNotWithdrawnError extends Error {}
-
-/** Games the winner is credited in a forfeit: the series clinch number. (The
- *  mutation guard anchors claim ids to TOP-LEVEL declarations only, so a
- *  local helper would not rename a claim; module scope is just for reuse.) */
-function forfeitScore(bestOf: number): number {
-  return Math.floor(bestOf / 2) + 1;
-}
 
 /**
  * Claim the exact active Regular-season row before changing Team/Match state.
@@ -1522,9 +1518,13 @@ export async function withdrawTeam(
               forfeit: true,
               completedAt: new Date(),
               homeScore:
-                match.homeTeamId === teamId ? 0 : forfeitScore(match.bestOf),
+                match.homeTeamId === teamId
+                  ? 0
+                  : withdrawalForfeitScore(match.bestOf),
               awayScore:
-                match.awayTeamId === teamId ? 0 : forfeitScore(match.bestOf),
+                match.awayTeamId === teamId
+                  ? 0
+                  : withdrawalForfeitScore(match.bestOf),
               winnerTeamId:
                 match.homeTeamId === teamId
                   ? match.awayTeamId
