@@ -5,6 +5,7 @@ import {
   biggestUpset,
   seriesUpset,
   upsetContext,
+  upsetDetail,
   type UpsetMatch,
 } from "./upsets";
 
@@ -316,5 +317,23 @@ describe("biggestUpset", () => {
     expect(biggestUpset(matches, upsetContext(TEAMS, matches))).toMatchObject({
       upset: { kind: "seed", winnerId: "d", gap: 3 },
     });
+  });
+});
+
+describe("upsetDetail", () => {
+  it("names the points gap going into the week, or the seeds", () => {
+    const points = judge(twoWeeks(), series(3, "a", "f", 0, 2));
+    expect(upsetDetail(points!)).toBe(
+      "from 6 points behind going into the week",
+    );
+    expect(upsetDetail({ ...points!, gap: 1 })).toBe(
+      "from 1 point behind going into the week",
+    );
+    const matches = [
+      series(6, "a", "d", 0, 2, { phase: "PLAYOFF", bracketSlot: "R0M0" }),
+      series(6, "b", "c", 2, 1, { phase: "PLAYOFF", bracketSlot: "R0M1" }),
+    ];
+    const seed = seriesUpset(matches[0], upsetContext(TEAMS, matches));
+    expect(upsetDetail(seed!)).toBe("seed 4 over seed 1");
   });
 });

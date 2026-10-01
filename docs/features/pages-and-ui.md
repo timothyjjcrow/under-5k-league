@@ -303,6 +303,15 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **`WeeklyHonorsLine`** renders only official honors (the readiness rows
   Discord and `/leaders` use; `honorBestGame` picks the game), else nothing;
   the in-progress caveats live on `/leaders`.
+- **Upsets on Home** (rules: `stats-and-side-games.md`). A Recent results row
+  whose series was an upset carries an amber "Upset" chip (`UpsetChip`,
+  `aria-hidden`, the reason on hover), and its spoken sentence opens
+  "Upset:" yet still ends "won the series · Match details"
+  (`recentResultSpoken`). `WeekHighlights` (`week-highlights.tsx`) is one
+  line beside the honors line, never inside it: the latest week's biggest
+  upset ("Week 5 upset · X beat Y 2–0, from 6 points behind going into the
+  week"), else nothing. Both judge the matches Home already loaded and add
+  no query; `week-highlights.test.ts` pins the wiring.
 - **`AdminStrip` (admins only) repeats `/admin`'s next step word for word**
   plus the Needs attention count (`adminHomeLine`). Feed `adminNextStep` and
   `matchAttention` the same inputs as `/admin` or they drift. Database reads

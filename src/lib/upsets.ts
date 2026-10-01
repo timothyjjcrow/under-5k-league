@@ -167,3 +167,16 @@ export function biggestUpset<M extends UpsetMatch>(
   }
   return best;
 }
+
+/**
+ * Why a series counts as an upset, in the words Home prints after it:
+ * "from 6 points behind going into the week", or "seed 4 over seed 1".
+ * Stored facts only: the table it was judged against, or the seeds.
+ */
+export function upsetDetail(upset: SeriesUpset): string {
+  if (upset.kind === "seed") {
+    return `seed ${upset.winner} over seed ${upset.loser}`;
+  }
+  const points = upset.gap === 1 ? "point" : "points";
+  return `from ${upset.gap} ${points} behind going into the week`;
+}

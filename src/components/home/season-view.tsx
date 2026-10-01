@@ -62,6 +62,7 @@ import {
 } from "@/lib/stakes";
 import { standingsMovement } from "@/lib/standings";
 import { standingsForm, standingsStreaksShown } from "@/lib/team-matches";
+import { biggestUpset, seriesUpset, upsetContext } from "@/lib/upsets";
 import { cn } from "@/lib/utils";
 import {
   NewcomerStandinLine,
@@ -72,6 +73,11 @@ import { HeroStat, type HeroParts, type HomeViewer } from "./hero";
 import { InhouseStrip } from "./inhouse-strip";
 import { MyNextMatch } from "./my-next-match";
 import { ThisWeek } from "./this-week";
+import {
+  UpsetChip,
+  WeekHighlights,
+  recentResultSpoken,
+} from "./week-highlights";
 import { fmtWhen } from "./when";
 
 /**
@@ -296,6 +302,13 @@ export async function SeasonView({
     matches,
     { streaks: standingsStreaksShown(season) },
   );
+  // Every series is judged against the table going into its week (or the
+  // frozen seeds): one context for Recent results and the week's upset.
+  const upsets = upsetContext(
+    teams.map((t) => t.id),
+    matches,
+  );
+  const weekUpset = biggestUpset(matches, upsets);
 
   // One scenario report powers the standings clinch marks, the this-week
   // stakes chips, and the your-team one-liner — computed once.
@@ -359,6 +372,12 @@ export async function SeasonView({
         b.week - a.week || b.createdAt.getTime() - a.createdAt.getTime(),
     )
     .slice(0, 4);
+  const recentUpsets = new Map(
+    recentResults.flatMap((m) => {
+      const upset = seriesUpset(m, upsets);
+      return upset ? [[m.id, upset] as const] : [];
+    }),
+  );
 
   // Visible to everyone — spectators and unrostered players had no way to
   // see what's coming up without leaving the dashboard. Chronological, not
@@ -756,9 +775,12 @@ export async function SeasonView({
                       href={`/matches/${m.id}`}
                       className={cn(ROW_LINK, "px-4 py-2")}
                     >
-                      <p className="mb-0.5 text-xs text-muted">
-                        {matchRoundLabel(m, playoffRounds)} ·{" "}
-                        {m.forfeit ? "Forfeit" : "Final score"}
+                      <p className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
+                        <span>
+                          {matchRoundLabel(m, playoffRounds)} ·{" "}
+                          {m.forfeit ? "Forfeit" : "Final score"}
+                        </span>
+                        <UpsetChip upset={recentUpsets.get(m.id)} />
                       </p>
                       {[
                         { id: m.homeTeamId, score: m.homeScore },
@@ -798,10 +820,12 @@ export async function SeasonView({
                         </div>
                       ))}
                       <p className="sr-only">
-                        {m.winnerTeamId
-                          ? `${teamName.get(m.winnerTeamId) ?? "Winning team"} won the series`
-                          : "Series drawn"}{" "}
-                        · Match details
+                        {recentResultSpoken(
+                          m.winnerTeamId
+                            ? (teamName.get(m.winnerTeamId) ?? "Winning team")
+                            : null,
+                          recentUpsets.has(m.id),
+                        )}
                       </p>
                     </Link>
                   </li>
@@ -823,10 +847,18 @@ export async function SeasonView({
     </>
   );
 
-  // The week's honors (one line) and the news: under the table from xl, and
-  // last on a phone, after the rail's cards.
+  // The week's upset and honors (a line each) and the news: under the table
+  // from xl, and last on a phone, after the rail's cards.
   const closing = (
     <>
+      {weekUpset ? (
+        <WeekHighlights
+          label={matchRoundLabel(weekUpset.match, playoffRounds)}
+          match={weekUpset.match}
+          upset={weekUpset.upset}
+          teamName={teamName}
+        />
+      ) : null}
       <Suspense fallback={null}>
         <WeeklyHonorsLine
           seasonId={season.id}
