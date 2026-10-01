@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { heroPortrait, type Hero } from "@/lib/heroes";
 import {
+  championTitles,
   playerCardHasContent,
   profileCardRoleText,
   type PlayerCardFacts,
@@ -22,7 +23,7 @@ import { roleLabels } from "@/lib/roles";
 
 /**
  * A joined player's profile header: the back link, then the banner with their
- * name and badges, signup and pub facts, outbound links,
+ * name, badges and titles, signup and pub facts, outbound links,
  * members-only contact, their season card and their own About text. Every
  * fact arrives precomputed; the page decides what is shown and to whom.
  */
@@ -81,12 +82,13 @@ export function ProfileHeader({
   pubLast: PubActivity | null;
   nowMs: number;
   accountId: number | null;
-  /** playerCardFacts: their season card. */
+  /** playerCardFacts: their season card, and the titles beside their name. */
   card: PlayerCardFacts;
   /** What they wrote about themselves on the signup. */
   signupAbout: string | null;
 }) {
   const roles = roleLabels(signup?.roles);
+  const titles = championTitles(card.titles);
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -157,6 +159,26 @@ export function ProfileHeader({
               {isStandin ? <Badge tone="info">Standin</Badge> : null}
               {wantsCaptainNow ? (
                 <Badge tone="neutral">Wants to captain</Badge>
+              ) : null}
+              {/* Every title they won, newest first: three, then a count.
+                  A long season name wraps inside its badge. */}
+              {titles.shown.map((title, i) => (
+                <Badge
+                  // Two seasons may share a name.
+                  key={`${i}-${title}`}
+                  tone="accent"
+                  className="max-w-full [overflow-wrap:anywhere]"
+                >
+                  <span aria-hidden>🏆</span> {title}
+                </Badge>
+              ))}
+              {titles.more.length > 0 ? (
+                <Badge tone="accent" title={titles.more.join(", ")}>
+                  +{titles.more.length} more
+                  <span className="sr-only">
+                    {` titles: ${titles.more.join(", ")}`}
+                  </span>
+                </Badge>
               ) : null}
             </div>
             {subtitle || editSignupLink ? (

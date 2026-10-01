@@ -168,6 +168,9 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   only once it has enough graded games. "Strength:" names the best metric.
 - **Honors are Match MVPs and league records held.** Titles are the
   picture's gold chips: the newest, then "+N more titles".
+- **Titles are badges beside the name on the profile:** "Season N champion",
+  newest first, three and then "+N more" (the rest named for screen readers).
+  The card doesn't repeat them.
 - **Say each fact once.** The card owns the medal and MMR; the role line drops
   a live Captain or Standin the name row already badges
   (`profileCardRoleText`); the season name under the player's name shows only

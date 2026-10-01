@@ -487,6 +487,9 @@ the league is already draftable and many visitors have joined. Write for both.
 - **"Edit your signup" shows on a player's own profile** while they are in
   the current season, or have no season yet; never under a past season's
   card.
+- **Title badges wrap inside themselves** (`max-w-full
+  [overflow-wrap:anywhere]`), so a long season name never widens the name
+  row.
 - **A profile is two columns from `xl`:** form, match history and "How they
   play" in the main column, and a 24rem rail with the hero pool, records,
   achievements and seasons. A phone reads them in that order. Both columns

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
 import { POSTSEASON_DB_URL } from "../playwright.postseason.config";
 import {
   expectNoHorizontalOverflow,
@@ -957,3 +958,73 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
 
   assertNoErrors();
 });
+
+// A title stays with the players who won it: a badge beside their name, and
+// a season card on the season they won it in, once the final is won and
+// still after the next season opens (when the card falls back to their
+// latest season, since they haven't joined the new one).
+for (const archived of [false, true]) {
+  test(`a champion's profile wears the title ${archived ? "after the season is archived" : "once the final is won"}`, async ({
+    page,
+  }) => {
+    // The picture compiles its route on first hit in the dev server.
+    test.setTimeout(90_000);
+    await reseed(page, "complete", archived);
+    const assertNoErrors = trackPageErrors(page);
+    const db = new PrismaClient({
+      datasources: { db: { url: POSTSEASON_DB_URL } },
+    });
+    try {
+      const season = await db.season.findFirstOrThrow({
+        where: { name: "Season 9 (fixture)", championTeamId: { not: null } },
+      });
+      // A drafted player on the champion team: no armband in the name row,
+      // so the title badge is the row's only badge.
+      const member = await db.teamMember.findFirstOrThrow({
+        where: {
+          seasonId: season.id,
+          teamId: season.championTeamId!,
+          isCaptain: false,
+        },
+        orderBy: { userId: "asc" },
+        include: { user: true, team: true },
+      });
+      const profile = `/players/${member.userId}`;
+      await page.setViewportSize({ width: 360, height: 812 });
+      await page.goto(profile);
+      const name = page.locator("#main h1").first();
+      await expect(name).toHaveText(member.user.name);
+      await expect(
+        name.locator("..").getByText("Season 9 (fixture) champion"),
+      ).toBeVisible();
+
+      const card = page.getByTestId("player-season-card");
+      await expect(card).toBeVisible();
+      await expect(card).toContainText("Season 9 (fixture)");
+      await expect(
+        card.locator(`a[href="/teams/${member.teamId}"]`),
+      ).toContainText(member.team.name);
+      // The title is said once, beside the name; the card doesn't repeat it.
+      await expect(card).not.toContainText(/champion/i);
+      if (archived) {
+        // Season 10 is open but theirs is still the season they won.
+        await expect(card).not.toContainText("Season 10");
+      }
+      await expectNoHorizontalOverflow(
+        page,
+        `/players/[id] champion${archived ? ", archived" : ""}`,
+      );
+
+      // Their link's picture is drawn for them, not the league's fallback
+      // (a 307 to the league's image, which maxRedirects: 0 won't follow).
+      const picture = await page.request.get(`${profile}/opengraph-image`, {
+        maxRedirects: 0,
+      });
+      expect(picture.status()).toBe(200);
+      expect(picture.headers()["content-type"]).toBe("image/png");
+    } finally {
+      await db.$disconnect();
+    }
+    assertNoErrors();
+  });
+}

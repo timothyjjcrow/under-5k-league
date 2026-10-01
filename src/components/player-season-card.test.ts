@@ -40,6 +40,8 @@ describe("the profile's season card", () => {
       /^profileCardRoleText\(card, \{\s*captain: isCaptain,\s*standin: isStandin,?\s*\}\)$/,
     );
     expect(text).toContain("playerCardHasContent(card) ? (");
+    // The titles beside the name are the card's titles.
+    expect(text).toContain("championTitles(card.titles)");
     expect(text).toMatch(/card: PlayerCardFacts;/);
   });
 
