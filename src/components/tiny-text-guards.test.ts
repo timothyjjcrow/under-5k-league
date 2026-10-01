@@ -66,6 +66,7 @@ const STATE_MARKERS: {
   { file: "src/components/standings-table.tsx", what: "tiebreaker resolved chip", pattern: />\s*Settled by tiebreaker\s*</g, min: 1 },
   { file: "src/components/standings-table.tsx", what: "playoff cut line", pattern: /Playoff cut/g, min: 1 },
   { file: "src/components/standings-table.tsx", what: "status line", pattern: /<StatusLine\b/g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "win streak chip", pattern: /W\{wins\} streak/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "live/final status", pattern: /\{status\}\n/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "forfeit marker", pattern: /Ruled result/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "bye chip", pattern: />\s*Bye\s*</g, min: 1 },

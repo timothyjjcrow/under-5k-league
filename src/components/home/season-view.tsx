@@ -61,7 +61,7 @@ import {
   seasonScenarioReport,
 } from "@/lib/stakes";
 import { standingsMovement } from "@/lib/standings";
-import { formByTeam } from "@/lib/team-matches";
+import { standingsForm, standingsStreaksShown } from "@/lib/team-matches";
 import { cn } from "@/lib/utils";
 import {
   NewcomerStandinLine,
@@ -289,9 +289,12 @@ export async function SeasonView({
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
   const playoffRounds = playoffTotalRounds(matches);
-  const teamForm = formByTeam(
+  // The Last 5 strip and the streak chips read ONE list in play order, so a
+  // "W3 streak" always matches the strip beside it.
+  const { form: teamForm, streaks: teamStreaks } = standingsForm(
     teams.map((t) => t.id),
     matches,
+    { streaks: standingsStreaksShown(season) },
   );
 
   // One scenario report powers the standings clinch marks, the this-week
@@ -653,6 +656,7 @@ export async function SeasonView({
                   new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
                 }
                 formByTeam={teamForm}
+                streakByTeam={teamStreaks}
                 playoffCut={playoffField.bracketSize}
                 playoffSeedByTeam={playoffField.seedByTeam}
                 unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(

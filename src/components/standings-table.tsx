@@ -8,7 +8,7 @@ import Link from "next/link";
 import { Fragment } from "react";
 import { EmptyState, FormStrip, TeamCrest } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import type { FormResult } from "@/lib/team-matches";
+import { WIN_STREAK_MIN, type FormResult } from "@/lib/team-matches";
 import type { ClinchStatus } from "@/lib/standings";
 
 export type StandingsRowView = {
@@ -38,6 +38,9 @@ export type StandingsRowView = {
   withdrawn: boolean;
   /** One-based playoff seed, or null when below the cut / ineligible. */
   playoffSeed: number | null;
+  /** Series won in a row up to the latest result (`seriesWinStreak`); left
+   *  out where the table isn't live (`standingsStreaksShown`). */
+  streak?: number;
 };
 
 /** The scoring and tiebreak order, in the one line under every table. */
@@ -309,6 +312,24 @@ export function TiedChip({ className }: { className?: string }) {
   );
 }
 
+/**
+ * A run of series wins, from WIN_STREAK_MIN: "W3 streak", with its meaning
+ * spoken. Neutral like "Your team": blue reads as a link here, green is the
+ * playoff marks' colour and amber the warnings'.
+ */
+export function StreakChip({ wins }: { wins: number }) {
+  return (
+    <span
+      role="img"
+      aria-label={`Won the last ${wins} series`}
+      title={`Won the last ${wins} series in a row`}
+      className="whitespace-nowrap rounded bg-surface-3 px-1.5 py-0.5 text-fg"
+    >
+      <span aria-hidden>W{wins} streak</span>
+    </span>
+  );
+}
+
 /** The line under a team's name: playoff status, then any chips. */
 function StatusLine({
   row,
@@ -321,7 +342,17 @@ function StatusLine({
 }) {
   const status = playoffStatus(row, playoffCut);
   const tied = row.idDecided && !row.tiebreakerPending;
-  if (!status && !isViewer && !tied && !row.tiebreakerResolved) return null;
+  const streak =
+    row.streak != null && row.streak >= WIN_STREAK_MIN ? row.streak : null;
+  if (
+    !status &&
+    !isViewer &&
+    !tied &&
+    !row.tiebreakerResolved &&
+    streak == null
+  ) {
+    return null;
+  }
   return (
     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium leading-tight @md:my-0.5">
       {status}
@@ -340,6 +371,7 @@ function StatusLine({
           Settled by tiebreaker
         </span>
       ) : null}
+      {streak != null ? <StreakChip wins={streak} /> : null}
     </div>
   );
 }

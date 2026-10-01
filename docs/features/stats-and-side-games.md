@@ -113,7 +113,8 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
 
 Reasons to open the site between match nights, each a pure rule with its
 numbers in one named constant. Stored results only: no pace, averages or
-predictions. Where each one shows: `pages-and-ui.md`.
+predictions. Where each one shows: `pages-and-ui.md` (Home, the profile, the
+match preview) and `season-schedule-playoffs.md` (the standings chip).
 
 - **An upset is judged on points going into the week, never places**
   (`seriesUpset`, `upsets.ts`). Regular season: the winner had at least

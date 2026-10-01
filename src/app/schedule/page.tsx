@@ -47,7 +47,7 @@ import {
   seedsFromFirstRound,
 } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
-import { formByTeam } from "@/lib/team-matches";
+import { standingsForm, standingsStreaksShown } from "@/lib/team-matches";
 import {
   captainOverdueResults,
   regularSeasonStatus,
@@ -389,9 +389,11 @@ export default async function SchedulePage() {
   // tiebreaker fixtures exist) does it get a tiebreaker badge that holds back
   // its seeds and the projected matchups.
   const shownDeadHeatTeamIds = publicDeadHeatTeamIds(playoffField, matches);
-  const teamForm = formByTeam(
+  // Last 5 and the streak chips from one list in play order (Home's rule).
+  const { form: teamForm, streaks: teamStreaks } = standingsForm(
     teams.map((t) => t.id),
     matches,
+    { streaks: standingsStreaksShown(season) },
   );
   // The scenario engine's report drives the refined clinch marks and the
   // playoff-race notes — only a live regular season has a race to compute.
@@ -842,6 +844,7 @@ export default async function SchedulePage() {
                 new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
               }
               formByTeam={teamForm}
+              streakByTeam={teamStreaks}
               playoffCut={
                 season.status === "REGULAR_SEASON"
                   ? playoffField.bracketSize
