@@ -1566,13 +1566,20 @@ function AdminAttention({
           </details>
         ) : null}
         {/* inline-flex min-h-6: on 12px text TAP_SAFE alone left a 22px
-            target, under the 24px minimum. */}
-        <p className="text-xs">
+            target, under the 24px minimum. gap-y-2 keeps 8px between the
+            two links when they wrap. */}
+        <p className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
           <Link
             href={`/admin/data-quality?season=${season.id}`}
             className={textLink("inline-flex min-h-6 items-center")}
           >
             Check imported-game quality <LinkArrow />
+          </Link>
+          <Link
+            href={`/admin/health?season=${season.id}`}
+            className={textLink("inline-flex min-h-6 items-center")}
+          >
+            League health <LinkArrow />
           </Link>
         </p>
       </CardBody>

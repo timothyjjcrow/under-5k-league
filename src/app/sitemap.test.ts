@@ -29,6 +29,7 @@ describe("public sitemap", () => {
       "/players/compare",
       "/news",
       "/how-it-works",
+      "/rules",
       "/hall-of-fame",
       "/seasons",
       "/inhouse/history",

@@ -55,7 +55,6 @@ usage figures are the US site's as of 2026-09-26.
 | 2026-08-02 | Auto-cancelling surplus standin bookings after a partial roster refill. | The signing toast reports the surplus, and the captain chooses which booking goes. | Captains ask for it. |
 | 2026-07-31 | An exclusion or ban layer (no inhouse queue ban, no points-dock tool). | Deferred until the league actually has a griefer. Standin removal, the urgent case, is fixed. | The league has a griefer. |
 | 2026-07-31 | A captain-initiated forfeit claim. | `Match.forfeit` exists, but only the admin `recordResult` sets it, so an admin rules on every forfeit. An open product question; nobody has asked for it. | Captains ask to concede a match themselves. |
-| 2026-07-31 | A player-visible rules page (series length, tiebreakers, forfeits, standin rules). | `/how-it-works` covers joining and match night only. An open product question; nobody has asked for it. | Players ask where the rules are written down. |
 | 2026-07-30 | Replacing raw status strings in `src/app` with `MATCH_STATUS` / `MATCH_PHASE` (the second half of refactor R29). | Three times the churn, in display code where a wrong string shows up on screen. | Someone is already editing those files. |
 | 2026-07-30 | Signing out one account's sessions. | The only revocation is the global session epoch (`src/lib/session-epoch.ts`), a break-glass that signs everyone out. | One account must be signed out without signing out everyone. |
 
@@ -92,6 +91,7 @@ code on 2026-09-28.
 
 | Deferred | What | How it was closed |
 | --- | --- | --- |
+| 2026-07-31 | A player-visible rules page (series length, tiebreakers, forfeits, standin rules). | Done 2026-10-01 at Tim's request. `/rules` (League group of the nav, linked from `/how-it-works` and the match page's How to host line) builds every sentence from the code's constants, the season's settings and `LEAGUE_CONFIG` through `leagueRules` (`src/lib/league-rules.ts`), and a source guard keeps rule numbers off the page. It writes only what the code enforces; the rules nothing encodes yet are listed in [pages-and-ui](features/pages-and-ui.md#the-rules-page-rules) for Tim to write. |
 | 2026-07-30 | Splitting `src/app/actions/admin.ts` by domain (rejected in July). | Done 2026-09-28, once the file had grown to 61 actions and 38 ratchet claims and the baseline could carry moved claim ids through `renames`. It is split by job into `admin-season.ts`, `admin-captains-draft.ts`, `admin-roster.ts`, `admin-schedule-results.ts` and `admin-discord.ts`, with shared helpers in the non-server-action `admin-shared.ts`. |
 | 2026-07-30 | Splitting `src/app/page.tsx` per phase (rejected in July). | Done 2026-09-28: at 3,600 lines the file made every home change harder to review. `page.tsx` loads the data and picks the phase; the shared hero and one view file per phase live in `src/components/home/`, with `SeasonViewSkeleton` beside `SeasonView`, and the home source guards read the folder through `homePageSource()`. |
 | 2026-07-30 | `nominatePlayer`'s claim pinning the nominator's turn. | Its claim re-asserts `nominatorTeamId` and `nominationEndsAt` (2026-08-01). |

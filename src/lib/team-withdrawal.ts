@@ -23,3 +23,13 @@ export function teamWithdrawalLockedReason(
   }
   return "Team withdrawal opens in the Regular season. Before the season starts, remove the captain instead so the empty team is removed cleanly.";
 }
+
+/**
+ * Games a withdrawn team's opponent is credited in each of the team's
+ * unfinished regular-season series: the series clinch number (Bo1 1-0, Bo2
+ * 2-0, Bo3 2-0, Bo5 3-0). Shared by the withdrawal action, which writes it,
+ * and /rules, which quotes it, so the page can't drift from the ruling.
+ */
+export function withdrawalForfeitScore(bestOf: number): number {
+  return Math.floor(bestOf / 2) + 1;
+}

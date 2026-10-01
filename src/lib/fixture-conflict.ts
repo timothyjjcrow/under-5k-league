@@ -1,11 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { loadPlayoffRoundsBySeason } from "./playoff-rounds";
-import { matchRoundLabel } from "./schedule";
+import { FIXTURE_CONFLICT_WINDOW_MS, matchRoundLabel } from "./schedule";
 
-// A team can't play two league fixtures inside this window. Same span as the
-// standin and scrim clash rules: a Bo3 plus warm-up runs about three hours.
-export const FIXTURE_CONFLICT_WINDOW_MS = 4 * 60 * 60 * 1000;
+// The window lives in the pure schedule module so /rules can quote it; the
+// match page's reschedule card still imports it from here.
+export { FIXTURE_CONFLICT_WINDOW_MS };
 
 export type FixtureConflict = {
   id: string;

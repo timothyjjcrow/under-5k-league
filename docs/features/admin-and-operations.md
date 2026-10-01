@@ -121,6 +121,48 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   (`captainImportOnPage`). Once a game is imported `StandinMatchBlock` shows
   "Locked: series already started" (`removeStandinGuarded` refuses).
 
+## League health (`/admin/health`)
+
+- **Its own route, not a card on /admin.** /admin is the match-night console
+  for the active season; health compares seasons, so it takes `?season=` and
+  sits beside `/admin/data-quality`, linked from Needs attention ("League
+  health", next to "Check imported-game quality"). The guard is the
+  data-quality page's: signed out goes to `/login?next=`, a non-admin gets the
+  same 404 as a missing page, the parameter goes through `singleSearchParam`
+  (a repeated key is a 404), then `resolveSeasonScope` (an unknown id is a
+  404; none means the active season, else the latest). The `SeasonSwitcher`
+  lists every season; with no season at all the page says so.
+- **Counts only.** `loadLeagueHealth` (`league-health-service.ts`) reads the
+  season list, then every count, groupBy and id/timestamp select in one
+  `Promise.all`; `buildLeagueHealth` (`league-health.ts`, pure, tested) does
+  the arithmetic. No player names, contact details, message bodies, client
+  payload, Discord or OpenDota call, or cached-queries tags:
+  `league-health.test.ts` pins the page's and the service's imports and
+  selects.
+- **Unknown is its own answer.** Never drafted (active player signups never on
+  a team: not a captain, not bought, not signed later) is counted only after
+  a COMPLETE auction and only while roster history covers the season. A
+  `LEGACY_CAPTURE` tenure or a roster seat with no tenure makes it unknown, and
+  so does a season past its draft with no finished auction (the e2e
+  fixtures). Its void tenure endings are `profile-seasons.ts`'s, kept equal by
+  a parity test. A booking on a match with no kickoff has an unknown lead
+  time, and a rate with nothing to divide reads "None yet".
+- **The page states its caveats:**
+  - Withdrawals and removals have no date, so they are counted as they
+    stand now.
+  - Check-ins count only kicked-off series, forfeits left out, at the current
+    `scheduleRevision`: a new kickoff deletes them. Seats are full sides plus
+    booked standins, capped per series.
+  - A removed standin booking is deleted, so it isn't counted, and lead time
+    runs to the current kickoff.
+  - Discord posts (`LeagueAnnouncement` rows marked SENT) carry no season.
+    A season owns those sent from its `createdAt` until the next season's
+    (or now), and kinds come from the dedupe key's first segment (pinned to
+    `announcementDedupeKey` and the two expiry groups). News copies, webhook
+    tests and inhouse posts aren't counted.
+  - New accounts are counted in Monday weeks on `LEAGUE_CONFIG.timeZone`; the
+    latest `MAX_WEEKS_SHOWN` weeks show and the rest fold into one line.
+
 ## Archives and recovery
 
 - **The season export is an audit archive, not a backup.**
