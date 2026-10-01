@@ -71,16 +71,26 @@ describe("link preview picture reads", () => {
     expect(fetchOgImage).toContain("signal: AbortSignal.timeout(");
   });
 
-  it("read the bundled fonts and emblems from files that exist", () => {
+  it("read the bundled fonts, emblems and medals from files that exist", () => {
     // A wrong path fails quietly: the picture falls back to next/og's own
-    // font or leaves the emblem out. So every literal path is checked here.
+    // font or leaves the emblem or medal out. So every literal path is
+    // checked here.
     const assets = stripLineComments(sourceFile("src/lib/og-assets.ts").text);
     const files = [
       ...assets.matchAll(/join\(process\.cwd\(\),((?:\s*"[^"]+",?)+)\s*\)/g),
     ].map((call) => [...call[1].matchAll(/"([^"]+)"/g)].map((s) => s[1]));
     const fonts = files.filter((f) => f.at(-1)!.endsWith(".ttf"));
     expect(fonts).toHaveLength(2);
-    expect(files.filter((f) => f.at(-1)!.endsWith(".png"))).toHaveLength(2);
+    // Two league emblems, then the player card's medals: eight medallions
+    // (Herald to Immortal) and five star rings, the files RankMedal draws.
+    const pngs = files.filter((f) => f.at(-1)!.endsWith(".png"));
+    expect(pngs).toHaveLength(15);
+    expect(
+      pngs.filter((f) => f.join("/").startsWith("public/ranks/")).map((f) => f.at(-1)),
+    ).toEqual([
+      ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => `rank_icon_${n}.png`),
+      ...[1, 2, 3, 4, 5].map((n) => `rank_star_${n}.png`),
+    ]);
     for (const file of files) {
       expect(existsSync(path.join(REPO_ROOT, ...file)), file.join("/")).toBe(true);
     }
@@ -91,6 +101,25 @@ describe("link preview picture reads", () => {
       expect(
         existsSync(path.join(REPO_ROOT, ...font.slice(0, -1), "OFL.txt")),
       ).toBe(true);
+    }
+  });
+
+  it("write no emoji, which the renderer would fetch from the internet", () => {
+    // next/og draws a glyph its bundled fonts lack by downloading one at
+    // render time (Twemoji for an emoji), so a picture's own words stay in
+    // Oswald: no emoji and no "×". The player's picture borrows words from
+    // the season card's rules, so those files count too.
+    const files = [
+      "src/components/og-card.tsx",
+      "src/components/og-share-images.tsx",
+      "src/lib/og-image.ts",
+      "src/lib/link-preview-images.ts",
+      "src/lib/player-card.ts",
+    ];
+    for (const file of files) {
+      const text = sourceFile(file).text;
+      expect(text, file).not.toMatch(/\p{Extended_Pictographic}/u);
+      expect(text, file).not.toContain("×");
     }
   });
 

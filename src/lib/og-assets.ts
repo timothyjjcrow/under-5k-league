@@ -15,6 +15,7 @@ import {
   ogImageUrlAllowed,
   sniffImageType,
 } from "./og-image";
+import { rankMedalTier, rankStars } from "./rank";
 
 type OgFont = {
   name: string;
@@ -55,6 +56,57 @@ export function loadLeagueEmblem(): Promise<string | null> {
     () => null,
   );
   return emblem;
+}
+
+// The medal pictures RankMedal draws on the site (public/ranks): the
+// medallion per medal, Herald to Immortal, and the star ring per star count.
+const MEDAL_FILES = [
+  join(process.cwd(), "public", "ranks", "rank_icon_1.png"),
+  join(process.cwd(), "public", "ranks", "rank_icon_2.png"),
+  join(process.cwd(), "public", "ranks", "rank_icon_3.png"),
+  join(process.cwd(), "public", "ranks", "rank_icon_4.png"),
+  join(process.cwd(), "public", "ranks", "rank_icon_5.png"),
+  join(process.cwd(), "public", "ranks", "rank_icon_6.png"),
+  join(process.cwd(), "public", "ranks", "rank_icon_7.png"),
+  join(process.cwd(), "public", "ranks", "rank_icon_8.png"),
+];
+const STAR_FILES = [
+  join(process.cwd(), "public", "ranks", "rank_star_1.png"),
+  join(process.cwd(), "public", "ranks", "rank_star_2.png"),
+  join(process.cwd(), "public", "ranks", "rank_star_3.png"),
+  join(process.cwd(), "public", "ranks", "rank_star_4.png"),
+  join(process.cwd(), "public", "ranks", "rank_star_5.png"),
+];
+
+const pngFiles = new Map<string, Promise<string | null>>();
+function loadPng(file: string): Promise<string | null> {
+  let png = pngFiles.get(file);
+  if (!png) {
+    png = readFile(file).then(
+      (bytes) => `data:image/png;base64,${bytes.toString("base64")}`,
+      () => null,
+    );
+    pngFiles.set(file, png);
+  }
+  return png;
+}
+
+/**
+ * A medal for a picture, the way RankMedal draws it: the medallion with its
+ * star ring on top (Immortal has none). Null for an unknown medal, or when
+ * the medallion can't be read; a missing star ring leaves the medallion bare.
+ */
+export async function loadRankMedal(
+  rankTier: number | null,
+): Promise<{ icon: string; stars: string | null } | null> {
+  const tier = rankMedalTier(rankTier);
+  if (tier === 0) return null;
+  const stars = tier < 8 ? rankStars(rankTier) : 0;
+  const [icon, ring] = await Promise.all([
+    loadPng(MEDAL_FILES[tier - 1]),
+    stars > 0 ? loadPng(STAR_FILES[stars - 1]) : null,
+  ]);
+  return icon ? { icon, stars: ring } : null;
 }
 
 const OG_IMAGE_TIMEOUT_MS = 2_500;

@@ -1,6 +1,15 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fallbackOgImage, fetchOgImage, renderOgImage } from "./og-assets";
+import { REPO_ROOT } from "../../test/support/source-files";
+import { OgPlayerCard } from "@/components/og-card";
+import {
+  fallbackOgImage,
+  fetchOgImage,
+  loadRankMedal,
+  renderOgImage,
+} from "./og-assets";
 import { OG_CACHE_CONTROL } from "./og-image";
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
@@ -84,6 +93,28 @@ describe("renderOgImage", () => {
     expect(bytes.slice(0, 4)).toEqual(PNG.slice(0, 4));
   });
 
+  it("draws a player's season card with its medal", async () => {
+    // Satori is strict (a box with two children needs display: flex, a
+    // missing glyph is fetched from the internet), and a refused drawing
+    // quietly becomes the league's picture, so the real card is drawn here.
+    const medal = await loadRankMedal(64);
+    const res = await renderOgImage(
+      createElement(OgPlayerCard, {
+        emblem: null,
+        leagueName: "GGD2L",
+        name: "Raccoon King",
+        avatar: null,
+        seasonLine: "Season 9 · Drafted for $47",
+        team: { name: "Radiant Raccoons", hue: 200, logo: null },
+        medal: medal && { ...medal, name: "Ancient 4" },
+        titles: ["Season 9 champion", "+1 more title"],
+        facts: ["Grade A", "Axe", "Invoker · pubs", "3 Match MVPs"],
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+  });
+
   it("sends the league's own picture when the drawing fails", async () => {
     // Satori refuses a <div> with two children and no display: flex.
     const res = await renderOgImage(
@@ -100,5 +131,38 @@ describe("renderOgImage", () => {
     );
     expect(res.headers.get("location")).toMatch(/^\/.*\.png$/);
     expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("loadRankMedal", () => {
+  const file = (name: string) =>
+    `data:image/png;base64,${readFileSync(
+      path.join(REPO_ROOT, "public", "ranks", name),
+    ).toString("base64")}`;
+
+  it("draws the medal the way RankMedal does: the medallion and its stars", async () => {
+    expect(await loadRankMedal(64)).toEqual({
+      icon: file("rank_icon_6.png"),
+      stars: file("rank_star_4.png"),
+    });
+    expect(await loadRankMedal(11)).toEqual({
+      icon: file("rank_icon_1.png"),
+      stars: file("rank_star_1.png"),
+    });
+    // Immortal has no stars; a starless tier draws the bare medallion.
+    expect(await loadRankMedal(80)).toEqual({
+      icon: file("rank_icon_8.png"),
+      stars: null,
+    });
+    expect(await loadRankMedal(30)).toEqual({
+      icon: file("rank_icon_3.png"),
+      stars: null,
+    });
+  });
+
+  it("draws nothing for an unknown medal", async () => {
+    for (const unknown of [null, 0, 5, 95]) {
+      expect(await loadRankMedal(unknown), String(unknown)).toBeNull();
+    }
   });
 });

@@ -248,30 +248,3 @@ export function profileSeasonRecord(row: ProfileSeasonRow): string | null {
   if (row.games > 0) parts.push(`${row.games} game${row.games === 1 ? "" : "s"}`);
   return parts.length > 0 ? parts.join(" · ") : null;
 }
-
-/**
- * A player's most recent league season in one line, for a profile header
- * when they are not in the current season: "Season 9 champion · Radiant
- * Raccoons", "Season 9 · Dire Straits", or "Season 9 · Stood in for Dire
- * Straits" for someone who only covered. The header otherwise fell back to
- * the active season's name, a season they hadn't joined, and a champion's
- * title vanished from it the day the season was archived.
- *
- * `rows` comes from profileSeasonRows (newest season first, the roster team
- * first within a season). Within that newest season a title wins the line,
- * so covering for the champion is not hidden behind another row. Null when
- * there is no league season to name.
- */
-export function latestLeagueLine(
-  rows: readonly ProfileSeasonRow[],
-): string | null {
-  const first = rows[0];
-  if (!first) return null;
-  const row =
-    rows.find((r) => r.seasonId === first.seasonId && r.champion) ?? first;
-  if (row.champion) return `${row.seasonName} champion · ${row.teamName}`;
-  if (row.role === null && row.stoodIn > 0) {
-    return `${row.seasonName} · Stood in for ${row.teamName}`;
-  }
-  return `${row.seasonName} · ${row.teamName}`;
-}

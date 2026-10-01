@@ -15,6 +15,7 @@ import {
 } from "@/lib/scouting";
 import { parsePubStats, pubCheckedAgo } from "@/lib/pub-stats";
 import { roleCoverage, type RoleCount } from "@/lib/pool-stats";
+import { teamStripe } from "@/lib/team-tint";
 import {
   Card,
   CardBody,
@@ -130,6 +131,7 @@ export async function ScoutingReport({
             <div
               key={d.teamId}
               className="min-w-0 rounded-lg border border-line p-3"
+              {...teamStripe(d.teamId)}
             >
               <div className="mb-2.5 flex min-w-0 items-center gap-2">
                 <TeamCrest

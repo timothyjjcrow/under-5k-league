@@ -1,5 +1,6 @@
 import { formatNetWorth, cn } from "@/lib/utils";
 import { heroById } from "@/lib/heroes";
+import { teamStripe } from "@/lib/team-tint";
 import type { PlayerStat } from "@/lib/match-import";
 import {
   cardAverage,
@@ -97,6 +98,7 @@ export function SidePlayers({
   userAvatar,
   maxNet,
   mvpId,
+  teamId,
 }: {
   label: string;
   win: boolean;
@@ -105,6 +107,9 @@ export function SidePlayers({
   userAvatar: Map<string, string | null>;
   maxNet: number;
   mvpId?: string | null;
+  /** The team that played this side, when the game recorded it: the box
+   *  wears its colour stripe. Unknown sides stay plain Radiant and Dire. */
+  teamId?: string | null;
 }) {
   const hasNet = players.some((p) => p.netWorth != null);
   const hasGpm = players.some((p) => p.gpm != null);
@@ -122,6 +127,7 @@ export function SidePlayers({
         "@container min-w-0 rounded-xl border p-3",
         win ? "border-success/40 bg-success/5" : "border-line",
       )}
+      {...(teamId ? teamStripe(teamId) : {})}
     >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-3">
         <span className="flex min-w-0 items-center gap-2">

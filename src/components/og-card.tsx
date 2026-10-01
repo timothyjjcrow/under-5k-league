@@ -7,11 +7,13 @@ import {
   hueHex,
   type MatchCardData,
   type MatchCardStatus,
+  type OgMedal,
   type OgTeam,
   type PlayerCardData,
   type SeasonCardData,
   type TeamCardData,
 } from "@/lib/og-image";
+import { crestInk } from "@/lib/team-hues";
 import { teamInitials } from "@/lib/utils";
 
 const COLOR = {
@@ -183,7 +185,8 @@ function OgCrest({ team, size }: { team: OgTeam; size: number }) {
         boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
         fontSize: Math.round(size * 0.38),
         fontWeight: 600,
-        color: "#ffffff",
+        // The site crest's ink: white, or near-black on the yellows.
+        color: crestInk(team.hue),
       }}
     >
       {team.logo ? (
@@ -377,21 +380,34 @@ export function OgMatchCard({
   );
 }
 
-/** A chip of one fact under a name: "5W 1D 2L", "2nd of 6", "Champion". */
-function OgChip({ children, gold }: { children: ReactNode; gold?: boolean }) {
+/**
+ * A chip of one fact under a name: "5W 1D 2L", "2nd of 6", "Champion".
+ * `compact` is the player card's smaller chip, which also centres a medal
+ * beside its name.
+ */
+function OgChip({
+  children,
+  gold,
+  compact,
+}: {
+  children: ReactNode;
+  gold?: boolean;
+  compact?: boolean;
+}) {
   return (
     <span
       style={{
         display: "flex",
-        fontSize: 30,
+        ...(compact ? { alignItems: "center" } : {}),
+        fontSize: compact ? 26 : 30,
         fontWeight: 600,
         color: gold ? COLOR.accent : COLOR.fg,
         border: `2px solid ${gold ? COLOR.accent : COLOR.line}`,
         backgroundColor: gold ? "rgba(242,177,52,0.12)" : "rgba(18,26,41,0.85)",
-        borderRadius: 14,
-        padding: "6px 20px",
-        marginRight: 14,
-        marginBottom: 14,
+        borderRadius: compact ? 12 : 14,
+        padding: compact ? "4px 16px" : "6px 20px",
+        marginRight: compact ? 12 : 14,
+        marginBottom: compact ? 12 : 14,
       }}
     >
       {children}
@@ -463,21 +479,64 @@ export function OgTeamCard({
   );
 }
 
-/** A player: avatar, name, their league facts and their latest team. */
+/**
+ * A medal the way RankMedal draws it on the site: the medallion with its star
+ * ring laid over it.
+ */
+function OgMedalIcon({ medal, size }: { medal: OgMedal; size: number }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        display: "flex",
+        width: size,
+        height: size,
+        marginRight: 10,
+      }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element -- Satori draws <img>, not next/image */}
+      <img
+        src={medal.icon}
+        width={size}
+        height={size}
+        alt=""
+        style={{ position: "absolute", left: 0, top: 0 }}
+      />
+      {medal.stars ? (
+        // eslint-disable-next-line @next/next/no-img-element -- Satori draws <img>, not next/image
+        <img
+          src={medal.stars}
+          width={size}
+          height={size}
+          alt=""
+          style={{ position: "absolute", left: 0, top: 0 }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A player's season card (the one in their profile's header): avatar and
+ * name, the season and how they took part, their team that season, titles in
+ * gold, then medal, grade, most-played heroes and honors.
+ */
 export function OgPlayerCard({
   emblem,
   leagueName,
   name,
   avatar,
-  facts,
+  seasonLine,
   team,
-  teamSeason,
+  medal,
+  titles,
+  facts,
 }: PlayerCardData & OgBrand) {
   return (
     <OgFrame
       emblem={emblem}
       leagueName={leagueName}
-      kicker="Player profile"
+      kicker={seasonLine ?? "Player profile"}
       glows={team ? [team.hue] : []}
     >
       <div
@@ -529,34 +588,47 @@ export function OgPlayerCard({
           <div style={{ ...clampStyle(name.length > 20 ? 64 : 80, 700) }}>
             {name}
           </div>
-          {facts.length > 0 ? (
-            <div style={{ display: "flex", flexWrap: "wrap", marginTop: 26 }}>
-              {facts.map((fact) => (
-                <OgChip key={fact}>{fact}</OgChip>
-              ))}
-            </div>
-          ) : null}
           {team ? (
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
-                marginTop: 10,
+                marginTop: 18,
               }}
             >
               <OgCrest team={team} size={56} />
               <div
                 style={{
                   display: "block",
-                  fontSize: 30,
+                  fontSize: 34,
                   fontWeight: 600,
                   marginLeft: 18,
-                  maxWidth: 560,
+                  maxWidth: 660,
                   lineClamp: 1,
                 }}
               >
-                {teamSeason ? `${team.name} · ${teamSeason}` : team.name}
+                {team.name}
               </div>
+            </div>
+          ) : null}
+          {titles.length > 0 || medal || facts.length > 0 ? (
+            <div style={{ display: "flex", flexWrap: "wrap", marginTop: 22 }}>
+              {titles.map((title) => (
+                <OgChip key={title} gold compact>
+                  {title}
+                </OgChip>
+              ))}
+              {medal ? (
+                <OgChip compact>
+                  <OgMedalIcon medal={medal} size={40} />
+                  {medal.name}
+                </OgChip>
+              ) : null}
+              {facts.map((fact) => (
+                <OgChip key={fact} compact>
+                  {fact}
+                </OgChip>
+              ))}
             </div>
           ) : null}
         </div>

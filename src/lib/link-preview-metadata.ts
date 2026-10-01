@@ -2,7 +2,9 @@
 // fixture or the player, and the facts a match's or player's preview text and
 // picture share (link-preview-images.ts). Each loader reads only what its
 // preview needs: request-cached reads the page itself also makes (the active
-// season, Home's snapshot), or a few small rows. The sentences themselves live
+// season, Home's snapshot), or a few small rows. The one exception is a
+// player's picture, which is their profile's season card and so makes the
+// profile's reads for it (loadPlayerCardFacts). The sentences themselves live
 // in link-preview.ts.
 
 import type { Metadata } from "next";
@@ -10,13 +12,24 @@ import { prisma } from "./prisma";
 import { getActiveSeason } from "./season";
 import { getSessionUser } from "./auth";
 import { getSeasonMatches, getSeasonSnapshot } from "./queries";
+import { getAllGamesForRecords } from "./cached-queries";
 import { LEAGUE_CONFIG } from "./league-config";
 import { shareMetadata } from "./share-metadata";
-import { MATCH_PHASE, SEASON_STATUS } from "./constants";
+import {
+  MATCH_PHASE,
+  MATCH_STATUS,
+  REGISTRATION_STATUS,
+  SEASON_STATUS,
+} from "./constants";
 import { resolveChampionPresentation } from "./champion-presentation";
 import { groupPlayoffRounds, matchRoundLabel } from "./schedule";
 import { getPlayerGameFacts } from "./player-game-history";
+import { getRosterHistory } from "./player-roster-history";
+import { playerCardFacts, type PlayerCardFacts } from "./player-card";
+import { profileGameFolds, profileGameRows } from "./profile-games";
+import { loadProfileSeasonRows } from "./profile-season-history";
 import { hasJoinedLeague } from "./profile-footprint";
+import { leagueRecords, toRecordGames } from "./records";
 import {
   decodeGamePlayers,
   summarizePlayerGames,
@@ -237,4 +250,124 @@ export async function loadPlayerPreviewFacts(id: string): Promise<{
     favoriteHero ? `${favoriteHero.name} player` : null,
   ].filter((highlight): highlight is string => highlight !== null);
   return { name: user.name, avatar: user.avatar, joined: true, highlights };
+}
+
+/**
+ * A player's season card for their link picture: the facts their profile's
+ * header card shows (playerCardFacts), from the reads the profile makes for
+ * it: their signup and roster spot this season, their season history (games,
+ * tenures and cover served, never today's roster alone), the same folds over
+ * their games (profileGameFolds) and the record book. Null when there is no
+ * such player; "unjoined" for an account that only signed in, whose preview
+ * stays the league's own picture. The link text keeps its own highlights
+ * (loadPlayerPreviewFacts).
+ */
+export async function loadPlayerCardFacts(id: string): Promise<
+  | { name: string; avatar: string | null; card: PlayerCardFacts }
+  | "unjoined"
+  | null
+> {
+  const [user, joined, season] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id },
+      select: { name: true, avatar: true, rankTier: true, pubStats: true },
+    }),
+    hasJoinedLeague(id),
+    getActiveSeason(),
+  ]);
+  if (!user) return null;
+  if (!joined) return "unjoined";
+  const teamRef = { select: { id: true, name: true, logoUrl: true } } as const;
+  const [registration, membership, rosterHistory, gameFacts, covers, recordRows] =
+    await Promise.all([
+      season
+        ? prisma.registration.findUnique({
+            where: { seasonId_userId: { seasonId: season.id, userId: id } },
+            select: { status: true, mmr: true, type: true },
+          })
+        : null,
+      season
+        ? prisma.teamMember.findFirst({
+            where: { seasonId: season.id, userId: id },
+            select: { isCaptain: true, team: teamRef },
+          })
+        : null,
+      getRosterHistory(id),
+      getPlayerGameFacts(id),
+      // Cover they served: bookings on COMPLETED matches, as the profile's
+      // Seasons card counts them.
+      prisma.standinAssignment.findMany({
+        where: { standinUserId: id, match: { status: MATCH_STATUS.COMPLETED } },
+        select: {
+          matchId: true,
+          teamId: true,
+          match: {
+            select: { seasonId: true, homeTeam: teamRef, awayTeam: teamRef },
+          },
+        },
+      }),
+      getAllGamesForRecords(),
+    ]);
+  const myGameIds = gameFacts
+    .filter((game) =>
+      trustedGamePlayers(decodeGamePlayers(game.players)).some(
+        (player) => player.userId === id,
+      ),
+    )
+    .map((game) => game.id);
+  const games = myGameIds.length
+    ? await prisma.game.findMany({
+        where: { id: { in: myGameIds } },
+        select: {
+          id: true,
+          matchId: true,
+          players: true,
+          radiantWin: true,
+          durationSecs: true,
+          startTime: true,
+          match: {
+            select: { seasonId: true, homeTeam: teamRef, awayTeam: teamRef },
+          },
+        },
+        orderBy: { startTime: "desc" },
+      })
+    : [];
+  const { rows: seasonRows, teamLogos } = await loadProfileSeasonRows(id, {
+    games,
+    rosterHistory,
+    covers,
+  });
+  const { badges, reportCard, leagueHeroes } = profileGameFolds(
+    id,
+    profileGameRows(id, games),
+  );
+  // Only an ACTIVE signup is a live one (the profile's activeReg).
+  const signup =
+    registration?.status === REGISTRATION_STATUS.ACTIVE ? registration : null;
+  return {
+    name: user.name,
+    avatar: user.avatar,
+    card: playerCardFacts({
+      activeSeason: season ? { id: season.id, name: season.name } : null,
+      signup: signup ? { mmr: signup.mmr, type: signup.type } : null,
+      membership: membership
+        ? {
+            teamId: membership.team.id,
+            teamName: membership.team.name,
+            teamLogoUrl: membership.team.logoUrl,
+            isCaptain: membership.isCaptain,
+          }
+        : null,
+      seasonRows,
+      teamLogos,
+      rankTier: user.rankTier,
+      leagueHeroes,
+      pubHeroes: parsePubStats(user.pubStats)?.topHeroes ?? [],
+      report: reportCard,
+      achievements: badges,
+      recordsHeld: leagueRecords(toRecordGames(recordRows)).players.filter(
+        (record) => record.userId === id,
+      ).length,
+    }),
+  };
 }

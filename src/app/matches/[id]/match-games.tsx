@@ -54,6 +54,14 @@ export async function MatchGames({
         const direName = g.direTeamId
           ? (teamName.get(g.direTeamId) ?? "Dire")
           : "Dire";
+        // A side wears its team's colour only when the game says which of
+        // this match's teams played it.
+        const radiantTeamId =
+          g.radiantTeamId && teamName.has(g.radiantTeamId)
+            ? g.radiantTeamId
+            : null;
+        const direTeamId =
+          g.direTeamId && teamName.has(g.direTeamId) ? g.direTeamId : null;
         const maxNet = Math.max(1, ...g.parsed.map((p) => p.netWorth ?? 0));
         const mvpId = gameMvp(g.parsed, g.radiantWin);
         const radiantNet = radiant.reduce(
@@ -95,6 +103,7 @@ export async function MatchGames({
               />
               <SidePlayers
                 label={radiantName}
+                teamId={radiantTeamId}
                 win={g.radiantWin}
                 mvpId={mvpId}
                 players={radiant}
@@ -104,6 +113,7 @@ export async function MatchGames({
               />
               <SidePlayers
                 label={direName}
+                teamId={direTeamId}
                 win={!g.radiantWin}
                 mvpId={mvpId}
                 players={dire}

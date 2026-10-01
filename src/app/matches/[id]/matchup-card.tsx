@@ -3,6 +3,7 @@ import { CHECKIN_NUDGE_THROTTLE_SECONDS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import type { PickemControl } from "@/lib/pickem";
+import { teamStripe } from "@/lib/team-tint";
 import type { FormResult, HeadToHead } from "@/lib/team-matches";
 import { remindUnansweredCheckins } from "@/app/actions/availability";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -87,7 +88,11 @@ export function MatchupCard({
       />
       <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {sides.map((s) => (
-          <div key={s.teamId} className="rounded-lg border border-line p-3">
+          <div
+            key={s.teamId}
+            className="rounded-lg border border-line p-3"
+            {...teamStripe(s.teamId)}
+          >
             {/* flex-wrap: a long name keeps its line and the form drops
                 under it, rather than both squeezing. */}
             <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">

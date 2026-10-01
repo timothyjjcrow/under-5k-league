@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The record book's cached scan (unstable_cache) needs Next's server runtime;
+// its uncached twin reads the same rows (cached-queries.itest.ts).
+vi.mock("@/lib/cached-queries", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/cached-queries")>();
+  return { ...actual, getAllGamesForRecords: actual.fetchAllGamesForRecords };
+});
+
 import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
@@ -193,27 +201,165 @@ describe("loadSeasonCard", () => {
   });
 });
 
+/**
+ * A game with a trusted ten-line box score in which `userId` played for
+ * `teamId` on Radiant (and won), with a line good enough for Match MVP.
+ */
+async function playGame(
+  matchId: string,
+  player: { userId: string; teamId: string; heroId: number },
+) {
+  const lines: Record<string, unknown>[] = Array.from({ length: 10 }, (_, i) => ({
+    heroId: 50 + i,
+    isRadiant: i < 5,
+    kills: 1,
+    deaths: 5,
+    assists: 1,
+  }));
+  lines[0] = {
+    heroId: player.heroId,
+    isRadiant: true,
+    kills: 12,
+    deaths: 1,
+    assists: 9,
+    userId: player.userId,
+    teamId: player.teamId,
+  };
+  return prisma.game.create({
+    data: {
+      matchId,
+      dotaMatchId: `${matchId}-${player.userId}`,
+      radiantWin: true,
+      durationSecs: 2400,
+      startTime: 1_700_000_000,
+      players: JSON.stringify(lines),
+    },
+  });
+}
+
 describe("loadPlayerCard", () => {
-  it("shows the player's newest team, and keeps the league's picture for a bare account", async () => {
+  it("draws the profile's season card, and keeps the league's picture for a bare account", async () => {
     const { a } = await league();
-    const captain = await loadPlayerCard(a.captainId);
-    // A captain has joined: the card names them and their team.
-    expect(captain).toMatchObject({
+    // A captain has joined, but this one holds no roster row or game: the
+    // card is their name alone, as on their profile.
+    expect(await loadPlayerCard(a.captainId)).toMatchObject({
       name: "Radiant Raccoons Captain",
       avatar: null,
+      seasonLine: null,
+      team: null,
+      medal: null,
+      titles: [],
       facts: [],
     });
     const member = await makeUser("Rostered");
+    await prisma.user.update({ where: { id: member.id }, data: { rankTier: 64 } });
     await prisma.teamMember.create({
       data: { seasonId: a.seasonId, teamId: a.id, userId: member.id, price: 10 },
     });
-    expect(await loadPlayerCard(member.id)).toMatchObject({
+    const card = await loadPlayerCard(member.id);
+    expect(card).toMatchObject({
       name: "Rostered",
+      seasonLine: "Season 7 · Drafted for $10",
       team: { name: "Radiant Raccoons", logo: null },
-      teamSeason: "Season 7",
+      medal: { name: "Ancient 4", icon: expect.stringMatching(/^data:image\/png;base64,/) },
     });
+    // The medal is the site's own picture, with its star ring.
+    expect(card !== "unjoined" && card?.medal?.stars).toMatch(/^data:image\/png;/);
     const signedInOnly = await makeUser("Just Browsing");
     expect(await loadPlayerCard(signedInOnly.id)).toBe("unjoined");
     expect(await loadPlayerCard("not-a-player")).toBeNull();
+  });
+
+  it("takes the team from the season they played, not an older roster row", async () => {
+    const { a, played } = await league();
+    // Rostered last season on another team, then played for Radiant Raccoons
+    // this season and released: no roster row now, and no signup.
+    const old = await makeSeason({
+      name: "Season 6",
+      status: SEASON_STATUS.COMPLETE,
+      isActive: false,
+    });
+    // Seasons run in the order they were created.
+    await prisma.season.update({
+      where: { id: old.id },
+      data: { createdAt: new Date(Date.now() - 365 * DAY) },
+    });
+    const oldTeam = await makeTeam(old.id, "Old Guard", 0);
+    const player = await makeUser("Released");
+    await prisma.teamMember.create({
+      data: { seasonId: old.id, teamId: oldTeam.id, userId: player.id, price: 25 },
+    });
+    await playGame(played.id, { userId: player.id, teamId: a.id, heroId: 2 });
+
+    const card = await loadPlayerCard(player.id);
+    expect(card).toMatchObject({
+      seasonLine: "Season 7",
+      team: { name: "Radiant Raccoons" },
+      titles: [],
+      // The only named line in the league holds its kills and assists
+      // records too.
+      facts: ["Axe", "1 Match MVP", "2 league records"],
+    });
+    // The crest wears Season 7's colour, the one the match page paints.
+    const match = await loadMatchCard(played.id, Date.now());
+    expect(card !== "unjoined" && card?.team?.hue).toBe(match?.home.hue);
+  });
+
+  it("names the team a standin covered without wearing its colours", async () => {
+    const { season, b, played } = await league();
+    const standin = await makeUser("Sub");
+    const signup = await prisma.registration.create({
+      data: { seasonId: season.id, userId: standin.id, type: "STANDIN", mmr: 2900 },
+    });
+    await prisma.standinAssignment.create({
+      data: { matchId: played.id, teamId: b.id, standinUserId: standin.id },
+    });
+    // Signed up as a standin this season: the season, as a standin.
+    expect(await loadPlayerCard(standin.id)).toMatchObject({
+      seasonLine: "Season 7 · Standin",
+      team: null,
+    });
+    // Withdrawn since: the season they spent covering, by the team covered.
+    await prisma.registration.update({
+      where: { id: signup.id },
+      data: { status: "WITHDRAWN" },
+    });
+    expect(await loadPlayerCard(standin.id)).toMatchObject({
+      seasonLine: "Season 7 · Stood in for Dire Straits",
+      team: null,
+      titles: [],
+      facts: [],
+    });
+  });
+
+  it("carries a champion's title in gold", async () => {
+    const { season, a, b } = await league();
+    const final = await prisma.match.create({
+      data: {
+        seasonId: season.id,
+        week: 9,
+        phase: MATCH_PHASE.FINAL,
+        bracketSlot: "R0M0",
+        homeTeamId: a.id,
+        awayTeamId: b.id,
+      },
+    });
+    await recordMatch(final.id, 2, 0);
+    const champion = await makeUser("Champ");
+    await playGame(final.id, { userId: champion.id, teamId: a.id, heroId: 14 });
+    await prisma.season.update({
+      where: { id: season.id },
+      data: {
+        status: SEASON_STATUS.COMPLETE,
+        championTeamId: a.id,
+        isActive: false,
+      },
+    });
+    expect(await loadPlayerCard(champion.id)).toMatchObject({
+      seasonLine: "Season 7",
+      team: { name: "Radiant Raccoons" },
+      titles: ["Season 7 champion"],
+      facts: ["Pudge", "1 Match MVP", "2 league records"],
+    });
   });
 });

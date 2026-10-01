@@ -109,6 +109,19 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   `playoffStatusChip`, `resolveChampionPresentation`, the season's crest hues).
   A kickoff is on the league's clock with its zone named: a picture can't
   adapt to the viewer.
+- **A player's picture is their profile's season card** (`OgPlayerCard`, from
+  `playerCardFacts` through `playerPictureText`; rules in
+  `players-and-registration.md`): the season line as its kicker, avatar, name,
+  that season's team, then chips: one title and "+N more titles", the medal
+  drawn from `public/ranks` (`loadRankMedal`), the grade, heroes and honors.
+  No MMR: a picture travels without its date. `fitPictureFacts` drops chips
+  from the end (honors, then pub heroes, league heroes, the grade) until they
+  fit the frame beside a long name. The link's text keeps its own highlights
+  (`loadPlayerPreviewFacts`).
+- **Write no emoji or "×" in a picture:** next/og downloads any glyph its
+  bundled fonts lack while it draws (Twemoji for an emoji).
+  `share-image-guards.test.ts` checks the picture files and the card rules
+  they borrow words from.
 - **Leave the images out of those pages' metadata**
   (`shareMetadata(..., { pageImage: true })`): Next uses a folder's image files
   only where the page's metadata names no images at all, so the failure is
@@ -124,7 +137,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   the league's own image; a missing page's picture is a 404.
 - **The font is Oswald** (SIL Open Font License, `src/lib/og-fonts/`), read
   at request time; without it next/og falls back to its built-in font, so
-  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist.
+  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist
+  (the fonts, the league emblems and the medal files). Spell each path as a
+  literal `join(process.cwd(), ...)`: that is what the build's file tracing
+  bundles and what the guard reads.
   Keep files like these under `src/`: the release classifier
   (`scripts/classify-release.mjs`) treats a new top-level folder, or a
   `public/` file that isn't an image, video or web font, as an unknown path,
@@ -180,6 +196,44 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **One `<h1>` per page; page sections are `<h2>`.** On Home the season name
   is the h1 and dashboard cards pass `headingLevel={2}` (nested cards default to
   h3), or heading navigation skips what the page is for.
+
+## Team colours
+
+- **A team's colour is its crest hue, never a stored colour.**
+  `seasonTeamHues` spaces each season's teams round the wheel, and the root
+  layout publishes each team's `--team-hue` and crest ink `--team-ink`
+  (`teamHueStyleSheet`, a 60-second snapshot). A team the stylesheet doesn't
+  know yet falls back to its hash hue (`teamHueVar`, `teamInkVar`).
+- **Every element painted with a hue carries its own `data-team-hue`,** naming
+  the team its style reads. Custom properties reach an element only through
+  that attribute or inheritance, so without it an element shows the fallback,
+  or another team's hue inherited from an ancestor. `team-crest.test.ts`
+  parses every file under `src/` and fails on a hue read outside an element's
+  props, or on an element whose `data-team-hue` names another team. Build a new
+  paint with `src/lib/team-tint.ts`: its helpers return the attribute with the
+  style.
+- **A wash (`teamTint`) is an empty `pointer-events-none absolute` layer**
+  inside a `relative overflow-hidden` host: the team page header, each half of
+  the scoreboard (fading out before the score) and the player season card. It
+  is a layer of its own so the host keeps its gradient, and empty so its hue
+  can't reach a nested crest of another team. `TEAM_TINT_ALPHA` (the crest's
+  middle colour at 7%) keeps text, muted text, links and every Badge tone at
+  4.5:1 on every hue over the page, a card surface and the hero banners'
+  lightest corner (`team-tint.test.ts`). On `surface-2` the success and danger
+  Badges have no headroom left, so the same test reads each wash's host and
+  refuses any other background.
+- **A stripe (`teamStripe`) marks a box that belongs to one team:** the
+  Matchup and Scouting side boxes, and a box-score side when the game recorded
+  which team played it (`radiantTeamId`/`direTeamId`; an unknown side stays
+  plain Radiant or Dire, and keeps its win tint and the net-worth bar). It is
+  decorative: the team's name in the box says whose it is. It is an inset
+  shadow, so it sits inside the border and moves nothing.
+- **A generated crest's initials wear `crestInk(hue)`:** white, or the page's
+  near-black on the yellows through the cyans, where white fell to about 2:1.
+  The worst hue is now 3.8:1. The link pictures' `OgCrest` uses the same rule.
+- **Not built:** nudging two near-identical neighbouring hues apart, a
+  captain-chosen colour, and a colour taken from the logo (each needs new
+  data or an image decoder).
 
 ## Grids and bands
 
@@ -504,6 +558,18 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Player profile and compare (`/players/[id]`, `/players/compare`)
 
+- **The season card sits in the header's right slot from `lg`** (20rem beside
+  the name) and takes its own line below it. The line break is a `basis-full`
+  wrapper: the name column is `min-w-0`, so the row never overflows and
+  `flex-wrap` never fires on its own; the name would shrink to a letter a
+  line. The card's `max-w-md` sits inside the wrapper, because a max-width on
+  the flex item clamps the full basis the row wraps on.
+- **"Edit your signup" shows on a player's own profile** while they are in
+  the current season, or have no season yet; never under a past season's
+  card.
+- **Title badges wrap inside themselves** (`max-w-full
+  [overflow-wrap:anywhere]`), so a long season name never widens the name
+  row.
 - **A profile is two columns from `xl`:** form, match history and "How they
   play" in the main column, and a 24rem rail with the hero pool, records,
   achievements and seasons. A phone reads them in that order. Both columns
