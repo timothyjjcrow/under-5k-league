@@ -120,7 +120,14 @@ export async function ThisWeek({
         headingLevel={2}
         title={finalOnly ? "The grand final" : title}
         action={
-          <Link href="/schedule#fixtures" className={textLink("text-sm")}>
+          <Link
+            href={
+              season.status === "PLAYOFFS"
+                ? "/schedule#playoff-bracket"
+                : "/schedule#fixtures"
+            }
+            className={textLink("text-sm")}
+          >
             Full schedule <LinkArrow />
           </Link>
         }

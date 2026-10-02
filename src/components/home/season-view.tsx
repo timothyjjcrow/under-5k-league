@@ -253,7 +253,7 @@ const LIST_CELL =
 const ROW_LINK =
   "block text-sm transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60";
 
-/** "Semifinals underway" — the name of the earliest playoff round still open. */
+/** The earliest open playoff round; only a live series makes it "underway". */
 function currentRoundLabel(playoff: Match[]): string | null {
   const slotted = playoff.filter((m) => m.bracketSlot);
   const first = slotted.filter((m) => slotRound(m.bracketSlot) === 0);
@@ -262,7 +262,11 @@ function currentRoundLabel(playoff: Match[]): string | null {
   const open = slotted.filter((m) => m.status !== "COMPLETED");
   if (open.length === 0) return null;
   const round = Math.min(...open.map((m) => slotRound(m.bracketSlot)));
-  return `${roundName(round, total)} underway`;
+  const live = open.some(
+    (m) => slotRound(m.bracketSlot) === round && m.status === "LIVE",
+  );
+  const name = roundName(round, total);
+  return live ? `${name} underway` : name;
 }
 
 export async function SeasonView({
