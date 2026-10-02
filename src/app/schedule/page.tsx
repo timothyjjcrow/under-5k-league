@@ -47,7 +47,7 @@ import {
   seedsFromFirstRound,
 } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
-import { formByTeam } from "@/lib/team-matches";
+import { standingsForm, standingsStreaksShown } from "@/lib/team-matches";
 import {
   captainOverdueResults,
   regularSeasonStatus,
@@ -64,7 +64,9 @@ import {
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { adminSeasonCards } from "@/lib/admin-sections";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { matchWatchWindow } from "@/lib/broadcast";
 import { AUTO_SYNC } from "@/lib/constants";
+import { getLeagueStream } from "@/lib/queries";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import {
@@ -389,9 +391,11 @@ export default async function SchedulePage() {
   // tiebreaker fixtures exist) does it get a tiebreaker badge that holds back
   // its seeds and the projected matchups.
   const shownDeadHeatTeamIds = publicDeadHeatTeamIds(playoffField, matches);
-  const teamForm = formByTeam(
+  // Last 5 and the streak chips from one list in play order (Home's rule).
+  const { form: teamForm, streaks: teamStreaks } = standingsForm(
     teams.map((t) => t.id),
     matches,
+    { streaks: standingsStreaksShown(season) },
   );
   // The scenario engine's report drives the refined clinch marks and the
   // playoff-race notes — only a live regular season has a race to compute.
@@ -444,6 +448,11 @@ export default async function SchedulePage() {
       ? teamName.get(championPresentation.championTeamId)
       : null;
 
+  // The league stream, read only when a playoff or final row could link it.
+  const stream = playoff.some((m) => matchWatchWindow(m, season.isActive))
+    ? await getLeagueStream()
+    : null;
+
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
   // collapsible weeks). Dates preformatted server-side. Shared with the
   // playoff round list below so RSVP/standin/reschedule chips work everywhere.
@@ -451,6 +460,7 @@ export default async function SchedulePage() {
     // Once per match — each call scans the season's whole assignment list
     // for both sides, and this used to run three times per row.
     const rsvp = rsvpFor(m);
+    const watchWindow = stream ? matchWatchWindow(m, season.isActive) : null;
     return {
       id: m.id,
       homeTeamId: m.homeTeamId,
@@ -492,6 +502,7 @@ export default async function SchedulePage() {
         away: pickRsvp(rsvp.away.summary, rsvp.away.expected),
       },
       reschedulePending: rescheduleByMatch.get(m.id) ?? null,
+      watch: stream && watchWindow ? { stream, window: watchWindow } : null,
     };
   };
   // The week's league night = its earliest kickoff (headers stay scannable
@@ -842,6 +853,7 @@ export default async function SchedulePage() {
                 new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
               }
               formByTeam={teamForm}
+              streakByTeam={teamStreaks}
               playoffCut={
                 season.status === "REGULAR_SEASON"
                   ? playoffField.bracketSize

@@ -5,6 +5,12 @@
 
 import { MATCH_STATUS } from "./constants";
 import { seriesResultText } from "./link-preview";
+import {
+  championTitles,
+  playerCardHonors,
+  playerCardRoleText,
+  type PlayerCardFacts,
+} from "./player-card";
 
 /** Discord and X show large cards at this shape. */
 export const OG_SIZE = { width: 1200, height: 630 } as const;
@@ -147,16 +153,139 @@ export type TeamCardData = {
   roster: string[];
 };
 
-/** What a player's picture shows (OgPlayerCard). */
+/** A medal as a picture draws it: the medallion and its stars as data URIs
+ *  (og-assets' loadRankMedal), and the medal's name. */
+export type OgMedal = { icon: string; stars: string | null; name: string };
+
+/** What a player's picture shows (OgPlayerCard): their season card. */
 export type PlayerCardData = {
   name: string;
   avatar: string | null;
-  /** The link text's highlights: medal, league record, favourite hero. */
-  facts: string[];
-  /** Their latest team, and that team's season. */
+  /** "Season 9 · Captain": the card's season and how they took part. */
+  seasonLine: string | null;
+  /** Their team that season, from their season history, never a later
+   *  roster's. Null for a season spent standing in. */
   team: OgTeam | null;
-  teamSeason: string | null;
+  medal: OgMedal | null;
+  /** Gold chips, newest first: "Season 9 champion", "+2 more titles". */
+  titles: string[];
+  /** "Career grade A", the heroes ("Axe", "Invoker · pubs"), "3 Match MVPs". */
+  facts: string[];
 };
+
+/** Title chips a picture shows before the rest fold into a count. */
+const PICTURE_TITLES = 1;
+
+// The player picture's layout in pixels (OgPlayerCard), for fitting its chips
+// in the frame. Measured on rendered pictures and rounded up: Oswald SemiBold
+// at 26px runs under 12px a character, a chip adds 40px of padding and border
+// and 12px of margin, and a medal 50px more.
+const PICTURE = {
+  /** The column beside the avatar. */
+  columnPx: 756,
+  charPx: 12,
+  chipPx: 40,
+  chipMarginPx: 12,
+  medalPx: 50,
+  /** One row of chips, with its margin. */
+  chipRowPx: 64,
+  /** The frame's height between its header and its bottom padding. */
+  contentPx: 474,
+  chipsTopPx: 22,
+  /** The crest row under the name, with its margin. */
+  teamRowPx: 74,
+} as const;
+
+/** How many rows flex-wrap lays out chips of these widths in. */
+function pictureChipRows(widths: readonly number[]): number {
+  let rows = 0;
+  let line = 0;
+  for (const width of widths) {
+    const outer = width + PICTURE.chipMarginPx;
+    if (rows === 0 || line + outer > PICTURE.columnPx) {
+      rows += 1;
+      line = outer;
+    } else {
+      line += outer;
+    }
+  }
+  return rows;
+}
+
+/** The name's height: clampStyle at 80px to 20 characters, else 64px, two
+ *  lines at most, counting a generous half an em a character. */
+function pictureNameHeight(name: string): number {
+  const size = name.length > 20 ? 64 : 80;
+  const lines = Math.min(2, Math.ceil((name.length * size * 0.5) / 700));
+  return Math.max(1, lines) * size * 1.12;
+}
+
+/**
+ * The facts a player's picture has room for. The titles and the medal always
+ * show; the facts follow in their order until the chips would run out of the
+ * frame, so a long name with a crowded card drops its honors first, then pub
+ * heroes, then league heroes, then the grade.
+ */
+export function fitPictureFacts(input: {
+  name: string;
+  hasTeam: boolean;
+  titles: readonly string[];
+  /** The medal's name, when one is drawn. */
+  medal: string | null;
+  facts: readonly string[];
+}): string[] {
+  const width = (text: string, extra = 0) =>
+    text.length * PICTURE.charPx + PICTURE.chipPx + extra;
+  const room =
+    PICTURE.contentPx -
+    pictureNameHeight(input.name) -
+    (input.hasTeam ? PICTURE.teamRowPx : 0) -
+    PICTURE.chipsTopPx;
+  const maxRows = Math.max(1, Math.floor(room / PICTURE.chipRowPx));
+  const fixed = [
+    ...input.titles.map((title) => width(title)),
+    ...(input.medal ? [width(input.medal, PICTURE.medalPx)] : []),
+  ];
+  const facts = [...input.facts];
+  while (
+    facts.length > 0 &&
+    pictureChipRows([...fixed, ...facts.map((fact) => width(fact))]) > maxRows
+  ) {
+    facts.pop();
+  }
+  return facts;
+}
+
+/**
+ * The words on a player's picture, from the same facts as their profile's
+ * season card (playerCardFacts). The picture has no name row, so its season
+ * line always says how they took part, and it has room for one title chip
+ * and a count of the rest. No MMR: a picture travels without its date.
+ */
+export function playerPictureText(
+  card: PlayerCardFacts,
+): Pick<PlayerCardData, "seasonLine" | "titles" | "facts"> {
+  const role = playerCardRoleText(card);
+  const { shown, more } = championTitles(card.titles, PICTURE_TITLES);
+  return {
+    seasonLine: card.season
+      ? role
+        ? `${card.season.name} · ${role}`
+        : card.season.name
+      : null,
+    titles: [
+      ...shown,
+      ...(more.length > 0
+        ? [`+${more.length} more title${more.length === 1 ? "" : "s"}`]
+        : []),
+    ],
+    facts: [
+      ...(card.grade ? [`Career grade ${card.grade.overall}`] : []),
+      ...card.heroes.map((h) => (h.pubs ? `${h.name} · pubs` : h.name)),
+      ...playerCardHonors(card),
+    ],
+  };
+}
 
 /** What a season's picture shows (OgSeasonCard). */
 export type SeasonCardData = {

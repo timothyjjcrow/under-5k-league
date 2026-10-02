@@ -73,6 +73,16 @@ export const SETTING_KEYS = {
   // User id whose fetch failed on the last player data refresh; the next
   // pass tries that account last so it can't hold up everyone else.
   PLAYER_DATA_REFRESH_FAILED_USER: "playerDataRefreshFailedUser",
+  // When the next season's signups are planned to open, as JSON
+  // `{seasonId, signupsAt}` (next-season.ts). Set on /admin's Season handoff
+  // card while the league rests in Season complete; Home's hero prints it.
+  // It names the season it was set during, so the handoff makes it lapse
+  // without anyone deleting it. Display only: nothing acts on the date.
+  NEXT_SEASON_PLAN: "nextSeasonPlan",
+  // The league's stream channel (a Twitch, YouTube or Kick link checked by
+  // broadcast.ts), set on /admin's Match stream card. Playoff and final
+  // matches link to it; absent means no watch links anywhere.
+  LEAGUE_STREAM_URL: "leagueStreamUrl",
 } as const;
 
 // ---------------------------------------------------------------------------

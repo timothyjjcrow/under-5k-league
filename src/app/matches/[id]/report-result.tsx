@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LEAGUE_GAME_MODE } from "@/lib/constants";
 import {
@@ -15,7 +16,13 @@ import {
 import { MatchImportControls } from "@/components/match-import-controls";
 import { LeagueLobbyChecklist } from "@/components/league-lobby-checklist";
 import { DotaLobbyControls } from "@/components/dota-lobby-controls";
-import { Card, CardBody, CardHeader } from "@/components/ui";
+import {
+  Card,
+  CardBody,
+  CardHeader,
+  LinkArrow,
+  textLink,
+} from "@/components/ui";
 import type { MatchPageMatch, MatchViewer } from "./load";
 
 // The two captains can pull their finished game straight from OpenDota —
@@ -155,7 +162,10 @@ function HowToHost({ parts, note }: { parts: string[]; note: string }) {
     >
       <p>
         <b className="text-fg">How to host:</b>{" "}
-        <span className="text-muted">{parts.join(" · ")}</span>
+        <span className="text-muted">{parts.join(" · ")}</span>{" "}
+        <Link href="/rules#hosting" className={textLink("whitespace-nowrap")}>
+          League rules <LinkArrow />
+        </Link>
       </p>
       <p className="mt-1 text-xs text-muted">{note}</p>
     </section>

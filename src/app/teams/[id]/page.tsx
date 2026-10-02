@@ -48,6 +48,8 @@ import { cn } from "@/lib/utils";
 import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { draftSetupOpen } from "@/lib/draft-setup";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { championFinalLine } from "@/lib/champion-moment";
+import { ChampionStrip } from "@/components/champion-moment";
 import { getTeamJersey } from "@/lib/team-jerseys";
 import { TeamJerseyPreview } from "@/components/team-jersey-preview";
 import { TeamIdentityForm } from "@/components/team-identity-form";
@@ -67,6 +69,7 @@ import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { SeriesRecord } from "@/components/series-record";
 import { rosterOrder } from "@/lib/team-roster";
 import { teamHueVar } from "@/lib/team-hues";
+import { teamTint } from "@/lib/team-tint";
 import {
   Avatar,
   Badge,
@@ -391,6 +394,17 @@ export default async function TeamPage({
   ];
   const hasRail =
     teamHeroes.length > 0 || h2h.length > 0 || (showOutlookCard && !!myScenario);
+  // The crowned team's strip under its header: the resolved champion only
+  // (a COMPLETE season, archived ones included), with its final's score.
+  const crowned = championPresentation.championTeamId === team.id;
+  const championFinal = crowned
+    ? championFinalLine(
+        allMatches.find(
+          (m) => m.id === championPresentation.authoritativeFinalId,
+        ),
+        team.id,
+      )
+    : null;
 
   return (
     <div className="space-y-5">
@@ -440,6 +454,12 @@ export default async function TeamPage({
           </span>
         </div>
         <div className="relative overflow-hidden rounded-[var(--radius)] border border-line bg-gradient-to-br from-surface-2/70 via-surface/50 to-surface/30 shadow-sm">
+          {/* A faint wash of the team's colour under everything else. */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            {...teamTint(team.id)}
+          />
           {/* The roster's signature hero, very faint on the right. */}
           {teamHero ? (
             <div
@@ -611,6 +631,18 @@ export default async function TeamPage({
           </details>
         ) : null}
       </div>
+
+      {crowned ? (
+        <ChampionStrip
+          seasonName={team.season.name}
+          final={championFinal}
+          opponentName={
+            championFinal
+              ? (teamName.get(championFinal.opponentTeamId) ?? null)
+              : null
+          }
+        />
+      ) : null}
 
       {team.withdrawn ? (
         <div className="rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm">

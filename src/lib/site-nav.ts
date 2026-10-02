@@ -237,6 +237,10 @@ const NAV_PAGES: readonly NavPage[] = [
     visible: always,
     footer: true,
   },
+  // Series lengths, standings, forfeits and standins in one place, built from
+  // the settings the site enforces (league-rules.ts). Not in the footer,
+  // which keeps at most five links.
+  { href: "/rules", label: "Rules", group: "league", visible: always },
   // Champion history is what makes it a hall of fame; until a season has
   // one, its boards are empty or repeat Leaders.
   {

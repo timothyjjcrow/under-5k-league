@@ -18,6 +18,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
+import { WatchLink } from "@/components/watch-link";
+import type { LeagueStream, WatchWindow } from "@/lib/broadcast";
 import { cn } from "@/lib/utils";
 import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { scheduleFilterTeamId, weekStartsCollapsed } from "@/lib/schedule";
@@ -63,6 +65,9 @@ export type MatchView = {
   isFinalPhase: boolean;
   standins: string[];
   rsvp?: { home: RsvpSide; away: RsvpSide };
+  /** The league stream on a playoff or final match still to be played
+   *  (broadcast.ts); the row's link decides "soon" or "live" in the browser. */
+  watch?: { stream: LeagueStream; window: WatchWindow } | null;
   /** Pending reschedule: proposer + epoch so the tooltip renders viewer-local. */
   reschedulePending: {
     by: string;
@@ -825,6 +830,16 @@ function MatchRow({ match: m }: { match: MatchView }) {
             </span>
             <span aria-hidden>&nbsp;→</span>
           </Link>
+        ) : null}
+        {m.watch ? (
+          // Above the card's stretched link (relative z-10), like Report
+          // result.
+          <WatchLink
+            stream={m.watch.stream}
+            watch={m.watch.window}
+            variant="row"
+            matchLabel={`${m.homeName} vs ${m.awayName}`}
+          />
         ) : null}
         <Link
           href={`/matches/${m.id}`}

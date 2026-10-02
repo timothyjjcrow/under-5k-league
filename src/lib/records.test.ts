@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  RECORD_WATCH_MIN_GAMES,
+  RECORD_WATCH_PER_MATCH,
+  RECORD_WATCH_WITHIN_PERCENT,
   brokenPlayerRecord,
   formatGameDuration,
   formatRecordMark,
   analyzeRecordGames,
   leagueRecords,
   recordGameMetricsValid,
+  recordWatchBook,
+  recordWatchFor,
+  recordWatchLines,
+  recordWatchText,
   toRecordGames,
   type RecordGame,
   type RecordLine,
+  type RecordWatchLine,
   type StoredRecordGame,
 } from "./records";
 
@@ -224,6 +232,194 @@ describe("formatRecordMark", () => {
     expect(formatRecordMark("netWorth", 32100)).toBe("32.1k net worth");
     expect(formatRecordMark("gpm", 812)).toBe("812 GPM");
     expect(formatRecordMark("heroDamage", 45210)).toBe("45,210 hero damage");
+  });
+});
+
+describe("record watch", () => {
+  // The record holder's big night comes first, so a later equal mark is
+  // "level", never a share of the record.
+  const holder = game({
+    matchId: "holder-night",
+    lines: [
+      line({
+        userId: "holder",
+        kills: 20,
+        assists: 30,
+        netWorth: 30000,
+        gpm: 800,
+        lastHits: 300,
+      }),
+    ],
+  });
+  // Quiet games: 5 kills, 10 assists, 15,000 net worth, 400 GPM, 150 last
+  // hits, far outside 15% of every record above.
+  const quiet = (count: number) =>
+    Array.from({ length: count }, (_, i) =>
+      game({ matchId: `quiet-${i}`, lines: [line({ userId: `p${i}` })] }),
+    );
+  /** A book of `total` complete games: the holder's, one per chaser line,
+   *  then quiet games. */
+  const bookWith = (chaser: Partial<RecordLine>[], total = 20) =>
+    recordWatchBook([
+      holder,
+      ...chaser.map((overrides, i) =>
+        game({
+          matchId: `chase-${i}`,
+          lines: [line({ userId: "chaser", ...overrides })],
+        }),
+      ),
+      ...quiet(total - 1 - chaser.length),
+    ]);
+
+  it("waits for 20 games and a best within 15%, at most 3 lines a match", () => {
+    expect(RECORD_WATCH_MIN_GAMES).toBe(20);
+    expect(RECORD_WATCH_WITHIN_PERCENT).toBe(15);
+    expect(RECORD_WATCH_PER_MATCH).toBe(3);
+  });
+
+  it("measures the gap from the player's career best to the record", () => {
+    const book = bookWith([{ kills: 12 }, { kills: 18 }, { kills: 15 }]);
+    expect(recordWatchFor(book, "chaser")).toEqual({
+      userId: "chaser",
+      key: "kills",
+      title: "Most kills",
+      emoji: "🔪",
+      best: 18,
+      record: 20,
+      gap: 2,
+    });
+  });
+
+  it("stays quiet until the book has 20 complete games", () => {
+    expect(recordWatchFor(bookWith([{ kills: 18 }], 19), "chaser")).toBeNull();
+    expect(recordWatchFor(bookWith([{ kills: 18 }], 20), "chaser")).toMatchObject(
+      { key: "kills", gap: 2 },
+    );
+  });
+
+  it("counts a best exactly 15% short, and nothing further", () => {
+    // 17 of 20 is 3 short, exactly 15%; 16 is 4 short, 20%.
+    expect(recordWatchFor(bookWith([{ kills: 17 }]), "chaser")).toMatchObject({
+      gap: 3,
+    });
+    expect(recordWatchFor(bookWith([{ kills: 16 }]), "chaser")).toBeNull();
+  });
+
+  it("never lists a record the player holds, but watches the rest", () => {
+    // In a plain book the holder holds every record: nothing to chase.
+    expect(recordWatchFor(bookWith([]), "holder")).toBeNull();
+    // A rival's 820 GPM takes that record, and the holder's 800 trails it.
+    const book = bookWith([{ gpm: 820 }]);
+    expect(recordWatchFor(book, "holder")).toMatchObject({
+      key: "gpm",
+      best: 800,
+      record: 820,
+      gap: 20,
+    });
+    expect(recordWatchFor(book, "chaser")).toBeNull();
+  });
+
+  it("calls an equalled mark level with the record", () => {
+    const watch = recordWatchFor(bookWith([{ kills: 20 }]), "chaser");
+    expect(watch).toMatchObject({ best: 20, record: 20, gap: 0 });
+    expect(recordWatchText(watch!)).toBe(
+      "Career best 20 kills · level with the record",
+    );
+  });
+
+  it("picks the record closest by share, then book order", () => {
+    // 790 of 800 GPM is 1.25% short; 18 of 20 kills is 10% short, though
+    // fewer units away.
+    expect(
+      recordWatchFor(bookWith([{ kills: 18, gpm: 790 }]), "chaser"),
+    ).toMatchObject({ key: "gpm", gap: 10 });
+    // 18 of 20 kills and 27 of 30 assists are both 10% short: kills first.
+    expect(
+      recordWatchFor(bookWith([{ kills: 18, assists: 27 }]), "chaser"),
+    ).toMatchObject({ key: "kills" });
+  });
+
+  it("has nothing for a player outside the book or a record of zero", () => {
+    expect(recordWatchFor(bookWith([{ kills: 18 }]), "nobody")).toBeNull();
+    // Twenty games without a kill: a record of 0 is no target, and "level
+    // with the record" at 0 kills would be a joke at the player's expense.
+    const blank = Array.from({ length: 20 }, (_, i) =>
+      game({
+        matchId: `blank-${i}`,
+        lines: [
+          line({
+            userId: `p${i}`,
+            kills: 0,
+            assists: 0,
+            netWorth: null,
+            gpm: null,
+            lastHits: null,
+          }),
+        ],
+      }),
+    );
+    expect(recordWatchFor(recordWatchBook(blank), "p1")).toBeNull();
+  });
+
+  describe("recordWatchLines", () => {
+    const book = recordWatchBook([
+      holder,
+      game({ matchId: "a", lines: [line({ userId: "amy", gpm: 790 })] }), // 1.25%
+      game({ matchId: "b", lines: [line({ userId: "bob", kills: 18 })] }), // 10%
+      game({ matchId: "z", lines: [line({ userId: "zed", kills: 19 })] }), // 5%
+      game({ matchId: "c", lines: [line({ userId: "ace", assists: 27 })] }), // 10%
+      game({ matchId: "d", lines: [line({ userId: "abe", kills: 18 })] }), // 10%
+      ...quiet(14),
+    ]);
+    const ids = (userIds: string[], limit?: number) =>
+      recordWatchLines(book, userIds, limit).map((watch) => watch.userId);
+
+    it("lists the closest first, one line a player", () => {
+      expect(ids(["bob", "zed", "amy"])).toEqual(["amy", "zed", "bob"]);
+    });
+
+    it("breaks an equal share on book order, then user id", () => {
+      // All three are 10% short; kills comes before assists in the book,
+      // though "ace" sorts before "bob".
+      expect(ids(["ace", "bob", "abe"])).toEqual(["abe", "bob", "ace"]);
+    });
+
+    it("stops at three lines unless told otherwise", () => {
+      expect(ids(["ace", "bob", "abe", "zed", "amy"])).toEqual([
+        "amy",
+        "zed",
+        "abe",
+      ]);
+      expect(ids(["bob", "amy"], 1)).toEqual(["amy"]);
+    });
+
+    it("skips repeats and players with nothing to chase", () => {
+      expect(ids(["amy", "amy", "p1", "nobody", "holder"])).toEqual(["amy"]);
+    });
+  });
+
+  it("writes the stored marks and the gap, exact and with their unit", () => {
+    const watch = (overrides: Partial<RecordWatchLine>): RecordWatchLine => ({
+      userId: "u",
+      key: "kills",
+      title: "Most kills",
+      emoji: "🔪",
+      best: 18,
+      record: 21,
+      gap: 3,
+      ...overrides,
+    });
+    expect(recordWatchText(watch({}))).toBe(
+      "Career best 18 kills · record 21, 3 short",
+    );
+    expect(
+      recordWatchText(
+        watch({ key: "netWorth", best: 30200, record: 32149, gap: 1949 }),
+      ),
+    ).toBe("Career best 30,200 net worth · record 32,149, 1,949 short");
+    expect(
+      recordWatchText(watch({ key: "gpm", best: 790, record: 800, gap: 10 })),
+    ).toBe("Career best 790 GPM · record 800, 10 short");
   });
 });
 

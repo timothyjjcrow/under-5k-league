@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  WIN_STREAK_MIN,
+  compareSeriesOrder,
   formByTeam,
   headToHead,
   recentForm,
@@ -7,7 +9,11 @@ import {
   resultFor,
   seriesRecordSpoken,
   seriesRecordText,
+  seriesWinStreak,
+  standingsForm,
+  standingsStreaksShown,
   teamFixtureOrder,
+  type SeriesOrderMatch,
   type TeamMatchLike,
 } from "./team-matches";
 
@@ -189,5 +195,129 @@ describe("teamFixtureOrder", () => {
       fixture("c", "COMPLETED", 2, null),
     ]);
     expect(ordered.map((m) => m.id)).toEqual(["b", "c", "a"]);
+  });
+});
+
+describe("win streaks", () => {
+  const night = (week: number, hour = 19) =>
+    new Date(Date.UTC(2026, 8, week * 7, hour));
+  /** A series in week `week`; `winner` null for a draw. */
+  const played = (
+    id: string,
+    week: number,
+    home: string,
+    away: string,
+    winner: string | null,
+    extra: Partial<SeriesOrderMatch> = {},
+  ): SeriesOrderMatch => ({
+    id,
+    week,
+    scheduledAt: night(week),
+    homeTeamId: home,
+    awayTeamId: away,
+    status: "COMPLETED",
+    winnerTeamId: winner,
+    homeScore: winner === home ? 2 : 1,
+    awayScore: winner === away ? 2 : 1,
+    ...extra,
+  });
+
+  it("shows from two series in a row", () => {
+    expect(WIN_STREAK_MIN).toBe(2);
+  });
+
+  it("counts consecutive series wins back from the latest result", () => {
+    const matches = [
+      played("1", 1, A, B, B),
+      played("2", 2, A, C, A),
+      played("3", 3, B, A, A),
+      played("4", 4, A, C, A),
+    ];
+    expect(seriesWinStreak(A, matches)).toBe(3);
+    expect(seriesWinStreak(B, matches)).toBe(0);
+    expect(seriesWinStreak(C, matches)).toBe(0);
+  });
+
+  it("ends at a draw as surely as at a loss", () => {
+    const matches = [
+      played("1", 1, A, B, A),
+      played("2", 2, A, C, A),
+      played("3", 3, A, B, null),
+      played("4", 4, C, A, A),
+    ];
+    expect(seriesWinStreak(A, matches)).toBe(1);
+  });
+
+  it("skips series still being played, counting every phase", () => {
+    const matches = [
+      played("1", 1, A, B, A),
+      played("2", 6, A, C, A, { status: "LIVE", winnerTeamId: null }),
+      played("3", 5, A, B, A),
+    ].sort(compareSeriesOrder);
+    expect(seriesWinStreak(A, matches)).toBe(2);
+  });
+
+  it("orders one week's two series by kickoff, then id, never query order", () => {
+    // A tiebreaker knockout: A loses the 18:00 game, wins the 21:00 one.
+    const early = played("tb-b", 3, A, B, B, { scheduledAt: night(3, 18) });
+    const late = played("tb-a", 3, A, C, A, { scheduledAt: night(3, 21) });
+    const before = played("w2", 2, A, C, A);
+    for (const query of [
+      [before, early, late],
+      [late, early, before],
+    ]) {
+      const { form, streaks } = standingsForm([A], query, { streaks: true });
+      expect(form.get(A)).toEqual(["W", "L", "W"]);
+      expect(streaks?.get(A)).toBe(1);
+    }
+    // Same kickoff (or none): the id decides, so both pages agree.
+    const untimed = [
+      played("x2", 3, A, B, A, { scheduledAt: null }),
+      played("x1", 3, A, C, null, { scheduledAt: null }),
+    ];
+    expect(
+      standingsForm([A], untimed, { streaks: true }).form.get(A),
+    ).toEqual(["W", "D"]);
+    // An untimed series sorts after a timed one in its week.
+    expect(
+      compareSeriesOrder(
+        played("p", 3, A, B, A, { scheduledAt: null }),
+        played("q", 3, A, C, A),
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it("agrees with the Last 5 strip it sits beside", () => {
+    const matches = [
+      played("1", 1, A, B, A),
+      played("2", 2, C, A, A),
+      played("3", 3, A, B, B),
+      played("4", 4, A, C, A),
+      played("5", 5, B, A, A),
+      played("6", 6, A, C, A),
+    ];
+    const { form, streaks } = standingsForm([A, B, C], matches, {
+      streaks: true,
+    });
+    for (const id of [A, B, C]) {
+      const strip = form.get(id)!;
+      const leadingWins = strip.findIndex((r) => r !== "W");
+      expect(streaks?.get(id)).toBe(
+        leadingWins === -1 ? strip.length : leadingWins,
+      );
+    }
+    expect(streaks?.get(A)).toBe(3);
+  });
+
+  it("leaves streaks out unless the table is live", () => {
+    const matches = [played("1", 1, A, B, A), played("2", 2, A, C, A)];
+    expect(standingsForm([A], matches, { streaks: false }).streaks).toBe(
+      undefined,
+    );
+    expect(standingsStreaksShown({ isActive: true, status: "REGULAR_SEASON" })).toBe(true);
+    expect(standingsStreaksShown({ isActive: true, status: "PLAYOFFS" })).toBe(true);
+    expect(standingsStreaksShown({ isActive: true, status: "COMPLETE" })).toBe(false);
+    expect(standingsStreaksShown({ isActive: false, status: "REGULAR_SEASON" })).toBe(false);
+    expect(standingsStreaksShown({ isActive: true, status: "DRAFT" })).toBe(false);
   });
 });

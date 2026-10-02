@@ -1,25 +1,31 @@
 import Link from "next/link";
 import { ContextBackLink } from "@/components/context-back-link";
+import { PlayerSeasonCard } from "@/components/player-season-card";
 import { ShareButton } from "@/components/share-button";
 import { DiscordTag } from "@/components/discord-tag";
 import {
   Avatar,
   Badge,
   LinkArrow,
-  RankMedal,
   RoleBadges,
   textLink,
 } from "@/components/ui";
 import { heroPortrait, type Hero } from "@/lib/heroes";
+import {
+  championTitles,
+  playerCardHasContent,
+  profileCardRoleText,
+  type PlayerCardFacts,
+} from "@/lib/player-card";
 import { pubTitle, pubToken } from "@/lib/player-pool";
 import type { PoolPub, PubActivity } from "@/lib/pub-stats";
 import { roleLabels } from "@/lib/roles";
 
 /**
  * A joined player's profile header: the back link, then the banner with their
- * name, badges, signup and pub facts, outbound links, members-only contact,
- * team and their own About text. Every fact arrives precomputed; the page
- * decides what is shown and to whom.
+ * name, badges and titles, signup and pub facts, outbound links,
+ * members-only contact, their season card and their own About text. Every
+ * fact arrives precomputed; the page decides what is shown and to whom.
  */
 export function ProfileHeader({
   user,
@@ -32,14 +38,13 @@ export function ProfileHeader({
   isStandin,
   wantsCaptainNow,
   subtitle,
-  subtitleIsPastSeason,
+  editSignupLink,
   signup,
   pubScout,
   pubLast,
   nowMs,
   accountId,
-  team,
-  draftPrice,
+  card,
   signupAbout,
 }: {
   user: {
@@ -47,7 +52,6 @@ export function ProfileHeader({
     name: string;
     avatar: string | null;
     role: string;
-    rankTier: number | null;
     profileUrl: string | null;
     discordName: string;
     discordId: string | null;
@@ -67,24 +71,24 @@ export function ProfileHeader({
   isCaptain: boolean;
   isStandin: boolean;
   wantsCaptainNow: boolean;
+  /** A season line under the name, for when their card names no season. */
   subtitle: string | null;
-  /** The subtitle is their latest past league line, not the current season's
-   *  (they aren't in it), so it carries no "Edit your signup" link. */
-  subtitleIsPastSeason: boolean;
+  /** Their own profile while the current season is theirs to sign up for or
+   *  edit: the "Edit your signup" link. Never under a past season. */
+  editSignupLink: boolean;
   /** Their ACTIVE signup this season, if any. */
-  signup: { mmr: number; roles: string } | null;
+  signup: { roles: string } | null;
   pubScout: PoolPub | null;
   pubLast: PubActivity | null;
   nowMs: number;
   accountId: number | null;
-  /** Their team this season, if drafted. */
-  team: { id: string; name: string } | null;
-  /** What a drafted non-captain went for; null hides the line. */
-  draftPrice: number | null;
+  /** playerCardFacts: their season card, and the titles beside their name. */
+  card: PlayerCardFacts;
   /** What they wrote about themselves on the signup. */
   signupAbout: string | null;
 }) {
   const roles = roleLabels(signup?.roles);
+  const titles = championTitles(card.titles);
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -156,20 +160,35 @@ export function ProfileHeader({
               {wantsCaptainNow ? (
                 <Badge tone="neutral">Wants to captain</Badge>
               ) : null}
-              <RankMedal rankTier={user.rankTier} size={34} showLabel />
+              {/* Every title they won, newest first: three, then a count.
+                  A long season name wraps inside its badge. */}
+              {titles.shown.map((title, i) => (
+                <Badge
+                  // Two seasons may share a name.
+                  key={`${i}-${title}`}
+                  tone="accent"
+                  className="max-w-full [overflow-wrap:anywhere]"
+                >
+                  <span aria-hidden>🏆</span> {title}
+                </Badge>
+              ))}
+              {titles.more.length > 0 ? (
+                <Badge tone="accent" title={titles.more.join(", ")}>
+                  +{titles.more.length} more
+                  <span className="sr-only">
+                    {` titles: ${titles.more.join(", ")}`}
+                  </span>
+                </Badge>
+              ) : null}
             </div>
-            {subtitle ? (
+            {subtitle || editSignupLink ? (
               <div className="mt-1 text-sm text-muted">
                 {subtitle}
-                {/* The signup link belongs to the current season's line,
-                    not to a past season's. */}
-                {isSelf && !subtitleIsPastSeason ? (
-                  <>
-                    {" · "}
-                    <Link href="/me" className={textLink()}>
-                      Edit your signup →
-                    </Link>
-                  </>
+                {subtitle && editSignupLink ? " · " : null}
+                {editSignupLink ? (
+                  <Link href="/me" className={textLink()}>
+                    Edit your signup <LinkArrow />
+                  </Link>
                 ) : null}
               </div>
             ) : null}
@@ -181,12 +200,7 @@ export function ProfileHeader({
                 OpenDota. Same rule player-pool.tsx already states: hit boxes
                 may touch, never overlap. */}
             <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted">
-              {signup ? (
-                <span>
-                  <span className="font-semibold text-fg">{signup.mmr}</span>{" "}
-                  MMR
-                </span>
-              ) : null}
+              {/* Their MMR and medal are on their season card. */}
               {roles.length > 0 ? <RoleBadges roles={signup?.roles} /> : null}
               {pubScout ? (
                 <span
@@ -285,36 +299,34 @@ export function ProfileHeader({
               </p>
             ) : null}
           </div>
-          {team ? (
-            // basis-full below sm: this card and the name column are flex
+          {playerCardHasContent(card) ? (
+            // basis-full below lg: this card and the name column are flex
             // siblings, and the column carries `min-w-0` (it must, or a long
             // name widens the page). min-w-0 sets its min-content
             // contribution to ZERO, so the row can never overflow and
-            // `flex-wrap` NEVER FIRES — the card kept its full 153px and the
-            // name column absorbed the whole shortfall. Measured at 375px it
-            // was 12px wide, and `[overflow-wrap:anywhere]` on the h1 then
-            // rendered the player's name ONE CHARACTER PER LINE: a 504px-tall
-            // h1 in a 908px hero card, with Dotabuff/OpenDota squeezed to
-            // 57px and wrapped onto two lines ~940px down. Broken at every
-            // phone width, healthy by 640px — which is why it never showed up
-            // on a desktop. Taking the card out of the line is the fix that
-            // cannot backfire: the floor has to go on the item that is
-            // ALLOWED to shrink, and a min-width on the name column instead
-            // overflows the page below ~320px.
-            <Link
-              href={`/teams/${team.id}`}
-              className="basis-full rounded-lg border border-line bg-surface/60 px-4 py-2 text-sm backdrop-blur transition-colors hover:border-muted/60 sm:basis-auto"
-            >
-              <div className="text-xs uppercase tracking-wide text-muted">
-                Team
-              </div>
-              <div className="font-medium">{team.name}</div>
-              {draftPrice != null ? (
-                <div className="text-xs text-muted">
-                  Drafted for ${draftPrice}
-                </div>
-              ) : null}
-            </Link>
+            // `flex-wrap` NEVER FIRES — the card would keep its full width
+            // and the name column absorb the whole shortfall. The team box
+            // that sat here first shipped that way: measured at 375px the
+            // name column was 12px wide, and `[overflow-wrap:anywhere]` on
+            // the h1 rendered the player's name ONE CHARACTER PER LINE.
+            // Taking the card out of the line is the fix that cannot
+            // backfire: the floor has to go on the item that is ALLOWED to
+            // shrink, and a min-width on the name column instead overflows
+            // the page below ~320px. The card's own max-width sits INSIDE
+            // this wrapper: on the flex item it would clamp the 100% basis
+            // the row wraps on, and a tablet would fit the card beside a
+            // name column squeezed to nothing. From lg the row has room for
+            // the card's 20rem beside a name column of ~29rem.
+            <div className="min-w-0 basis-full lg:w-80 lg:basis-auto">
+              <PlayerSeasonCard
+                facts={card}
+                roleText={profileCardRoleText(card, {
+                  captain: isCaptain,
+                  standin: isStandin,
+                })}
+                className="max-w-md"
+              />
+            </div>
           ) : null}
           {signupAbout ? (
             // Their own words, once, under the header. Full width so a

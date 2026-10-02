@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   capNames,
+  fitPictureFacts,
   hueHex,
   matchCardStatus,
   ogImageUrlAllowed,
+  playerPictureText,
   sniffImageType,
 } from "./og-image";
+import type { PlayerCardFacts } from "./player-card";
 
 describe("ogImageUrlAllowed", () => {
   it("accepts Imgur crests and Steam avatars over HTTPS", () => {
@@ -148,5 +151,129 @@ describe("hueHex", () => {
     expect(hueHex(0, 0, 50)).toBe("#808080");
     // hsl(210 70% 52%), the tale of the tape's bar colour: rgb(47 133 218).
     expect(hueHex(210, 70, 52)).toBe("#2f85da");
+  });
+});
+
+function card(overrides: Partial<PlayerCardFacts> = {}): PlayerCardFacts {
+  return {
+    season: { id: "s9", name: "Season 9", current: false },
+    role: { kind: "drafted", price: 47 },
+    team: { id: "t1", name: "Radiant Raccoons", logoUrl: null },
+    stoodInFor: null,
+    rankTier: 64,
+    mmr: 4700,
+    heroes: [
+      { heroId: 2, name: "Axe", pubs: false },
+      { heroId: 74, name: "Invoker", pubs: true },
+    ],
+    grade: { overall: "A", strength: "Farming" },
+    titles: [{ seasonId: "s9", seasonName: "Season 9" }],
+    mvps: 3,
+    records: 1,
+    ...overrides,
+  };
+}
+
+describe("playerPictureText", () => {
+  it("says the season and how they took part, always (no name row here)", () => {
+    expect(playerPictureText(card()).seasonLine).toBe(
+      "Season 9 · Drafted for $47",
+    );
+    expect(
+      playerPictureText(card({ role: { kind: "captain" } })).seasonLine,
+    ).toBe("Season 9 · Captain");
+    expect(
+      playerPictureText(
+        card({ role: { kind: "standin" }, team: null, stoodInFor: "Dire Straits" }),
+      ).seasonLine,
+    ).toBe("Season 9 · Stood in for Dire Straits");
+    expect(playerPictureText(card({ role: null })).seasonLine).toBe("Season 9");
+    expect(playerPictureText(card({ season: null })).seasonLine).toBeNull();
+  });
+
+  it("shows the newest title and counts the rest", () => {
+    const titles = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        seasonId: `s${9 - i}`,
+        seasonName: `Season ${9 - i}`,
+      }));
+    expect(playerPictureText(card({ titles: [] })).titles).toEqual([]);
+    expect(playerPictureText(card({ titles: titles(2) })).titles).toEqual([
+      "Season 9 champion",
+      "+1 more title",
+    ]);
+    expect(playerPictureText(card({ titles: titles(3) })).titles).toEqual([
+      "Season 9 champion",
+      "+2 more titles",
+    ]);
+  });
+
+  it("lists the grade, the heroes (pubs marked) and the honors, never the MMR", () => {
+    const text = playerPictureText(card());
+    expect(text.facts).toEqual([
+      "Career grade A",
+      "Axe",
+      "Invoker · pubs",
+      "3 Match MVPs",
+      "1 league record",
+    ]);
+    expect(JSON.stringify(text)).not.toContain("4700");
+    expect(
+      playerPictureText(card({ grade: null, heroes: [], mvps: 0, records: 0 }))
+        .facts,
+    ).toEqual([]);
+  });
+});
+
+describe("fitPictureFacts", () => {
+  const crowded = {
+    titles: ["Season 12 (Winter Invitational) champion", "+2 more titles"],
+    medal: "Immortal",
+    facts: [
+      "Career grade S",
+      "Keeper of the Light",
+      "Outworld Destroyer",
+      "Nature's Prophet · pubs",
+      "12 Match MVPs",
+      "3 league records",
+    ],
+  };
+
+  it("keeps a typical card whole", () => {
+    const facts = playerPictureText(card()).facts;
+    expect(
+      fitPictureFacts({
+        name: "Raccoon King",
+        hasTeam: true,
+        titles: ["Season 9 champion"],
+        medal: "Ancient 4",
+        facts,
+      }),
+    ).toEqual(facts);
+  });
+
+  it("drops from the end (honors first) when a long name leaves less room", () => {
+    const long = "An Extremely Long Steam Persona Name";
+    expect(fitPictureFacts({ name: long, hasTeam: true, ...crowded })).toEqual([
+      "Career grade S",
+      "Keeper of the Light",
+      "Outworld Destroyer",
+      "Nature's Prophet · pubs",
+    ]);
+    // Without a crest row there is room for every chip again.
+    expect(fitPictureFacts({ name: long, hasTeam: false, ...crowded })).toEqual(
+      crowded.facts,
+    );
+    // A short name has room too.
+    expect(fitPictureFacts({ name: "Zed", hasTeam: true, ...crowded })).toEqual(
+      crowded.facts,
+    );
+  });
+
+  it("never drops a title or the medal, only facts", () => {
+    const titles = Array.from({ length: 12 }, (_, i) => `Season ${i} champion`);
+    expect(
+      fitPictureFacts({ ...crowded, name: "Zed", hasTeam: true, titles }),
+    ).toEqual([]);
   });
 });

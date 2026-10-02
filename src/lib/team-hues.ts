@@ -9,6 +9,8 @@
 // <TeamCrest> on every page picks it up without being passed anything. A team
 // the stylesheet doesn't know yet keeps its old hash hue as the fallback.
 
+import { contrastRatio, hexRgb, hslRgb } from "./contrast";
+
 export type HueTeam = {
   id: string;
   seasonId: string;
@@ -56,14 +58,18 @@ export function seasonTeamHues(teams: readonly HueTeam[]): Map<string, number> {
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
 /**
- * One CSS rule per team setting `--team-hue` on the elements that carry its
- * id in `data-team-hue` (crests and team-tinted glows).
+ * One CSS rule per team setting `--team-hue`, and the ink its crest's
+ * initials wear on that hue (`--team-ink`), on the elements that carry its id
+ * in `data-team-hue` (crests, and the team-coloured glows, washes, stripes
+ * and bars).
  */
 export function teamHueStyleSheet(hues: Map<string, number>): string {
   const rules: string[] = [];
   for (const [id, hue] of hues) {
     if (!SAFE_ID.test(id) || !Number.isInteger(hue)) continue;
-    rules.push(`[${TEAM_HUE_ATTRIBUTE}="${id}"]{--team-hue:${hue}}`);
+    rules.push(
+      `[${TEAM_HUE_ATTRIBUTE}="${id}"]{--team-hue:${hue};--team-ink:${crestInk(hue)}}`,
+    );
   }
   return rules.join("");
 }
@@ -71,4 +77,27 @@ export function teamHueStyleSheet(hues: Map<string, number>): string {
 /** A CSS hue for a team: its season hue when published, else the hash hue. */
 export function teamHueVar(teamId: string): string {
   return `var(--team-hue, ${hashHue(teamId)})`;
+}
+
+/** The inks a generated crest's initials can wear. Dark is the page's own
+ *  background (`--color-bg`; team-hues.test.ts reads it from globals.css). */
+const CREST_INK = { light: "#ffffff", dark: "#0b0f17" } as const;
+
+/**
+ * The ink a generated crest's initials read best in on this hue. The crest is
+ * a gradient from `hsl(h 62% 46%)` to `hsl(h 62% 28%)` with the initials over
+ * its middle. White there fell to 2.6:1 on yellow; the yellows through the
+ * cyans take the dark ink instead, so the worst hue is now 3.8:1 either way.
+ */
+export function crestInk(hue: number): string {
+  const middle = hslRgb(hue, 62, 37);
+  return contrastRatio(hexRgb(CREST_INK.dark), middle) >
+    contrastRatio(hexRgb(CREST_INK.light), middle)
+    ? CREST_INK.dark
+    : CREST_INK.light;
+}
+
+/** A team crest's ink: the published one, else the hash hue's. */
+export function teamInkVar(teamId: string): string {
+  return `var(--team-ink, ${crestInk(hashHue(teamId))})`;
 }

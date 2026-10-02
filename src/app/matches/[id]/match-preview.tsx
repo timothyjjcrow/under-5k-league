@@ -18,6 +18,7 @@ import {
   postAuctionWorkOpen,
 } from "@/lib/league-lifecycle";
 import { pickemControlFor } from "@/lib/pickem";
+import { recordWatchLines, type RecordWatchBook } from "@/lib/records";
 import { textLink } from "@/components/ui";
 import {
   loadDraftStatus,
@@ -26,6 +27,7 @@ import {
   type MatchViewer,
 } from "./load";
 import { MatchupCard, type MatchupSide } from "./matchup-card";
+import { RecordWatch } from "./record-watch";
 import { ScoutingReport } from "./scouting-report";
 import { StakesBanner } from "./stakes-banner";
 import { TaleOfTheTape } from "./tale-of-the-tape";
@@ -36,11 +38,14 @@ export async function MatchPreview({
   match,
   viewer,
   roundLabel,
+  recordBook = null,
 }: {
   match: MatchPageMatch;
   viewer: MatchViewer;
   /** matchRoundLabel of this fixture, for the pick'em tray's legend. */
   roundLabel: string;
+  /** The record book (loadRecordWatchBook), read in the page's body. */
+  recordBook?: RecordWatchBook | null;
 }) {
   const canSeeNamedAvailability = canViewNamedMatchAvailability(
     viewer,
@@ -136,6 +141,15 @@ export async function MatchPreview({
   const activeNightRoster = new Set(
     [match.homeTeamId, match.awayTeamId].flatMap(nightRoster),
   );
+  // Record watch for the players expected tonight: standins in, the
+  // players they cover out.
+  const recordWatch = recordBook
+    ? recordWatchLines(recordBook, [...activeNightRoster])
+    : [];
+  const recordWatchNames = new Map([
+    ...members.map((m) => [m.userId, m.user.name] as const),
+    ...match.standins.map((s) => [s.standin.id, s.standin.name] as const),
+  ]);
   // Async server component: this captures request time once for the stale-
   // fixture guard; it is not client render state.
   // eslint-disable-next-line react-hooks/purity
@@ -291,6 +305,8 @@ export async function MatchPreview({
           away: rosterMmrs(match.awayTeamId),
         }}
       />
+
+      <RecordWatch lines={recordWatch} names={recordWatchNames} />
 
       {/* Full width, one above the other: each card is split home | away
           inside, and their heights follow the data (check-ins, how many

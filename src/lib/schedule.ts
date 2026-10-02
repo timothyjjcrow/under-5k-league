@@ -144,6 +144,19 @@ export function rescheduleDeadline(options: {
   return planned.getTime() > options.nowMs ? planned : null;
 }
 
+// Sanity bounds for a captain-proposed time: a datetime-local typo (year 0002
+// from typing "2", 20268 from a stray digit) or a past date would otherwise
+// sail straight into Match.scheduledAt on acceptance. Enforced by
+// reschedule-service and quoted by /rules, so the two can't disagree.
+export const RESCHEDULE_PAST_GRACE_MS = 60 * 60 * 1000; // "tonight, an hour ago" is fine
+export const RESCHEDULE_MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000; // no league pauses half a year
+
+// A team can't play two league fixtures inside this window. Same span as the
+// standin and scrim clash rules: a Bo3 plus warm-up runs about three hours.
+// Enforced by `findFixtureConflict` (fixture-conflict.ts) and quoted by
+// /rules; it lives here because that module reads the database.
+export const FIXTURE_CONFLICT_WINDOW_MS = 4 * 60 * 60 * 1000;
+
 /**
  * Generate a round-robin: every team plays every other once (or twice if
  * `doubleRound`). Returns an array of rounds (weeks); each round is a list of

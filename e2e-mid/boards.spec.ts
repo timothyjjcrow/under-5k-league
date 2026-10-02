@@ -832,6 +832,89 @@ test("a player profile hero survives a phone", async ({ page }) => {
   assertNoErrors();
 });
 
+// The season card: the trading-card panel in a profile's header, and the
+// picture the profile's link unfurls into. The fixture's last team carries
+// its longest name ("The Couriers of Catastrophe With Very Long Name"), the
+// widest thing a card holds, and its drafted players were bought for more
+// than $0, so the card has a role to name.
+test("a player's season card names their season and team, and is their link picture", async ({
+  page,
+}) => {
+  // The picture compiles its route on first hit in the dev server.
+  test.setTimeout(90_000);
+  const assertNoErrors = trackPageErrors(page);
+  const member = await db.teamMember.findFirstOrThrow({
+    where: { season: { isActive: true }, isCaptain: false },
+    orderBy: [{ team: { draftOrder: "desc" } }, { userId: "asc" }],
+    include: { user: true, team: true, season: true },
+  });
+  const profile = `/players/${member.userId}`;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(profile);
+  const name = page.locator("#main h1").first();
+  await expect(name).toHaveText(member.user.name);
+  const card = page.getByTestId("player-season-card");
+  await expect(card).toBeVisible();
+  // The season and how they joined it (their tenure: this fixture's
+  // rosters are captured rows, so "Drafted for" their price).
+  await expect(card).toContainText(
+    member.price > 0
+      ? `${member.season.name} · Drafted for $${member.price}`
+      : member.season.name,
+  );
+  // Their team that season, one tap away, in its colour.
+  const team = card.locator(`a[href="/teams/${member.teamId}"]`);
+  await expect(team).toBeVisible();
+  await expect(team).toContainText(member.team.name);
+  await expect(
+    card.locator(`[data-team-hue="${member.teamId}"]`).first(),
+  ).toBeAttached();
+  // They have league games, so the card shows what they played.
+  await expect(card.getByText("Career heroes", { exact: true })).toBeVisible();
+  const heroes = await card.getByRole("listitem").count();
+  expect(heroes).toBeGreaterThanOrEqual(1);
+  expect(heroes).toBeLessThanOrEqual(3);
+  // No signup in this fixture: no MMR on the card.
+  await expect(card.getByText("MMR", { exact: true })).toHaveCount(0);
+
+  // Below lg the card takes its own line under the name, never a slice of
+  // the name's row.
+  const nameBox = (await name.boundingBox())!;
+  const cardBox = (await card.boundingBox())!;
+  expect(cardBox.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height);
+  await expectNoHorizontalOverflow(page, "/players/[id] season card");
+  await expectNoSqueezedText(page, "/players/[id] season card");
+  await expectTapTargets(page, "/players/[id] season card");
+
+  // From lg it sits in the header's right slot, beside the name.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const wideName = (await name.boundingBox())!;
+  const wideCard = (await card.boundingBox())!;
+  expect(wideCard.x).toBeGreaterThanOrEqual(wideName.x + wideName.width);
+  expect(wideCard.y).toBeLessThan(wideName.y + wideName.height);
+  await expectNoHorizontalOverflow(page, "/players/[id] season card, desktop");
+
+  // The same card is the link's picture, on Discord and on X: drawn for this
+  // player, not the league's fallback (a 307 to the league's image, which
+  // maxRedirects: 0 refuses to follow).
+  for (const [selector, route] of [
+    ['meta[property="og:image"]', "opengraph-image"],
+    ['meta[name="twitter:image"]', "twitter-image"],
+  ] as const) {
+    const url = new URL((await page.locator(selector).getAttribute("content"))!);
+    expect(url.pathname).toBe(`${profile}/${route}`);
+    const path = url.pathname + url.search;
+    const picture = await page.request.get(path, { maxRedirects: 0 });
+    expect(picture.status(), path).toBe(200);
+    expect(picture.headers()["content-type"], path).toBe("image/png");
+    expect(picture.headers()["cache-control"], path).toMatch(/max-age=300/);
+    expect([...(await picture.body()).subarray(0, 4)], path).toEqual([
+      0x89, 0x50, 0x4e, 0x47,
+    ]);
+  }
+  assertNoErrors();
+});
+
 // The pages carrying the most links per pixel — leaderboards, the pool, the
 // cross-table — are where a 16px text link hides most easily.
 for (const [label, path] of [

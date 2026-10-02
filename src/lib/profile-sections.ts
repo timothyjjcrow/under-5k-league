@@ -14,6 +14,9 @@ export type ProfileData = {
   heroes: boolean;
   /** An all-time league record they hold. */
   records: boolean;
+  /** A league record within reach (`recordWatchFor`): the records card
+   *  shows for it even when they hold none. */
+  recordWatch: boolean;
   achievements: boolean;
   /** A season they played in, were rostered in, or stood in for. */
   seasons: boolean;
@@ -42,7 +45,8 @@ type ProfileSections = {
 
 export function profileSections(data: ProfileData): ProfileSections {
   const performance = data.economy || data.gradedGames;
-  const profile = data.heroes || data.records;
+  const records = data.records || data.recordWatch;
+  const profile = data.heroes || records;
   const inhouseInOverview = !data.leagueGames && data.inhouse;
   const inhouseInCareer = data.inhouse && !inhouseInOverview;
   const career = data.achievements || data.seasons || inhouseInCareer;
@@ -53,7 +57,7 @@ export function profileSections(data: ProfileData): ProfileSections {
     reportCard: data.gradedGames,
     profile,
     heroes: data.heroes,
-    records: data.records,
+    records,
     inhouseInOverview,
     inhouseInCareer,
     career,
@@ -66,7 +70,7 @@ export function profileSections(data: ProfileData): ProfileSections {
       ...(data.heroes ? [{ id: "player-heroes", label: "Heroes" }] : []),
       // Named for the card it jumps to. "About" is the player's own words
       // under the header, so a tab called that must not land on records.
-      ...(data.records ? [{ id: "player-records", label: "Records" }] : []),
+      ...(records ? [{ id: "player-records", label: "Records" }] : []),
       ...(career ? [{ id: "player-career", label: "Career" }] : []),
     ],
   };

@@ -1,15 +1,19 @@
 import Link from "next/link";
+import { matchWatchWindow } from "@/lib/broadcast";
 import { prisma } from "@/lib/prisma";
+import { getLeagueStream } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchResultsOpen } from "@/lib/league-lifecycle";
 import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
 import { teamHueVar } from "@/lib/team-hues";
+import { teamTint } from "@/lib/team-tint";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
+import { WatchLink } from "@/components/watch-link";
 import {
   Badge,
   Card,
@@ -76,9 +80,25 @@ export async function MatchScoreboard({
     !resultPending
       ? match.scheduledAt.getTime()
       : null;
+  // The league stream on a playoff or final match still to be played:
+  // where it will be streamed, then "Live now" (broadcast.ts).
+  const watch = matchWatchWindow(match, match.season.isActive);
+  const stream = watch ? await getLeagueStream() : null;
 
   return (
     <Card className="relative overflow-hidden">
+      {/* Each half washed faintly in its team's colour, clearing before the
+          score in the middle. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/2"
+        {...teamTint(match.homeTeamId, "to right")}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-1/2"
+        {...teamTint(match.awayTeamId, "to left")}
+      />
       <div
         aria-hidden
         className="hero-grid pointer-events-none absolute inset-0 opacity-40"
@@ -222,6 +242,7 @@ export async function MatchScoreboard({
           ) : (
             <span>Kickoff time TBD</span>
           )}
+          {watch && stream ? <WatchLink stream={stream} watch={watch} /> : null}
           {pickVerdict ? (
             <PickemTray
               control={pickVerdict}

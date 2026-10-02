@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { sourceFile } from "../../test/support/source-files";
+import { contrastRatio, hexRgb, hslRgb } from "./contrast";
 import {
+  crestInk,
   hashHue,
   seasonTeamHues,
   teamHueStyleSheet,
   teamHueVar,
+  teamInkVar,
   type HueTeam,
 } from "./team-hues";
 
@@ -94,8 +98,8 @@ describe("teamHueStyleSheet", () => {
       ]),
     );
     expect(css).toBe(
-      '[data-team-hue="cmteam1"]{--team-hue:12}' +
-        '[data-team-hue="cm_team-2"]{--team-hue:300}',
+      '[data-team-hue="cmteam1"]{--team-hue:12;--team-ink:#ffffff}' +
+        '[data-team-hue="cm_team-2"]{--team-hue:300;--team-ink:#ffffff}',
     );
   });
 
@@ -108,7 +112,7 @@ describe("teamHueStyleSheet", () => {
         ["fine", 40],
       ]),
     );
-    expect(css).toBe('[data-team-hue="fine"]{--team-hue:40}');
+    expect(css).toBe('[data-team-hue="fine"]{--team-hue:40;--team-ink:#ffffff}');
   });
 });
 
@@ -116,6 +120,53 @@ describe("teamHueVar", () => {
   it("reads the published hue and falls back to the hash hue", () => {
     expect(teamHueVar("cmteam1")).toBe(
       `var(--team-hue, ${hashHue("cmteam1")})`,
+    );
+  });
+});
+
+describe("crestInk", () => {
+  const HUES = Array.from({ length: 360 }, (_, hue) => hue);
+  // The crest runs from hsl(h 62% 46%) to hsl(h 62% 28%) corner to corner;
+  // the initials cover roughly the middle half of that diagonal.
+  const UNDER_THE_INITIALS = [33, 35, 37, 39, 41];
+  const worstOn = (hue: number, ink: string) =>
+    Math.min(
+      ...UNDER_THE_INITIALS.map((l) =>
+        contrastRatio(hexRgb(ink), hslRgb(hue, 62, l)),
+      ),
+    );
+
+  it("keeps the initials at 3:1 or better on every hue", () => {
+    // White alone fell to about 2.6:1 on the yellows.
+    const failing = HUES.filter((hue) => worstOn(hue, crestInk(hue)) < 3).map(
+      (hue) => `${hue}: ${worstOn(hue, crestInk(hue)).toFixed(2)}:1`,
+    );
+    expect(failing).toEqual([]);
+    expect(worstOn(60, "#ffffff")).toBeLessThan(3);
+  });
+
+  it("only ever picks white or the page's own background", () => {
+    const bg = /--color-bg:\s*(#[0-9a-f]{6})\s*;/i.exec(
+      sourceFile("src/app/globals.css").text,
+    )![1];
+    expect(new Set(HUES.map(crestInk))).toEqual(new Set(["#ffffff", bg]));
+  });
+
+  it("keeps white for the blues, purples and reds it already read on", () => {
+    for (const hue of [0, 20, 220, 240, 270, 300, 340]) {
+      expect(crestInk(hue), String(hue)).toBe("#ffffff");
+    }
+    for (const hue of [50, 60, 90, 120, 160]) {
+      expect(crestInk(hue), String(hue)).not.toBe("#ffffff");
+    }
+  });
+
+  it("publishes each team's ink beside its hue, and falls back with the hue", () => {
+    expect(teamHueStyleSheet(new Map([["cmyellow", 60]]))).toBe(
+      `[data-team-hue="cmyellow"]{--team-hue:60;--team-ink:${crestInk(60)}}`,
+    );
+    expect(teamInkVar("cmteam1")).toBe(
+      `var(--team-ink, ${crestInk(hashHue("cmteam1"))})`,
     );
   });
 });

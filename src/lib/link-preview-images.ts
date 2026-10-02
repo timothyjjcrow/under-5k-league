@@ -1,22 +1,25 @@
 // What each link preview picture shows (the opengraph-image routes beside the
 // match, team, player and season pages), read from the database. Every rule
 // here is a tested pure function shared with the pages or the preview text
-// (og-image.ts, link-preview.ts, playoff-status.ts, standings); the drawing is
-// src/components/og-card.tsx. Crests and avatars come through fetchOgImage's
-// allowlist, and one that can't be fetched is drawn as initials.
+// (og-image.ts, link-preview.ts, player-card.ts, playoff-status.ts,
+// standings); the drawing is src/components/og-card.tsx. Crests and avatars
+// come through fetchOgImage's allowlist, and one that can't be fetched is
+// drawn as initials.
 
 import { seedsFromFirstRound } from "./bracket-view";
 import { resolveChampionPresentation } from "./champion-presentation";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import {
   loadMatchPreviewFacts,
-  loadPlayerPreviewFacts,
+  loadPlayerCardFacts,
 } from "./link-preview-metadata";
 import { seriesWinnerSide } from "./link-preview";
-import { fetchOgImage } from "./og-assets";
+import { fetchOgImage, loadRankMedal } from "./og-assets";
 import {
   capNames,
+  fitPictureFacts,
   matchCardStatus,
+  playerPictureText,
   type MatchCardData,
   type PlayerCardData,
   type SeasonCardData,
@@ -25,6 +28,7 @@ import {
 import { projectPlayoffField } from "./playoff-field";
 import { playoffStatusChip, playoffStatuses } from "./playoff-status";
 import { prisma } from "./prisma";
+import { rankMedalName } from "./rank";
 import { seasonPhaseLabel } from "./season-copy";
 import { ordinalPlace } from "./tale-of-the-tape";
 import { seriesRecordText } from "./team-matches";
@@ -168,43 +172,47 @@ export async function loadTeamCard(
 }
 
 /**
- * A player's picture: avatar, name, the highlights their link text names,
- * and their team in the newest season they were rostered. Null when there is
- * no such player; "unjoined" for an account that only signed in, whose
- * preview stays the league's own picture.
+ * A player's picture: their profile's season card (loadPlayerCardFacts), with
+ * their avatar, the team crest in that season's colour and the medal drawn
+ * from the site's own medal pictures. Null when there is no such player;
+ * "unjoined" for an account that only signed in, whose preview stays the
+ * league's own picture.
  */
 export async function loadPlayerCard(
   id: string,
 ): Promise<PlayerCardData | "unjoined" | null> {
-  const player = await loadPlayerPreviewFacts(id);
-  if (!player) return null;
-  if (!player.joined) return "unjoined";
-  const membership = await prisma.teamMember.findFirst({
-    where: { userId: id },
-    orderBy: [{ season: { createdAt: "desc" } }, { id: "asc" }],
-    select: {
-      season: { select: { name: true } },
-      team: { select: { id: true, name: true, logoUrl: true, seasonId: true } },
-    },
-  });
-  const [avatar, teamLogo, hue] = await Promise.all([
+  const player = await loadPlayerCardFacts(id);
+  if (player === null || player === "unjoined") return player;
+  const { card } = player;
+  // The team is the card's season's (never a later roster's), so its colour
+  // is that season's too.
+  const [avatar, teamLogo, hue, medal] = await Promise.all([
     fetchOgImage(player.avatar),
-    membership ? fetchOgImage(membership.team.logoUrl) : null,
-    membership ? seasonHues(membership.team.seasonId) : null,
+    card.team ? fetchOgImage(card.team.logoUrl) : null,
+    card.team && card.season ? seasonHues(card.season.id) : null,
+    loadRankMedal(card.rankTier),
   ]);
+  const text = playerPictureText(card);
+  const team =
+    card.team && hue
+      ? { name: card.team.name, hue: hue(card.team.id), logo: teamLogo }
+      : null;
+  const medalName = medal ? rankMedalName(card.rankTier) : null;
   return {
     name: player.name,
     avatar,
-    facts: player.highlights,
-    team:
-      membership && hue
-        ? {
-            name: membership.team.name,
-            hue: hue(membership.team.id),
-            logo: teamLogo,
-          }
-        : null,
-    teamSeason: membership?.season.name ?? null,
+    seasonLine: text.seasonLine,
+    team,
+    medal: medal && medalName ? { ...medal, name: medalName } : null,
+    titles: text.titles,
+    // As many facts as the frame has room for beside a long name.
+    facts: fitPictureFacts({
+      name: player.name,
+      hasTeam: team !== null,
+      titles: text.titles,
+      medal: medalName,
+      facts: text.facts,
+    }),
   };
 }
 

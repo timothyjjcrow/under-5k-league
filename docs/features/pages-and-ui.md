@@ -43,6 +43,57 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   (`match-hosting.ts`), the match page's wording. Its one button
   (`howItWorksAction`) reuses the header's join label and Home's "Register as
   a standin" (`standinSignupOpen`), so the three pages name one action one way.
+  Its Questions card links to `/rules`.
+
+### The rules page (`/rules`)
+
+- **The rulebook is built, not written.** `leagueRules`
+  (`src/lib/league-rules.ts`, pure, tested beside it) builds every section
+  from the code's constants, the season's settings and `LEAGUE_CONFIG`; the
+  page (`src/app/rules/page.tsx`, `force-dynamic`) only loads the season and
+  renders one card per section. A source guard in `league-rules.test.ts`
+  fails on any digit in the page's shown text, any number literal but
+  `headingLevel`, and any import outside its short list, so a rule number can
+  reach the page only through the builder.
+- **Which season:** the active one, else the latest (worded as how the league
+  played it, and that the next season starts with the same settings); with no
+  season at all, `carriedSeasonSettings(null)` under a "First-season defaults"
+  badge. The night comes from `announcedMatchNight`, so Europe without one
+  says it is to be announced. The team count ("the top N make the playoffs")
+  and the league-ticket sentences need an active season. Only the current
+  tiebreaker format is described (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
+- **Every sentence is derived or left out.** Points come from probing
+  `computeStandings`, bracket sizes from `pickBracketSize`, round one from
+  `playoffFirstRound`, the withdrawal forfeit score from
+  `withdrawalForfeitScore` (which the withdraw action uses too), the import
+  window from `league-result-window.ts`, the reschedule limits from
+  `schedule.ts`, the standin clash and MMR gap from the standin constants and
+  the draft clocks from `DEFAULTS`. Sentences that only hold while a function
+  decides them (`teamWithdrawalLockedReason`, `matchResultsOpen`) drop out
+  when it changes. The literal copy (the tiebreak order, the draw refusals,
+  standin and draft wording) is pinned by the "claims hold in the code" tests
+  in the same file: change the behaviour and they go red.
+- **Copy rules hold here too:** the soft MMR limit never blocks, signups are
+  uncapped (`minTeams` is a target), the league id stays on the match page,
+  and the page ends with exactly `RULES_CLOSING`, "Admins rule on anything
+  not written here."
+- **Links:** the League group of `site-nav.ts` (never the footer, which is
+  capped), `/how-it-works`, and both How to host lines (`report-result.tsx`,
+  `league-lobby-checklist.tsx`) to `/rules#hosting`, each source-guarded.
+  Sections are `<Card id>` with `scroll-mt-24` under the `h-16` header.
+  `e2e/rules.spec.ts` checks the sections, the jump links and no overflow at
+  320, 390 and 768px.
+- **Rules nothing encodes yet, so the page doesn't state them** (Tim's to
+  write; until then the closing line covers them): a no-show grace period and
+  when a no-show becomes a forfeit; double forfeits (a 0–0 ruling counts as a
+  draw, so both teams get a draw's points); a cap on standins per match or
+  season; a standin MMR cap or the other captain's approval (a gap of
+  `STANDIN_MMR_FLAG_GAP` or more only warns the person booking); pauses,
+  disconnects and remakes; side and first-pick choice; hero or patch bans;
+  conduct, smurfing, account sharing, disputes and appeals; a roster lock
+  (admin signings stay open through the playoffs); reschedule notice and how
+  many reschedules a team gets; prizes, lobby passwords and spectators; and
+  the away captain as backup host, which only the ticketed checklist says.
 
 ## Link previews (Discord, X, Slack)
 
@@ -58,6 +109,19 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   `playoffStatusChip`, `resolveChampionPresentation`, the season's crest hues).
   A kickoff is on the league's clock with its zone named: a picture can't
   adapt to the viewer.
+- **A player's picture is their profile's season card** (`OgPlayerCard`, from
+  `playerCardFacts` through `playerPictureText`; rules in
+  `players-and-registration.md`): the season line as its kicker, avatar, name,
+  that season's team, then chips: one title and "+N more titles", the medal
+  drawn from `public/ranks` (`loadRankMedal`), the grade, heroes and honors.
+  No MMR: a picture travels without its date. `fitPictureFacts` drops chips
+  from the end (honors, then pub heroes, league heroes, the grade) until they
+  fit the frame beside a long name. The link's text keeps its own highlights
+  (`loadPlayerPreviewFacts`).
+- **Write no emoji or "×" in a picture:** next/og downloads any glyph its
+  bundled fonts lack while it draws (Twemoji for an emoji).
+  `share-image-guards.test.ts` checks the picture files and the card rules
+  they borrow words from.
 - **Leave the images out of those pages' metadata**
   (`shareMetadata(..., { pageImage: true })`): Next uses a folder's image files
   only where the page's metadata names no images at all, so the failure is
@@ -73,7 +137,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   the league's own image; a missing page's picture is a 404.
 - **The font is Oswald** (SIL Open Font License, `src/lib/og-fonts/`), read
   at request time; without it next/og falls back to its built-in font, so
-  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist.
+  `share-image-guards.test.ts` checks the paths `og-assets.ts` reads exist
+  (the fonts, the league emblems and the medal files). Spell each path as a
+  literal `join(process.cwd(), ...)`: that is what the build's file tracing
+  bundles and what the guard reads.
   Keep files like these under `src/`: the release classifier
   (`scripts/classify-release.mjs`) treats a new top-level folder, or a
   `public/` file that isn't an image, video or web font, as an unknown path,
@@ -99,7 +166,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   inside a card whose header already names it; wins over `compact`);
   `CheckinBanner variant` (`strip` on `/schedule` and the match page, `panel`
   stacked for a narrow column); `StatStrip`/`StatCell` (the one-line summary
-  band under a page title).
+  band under a page title). One deliberate exception: `TeamCrest`'s initials
+  wear `crestInk` by default, not behind a prop, because an opt-in would leave
+  white initials at about 2:1 on every yellow crest that didn't pass it. A
+  contrast fix belongs at every call site.
 - **Tokens:** `--color-surface-3` is an OPAQUE elevation step (translucent
   lets scrolled rows show through a table header); `--color-line-soft` is a
   rule inside a dense list (`--color-line` boxes every row).
@@ -129,6 +199,44 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **One `<h1>` per page; page sections are `<h2>`.** On Home the season name
   is the h1 and dashboard cards pass `headingLevel={2}` (nested cards default to
   h3), or heading navigation skips what the page is for.
+
+## Team colours
+
+- **A team's colour is its crest hue, never a stored colour.**
+  `seasonTeamHues` spaces each season's teams round the wheel, and the root
+  layout publishes each team's `--team-hue` and crest ink `--team-ink`
+  (`teamHueStyleSheet`, a 60-second snapshot). A team the stylesheet doesn't
+  know yet falls back to its hash hue (`teamHueVar`, `teamInkVar`).
+- **Every element painted with a hue carries its own `data-team-hue`,** naming
+  the team its style reads. Custom properties reach an element only through
+  that attribute or inheritance, so without it an element shows the fallback,
+  or another team's hue inherited from an ancestor. `team-crest.test.ts`
+  parses every file under `src/` and fails on a hue read outside an element's
+  props, or on an element whose `data-team-hue` names another team. Build a new
+  paint with `src/lib/team-tint.ts`: its helpers return the attribute with the
+  style.
+- **A wash (`teamTint`) is an empty `pointer-events-none absolute` layer**
+  inside a `relative overflow-hidden` host: the team page header, each half of
+  the scoreboard (fading out before the score) and the player season card. It
+  is a layer of its own so the host keeps its gradient, and empty so its hue
+  can't reach a nested crest of another team. `TEAM_TINT_ALPHA` (the crest's
+  middle colour at 7%) keeps text, muted text, links and every Badge tone at
+  4.5:1 on every hue over the page, a card surface and the hero banners'
+  lightest corner (`team-tint.test.ts`). On `surface-2` the success and danger
+  Badges have no headroom left, so the same test reads each wash's host and
+  refuses any other background.
+- **A stripe (`teamStripe`) marks a box that belongs to one team:** the
+  Matchup and Scouting side boxes, and a box-score side when the game recorded
+  which team played it (`radiantTeamId`/`direTeamId`; an unknown side stays
+  plain Radiant or Dire, and keeps its win tint and the net-worth bar). It is
+  decorative: the team's name in the box says whose it is. It is an inset
+  shadow, so it sits inside the border and moves nothing.
+- **A generated crest's initials wear `crestInk(hue)`:** white, or the page's
+  near-black on the yellows through the cyans, where white fell to about 2:1.
+  The worst hue is now 3.8:1. The link pictures' `OgCrest` uses the same rule.
+- **Not built:** nudging two near-identical neighbouring hues apart, a
+  captain-chosen colour, and a colour taken from the logo (each needs new
+  data or an image decoder).
 
 ## Grids and bands
 
@@ -268,9 +376,18 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   rides under the title; with no aside, meta takes the right half.
 - **The slot addresses the viewer.** Mid-season: `MyNextMatch` (their next
   check-in, `<CheckinBanner variant="panel">`), or for someone with no team and
-  no signup, the late standin signup plus the inhouse queue. COMPLETE: only
-  "Relive the season"; the champion card below is the page's one champion
-  block.
+  no signup, the late standin signup plus the inhouse queue. COMPLETE: "Relive
+  the season" and, under it, where the next season is announced (the league
+  Discord, or League news without an invite); the champion banner below is the
+  page's one champion block, so the hero names no team.
+- **COMPLETE's meta line says what's next:** "Next season: signups open
+  {date}" with a countdown once an admin sets the date on `/admin`'s Season
+  handoff card (`setNextSeasonDate`), else "Next season: coming soon". The
+  date is one Setting row (`NEXT_SEASON_PLAN`, parsed by `next-season.ts`)
+  naming the season it was set during, so the handoff makes it lapse without
+  a write. Display only: it opens nothing and posts nothing, and its
+  countdown carries `passedLabel={NEXT_SEASON_PASSED_LABEL}` for a date that
+  slips.
 - **The regular season is two columns from `xl`:** This week and the
   standings, then the honors line and the news under them; the rail holds the
   Your team / Coming up / Recent results band and the side games. The
@@ -295,6 +412,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **A lone series on This week gets the big kickoff clock**
   (`<KickoffCountdown>`) in place of the header chip; when it is the grand
   final the card is titled "The grand final" and the clock wears gold.
+- **A playoff or final card on This week carries the league stream** as a
+  strip under the card's link (see the match page's watch link below).
 - **The Your team card** shows only the stakes of the next series (the table
   already highlights rank and record), aligned to the engine's `nextMatchId`
   and naming the opponent. It sits in the auto-fit band (the rail from `xl`)
@@ -303,14 +422,32 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **`WeeklyHonorsLine`** renders only official honors (the readiness rows
   Discord and `/leaders` use; `honorBestGame` picks the game), else nothing;
   the in-progress caveats live on `/leaders`.
+- **Upsets on Home** (rules: `stats-and-side-games.md`). A Recent results row
+  whose series was an upset carries an amber "Upset" chip (`UpsetChip`,
+  `aria-hidden`, the reason on hover), and its spoken sentence opens
+  "Upset:" yet still ends "won the series · Match details"
+  (`recentResultSpoken`). `WeekHighlights` (`week-highlights.tsx`) is one
+  line beside the honors line, never inside it: the latest week's biggest
+  upset ("Week 5 upset · X beat Y 2–0, from 6 points behind going into the
+  week"), else nothing. Both judge the matches Home already loaded and add
+  no query; `week-highlights.test.ts` pins the wiring.
 - **`AdminStrip` (admins only) repeats `/admin`'s next step word for word**
   plus the Needs attention count (`adminHomeLine`). Feed `adminNextStep` and
   `matchAttention` the same inputs as `/admin` or they drift. Database reads
   only, never Discord.
-- **PLAYOFFS shows a compact bracket; COMPLETE a champion banner (crest beside
-  the story) and "How it was won".** `<Bracket>` centres itself when its card
-  is wider than it. Round grouping is pure `slotRound`/`groupPlayoffRounds`
-  (`schedule.ts`), shared with `/schedule`.
+- **PLAYOFFS shows a compact bracket; COMPLETE the gold champion banner and
+  "How it was won".** `<ChampionMoment>` (`champion-moment.tsx`) is the
+  crowned state only: crest and trophy, "{season} Champion", the final's score
+  from `championFinalLine` (null for a legacy archive), the regular-season
+  record and the roster chips, captain first. The "needs review" card stays in
+  `complete-view.tsx`. The champion's own team page shows `<ChampionStrip>`
+  under its header (season and final only: the header and the roster card
+  already carry the rest). Keep the "{season} Champion" label and the one
+  `/teams/` link siblings under one parent, and never link the beaten
+  finalist there (the postseason e2e reads the champion that way).
+  `<Bracket>` centres itself when its card is wider than it. Round grouping is
+  pure `slotRound`/`groupPlayoffRounds` (`schedule.ts`), shared with
+  `/schedule`.
 
 ### The SIGNUPS view
 
@@ -424,12 +561,31 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Player profile and compare (`/players/[id]`, `/players/compare`)
 
+- **The season card sits in the header's right slot from `lg`** (20rem beside
+  the name) and takes its own line below it. The line break is a `basis-full`
+  wrapper: the name column is `min-w-0`, so the row never overflows and
+  `flex-wrap` never fires on its own; the name would shrink to a letter a
+  line. The card's `max-w-md` sits inside the wrapper, because a max-width on
+  the flex item clamps the full basis the row wraps on.
+- **"Edit your signup" shows on a player's own profile** while they are in
+  the current season, or have no season yet; never under a past season's
+  card.
+- **Title badges wrap inside themselves** (`max-w-full
+  [overflow-wrap:anywhere]`), so a long season name never widens the name
+  row.
 - **A profile is two columns from `xl`:** form, match history and "How they
   play" in the main column, and a 24rem rail with the hero pool, records,
   achievements and seasons. A phone reads them in that order. Both columns
   are `@container`s: the overview's stats and spotlight split at `@2xl`, a
   series row puts its games beside the opponent at `@2xl`, and the hero pool
   (`columns="container"`) and achievements step with the rail's width.
+- **The League records card also shows the record within reach**
+  (`recordWatchFor`, rules in `stats-and-side-games.md`): one "Within reach"
+  row under any held-record chips, stored marks only ("Most kills · Career
+  best 18 kills · record 21, 3 short"). `profileSections` opens the card and
+  its Records tab for a held record OR a within-reach line, and both come
+  from one `recordWatchBook` over the page's record-book read, so they can
+  never disagree with `/records`.
 - **Compare is two columns from `lg`:** career numbers on the left, the
   head-to-head and both hero cards on the right, by grid placement, so the
   DOM and a phone keep head-to-head, numbers, heroes. The rows are
@@ -452,6 +608,11 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## The admin page layout (`/admin`)
 
+- **Season-wide diagnostics are their own pages:** `/admin/data-quality` and
+  `/admin/health`, linked side by side from Needs attention (a `flex-wrap`
+  row with `gap-y-2`). League health is server-rendered `SectionTitle` and
+  `StatStrip` bands with a note list under each; see
+  [admin-and-operations](admin-and-operations.md#league-health-adminhealth).
 - **Anchors plus disclosure.** `AdminJump` (a `SectionNav`, sticky from `lg`)
   jumps to `AdminAnchor` ids. Rarely touched cards (Discord, league id, news,
   security, historical records, database performance, season handoff and
@@ -500,7 +661,7 @@ the league is already draftable and many visitors have joined. Write for both.
   `getSessionUser`.
 - **`MatchPreview` renders while a match has no games and is not COMPLETED:**
   rosters, recent form, prior meetings, stakes banner, tale of the tape,
-  scouting report, and the `/schedule` check-in banner. A COMPLETED match with
+  record watch, scouting report, and the `/schedule` check-in banner. A COMPLETED match with
   no games says it was a forfeit ruling or a manual score.
 - **The tale of the tape** (`tale-of-the-tape.tsx` over the pure
   `src/lib/tale-of-the-tape.ts`) compares the two teams' season: the regular
@@ -514,6 +675,16 @@ the league is already draftable and many visitors have joined. Write for both.
   solid. A knockout series adds each side's road (`playoffRoad`): the series
   it won in the rounds before this one, each linking to its match. It never
   shows the community pick'em split (`pickemControlFor`'s rule).
+- **Record watch follows the tape, before the Matchup card**
+  (`record-watch.tsx`, rules in `stats-and-side-games.md`): up to three of
+  tonight's players (`matchNightRoster`: standins in, covered players out)
+  whose career best is within reach of a league record, each a profile link
+  and one line of stored marks. The card is props-only and stays out of the
+  jump bar. The record book is read in `page.tsx`'s body
+  (`loadRecordWatchBook`, the same cached read and mapping as `/records`),
+  only for an upcoming fixture of the active season, and passed down: inside
+  a card's Suspense the cached read once hung the stream.
+  `record-watch.test.ts` pins the order and the hand-off.
 - **The season lobby bot's panel has two render sites, never both for one
   viewer** (off unless `DOTA_SEASON_LOBBY_BOT_ENABLED`): captains get it with
   Create/Start in Captain tools; other players, booked standins and admins get
@@ -529,6 +700,25 @@ the league is already draftable and many visitors have joined. Write for both.
   empty boxes and the browser fills them (`getServerSnapshot` is null), so
   hydration never mismatches; its spoken name gives minutes, never seconds.
   `kickoff-countdown.test.ts` pins both render sites.
+- **Playoff and final matches link the league stream** (`<WatchLink>` over
+  `src/lib/broadcast.ts`) once an admin sets one on /admin's Match stream
+  card: "Streamed on Twitch" before the window, "Live now · Watch on Twitch"
+  from 15 minutes before kickoff until the series estimate ends
+  (`seriesEstimateMinutes`, the calendar's event length), then nothing. Once
+  a game is in (LIVE) the window runs a second estimate, so a series that
+  started late keeps its link to the end. `matchWatchWindow` picks the
+  matches (playoffs and the final of the active season, kickoff set, not
+  decided, not a forfeit), and the browser picks the state
+  (`getServerSnapshot` is null), so a parked tab crosses both edges. Three
+  render sites, each reading `getLeagueStream()` only when a match
+  qualifies: the scoreboard's footer, a strip under Home's This week card
+  (outside the card's link, like the pick tray) and `/schedule` rows ("On
+  Twitch" / "Watch live": a `textLink` with `my-0` on its 44px row, `relative
+  z-10` above the stretched link). It links out in a new tab with
+  `rel="noreferrer"` and never embeds a player:
+  `watch-link.test.ts` bans `<iframe` in `src`. One channel serves the
+  league, so two semifinals at once both point at it; per-match links and
+  replays need a `Match` column (DECISIONS.md).
 - **A box score line is `BoxScoreLine`** (`box-score-line.tsx`, the page's
   one client piece of a box score): the server renders every part and the
   line lays them out. Each side is an `@container`; from `@lg` a player is

@@ -71,6 +71,11 @@ function faq(recording: string) {
       answer:
         "Yes. Anyone can browse teams, results and player pages. Sign in with Steam to play fantasy and pick'em while they're open.",
     },
+    {
+      question: "Can I cast or stream league matches?",
+      answer:
+        "Playoff and final match pages link the league's stream channel when there is one. If you'd like to cast a match, tell an admin.",
+    },
   ];
 }
 
@@ -199,7 +204,15 @@ export default async function HowItWorksPage() {
       </Card>
 
       <Card id="faq" className="mt-6 scroll-mt-24">
-        <CardHeader title="Questions" headingLevel={2} />
+        <CardHeader
+          title="Questions"
+          headingLevel={2}
+          action={
+            <Link href="/rules" className={textLink("text-sm")}>
+              League rules <LinkArrow />
+            </Link>
+          }
+        />
         <ul className="divide-y divide-line-soft">
           {faq(results.faq).map((item) => (
             <li key={item.question}>

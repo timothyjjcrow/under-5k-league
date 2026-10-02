@@ -1,8 +1,10 @@
 import { cache } from "react";
 import type { SessionUser } from "@/lib/auth";
+import { getAllGamesForRecords } from "@/lib/cached-queries";
 import { prisma } from "@/lib/prisma";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { getSeasonDraftStatus } from "@/lib/queries";
+import { recordWatchBook, toRecordGames } from "@/lib/records";
 
 /**
  * The match page's shared reads. The page loads the match once, with its
@@ -81,6 +83,16 @@ export async function loadPostseason(match: { seasonId: string; phase: string })
 }
 
 export type MatchPostseason = Awaited<ReturnType<typeof loadPostseason>>;
+
+/**
+ * The record book as the Record watch card reads it: the same cached read
+ * and mapping as /records and the profile, so the three always agree. The
+ * page awaits it in its body, and only for an upcoming fixture of the active
+ * season, never inside a card's Suspense, where the cached read once hung.
+ */
+export async function loadRecordWatchBook() {
+  return recordWatchBook(toRecordGames(await getAllGamesForRecords()));
+}
 
 /** The season's auction status; null before its Draft row exists. */
 export function loadDraftStatus(match: { seasonId: string }) {

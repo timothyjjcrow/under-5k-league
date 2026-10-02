@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
 import { POSTSEASON_DB_URL } from "../playwright.postseason.config";
 import {
   expectNoHorizontalOverflow,
@@ -606,6 +607,189 @@ test("complete champion and recap remain usable at 360px", async ({ page }) => {
   assertNoErrors();
 });
 
+/**
+ * Moves the open playoff series' kickoff `minutes` from now, so the
+ * watch-link test can stand before and inside the "Live now" window without
+ * waiting for a real clock; returns its id. Done here rather than in a helper
+ * script beside the specs: the release classifier reads a new non-spec file in
+ * this folder as an unknown path, which would make the release a maintenance
+ * one.
+ */
+async function moveOpenKickoff(minutes: number): Promise<string> {
+  const db = new PrismaClient({
+    datasources: { db: { url: POSTSEASON_DB_URL } },
+  });
+  try {
+    const match = await db.match.findFirstOrThrow({
+      where: {
+        season: { isActive: true },
+        phase: { in: ["PLAYOFF", "FINAL"] },
+        status: { not: "COMPLETED" },
+      },
+      orderBy: [{ bracketSlot: "asc" }, { id: "asc" }],
+      select: { id: true },
+    });
+    await db.match.update({
+      where: { id: match.id },
+      data: { scheduledAt: new Date(Date.now() + minutes * 60_000) },
+    });
+    return match.id;
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+test("after the final, Home says what's next and the champion's page shows the title", async ({
+  page,
+}) => {
+  await reseed(page, "complete");
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/");
+  const main = page.locator("#main");
+  const hero = main
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { level: 1 }) });
+  // Until an admin sets a date: "coming soon", and where it will be
+  // announced (the league Discord, or League news without an invite).
+  await expect(hero).toContainText("Next season: coming soon");
+  await expect(
+    hero.getByRole("link", { name: /^(Join our Discord|League news)$/ }),
+  ).toBeVisible();
+
+  // The champion banner: the final's score, the regular season and the
+  // winning five, captain first.
+  const champion = await championName(page);
+  const banner = page
+    .getByText("Season 9 (fixture) Champion", { exact: true })
+    .locator("..");
+  await expect(banner).toContainText(/Won the grand final \d–\d over \S/);
+  await expect(banner).toContainText(/regular season · \d+ pts?/);
+  const chips = banner.locator('a[href^="/players/"]');
+  await expect(chips).toHaveCount(5);
+  await expect(chips.first()).toContainText("Captain");
+
+  // The champion's own page carries the season and the final.
+  await banner.getByRole("link", { name: champion, exact: true }).click();
+  await expect(page).toHaveURL(/\/teams\/[^/?#]+$/);
+  await expect(
+    page.getByText("Season 9 (fixture) Champion", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/^Won the grand final \d–\d over \S/),
+  ).toBeVisible();
+
+  // An admin sets the next season's signup date on the handoff card.
+  await page.goto(
+    "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin",
+  );
+  const when = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  await page
+    .getByLabel("Signups open", { exact: true })
+    .fill(
+      `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T18:00`,
+    );
+  await page.getByRole("button", { name: "Set date" }).click();
+  await expect(
+    page.getByText(/^Home now says the next season's signups open /),
+  ).toBeVisible();
+
+  await page.goto("/");
+  await expect(hero).toContainText("Next season: signups open");
+  await expect(hero.getByRole("timer")).toHaveAccessibleName(
+    /^Signups open in \d+d/,
+  );
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expectNoHorizontalOverflow(page, "/ complete with the next date");
+
+  // Clearing it puts "coming soon" back.
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "Clear date" }).click();
+  await expect(
+    page.getByText("Next season's date cleared: Home says coming soon"),
+  ).toBeVisible();
+  await page.goto("/");
+  await expect(hero).toContainText("Next season: coming soon");
+  assertNoErrors();
+});
+
+test("playoff matches link the league stream an admin sets", async ({
+  page,
+}) => {
+  await reseed(page, "playoffs");
+  const assertNoErrors = trackPageErrors(page);
+  let matchId = await moveOpenKickoff(90);
+  await expireFixtureCache(page);
+
+  // No stream set: nothing links to one.
+  await page.goto(`/matches/${matchId}`);
+  await expect(page.getByRole("heading", { level: 1 })).toBeAttached();
+  await expect(
+    page.getByRole("link", { name: /Streamed on|Live now/ }),
+  ).toHaveCount(0);
+
+  await page.goto(
+    "/api/auth/dev?name=Stream%20Admin&steamId=76561190000994001&admin=1&redirect=/admin",
+  );
+  await page.locator("#adm-stream summary").click();
+  await page.getByLabel("Stream link").fill("https://www.twitch.tv/ggd2l");
+  await page.getByRole("button", { name: "Save stream link" }).click();
+  await expect(
+    page.getByText(
+      "Stream link saved: playoff and final matches now link to https://www.twitch.tv/ggd2l",
+    ),
+  ).toBeVisible();
+
+  // Before the window: where it will be streamed, on all three surfaces.
+  await page.goto(`/matches/${matchId}`);
+  const soon = page.getByRole("link", { name: /^Streamed on Twitch/ });
+  await expect(soon).toHaveAttribute("href", "https://www.twitch.tv/ggd2l");
+  await expect(soon).toHaveAttribute("target", "_blank");
+  await expect(soon).toHaveAttribute("rel", "noreferrer");
+  await page.goto("/");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^Streamed on Twitch/ }),
+  ).toBeVisible();
+  await page.goto("/schedule");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^On Twitch\b/ }),
+  ).toBeVisible();
+
+  // Inside the window: "Live now".
+  matchId = await moveOpenKickoff(-5);
+  await expireFixtureCache(page);
+  await page.goto(`/matches/${matchId}`);
+  await expect(
+    page.getByRole("link", { name: /^Live now · Watch on Twitch/ }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 812 });
+  await expectNoHorizontalOverflow(page, "/matches/[id] live stream link");
+  await page.goto("/");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^Live now · Watch on Twitch/ }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/ live stream link");
+  await page.goto("/schedule");
+  await expect(
+    page.locator("#main").getByRole("link", { name: /^Watch live\b/ }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/schedule live stream link");
+
+  // Removing the link takes it off every match.
+  await page.goto("/admin");
+  await page.locator("#adm-stream summary").click();
+  await page.getByRole("button", { name: "Remove stream link" }).click();
+  await expect(
+    page.getByText("Stream link removed: matches show no watch links"),
+  ).toBeVisible();
+  await page.goto(`/matches/${matchId}`);
+  await expect(page.getByRole("heading", { level: 1 })).toBeAttached();
+  await expect(
+    page.getByRole("link", { name: /Streamed on|Live now/ }),
+  ).toHaveCount(0);
+  assertNoErrors();
+});
+
 test("admin can enter a real offseason, browse it, and open the next season", async ({
   page,
 }) => {
@@ -957,3 +1141,73 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
 
   assertNoErrors();
 });
+
+// A title stays with the players who won it: a badge beside their name, and
+// a season card on the season they won it in, once the final is won and
+// still after the next season opens (when the card falls back to their
+// latest season, since they haven't joined the new one).
+for (const archived of [false, true]) {
+  test(`a champion's profile wears the title ${archived ? "after the season is archived" : "once the final is won"}`, async ({
+    page,
+  }) => {
+    // The picture compiles its route on first hit in the dev server.
+    test.setTimeout(90_000);
+    await reseed(page, "complete", archived);
+    const assertNoErrors = trackPageErrors(page);
+    const db = new PrismaClient({
+      datasources: { db: { url: POSTSEASON_DB_URL } },
+    });
+    try {
+      const season = await db.season.findFirstOrThrow({
+        where: { name: "Season 9 (fixture)", championTeamId: { not: null } },
+      });
+      // A drafted player on the champion team: no armband in the name row,
+      // so the title badge is the row's only badge.
+      const member = await db.teamMember.findFirstOrThrow({
+        where: {
+          seasonId: season.id,
+          teamId: season.championTeamId!,
+          isCaptain: false,
+        },
+        orderBy: { userId: "asc" },
+        include: { user: true, team: true },
+      });
+      const profile = `/players/${member.userId}`;
+      await page.setViewportSize({ width: 360, height: 812 });
+      await page.goto(profile);
+      const name = page.locator("#main h1").first();
+      await expect(name).toHaveText(member.user.name);
+      await expect(
+        name.locator("..").getByText("Season 9 (fixture) champion"),
+      ).toBeVisible();
+
+      const card = page.getByTestId("player-season-card");
+      await expect(card).toBeVisible();
+      await expect(card).toContainText("Season 9 (fixture)");
+      await expect(
+        card.locator(`a[href="/teams/${member.teamId}"]`),
+      ).toContainText(member.team.name);
+      // The title is said once, beside the name; the card doesn't repeat it.
+      await expect(card).not.toContainText(/champion/i);
+      if (archived) {
+        // Season 10 is open but theirs is still the season they won.
+        await expect(card).not.toContainText("Season 10");
+      }
+      await expectNoHorizontalOverflow(
+        page,
+        `/players/[id] champion${archived ? ", archived" : ""}`,
+      );
+
+      // Their link's picture is drawn for them, not the league's fallback
+      // (a 307 to the league's image, which maxRedirects: 0 won't follow).
+      const picture = await page.request.get(`${profile}/opengraph-image`, {
+        maxRedirects: 0,
+      });
+      expect(picture.status()).toBe(200);
+      expect(picture.headers()["content-type"]).toBe("image/png");
+    } finally {
+      await db.$disconnect();
+    }
+    assertNoErrors();
+  });
+}
