@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, symlink, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LEAGUE_TARGETS, RELEASE_REPOSITORY, assertDeployment, assertReleaseInfo, promotePair } from "./league-targets.mjs";
-import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory } from "./release-both.mjs";
+import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory, requireHealthy, AUTOMATION_PROBE_ATTEMPTS } from "./release-both.mjs";
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 import { projectProvider } from "./release-provider.mjs";
 import { classifyEntries } from "./classify-release.mjs";
@@ -96,6 +96,34 @@ test("scheduler verification requires two consecutive successful minute slots an
   assert.equal(scheduledPasses([log(60_000), log(180_000)], 0), null);
   assert.equal(scheduledPasses([log(60_000), log(120_000)], 0).length, 2);
   assert.throws(() => scheduledPasses([log(60_000), log(120_000, 500)], 0));
+});
+test("only the automation probe is retried, and a fault that persists still fails", async () => {
+  const replies = (...answers) => {
+    const calls = { reads: 0, waits: 0 };
+    const read = async () => {
+      const answer = answers[Math.min(calls.reads++, answers.length - 1)];
+      if (answer instanceof Error) throw answer;
+      return JSON.stringify(answer);
+    };
+    return { calls, read, wait: async () => { calls.waits++; } };
+  };
+  // A pass in progress answers 503 (the probe throws), then ok:false, then recovers.
+  let probe = replies(new Error("503"), { ok: false }, { ok: true });
+  await requireHealthy(probe.read, "automation", "us: automation health failed", { wait: probe.wait });
+  assert.deepEqual(probe.calls, { reads: 3, waits: 2 });
+  probe = replies({ ok: true });
+  await requireHealthy(probe.read, "automation", "us: automation health failed", { wait: probe.wait });
+  assert.deepEqual(probe.calls, { reads: 1, waits: 0 });
+  probe = replies({ ok: false });
+  await assert.rejects(requireHealthy(probe.read, "automation", "us: automation health failed", { wait: probe.wait }), /us: automation health failed/);
+  assert.deepEqual(probe.calls, { reads: AUTOMATION_PROBE_ATTEMPTS, waits: AUTOMATION_PROBE_ATTEMPTS - 1 });
+  probe = replies(new Error("503 Service Unavailable"));
+  await assert.rejects(requireHealthy(probe.read, "automation", "us: automation health failed", { wait: probe.wait }), /503 Service Unavailable/);
+  for (const kind of ["live", "ready"]) {
+    probe = replies({ ok: false }, { ok: true });
+    await assert.rejects(requireHealthy(probe.read, kind, `eu: ${kind} health failed`, { wait: probe.wait }), new RegExp(`eu: ${kind} health failed`));
+    assert.deepEqual(probe.calls, { reads: 1, waits: 0 });
+  }
 });
 test("scheduler verification counts duplicate provider rows once without hiding failures", () => {
   const first = { id: "request-one", timestamp: 60_000, responseStatusCode: 200, requestPath: "/api/cron/automation" };

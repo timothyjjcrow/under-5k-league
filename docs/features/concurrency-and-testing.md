@@ -150,7 +150,9 @@ auto-import), `assignStandinGuarded` (double-covered seat), and `deleteSeason`
   claim's first failing test file; verify runs it alone with `--bail` (after it
   passes alone unmutated) and falls back to the whole suite if it does not fail.
   A preflight first proves the unmutated suite green, and each mutant is a fresh
-  `vitest run`, which is why a full sweep is slow.
+  `vitest run`, which is why a full sweep is slow. When the preflight fails, the
+  runner lists each failed test and the first line of its failure (the suite
+  runs `--silent`), so a flake that does not repeat still names its test.
 - **Read counts from the source.** `node scripts/mutation-guard.mjs --static`
   checks the inventory without Postgres and prints the counts.
 - **CI.** The test job always runs `--static`. The four `mutation guard N/4`

@@ -155,6 +155,31 @@ export function scheduledPasses(logs, since) {
     ? last.map((log) => new Date(log.timestamp).toISOString()) : null;
 }
 
+// A scheduled pass in progress can make /api/health/automation answer 503 for
+// a few seconds: the deployment took its gate snapshot while the pass held the
+// lease (staging c6316d6, 2026-09-30, healthy a minute later). A real fault
+// persists, so that probe gets a few tries a short wait apart. Live and ready
+// get one try, as before.
+export const AUTOMATION_PROBE_ATTEMPTS = 3;
+const AUTOMATION_PROBE_WAIT_MS = 20_000;
+
+export async function requireHealthy(read, kind, failure, {
+  attempts = kind === "automation" ? AUTOMATION_PROBE_ATTEMPTS : 1,
+  wait = () => sleep(AUTOMATION_PROBE_WAIT_MS),
+} = {}) {
+  for (let attempt = 1; ; attempt++) {
+    let error;
+    try {
+      if (JSON.parse(await read()).ok === true) return;
+      error = new Error(failure);
+    } catch (thrown) {
+      error = thrown;
+    }
+    if (attempt >= attempts) throw error;
+    await wait();
+  }
+}
+
 export function requireMaintenanceEvidence(plan, evidence, now = Date.now()) {
   for (const target of LEAGUE_TARGETS) {
     const impact = plan.classifications[target.region];
@@ -224,8 +249,7 @@ export async function runRelease(argv = process.argv.slice(2)) {
     const url = `https://${actual.url}`;
     assertReleaseInfo(target, JSON.parse(await probe(target, url, "/api/health/release")), sha);
     for (const kind of ["live", "ready", ...(production && !report.classifications[target.region]?.needs_scheduler_pause ? ["automation"] : [])])
-      if (JSON.parse(await probe(target, url, `/api/health/${kind}`)).ok !== true)
-        throw new Error(`${target.region}: ${kind} health failed`);
+      await requireHealthy(() => probe(target, url, `/api/health/${kind}`), kind, `${target.region}: ${kind} health failed`);
     for (const pathname of ["/", "/schedule"])
       if (!(await probe(target, url, pathname)).includes("GGD2L"))
         throw new Error(`${target.region}: public page smoke check failed`);
@@ -368,8 +392,8 @@ export async function runRelease(argv = process.argv.slice(2)) {
             if (!passes) await sleep(15_000);
           }
           if (!passes) throw new Error(`${target.region}: two consecutive scheduled successes were not observed`);
-          if (JSON.parse(await probe(target, target.origin, "/api/health/automation")).ok !== true)
-            throw new Error(`${target.region}: automation health failed after scheduled passes`);
+          await requireHealthy(() => probe(target, target.origin, "/api/health/automation"), "automation",
+            `${target.region}: automation health failed after scheduled passes`);
           report.events.push({ region: target.region, action: "scheduled-passes-verified", timestamps: passes });
         }
       }, record: (event) => report.events.push({ ...event, at: new Date().toISOString() }) });

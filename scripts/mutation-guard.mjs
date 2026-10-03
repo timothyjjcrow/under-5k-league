@@ -57,6 +57,7 @@ import ts from "typescript";
 import { assertPostgresTestUrl } from "./test-db-safety.mjs";
 import {
   discoverClaims,
+  failedTestsFromReport,
   killerFromReport,
   measureMutant,
   resolveKillers,
@@ -817,6 +818,11 @@ if (preflight.kind === "test-failure") {
       "caught and the result would be meaningless. Fix the suite first:\n" +
       "  npm run test:pg",
   );
+  const failed = failedTestsFromReport(preflight.report, process.cwd());
+  if (failed.length > 0) {
+    console.error("\nFailed on unmutated source:");
+    for (const line of failed) console.error(`  - ${line}`);
+  }
   process.exit(2);
 }
 

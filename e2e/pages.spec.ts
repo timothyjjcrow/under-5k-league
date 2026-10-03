@@ -96,10 +96,12 @@ test("the pool's scouting details toggle folds rows and survives a reload", asyn
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/players");
   const toggle = page.getByRole("button", { name: "Scouting details" });
-  // A seeded signup's "about you" line, shown only in detailed rows.
-  const quote = page.getByText("Reliable — rarely misses games.", {
-    exact: false,
-  });
+  // A seeded signup's "about you" line, shown only in detailed rows. The seed
+  // gives each signup one of these five notes at random (prisma/seed.ts
+  // NOTES), so one fixed note is missing from about 1 seed in 36.
+  const quote = page.getByText(
+    /Flexible on role, good comms\.|Best on cores, can flex support\.|Reliable — rarely misses games\.|Aggressive playstyle, loves to gank\.|Comfortable drafting \/ shotcalling\./,
+  );
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(quote.first()).toBeVisible();
 
