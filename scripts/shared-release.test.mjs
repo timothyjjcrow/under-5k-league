@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, symlink, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LEAGUE_TARGETS, RELEASE_REPOSITORY, assertDeployment, assertReleaseInfo, promotePair } from "./league-targets.mjs";
-import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory, requireHealthy, AUTOMATION_PROBE_ATTEMPTS } from "./release-both.mjs";
+import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory, requireHealthy, AUTOMATION_PROBE_ATTEMPTS, AUTOMATION_PROBE_WAIT_MS } from "./release-both.mjs";
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 import { projectProvider } from "./release-provider.mjs";
 import { classifyEntries } from "./classify-release.mjs";
@@ -124,6 +124,19 @@ test("only the automation probe is retried, and a fault that persists still fail
     await assert.rejects(requireHealthy(probe.read, kind, `eu: ${kind} health failed`, { wait: probe.wait }), new RegExp(`eu: ${kind} health failed`));
     assert.deepEqual(probe.calls, { reads: 1, waits: 0 });
   }
+});
+test("the automation probe outlasts a wake: up to one scheduler tick plus a full pass", async () => {
+  const source = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+  const tickMs = Number(/AUTOMATION_EXPECTED_CADENCE_MS = ([\d_]+);/.exec(source("src/lib/automation-health.ts"))[1].replaceAll("_", ""));
+  const passMs = 1000 * Number(/export const maxDuration = (\d+);/.exec(source("src/app/api/cron/automation/route.ts"))[1]);
+  // Worst case: the first read lands as the wake begins, and the pass that
+  // ends it starts a full tick later and runs to its limit.
+  let clock = 0;
+  const read = async () => {
+    if (clock <= tickMs + passMs) throw new Error("503 Service Unavailable");
+    return JSON.stringify({ ok: true, status: "healthy" });
+  };
+  await requireHealthy(read, "automation", "us: automation health failed", { wait: async () => { clock += AUTOMATION_PROBE_WAIT_MS; } });
 });
 test("scheduler verification counts duplicate provider rows once without hiding failures", () => {
   const first = { id: "request-one", timestamp: 60_000, responseStatusCode: 200, requestPath: "/api/cron/automation" };

@@ -175,7 +175,10 @@ Captain report, admin import, league feed and roster scan all end in
   it in the transaction of every write that changes results, games, box-score
   attribution or names shown on them; grep `stampResultChange` for callers.
 - **Probe health elsewhere.** `/api/health/live`, `/api/health/ready` and
-  `/api/health/automation` (worker freshness; see the README).
+  `/api/health/automation` (worker freshness; see the README). The last one
+  reads `stale` from each wake of a sleeping worker until the next scheduled
+  pass finishes, so a monitor or release check must outlast one scheduler tick
+  plus a full pass (`AUTOMATION_PROBE_ATTEMPTS` in `scripts/release-both.mjs`).
 
 ### Which matches get scanned
 
