@@ -7,8 +7,9 @@
 //
 // Which of the three depends on the viewer's clock, so the server renders
 // nothing and the browser decides (no hydration mismatch), like <Countdown>.
-// One shared ticker serves every link on the page, and a tab left open
-// crosses both edges of the window on its own.
+// One shared ticker serves every link and player on the page
+// (useWatchState), and a tab left open crosses both edges of the window on
+// its own.
 
 import { useSyncExternalStore } from "react";
 import {
@@ -51,6 +52,13 @@ function getServerSnapshot(): number | null {
   return null;
 }
 
+/** watchState at the shared ticker's time: null on the server, before
+ *  hydration and once the window has closed. */
+export function useWatchState(watch: WatchWindow): "soon" | "live" | null {
+  const now = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return now === null ? null : watchState(watch, now);
+}
+
 /**
  * `button` stands on its own (the match scoreboard, Home's This week card);
  * `row` is the compact text link in a /schedule fixture card, above the
@@ -75,8 +83,7 @@ export function WatchLink({
    *  so the wrapper goes when the link does. */
   wrapperClassName?: string;
 }) {
-  const now = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const state = now === null ? null : watchState(watch, now);
+  const state = useWatchState(watch);
   if (!state) return null;
   const live = state === "live";
   const words =

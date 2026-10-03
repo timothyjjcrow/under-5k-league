@@ -6708,8 +6708,13 @@ async function StreamControls() {
           final match links to it on Home, its match page and the schedule:
           where it will be streamed before kickoff, then a live link from{" "}
           {WATCH_OPENS_BEFORE_KICKOFF_MS / 60_000} minutes before kickoff until
-          the series should be over, or longer once a game is in. The regular
-          season shows nothing. Remove it on playoff nights nobody streams.
+          the series should be over, or longer once a game is in. While it is
+          live, the match page (and Home, when that match is the only one on)
+          also plays it in place, in the streaming service&apos;s own player,
+          which loads only when a visitor presses play. On YouTube that needs
+          the live video&apos;s link or a youtube.com/channel/UC… link. The
+          regular season shows nothing. Remove it on playoff nights nobody
+          streams.
         </p>
         <ActionForm
           action={setLeagueStreamUrl}

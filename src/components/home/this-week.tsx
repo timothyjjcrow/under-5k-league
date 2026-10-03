@@ -6,6 +6,7 @@ import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
+import { StreamPlayer } from "@/components/stream-player";
 import { WatchLink } from "@/components/watch-link";
 import {
   Card,
@@ -20,7 +21,7 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "@/lib/availability";
-import { matchWatchWindow } from "@/lib/broadcast";
+import { matchWatchWindow, streamEmbed } from "@/lib/broadcast";
 import { MATCH_PHASE } from "@/lib/constants";
 import { pickemControlFor } from "@/lib/pickem";
 import { prisma } from "@/lib/prisma";
@@ -76,6 +77,9 @@ export async function ThisWeek({
   const stream = focus.some((m) => matchWatchWindow(m, season.isActive))
     ? await getLeagueStream()
     : null;
+  // Its player goes only on a card standing alone (the grand final, a round's
+  // last series): one stream can't play under two matches at once.
+  const embed = stream && focus.length === 1 ? streamEmbed(stream) : null;
 
   const [avail, standinRows] = await Promise.all([
     showCheckins
@@ -384,6 +388,15 @@ export async function ThisWeek({
                   watch={watch}
                   matchLabel={`${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`}
                   wrapperClassName="border-t border-line-soft px-4 py-3"
+                />
+              ) : null}
+              {stream && watch && embed ? (
+                <StreamPlayer
+                  embed={embed}
+                  platform={stream.platform}
+                  watch={watch}
+                  matchLabel={`${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`}
+                  className="border-t border-line-soft"
                 />
               ) : null}
               {pick ? (

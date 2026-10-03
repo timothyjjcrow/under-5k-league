@@ -52,15 +52,54 @@ describe("WatchLink", () => {
   });
 });
 
-// An embedded player would load the streaming site in every visitor's
-// browser, handing it their address and cookies whether or not they press
-// play. The league links out instead.
-describe("no embedded players", () => {
-  it("renders no iframe anywhere in the app", () => {
+// The streaming site's player loads only when a visitor presses play: an
+// iframe that came with the page would hand every visitor's address and
+// cookies to the streaming site, whether or not they watch (broadcast.ts).
+describe("the stream player", () => {
+  const player = stripLineComments(
+    sourceFile("src/components/stream-player.tsx").text,
+  );
+
+  it("is the app's only iframe", () => {
     const files = sourceFiles("src/**/*.tsx", 80);
     const framed = files
       .filter((f) => /<iframe\b/i.test(stripLineComments(f.text)))
       .map((f) => f.path);
-    expect(framed).toEqual([]);
+    expect(framed).toEqual(["src/components/stream-player.tsx"]);
+  });
+
+  it("creates its iframe only from a press of play, at the tested address", () => {
+    // No address until the button sets one, and the iframe needs one.
+    expect(player).toContain("useState<string | null>(null)");
+    expect(player).toMatch(/\{src \? \(\s*<iframe\s+src=\{src\}/);
+    expect(player.match(/<iframe\b/g)).toHaveLength(1);
+    expect(player.match(/setSrc\(/g)).toHaveLength(1);
+    expect(player).toMatch(
+      /onClick=\{\(\) =>\s*setSrc\(streamEmbedSrc\(embed, window\.location\.hostname\)\)\s*\}/,
+    );
+  });
+
+  it("appears inside the live window and keeps playing past its end", () => {
+    expect(player).toContain("useWatchState(watch)");
+    expect(player).toContain('if (src === null && state !== "live") return null;');
+  });
+
+  it("stands on the match scoreboard and on Home's lone This week card", () => {
+    const scoreboard =
+      folderSourceFiles("src/app/matches/[id]", 5).find((f) =>
+        f.path.endsWith("/scoreboard.tsx"),
+      )?.text ?? "";
+    const home = sourceFile("src/components/home/this-week.tsx").text;
+    for (const site of [scoreboard, home]) {
+      expect(site).toContain("<StreamPlayer");
+      expect(site).toContain("streamEmbed(stream)");
+    }
+    // One stream can't play under two matches at once.
+    expect(home).toContain(
+      "const embed = stream && focus.length === 1 ? streamEmbed(stream) : null;",
+    );
+    expect(sourceFile("src/components/schedule-weeks.tsx").text).not.toContain(
+      "<StreamPlayer",
+    );
   });
 });
