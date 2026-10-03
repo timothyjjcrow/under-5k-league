@@ -45,6 +45,11 @@ auto-import), `assignStandinGuarded` (double-covered seat), and `deleteSeason`
   code. Use `raceAll` / `raceN`, loop when the losing order is rare, and assert
   the invariant. `raceAll` is concurrent only on Postgres (SQLite pins one
   connection and would queue or time out), so `npm run test:pg` is the real run.
+- **When either order is legitimate, a raced test can only check that each
+  outcome is whole.** An accept that commits before a result is a real
+  retime-then-play, so the end state cannot tell it from a stale accept; the
+  reschedule race test assumed it could and failed about once in 150 rounds.
+  Pin the stale order with a seam (`reschedule.respondReschedule.beforeAccept`).
 - **Use a seam when racing cannot hit the interleaving.** The service awaits
   `raceHook("area.function.point")` between its read and its guarded write; the
   test installs `setRaceHook(onceAt(label, rival))` and clears it in `afterEach`.
