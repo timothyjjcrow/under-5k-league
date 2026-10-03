@@ -715,10 +715,21 @@ the league is already draftable and many visitors have joined. Write for both.
   (outside the card's link, like the pick tray) and `/schedule` rows ("On
   Twitch" / "Watch live": a `textLink` with `my-0` on its 44px row, `relative
   z-10` above the stretched link). It links out in a new tab with
-  `rel="noreferrer"` and never embeds a player:
-  `watch-link.test.ts` bans `<iframe` in `src`. One channel serves the
-  league, so two semifinals at once both point at it; per-match links and
-  replays need a `Match` column (DECISIONS.md).
+  `rel="noreferrer"`. One channel serves the league, so two semifinals at
+  once both point at it; per-match links and replays need a `Match` column
+  (DECISIONS.md).
+- **While the stream is live, `<StreamPlayer>` plays it in place**, in
+  Twitch's, YouTube's or Kick's own player (`streamEmbed` and
+  `streamEmbedSrc` in `broadcast.ts`), under the scoreboard and under Home's
+  This week card when that card holds one match (one stream can't play under
+  two). The page ships only our button: the press creates the iframe, so a
+  visitor who never plays it never contacts the streaming site. Twitch plays
+  only inside the host its address names (`parent`), so the browser passes
+  `location.hostname` and previews work too. Once playing it outlives the
+  window, which is only an estimate. A link no player can show (a YouTube
+  @handle, a site page) keeps just the link, and the save toast says so.
+  `watch-link.test.ts` keeps the player the app's only `<iframe`, created
+  only from that press; the postseason e2e stubs Twitch and presses play.
 - **A box score line is `BoxScoreLine`** (`box-score-line.tsx`, the page's
   one client piece of a box score): the server renders every part and the
   line lays them out. Each side is an `@container`; from `@lg` a player is

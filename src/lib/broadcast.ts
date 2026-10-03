@@ -6,9 +6,13 @@ import { seriesEstimateMinutes } from "./series-lengths";
 // so its own channel). Playoff and final matches link to it: "Streamed on
 // Twitch" before kickoff, then "Live now · Watch on Twitch" from 15 minutes
 // before kickoff until the series should be over (longer once a game is in).
-// It is an outbound link, never an embedded player: a player would hand every
-// visitor's address to the streaming site. Per-match links and replays need a
-// column on Match, which is a database release, so they are not here.
+// While a match is live its page can also play the stream in place, in the
+// streaming site's own player (streamEmbed, stream-player.tsx). Nothing of
+// that player loads until a visitor presses play: loaded with the page, it
+// would hand every visitor's address to the streaming site whether or not
+// they watch. The video always comes from the streaming site, never through
+// this one. Per-match links and replays need a column on Match, which is a
+// database release, so they are not here.
 
 export const STREAM_URL_MAX_LENGTH = 2048;
 
@@ -133,6 +137,125 @@ export function matchWatchWindow(
     closesAtMs:
       kickoff + estimates * seriesEstimateMinutes(match.bestOf) * 60_000,
   };
+}
+
+/** What the streaming site's own player can show for the league's link. */
+export type StreamEmbed =
+  | { kind: "twitch"; channel: string }
+  | { kind: "youtube-video"; videoId: string }
+  | { kind: "youtube-channel"; channelId: string }
+  | { kind: "kick"; channel: string };
+
+const TWITCH_CHANNEL = /^[A-Za-z0-9_]{1,25}$/;
+const KICK_CHANNEL = /^[A-Za-z0-9_-]{1,25}$/;
+const YOUTUBE_VIDEO = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_CHANNEL = /^UC[A-Za-z0-9_-]{22}$/;
+// Site pages shaped like a channel's address, which no player can show.
+const TWITCH_PAGES = new Set([
+  "directory",
+  "downloads",
+  "drops",
+  "inventory",
+  "jobs",
+  "login",
+  "p",
+  "prime",
+  "search",
+  "settings",
+  "signup",
+  "subscriptions",
+  "turbo",
+  "videos",
+  "wallet",
+]);
+const KICK_PAGES = new Set([
+  "browse",
+  "categories",
+  "category",
+  "clips",
+  "dashboard",
+  "following",
+  "search",
+  "settings",
+  "video",
+  "videos",
+]);
+
+/**
+ * The player for a stored stream link, or null when the link names nothing a
+ * player can show: a YouTube @handle (its player needs the channel's UC… id),
+ * a Shorts or playlist page, or a site page rather than a channel. Null only
+ * drops the player; the link still links out.
+ */
+export function streamEmbed(stream: LeagueStream): StreamEmbed | null {
+  let url: URL;
+  try {
+    url = new URL(stream.url);
+  } catch {
+    return null;
+  }
+  const [first, second] = url.pathname.split("/").filter(Boolean);
+  if (!first) return null;
+  switch (stream.platform) {
+    case "Twitch":
+      // Twitch logins are case-blind; its player takes them lower-case.
+      return TWITCH_CHANNEL.test(first) && !TWITCH_PAGES.has(first.toLowerCase())
+        ? { kind: "twitch", channel: first.toLowerCase() }
+        : null;
+    case "Kick":
+      return KICK_CHANNEL.test(first) && !KICK_PAGES.has(first.toLowerCase())
+        ? { kind: "kick", channel: first }
+        : null;
+    case "YouTube": {
+      if (url.hostname === "youtu.be") {
+        return YOUTUBE_VIDEO.test(first)
+          ? { kind: "youtube-video", videoId: first }
+          : null;
+      }
+      // A channel's live stream: /channel/UC…, or that player's own address
+      // (whose "live_stream" would otherwise pass for an 11-character id).
+      if (first === "channel" || (first === "embed" && second === "live_stream")) {
+        const channelId =
+          first === "channel" ? second : url.searchParams.get("channel");
+        return channelId && YOUTUBE_CHANNEL.test(channelId)
+          ? { kind: "youtube-channel", channelId }
+          : null;
+      }
+      const videoId =
+        first === "watch"
+          ? url.searchParams.get("v")
+          : first === "live" || first === "embed"
+            ? second
+            : null;
+      return videoId && YOUTUBE_VIDEO.test(videoId)
+        ? { kind: "youtube-video", videoId }
+        : null;
+    }
+  }
+}
+
+/**
+ * The player's address. Twitch refuses to play inside a page unless the
+ * address names that page's host (`parent`), so the browser passes its own
+ * (stream-player.tsx), which also keeps previews and local servers working.
+ * Every address asks to start playing: it loads only on a press of play.
+ */
+export function streamEmbedSrc(embed: StreamEmbed, parentHost: string): string {
+  switch (embed.kind) {
+    case "twitch":
+      return `https://player.twitch.tv/?${new URLSearchParams({
+        channel: embed.channel,
+        parent: parentHost,
+        autoplay: "true",
+      })}`;
+    case "youtube-video":
+      // The privacy-enhanced host: no YouTube cookies until the video plays.
+      return `https://www.youtube-nocookie.com/embed/${embed.videoId}?autoplay=1`;
+    case "youtube-channel":
+      return `https://www.youtube.com/embed/live_stream?channel=${embed.channelId}&autoplay=1`;
+    case "kick":
+      return `https://player.kick.com/${embed.channel}?autoplay=true`;
+  }
 }
 
 /**

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { matchWatchWindow } from "@/lib/broadcast";
+import { matchWatchWindow, streamEmbed } from "@/lib/broadcast";
 import { prisma } from "@/lib/prisma";
 import { getLeagueStream } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
+import { StreamPlayer } from "@/components/stream-player";
 import { WatchLink } from "@/components/watch-link";
 import {
   Badge,
@@ -81,9 +82,10 @@ export async function MatchScoreboard({
       ? match.scheduledAt.getTime()
       : null;
   // The league stream on a playoff or final match still to be played:
-  // where it will be streamed, then "Live now" (broadcast.ts).
+  // where it will be streamed, then "Live now" and a player (broadcast.ts).
   const watch = matchWatchWindow(match, match.season.isActive);
   const stream = watch ? await getLeagueStream() : null;
+  const embed = stream ? streamEmbed(stream) : null;
 
   return (
     <Card className="relative overflow-hidden">
@@ -283,6 +285,15 @@ export async function MatchScoreboard({
           ) : null}
         </div>
       </CardBody>
+      {watch && stream && embed ? (
+        <StreamPlayer
+          embed={embed}
+          platform={stream.platform}
+          watch={watch}
+          matchLabel={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
+          className="border-t border-line"
+        />
+      ) : null}
       {games.length > 0 ? (
         <div className="relative flex flex-wrap justify-center gap-2 border-t border-line bg-bg/30 px-3 py-3">
           {games.map((game, index) => {

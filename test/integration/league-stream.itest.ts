@@ -44,7 +44,7 @@ describe("the league stream link", () => {
     );
     expect(res?.error).toBeUndefined();
     expect(res?.message).toBe(
-      "Stream link saved: playoff and final matches now link to https://www.twitch.tv/ggd2l",
+      "Stream link saved: playoff and final matches now link to https://www.twitch.tv/ggd2l, and play it on the site while live",
     );
     expect(await getSetting(SETTING_KEYS.LEAGUE_STREAM_URL)).toBe(
       "https://www.twitch.tv/ggd2l",
@@ -60,6 +60,28 @@ describe("the league stream link", () => {
         summary: "Set the league stream link to https://www.twitch.tv/ggd2l",
       },
     ]);
+  });
+
+  it("says when a saved link can only link out", async () => {
+    const res = await setLeagueStreamUrl(
+      {},
+      streamForm("https://www.youtube.com/@ggd2l/live"),
+    );
+    expect(res?.message).toBe(
+      "Stream link saved: playoff and final matches now link to https://www.youtube.com/@ggd2l/live. It can't play on the site: use the live video's link or a youtube.com/channel/UC… link for that",
+    );
+    expect(
+      (await setLeagueStreamUrl({}, streamForm("https://kick.com/browse")))
+        ?.message,
+    ).toBe(
+      "Stream link saved: playoff and final matches now link to https://kick.com/browse. It can't play on the site: use the channel's own link for that",
+    );
+    expect(
+      (await setLeagueStreamUrl({}, streamForm("https://youtu.be/dQw4w9WgXcQ")))
+        ?.message,
+    ).toBe(
+      "Stream link saved: playoff and final matches now link to https://youtu.be/dQw4w9WgXcQ, and play it on the site while live",
+    );
   });
 
   it("refuses a link off the streaming hosts and keeps the saved one", async () => {

@@ -6,6 +6,8 @@ import {
   matchWatchWindow,
   normalizeStreamUrl,
   parseStoredStream,
+  streamEmbed,
+  streamEmbedSrc,
   watchState,
 } from "./broadcast";
 import { seriesEstimateMinutes } from "./series-lengths";
@@ -198,5 +200,119 @@ describe("watchState", () => {
   it("is gone once the window closes", () => {
     expect(watchState(window, window.closesAtMs)).toBeNull();
     expect(watchState(window, window.closesAtMs + 60 * MIN)).toBeNull();
+  });
+});
+
+describe("streamEmbed", () => {
+  // Through the same check an admin's link takes, so every case is a link
+  // /admin would store.
+  const embedOf = (raw: string) => {
+    const stream = parseStoredStream(raw);
+    if (!stream) throw new Error(`not a stream link: ${raw}`);
+    return streamEmbed(stream);
+  };
+  const VIDEO = "dQw4w9WgXcQ";
+  const CHANNEL = "UCabcdefghijklmnopqrstuv";
+
+  it.each([
+    ["https://www.twitch.tv/ggd2l", { kind: "twitch", channel: "ggd2l" }],
+    ["https://twitch.tv/GGD2L", { kind: "twitch", channel: "ggd2l" }],
+    ["https://m.twitch.tv/ggd2l/videos", { kind: "twitch", channel: "ggd2l" }],
+    ["https://kick.com/ggd2l", { kind: "kick", channel: "ggd2l" }],
+    ["https://www.kick.com/ggd2l-eu", { kind: "kick", channel: "ggd2l-eu" }],
+    [`https://youtu.be/${VIDEO}`, { kind: "youtube-video", videoId: VIDEO }],
+    [
+      `https://www.youtube.com/watch?v=${VIDEO}&t=42`,
+      { kind: "youtube-video", videoId: VIDEO },
+    ],
+    [
+      `https://m.youtube.com/live/${VIDEO}?si=share`,
+      { kind: "youtube-video", videoId: VIDEO },
+    ],
+    [
+      `https://www.youtube.com/embed/${VIDEO}`,
+      { kind: "youtube-video", videoId: VIDEO },
+    ],
+    [
+      `https://www.youtube.com/channel/${CHANNEL}`,
+      { kind: "youtube-channel", channelId: CHANNEL },
+    ],
+    [
+      `https://youtube.com/channel/${CHANNEL}/live`,
+      { kind: "youtube-channel", channelId: CHANNEL },
+    ],
+    [
+      `https://www.youtube.com/embed/live_stream?channel=${CHANNEL}`,
+      { kind: "youtube-channel", channelId: CHANNEL },
+    ],
+  ])("plays %s", (raw, embed) => {
+    expect(embedOf(raw)).toEqual(embed);
+  });
+
+  it.each([
+    // A handle's player needs the channel's UC… id, which the link lacks.
+    "https://www.youtube.com/@ggd2l",
+    "https://www.youtube.com/@ggd2l/live",
+    "https://www.youtube.com/c/ggd2l",
+    `https://www.youtube.com/shorts/${VIDEO}`,
+    "https://www.youtube.com/watch?v=short",
+    "https://www.youtube.com/channel/not-a-channel-id",
+    "https://www.youtube.com/embed/live_stream",
+    "https://www.youtube.com/",
+    "https://www.twitch.tv/",
+    "https://www.twitch.tv/directory/category/dota-2",
+    "https://www.twitch.tv/videos/123456",
+    "https://www.twitch.tv/name-with-dash",
+    "https://kick.com/browse",
+    "https://kick.com/",
+  ])("leaves %s as a link only", (raw) => {
+    expect(embedOf(raw)).toBeNull();
+  });
+});
+
+describe("streamEmbedSrc", () => {
+  it("names the page's own host to Twitch, which plays nowhere else", () => {
+    expect(
+      streamEmbedSrc({ kind: "twitch", channel: "ggd2l" }, "ggd2l.vercel.app"),
+    ).toBe(
+      "https://player.twitch.tv/?channel=ggd2l&parent=ggd2l.vercel.app&autoplay=true",
+    );
+  });
+
+  it("plays a YouTube video from the privacy-enhanced host", () => {
+    expect(
+      streamEmbedSrc({ kind: "youtube-video", videoId: "dQw4w9WgXcQ" }, "x"),
+    ).toBe("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1");
+  });
+
+  it("plays a YouTube channel's live stream and a Kick channel", () => {
+    expect(
+      streamEmbedSrc(
+        { kind: "youtube-channel", channelId: "UCabcdefghijklmnopqrstuv" },
+        "x",
+      ),
+    ).toBe(
+      "https://www.youtube.com/embed/live_stream?channel=UCabcdefghijklmnopqrstuv&autoplay=1",
+    );
+    expect(streamEmbedSrc({ kind: "kick", channel: "ggd2l" }, "x")).toBe(
+      "https://player.kick.com/ggd2l?autoplay=true",
+    );
+  });
+
+  it("only ever points at the three players", () => {
+    const hosts = (
+      [
+        { kind: "twitch", channel: "a" },
+        { kind: "youtube-video", videoId: "dQw4w9WgXcQ" },
+        { kind: "youtube-channel", channelId: "UCabcdefghijklmnopqrstuv" },
+        { kind: "kick", channel: "a" },
+      ] as const
+    ).map((embed) => new URL(streamEmbedSrc(embed, "evil.example")).host);
+    expect(hosts).toEqual([
+      "player.twitch.tv",
+      "www.youtube-nocookie.com",
+      "www.youtube.com",
+      "player.kick.com",
+    ]);
   });
 });

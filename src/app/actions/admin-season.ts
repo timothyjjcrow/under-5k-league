@@ -38,7 +38,7 @@ import {
   carriedSeasonSettings,
 } from "@/lib/season-handoff";
 import { draftSetupLockedMessage, draftSetupOpen } from "@/lib/draft-setup";
-import { normalizeStreamUrl } from "@/lib/broadcast";
+import { normalizeStreamUrl, streamEmbed } from "@/lib/broadcast";
 import { parseLeagueId } from "@/lib/dota";
 import { clampInt, localDate, str } from "@/lib/form";
 import {
@@ -1350,7 +1350,8 @@ export async function clearNextSeasonDate(
 /**
  * Set or clear the league's stream channel (/admin's Match stream card).
  * Playoff and final matches link to it: "Streamed on Twitch" before kickoff,
- * "Live now · Watch on Twitch" through the series (broadcast.ts). It belongs
+ * "Live now · Watch on Twitch" through the series, with a player on the match
+ * page when the link names something one can show (broadcast.ts). It belongs
  * to the league, not a season, so it needs no active season and survives the
  * handoff. Blank clears it; anything else must pass normalizeStreamUrl, and
  * the toast says what was stored.
@@ -1381,7 +1382,17 @@ export async function setLeagueStreamUrl(
     seasonId: season?.id ?? null,
   });
   refresh();
+  const saved = `Stream link saved: playoff and final matches now link to ${result.stream.url}`;
+  // A link no player can show (a YouTube @handle, a site page) still links
+  // out; say so, and what would play.
+  if (streamEmbed(result.stream)) {
+    return { message: `${saved}, and play it on the site while live` };
+  }
   return {
-    message: `Stream link saved: playoff and final matches now link to ${result.stream.url}`,
+    message: `${saved}. It can't play on the site: ${
+      result.stream.platform === "YouTube"
+        ? "use the live video's link or a youtube.com/channel/UC… link for that"
+        : "use the channel's own link for that"
+    }`,
   };
 }

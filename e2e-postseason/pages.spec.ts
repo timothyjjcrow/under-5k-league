@@ -755,19 +755,46 @@ test("playoff matches link the league stream an admin sets", async ({
     page.locator("#main").getByRole("link", { name: /^On Twitch\b/ }),
   ).toBeVisible();
 
-  // Inside the window: "Live now".
+  // Inside the window: "Live now", and a player that loads Twitch's only
+  // when pressed. A stand-in answers for Twitch: the test needs the request,
+  // not the stream.
+  const twitch: string[] = [];
+  await page.route("https://player.twitch.tv/**", (route) => {
+    twitch.push(route.request().url());
+    return route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>Twitch player</title>",
+    });
+  });
   matchId = await moveOpenKickoff(-5);
   await expireFixtureCache(page);
   await page.goto(`/matches/${matchId}`);
   await expect(
     page.getByRole("link", { name: /^Live now · Watch on Twitch/ }),
   ).toBeVisible();
+  const play = page.getByRole("button", { name: "Play the stream here" });
+  await expect(play).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  expect(twitch).toEqual([]);
+  await play.click();
+  const player = page.locator('iframe[title^="Twitch stream: "]');
+  await expect(player).toHaveAttribute(
+    "src",
+    /^https:\/\/player\.twitch\.tv\/\?channel=ggd2l&parent=[^&]+&autoplay=true$/,
+  );
+  await expect(play).toHaveCount(0);
+  await expect.poll(() => twitch.length).toBe(1);
   await page.setViewportSize({ width: 360, height: 812 });
   await expectNoHorizontalOverflow(page, "/matches/[id] live stream link");
   await page.goto("/");
   await expect(
     page.locator("#main").getByRole("link", { name: /^Live now · Watch on Twitch/ }),
   ).toBeVisible();
+  // The open semifinal is the only match on: Home plays it too.
+  await expect(
+    page.locator("#main").getByRole("button", { name: "Play the stream here" }),
+  ).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/ live stream link");
   await page.goto("/schedule");
   await expect(
