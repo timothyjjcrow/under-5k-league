@@ -437,6 +437,45 @@ export function killerFromReport(report, cwd) {
 }
 
 /**
+ * The failed tests in a Vitest JSON report, one line each: the file relative
+ * to `cwd`, the test's full name and the first line of its failure. A file
+ * that failed without a failed test (an import or hook error) is listed with
+ * its own message. The suite runs with --silent, so without this a red run
+ * says only THAT something failed, never which test, and a flake that does
+ * not repeat leaves nothing to chase. At most `limit` lines, plus a count.
+ */
+export function failedTestsFromReport(report, cwd, limit = 20) {
+  const files = Array.isArray(report?.testResults) ? report.testResults : [];
+  const lines = [];
+  for (const file of files) {
+    if (typeof file?.name !== "string") continue;
+    const relative = path.relative(cwd, file.name).split(path.sep).join("/");
+    const failed = Array.isArray(file.assertionResults)
+      ? file.assertionResults.filter((test) => test?.status === "failed")
+      : [];
+    for (const test of failed) {
+      const name =
+        typeof test.fullName === "string" && test.fullName.trim()
+          ? test.fullName.trim()
+          : "(unnamed test)";
+      lines.push(`${relative} › ${name}${firstLineOf(test.failureMessages?.[0])}`);
+    }
+    if (failed.length === 0 && file.status === "failed") {
+      lines.push(`${relative}${firstLineOf(file.message) || ": failed before any test ran"}`);
+    }
+  }
+  return lines.length > limit
+    ? [...lines.slice(0, limit), `… and ${lines.length - limit} more`]
+    : lines;
+}
+
+function firstLineOf(message) {
+  if (typeof message !== "string") return "";
+  const line = message.split("\n").find((part) => part.trim()) ?? "";
+  return line ? `: ${line.trim().slice(0, 300)}` : "";
+}
+
+/**
  * Measure one mutant, trying its recorded killer first.
  *
  * `run(files)` runs the PostgreSQL suite with --bail over `files` (an empty

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { resultNudgeKey } from "@/lib/settings";
 import {
   deliverLeagueAnnouncements,
@@ -18,6 +19,7 @@ import {
   makeSeason,
   makeTeam,
   makeUser,
+  ON_POSTGRES,
   raceAll,
   raceN,
   recordMatch,
@@ -521,11 +523,14 @@ describe("reschedule — claims fire exactly once under contention", () => {
     ).toBe(1);
   });
 
-  it("an accept racing a RESULT never retimes a match that just completed", async () => {
-    // respondReschedule checks "not already played" against a row read before
-    // its transaction opens, and auto-sync completes matches from any
-    // visitor's page view. Stamping a future kickoff on a finished series also
-    // wipes its RSVPs and pushes it outside its own detection window.
+  it("an accept racing a RESULT either retimes first or changes nothing", async () => {
+    // Auto-sync completes matches from any visitor's page view. Stamping a
+    // future kickoff on a finished series wipes its RSVPs and pushes it outside
+    // its own detection window. On Postgres either call may commit first, and an
+    // accept that commits while the match is still SCHEDULED is a legitimate
+    // retime-then-play, so the end state cannot tell a stale accept from an
+    // early one: this loop pins that each outcome is whole, and the seam test
+    // below pins the stale accept.
     for (let run = 0; run < 6; run++) {
       // Each repetition is a new league fixture; preserve the production
       // invariant instead of accumulating six active test seasons.
@@ -537,11 +542,9 @@ describe("reschedule — claims fire exactly once under contention", () => {
         await prisma.match.findUniqueOrThrow({ where: { id: match.id } })
       ).scheduledAt;
 
-      // RESULT FIRST in the list: raceAll is sequential on SQLite, and with the
-      // accept first that is a legitimate retime-then-play rather than the case
-      // under test. This order gives both engines the same scenario — the
-      // series finishes, then a stale accept tries to move it.
-      await raceAll<unknown>([
+      // RESULT FIRST in the list: raceAll is sequential on SQLite, so there the
+      // series finishes and the accept then finds it played.
+      const [, accepted] = await raceAll<unknown>([
         () => recordMatch(match.id, 2, 0),
         () =>
           respondReschedule(away.captainId, open.id, true).catch(() => null),
@@ -550,8 +553,17 @@ describe("reschedule — claims fire exactly once under contention", () => {
       const after = await prisma.match.findUniqueOrThrow({
         where: { id: match.id },
       });
-      if (after.status === "COMPLETED") {
-        // A played match keeps the night it was played on.
+      const request = await prisma.rescheduleRequest.findUniqueOrThrow({
+        where: { id: open.id },
+      });
+      expect(after.status).toBe("COMPLETED");
+      if (accepted) {
+        // The accept committed first; the result then completed the moved match.
+        expect(request.status).toBe("ACCEPTED");
+        expect(after.scheduledAt?.getTime()).toBe(NIGHT.getTime());
+      } else {
+        // Refused: a played match keeps the night it was played on.
+        expect(request.status).toBe("PENDING");
         expect(after.scheduledAt?.getTime()).toBe(before?.getTime());
       }
     }
@@ -637,6 +649,51 @@ describe("reschedule — claims fire exactly once under contention", () => {
     expect(res.filter(Boolean)).toHaveLength(1);
   });
 });
+
+describe.skipIf(!ON_POSTGRES)(
+  "reschedule — a result landing mid-accept rolls the accept back",
+  () => {
+    afterEach(() => setRaceHook(null));
+
+    it("a stale accept never retimes a match that just completed", async () => {
+      // The accept has read the match as SCHEDULED when the series finishes on
+      // another connection, before the accept writes. The SERIALIZABLE snapshot
+      // and the retime's `status: SCHEDULED` predicate each refuse it; with
+      // neither, the finished series moves to a future night. Postgres-only:
+      // the rival commits while this transaction is open.
+      const { home, away, match } = await setupMatch();
+      await proposeReschedule(home.captainId, match.id, NIGHT);
+      const open = (await pendingFor(match.id))!;
+
+      let fired = false;
+      setRaceHook(
+        onceAt("reschedule.respondReschedule.beforeAccept", async () => {
+          fired = true;
+          await recordMatch(match.id, 2, 0);
+        }),
+      );
+
+      await expect(
+        respondReschedule(away.captainId, open.id, true),
+      ).rejects.toThrow(/just changed|no longer awaiting play/);
+      expect(fired).toBe(true);
+
+      const after = await prisma.match.findUniqueOrThrow({
+        where: { id: match.id },
+      });
+      expect(after.status).toBe("COMPLETED");
+      expect(after.scheduledAt?.getTime()).toBe(ORIGINAL_NIGHT.getTime());
+      // The proposal's ACCEPTED write rolled back with the refused retime.
+      expect(
+        (
+          await prisma.rescheduleRequest.findUniqueOrThrow({
+            where: { id: open.id },
+          })
+        ).status,
+      ).toBe("PENDING");
+    });
+  },
+);
 
 // Accepting a reschedule DELETES every RSVP for the match (they were answers
 // about a night nobody is now playing). That part is deliberate; doing it

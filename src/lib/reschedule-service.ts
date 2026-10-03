@@ -25,6 +25,7 @@ import {
 } from "./schedule";
 import { roundLabelsForPost } from "./playoff-rounds";
 import { isSerializationConflict } from "./prisma-errors";
+import { raceHook } from "./race-hook";
 
 export type AcceptedReschedule = {
   /** For the announcement's match-page link. */
@@ -462,6 +463,12 @@ export async function respondReschedule(
           request.proposedTime,
         );
 
+        // Seam: a result completing the match between the SCHEDULED read above
+        // and the retime below, which racing cannot steer (the accept may just
+        // as well commit first, a legitimate retime-then-play). The rival
+        // writes only the Match row, which this transaction has READ but not
+        // written, so a second connection cannot deadlock on it.
+        await raceHook("reschedule.respondReschedule.beforeAccept");
         const accepted = await tx.rescheduleRequest.updateMany({
           where: { id: requestId, status: "PENDING" },
           data: { status: "ACCEPTED" },

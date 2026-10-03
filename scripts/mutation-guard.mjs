@@ -57,6 +57,7 @@ import ts from "typescript";
 import { assertPostgresTestUrl } from "./test-db-safety.mjs";
 import {
   discoverClaims,
+  failedTestsFromReport,
   killerFromReport,
   measureMutant,
   resolveKillers,
@@ -183,8 +184,10 @@ const EQUIVALENT = new Set([
   // predicates redundant on Postgres: concurrent accept/decline/withdraw
   // attempts cannot both commit without them. Accept also reads and writes
   // Match in the same transaction, so the copied SCHEDULED predicate is
-  // redundant against a concurrent result. The PG contention tests pin all
-  // four one-winner / result-vs-retime invariants. These predicates remain in
+  // redundant against a concurrent result. The PG contention tests pin the
+  // one-winner invariants; the `reschedule.respondReschedule.beforeAccept`
+  // seam test pins result-vs-retime, and fails only with both the SCHEDULED
+  // predicate and SERIALIZABLE removed. These predicates remain in
   // production as executable state-machine documentation and defense in depth.
   "src/lib/reschedule-service.ts::cancelReschedule::status#1",
   "src/lib/reschedule-service.ts::respondReschedule::status#1",
@@ -817,6 +820,11 @@ if (preflight.kind === "test-failure") {
       "caught and the result would be meaningless. Fix the suite first:\n" +
       "  npm run test:pg",
   );
+  const failed = failedTestsFromReport(preflight.report, process.cwd());
+  if (failed.length > 0) {
+    console.error("\nFailed on unmutated source:");
+    for (const line of failed) console.error(`  - ${line}`);
+  }
   process.exit(2);
 }
 
