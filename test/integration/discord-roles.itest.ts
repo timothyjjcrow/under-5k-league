@@ -53,6 +53,8 @@ let respond: (r: Recorded) => {
   body?: unknown;
   /** Extra response headers — the rate-pacing tests speak X-RateLimit-*. */
   headers?: Record<string, string>;
+  /** Hold the answer this long, like a network round trip. */
+  delayMs?: number;
 };
 
 const GUILD = "900000000000000001";
@@ -78,11 +80,15 @@ beforeAll(async () => {
       };
       recorded.push(entry);
       const out = respond(entry);
-      res.writeHead(out.status, {
-        "content-type": "application/json",
-        ...(out.headers ?? {}),
-      });
-      res.end(JSON.stringify(out.body ?? {}));
+      const send = () => {
+        res.writeHead(out.status, {
+          "content-type": "application/json",
+          ...(out.headers ?? {}),
+        });
+        res.end(JSON.stringify(out.body ?? {}));
+      };
+      if (out.delayMs) setTimeout(send, out.delayMs);
+      else send();
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -682,10 +688,18 @@ describe("member lookup rate pacing", () => {
     // can produce. The window is also 150ms rather than 60 so a timer
     // waking late on a loaded runner still lands inside the window it was
     // aimed at.
+    //
+    // A ROUND TRIP, too. Answering in about a millisecond let one worker finish
+    // two lookups in the few milliseconds between refill wake-ups, fill the
+    // window, and turn another worker's gated retry into a second 429 (2 runs
+    // in 30 under load): again an interleaving real latency rules out, since
+    // a Discord round trip takes tens of milliseconds. 25ms keeps the window
+    // six round trips long.
     const WINDOW_MS = 150;
+    const ROUND_TRIP_MS = 25;
     let windowStart = Date.now();
     let used = 0;
-    respond = () => {
+    const bucket = () => {
       const now = Date.now();
       if (now - windowStart >= WINDOW_MS) {
         windowStart +=
@@ -710,6 +724,7 @@ describe("member lookup rate pacing", () => {
           }
         : MEMBER_OK;
     };
+    respond = () => ({ ...bucket(), delayMs: ROUND_TRIP_MS });
     const ids = Array.from({ length: 12 }, (_, i) => `8000000000000001${String(i).padStart(2, "0")}`);
     // An EXPLICIT deadline, not the 8s production default. What this test is
     // about is PACING — that the sweep waits out a known-empty bucket instead
