@@ -66,6 +66,7 @@ usage figures are the US site's as of 2026-09-26.
 
 | Date | Decision | Reason | Revisit when |
 | --- | --- | --- | --- |
+| 2026-10-03 | **`@next/eslint-plugin-next` finds files with `tinyglobby`, not `fast-glob`** (an `overrides` entry in `package.json`). | GHSA-vfj7-8cjw-p6xm (high) covers every `braces` version, with no fix, and the plugin's `fast-glob` was its only route in, so CI's full audit failed and nothing could release. The plugin calls `globSync` only for a `settings.next.rootDir` this config doesn't set, and `tinyglobby`, already installed for Vite and typescript-eslint, answers that call the same way. The audits stay as strict as before. | `braces` ships a fix, or the plugin drops `fast-glob`: remove the override. |
 | 2026-09-27 | **No unique constraint on `Team(seasonId, draftOrder)`.** | Duplicates can't reach a draft: `addCaptain` runs Serializable and takes one past the highest order, and `startDraft` refuses duplicates ("Two captains share the same draft order — randomize the order once, then start again."). The constraint would break `randomizeDraftOrder`, which rewrites orders one team at a time and would collide with itself mid-shuffle (`removeCaptain`'s renumbering has the same shape), and it would need a guarded migration in both leagues. | A duplicate order reaches a started draft. |
 
 ## July 2026 refactor: rejected
