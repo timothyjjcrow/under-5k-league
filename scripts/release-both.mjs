@@ -155,13 +155,16 @@ export function scheduledPasses(logs, since) {
     ? last.map((log) => new Date(log.timestamp).toISOString()) : null;
 }
 
-// A scheduled pass in progress can make /api/health/automation answer 503 for
-// a few seconds: the deployment took its gate snapshot while the pass held the
-// lease (staging c6316d6, 2026-09-30, healthy a minute later). A real fault
-// persists, so that probe gets a few tries a short wait apart. Live and ready
-// get one try, as before.
-export const AUTOMATION_PROBE_ATTEMPTS = 3;
-const AUTOMATION_PROBE_WAIT_MS = 20_000;
+// /api/health/automation can answer 503 on a healthy league. The worker sleeps
+// until its next wake, at most an hour after its last pass, and from that wake
+// until the next scheduled pass finishes (up to one scheduler tick plus the
+// pass) the probe reads the last success as stale. That rolled back the first
+// promotion of 95dff96 (US, 2026-10-03 15:16 UTC, three 503s in 40 seconds). A
+// deployment whose gate snapshot was taken mid-pass does the same until the
+// pass ends (staging c6316d6, 2026-09-30). A real fault persists, so the tries
+// span more than a tick plus a full pass. Live and ready get one try, as before.
+export const AUTOMATION_PROBE_ATTEMPTS = 6;
+export const AUTOMATION_PROBE_WAIT_MS = 30_000;
 
 export async function requireHealthy(read, kind, failure, {
   attempts = kind === "automation" ? AUTOMATION_PROBE_ATTEMPTS : 1,
