@@ -6,6 +6,13 @@ import { mmrCeilingPhrase } from "./season-copy";
 import { joinSeasonCta } from "./site-nav";
 
 /**
+ * What the league's name stands for, shown under the page title after the
+ * pitch. Both regions share the GGD2L name, so the sentence is the same on
+ * the US and Europe sites.
+ */
+export const LEAGUE_NAME_MEANING = "GGD2L stands for Good Game Dota 2 League.";
+
+/**
  * How results get recorded: the end of the "Weekly matches and playoffs" step
  * and the answer to "How do our games get recorded?". `hasLeagueTicket` is
  * whether the active season has a Valve league ticket (`Season.dotaLeagueId`),

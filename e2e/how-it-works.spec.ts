@@ -27,6 +27,9 @@ test("How it works explains the league on one screen and asks newcomers to join"
     "How it works",
   );
   const main = page.locator("#main");
+  await expect(main).toContainText(
+    "GGD2L stands for Good Game Dota 2 League.",
+  );
   for (const step of ["Sign up", "Draft night", "Weekly matches and playoffs"]) {
     await expect(
       main.getByRole("heading", { name: step, exact: true, level: 3 }),
