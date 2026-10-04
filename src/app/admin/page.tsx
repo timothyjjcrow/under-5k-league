@@ -6813,8 +6813,8 @@ async function AdminMatchNightPoll({
       title="Match night poll"
       subtitle={
         poll?.open
-          ? `Voting is open: ${poll.ballots} vote${poll.ballots === 1 ? "" : "s"} so far. Signed-up players rank the slots they can make on Home, and the count is instant runoff.`
-          : "Let signed-up players rank the weekly slots they can make. The poll shows on Home, and the count is instant runoff."
+          ? `Voting is open: ${poll.ballots} vote${poll.ballots === 1 ? "" : "s"} so far. Signed-up players mark every time they could play on Home; the time the most can make wins.`
+          : "Let signed-up players mark every weekly time they could play. The grid fills itself, the poll shows on Home, and the time the most players can make wins."
       }
       defaultOpen={poll?.open ?? false}
     >

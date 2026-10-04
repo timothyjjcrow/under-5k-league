@@ -111,16 +111,16 @@ beforeEach(async () => {
 afterEach(() => setRaceHook(null));
 
 describe("voting", () => {
-  it("saves a ranking, replaces it on a recast, and keeps one ballot per voter", async () => {
+  it("saves a voter's times, replaces them on a recast, and keeps one ballot per voter", async () => {
     const poll = await openPoll(admin.id);
     const voter = await makeVoter("Voter");
 
     expect(
-      await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SUN, WED] }),
-    ).toMatchObject({ ok: true, ranking: [SUN, WED], dropped: 0 });
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN, WED] }),
+    ).toMatchObject({ ok: true, availability: [WED, SUN], dropped: 0 });
     expect(
-      await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SAT] }),
-    ).toMatchObject({ ok: true, ranking: [SAT] });
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: [SAT] }),
+    ).toMatchObject({ ok: true, availability: [SAT] });
 
     expect(await prisma.matchNightBallot.count()).toBe(1);
     expect(await ballotOf(poll.id, voter.id)).toEqual([SAT]);
@@ -137,24 +137,24 @@ describe("voting", () => {
       await castBallot({
         pollId: poll.id,
         userId: voter.id,
-        ranking: ["5@600", WED, WED, 42],
+        availability: ["5@600", WED, WED, 42],
       }),
-    ).toMatchObject({ ok: true, ranking: [WED], dropped: 3 });
+    ).toMatchObject({ ok: true, availability: [WED], dropped: 2 });
     expect(
-      await castBallot({ pollId: poll.id, userId: voter.id, ranking: ["5@600"] }),
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: ["5@600"] }),
     ).toEqual({
       ok: false,
-      error: "None of the slots you ranked are in this poll. Reload and rank again.",
+      error: "None of the times you picked are in this poll. Reload and pick again.",
     });
     expect(await ballotOf(poll.id, voter.id)).toEqual([WED]);
   });
 
-  it("stores an empty ranking as 'none of these work'", async () => {
+  it("stores an empty list as 'none of these work'", async () => {
     const poll = await openPoll(admin.id);
     const voter = await makeVoter("Voter");
     expect(
-      await castBallot({ pollId: poll.id, userId: voter.id, ranking: [] }),
-    ).toMatchObject({ ok: true, ranking: [] });
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: [] }),
+    ).toMatchObject({ ok: true, availability: [] });
     expect(await ballotOf(poll.id, voter.id)).toEqual([]);
   });
 
@@ -165,7 +165,7 @@ describe("voting", () => {
       await castBallot({
         pollId: poll.id,
         userId: voter.id,
-        ranking: [SUN],
+        availability: [SUN],
         now: new Date(Date.now() + 2 * HOUR),
       }),
     ).toEqual({ ok: false, error: "Voting on this poll has closed." });
@@ -187,7 +187,7 @@ describe("voting", () => {
       }),
     );
     expect(
-      await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SUN] }),
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] }),
     ).toEqual({ ok: false, error: "Voting on this poll has closed." });
     expect(fired).toBe(true);
     expect(await prisma.matchNightBallot.count()).toBe(0);
@@ -203,7 +203,7 @@ describe("voting", () => {
       const results = await raceAll<unknown>([
         () => closePollNow({ pollId: poll.id }),
         ...voters.map((voter) => () =>
-          castBallot({ pollId: poll.id, userId: voter.id, ranking: [SUN] }),
+          castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] }),
         ),
       ]);
       expect(results[0]).toMatchObject({ ok: true });
@@ -216,34 +216,32 @@ describe("voting", () => {
     }
   });
 
-  it("the action asks a signed-out visitor to sign in, and validates the ranking", async () => {
+  it("the action asks a signed-out visitor to sign in, and validates the times", async () => {
     const poll = await openPoll(admin.id);
     vi.mocked(requireUser).mockRejectedValue(new Error("UNAUTHORIZED"));
     expect(
-      await castMatchNightBallot(null, form({ pollId: poll.id, ranking: `["${SUN}"]` })),
+      await castMatchNightBallot(null, form({ pollId: poll.id, availability: `["${SUN}"]` })),
     ).toEqual({ error: SIGN_IN_REQUIRED });
 
     const voter = await makeVoter("Voter");
     vi.mocked(requireUser).mockResolvedValue(sessionFor(voter));
     expect(
-      await castMatchNightBallot(null, form({ pollId: poll.id, ranking: "nope" })),
-    ).toEqual({ error: "Your ranking didn't come through. Reload and try again." });
+      await castMatchNightBallot(null, form({ pollId: poll.id, availability: "nope" })),
+    ).toEqual({ error: "Your times didn't come through. Reload and try again." });
     expect(
-      await castMatchNightBallot(null, form({ pollId: poll.id, ranking: "[]" })),
+      await castMatchNightBallot(null, form({ pollId: poll.id, availability: "[]" })),
     ).toMatchObject({ error: expect.stringContaining("None of these work for me") });
 
     const saved = await castMatchNightBallot(
       null,
-      form({ pollId: poll.id, ranking: JSON.stringify([SUN, "9@9", SAT]) }),
+      form({ pollId: poll.id, availability: JSON.stringify([SUN, "9@9", SAT]) }),
     );
-    expect(saved).toEqual({
-      message: expect.stringContaining(`2 slots ranked, ${label(SUN_18)} first.`),
-    });
-    expect(saved?.message).toContain("1 slot isn't in this poll and was left off.");
+    expect(saved?.message).toMatch(/^Saved 2 times: Sat 5 PM, Sun 6 PM \(.+ time\)\./);
+    expect(saved?.message).toContain("1 time isn't in this poll and was left off.");
 
     expect(
       await castMatchNightBallot(null, form({ pollId: poll.id, none: "1" })),
-    ).toEqual({ message: expect.stringContaining("none of these slots work") });
+    ).toEqual({ message: expect.stringContaining("none of these times work") });
     expect(await ballotOf(poll.id, voter.id)).toEqual([]);
   });
 });
@@ -258,7 +256,7 @@ describe("who may vote", () => {
     const poll = await openPoll(admin.id);
     const outsider = await makeUser("Outsider");
     expect(
-      await castBallot({ pollId: poll.id, userId: outsider.id, ranking: [SUN] }),
+      await castBallot({ pollId: poll.id, userId: outsider.id, availability: [SUN] }),
     ).toEqual(refusal);
 
     for (const status of ["WITHDRAWN", "REMOVED"]) {
@@ -268,7 +266,7 @@ describe("who may vote", () => {
         data: { status },
       });
       expect(
-        await castBallot({ pollId: poll.id, userId: quitter.id, ranking: [SUN] }),
+        await castBallot({ pollId: poll.id, userId: quitter.id, availability: [SUN] }),
       ).toEqual(refusal);
     }
 
@@ -276,7 +274,7 @@ describe("who may vote", () => {
     const old = await makeSeason({ name: "Season 9", isActive: false });
     const veteran = await makePlayer(old.id, "Veteran", 3000);
     expect(
-      await castBallot({ pollId: poll.id, userId: veteran.id, ranking: [SUN] }),
+      await castBallot({ pollId: poll.id, userId: veteran.id, availability: [SUN] }),
     ).toEqual(refusal);
 
     expect(await prisma.matchNightBallot.count()).toBe(0);
@@ -305,7 +303,7 @@ describe("who may vote", () => {
     });
     for (const voter of [standin, captain, rostered]) {
       expect(
-        await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SUN] }),
+        await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] }),
       ).toMatchObject({ ok: true });
     }
     expect(await prisma.matchNightBallot.count()).toBe(3);
@@ -322,10 +320,10 @@ describe("who may vote", () => {
     });
     const ancient = await makePlayer(older.id, "Ancient", 3000);
     expect(
-      await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SUN] }),
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] }),
     ).toMatchObject({ ok: true });
     expect(
-      await castBallot({ pollId: poll.id, userId: ancient.id, ranking: [SUN] }),
+      await castBallot({ pollId: poll.id, userId: ancient.id, availability: [SUN] }),
     ).toEqual(refusal);
   });
 
@@ -360,18 +358,19 @@ describe("what Home shows", () => {
     const [a, b, c, outsider] = await Promise.all(
       ["A", "B", "C"].map((name) => makeVoter(name)).concat(makeUser("Outsider")),
     );
-    await castBallot({ pollId: poll.id, userId: a.id, ranking: [SUN, WED] });
-    await castBallot({ pollId: poll.id, userId: b.id, ranking: [WED, SUN] });
-    await castBallot({ pollId: poll.id, userId: c.id, ranking: [SAT, SUN] });
+    await castBallot({ pollId: poll.id, userId: a.id, availability: [SUN, WED] });
+    await castBallot({ pollId: poll.id, userId: b.id, availability: [WED, SUN] });
+    await castBallot({ pollId: poll.id, userId: c.id, availability: [SAT, SUN] });
 
     const now = Date.now();
     const hidden = await loadHomePoll({ id: outsider.id, role: "USER" }, now);
-    expect(hidden).toMatchObject({ open: true, ballots: 3, myRanking: null, results: null });
+    expect(hidden).toMatchObject({ open: true, ballots: 3, myAvailability: null, results: null });
     expect(await loadHomePoll(null, now)).toMatchObject({ results: null });
 
     const voter = await loadHomePoll({ id: a.id, role: "USER" }, now);
-    expect(voter?.myRanking).toEqual([SUN, WED]);
-    // SAT goes first; its ballot moves to SUN, which then has 2 of 3.
+    // Kept in poll order: Wednesday before Sunday.
+    expect(voter?.myAvailability).toEqual([WED, SUN]);
+    // All three voters can make Sunday; two can make Wednesday.
     expect(voter?.results?.winner).toBe(SUN);
     expect((await loadHomePoll({ id: admin.id, role: "ADMIN" }, now))?.results).not.toBeNull();
 
@@ -385,34 +384,59 @@ describe("what Home shows", () => {
 });
 
 describe("admin controls", () => {
-  it("opens a poll from the form's slot rows and announces it on Discord", async () => {
+  it("opens a poll whose grid fills itself: every day, noon to 6 PM", async () => {
     const result = await createMatchNightPoll(
       null,
       form({
         question: "  When should Season 10 play?  ",
-        slotDay: ["0", "3", ""],
-        slotTime: ["18:00", "20:00", ""],
         closesAt: "2030-01-01T20:00",
         closesAtTs: String(Date.now() + 2 * DAY),
         announce: "on",
       }),
     );
-    expect(result?.message).toContain("Poll open on Home with 2 slots");
+    expect(result?.message).toContain(
+      "Poll open on Home: Every day, 12 PM–6 PM, on the hour",
+    );
+    expect(result?.message).toContain("(49 start times)");
     expect(result?.message).toContain("It's announced on Discord.");
     const poll = await prisma.matchNightPoll.findFirstOrThrow();
     expect(poll.question).toBe("When should Season 10 play?");
-    // Monday-first order: Wednesday before Sunday.
-    expect(JSON.parse(poll.slots)).toEqual([WED_20, SUN_18]);
+    const slots = JSON.parse(poll.slots) as { day: number; minute: number }[];
+    expect(slots).toHaveLength(49);
+    expect(slots[0]).toEqual({ day: 1, minute: 720 });
+    expect(slots.at(-1)).toEqual({ day: 0, minute: 1080 });
     expect(sendDiscordMessage).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(sendDiscordMessage).mock.calls[0][0]).toContain(
-      `• ${label(WED_20)}`,
-    );
+    const post = vi.mocked(sendDiscordMessage).mock.calls[0][0];
+    expect(post).toContain("Times: Every day, 12 PM–6 PM, on the hour");
+    expect(post).toMatch(/\(<t:\d+:t>–<t:\d+:t> your time\)/);
     expect(
       await prisma.adminAction.findFirst({ where: { action: "createMatchNightPoll" } }),
     ).not.toBeNull();
   });
 
-  it("refuses a second open poll, a past closing time and bad slot rows", async () => {
+  it("opens a narrower grid from the ticked days and hours", async () => {
+    const result = await createMatchNightPoll(
+      null,
+      form({
+        daysPosted: "1",
+        day: ["6", "0"],
+        fromHour: "19",
+        toHour: "20",
+        closesAt: "x",
+        closesAtTs: String(Date.now() + DAY),
+      }),
+    );
+    expect(result?.message).toContain("Sat and Sun, 7 PM–8 PM, on the hour");
+    expect(result?.message).toContain("It wasn't posted to Discord.");
+    expect(JSON.parse((await prisma.matchNightPoll.findFirstOrThrow()).slots)).toEqual([
+      { day: 6, minute: 1140 },
+      { day: 6, minute: 1200 },
+      { day: 0, minute: 1140 },
+      { day: 0, minute: 1200 },
+    ]);
+  });
+
+  it("refuses a second open poll, a past closing time and an empty grid", async () => {
     await openPoll(admin.id, undefined, "First poll");
     expect(
       await createPoll({
@@ -428,9 +452,9 @@ describe("admin controls", () => {
     expect(
       await createMatchNightPoll(
         null,
-        form({ slotDay: ["0"], slotTime: ["18:00"], closesAtTs: String(Date.now() + DAY), closesAt: "x" }),
+        form({ daysPosted: "1", closesAtTs: String(Date.now() + DAY), closesAt: "x" }),
       ),
-    ).toEqual({ error: "Offer at least 2 slots to vote between." });
+    ).toEqual({ error: "Pick at least one day." });
     await prisma.matchNightPoll.deleteMany();
     expect(
       await createPoll({
@@ -466,7 +490,7 @@ describe("admin controls", () => {
   it("closes voting once: a second close changes nothing and keeps the recorded time", async () => {
     const poll = await openPoll(admin.id);
     const voter = await makeVoter("Voter");
-    await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SUN] });
+    await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] });
     const first = await closeMatchNightPoll(null, form({ pollId: poll.id }));
     expect(first).toEqual({
       message: "Voting closed with 1 vote. The result shows on Home for the next week.",
@@ -486,7 +510,7 @@ describe("admin controls", () => {
   it("reopens a closed poll with its votes, unless another poll is open", async () => {
     const old = await openPoll(admin.id, undefined, "Old poll");
     const voter = await makeVoter("Voter");
-    await castBallot({ pollId: old.id, userId: voter.id, ranking: [SUN] });
+    await castBallot({ pollId: old.id, userId: voter.id, availability: [SUN] });
     await closePollNow({ pollId: old.id });
 
     const reopened = await setMatchNightPollClosing(
@@ -567,7 +591,7 @@ describe("admin controls", () => {
   it("announces a closed poll's winner once, and frees the claim when Discord fails", async () => {
     const poll = await openPoll(admin.id);
     const voter = await makeVoter("Voter");
-    await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SAT] });
+    await castBallot({ pollId: poll.id, userId: voter.id, availability: [SAT] });
     expect(
       await announceMatchNightPollResult(null, form({ pollId: poll.id })),
     ).toEqual({ error: "Voting is still open. Close it first." });
@@ -582,7 +606,7 @@ describe("admin controls", () => {
       await announceMatchNightPollResult(null, form({ pollId: poll.id })),
     ).toEqual({ message: `Announced on Discord: ${label(SAT_17)} won.` });
     expect(vi.mocked(sendDiscordMessage).mock.calls.at(-1)?.[0]).toContain(
-      "with 1 of 1 votes in the first round",
+      "1 of 1 voters can play then, next on <t:",
     );
     expect(
       await announceMatchNightPollResult(null, form({ pollId: poll.id })),
@@ -593,7 +617,7 @@ describe("admin controls", () => {
   it("deletes a poll with its ballots only once its question is typed", async () => {
     const poll = await openPoll(admin.id);
     const voter = await makeVoter("Voter");
-    await castBallot({ pollId: poll.id, userId: voter.id, ranking: [SUN] });
+    await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] });
     expect(
       await deleteMatchNightPoll(null, form({ pollId: poll.id, confirmationName: "delete" })),
     ).toEqual({

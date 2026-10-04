@@ -160,27 +160,52 @@ describe("discord message formatters", () => {
     expect(msg).toMatch(/Sign up: <[^>]+\/me>$/);
   });
 
-  it("announces a match-night poll with its slots, deadline and link", () => {
+  it("announces a match-night poll with its grid on each reader's clock", () => {
     const msg = matchNightPollOpenedMessage({
       question: "When should *match night* be?",
-      slots: ["Wednesdays at 8:00 PM Pacific time", "Sundays at 6:00 PM Pacific time"],
+      summary: "Every day, 12 PM–6 PM, on the hour",
+      zone: "Pacific time",
+      hours: { firstMs: Date.UTC(2026, 9, 5, 19, 0), lastMs: Date.UTC(2026, 9, 6, 1, 0) },
       closesAtMs: Date.UTC(2026, 9, 11, 1, 0),
     });
     expect(msg).toContain("**When should \\*match night\\* be?**");
-    expect(msg).toContain("ranked choice");
+    expect(msg).toContain("as many as you like");
+    expect(msg).toContain(
+      `Times: Every day, 12 PM–6 PM, on the hour, Pacific time (<t:${Date.UTC(2026, 9, 5, 19, 0) / 1000}:t>–<t:${Date.UTC(2026, 9, 6, 1, 0) / 1000}:t> your time).`,
+    );
     expect(msg).toContain(`<t:${Date.UTC(2026, 9, 11, 1, 0) / 1000}:F>`);
-    expect(msg).toContain("\n• Wednesdays at 8:00 PM Pacific time\n• Sundays at 6:00 PM Pacific time\n");
     expect(msg).toMatch(/Vote: <[^>]+\/#match-night-poll>$/);
     expect(msg).not.toContain("@");
+    expect(
+      matchNightPollOpenedMessage({
+        question: "Q",
+        summary: "3 start times",
+        zone: "Berlin time",
+        hours: null,
+        closesAtMs: 0,
+      }),
+    ).toContain("Times: 3 start times, Berlin time. Voting");
   });
 
-  it("announces a poll's winner with the final round's count", () => {
-    const base = { question: "Match night?", winner: "Sundays at 6:00 PM Pacific time", votes: 9, counted: 14 };
-    expect(matchNightPollResultMessage({ ...base, rounds: 3 })).toContain(
-      "**The votes are in: Sundays at 6:00 PM Pacific time** won \"Match night?\" with 9 of 14 votes after 2 runoff rounds.",
+  it("announces a poll's winner with how many can play and the runner-up", () => {
+    const base = {
+      question: "Match night?",
+      winner: "Saturdays at 2:00 PM Pacific time",
+      count: 15,
+      voters: 18,
+      nextAtMs: Date.UTC(2026, 9, 10, 21, 0),
+    };
+    expect(
+      matchNightPollResultMessage({
+        ...base,
+        runnerUp: { label: "Sundays at 1:00 PM Pacific time", count: 14 },
+      }),
+    ).toContain(
+      `**The votes are in: Saturdays at 2:00 PM Pacific time** won "Match night?": 15 of 18 voters can play then, next on <t:${Date.UTC(2026, 9, 10, 21, 0) / 1000}:F>. Runner-up: Sundays at 1:00 PM Pacific time (14).`,
     );
-    expect(matchNightPollResultMessage({ ...base, rounds: 2 })).toContain("after 1 runoff round.");
-    expect(matchNightPollResultMessage({ ...base, rounds: 1 })).toContain("in the first round.");
+    expect(matchNightPollResultMessage({ ...base, runnerUp: null })).not.toContain(
+      "Runner-up",
+    );
   });
 
   it("leaves the match night out until one is announced", () => {

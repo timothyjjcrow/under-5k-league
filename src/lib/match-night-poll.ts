@@ -1,13 +1,13 @@
-// The match-night poll: a ranked-choice vote on the league's weekly slot.
-// Pure: the slot model, the labels, and the instant-runoff count that turns
-// ranked ballots into one winner. The service (match-night-poll-service.ts)
-// stores and claims; this file decides.
+// The match-night poll: players mark every weekly start time they could play,
+// and the time the most players can make wins. Pure: the slot grid, labels,
+// the count and the viewer's-clock conversion. The service
+// (match-night-poll-service.ts) stores and claims; this file decides.
 //
 // A slot is a weekday plus a minute of the day on the LEAGUE's clock
 // (LEAGUE_CONFIG.timeZone), never an instant: "Sundays at 6 PM" stays 6 PM
-// across daylight saving, the way matchNightForWeek schedules fixtures. A
-// ballot is the slots a voter can make, best first; a slot left off means
-// "I can't play then".
+// across daylight saving, the way matchNightForWeek schedules fixtures.
+// Pages show every slot on the viewer's own clock; the league's clock is
+// what gets stored and announced.
 
 import { zoneLabel } from "./zone-label";
 import { dateAtWallTime, wallTime, zoneFormatter } from "./zoned-time";
@@ -19,9 +19,13 @@ export type PollSlot = {
   minute: number;
 };
 
-/** Fewest and most slots a poll may offer. */
-export const POLL_MIN_SLOTS = 2;
-export const POLL_MAX_SLOTS = 10;
+/** Every day of the week, Monday first. */
+export const POLL_DAYS = [1, 2, 3, 4, 5, 6, 0] as const;
+/** The grid a new poll offers: every day, on the hour, noon to 6 PM. */
+export const POLL_DEFAULT_FROM_HOUR = 12;
+export const POLL_DEFAULT_TO_HOUR = 18;
+/** Seven days of twelve hourly start times. */
+export const POLL_MAX_SLOTS = 84;
 /** How long Home keeps showing a poll's result after voting closes. */
 export const POLL_RESULT_DAYS = 7;
 export const POLL_QUESTION_MAX = 120;
@@ -96,64 +100,48 @@ export function parseSlots(json: string): PollSlot[] {
   return slots;
 }
 
-/** "19:30" (an `<input type="time">` value) as minutes, or null. */
-export function parseTimeOfDay(value: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
-  if (!m) return null;
-  const hour = Number(m[1]);
-  const minute = Number(m[2]);
-  if (hour > 23 || minute > 59) return null;
-  return hour * 60 + minute;
-}
-
 /**
- * The admin's slot rows (parallel weekday and time fields) as a poll's
- * slots, Monday first. Blank rows are skipped, so the form can offer spare
- * rows; a half-filled row, a repeat or a count outside the limits is refused
- * by name instead of being dropped, so the poll never offers fewer slots than
- * the admin thinks it does.
+ * The start times a poll offers: every chosen day, on the hour, from
+ * `fromHour` to `toHour` inclusive on the league's clock, Monday first. The
+ * admin form posts the days and the two hours; a new poll defaults to every
+ * day, noon to 6 PM.
  */
-export function parseSlotRows(
-  days: readonly string[],
-  times: readonly string[],
-): { slots: PollSlot[] } | { error: string } {
-  const slots: PollSlot[] = [];
-  const seen = new Set<string>();
-  const rows = Math.max(days.length, times.length);
-  for (let i = 0; i < rows; i++) {
-    const dayRaw = (days[i] ?? "").trim();
-    const timeRaw = (times[i] ?? "").trim();
-    if (!dayRaw && !timeRaw) continue;
-    if (!dayRaw || !timeRaw) {
-      return { error: `Slot ${i + 1} needs both a day and a time.` };
-    }
-    const day = Number(dayRaw);
-    const minute = parseTimeOfDay(timeRaw);
-    if (minute === null || !validSlot(day, minute)) {
-      return { error: `Slot ${i + 1} isn't a real day and time.` };
-    }
-    const slot = { day, minute };
-    if (seen.has(slotKey(slot))) {
-      return { error: `${slotLabel(slot)} is listed twice.` };
-    }
-    seen.add(slotKey(slot));
-    slots.push(slot);
+export function gridSlots(input: {
+  days: readonly number[];
+  fromHour: number;
+  toHour: number;
+}): { slots: PollSlot[] } | { error: string } {
+  const days = POLL_DAYS.filter((day) => input.days.includes(day));
+  if (days.length === 0) return { error: "Pick at least one day." };
+  const { fromHour, toHour } = input;
+  if (
+    !Number.isInteger(fromHour) ||
+    !Number.isInteger(toHour) ||
+    fromHour < 0 ||
+    toHour > 23 ||
+    fromHour > toHour
+  ) {
+    return { error: "Pick a start hour no later than the end hour." };
   }
-  if (slots.length < POLL_MIN_SLOTS) {
-    return { error: `Offer at least ${POLL_MIN_SLOTS} slots to vote between.` };
+  const slots: PollSlot[] = [];
+  for (const day of days) {
+    for (let hour = fromHour; hour <= toHour; hour++) {
+      slots.push({ day, minute: hour * 60 });
+    }
   }
   if (slots.length > POLL_MAX_SLOTS) {
-    return { error: `A poll can offer at most ${POLL_MAX_SLOTS} slots.` };
+    return { error: `A poll can offer at most ${POLL_MAX_SLOTS} start times.` };
   }
-  return { slots: [...slots].sort((a, b) => weekOrder(a) - weekOrder(b)) };
+  return { slots };
 }
 
 /**
- * A ballot as stored or submitted: slot keys, best first. Unknown keys and
- * repeats are dropped (a repeat keeps its higher rank), and garbage reads as
- * an empty ballot.
+ * A ballot as stored or submitted: the slot keys a voter can play, in poll
+ * order. Unknown keys and repeats are dropped, and garbage reads as an empty
+ * ballot. (The column is `ranking` because the first version of the poll was
+ * ranked choice; order no longer carries meaning.)
  */
-export function parseRanking(
+export function parseAvailability(
   json: string,
   slots: readonly PollSlot[],
 ): string[] {
@@ -163,21 +151,33 @@ export function parseRanking(
   } catch {
     return [];
   }
-  return cleanRanking(raw, slots);
+  return cleanAvailability(raw, slots);
 }
 
-/** `parseRanking` for an already-decoded value. */
-export function cleanRanking(raw: unknown, slots: readonly PollSlot[]): string[] {
+/** `parseAvailability` for an already-decoded value. */
+export function cleanAvailability(
+  raw: unknown,
+  slots: readonly PollSlot[],
+): string[] {
   if (!Array.isArray(raw)) return [];
-  const known = new Set(slots.map(slotKey));
-  const ranking: string[] = [];
-  for (const key of raw) {
-    if (typeof key !== "string" || !known.has(key) || ranking.includes(key)) {
-      continue;
-    }
-    ranking.push(key);
-  }
-  return ranking;
+  const picked = new Set(raw.filter((key) => typeof key === "string"));
+  return slots.map(slotKey).filter((key) => picked.has(key));
+}
+
+/**
+ * A poll's slots as a grid: columns are its days (Monday first), rows its
+ * start times. `at` finds the slot in a cell, or nothing for a cell the poll
+ * doesn't offer.
+ */
+export function pollGrid<S extends PollSlot & { key: string }>(
+  slots: readonly S[],
+): { days: number[]; minutes: number[]; at: (day: number, minute: number) => S | undefined } {
+  const byKey = new Map(slots.map((slot) => [slotKey(slot), slot]));
+  return {
+    days: POLL_DAYS.filter((day) => slots.some((slot) => slot.day === day)),
+    minutes: [...new Set(slots.map((slot) => slot.minute))].sort((a, b) => a - b),
+    at: (day, minute) => byKey.get(slotKey({ day, minute })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,13 +193,27 @@ export function slotTime(minute: number, locale?: string): string {
   }).format(new Date(Date.UTC(2000, 0, 2, Math.floor(minute / 60), minute % 60)));
 }
 
+/** "6 PM" (en-US) or "18:00" (en-GB): the compact form a grid prints. */
+export function slotHour(minute: number, locale?: string): string {
+  const format = new Intl.DateTimeFormat(locale, {
+    hour: "numeric",
+    ...(minute % 60 === 0 ? {} : { minute: "2-digit" as const }),
+    timeZone: "UTC",
+  });
+  const text = format.format(
+    new Date(Date.UTC(2000, 0, 2, Math.floor(minute / 60), minute % 60)),
+  );
+  // en-GB prints a bare "18" for an hour; keep it readable as a time.
+  return /^\d{1,2}$/.test(text) ? `${text.padStart(2, "0")}:00` : text;
+}
+
 /** "Sunday". */
-export function slotDayName(slot: PollSlot): string {
+export function slotDayName(slot: Pick<PollSlot, "day">): string {
   return WEEKDAYS[slot.day];
 }
 
 /** "Sun". */
-export function slotDayShort(slot: PollSlot): string {
+export function slotDayShort(slot: Pick<PollSlot, "day">): string {
   return WEEKDAYS[slot.day].slice(0, 3);
 }
 
@@ -215,6 +229,70 @@ export function slotLabel(
 ): string {
   const zone = timeZone ? ` ${zoneLabel(timeZone)}` : "";
   return `${slotDayName(slot)}s at ${slotTime(slot.minute, locale)}${zone}`;
+}
+
+/**
+ * "Every day, 12 PM–6 PM", "Mon–Fri, 7 PM–10 PM" or "Sat and Sun, 12 PM–6 PM":
+ * a full grid in a few words, for Discord and the admin card. Falls back to a
+ * count when the slots aren't one rectangle of days by hours.
+ */
+export function gridSummary(slots: readonly PollSlot[], locale?: string): string {
+  if (slots.length === 0) return "no times";
+  const days = POLL_DAYS.filter((day) => slots.some((s) => s.day === day));
+  const minutes = [...new Set(slots.map((s) => s.minute))].sort((a, b) => a - b);
+  const hourly = minutes.every((m, i) => i === 0 || m - minutes[i - 1] === 60);
+  if (!hourly || days.length * minutes.length !== slots.length) {
+    return `${slots.length} start times`;
+  }
+  const times =
+    minutes.length === 1
+      ? slotHour(minutes[0], locale)
+      : `${slotHour(minutes[0], locale)}–${slotHour(minutes.at(-1)!, locale)}`;
+  const order = days.map((day) => POLL_DAYS.indexOf(day as (typeof POLL_DAYS)[number]));
+  const consecutive = order.every((o, i) => i === 0 || o - order[i - 1] === 1);
+  const dayText =
+    days.length === 7
+      ? "Every day"
+      : consecutive && days.length > 2
+        ? `${slotDayShort({ day: days[0] })}–${slotDayShort({ day: days.at(-1)! })}`
+        : days.length === 1
+          ? `${slotDayName({ day: days[0] })}s`
+          : `${days.slice(0, -1).map((day) => slotDayShort({ day })).join(", ")} and ${slotDayShort({ day: days.at(-1)! })}`;
+  return `${dayText}, ${times}${minutes.length > 1 ? ", on the hour" : ""}`;
+}
+
+/**
+ * Times picked, as compact ranges per day: ["Sat 12 PM–3 PM", "Sun 1 PM"].
+ * Consecutive hours on one day join into a range. `entries` may be on any
+ * clock (the league's, or the viewer's from `slotInZone`).
+ */
+export function describeTimes(
+  entries: readonly { day: number; minute: number }[],
+  locale?: string,
+): string[] {
+  const sorted = [...entries].sort((a, b) => weekOrder(a) - weekOrder(b));
+  const out: string[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    const start = sorted[i];
+    let end = start;
+    while (
+      i + 1 < sorted.length &&
+      sorted[i + 1].day === start.day &&
+      sorted[i + 1].minute - end.minute === 60
+    ) {
+      i += 1;
+      end = sorted[i];
+    }
+    const day = slotDayShort(start);
+    out.push(
+      end === start
+        ? `${day} ${slotHour(start.minute, locale)}`
+        : `${day} ${slotHour(start.minute, locale)}–${slotHour(end.minute, locale)}`,
+    );
+    i += 1;
+  }
+  return out;
 }
 
 /**
@@ -244,48 +322,64 @@ export function nextSlotOccurrence(
 }
 
 /**
- * What a weekly slot is on the viewer's clock: "Mon 3:00 AM your time", or
- * null when both clocks read the same weekday and time (nothing to tell
- * them). Null too for a zone Intl can't format, so a browser reporting
- * "Etc/Unknown" loses a hint line, not the ballot.
+ * An instant as a weekday and minute on `zone`'s clock: where a slot lands
+ * for the viewer. Null for a zone Intl can't format (Chrome reports
+ * "Etc/Unknown" when it can't map the OS zone), so a strange browser shows
+ * the league's clock instead of crashing the grid.
  */
-export function yourSlotTime(
+export function slotInZone(
   ms: number,
-  timeZone: string,
-  viewerZone: string,
-  locale?: string,
-): string | null {
+  zone: string,
+): { day: number; minute: number } | null {
   try {
     const date = new Date(ms);
     if (Number.isNaN(date.getTime())) return null;
-    const league = wallTime(date, zoneFormatter(timeZone));
-    const yours = wallTime(date, zoneFormatter(viewerZone));
-    if (league === yours) return null;
-    const when = new Intl.DateTimeFormat(locale, {
-      timeZone: viewerZone,
-      weekday: "short",
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(date);
-    return `${when} your time`;
+    const wall = new Date(wallTime(date, zoneFormatter(zone)));
+    return {
+      day: wall.getUTCDay(),
+      minute: wall.getUTCHours() * 60 + wall.getUTCMinutes(),
+    };
   } catch {
     return null;
   }
 }
 
-/** "1st", "2nd", "3rd", "4th" … for a ballot position (1-based). */
-export function ordinal(n: number): string {
-  const tens = n % 100;
-  if (tens >= 11 && tens <= 13) return `${n}th`;
-  switch (n % 10) {
-    case 1:
-      return `${n}st`;
-    case 2:
-      return `${n}nd`;
-    case 3:
-      return `${n}rd`;
-    default:
-      return `${n}th`;
+/**
+ * A slot as one clock reads it, for a grid's row header or a list: the start
+ * time, the weekday, and how many days that weekday is from the slot's own
+ * column (+1 when 6 PM Pacific Saturday is 3 AM Sunday in Berlin). With no
+ * zone (the server, or a browser zone Intl can't read) it is the league's
+ * clock unchanged.
+ */
+export function slotOnClock(
+  slot: { day: number; minute: number; nextAt: number },
+  zone: string | null,
+): { day: number; minute: number; shift: -1 | 0 | 1 } {
+  const local = zone ? slotInZone(slot.nextAt, zone) : null;
+  if (!local) return { day: slot.day, minute: slot.minute, shift: 0 };
+  const ahead = (local.day - slot.day + 7) % 7;
+  return { ...local, shift: ahead === 1 ? 1 : ahead === 6 ? -1 : 0 };
+}
+
+/**
+ * How far the viewer's clock is from the league's at `ms`, in minutes
+ * (positive when the viewer is ahead), or null when they agree or the zone
+ * is unknown.
+ */
+export function zoneOffsetMinutes(
+  ms: number,
+  leagueZone: string,
+  viewerZone: string,
+): number | null {
+  try {
+    const date = new Date(ms);
+    const diff =
+      wallTime(date, zoneFormatter(viewerZone)) -
+      wallTime(date, zoneFormatter(leagueZone));
+    const minutes = Math.round(diff / 60_000);
+    return minutes === 0 ? null : minutes;
+  } catch {
+    return null;
   }
 }
 
@@ -306,10 +400,10 @@ export function pollOnHome(poll: { closesAt: Date }, nowMs: number): boolean {
 }
 
 /**
- * Who sees the standings. While voting is open only people who have voted
- * (and admins), so a voter ranks what they can make instead of piling onto
- * the leader; once it closes, everyone. The tally is left out of the page
- * payload for everyone else, not merely hidden.
+ * Who sees the count. While voting is open only people who have voted (and
+ * admins), so a voter marks the times they can actually make instead of the
+ * ones already winning; once it closes, everyone. The count is left out of
+ * the page payload for everyone else, not merely hidden.
  */
 export function pollResultsVisible(input: {
   open: boolean;
@@ -320,252 +414,67 @@ export function pollResultsVisible(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Instant runoff
+// The count
 // ---------------------------------------------------------------------------
 
-/** Which rule picked the slot to drop when the bottom of a round was tied. */
-export type RunoffTiebreak = "earlier-round" | "reach" | "order";
-
-export type RunoffRound = {
-  /** Votes for each slot still standing this round, in poll order. */
-  tallies: { key: string; votes: number }[];
-  /** Ballots with no standing slot left on them (empty ballots included). */
-  exhausted: number;
-  /** Slots knocked out after this round; empty on the deciding round. */
-  eliminated: string[];
-  /** Set when the fewest votes were tied and a rule chose who went. */
-  tiebreak: RunoffTiebreak | null;
-};
-
-export type RunoffResult = {
+export type AvailabilityResult = {
   /** Every ballot cast, including "none of these work" ones. */
   ballots: number;
-  rounds: RunoffRound[];
-  /** Null only when no ballot ranks anything. */
+  /** Players who can make each slot. */
+  counts: Record<string, number>;
+  /** Slots best first (see tallyAvailability); every slot appears once. */
+  order: string[];
+  /** Null when nobody can make any slot. */
   winner: string | null;
-  /** Ballots that rank each slot at all: how many can make it. */
-  reach: Record<string, number>;
 };
 
 /**
- * Count ranked ballots by instant runoff.
- *
- * Each round, every ballot counts for its highest-ranked slot still standing.
- * A slot with more than half of those counted ballots wins. Otherwise the
- * slot with the fewest votes is dropped and its ballots move to their next
- * choice; a ballot with no choice left is exhausted and stops counting, so
- * the majority is of the ballots still in play.
- *
- * Slots on zero votes drop together (they carry no ballots, so dropping them
- * one by one would land in the same place). A tie for fewest is broken, in
- * order, by fewer votes in the latest earlier round that separates them, by
- * fewer ballots ranking the slot at all, and finally by poll order (the slot
- * listed later drops). Every rule is deterministic, so the same ballots
- * always crown the same slot, and the round says which rule decided.
+ * Count availability ballots. The best slot is the one the most players can
+ * make. A tie goes to the slot with more players free an hour either side on
+ * the same day (a late start or a long series still works), then to the
+ * earlier slot in the week. Deterministic, so the same ballots always pick
+ * the same night.
  */
-export function instantRunoff(
-  slotKeys: readonly string[],
+export function tallyAvailability(
+  slots: readonly PollSlot[],
   ballots: readonly (readonly string[])[],
-): RunoffResult {
-  const known = new Set(slotKeys);
-  const clean = ballots.map((ballot) => {
-    const seen = new Set<string>();
-    return ballot.filter((key) => {
-      if (!known.has(key) || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  });
-  const reach: Record<string, number> = Object.fromEntries(
-    slotKeys.map((key) => [key, 0]),
+): AvailabilityResult {
+  const keys = slots.map(slotKey);
+  const counts: Record<string, number> = Object.fromEntries(
+    keys.map((key) => [key, 0]),
   );
-  for (const ballot of clean) for (const key of ballot) reach[key] += 1;
-
-  const result: RunoffResult = {
-    ballots: clean.length,
-    rounds: [],
-    winner: null,
-    reach,
-  };
-  if (!clean.some((ballot) => ballot.length > 0)) return result;
-
-  let standing = [...new Set(slotKeys)];
-  for (;;) {
-    const live = new Set(standing);
-    const votes = new Map(standing.map((key) => [key, 0]));
-    let exhausted = 0;
-    for (const ballot of clean) {
-      const top = ballot.find((key) => live.has(key));
-      if (top === undefined) exhausted += 1;
-      else votes.set(top, (votes.get(top) ?? 0) + 1);
+  for (const ballot of ballots) {
+    for (const key of new Set(ballot)) {
+      if (key in counts) counts[key] += 1;
     }
-    const round: RunoffRound = {
-      tallies: standing.map((key) => ({ key, votes: votes.get(key) ?? 0 })),
-      exhausted,
-      eliminated: [],
-      tiebreak: null,
-    };
-    result.rounds.push(round);
-
-    const counted = clean.length - exhausted;
-    const leader = round.tallies.reduce((best, t) =>
-      t.votes > best.votes ? t : best,
-    );
-    if (standing.length === 1 || leader.votes * 2 > counted) {
-      result.winner = leader.key;
-      return result;
-    }
-
-    const zero = standing.filter((key) => votes.get(key) === 0);
-    if (zero.length > 0) {
-      round.eliminated = zero;
-    } else {
-      const fewest = Math.min(...standing.map((key) => votes.get(key) ?? 0));
-      let bottom = standing.filter((key) => votes.get(key) === fewest);
-      if (bottom.length > 1) {
-        // The latest earlier round that separates them, then the next one
-        // back, narrowing the tie each time.
-        for (let r = result.rounds.length - 2; r >= 0 && bottom.length > 1; r--) {
-          const tally = new Map(
-            result.rounds[r].tallies.map((t) => [t.key, t.votes]),
-          );
-          const low = Math.min(...bottom.map((key) => tally.get(key) ?? 0));
-          const narrowed = bottom.filter((key) => (tally.get(key) ?? 0) === low);
-          if (narrowed.length < bottom.length) {
-            bottom = narrowed;
-            round.tiebreak = "earlier-round";
-          }
-        }
-      }
-      if (bottom.length > 1) {
-        const low = Math.min(...bottom.map((key) => reach[key]));
-        const narrowed = bottom.filter((key) => reach[key] === low);
-        if (narrowed.length < bottom.length) {
-          bottom = narrowed;
-          round.tiebreak = "reach";
-        }
-      }
-      if (bottom.length > 1) {
-        bottom = [bottom[bottom.length - 1]];
-        round.tiebreak = "order";
-      }
-      round.eliminated = bottom;
-    }
-    const out = new Set(round.eliminated);
-    standing = standing.filter((key) => !out.has(key));
   }
-}
-
-/**
- * The slots in finishing order: the winner, then whoever lasted longest, so
- * a results list reads top to bottom as the count played out. Slots that
- * went out in the same round are ordered by their votes in that round, then
- * by poll order. Every slot appears once, including when nobody voted.
- */
-export function runoffPlacement(
-  slotKeys: readonly string[],
-  result: RunoffResult,
-): string[] {
-  const outRound = new Map<string, number>();
-  const lastVotes = new Map<string, number>();
-  result.rounds.forEach((round, index) => {
-    for (const t of round.tallies) lastVotes.set(t.key, t.votes);
-    for (const key of round.eliminated) outRound.set(key, index);
-  });
-  const lasted = (key: string) =>
-    key === result.winner
-      ? Number.POSITIVE_INFINITY
-      : (outRound.get(key) ?? result.rounds.length - 1);
-  return slotKeys
-    .map((key, index) => ({ key, index }))
+  const countAt = (day: number, minute: number) =>
+    counts[slotKey({ day, minute })] ?? 0;
+  const neighbours = (slot: PollSlot) =>
+    countAt(slot.day, slot.minute - 60) + countAt(slot.day, slot.minute + 60);
+  const order = slots
+    .map((slot, index) => ({ slot, key: keys[index] }))
     .sort(
       (a, b) =>
-        lasted(b.key) - lasted(a.key) ||
-        (lastVotes.get(b.key) ?? 0) - (lastVotes.get(a.key) ?? 0) ||
-        a.index - b.index,
+        counts[b.key] - counts[a.key] ||
+        neighbours(b.slot) - neighbours(a.slot) ||
+        weekOrder(a.slot) - weekOrder(b.slot),
     )
     .map(({ key }) => key);
-}
-
-/** The round a slot went out in (0-based), or null if it never did. */
-export function eliminatedInRound(
-  result: RunoffResult,
-  key: string,
-): number | null {
-  const index = result.rounds.findIndex((round) => round.eliminated.includes(key));
-  return index === -1 ? null : index;
-}
-
-/**
- * Where a dropped slot's ballots went in the next round: the votes each
- * still-standing slot gained, and how many ran out of choices. Empty for the
- * deciding round.
- */
-export function roundTransfers(
-  result: RunoffResult,
-  roundIndex: number,
-): { gained: { key: string; votes: number }[]; exhausted: number } {
-  const round = result.rounds[roundIndex];
-  const next = result.rounds[roundIndex + 1];
-  if (!round || !next) return { gained: [], exhausted: 0 };
-  const before = new Map(round.tallies.map((t) => [t.key, t.votes]));
-  return {
-    gained: next.tallies
-      .map((t) => ({ key: t.key, votes: t.votes - (before.get(t.key) ?? 0) }))
-      .filter((t) => t.votes > 0),
-    exhausted: next.exhausted - round.exhausted,
-  };
-}
-
-/** The plain-words reason a tiebreak picked the slot it dropped. */
-export function tiebreakReason(tiebreak: RunoffTiebreak): string {
-  switch (tiebreak) {
-    case "earlier-round":
-      return "it had fewer votes in an earlier round";
-    case "reach":
-      return "fewer voters ranked it at all";
-    case "order":
-      return "it was still tied after every other check, and it's listed later in the poll";
-  }
+  const winner = order.length > 0 && counts[order[0]] > 0 ? order[0] : null;
+  return { ballots: ballots.length, counts, order, winner };
 }
 
 // ---------------------------------------------------------------------------
 // The page's view of a poll
 // ---------------------------------------------------------------------------
 
-export type PollSlotView = {
+export type PollSlotView = PollSlot & {
   key: string;
   /** "Sundays at 6:00 PM Pacific time". */
   label: string;
-  /** "Sundays". */
-  days: string;
-  /** "Sun". */
-  dayShort: string;
-  /** "6:00 PM", on the league's clock. */
-  time: string;
-  /** The next time the slot comes round, for the viewer's-clock hint. */
+  /** The next time the slot comes round, for converting to the viewer's clock. */
   nextAt: number;
-};
-
-export type PollView = {
-  id: string;
-  question: string;
-  closesAt: number;
-  open: boolean;
-  slots: PollSlotView[];
-  ballots: number;
-  /** Ballots that rank nothing: "none of these work for me". */
-  noneOfThese: number;
-  /** The viewer's ranking, or null when they haven't voted. */
-  myRanking: string[] | null;
-  /** When the viewer last saved, so a fresh save remounts the ballot. */
-  myBallotAt: number | null;
-  /** The count, only for viewers allowed to see it (pollResultsVisible). */
-  results: RunoffResult | null;
-  /** Whose votes count: the voting season's signed-up players. */
-  electorate: PollElectorate | null;
-  /** The signed-in viewer is signed up for that season, so may vote. */
-  canVote: boolean;
 };
 
 export type PollElectorate = {
@@ -575,10 +484,35 @@ export type PollElectorate = {
   signupsOpen: boolean;
 };
 
+export type PollView = {
+  id: string;
+  question: string;
+  closesAt: number;
+  open: boolean;
+  /** The league's zone, "America/Los_Angeles": the clock slots are stored on. */
+  timeZone: string;
+  slots: PollSlotView[];
+  /** "Every day, 12 PM–6 PM, on the hour". */
+  summary: string;
+  ballots: number;
+  /** Ballots that mark nothing: "none of these work for me". */
+  noneOfThese: number;
+  /** The viewer's marked slots, or null when they haven't voted. */
+  myAvailability: string[] | null;
+  /** When the viewer last saved, so a fresh save remounts the grid. */
+  myBallotAt: number | null;
+  /** The count, only for viewers allowed to see it (pollResultsVisible). */
+  results: AvailabilityResult | null;
+  /** Whose votes count: the voting season's signed-up players. */
+  electorate: PollElectorate | null;
+  /** The signed-in viewer is signed up for that season, so may vote. */
+  canVote: boolean;
+};
+
 /**
- * Everything a page needs to draw one poll for one viewer. The tally is
+ * Everything a page needs to draw one poll for one viewer. The count is
  * computed for everyone but handed over only when pollResultsVisible says
- * so; nothing in the view says who ranked what.
+ * so; nothing in the view says who marked what.
  */
 export function buildPollView(input: {
   poll: { id: string; question: string; slots: string; closesAt: Date };
@@ -593,8 +527,7 @@ export function buildPollView(input: {
 }): PollView {
   const { poll, ballots, viewerId, nowMs, timeZone, locale } = input;
   const slots = parseSlots(poll.slots);
-  const keys = slots.map(slotKey);
-  const rankings = ballots.map((b) => parseRanking(b.ranking, slots));
+  const marks = ballots.map((b) => parseAvailability(b.ranking, slots));
   const mine = viewerId
     ? ballots.findIndex((b) => b.userId === viewerId)
     : -1;
@@ -609,27 +542,23 @@ export function buildPollView(input: {
     question: poll.question,
     closesAt: poll.closesAt.getTime(),
     open,
+    timeZone,
     slots: slots.map((slot) => ({
+      ...slot,
       key: slotKey(slot),
       label: slotLabel(slot, timeZone, locale),
-      days: `${slotDayName(slot)}s`,
-      dayShort: slotDayShort(slot),
-      time: slotTime(slot.minute, locale),
       nextAt: nextSlotOccurrence(slot, nowMs, timeZone),
     })),
+    summary: gridSummary(slots, locale),
     ballots: ballots.length,
-    noneOfThese: rankings.filter((r) => r.length === 0).length,
-    myRanking: mine === -1 ? null : rankings[mine],
+    noneOfThese: marks.filter((m) => m.length === 0).length,
+    myAvailability: mine === -1 ? null : marks[mine],
     myBallotAt: mine === -1 ? null : ballots[mine].updatedAt.getTime(),
-    results: visible ? instantRunoff(keys, rankings) : null,
+    results: visible ? tallyAvailability(slots, marks) : null,
     electorate: input.electorate,
     canVote: !!viewerId && input.canVote,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Who may vote
-// ---------------------------------------------------------------------------
 
 /**
  * Whether a season still takes a signup of some kind: full signups during
@@ -638,61 +567,4 @@ export function buildPollView(input: {
  */
 export function pollSignupsOpen(season: { isActive: boolean; status: string }): boolean {
   return season.isActive && season.status !== "COMPLETE";
-}
-
-/** "A", "A and B", "A, B and C". */
-function listOf(items: readonly string[]): string {
-  if (items.length <= 1) return items[0] ?? "";
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-}
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-/**
- * One round of the count in a sentence, for the results chart's caption:
- * who was dropped and where their ballots went, or, on the last round, who
- * won (or leads, while voting is open) and by how much. `name` turns a slot
- * key into the short name the chart prints.
- */
-export function roundStory(input: {
-  result: RunoffResult;
-  round: number;
-  open: boolean;
-  name: (key: string) => string;
-}): string {
-  const { result, round, open, name } = input;
-  const current = result.rounds[round];
-  if (!current) return "";
-  const counted = result.ballots - current.exhausted;
-  if (round === result.rounds.length - 1 && result.winner) {
-    const votes =
-      current.tallies.find((t) => t.key === result.winner)?.votes ?? 0;
-    const pct = counted > 0 ? Math.round((votes / counted) * 100) : 0;
-    const runoffs = result.rounds.length - 1;
-    return `${name(result.winner)} ${open ? "leads" : "wins"} with ${votes} of the ${plural(counted, "ballot")} in play (${pct}%)${
-      runoffs === 0
-        ? ", a majority on first choices."
-        : ` after ${plural(runoffs, "runoff round")}.`
-    }`;
-  }
-  const need = Math.floor(counted / 2) + 1;
-  const out = current.eliminated.map(name);
-  let story = `No slot has a majority yet: it takes ${need} of the ${plural(counted, "ballot")} in play.`;
-  const votesOf = (key: string) =>
-    current.tallies.find((t) => t.key === key)?.votes ?? 0;
-  if (current.eliminated.every((key) => votesOf(key) === 0)) {
-    return `${story} ${listOf(out)} ${out.length === 1 ? "has no first-choice votes and drops" : "have no first-choice votes and drop"} out.`;
-  }
-  story += current.tiebreak
-    ? ` ${listOf(out)} drops out: it tied for the fewest votes, and ${tiebreakReason(current.tiebreak)}.`
-    : ` ${listOf(out)} has the fewest votes and drops out.`;
-  const moves = roundTransfers(result, round);
-  const moved =
-    moves.gained.reduce((sum, g) => sum + g.votes, 0) + moves.exhausted;
-  if (moved > 0) {
-    const parts = moves.gained.map((g) => `${g.votes} to ${name(g.key)}`);
-    if (moves.exhausted > 0) parts.push(`${moves.exhausted} with no choice left`);
-    story += ` Its ${plural(moved, "ballot")} ${moved === 1 ? "moves" : "move"} on: ${listOf(parts)}.`;
-  }
-  return story;
 }

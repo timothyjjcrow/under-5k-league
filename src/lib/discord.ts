@@ -108,35 +108,44 @@ export function signupsOpenMessage(
 }
 
 /**
- * A match-night poll opened. Lists the slots so the channel can see the
- * choice at a glance, and says it is ranked choice, since "pick one" is what
- * a reader assumes and their backups would go unranked. Mentions nobody: a
- * poll is for whoever wants a say.
+ * A match-night poll opened. Says what kind of vote it is, since a reader
+ * assumes "pick one" and would mark a single time, and shows the grid on each
+ * reader's own clock through Discord timestamps. Mentions nobody: a poll is
+ * for whoever wants a say.
  */
 export function matchNightPollOpenedMessage(m: {
   question: string;
-  /** slotLabel for each slot, in poll order. */
-  slots: readonly string[];
+  /** gridSummary of the slots: "Every day, 12 PM–6 PM, on the hour". */
+  summary: string;
+  /** The league's zone in words: "Pacific time". */
+  zone: string;
+  /** Next occurrences of the earliest and latest start on one day, so
+   *  Discord can print the hours on each reader's clock; null to omit. */
+  hours: { firstMs: number; lastMs: number } | null;
   closesAtMs: number;
 }): string {
-  const list = m.slots.map((slot) => `• ${name(slot)}`).join("\n");
-  return `🗳️ **${name(m.question)}** Signed-up players: rank every slot you can make, best first. It's ranked choice, so your backups count if your favourite is knocked out. Voting closes <t:${Math.floor(m.closesAtMs / 1000)}:F>.\n${list}\nVote: <${resolveSiteUrl()}/#${POLL_ANCHOR}>`;
+  const local = m.hours
+    ? ` (<t:${Math.floor(m.hours.firstMs / 1000)}:t>–<t:${Math.floor(m.hours.lastMs / 1000)}:t> your time)`
+    : "";
+  return `🗳️ **${name(m.question)}** Signed-up players: tap every time you could play, as many as you like. The time the most players can make wins.\nTimes: ${name(m.summary)}, ${name(m.zone)}${local}. Voting closes <t:${Math.floor(m.closesAtMs / 1000)}:F>.\nVote: <${resolveSiteUrl()}/#${POLL_ANCHOR}>`;
 }
 
-/** A closed poll's winner, with the final round's count. */
+/** A closed poll's winner, how many can play, and the runner-up. */
 export function matchNightPollResultMessage(m: {
   question: string;
+  /** slotLabel of the winning slot. */
   winner: string;
-  votes: number;
-  /** Ballots still counting in the final round. */
-  counted: number;
-  rounds: number;
+  /** Players who can make the winner, and every voter. */
+  count: number;
+  voters: number;
+  /** The winner's next occurrence, shown on each reader's clock. */
+  nextAtMs: number;
+  runnerUp: { label: string; count: number } | null;
 }): string {
-  const how =
-    m.rounds > 1
-      ? ` after ${m.rounds - 1} runoff round${m.rounds === 2 ? "" : "s"}`
-      : " in the first round";
-  return `🗳️ **The votes are in: ${name(m.winner)}** won "${name(m.question)}" with ${m.votes} of ${m.counted} votes${how}. The full count: <${resolveSiteUrl()}/#${POLL_ANCHOR}>`;
+  const runnerUp = m.runnerUp
+    ? ` Runner-up: ${name(m.runnerUp.label)} (${m.runnerUp.count}).`
+    : "";
+  return `🗳️ **The votes are in: ${name(m.winner)}** won "${name(m.question)}": ${m.count} of ${m.voters} voters can play then, next on <t:${Math.floor(m.nextAtMs / 1000)}:F>.${runnerUp} The full grid: <${resolveSiteUrl()}/#${POLL_ANCHOR}>`;
 }
 
 export function draftScheduledMessage(

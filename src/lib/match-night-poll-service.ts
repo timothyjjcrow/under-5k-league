@@ -1,5 +1,5 @@
 // The match-night poll's database side. The rules (slots, labels, the
-// instant-runoff count) are pure in match-night-poll.ts; this file stores
+// availability count) are pure in match-night-poll.ts; this file stores
 // polls and ballots under the guards CLAUDE.md's two concurrency rules ask
 // for.
 //
@@ -20,7 +20,7 @@ import {
   POLL_QUESTION_MAX,
   POLL_RESULT_DAYS,
   buildPollView,
-  cleanRanking,
+  cleanAvailability,
   parseSlots,
   pollSignupsOpen,
   type PollSlot,
@@ -206,10 +206,11 @@ export async function loadPollById(
 // ---------------------------------------------------------------------------
 
 /**
- * Save (or replace) one voter's ranking. `ranking` is the submitted list of
- * slot keys, best first; keys the poll doesn't offer and repeats are dropped
- * and the result says what was stored. An empty ranking is a vote too: none
- * of the slots work for this voter.
+ * Save (or replace) one voter's availability: the slot keys they could play,
+ * any number of them. Keys the poll doesn't offer and repeats are dropped and
+ * the result says how many; a list of only unknown keys is refused rather
+ * than saved as "none". An empty list is a vote too: none of the times work
+ * for this voter.
  *
  * The poll's deadline is enforced by the claim alone, never by a read-time
  * check: the claim is the first write of the transaction and re-asserts
@@ -219,24 +220,26 @@ export async function loadPollById(
 export async function castBallot(input: {
   pollId: string;
   userId: string;
-  ranking: unknown;
+  availability: unknown;
   now?: Date;
-}): Promise<PollOutcome<{ ranking: string[]; slots: PollSlot[]; dropped: number }>> {
+}): Promise<PollOutcome<{ availability: string[]; slots: PollSlot[]; dropped: number }>> {
   const poll = await prisma.matchNightPoll.findUnique({
     where: { id: input.pollId },
     select: { id: true, slots: true },
   });
   if (!poll) return { ok: false, error: "This poll no longer exists." };
   const slots = parseSlots(poll.slots);
-  const submitted = Array.isArray(input.ranking) ? input.ranking.length : 0;
-  const ranking = cleanRanking(input.ranking, slots);
-  if (submitted > 0 && ranking.length === 0) {
+  const submitted = Array.isArray(input.availability)
+    ? new Set(input.availability).size
+    : 0;
+  const availability = cleanAvailability(input.availability, slots);
+  if (submitted > 0 && availability.length === 0) {
     return {
       ok: false,
-      error: "None of the slots you ranked are in this poll. Reload and rank again.",
+      error: "None of the times you picked are in this poll. Reload and pick again.",
     };
   }
-  const value = JSON.stringify(ranking);
+  const value = JSON.stringify(availability);
   await raceHook("matchNightPoll.castBallot.afterRead");
 
   try {
@@ -276,12 +279,17 @@ export async function castBallot(input: {
       return {
         ok: false,
         error:
-          "Your vote was sent twice at once. Reload to see the ranking that was saved.",
+          "Your vote was sent twice at once. Reload to see the times that were saved.",
       };
     }
     throw error;
   }
-  return { ok: true, ranking, slots, dropped: submitted - ranking.length };
+  return {
+    ok: true,
+    availability,
+    slots,
+    dropped: submitted - availability.length,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -10,20 +10,25 @@ import { ActionForm, SubmitButton } from "@/components/action-form";
 import { DangerSubmit } from "@/components/danger-submit";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
-import { PollRunoff } from "@/components/match-night-poll/poll-runoff";
+import { AvailabilityHeatmap } from "@/components/match-night-poll/availability-heatmap";
+import { PollClockProvider } from "@/components/match-night-poll/poll-clock";
 import { CardBody } from "@/components/ui";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import {
   DEFAULT_POLL_QUESTION,
-  POLL_MAX_SLOTS,
+  POLL_DAYS,
+  POLL_DEFAULT_FROM_HOUR,
+  POLL_DEFAULT_TO_HOUR,
   POLL_QUESTION_MAX,
   POLL_RESULT_DAYS,
   pollOnHome,
+  slotDayName,
+  slotHour,
   type PollView,
 } from "@/lib/match-night-poll";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { zoneLabel } from "@/lib/zone-label";
-import { PollSlotRows, type SlotRow } from "./poll-slot-rows";
+import { LEAGUE_LOCALE } from "@/lib/zoned-time";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -105,14 +110,24 @@ function CurrentPoll({
         </p>
       </div>
 
+      <p className="text-xs text-muted">
+        Times on offer: {poll.summary}, {zoneLabel(poll.timeZone)} (
+        {poll.slots.length} start times).
+      </p>
+
       {poll.results ? (
-        <PollRunoff
-          slots={poll.slots}
-          result={poll.results}
-          open={poll.open}
-          noneOfThese={poll.noneOfThese}
-          myFirst={null}
-        />
+        <PollClockProvider
+          leagueZone={poll.timeZone}
+          sampleAt={poll.slots[0]?.nextAt ?? poll.closesAt}
+        >
+          <AvailabilityHeatmap
+            slots={poll.slots}
+            result={poll.results}
+            open={poll.open}
+            noneOfThese={poll.noneOfThese}
+            mine={null}
+          />
+        </PollClockProvider>
       ) : null}
 
       {poll.open ? (
@@ -244,32 +259,11 @@ function CurrentPoll({
 }
 
 function NewPollForm({ nowMs, hasPoll }: { nowMs: number; hasPoll: boolean }) {
-  const { day, time } = LEAGUE_CONFIG.matchSchedule;
-  // Start from the league's announced night when it has one, so the current
-  // slot is on the ballot unless the admin takes it off.
-  const announcedDay = [
-    "Sundays",
-    "Mondays",
-    "Tuesdays",
-    "Wednesdays",
-    "Thursdays",
-    "Fridays",
-    "Saturdays",
-  ].indexOf(day);
-  const announcedTime = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(time.trim());
-  const first: SlotRow =
-    announcedDay >= 0 && announcedTime
-      ? {
-          day: String(announcedDay),
-          time: `${String(
-            (Number(announcedTime[1]) % 12) +
-              (announcedTime[3].toUpperCase() === "PM" ? 12 : 0),
-          ).padStart(2, "0")}:${announcedTime[2]}`,
-        }
-      : { day: "", time: "" };
+  const hours = Array.from({ length: 24 }, (_, hour) => hour);
   return (
     <ActionForm
       action={createMatchNightPoll}
+      hidden={{ daysPosted: "1" }}
       className="space-y-4 border-t border-line pt-4 first:border-t-0 first:pt-0"
     >
       <h4 className="text-sm font-semibold text-fg">
@@ -288,10 +282,59 @@ function NewPollForm({ nowMs, hasPoll }: { nowMs: number; hasPoll: boolean }) {
           className={`${FIELD} block w-full max-w-lg`}
         />
       </div>
-      <PollSlotRows
-        initial={[first, { day: "", time: "" }, { day: "", time: "" }]}
-        zone={zoneLabel(LEAGUE_CONFIG.timeZone)}
-      />
+      <fieldset className="space-y-2">
+        <legend className="text-xs text-muted">
+          The grid fills itself: every ticked day, every hour between the two
+          times, on the league&apos;s clock ({zoneLabel(LEAGUE_CONFIG.timeZone)}).
+          Players see it on their own clock.
+        </legend>
+        <div className="flex flex-wrap gap-2">
+          {POLL_DAYS.map((day) => (
+            <label
+              key={day}
+              className="flex items-center gap-1.5 rounded-md border border-line bg-surface-2/50 px-2.5 py-1.5 text-sm text-fg"
+            >
+              <input type="checkbox" name="day" value={day} defaultChecked />
+              {slotDayName({ day }).slice(0, 3)}
+            </label>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <label htmlFor="pollFromHour" className="text-xs text-muted">
+            From
+          </label>
+          <select
+            id="pollFromHour"
+            name="fromHour"
+            defaultValue={POLL_DEFAULT_FROM_HOUR}
+            className={FIELD}
+          >
+            {hours.map((hour) => (
+              <option key={hour} value={hour}>
+                {slotHour(hour * 60, LEAGUE_LOCALE)}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="pollToHour" className="text-xs text-muted">
+            to
+          </label>
+          <select
+            id="pollToHour"
+            name="toHour"
+            defaultValue={POLL_DEFAULT_TO_HOUR}
+            className={FIELD}
+          >
+            {hours.map((hour) => (
+              <option key={hour} value={hour}>
+                {slotHour(hour * 60, LEAGUE_LOCALE)}
+              </option>
+            ))}
+          </select>
+          <span className="text-xs text-muted">
+            start times, on the hour (both ends included)
+          </span>
+        </div>
+      </fieldset>
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor="pollNewClosesAt" className="text-xs text-muted">
           Voting closes
@@ -313,8 +356,9 @@ function NewPollForm({ nowMs, hasPoll }: { nowMs: number; hasPoll: boolean }) {
       <div className="flex flex-wrap items-center gap-3">
         <SubmitButton size="sm">Open the poll</SubmitButton>
         <span className="text-xs text-muted">
-          Between 2 and {POLL_MAX_SLOTS} slots. They can&apos;t be edited once
-          voting starts; delete the poll and open a new one instead.
+          Every day from noon to 6 PM is 49 start times. They can&apos;t be
+          edited once voting starts; delete the poll and open a new one
+          instead.
         </span>
       </div>
     </ActionForm>
