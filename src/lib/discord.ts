@@ -993,12 +993,34 @@ export function rescheduleProposedMessage(m: {
   /** Deep link to the Reschedule card, where the other captain answers.
    *  Optional so hand-built calls stay valid. */
   matchId?: string;
+  /**
+   * Every time on offer (ascending) when the proposal runs a ready check:
+   * the post then asks the players, not just the other captain. Omitted, the
+   * post reads as it always has.
+   */
+  optionsMs?: number[];
+  /** The proposer's note to the other side, quoted. */
+  note?: string | null;
 }): string {
   const label = fixtureLabel(m);
+  const fixture = `${label} **${name(m.homeName)}** vs **${name(m.awayName)}**`;
+  if (m.optionsMs?.length) {
+    const times = m.optionsMs.map((ms) => `<t:${Math.floor(ms / 1000)}:F>`);
+    const ask =
+      times.length === 1
+        ? ` to ${times[0]}. Can you make it?`
+        : `. Can you make ${times.slice(0, -1).join(", ")} or ${times.at(-1)}?`;
+    const note = m.note ? ` “${name(m.note)}”` : "";
+    const where = m.matchId
+      ? `: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.reschedule)}>`
+      : " on the match page.";
+    const tap = times.length === 1 ? "Tap ✓ or ✗" : "Tap ✓ or ✗ for each time";
+    return `⏳ **Ready check!** **${name(m.proposerName)}** wants to move the ${fixture}${ask}${note} ${tap}${where}`;
+  }
   const where = m.matchId
     ? `on the match page: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.reschedule)}>`
     : "on the match page.";
-  return `⏳ **${name(m.proposerName)}** proposed moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond ${where}`;
+  return `⏳ **${name(m.proposerName)}** proposed moving the ${fixture} to <t:${Math.floor(m.whenMs / 1000)}:F> — the other captain can respond ${where}`;
 }
 
 /**
@@ -1512,6 +1534,20 @@ export function weeklyHonorsMessage(honors: {
   return lines.join("\n");
 }
 
+/** How the ready check stood on the time a reschedule locked in. */
+export type RescheduleReadyCheckLine = {
+  /** Both captains and a full lineup each side were in. */
+  everyoneIn: boolean;
+  ready: number;
+  seats: number;
+  /** The captain who locked it in early (null when it locked itself). */
+  lockedByName?: string | null;
+  /** Players who said they can't make the new time. */
+  outNames: string[];
+  /** Players who never answered: they still owe a check-in. */
+  awaitingCount: number;
+};
+
 /** A captain-agreed reschedule — the new time is pre-formatted by the caller. */
 export function rescheduleMessage(m: {
   homeName: string;
@@ -1525,11 +1561,17 @@ export function rescheduleMessage(m: {
   whenMs: number;
   /** RSVPs the retime invalidated — the rosters have to hear about this. */
   clearedRsvps?: number;
-  /** `matchRoundLabel` ("Semifinal"): names a playoff fixture's round. */
+  /** `matchRoundLabel` ("Semifinal"): names a playoff round. */
   roundLabel?: string | null;
   /** Deep link to the match page, where players check in again (the admin
    *  retime's shape). Optional so hand-built calls stay valid. */
   matchId?: string;
+  /**
+   * The ready check behind the move. Its answers became the check-ins for
+   * the new kickoff, so the post says who can't make it and how many still
+   * owe an answer instead of "everyone please RSVP again".
+   */
+  readyCheck?: RescheduleReadyCheckLine;
 }): string {
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week}`
@@ -1537,16 +1579,30 @@ export function rescheduleMessage(m: {
       ? (playoffFixtureTitle(m.roundLabel) ?? "Playoffs")
       : `Week ${m.week}`;
   const t = `<t:${Math.floor(m.whenMs / 1000)}:F>`;
+  const link = m.matchId
+    ? ` <${resolveSiteUrl()}/matches/${m.matchId}>`
+    : "";
+  const fixture = `**${name(m.homeName)}** vs **${name(m.awayName)}**`;
+  const rc = m.readyCheck;
+  if (rc) {
+    const how = rc.everyoneIn
+      ? ` ✅ Everyone's in (${rc.ready}/${rc.seats} ready).`
+      : ` Locked in${rc.lockedByName ? ` by **${name(rc.lockedByName)}**` : ""} with ${rc.ready}/${rc.seats} ready.`;
+    const out = rc.outNames.length
+      ? ` Can't make it: ${rc.outNames.map((n) => `**${name(n)}**`).join(", ")}.`
+      : "";
+    const owed = rc.awaitingCount
+      ? ` ${rc.awaitingCount} still to check in.`
+      : "";
+    return `🗓️ **Rescheduled** — ${label}: ${fixture} now plays ${t}.${how}${out}${owed} Ready-check answers count as check-ins.${link}`;
+  }
   // Retiming clears every check-in (an old answer about a night nobody is
   // playing). Saying so is the only notice the roster gets — the site shows
   // them an empty banner with no explanation of why their ✓ vanished.
   const reset = m.clearedRsvps
     ? ` Check-ins were reset (${m.clearedRsvps} cleared) — everyone please RSVP again.`
     : "";
-  const link = m.matchId
-    ? ` <${resolveSiteUrl()}/matches/${m.matchId}>`
-    : "";
-  return `🗓️ **Rescheduled** — ${label}: **${name(m.homeName)}** vs **${name(m.awayName)}** now plays ${t} (both captains agreed).${reset}${link}`;
+  return `🗓️ **Rescheduled** — ${label}: ${fixture} now plays ${t} (both captains agreed).${reset}${link}`;
 }
 
 export type AdminRetimeMove = {

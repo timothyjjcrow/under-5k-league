@@ -123,8 +123,9 @@ the form and re-reads the phase, Draft row, registrations, teams, and relevant
 orders/roster state inside a Serializable transaction. Handover compare-and-
 sets `Team.captainId`, then normalizes the denormalized member flags to exactly
 one captain. Designation/handover notify the new captain through Discord when
-possible; reschedules invalidate readiness by revision and explicitly ask
-players to reconfirm, while schedule clearing is also announced.
+possible; admin retimes invalidate readiness by revision and explicitly ask
+players to reconfirm (a ready-check reschedule carries each player's answer
+over as their check-in), while schedule clearing is also announced.
 
 `startDraft` claims the Draft row and moves the season to DRAFT in the same
 snapshot used to verify unique order, exactly one active PLAYER captain per
@@ -243,10 +244,14 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   `src/lib/standin.ts`. Captains self-serve on the match page
   (`src/app/actions/standins.ts`); admins get the any-team override. Assign
   and remove both Discord-mention the standin.
-- _Reschedules_: `src/lib/reschedule-service.ts` (one PENDING proposal per
-  match; current captain/season/Draft/match authority is re-read; acceptance
-  compare-and-sets the kickoff, counts/wipes RSVPs, and releases exact reminder
-  clusters in one Serializable transaction), thin actions in
+- _Reschedules_: a ready check. `src/lib/reschedule-service.ts` (one PENDING
+  proposal per match offering up to three times; current captain/season/Draft/
+  match authority is re-read; every answer, captain lock and accept that moves
+  the match goes through `retimeToOption`, which compare-and-sets the kickoff,
+  replaces RSVPs with the ready-check answers, and releases exact reminder
+  clusters in one Serializable transaction), pure rules in
+  `reschedule-ready-check.ts`, per-viewer reads in
+  `reschedule-ready-check-service.ts`, thin actions in
   `src/app/actions/reschedule.ts`. Decline/withdraw remain cleanup-safe after a
   later phase lock. Admin `setWeekNight` uses the modal canonical kickoff for
   cascade delta; `setWeekNight` and `setMatchTime` only retime `SCHEDULED`
@@ -680,7 +685,9 @@ result cursor; no POST/mutation path); `/api/cron/automation` — the
 liveness; `/api/health/ready` — database readiness (`SELECT 1`, 503 on
 failure); `/api/health/automation` — public, read-only dead-man probe with only
 a bounded status enum (200 for fresh clean success, 503 otherwise);
-`/api/calendar` — the .ics feed;
+`/api/calendar` — the .ics feed; `/api/reschedule?match=<id>` — read-only,
+viewer-tailored GET of a match's open reschedule ready check (the card's 15s
+poll; `private, no-store`, 240/min/IP);
 `/api/admin/season-export` — the non-restorable season JSON audit archive. It
 serializes one complete snapshot, measures the result in UTF-8 bytes, and
 returns an admin-only 413 with backup/out-of-band-export guidance above the
@@ -771,7 +778,10 @@ enums, so every status column is a string whose allowed values live in
   (`autoSyncedAt` = the per-match scan claim column, `autoSyncAttempts` =
   backoff counter). `Match→Team` is RESTRICT, which dictates delete order.
 - `RescheduleRequest` — one PENDING per match (enforced by the service's
-  Serializable cancel-then-create).
+  Serializable cancel-then-create); `options` JSON (null on pre-ready-check
+  rows: `proposedTime` alone), `note`, `lockedAt`.
+- `RescheduleVote` — one ready-check answer, `@@unique([requestId, userId,
+  time])`; cascades with its request.
 - `MatchAvailability` — RSVPs, `@@unique([matchId, userId])`.
 - `StandinAssignment` — cover rows; null `replacingUserId` = filling an empty
   seat.

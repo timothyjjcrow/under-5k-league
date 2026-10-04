@@ -26,6 +26,8 @@ const HISTORICAL_PARTICIPATION_MIGRATION =
   "20260925020000_historical_participation";
 const REVIEW_FOLLOWUPS_MIGRATION = "20260927000000_review_followups";
 const MATCH_NIGHT_POLL_MIGRATION = "20261004000000_match_night_poll";
+const RESCHEDULE_READY_CHECK_MIGRATION =
+  "20261004120000_reschedule_ready_check";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -157,6 +159,7 @@ async function rehearseFreshDatabase(url) {
           HISTORICAL_PARTICIPATION_MIGRATION,
           REVIEW_FOLLOWUPS_MIGRATION,
           MATCH_NIGHT_POLL_MIGRATION,
+          RESCHEDULE_READY_CHECK_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -413,6 +416,7 @@ async function rehearseExistingLegacyDatabase(url) {
           HISTORICAL_PARTICIPATION_MIGRATION,
           REVIEW_FOLLOWUPS_MIGRATION,
           MATCH_NIGHT_POLL_MIGRATION,
+          RESCHEDULE_READY_CHECK_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );

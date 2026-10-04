@@ -13,6 +13,7 @@ import { getActiveSeason } from "@/lib/season";
 import { fixturesMatchNightLabel, seasonMatchNightLabel } from "@/lib/match-night";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { parseRescheduleOptions } from "@/lib/reschedule-ready-check";
 import { computeStandings, standingsMovement } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import {
@@ -266,6 +267,7 @@ export default async function SchedulePage() {
         by: r.proposedBy.name,
         ts: r.proposedTime ? r.proposedTime.getTime() : null,
         initial: fmtWhen(r.proposedTime),
+        optionCount: parseRescheduleOptions(r.options, r.proposedTime).length,
       },
     ]),
   );

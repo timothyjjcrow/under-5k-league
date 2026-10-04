@@ -42,6 +42,7 @@ import {
   setMatchTime,
 } from "@/app/actions/admin-schedule-results";
 import { cancelReschedule } from "@/app/actions/reschedule";
+import { parseRescheduleOptions } from "@/lib/reschedule-ready-check";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { AutoOpenDetails } from "@/components/auto-open-details";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
@@ -972,6 +973,7 @@ export async function AdminMatchTools({
         select: {
           id: true,
           proposedTime: true,
+          options: true,
           proposedBy: { select: { name: true } },
         },
       }),
@@ -1069,12 +1071,19 @@ export async function AdminMatchTools({
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 p-3 text-xs">
               <span className="min-w-0 flex-1">
                 ⏳ <strong>{pending.proposedBy.name}</strong> proposes{" "}
-                <LocalTime
-                  ts={pending.proposedTime.getTime()}
-                  variant="full"
-                  initial={formatLeagueMatchTime(pending.proposedTime, "full")}
-                />{" "}
-                — awaiting the other captain.
+                {parseRescheduleOptions(pending.options, pending.proposedTime).map(
+                  (ts, i, all) => (
+                    <span key={ts}>
+                      {i > 0 ? (i === all.length - 1 ? " or " : ", ") : null}
+                      <LocalTime
+                        ts={ts}
+                        variant="full"
+                        initial={formatLeagueMatchTime(new Date(ts), "full")}
+                      />
+                    </span>
+                  ),
+                )}{" "}
+                — a ready check is under way on the match page.
               </span>
               <ActionForm
                 action={cancelReschedule}

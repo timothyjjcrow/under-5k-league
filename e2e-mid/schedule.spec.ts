@@ -145,24 +145,68 @@ test("player check-in and captain reschedule stay synchronized end to end", asyn
   await expect(
     page.locator("#match-matchup").getByText("no reply", { exact: true }).first(),
   ).toBeVisible();
+  // Reschedule as a ready check: two times, one a quick pick and one typed
+  // on the captain's own clock, plus a note.
+  await page.locator("summary").filter({ hasText: "Propose new times" }).click();
   const proposed = await page.evaluate(() => {
     const d = new Date(Date.now() + 2 * 24 * 3600_000);
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   });
-  await page.locator('input[name="proposedTime"]').fill(proposed);
-  await page.getByRole("button", { name: "Propose new time" }).click();
-  await expect(page.getByText(/You proposed/)).toBeVisible();
-
-  await login(page, "Schedule Away Captain", LOGISTICS.awayCaptain, matchHref!);
-  await expect(page.getByText(/Accepting will clear 1 check-in/)).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "✓ Accept time" }).click();
+  await page.locator('input[name="customTime"]').fill(proposed);
+  await page.getByRole("button", { name: "+ Add time" }).click();
+  const quickPick = page
+    .getByRole("group", { name: /Quick picks/ })
+    .getByRole("button")
+    .first();
+  await quickPick.click();
+  await expect(quickPick).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel(/^Note/).fill("Two of us have exams that night");
+  await page.getByRole("button", { name: /^Send ready check/ }).click();
   await expect(
-    page.getByText("Accepted — match retimed for both teams."),
+    page.getByText("Ready check sent — waiting on everyone else"),
   ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/matches/[id] proposer ready check");
+
+  // The player hears about it on Home and answers with one tap.
+  await login(page, "Schedule Player", LOGISTICS.player, "/");
+  await expect(page.getByText(/2 times to answer/)).toBeVisible();
+  await page.getByRole("link", { name: /^Answer/ }).click();
+  await expect(page).toHaveURL(/#match-reschedule$/);
+  await expect(page.getByText("Two of us have exams that night")).toBeVisible();
+  const imIn = page.getByRole("button", { name: "✓ I'm in" }).first();
+  await imIn.click();
+  await expect(imIn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Thanks — answer the rest too")).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/matches/[id] player ready check");
+
+  // The other captain is pointed at it, and locks the first time in without
+  // waiting for the rest of the lineup.
+  await login(page, "Schedule Away Captain", LOGISTICS.awayCaptain, matchHref!);
+  await page.getByRole("link", { name: /Answer the ready check/ }).click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .getByRole("button", { name: "🔒 Accept & lock in" })
+    .first()
+    .click();
+  await expect(
+    page.getByText(/^Locked in — match moved for both teams\./),
+  ).toBeVisible();
+  await expect(page.getByText("Locked in!")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Reschedule" })).toBeVisible();
   await expectNoHorizontalOverflow(page, "/matches/[id] captain reschedule");
+
+  // Each answer to the locked time is a check-in for the new kickoff: the
+  // home side has its captain (the proposer's yes) and the player, the away
+  // side the captain who locked it.
+  await page.goto("/schedule");
+  await page.setViewportSize({ width: 1024, height: 812 });
+  await expect(
+    page.getByRole("img", { name: /2 of 5 confirmed/ }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("img", { name: /1 of 5 confirmed/ }).first(),
+  ).toBeVisible();
   assertNoErrors();
 });
 

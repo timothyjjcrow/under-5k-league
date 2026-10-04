@@ -78,6 +78,7 @@ model User {
   inhouseCredit          InhouseCredit?
   matchAvailability      MatchAvailability[]
   rescheduleProposals    RescheduleRequest[]
+  rescheduleVotes        RescheduleVote[]
   fantasyRosters         FantasyRoster[]
   fantasyPickedBy        FantasyPick[]
   predictions            Prediction[]
@@ -429,21 +430,56 @@ model Match {
   @@index([awayTeamId])
 }
 
-// A captain's proposal to move a match to a different time. The opposing
-// captain accepts (retimes the match) or declines; one open proposal per
-// match at a time.
+// A captain's proposal to move a match to a different time, run as a ready
+// check: the proposer offers up to three times, everyone playing the match
+// answers each one, and the match moves once both captains and a full lineup
+// on each side are in (or a captain locks a time in once both captains
+// agree). One open proposal per match at a time.
 model RescheduleRequest {
   id           String   @id @default(cuid())
   matchId      String
   proposedById String
+  // The earliest option while PENDING; on ACCEPTED, the time that won. Every
+  // reader that predates the ready check reads this one time.
   proposedTime DateTime
   status       String   @default("PENDING") // PENDING | ACCEPTED | DECLINED | CANCELLED
   createdAt    DateTime @default(now())
+  // JSON [epochMs, ...], ascending: the times on offer. Null on a proposal
+  // made before the ready check, which offers proposedTime alone
+  // (parseRescheduleOptions).
+  options      String?
+  // The proposer's optional word to the other side ("two of us have exams").
+  note         String?
+  // When a time was locked in (ACCEPTED). Written once by the lock; the
+  // match page's "moved by ready check" card reads it.
+  lockedAt     DateTime?
 
-  match      Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
-  proposedBy User  @relation(fields: [proposedById], references: [id], onDelete: Cascade)
+  match      Match            @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  proposedBy User             @relation(fields: [proposedById], references: [id], onDelete: Cascade)
+  votes      RescheduleVote[]
 
   @@index([matchId, status])
+}
+
+// One answer in a reschedule ready check: can this player make that option?
+// Only people playing the match (loadSidePlayerIds) and its two captains
+// answer. Changed freely while the proposal is open; the locked option's
+// answers become the players' check-ins for the new kickoff.
+model RescheduleVote {
+  id        String   @id @default(cuid())
+  requestId String
+  userId    String
+  // Which option: one of the request's times.
+  time      DateTime
+  ready     Boolean
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  request RescheduleRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, userId, time])
+  @@index([userId])
 }
 
 // A rostered player's match-night RSVP for a scheduled match. Captains and the

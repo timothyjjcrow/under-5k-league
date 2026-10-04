@@ -2,13 +2,12 @@ import type { Match } from "@prisma/client";
 import Link from "next/link";
 import { ByeWeekNote } from "@/components/bye-week-note";
 import { CheckinBanner } from "@/components/checkin-banner";
-import { LocalTime } from "@/components/local-time";
 import { Card, LinkArrow, buttonClasses, textLink } from "@/components/ui";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
-import { formatLeagueMatchTime } from "@/lib/match-time";
 import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
 import { prisma } from "@/lib/prisma";
+import { loadReadyCheckView } from "@/lib/reschedule-ready-check-service";
 import type { SeasonSnapshot } from "@/lib/queries";
 import {
   matchRoundLabel,
@@ -205,27 +204,42 @@ export async function MyNextMatch({
 
   const homeTeam = teamById.get(next.homeTeamId);
   const awayTeam = teamById.get(next.awayTeamId);
-  const [myRsvp, pendingReschedule, side] = await Promise.all([
+  const [myRsvp, readyCheck, side] = await Promise.all([
     prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: next.id, userId }, scheduleRevision: next.scheduleRevision },
       select: { status: true },
     }),
-    prisma.rescheduleRequest.findFirst({
-      where: { matchId: next.id, status: "PENDING" },
-      include: { proposedBy: { select: { name: true } } },
-    }),
+    homeTeam && awayTeam
+      ? loadReadyCheckView(
+          {
+            ...next,
+            homeTeam: { name: homeTeam.name, captainId: homeTeam.captainId },
+            awayTeam: { name: awayTeam.name, captainId: awayTeam.captainId },
+            season: { isActive: true, status: seasonStatus, teamSize },
+          },
+          viewer,
+          nowMs,
+        )
+      : Promise.resolve(null),
     // Who the viewer is in this match and how their side stands. A captain
     // gets the names behind the count right under the buttons, so chasing
     // the no-replies starts here rather than on the match page.
     loadCheckinSide({ matchId: next.id, viewer }),
   ]);
 
-  // A proposal awaiting THIS viewer's answer gets a strip right on the
-  // dashboard — proposals used to rot on the match page unseen.
-  const awaitingMyAnswer =
-    !!pendingReschedule &&
-    pendingReschedule.proposedById !== userId &&
-    (homeTeam?.captainId === userId || awayTeam?.captainId === userId);
+  // A ready check the viewer answers gets a strip right on the dashboard —
+  // proposals used to rot on the match page unseen.
+  const check =
+    readyCheck?.open && readyCheck.viewer.canAnswer ? readyCheck : null;
+  const unanswered = check
+    ? check.options.filter((o) => !o.passed && o.myAnswer === null).length
+    : 0;
+  const best = check
+    ? check.options.reduce<(typeof check.options)[number] | null>(
+        (top, o) => (!top || o.readyTotal > top.readyTotal ? o : top),
+        null,
+      )
+    : null;
 
   return (
     <div className="space-y-2">
@@ -245,28 +259,36 @@ export async function MyNextMatch({
         side={side}
         detailsHref={`/matches/${next.id}`}
       />
-      {awaitingMyAnswer ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm">
+      {check ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm">
           <span aria-hidden>⏳</span>
-          <span className="min-w-0 flex-1">
-            <strong>{pendingReschedule.proposedBy.name}</strong> proposed moving
-            this match to{" "}
-            <strong>
-              <LocalTime
-                ts={pendingReschedule.proposedTime.getTime()}
-                variant="full"
-                initial={formatLeagueMatchTime(
-                  pendingReschedule.proposedTime,
-                  "full",
-                )}
-              />
-            </strong>
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <span className="font-semibold">Ready check:</span>{" "}
+            {check.viewer.isProposer ? (
+              "your new times are out"
+            ) : (
+              <>
+                <strong>{check.proposer.name}</strong> wants to move this match
+              </>
+            )}
+            {unanswered > 0 ? (
+              <span className="text-muted">
+                {" "}
+                · {unanswered === 1 ? "1 time" : `${unanswered} times`} to
+                answer
+              </span>
+            ) : best ? (
+              <span className="text-muted">
+                {" "}
+                · best so far {best.readyTotal}/{best.seatTotal} ready
+              </span>
+            ) : null}
           </span>
           <Link
             href={matchAnchorPath(next.id, MATCH_ANCHOR.reschedule)}
-            className={textLink("shrink-0")}
+            className={textLink("shrink-0 font-medium")}
           >
-            Respond <LinkArrow />
+            {unanswered > 0 ? "Answer" : "See it"} <LinkArrow />
           </Link>
         </div>
       ) : null}

@@ -146,8 +146,10 @@ standin cover, and match-night check-ins. Main files:
 - **Tell the standin, and the captain when someone else acted.** Assign mentions
   the standin plus the covered captain if they didn't book it; an admin removal
   mentions both. Assign toasts append `reachabilityNote`. `standinAssignedMessage`
-  and `playerOutMessage` link the match page. A reschedule ACCEPT mentions booked
-  standins (`AcceptedReschedule.standinUserIds`): their ping quoted the old time.
+  and `playerOutMessage` link the match page. A reschedule that moves the match
+  mentions booked standins (`AcceptedReschedule.standinUserIds`): their ping
+  quoted the old time. Standins answer the ready check for the seat they cover;
+  the player they cover doesn't.
 - **Make the picker mirror the server.** `standinPickerBlock` lists standins booked
   here or that night last, disabled, with why; `coverChoices` puts uncovered OUT
   players first. Pinned by `src/app/matches/[id]/match-page-guards.test.ts`.

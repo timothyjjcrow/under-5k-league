@@ -24,6 +24,7 @@ import { getSessionUser } from "@/lib/auth";
 import { completedSeasonArchiveReadiness, getActiveSeason } from "@/lib/season";
 import { capacityInfo } from "@/lib/capacity";
 import { prisma } from "@/lib/prisma";
+import { parseRescheduleOptions } from "@/lib/reschedule-ready-check";
 import {
   AUTO_SYNC,
   DRAFT_STATUS,
@@ -7194,11 +7195,16 @@ async function PendingReschedules({
             </Link>
             : {name(r.match.homeTeamId)} vs {name(r.match.awayTeamId)} —{" "}
             <strong>{r.proposedBy.name}</strong> proposes{" "}
-            <LocalTime
-              ts={r.proposedTime.getTime()}
-              variant="full"
-              initial={formatLeagueMatchTime(r.proposedTime, "full")}
-            />
+            {parseRescheduleOptions(r.options, r.proposedTime).map((ts, i, all) => (
+              <span key={ts}>
+                {i > 0 ? (i === all.length - 1 ? " or " : ", ") : null}
+                <LocalTime
+                  ts={ts}
+                  variant="full"
+                  initial={formatLeagueMatchTime(new Date(ts), "full")}
+                />
+              </span>
+            ))}
           </span>
           <ActionForm action={cancelReschedule} hidden={{ requestId: r.id }}>
             <SubmitButton variant="secondary" size="sm">

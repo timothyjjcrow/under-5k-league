@@ -29,7 +29,7 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
 - **The Regular season needs fixtures.** DRAFT to REGULAR_SEASON needs a COMPLETE
   auction and at least one regular fixture; generate the schedule in Draft.
 - **Archived seasons are read-only for players and captains.**
-  `match-report-service`, `reschedule-service` (propose, accept),
+  `match-report-service`, `reschedule-service` (propose, answer, lock, accept),
   `setAvailability` and `standin-service` refuse a match whose season is not
   active, and the match page hides those controls. Declining or withdrawing a
   proposal stays legal (cleanup). An import there would run `recomputeSeries`,
@@ -68,7 +68,9 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   `autoSyncedAt`/`autoSyncAttempts`, invalidate queued result nudges and
   check-in reminders (`invalidateMatchNudges`), delete the match's
   check-ins, cancel open proposals (admin paths) and delete the week-reminder
-  markers (`weekReminderKey(season, week)` and its `:<kickoffMs>` keys).
+  markers (`weekReminderKey(season, week)` and its `:<kickoffMs>` keys). A
+  ready-check lock then writes each seat's answer to the locked time as their
+  check-in at the new revision (✓ IN, ✗ OUT), so nobody answers twice.
   Check-ins answered the old night, and the reminder quoted the old kickoff (a
   Discord edit notifies nobody), so the marker must be released to re-fire.
   After commit, report standin clashes with `clashesAfterRetime`; don't refuse.
@@ -88,24 +90,70 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
 
 ## Rescheduling
 
-- **The flow.** `RescheduleRequest` (PENDING / ACCEPTED / DECLINED / CANCELLED),
-  guards in `reschedule-service.ts` (`test/integration/reschedule.itest.ts`),
-  auth, toasts and Discord posts in `src/app/actions/reschedule.ts` (mention
-  targets in `discord.md`). Shown as the captains' card
-  (`src/app/matches/[id]/reschedule.tsx`), a ⏳ chip on /schedule, a "Respond"
-  strip in `MyNextMatch` (`src/components/home/my-next-match.tsx`), and the
-  admin list with Clear (`cancelReschedule` allows admins and the proposer).
+- **A reschedule is a ready check.** A captain offers one to three times
+  (`RescheduleRequest.options`, JSON epochs ascending; `proposedTime` is the
+  earliest, and on ACCEPTED the time that won) with an optional note. Everyone
+  playing the match answers each time ✓ or ✗ (`RescheduleVote`): the seats from
+  `loadSidePlayerIds` (roster minus covered players, plus standins) and both
+  captains. The rules are pure in `reschedule-ready-check.ts`; guards in
+  `reschedule-service.ts` (`test/integration/reschedule.itest.ts` and
+  `reschedule-ready-check.itest.ts`); auth, toasts and Discord in
+  `src/app/actions/reschedule.ts` (mention targets in `discord.md`).
+- **The match moves the moment everyone's in.** An option locks itself when
+  both captains and a full lineup each side are in (`tallyOption`: a side
+  needs `min(teamSize, seats)` ready, so a sixth man's ✗ or silence doesn't
+  block it). The answer that completes it retimes the match in the same
+  Serializable transaction (`voteReschedule`).
+- **One flaky player never holds a match hostage.** Either captain may lock
+  in an option the OTHER captain has said yes to (`lockRefusal`; the locker's
+  yes is the lock itself), whatever the lineup: the toast and the post say who
+  can't make it and how many haven't answered. The opposing captain's accept
+  (`respondReschedule`) is that lock and must name the option when there is
+  more than one. The proposer's yes on their own times is implied
+  (`withProposerYes`), so a proposal made before the ready check still settles.
+- **Every move goes through `retimeToOption`** (accept, lock, last answer):
+  claim the request PENDING to ACCEPTED with the winning time and `lockedAt`,
+  claim the match SCHEDULED, then the retime contract above, then each seat's
+  answer becomes their check-in. Its claims are reviewed equivalents in the
+  mutation ratchet (every caller reads both rows first, Serializable).
+- **Answers retry a lost serialization race.** Two last answers each see the
+  option one short; SSI aborts one, and its retry (`VOTE_ATTEMPTS`) is what
+  locks. `reschedule-ready-check.itest.ts` races it on Postgres
+  (sabotage-verified: Read Committed or no retry leaves the match unmoved).
 - **One open proposal per match, by Serializable.** There is no unique
-  constraint: a new proposal cancels the open one in a Serializable transaction,
-  or two simultaneous proposals leave a zombie to accept days later.
-- **Check the calendar at propose AND accept** (a proposal can sit open): a sane
+  constraint: a new proposal (or a counter-offer from either captain) cancels
+  the open one in a Serializable transaction, or two simultaneous proposals
+  leave a zombie to accept days later. Answers to the old one stay with it.
+- **Check the calendar at propose AND lock** (a proposal can sit open): a sane
   time (under 1h past, under 180 days ahead), no fixture of either team or
   confirmed scrim within four hours (`findFixtureConflict`), and the deadline.
-- **Accept retimes; decline is cleanup.** Accept needs the active season,
-  `matchLogisticsOpen` and SCHEDULED, claims the request and match with guarded
-  `updateMany`s, then follows the retime contract. It returns `clearedRsvps` (the
-  post says why check-ins vanished) and `standinUserIds`. Decline leaves kickoff,
-  check-ins and reminder marker alone (pinned in the itest).
+  With several options a propose refusal names the option. An everyone-in
+  option that stopped fitting keeps the answer and says why nothing moved.
+- **Decline is cleanup.** "None of these work" (the opposing captain) and
+  Withdraw (the proposer, or an admin's Clear) leave kickoff, check-ins and
+  the reminder marker alone (pinned in the itest).
+- **Who sees what.** `loadReadyCheckView` (`reschedule-ready-check-service.ts`)
+  builds the card per viewer: names for the captains and admins only
+  (`canViewNamedMatchAvailability`), everyone else counts plus their own seat,
+  sorted so a seat's place can't reveal whose it is. Spectators get a
+  read-only strip. Surfaces: the card (`src/components/reschedule/`, mounted
+  by `src/app/matches/[id]/reschedule.tsx`: in Captain tools for captains,
+  under the scoreboard for players), captain to-dos ("Answer the ready check",
+  "Lock it in"), the Home strip in `MyNextMatch`, the ⏳ chip on /schedule
+  and the admin list with Clear.
+- **The card is live.** It polls `GET /api/reschedule?match=<id>` every 15s
+  while its tab is visible (read-only, viewer-tailored, `private, no-store`)
+  and answers optimistically (`withMyAnswer`); a lost answer response is
+  unknown, never failed (the page refreshes).
+- **Quick picks come from `suggestRescheduleTimes`:** the kickoff's time of
+  day on nearby days on the league's clock, plus an hour either side, minus
+  anything within four hours of either team's other fixtures or booked
+  scrims or past the deadline, closest to the kickoff first. The custom
+  picker reads the viewer's own clock ("your time"; source-guarded).
+- **A lock is remembered for a day.** `loadRecentLock` shows "Moved by ready
+  check" with the ready count while the locked time is still the kickoff; a
+  lock under 20 seconds old plays the burst, which is the celebration the
+  person who completed it sees when the page re-renders.
 
 ## Calendar feed
 

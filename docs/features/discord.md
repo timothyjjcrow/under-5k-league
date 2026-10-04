@@ -101,9 +101,11 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Mention the person who must act, and nobody else** (a ping people can't act
   on gets the channel muted). OUT or "can make it after all": their captain,
   never about their own answer. Standin booked or removed: the standin, plus
-  the covered captain when someone else acted. Reschedule proposed: the other
-  captain; accepted: the proposer and booked standins (their ping quoted the old
-  time); declined: the proposer. Week reminder: unanswered players only
+  the covered captain when someone else acted. Reschedule proposed (a ready
+  check): the other captain, then every other seat on both sides, since each
+  must answer; moved: the proposer, booked standins (their ping quoted the old
+  time) and the seats that never answered (they still owe a check-in), never
+  whoever just acted; declined: the proposer. Week reminder: unanswered players only
   (`unansweredUserIds`). Free-agent signing or release: that player. Draft
   started (`draftStartedAnnouncement`, sent by `startDraft`): the linked
   captains only, in draft order, unlinked captains named in plain text; a

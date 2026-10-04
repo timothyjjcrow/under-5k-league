@@ -74,6 +74,8 @@ export type MatchView = {
     ts: number | null;
     /** Server-formatted fallback for the first paint. */
     initial: string | null;
+    /** Times on offer in the ready check (`ts` is the earliest). */
+    optionCount?: number;
   } | null;
 };
 
@@ -888,11 +890,14 @@ function RescheduleChip({
     "full",
     pending.initial ?? "?",
   );
-  const label = `${pending.by} proposes ${pending.ts ? when : "a new time"}`;
+  const label =
+    (pending.optionCount ?? 1) > 1
+      ? `${pending.by} offered ${pending.optionCount} new times, the earliest ${pending.ts ? when : "soon"}`
+      : `${pending.by} proposes ${pending.ts ? when : "a new time"}`;
   return (
     <Link
       href={`/matches/${matchId}`}
-      aria-label={`Time change proposed — ${label}. Open the match page to respond.`}
+      aria-label={`Time change proposed — ${label}. Open the match page to answer the ready check.`}
       title={`Time change proposed — ${label}`}
       className="relative z-10 inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
     >

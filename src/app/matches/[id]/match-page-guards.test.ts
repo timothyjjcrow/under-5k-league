@@ -92,8 +92,22 @@ describe("match page captain tools order and anchors", () => {
   it("gives every card a deep link lands on its own id", () => {
     // Discord's player-out message and the dashboard's Respond link land here.
     expect(PAGE).toContain("<Card id={MATCH_ANCHOR.standins}");
-    // The editable card, the locked card and the spectator strip.
-    expect(PAGE.match(/id=\{MATCH_ANCHOR\.reschedule\}/g)).toHaveLength(3);
+    // The locked card and the spectator strip here; the picker card unless a
+    // "moved by ready check" card above it already carries the anchor.
+    expect(PAGE.match(/id=\{MATCH_ANCHOR\.reschedule\}/g)).toHaveLength(2);
+    expect(PAGE).toContain(
+      "id={anchored ? MATCH_ANCHOR.reschedule : undefined}",
+    );
+    // The live ready check and the "moved by ready check" card, which the
+    // reschedule section mounts from the shared components.
+    expect(
+      stripLineComments(
+        sourceFile("src/components/reschedule/ready-check-card.tsx").text,
+      ).match(/id=\{MATCH_ANCHOR\.reschedule\}/g),
+    ).toHaveLength(1);
+    expect(
+      sourceFile("src/components/reschedule/locked-in-card.tsx").text,
+    ).toContain("id = MATCH_ANCHOR.reschedule");
     expect(PAGE).toContain("href={`#${MATCH_ANCHOR.standins}`}");
     expect(PAGE).toContain("href={`#${MATCH_ANCHOR.reschedule}`}");
   });
@@ -116,16 +130,32 @@ describe("match page captain contact", () => {
 });
 
 describe("match page reschedule form", () => {
+  // The card hands its settings to the shared picker, which owns the box.
+  const PICKER = stripLineComments(
+    sourceFile("src/components/reschedule/propose-times.tsx").text,
+  );
+
   it("starts on the current kickoff and stays inside the enforced window", () => {
     // The deadline is the service's own read, so the hint can't disagree.
-    expect(PAGE).toMatch(/await loadRescheduleDeadline\(\s*prisma,\s*match,/);
-    expect(PAGE).toContain("defaultTs={match.scheduledAt?.getTime() ?? null}");
-    expect(PAGE).toContain("minTs={nowMs}");
+    expect(PAGE).toMatch(/loadRescheduleDeadline\(\s*prisma,\s*match,/);
+    expect(PAGE).toContain("kickoffMs: match.scheduledAt?.getTime() ?? null");
+    expect(PAGE).toContain("minTs: nowMs");
     // datetime-local's max is inclusive; the server refuses the deadline itself.
     expect(PAGE).toContain(
-      "maxTs={deadline ? deadline.getTime() - 60_000 : null}",
+      "maxTs: deadline ? deadline.getTime() - 60_000 : null",
     );
-    expect(PAGE).toContain("describedBy={hintId}");
+    expect(PICKER).toContain("defaultTs={kickoffMs}");
+    expect(PICKER).toContain("minTs={minTs}");
+    expect(PICKER).toContain("maxTs={maxTs}");
+    expect(PICKER).toContain("describedBy={hintId}");
+  });
+
+  it("suggests only times the calendar can take", () => {
+    // Quick picks avoid both teams' other fixtures and booked scrims and the
+    // playoff deadline, through the tested suggestRescheduleTimes.
+    expect(PAGE).toMatch(/suggestRescheduleTimes\(\{[\s\S]*?deadlineMs: deadline\?\.getTime\(\) \?\? null,[\s\S]*?busyMs:/);
+    expect(PAGE).toContain("windowMs: FIXTURE_CONFLICT_WINDOW_MS");
+    expect(PAGE).toContain("timeZone: LEAGUE_CONFIG.timeZone");
   });
 });
 

@@ -3086,3 +3086,73 @@ describe("teamIdentityChangedMessage", () => {
     ).toMatch(/^🎨 \*\*Radiant Raccoons\*\* has a new logo: </);
   });
 });
+
+describe("reschedule ready-check posts", () => {
+  const fixture = {
+    homeName: "Radiant Raccoons",
+    awayName: "Dire Wolves",
+    week: 3,
+    isPlayoff: false,
+    proposerName: "Kuroky",
+    whenMs: 1_800_000_000_000,
+    matchId: "m1",
+  };
+
+  it("asks everyone about every option, quoting the note", () => {
+    const msg = rescheduleProposedMessage({
+      ...fixture,
+      optionsMs: [1_800_000_000_000, 1_800_086_400_000, 1_800_172_800_000],
+      note: "two of us have *exams*",
+    });
+    expect(msg).toContain("**Ready check!** **Kuroky** wants to move the week 3 match");
+    expect(msg).toContain(
+      "Can you make <t:1800000000:F>, <t:1800086400:F> or <t:1800172800:F>?",
+    );
+    // The note is player-typed: escaped, so it can't restyle the post.
+    expect(msg).toContain("“two of us have \\*exams\\*”");
+    expect(msg).toContain("/matches/m1#match-reschedule>");
+  });
+
+  it("asks about a single option without an 'or'", () => {
+    const msg = rescheduleProposedMessage({
+      ...fixture,
+      optionsMs: [1_800_000_000_000],
+    });
+    expect(msg).toContain("to <t:1800000000:F>. Can you make it? Tap ✓ or ✗: <");
+    expect(msg).not.toContain(" or <t:");
+  });
+
+  it("reports an everyone-in lock and that answers became check-ins", () => {
+    const msg = rescheduleMessage({
+      ...fixture,
+      matchId: "m1",
+      readyCheck: {
+        everyoneIn: true,
+        ready: 10,
+        seats: 10,
+        outNames: [],
+        awaitingCount: 0,
+      },
+    });
+    expect(msg).toContain("✅ Everyone's in (10/10 ready).");
+    expect(msg).toContain("Ready-check answers count as check-ins.");
+    expect(msg).not.toContain("RSVP again");
+  });
+
+  it("names the captain who locked early, who can't make it and how many still owe an answer", () => {
+    const msg = rescheduleMessage({
+      ...fixture,
+      readyCheck: {
+        everyoneIn: false,
+        ready: 7,
+        seats: 10,
+        lockedByName: "Notail",
+        outNames: ["Ceb"],
+        awaitingCount: 2,
+      },
+    });
+    expect(msg).toContain("Locked in by **Notail** with 7/10 ready.");
+    expect(msg).toContain("Can't make it: **Ceb**.");
+    expect(msg).toContain("2 still to check in.");
+  });
+});

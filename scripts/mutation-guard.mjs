@@ -182,17 +182,24 @@ const EQUIVALENT = new Set([
   // conditionally write that same row inside one SERIALIZABLE transaction.
   // Their same-row write conflicts make the copied `status: PENDING` WHERE
   // predicates redundant on Postgres: concurrent accept/decline/withdraw
-  // attempts cannot both commit without them. Accept also reads and writes
-  // Match in the same transaction, so the copied SCHEDULED predicate is
-  // redundant against a concurrent result. The PG contention tests pin the
-  // one-winner invariants; the `reschedule.respondReschedule.beforeAccept`
-  // seam test pins result-vs-retime, and fails only with both the SCHEDULED
-  // predicate and SERIALIZABLE removed. These predicates remain in
-  // production as executable state-machine documentation and defense in depth.
+  // attempts cannot both commit without them. The PG contention tests pin
+  // the one-winner invariants. These predicates remain in production as
+  // executable state-machine documentation and defense in depth.
   "src/lib/reschedule-service.ts::cancelReschedule::status#1",
   "src/lib/reschedule-service.ts::respondReschedule::status#1",
-  "src/lib/reschedule-service.ts::respondReschedule::status#2",
-  "src/lib/reschedule-service.ts::respondReschedule::status#3",
+  // retimeToOption is the one retime behind accept, a captain's lock and the
+  // ready check's last answer (it holds what were respondReschedule's
+  // status#2 and #3). Every caller reads the request (loadRequest, with its
+  // Match) inside the same SERIALIZABLE transaction before these writes, so a
+  // concurrent lock, decline, withdraw or result on either row forces P2034
+  // with or without the copied PENDING / SCHEDULED predicates. The PG tests
+  // pin one winner of N accepts, accept vs withdraw, accept vs result, two
+  // captains locking different times, and two last answers racing; the
+  // `reschedule.respondReschedule.beforeAccept` seam (in lockInTx, before
+  // this call) pins result-vs-retime, and fails only with both the SCHEDULED
+  // predicate and SERIALIZABLE removed.
+  "src/lib/reschedule-service.ts::retimeToOption::status#1",
+  "src/lib/reschedule-service.ts::retimeToOption::status#2",
   // These admin correction/phase claims were expanded while their authority
   // reads moved into SERIALIZABLE transactions. In every case the transaction
   // reads the same Season or Match row before writing it, so a concurrent

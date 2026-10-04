@@ -63,3 +63,40 @@ export function formatMatchTimeInZone(
 export function formatLeagueMatchTime(d: Date, variant: TimeVariant): string {
   return formatMatchTimeInZone(d, variant, LEAGUE_CONFIG.timeZone, LEAGUE_LOCALE);
 }
+
+/**
+ * A kickoff split for a compact time chip: "Sat", "Oct 10", "8:00 PM", on the
+ * clock of whoever runs it. Only the browser should (the chip's client text);
+ * the server writes `leagueMatchTimeParts`.
+ */
+export function matchTimeParts(d: Date): {
+  day: string;
+  date: string;
+  time: string;
+} {
+  return {
+    day: d.toLocaleDateString(undefined, { weekday: "short" }),
+    date: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    time: d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+  };
+}
+
+/**
+ * `matchTimeParts` on the league's clock, the zone named after the time:
+ * the server's text for a time chip until the browser rewrites it on the
+ * viewer's clock (formatLeagueMatchTime's rule, split for a chip).
+ */
+export function leagueMatchTimeParts(d: Date): {
+  day: string;
+  date: string;
+  time: string;
+} {
+  const timeZone = LEAGUE_CONFIG.timeZone;
+  const on = (options: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat(LEAGUE_LOCALE, { timeZone, ...options }).format(d);
+  return {
+    day: on({ weekday: "short" }),
+    date: on({ month: "short", day: "numeric" }),
+    time: `${on({ hour: "numeric", minute: "2-digit" })} ${zoneName(timeZone)}`,
+  };
+}
