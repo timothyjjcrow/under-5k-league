@@ -83,6 +83,8 @@ model User {
   fantasyPickedBy        FantasyPick[]
   predictions            Prediction[]
   newsPosts              NewsPost[]
+  matchNightPolls        MatchNightPoll[]
+  matchNightBallots      MatchNightBallot[]
   teamStaffRoles         TeamStaff[]
   createdScrims          Scrim[]              @relation("ScrimCreator")
   scrimParticipations    ScrimParticipant[]   @relation("ScrimParticipantUser")
@@ -104,6 +106,50 @@ model NewsPost {
   author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
 
   @@index([pinned, createdAt, id])
+}
+
+// Match-night poll: a ranked-choice vote on the league's weekly slot.
+// Season-independent, like news, so a league can poll between seasons for
+// the next one. At most one poll is open at a time (createPoll and reopening
+// check it in a Serializable transaction). The slots are fixed when the poll
+// opens, since an edit would reinterpret every ballot already cast; closesAt
+// is the one deadline, and "Close voting now" moves it to now.
+model MatchNightPoll {
+  id           String    @id @default(cuid())
+  question     String
+  // JSON [{ "day": 0-6 (Sunday = 0), "minute": 0-1439 }] on the league's
+  // clock, in poll order (parseSlots).
+  slots        String
+  closesAt     DateTime
+  createdById  String?
+  createdAt    DateTime  @default(now())
+  // When the last ballot landed. Every ballot write claims this row with a
+  // guarded updateMany that re-asserts closesAt, so a close can't slip in
+  // between a voter's check and their write.
+  lastBallotAt DateTime?
+
+  createdBy User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  ballots   MatchNightBallot[]
+
+  @@index([closesAt])
+}
+
+// One voter's ranking in one poll: slot keys ("0@1080"), best first. A slot
+// left off means the voter can't play then; an empty ranking says none of
+// the slots work. Recast freely until the poll closes.
+model MatchNightBallot {
+  id        String   @id @default(cuid())
+  pollId    String
+  userId    String
+  ranking   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  poll MatchNightPoll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+  @@index([userId])
 }
 
 model Season {

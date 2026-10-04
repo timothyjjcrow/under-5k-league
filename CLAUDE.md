@@ -31,6 +31,7 @@ note before changing that area: it is required reading, not background.
 | [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, `/players`, `/inhouse`, `/admin` or match page layout, the fixture servers |
 | [players-and-registration](docs/features/players-and-registration.md) | signup and MMR rules, the player pool and scouting, profiles, compare, team names, logos and jerseys |
 | [stats-and-side-games](docs/features/stats-and-side-games.md) | impact points, honors, Leaders, Hall of Fame, Record book, Hero meta, power rankings, scouting, fantasy, pick'em, scrims, news |
+| [match-night-poll](docs/features/match-night-poll.md) | the match-night poll: its ballot, the instant-runoff count, the Home card or its admin section |
 | [admin-and-operations](docs/features/admin-and-operations.md) | admin actions and the admin panel, destructive controls, caching and streaming, room connection handling, migrations and backups |
 
 ## Mental model

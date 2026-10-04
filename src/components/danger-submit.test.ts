@@ -65,6 +65,10 @@ const UNRECOVERABLE: Array<{ action: string; why: string }> = [
     why: "regenerate cascades away every check-in, pick and standin booking",
   },
   {
+    action: "deleteMatchNightPoll",
+    why: "deletes a poll and every ballot in it; nothing keeps a copy",
+  },
+  {
     action: "removeCaptain",
     why: "once fixtures exist, deletes every fixture in the season, not just that team's",
   },
@@ -97,7 +101,8 @@ describe("unrecoverable admin actions require typed confirmation", () => {
       2,
     );
     // "type DELETE" trains the reflex it exists to break; the token has to be
-    // something specific to the thing being destroyed: its name.
+    // something specific to the thing being destroyed: its name (a poll's
+    // name is its question).
     for (const file of UI) {
       expect(file.text, file.path).not.toMatch(/token=\{?["']DELETE["']\}?/i);
       expect(file.text, file.path).not.toMatch(/token=\{?["']CONFIRM["']\}?/i);
@@ -109,7 +114,7 @@ describe("unrecoverable admin actions require typed confirmation", () => {
       expect(
         site.token,
         `a DangerSubmit in ${site.file} must pass a real name as its token`,
-      ).toMatch(/^\{[\w.]+\.name\}$/);
+      ).toMatch(/^\{[\w.]+\.(?:name|question)\}$/);
     }
     // Both files pass a real name through.
     expect(admin).toMatch(/token=\{(season\.name|t\.name)\}/);

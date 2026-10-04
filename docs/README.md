@@ -48,6 +48,9 @@ Read the note for an area before changing it.
   team identity.
 - [stats-and-side-games.md](features/stats-and-side-games.md) — impact points,
   honors and the stats pages, fantasy, pick'em, scrims and news.
+- [match-night-poll.md](features/match-night-poll.md) — the ranked-choice
+  match-night poll on Home: ballots, the instant-runoff count and its admin
+  section.
 - [admin-and-operations.md](features/admin-and-operations.md) — admin actions
   and the panel's safety rails, caching and streaming, room connection handling,
   migrations and backups.

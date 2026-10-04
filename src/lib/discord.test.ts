@@ -7,6 +7,8 @@ import {
   adminRetimeMessage,
   signupMessage,
   signupsOpenMessage,
+  matchNightPollOpenedMessage,
+  matchNightPollResultMessage,
   draftStartedAnnouncement,
   draftCompleteAnnouncement,
   regularSeasonStartedMessage,
@@ -156,6 +158,29 @@ describe("discord message formatters", () => {
     expect(msg).toContain("**Season 9 signups are open!**");
     expect(msg).toContain("Match night: Sundays at 6:00 PM PT.");
     expect(msg).toMatch(/Sign up: <[^>]+\/me>$/);
+  });
+
+  it("announces a match-night poll with its slots, deadline and link", () => {
+    const msg = matchNightPollOpenedMessage({
+      question: "When should *match night* be?",
+      slots: ["Wednesdays at 8:00 PM Pacific time", "Sundays at 6:00 PM Pacific time"],
+      closesAtMs: Date.UTC(2026, 9, 11, 1, 0),
+    });
+    expect(msg).toContain("**When should \\*match night\\* be?**");
+    expect(msg).toContain("ranked choice");
+    expect(msg).toContain(`<t:${Date.UTC(2026, 9, 11, 1, 0) / 1000}:F>`);
+    expect(msg).toContain("\n• Wednesdays at 8:00 PM Pacific time\n• Sundays at 6:00 PM Pacific time\n");
+    expect(msg).toMatch(/Vote: <[^>]+\/#match-night-poll>$/);
+    expect(msg).not.toContain("@");
+  });
+
+  it("announces a poll's winner with the final round's count", () => {
+    const base = { question: "Match night?", winner: "Sundays at 6:00 PM Pacific time", votes: 9, counted: 14 };
+    expect(matchNightPollResultMessage({ ...base, rounds: 3 })).toContain(
+      "**The votes are in: Sundays at 6:00 PM Pacific time** won \"Match night?\" with 9 of 14 votes after 2 runoff rounds.",
+    );
+    expect(matchNightPollResultMessage({ ...base, rounds: 2 })).toContain("after 1 runoff round.");
+    expect(matchNightPollResultMessage({ ...base, rounds: 1 })).toContain("in the first round.");
   });
 
   it("leaves the match night out until one is announced", () => {
