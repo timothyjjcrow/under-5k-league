@@ -344,6 +344,36 @@ body {
   animation: sold-pop 0.4s ease-out;
 }
 
+/* Reschedule ready check: a pip pops as its player answers, and a locked-in
+   time bursts. Reduced motion gets the end state (the global rule below). */
+@keyframes ready-pop {
+  0% {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.ready-pop {
+  animation: ready-pop 0.35s ease-out;
+}
+@keyframes ready-burst {
+  0% {
+    transform: translate(0, 0) scale(0.4);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--burst-x), var(--burst-y)) scale(1);
+    opacity: 0;
+  }
+}
+.ready-burst {
+  animation: ready-burst 1.1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
 @keyframes countdown-urgent {
   0%,
   100% {
@@ -365,8 +395,12 @@ body {
   .animate-countdown-urgent {
     animation: none;
   }
-  .sold-flash {
+  .sold-flash,
+  .ready-pop {
     animation: none;
+  }
+  .ready-burst {
+    display: none;
   }
 
   /* Catch component-local Tailwind transitions and any future animation that

@@ -136,6 +136,7 @@ describe("migration SQL safety gate", () => {
       "20260925010000_resumable_import",
       "20260925020000_historical_participation",
       "20260927000000_review_followups",
+      "20261004120000_reschedule_ready_check",
     ]);
   });
 

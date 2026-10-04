@@ -23,3 +23,20 @@ export function formatMatchTime(d: Date, variant: TimeVariant): string {
     minute: "2-digit",
   });
 }
+
+/**
+ * A kickoff split for a compact time chip: "Sat", "Oct 10", "8:00 PM", in the
+ * running environment's locale and zone (a client chip passes the server's
+ * parts as its hydration snapshot, like LocalTime).
+ */
+export function matchTimeParts(d: Date): {
+  day: string;
+  date: string;
+  time: string;
+} {
+  return {
+    day: d.toLocaleDateString(undefined, { weekday: "short" }),
+    date: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    time: d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+  };
+}

@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { sourceFiles } from "../../../test/support/source-files";
+import {
+  folderSourceFiles,
+  sourceFiles,
+} from "../../../test/support/source-files";
 
 /**
  * Every admin date/time box reads on the LEAGUE's clock.
@@ -12,8 +13,6 @@ import { sourceFiles } from "../../../test/support/source-files";
  * clock, so nothing looked wrong until players turned up. The failure is a
  * missing prop on a box nobody remembered, which only a source guard sees.
  */
-const ROOT = join(__dirname, "..", "..", "..");
-
 /**
  * Every file that renders an admin control: each page under /admin and the
  * admin components they mount (the same area admin-copy-guard globs), so a
@@ -55,11 +54,13 @@ describe("admin time boxes", () => {
   });
 
   it("leaves captain-facing boxes on the viewer's own clock", () => {
-    // The reschedule box is labelled "your time"; the two captains may sit in
-    // different zones and each proposes on their own clock.
-    const reschedule = fieldProps(
-      readFileSync(join(ROOT, "src", "app", "matches", "[id]", "reschedule.tsx"), "utf8"),
-    );
+    // The reschedule picker is labelled "your time"; the two captains may sit
+    // in different zones and each proposes on their own clock. Every box on
+    // the match page, and the picker its card mounts.
+    const reschedule = [
+      ...folderSourceFiles("src/app/matches/[id]", 12),
+      ...sourceFiles("src/components/reschedule/**/*.tsx", 2),
+    ].flatMap(({ text }) => fieldProps(text));
     expect(reschedule.length).toBeGreaterThan(0);
     expect(reschedule.every((props) => !props.includes("timeZone="))).toBe(true);
   });

@@ -1,26 +1,41 @@
 import { prisma } from "@/lib/prisma";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatMatchTime, matchTimeParts } from "@/lib/match-time";
 import { matchLogisticsOpen } from "@/lib/league-lifecycle";
 import { loadRescheduleDeadline } from "@/lib/reschedule-service";
-import { FIXTURE_CONFLICT_WINDOW_MS } from "@/lib/fixture-conflict";
-import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import {
-  cancelReschedule,
-  proposeReschedule,
-  respondReschedule,
-} from "@/app/actions/reschedule";
+  loadReadyCheckView,
+  loadRecentLock,
+} from "@/lib/reschedule-ready-check-service";
+import { suggestRescheduleTimes } from "@/lib/reschedule-ready-check";
+import { FIXTURE_CONFLICT_WINDOW_MS } from "@/lib/fixture-conflict";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { MATCH_STATUS, SCRIM_STATUS } from "@/lib/constants";
+import { MATCH_ANCHOR } from "@/lib/match-anchors";
+import { cancelReschedule, respondReschedule } from "@/app/actions/reschedule";
 import { ActionForm, SubmitButton } from "@/components/action-form";
-import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
+import {
+  ProposeTimes,
+  type ProposeTimesProps,
+} from "@/components/reschedule/propose-times";
+import { LockedInCard } from "@/components/reschedule/locked-in-card";
+import { ReadyCheckCard } from "@/components/reschedule/ready-check-card";
 import { Card, CardBody, CardHeader } from "@/components/ui";
 import { loadDraftStatus, type MatchPageMatch, type MatchViewer } from "./load";
 
+/** How far ahead the quick picks look. */
+const SUGGESTION_DAYS = 10;
+
 /**
- * Captain-to-captain rescheduling: a captain proposes a time and the other
- * captain accepts (retiming the match) or declines. While the match can still
- * be moved, both captains get the card; once it can't, a stranded proposal
- * gets a card that closes it. Everyone else sees a read-only strip while a
- * proposal is pending, so a moved match doesn't blindside them.
+ * Captain-to-captain rescheduling, run as a ready check. A captain offers up
+ * to three times; everyone playing the match answers each one on the
+ * ReadyCheckCard, which fills in live; the match moves when an option has
+ * both captains and a full lineup each side, or when a captain locks in a
+ * time the other captain said yes to. With nothing open, captains get the
+ * picker, and for a day after a ready check moves the match everyone gets a
+ * "moved by ready check" card. Spectators see a read-only strip while one is
+ * open, so a moved match doesn't blindside them; a proposal stranded by a
+ * phase change gets a card that closes it.
  */
 export async function RescheduleSection({
   match,
@@ -29,12 +44,13 @@ export async function RescheduleSection({
   match: MatchPageMatch;
   viewer: MatchViewer;
 }) {
-  const [draftStatus, pending] = await Promise.all([
+  // Async server component: request time, once, for the picker's earliest
+  // allowed time and the deadline read (not client render state).
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const [draftStatus, view] = await Promise.all([
     loadDraftStatus(match),
-    prisma.rescheduleRequest.findFirst({
-      where: { matchId: match.id, status: "PENDING" },
-      include: { proposedBy: { select: { name: true } } },
-    }),
+    loadReadyCheckView(match, viewer, nowMs),
   ]);
   const season = match.season;
   const isCaptain =
@@ -45,32 +61,29 @@ export async function RescheduleSection({
     season.isActive &&
     matchLogisticsOpen(season.status, draftStatus, match.status);
 
-  if (isCaptain && canRetime) {
-    // Async server component: request time, once, for the form's earliest
-    // allowed time and the deadline read (not client render state).
-    // eslint-disable-next-line react-hooks/purity
-    const nowMs = Date.now();
-    // The same deadline the service enforces, shown under the form.
-    const deadline = pending
-      ? null
-      : await loadRescheduleDeadline(
-          prisma,
-          match,
-          season.firstMatchNight,
-          nowMs,
-        );
+  if (!view) {
+    // A ready check that just moved the match says so for a day (and
+    // celebrates when it's seconds old: the re-render after the last answer).
+    const [lock, composer] = await Promise.all([
+      match.status === MATCH_STATUS.SCHEDULED
+        ? loadRecentLock(match, nowMs)
+        : Promise.resolve(null),
+      isCaptain && canRetime && match.status !== MATCH_STATUS.COMPLETED
+        ? composerProps(match, nowMs)
+        : Promise.resolve(null),
+    ]);
+    if (!lock) return composer ? <ProposeCard composer={composer} /> : null;
     return (
-      <RescheduleCard
-        match={match}
-        viewerId={viewer!.id}
-        pending={pending}
-        deadline={deadline}
-        nowMs={nowMs}
-      />
+      <div className="min-w-0 space-y-4">
+        <LockedInCard lock={lock} />
+        {composer ? <ProposeCard composer={composer} anchored={false} /> : null}
+      </div>
     );
   }
-  if (isCaptain && pending) {
-    const mine = pending.proposedById === viewer!.id;
+
+  if (!view.open) {
+    if (!isCaptain) return null;
+    const mine = view.viewer.isProposer;
     return (
       <Card id={MATCH_ANCHOR.reschedule} className="scroll-mt-24">
         <CardHeader
@@ -79,22 +92,15 @@ export async function RescheduleSection({
         />
         <CardBody className="flex flex-wrap items-center gap-3 text-sm">
           <span className="min-w-[14rem] flex-1 text-muted">
-            {mine ? "You" : <strong>{pending.proposedBy.name}</strong>} proposed{" "}
-            <strong className="text-fg">
-              <LocalTime
-                ts={pending.proposedTime.getTime()}
-                variant="full"
-                initial={formatMatchTime(pending.proposedTime, "full")}
-              />
-            </strong>
-            .
+            {mine ? "You" : <strong>{view.proposer.name}</strong>} proposed{" "}
+            {view.options.length === 1 ? "moving it" : `${view.options.length} new times`}.
           </span>
           <ActionForm
             action={mine ? cancelReschedule : respondReschedule}
             hidden={
               mine
-                ? { requestId: pending.id }
-                : { requestId: pending.id, response: "decline" }
+                ? { requestId: view.requestId }
+                : { requestId: view.requestId, response: "decline" }
             }
           >
             <SubmitButton variant="secondary" size="sm">
@@ -105,195 +111,170 @@ export async function RescheduleSection({
       </Card>
     );
   }
-  // Everyone else gets a read-only heads-up that a time change is pending, so
-  // spectators/scouts aren't blindsided by a moved match.
-  if (!pending) return null;
+
+  if (view.viewer.kind === "spectator") {
+    // Everyone else gets a read-only heads-up that a time change is pending,
+    // so spectators/scouts aren't blindsided by a moved match.
+    return (
+      <div
+        id={MATCH_ANCHOR.reschedule}
+        className="flex scroll-mt-24 flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted"
+      >
+        <span aria-hidden>⏳</span>
+        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+          The captains are agreeing a new time —{" "}
+          {view.options.map((option, i) => (
+            <span key={option.timeMs}>
+              {i > 0 ? (i === view.options.length - 1 ? " or " : ", ") : null}
+              <strong className="text-fg">
+                <LocalTime
+                  ts={option.timeMs}
+                  variant="full"
+                  initial={formatMatchTime(new Date(option.timeMs), "full")}
+                />
+              </strong>
+            </span>
+          ))}
+          . The current kickoff stands until both teams are in.
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <div
-      id={MATCH_ANCHOR.reschedule}
-      className="flex scroll-mt-24 flex-wrap items-center gap-2 rounded-[var(--radius)] border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-muted"
-    >
-      <span aria-hidden>⏳</span>
-      <span>
-        Reschedule proposed —{" "}
-        <strong className="text-fg">
-          <LocalTime
-            ts={pending.proposedTime.getTime()}
-            variant="full"
-            initial={formatMatchTime(pending.proposedTime, "full")}
-          />
-        </strong>{" "}
-        pending the captains&apos; agreement.
-      </span>
-    </div>
+    <ReadyCheckCard
+      initialView={view}
+      timeParts={Object.fromEntries(
+        view.options.map((o) => [
+          String(o.timeMs),
+          matchTimeParts(new Date(o.timeMs)),
+        ]),
+      )}
+      kickoffLabel={
+        match.scheduledAt ? formatMatchTime(match.scheduledAt, "full") : null
+      }
+      composer={isCaptain ? await composerProps(match, nowMs) : null}
+    />
   );
 }
 
-async function RescheduleCard({
-  match,
-  viewerId,
-  pending,
-  deadline,
-  nowMs,
+/** A captain's picker when nothing is open: folded shut until wanted. */
+function ProposeCard({
+  composer,
+  anchored = true,
 }: {
-  match: {
-    id: string;
-    status: string;
-    scheduledAt: Date | null;
-    scheduleRevision: number;
-    homeTeam: { name: string; captainId: string };
-    awayTeam: { name: string; captainId: string };
-  };
-  viewerId: string;
-  pending: {
-    id: string;
-    proposedById: string;
-    proposedTime: Date;
-    proposedBy: { name: string };
-  } | null;
-  /** A new time must be before this (the playoffs); null = no limit. */
-  deadline: Date | null;
-  nowMs: number;
+  composer: ProposeTimesProps;
+  /** False when a card above already carries the reschedule anchor. */
+  anchored?: boolean;
 }) {
-  if (match.status === "COMPLETED") return null;
-  const checkinCount = pending
-    ? await prisma.matchAvailability.count({ where: { matchId: match.id, scheduleRevision: match.scheduleRevision } })
-    : 0;
-  const mine = pending?.proposedById === viewerId;
-  const clashHours = Math.round(FIXTURE_CONFLICT_WINDOW_MS / 3_600_000);
-  const hintId = `proposed-time-hint-${match.id}`;
-
   return (
-    <Card id={MATCH_ANCHOR.reschedule} className="scroll-mt-24">
+    <Card
+      id={anchored ? MATCH_ANCHOR.reschedule : undefined}
+      className="scroll-mt-24"
+    >
       <CardHeader
         title="Reschedule"
         subtitle={
-          match.scheduledAt
-            ? "Agree a new time with the other captain. A real time change resets every player's check-in."
-            : "No time set yet — propose one to the other captain."
+          composer.kickoffMs != null
+            ? "Need a different time? Offer up to three and both teams answer a ready check. The match moves once everyone's in."
+            : "No time set yet — offer up to three and both teams answer a ready check."
         }
       />
-      <CardBody className="space-y-3 text-sm">
-        {pending ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="min-w-[14rem] flex-1">
-              {mine ? "You" : <strong>{pending.proposedBy.name}</strong>}{" "}
-              proposed{" "}
-              {/* Old and new side by side, so the answer doesn't need the
-                  current kickoff looked up elsewhere. */}
-              {match.scheduledAt ? (
-                <>
-                  moving it from{" "}
-                  <LocalTime
-                    ts={match.scheduledAt.getTime()}
-                    variant="full"
-                    initial={formatMatchTime(match.scheduledAt, "full")}
-                  />{" "}
-                  to{" "}
-                </>
-              ) : null}
-              <strong>
-                <LocalTime
-                  ts={pending.proposedTime.getTime()}
-                  variant="full"
-                  initial={formatMatchTime(pending.proposedTime, "full")}
-                />
-              </strong>
-              {mine ? " — waiting on the other captain." : "."}
-              {!mine && checkinCount > 0 ? (
-                <span className="mt-1 block text-xs text-accent">
-                  Accepting will clear {checkinCount} check-in
-                  {checkinCount === 1 ? "" : "s"}; every player must answer
-                  again for the new night.
-                </span>
-              ) : null}
+      <CardBody>
+        <details className="group">
+          <summary className="inline-flex h-10 cursor-pointer list-none items-center gap-2 rounded-lg border border-accent/50 bg-accent/10 px-4 text-sm font-medium text-fg transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:h-9 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden>🗓️</span> Propose new times
+            <span
+              aria-hidden
+              className="text-muted transition-transform group-open:rotate-180"
+            >
+              ▾
             </span>
-            {mine ? (
-              <ActionForm
-                action={cancelReschedule}
-                hidden={{ requestId: pending.id }}
-              >
-                <SubmitButton variant="secondary" size="sm">
-                  Withdraw
-                </SubmitButton>
-              </ActionForm>
-            ) : (
-              <div className="flex shrink-0 gap-2">
-                <ActionForm
-                  action={respondReschedule}
-                  hidden={{ requestId: pending.id, response: "accept" }}
-                >
-                  <SubmitButton
-                    variant="primary"
-                    size="sm"
-                    confirm={`Accept this new kickoff? ${checkinCount} check-in${checkinCount === 1 ? "" : "s"} will be cleared and every player must answer again.`}
-                  >
-                    ✓ Accept time
-                  </SubmitButton>
-                </ActionForm>
-                <ActionForm
-                  action={respondReschedule}
-                  hidden={{ requestId: pending.id, response: "decline" }}
-                >
-                  <SubmitButton variant="secondary" size="sm">
-                    ✗ Decline
-                  </SubmitButton>
-                </ActionForm>
-              </div>
-            )}
+          </summary>
+          <div className="mt-4">
+            <ProposeTimes {...composer} />
           </div>
-        ) : (
-          <ActionForm
-            action={proposeReschedule}
-            hidden={{ matchId: match.id }}
-            className="flex flex-wrap items-center gap-2"
-          >
-            <label htmlFor={`proposed-time-${match.id}`} className="sr-only">
-              Proposed new kickoff, in your time
-            </label>
-            {/* The two captains may sit in different zones, so each proposes
-                on their own clock; the admin boxes use the league's. Say
-                which one this is. Starts on the current kickoff, and the
-                browser keeps it between now and the deadline; the server
-                still checks every rule. */}
-            <span className="inline-flex max-w-full flex-wrap items-center gap-2">
-              <LocalDatetimeField
-                id={`proposed-time-${match.id}`}
-                name="proposedTime"
-                tsName="proposedTs"
-                required
-                defaultTs={match.scheduledAt?.getTime() ?? null}
-                minTs={nowMs}
-                maxTs={deadline ? deadline.getTime() - 60_000 : null}
-                describedBy={hintId}
-                className="h-9 rounded-md border border-line bg-surface-2/50 px-2 text-sm text-fg"
-              />
-              <span aria-hidden="true" className="text-xs text-muted">
-                your time
-              </span>
-            </span>
-            <SubmitButton variant="secondary" size="sm">
-              Propose new time
-            </SubmitButton>
-            <p id={hintId} className="basis-full text-xs text-muted">
-              {deadline ? (
-                <>
-                  Must be before{" "}
-                  <LocalTime
-                    ts={deadline.getTime()}
-                    variant="full"
-                    initial={formatMatchTime(deadline, "full")}
-                  />
-                  , when the playoffs start, and not within {clashHours}{" "}
-                  hours of another match or scrim for either team.
-                </>
-              ) : (
-                `Must not be within ${clashHours} hours of another match or scrim for either team.`
-              )}
-            </p>
-          </ActionForm>
-        )}
+        </details>
       </CardBody>
     </Card>
   );
+}
+
+/**
+ * The picker's settings: quick picks that fit the calendar (other fixtures
+ * and booked scrims of both teams, the playoff deadline), the custom range
+ * and the rule line. The service re-checks every time it is sent.
+ */
+async function composerProps(
+  match: MatchPageMatch,
+  nowMs: number,
+): Promise<ProposeTimesProps> {
+  const teamIds = [match.homeTeamId, match.awayTeamId];
+  const window = {
+    gte: new Date(nowMs - FIXTURE_CONFLICT_WINDOW_MS),
+    lte: new Date(
+      nowMs + (SUGGESTION_DAYS + 1) * 86_400_000 + FIXTURE_CONFLICT_WINDOW_MS,
+    ),
+  };
+  const [deadline, fixtures, scrims] = await Promise.all([
+    loadRescheduleDeadline(
+      prisma,
+      match,
+      match.season.firstMatchNight,
+      nowMs,
+    ),
+    prisma.match.findMany({
+      where: {
+        seasonId: match.seasonId,
+        id: { not: match.id },
+        status: { in: [MATCH_STATUS.SCHEDULED, MATCH_STATUS.LIVE] },
+        scheduledAt: window,
+        OR: [
+          { homeTeamId: { in: teamIds } },
+          { awayTeamId: { in: teamIds } },
+        ],
+      },
+      select: { scheduledAt: true },
+    }),
+    prisma.scrim.findMany({
+      where: {
+        seasonId: match.seasonId,
+        status: { in: [SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
+        scheduledAt: window,
+        OR: [
+          { hostTeamId: { in: teamIds } },
+          { opponentTeamId: { in: teamIds } },
+        ],
+      },
+      select: { scheduledAt: true },
+    }),
+  ]);
+  const suggestions = suggestRescheduleTimes({
+    kickoffMs: match.scheduledAt?.getTime() ?? null,
+    fallbackAnchorMs: match.season.firstMatchNight?.getTime() ?? null,
+    nowMs,
+    deadlineMs: deadline?.getTime() ?? null,
+    busyMs: [...fixtures, ...scrims].flatMap((row) =>
+      row.scheduledAt ? [row.scheduledAt.getTime()] : [],
+    ),
+    windowMs: FIXTURE_CONFLICT_WINDOW_MS,
+    timeZone: LEAGUE_CONFIG.timeZone,
+    count: 6,
+    horizonDays: SUGGESTION_DAYS,
+  });
+  return {
+    matchId: match.id,
+    suggestions: suggestions.map((ts) => ({
+      ts,
+      parts: matchTimeParts(new Date(ts)),
+    })),
+    minTs: nowMs,
+    // The browser keeps the custom time a minute inside the deadline.
+    maxTs: deadline ? deadline.getTime() - 60_000 : null,
+    deadline: deadline
+      ? { ts: deadline.getTime(), label: formatMatchTime(deadline, "full") }
+      : null,
+    clashHours: Math.round(FIXTURE_CONFLICT_WINDOW_MS / 3_600_000),
+    kickoffMs: match.scheduledAt?.getTime() ?? null,
+  };
 }
