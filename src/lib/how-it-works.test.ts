@@ -3,12 +3,23 @@ import nextConfig from "../../next.config";
 import { readFileSync } from "node:fs";
 import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import {
+  LEAGUE_NAME_MEANING,
   eligibilityText,
   howItWorksAction,
   resultsCopy,
   standinSignupOpen,
 } from "./how-it-works";
 import { NO_TICKET_RESULT_LEAD } from "./match-hosting";
+
+describe("LEAGUE_NAME_MEANING", () => {
+  it("spells out the league's name under the page title", () => {
+    expect(LEAGUE_NAME_MEANING).toBe(
+      "GGD2L stands for Good Game Dota 2 League.",
+    );
+    const page = readFileSync("src/app/how-it-works/page.tsx", "utf8");
+    expect(page).toContain("subtitle={`${PITCH} ${LEAGUE_NAME_MEANING}`}");
+  });
+});
 
 describe("eligibilityText", () => {
   it("states the hard ceiling and the medal rule", () => {
