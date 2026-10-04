@@ -25,6 +25,7 @@ import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { runAfterResponse } from "./after-response";
 import { capacityInfo } from "./capacity";
 import { PLAYER_SIGNUPS_OPEN_UNTIL } from "./season-copy";
+import { POLL_ANCHOR } from "./match-night-poll";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -104,6 +105,38 @@ export function signupsOpenMessage(
 ): string {
   const night = matchNight ? ` Match night: ${name(matchNight)}.` : "";
   return `📝 **${name(seasonName)} signups are open!**${night} Sign up: <${resolveSiteUrl()}/me>`;
+}
+
+/**
+ * A match-night poll opened. Lists the slots so the channel can see the
+ * choice at a glance, and says it is ranked choice, since "pick one" is what
+ * a reader assumes and their backups would go unranked. Mentions nobody: a
+ * poll is for whoever wants a say.
+ */
+export function matchNightPollOpenedMessage(m: {
+  question: string;
+  /** slotLabel for each slot, in poll order. */
+  slots: readonly string[];
+  closesAtMs: number;
+}): string {
+  const list = m.slots.map((slot) => `• ${name(slot)}`).join("\n");
+  return `🗳️ **${name(m.question)}** Signed-up players: rank every slot you can make, best first. It's ranked choice, so your backups count if your favourite is knocked out. Voting closes <t:${Math.floor(m.closesAtMs / 1000)}:F>.\n${list}\nVote: <${resolveSiteUrl()}/#${POLL_ANCHOR}>`;
+}
+
+/** A closed poll's winner, with the final round's count. */
+export function matchNightPollResultMessage(m: {
+  question: string;
+  winner: string;
+  votes: number;
+  /** Ballots still counting in the final round. */
+  counted: number;
+  rounds: number;
+}): string {
+  const how =
+    m.rounds > 1
+      ? ` after ${m.rounds - 1} runoff round${m.rounds === 2 ? "" : "s"}`
+      : " in the first round";
+  return `🗳️ **The votes are in: ${name(m.winner)}** won "${name(m.question)}" with ${m.votes} of ${m.counted} votes${how}. The full count: <${resolveSiteUrl()}/#${POLL_ANCHOR}>`;
 }
 
 export function draftScheduledMessage(

@@ -95,6 +95,9 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Start playoffs", rendered: "Start playoffs" },
   { quoted: "Reset playoffs", rendered: "Reset playoffs" },
   { quoted: "Move a match night", rendered: "Move a match night" },
+  // The match-night poll card sends a poll's winner here. The card title is a
+  // prop string, which the poll card's own prose can't satisfy.
+  { quoted: "Schedule & results", rendered: 'title="Schedule & results"' },
   // The next step sends recovery work to the phase card's disclosure.
   { quoted: "Fix the phase", rendered: "Fix the phase" },
   // The Playoffs card sends series lengths to the phase card's setup forms.
@@ -438,8 +441,8 @@ describe("admin copy names only controls that exist", () => {
     inOrder(seasonBar, "...(setupFirst ? [...setupItems, reachItem] : [])", 'id: "adm-schedule"', 'id: "adm-standins"', "...(setupFirst ? [] : [reachItem])", 'id: "adm-sync"', "...(setupFirst ? [] : setupItems)", 'id: "adm-league"');
     inOrder(season, "{setupFirst ? (", "{setupControls}", "{reachCard}", '<AdminAnchor id="adm-schedule">', '<AdminAnchor id="adm-standins">', "{setupFirst ? null : reachCard}", "{syncCards}", "{setupFirst ? null : setupControls}", "<LeagueControls");
     // The evergreen sections after the season's own.
-    inOrder(bar, 'id: "adm-history"', 'id: "adm-automation"', 'id: "adm-discord"', 'id: "adm-activity"', 'id: "adm-news"', 'id: "adm-security"');
-    inOrder(body, '<AdminAnchor id="adm-history">', '<AdminAnchor id="adm-automation">', "<DiscordSection />", "<AdminActivity />", "<AdminNews ", "<SecurityControls />");
+    inOrder(bar, 'id: "adm-history"', 'id: "adm-automation"', 'id: "adm-discord"', 'id: "adm-activity"', 'id: "adm-poll"', 'id: "adm-news"', 'id: "adm-security"');
+    inOrder(body, '<AdminAnchor id="adm-history">', '<AdminAnchor id="adm-automation">', "<DiscordSection />", "<AdminActivity />", "<AdminMatchNightPoll", "<AdminNews ", "<SecurityControls />");
   });
 
   // Two admin links once sent the admin to /matches/<id>#admin-tools, an id

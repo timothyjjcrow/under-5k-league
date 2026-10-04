@@ -400,6 +400,11 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **The inhouse queue is a side-game tile mid-season** (`InhouseStrip
   variant="tile"`, the live line), and ends the COMPLETE view's rail; the
   other phases keep the full-width strip after the view.
+- **The match-night poll card sits under the pinned notices in every phase**
+  (and in the offseason view), streamed with a null fallback because it is
+  usually absent. Its ballot and live count stack, never side by side: a
+  voter's folded ballot is one short strip. Rules:
+  [match-night-poll](match-night-poll.md).
 - **Show a fixture once per job.** `focusSlate` (`schedule.ts`) is This week's
   slate; "Coming up" is the open matches minus that slate, so no match is in
   both.

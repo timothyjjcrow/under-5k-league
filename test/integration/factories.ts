@@ -102,6 +102,9 @@ export async function resetDb() {
   // cleared explicitly before User or fixture resets leak announcements into
   // the next lifecycle state.
   await prisma.newsPost.deleteMany();
+  // Polls survive their creator's deletion (onDelete: SetNull); ballots
+  // cascade from the poll.
+  await prisma.matchNightPoll.deleteMany();
   // DotaMatchClaim is intentionally polymorphic and has no FK to either Game
   // or ScrimGame, so neither event cascade can clear the shared ownership row.
   await prisma.importCandidate.deleteMany();
