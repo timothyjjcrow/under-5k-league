@@ -27,6 +27,7 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { homeMetadata } from "@/lib/link-preview-metadata";
 import { announcedMatchNight } from "@/lib/match-night";
+import { parseNextSeasonPlan } from "@/lib/next-season";
 import { getDefendingChampion } from "@/lib/official-champion";
 import { prisma } from "@/lib/prisma";
 import { getSeasonMatches, getSeasonSnapshot } from "@/lib/queries";
@@ -35,6 +36,7 @@ import {
   phaseSubtitle,
   seasonPhaseLabel,
 } from "@/lib/season-copy";
+import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import {
   canViewAvailabilitySummary,
   hasActiveLeagueParticipation,
@@ -110,13 +112,18 @@ export default async function Home() {
     season.status === "REGULAR_SEASON" ||
     season.status === "PLAYOFFS" ||
     season.status === "COMPLETE";
-  const [matches, gamesOnRecord] = showsMatches
+  const [matches, gamesOnRecord, nextSeasonRaw] = showsMatches
     ? await Promise.all([
         // Request-cached: the link preview reads it for the champion.
         getSeasonMatches(season.id),
         prisma.game.count({ where: { match: { seasonId: season.id } } }),
+        // The next season's signup date, for the COMPLETE hero (set on
+        // /admin's Season handoff card).
+        season.status === "COMPLETE"
+          ? getSetting(SETTING_KEYS.NEXT_SEASON_PLAN)
+          : Promise.resolve(null),
       ])
-    : [[] as Match[], 0];
+    : [[] as Match[], 0, null];
   const championPresentation = resolveChampionPresentation(season, matches);
   // Until this season crowns someone, Home keeps naming the last champion.
   // Signups and the draft only: from the regular season on, the dashboard is
@@ -149,7 +156,11 @@ export default async function Home() {
       // The viewer's next match is not in this view: it is the hero's panel
       // (see seasonHero).
       view = (
-        <Suspense fallback={<SeasonViewSkeleton />}>
+        <Suspense
+          fallback={
+            <SeasonViewSkeleton playoffs={season.status === "PLAYOFFS"} />
+          }
+        >
           <SeasonView
             snapshot={snapshot}
             userId={user?.id}
@@ -170,18 +181,43 @@ export default async function Home() {
                   ),
               ),
             )}
+            // The news ends the dashboard's second column, and the inhouse
+            // queue is one of its side-game tiles, so neither follows the
+            // view below.
+            rail={
+              <Suspense fallback={null}>
+                <LeagueNews />
+              </Suspense>
+            }
           />
         </Suspense>
       );
       break;
     case "COMPLETE":
-      heroParts = completeHero(season.id);
+      heroParts = completeHero(
+        season.id,
+        parseNextSeasonPlan(nextSeasonRaw, season.id)?.signupsAtMs ?? null,
+      );
       view = (
         <Suspense fallback={<CardSkeleton rows={4} />}>
           <CompleteView
             snapshot={snapshot}
             matches={matches}
             championPresentation={championPresentation}
+            rail={
+              <>
+                <Suspense
+                  fallback={
+                    <div className="skeleton h-16 rounded-[var(--radius)]" />
+                  }
+                >
+                  <InhouseStrip variant="tile" />
+                </Suspense>
+                <Suspense fallback={null}>
+                  <LeagueNews />
+                </Suspense>
+              </>
+            }
           />
         </Suspense>
       );
@@ -226,8 +262,15 @@ export default async function Home() {
     />
   );
 
+  // From the regular season on, the phase's view draws the news and the
+  // inhouse queue itself (in its rail).
+  const seasonDashboard =
+    season.status === "REGULAR_SEASON" ||
+    season.status === "PLAYOFFS" ||
+    season.status === "COMPLETE";
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {defending || isAdmin ? (
         <div className="space-y-3">
           {hero}
@@ -268,14 +311,20 @@ export default async function Home() {
         <PinnedNotices />
       </Suspense>
       {view}
-      <Suspense fallback={null}>
-        <LeagueNews />
-      </Suspense>
-      <Suspense
-        fallback={<div className="skeleton h-12 rounded-[var(--radius)]" />}
-      >
-        <InhouseStrip />
-      </Suspense>
+      {seasonDashboard ? null : (
+        <>
+          <Suspense fallback={null}>
+            <LeagueNews />
+          </Suspense>
+          <Suspense
+            fallback={
+              <div className="skeleton h-12 rounded-[var(--radius)]" />
+            }
+          >
+            <InhouseStrip />
+          </Suspense>
+        </>
+      )}
     </div>
   );
 }

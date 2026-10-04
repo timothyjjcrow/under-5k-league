@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { LocalTime } from "@/components/local-time";
 import { TeamCrest } from "@/components/ui";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { cn } from "@/lib/utils";
 import { TIEBREAKER_SUMMARY } from "@/lib/tiebreaker-format";
 import type {
@@ -77,7 +77,7 @@ function BracketGame({ game, doubleElimination, admin }: { game: TiebreakerBrack
       </div>
       <div className="space-y-2 border-t border-line-soft px-3 py-3 text-xs">
         {game.scheduledAt ? (
-          <p className="text-fg"><LocalTime ts={game.scheduledAt.getTime()} variant="full" initial={formatMatchTime(game.scheduledAt, "full")} /></p>
+          <p className="text-fg"><LocalTime ts={game.scheduledAt.getTime()} variant="full" initial={formatLeagueMatchTime(game.scheduledAt, "full")} /></p>
         ) : null}
         {game.condition ? <p className="leading-relaxed text-muted">{game.condition}</p> : null}
         {doubleElimination && game.status !== "not-needed" ? <p className="leading-relaxed text-muted">{gameRoutes[game.number]}</p> : null}
@@ -129,7 +129,7 @@ export function TiebreakerBracket({ bracket, teams, postseasonStarted, admin = f
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           <p className="font-medium">{spots.length === bracket.teamIds.length ? "All teams qualified · Playing for seeds" : spots.length === 1 ? "Winner qualifies for playoffs" : `Top ${spots.length} qualify for playoffs`}</p>
-          {bracket.openingAt ? <p className="text-muted">Starts <LocalTime ts={bracket.openingAt.getTime()} variant="full" initial={formatMatchTime(bracket.openingAt, "full")} /> · your local time</p> : <p className="text-muted">Match day to be announced</p>}
+          {bracket.openingAt ? <p className="text-muted">Starts <LocalTime ts={bracket.openingAt.getTime()} variant="full" initial={formatLeagueMatchTime(bracket.openingAt, "full")} /> · your local time</p> : <p className="text-muted">Match day to be announced</p>}
         </div>
         <ul data-testid="tiebreaker-teams" aria-label="Teams in this tiebreaker" className="flex flex-wrap gap-2">
           {bracket.teamIds.map((id) => {
@@ -198,7 +198,7 @@ function SingleEliminationBracket({ bracket, teams, admin }: {
         <p className="text-sm text-accent">{TIEBREAKER_SUMMARY}</p>
         <p className="text-sm font-medium">{qualifies ? `${bracket.qualifyingPlaces} playoff place${bracket.qualifyingPlaces === 1 ? "" : "s"} available` : "All teams qualified · Playing for seeds"}</p>
         {qualifies && bracket.teamIds.length > (bracket.qualifyingPlaces ?? 0) * 8 ? <p className="text-xs text-accent">To keep the three-game limit, the published draw selects {bracket.qualifyingPlaces! * 8} teams before play. The remaining teams are out of playoffs.</p> : null}
-        {bracket.openingAt ? <p className="text-xs text-muted">Starts <LocalTime ts={bracket.openingAt.getTime()} variant="full" initial={formatMatchTime(bracket.openingAt, "full")} /> · your local time</p> : <p className="text-xs text-muted">Opening time to be announced</p>}
+        {bracket.openingAt ? <p className="text-xs text-muted">Starts <LocalTime ts={bracket.openingAt.getTime()} variant="full" initial={formatLeagueMatchTime(bracket.openingAt, "full")} /> · your local time</p> : <p className="text-xs text-muted">Opening time to be announced</p>}
         <p className="text-xs text-muted">Games run in parallel. Your next game starts when both opponents are ready.</p>
       </div>
       {!plan ? <div className="space-y-2 text-sm">

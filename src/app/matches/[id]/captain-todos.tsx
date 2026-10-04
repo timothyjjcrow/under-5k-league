@@ -1,5 +1,5 @@
 import { coverChoices } from "@/lib/standin";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
   matchLogisticsOpen,
   standinAssignmentOpen,
@@ -122,7 +122,7 @@ export async function CaptainTodos({
                   <LocalTime
                     ts={answer.options[0].timeMs}
                     variant="full"
-                    initial={formatMatchTime(
+                    initial={formatLeagueMatchTime(
                       new Date(answer.options[0].timeMs),
                       "full",
                     )}
@@ -151,7 +151,7 @@ export async function CaptainTodos({
               <LocalTime
                 ts={lockable.timeMs}
                 variant="full"
-                initial={formatMatchTime(new Date(lockable.timeMs), "full")}
+                initial={formatLeagueMatchTime(new Date(lockable.timeMs), "full")}
               />
             </strong>{" "}
             ({lockable.readyTotal}/{lockable.seatTotal} ready).

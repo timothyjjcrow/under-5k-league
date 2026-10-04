@@ -226,21 +226,24 @@ describe("match page box scores", () => {
   });
 
   it("shows one report-card chip per player that opens the named metrics", () => {
-    const BOX = CARD("box-score.tsx");
-    const strip = BOX.slice(BOX.indexOf("function ReportCardStrip"));
-    expect(strip).toMatch(
-      /<details[\s\S]*?<summary[\s\S]*?Report \{overall\}[\s\S]*?<\/summary>/,
+    // One toggle per line (a real button naming what it opens), and the
+    // metrics by their full names in the panel it controls.
+    const LINE = CARD("box-score-line.tsx");
+    expect(LINE).toMatch(
+      /<button\s+type="button"\s+aria-expanded=\{open\}\s+aria-controls=\{panelId\}[\s\S]*?Report \{report\.overall\}[\s\S]*?<\/button>/,
     );
-    expect(strip).toContain("{r.label}");
+    expect(LINE).toMatch(/<div id=\{panelId\} hidden=\{!open\}/);
+    expect(LINE).toContain("{r.label}");
     // No abbreviated per-metric chips ("HD/min", "TD").
-    expect(strip).not.toContain("r.short");
+    expect(LINE).not.toContain("short");
+    expect(CARD("box-score.tsx")).toContain("report={lineReport(p)}");
   });
 
   it("prints each game's team net worth once, in the panel", () => {
     const BOX = CARD("box-score.tsx");
     const side = BOX.slice(
       BOX.indexOf("function SidePlayers"),
-      BOX.indexOf("function ReportCardStrip"),
+      BOX.indexOf("function lineReport"),
     );
     expect(side.length).toBeGreaterThan(0);
     expect(side).not.toMatch(/formatNetWorth\(totalNet\)|Net worth\{" "\}/);
@@ -378,6 +381,36 @@ describe("match page admin tools", () => {
       "<RevealHashTarget prefix={ADMIN_MATCH_ROW_PREFIX} />",
     );
     expect(TOOLS).toContain("href={`/admin#${adminMatchRowId(match.id)}`}");
+  });
+});
+
+describe("match page tale of the tape", () => {
+  const TAPE = CARD("tale-of-the-tape.tsx");
+
+  it("sits in the preview after the stakes and before the Matchup card", () => {
+    const preview = CARD("match-preview.tsx");
+    const stakes = preview.indexOf("<StakesBanner");
+    const tape = preview.indexOf("<TaleOfTheTape");
+    expect(stakes).toBeGreaterThan(-1);
+    expect(tape).toBeGreaterThan(stakes);
+    expect(preview.indexOf("<MatchupCard")).toBeGreaterThan(tape);
+    // The season's matches come from the preview's one read.
+    expect(preview).toMatch(/<TaleOfTheTape[\s\S]*?seasonMatches=\{seasonMatches\}/);
+  });
+
+  it("takes every number from the tested helpers", () => {
+    expect(TAPE).toContain("const rows = taleOfTheTape({");
+    expect(TAPE).toContain("playoffRoad(match.homeTeamId, match, seasonMatches)");
+    expect(TAPE).toContain("playoffRoad(match.awayTeamId, match, seasonMatches)");
+    expect(TAPE).toContain("{playoffRoadTitle(roundLabel)}");
+  });
+
+  it("stays away until it has two numbers to compare or a road", () => {
+    expect(TAPE).toContain("if (rows.length < 2 && !hasRoad) return null;");
+  });
+
+  it("stays out of the jump bar, whose chips e2e pins", () => {
+    expect(CARD("page.tsx")).not.toContain('"match-tape"');
   });
 });
 

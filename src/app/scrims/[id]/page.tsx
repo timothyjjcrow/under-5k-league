@@ -8,7 +8,7 @@ import {
   SCRIM_STATUS,
   SEASON_STATUS,
 } from "@/lib/constants";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { heroById } from "@/lib/heroes";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -403,7 +403,7 @@ export default async function ScrimDetailPage({
                 <LocalTime
                   ts={scrim.scheduledAt.getTime()}
                   variant="full"
-                  initial={formatMatchTime(scrim.scheduledAt, "full")}
+                  initial={formatLeagueMatchTime(scrim.scheduledAt, "full")}
                 />
               </p>
               {scrim.status === SCRIM_STATUS.LIVE ||

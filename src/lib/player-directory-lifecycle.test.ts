@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 import {
   playerDirectoryPresentation,
+  poolDetailsByDefault,
   profileWantsCaptain,
 } from "./player-directory-lifecycle";
 
@@ -164,5 +165,36 @@ describe("profileWantsCaptain", () => {
     expect(
       profileWantsCaptain({ ...volunteer, ...open, wantsCaptain: false }),
     ).toBe(false);
+  });
+});
+
+describe("poolDetailsByDefault", () => {
+  it("opens the scouting line until the auction ends, one line a player after", () => {
+    const stageOf = (
+      seasonStatus: string,
+      draftStatus: string | null,
+    ) => playerDirectoryPresentation(seasonStatus, draftStatus).stage;
+    expect(poolDetailsByDefault(stageOf(SEASON_STATUS.SIGNUPS, null))).toBe(
+      true,
+    );
+    expect(
+      poolDetailsByDefault(
+        stageOf(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS),
+      ),
+    ).toBe(true);
+    expect(
+      poolDetailsByDefault(stageOf(SEASON_STATUS.DRAFT, DRAFT_STATUS.PAUSED)),
+    ).toBe(true);
+    for (const [seasonStatus, draftStatus] of [
+      [SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.PLAYOFFS, DRAFT_STATUS.COMPLETE],
+      [SEASON_STATUS.COMPLETE, DRAFT_STATUS.COMPLETE],
+    ] as const) {
+      expect(
+        poolDetailsByDefault(stageOf(seasonStatus, draftStatus)),
+        `${seasonStatus}/${draftStatus}`,
+      ).toBe(false);
+    }
   });
 });

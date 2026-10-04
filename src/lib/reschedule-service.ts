@@ -27,9 +27,14 @@ import {
   scrimConflictFix,
 } from "./scrim-schedule-conflict";
 import { findFixtureConflict } from "./fixture-conflict";
-import { rescheduleDeadline } from "./schedule";
+import {
+  RESCHEDULE_MAX_AHEAD_MS,
+  RESCHEDULE_PAST_GRACE_MS,
+  rescheduleDeadline,
+} from "./schedule";
 import { roundLabelsForPost } from "./playoff-rounds";
 import { isSerializationConflict } from "./prisma-errors";
+import { raceHook } from "./race-hook";
 import { formatLeagueTime } from "./zoned-time";
 import {
   lockRefusal,
@@ -174,20 +179,18 @@ export type VoteOutcome =
       lockBlocked: string | null;
     };
 
-// Sanity bounds for a proposed time: a datetime-local typo (year 0002 from
-// typing "2", 20268 from a stray digit) or a past date would otherwise sail
-// straight into Match.scheduledAt on acceptance.
-const PAST_GRACE_MS = 60 * 60 * 1000; // "tonight, an hour ago" is fine
-const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000; // no league pauses half a year
 /** Tries for a ready-check answer that loses a serialization race. */
 const VOTE_ATTEMPTS = 3;
+
+// Sanity bounds for a proposed time (`schedule.ts` explains them; /rules
+// quotes them).
 
 function assertSaneProposedTime(proposedTime: Date, now = new Date()): void {
   if (!Number.isFinite(proposedTime.getTime()))
     throw new UserFacingError("Choose a valid proposed time");
-  if (proposedTime.getTime() < now.getTime() - PAST_GRACE_MS)
+  if (proposedTime.getTime() < now.getTime() - RESCHEDULE_PAST_GRACE_MS)
     throw new UserFacingError("That time is in the past");
-  if (proposedTime.getTime() > now.getTime() + MAX_AHEAD_MS)
+  if (proposedTime.getTime() > now.getTime() + RESCHEDULE_MAX_AHEAD_MS)
     throw new UserFacingError("That time is too far out — check the year");
 }
 
@@ -771,6 +774,14 @@ async function lockInTx(
   });
   if (refusal) throw new UserFacingError(refusal);
 
+  // Seam: a result completing the match between the SCHEDULED read (the
+  // request's Match, loaded with it) and the retime below, which racing
+  // cannot steer (the accept may just as well commit first, a legitimate
+  // retime-then-play). The rival writes only the Match row, which this
+  // transaction has READ but not written, so a second connection cannot
+  // deadlock on it. Named for the accept that first carried it; a captain's
+  // lock runs the same code.
+  await raceHook("reschedule.respondReschedule.beforeAccept");
   const commit = await retimeToOption(
     tx,
     request,

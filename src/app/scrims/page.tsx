@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { singleActiveSeason } from "@/lib/season";
 import { SCRIM_STATUS, SEASON_STATUS } from "@/lib/constants";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
   isScrimNotPlayed,
   scrimJoinCheck,
@@ -52,7 +52,7 @@ function ScrimTime({ date }: { date: Date }) {
     <LocalTime
       ts={date.getTime()}
       variant="full"
-      initial={formatMatchTime(date, "full")}
+      initial={formatLeagueMatchTime(date, "full")}
     />
   );
 }
@@ -216,7 +216,12 @@ export default async function ScrimsPage({
               action={createScrim}
               className="flex flex-col gap-3 sm:flex-row sm:items-end"
             >
-              <label className="min-w-0 flex-1 space-y-1.5 text-sm">
+              {/* A datetime needs about 18rem; stretched across the card it
+                  pushed Format and Post to the far edge. A flex column, not
+                  space-y: the field's hidden twin is the last child, so
+                  space-y put a margin under the visible box and lifted it
+                  6px above Format and Post. */}
+              <label className="flex min-w-0 flex-col gap-1.5 text-sm sm:w-72">
                 <span className="block text-xs font-medium text-muted">
                   Available date and time
                 </span>
@@ -227,7 +232,7 @@ export default async function ScrimsPage({
                   className={`${inputClass} w-full`}
                 />
               </label>
-              <label className="space-y-1.5 text-sm">
+              <label className="flex flex-col gap-1.5 text-sm">
                 <span className="block text-xs font-medium text-muted">
                   Format
                 </span>
@@ -263,135 +268,143 @@ export default async function ScrimsPage({
         </Card>
       ) : null}
 
-      <Card id="open">
-        <CardHeader
-          title="Open availability"
-          subtitle="One captain click books the matchup. Posting or joining confirms that your side can field a team."
-          headingLevel={2}
-        />
-        <CardBody className="space-y-3">
-          {open.length === 0 ? (
-            <EmptyState
-              compact
-              title="No open scrim times"
-              description={
-                // Only a captain has a post form above to point at.
-                myCaptainTeam && seasonOpen
-                  ? "Post the first one above."
-                  : seasonOpen
-                    ? "Team captains post their practice times here, and none are open right now."
-                    : "This season is closed, so no new times can be posted."
-              }
-            />
-          ) : (
-            open.map((scrim) => {
-              // Same verdict as the scrim's own page, minus the per-row
-              // clash lookup (the service names that clash if it applies).
-              const canJoin =
-                scrimJoinCheck({
-                  status: scrim.status,
-                  seasonOpen,
-                  signedIn: !!viewer,
-                  viewerTeam: myCaptainTeam,
-                  hostTeamId: scrim.hostTeamId,
-                  hostWithdrawn: scrim.hostTeam.withdrawn,
-                  scheduledAtMs: scrim.scheduledAt.getTime(),
-                  nowMs: now.getTime(),
-                })?.canJoin === true;
-              const canCancel =
-                seasonOpen &&
-                (viewer?.role === "ADMIN" ||
-                  myCaptainTeam?.id === scrim.hostTeamId);
-              return (
-                <div
-                  key={scrim.id}
-                  className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/30 p-4 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="min-w-0 space-y-1.5">
-                    <TeamMark team={scrim.hostTeam} />
-                    <p className="text-sm text-muted">
-                      <ScrimTime date={scrim.scheduledAt} /> · Best of{" "}
-                      {scrim.bestOf}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Link
-                      href={`/scrims/${scrim.id}`}
-                      className={textLink("self-center text-sm")}
-                    >
-                      Details
-                    </Link>
-                    {canJoin ? (
-                      <ActionForm action={joinScrim} hidden={{ scrimId: scrim.id }}>
-                        <SubmitButton size="sm">Join scrim</SubmitButton>
-                      </ActionForm>
-                    ) : null}
-                    {canCancel ? (
-                      <ActionForm
-                        action={cancelScrim}
-                        hidden={{ scrimId: scrim.id }}
+      {/* Open and booked are the two lists of upcoming practice: side by
+          side from lg, each as tall as the row (an empty one keeps its
+          one-line note at the top). */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card id="open" className="min-w-0">
+          <CardHeader
+            title="Open availability"
+            subtitle="One captain click books the matchup. Posting or joining confirms that your side can field a team."
+            headingLevel={2}
+          />
+          <CardBody className="space-y-3">
+            {open.length === 0 ? (
+              <EmptyState
+                inline
+                title="No open scrim times"
+                description={
+                  // Only a captain has a post form above to point at.
+                  myCaptainTeam && seasonOpen
+                    ? "Post the first one above."
+                    : seasonOpen
+                      ? "Team captains post their practice times here, and none are open right now."
+                      : "This season is closed, so no new times can be posted."
+                }
+              />
+            ) : (
+              open.map((scrim) => {
+                // Same verdict as the scrim's own page, minus the per-row
+                // clash lookup (the service names that clash if it applies).
+                const canJoin =
+                  scrimJoinCheck({
+                    status: scrim.status,
+                    seasonOpen,
+                    signedIn: !!viewer,
+                    viewerTeam: myCaptainTeam,
+                    hostTeamId: scrim.hostTeamId,
+                    hostWithdrawn: scrim.hostTeam.withdrawn,
+                    scheduledAtMs: scrim.scheduledAt.getTime(),
+                    nowMs: now.getTime(),
+                  })?.canJoin === true;
+                const canCancel =
+                  seasonOpen &&
+                  (viewer?.role === "ADMIN" ||
+                    myCaptainTeam?.id === scrim.hostTeamId);
+                return (
+                  <div
+                    key={scrim.id}
+                    className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/30 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 space-y-1.5">
+                      <TeamMark team={scrim.hostTeam} />
+                      <p className="text-sm text-muted">
+                        <ScrimTime date={scrim.scheduledAt} /> · Best of{" "}
+                        {scrim.bestOf}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Link
+                        href={`/scrims/${scrim.id}`}
+                        className={textLink("self-center text-sm")}
                       >
-                        <SubmitButton
-                          size="sm"
-                          variant="ghost"
-                          confirm="Cancel this open scrim time?"
+                        Details
+                      </Link>
+                      {canJoin ? (
+                        <ActionForm action={joinScrim} hidden={{ scrimId: scrim.id }}>
+                          <SubmitButton size="sm">Join scrim</SubmitButton>
+                        </ActionForm>
+                      ) : null}
+                      {canCancel ? (
+                        <ActionForm
+                          action={cancelScrim}
+                          hidden={{ scrimId: scrim.id }}
                         >
-                          Cancel
-                        </SubmitButton>
-                      </ActionForm>
+                          <SubmitButton
+                            size="sm"
+                            variant="ghost"
+                            confirm="Cancel this open scrim time?"
+                          >
+                            Cancel
+                          </SubmitButton>
+                        </ActionForm>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </CardBody>
+        </Card>
+
+        <Card id="booked" className="min-w-0">
+          <CardHeader
+            title="Booked scrims"
+            subtitle="Upcoming and in-progress practice series."
+            headingLevel={2}
+          />
+          <CardBody className="space-y-3">
+            {booked.length === 0 ? (
+              <EmptyState
+                inline
+                title="Nothing booked"
+                description="Claimed availability appears here."
+              />
+            ) : (
+              booked.map((scrim) => (
+                <Link
+                  key={scrim.id}
+                  href={`/scrims/${scrim.id}`}
+                  className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/30 p-4 transition-colors hover:border-muted/60 hover:no-underline sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <TeamMark team={scrim.hostTeam} />
+                    <span className="text-xs font-medium uppercase text-muted">
+                      vs
+                    </span>
+                    {scrim.opponentTeam ? (
+                      <TeamMark team={scrim.opponentTeam} />
                     ) : null}
                   </div>
-                </div>
-              );
-            })
-          )}
-        </CardBody>
-      </Card>
+                  <div className="flex items-center gap-2 text-sm text-muted">
+                    {scrim.status === SCRIM_STATUS.LIVE ? (
+                      <Badge tone="accent">Live · {scrim.hostScore}–{scrim.awayScore}</Badge>
+                    ) : (
+                      <Badge tone="info">Booked</Badge>
+                    )}
+                    <ScrimTime date={scrim.scheduledAt} />
+                  </div>
+                </Link>
+              ))
+            )}
+          </CardBody>
+        </Card>
 
-      <Card id="booked">
-        <CardHeader
-          title="Booked scrims"
-          subtitle="Upcoming and in-progress practice series."
-          headingLevel={2}
-        />
-        <CardBody className="space-y-3">
-          {booked.length === 0 ? (
-            <EmptyState
-              compact
-              title="Nothing booked"
-              description="Claimed availability appears here."
-            />
-          ) : (
-            booked.map((scrim) => (
-              <Link
-                key={scrim.id}
-                href={`/scrims/${scrim.id}`}
-                className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/30 p-4 transition-colors hover:border-muted/60 hover:no-underline sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <TeamMark team={scrim.hostTeam} />
-                  <span className="text-xs font-medium uppercase text-muted">
-                    vs
-                  </span>
-                  {scrim.opponentTeam ? (
-                    <TeamMark team={scrim.opponentTeam} />
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-2 text-sm text-muted">
-                  {scrim.status === SCRIM_STATUS.LIVE ? (
-                    <Badge tone="accent">Live · {scrim.hostScore}–{scrim.awayScore}</Badge>
-                  ) : (
-                    <Badge tone="info">Booked</Badge>
-                  )}
-                  <ScrimTime date={scrim.scheduledAt} />
-                </div>
-              </Link>
-            ))
-          )}
-        </CardBody>
-      </Card>
+      </div>
 
-      <div className="grid gap-6 xl:grid-cols-3">
+      {/* Each card is a two-row subgrid (header, list), so side by side
+          the three lists start on one line whatever their subtitles wrap to. */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Suspense fallback={<p role="status">Loading practice history…</p>}><ScrimHistory seasonId={season.id} page={listPage(query.historyPage)} nowMs={now.getTime()} /></Suspense>
         <Suspense fallback={<p role="status">Loading all-time practice statistics…</p>}><ScrimStatistics seasonId={season.id} teams={teams} /></Suspense>
       </div>
@@ -408,7 +421,7 @@ export default async function ScrimsPage({
               action={addTeamCoach}
               className="flex flex-col gap-2 sm:flex-row sm:items-end"
             >
-              <label className="min-w-0 flex-1 space-y-1.5 text-sm">
+              <label className="min-w-0 flex-1 space-y-1.5 text-sm sm:max-w-md">
                 <span className="block text-xs font-medium text-muted">
                   Coach Dota ID, SteamID64, or profile URL
                 </span>
@@ -460,6 +473,8 @@ export default async function ScrimsPage({
   );
 }
 
+const SUBGRID_CARD = "row-span-2 grid min-w-0 grid-rows-subgrid gap-0";
+
 async function ScrimHistory({
   seasonId,
   page,
@@ -490,7 +505,7 @@ async function ScrimHistory({
   });
   const completed = results.slice(0, 20);
   return (
-    <Card id="history">
+    <Card id="history" className={SUBGRID_CARD}>
       <CardHeader
         title="Scrim history"
         subtitle="Practice results only — never league results. A booking with no games 36 hours after it started is listed as not played."
@@ -498,7 +513,7 @@ async function ScrimHistory({
       />
       <CardBody className="space-y-2">
         {completed.length === 0 ? (
-          <EmptyState compact title="No completed scrims yet" />
+          <EmptyState inline title="No completed scrims yet" />
         ) : (
           completed.map((scrim) => (
             <Link
@@ -523,6 +538,7 @@ async function ScrimHistory({
             </Link>
           ))
         )}
+        {page > 1 || results.length > 20 ? (
         <nav
           aria-label="Scrim history pages"
           className="flex flex-wrap gap-3 pt-3 text-sm"
@@ -544,6 +560,7 @@ async function ScrimHistory({
             </Link>
           ) : null}
         </nav>
+        ) : null}
       </CardBody>
     </Card>
   );
@@ -681,7 +698,7 @@ async function ScrimStatistics({
 
   return (
     <>
-      <Card id="team-stats">
+      <Card id="team-stats" className={SUBGRID_CARD}>
         <CardHeader
           title="Scrim team records"
           subtitle="A practice-only table; league standings are unchanged."
@@ -689,7 +706,7 @@ async function ScrimStatistics({
         />
         <CardBody className="space-y-2">
           {teamRecordRows.length === 0 ? (
-            <EmptyState compact title="No scrim team records yet" />
+            <EmptyState inline title="No scrim team records yet" />
           ) : (
             teamRecordRows.map((row) => (
               <div
@@ -711,7 +728,7 @@ async function ScrimStatistics({
         </CardBody>
       </Card>
 
-      <Card id="stats">
+      <Card id="stats" className={SUBGRID_CARD}>
         <CardHeader
           title="Scrim leaders"
           subtitle="Calculated only from completed scrim games, including casual guests."
@@ -719,7 +736,7 @@ async function ScrimStatistics({
         />
         <CardBody className="space-y-2">
           {leaderRows.length === 0 ? (
-            <EmptyState compact title="No scrim stats yet" />
+            <EmptyState inline title="No scrim stats yet" />
           ) : (
             leaderRows.map((row) => (
               <div

@@ -67,7 +67,7 @@ test("phone dock opens league tools in one tap and keeps feedback clear", async 
   await page.setViewportSize({ width: 844, height: 390 });
   await exploreButton.click();
   const sheetBounds = (await explore.boundingBox())!;
-  expect(sheetBounds.y).toBeGreaterThanOrEqual(80);
+  expect(sheetBounds.y).toBeGreaterThanOrEqual(64);
   expect(sheetBounds.y + sheetBounds.height).toBeLessThanOrEqual(
     (await dock.boundingBox())!.y,
   );

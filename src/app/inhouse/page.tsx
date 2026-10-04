@@ -17,7 +17,7 @@ import {
 } from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
 import { gameMvp } from "@/lib/achievements";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
 import {
@@ -278,7 +278,7 @@ async function SceneStats() {
             <LocalTime
               ts={stats.lastEndedAtMs}
               variant="short"
-              initial={formatMatchTime(new Date(stats.lastEndedAtMs), "short")}
+              initial={formatLeagueMatchTime(new Date(stats.lastEndedAtMs), "short")}
             />
           }
           hint={
@@ -476,7 +476,7 @@ function ResultSummaryLine({
         <LocalTime
           ts={playedAt.getTime()}
           variant="short"
-          initial={formatMatchTime(playedAt, "short")}
+          initial={formatLeagueMatchTime(playedAt, "short")}
         />
       </span>
     </span>

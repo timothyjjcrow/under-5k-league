@@ -50,6 +50,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { path: "/inhouse", changeFrequency: "daily", priority: 0.7 },
     { path: "/inhouse/history", changeFrequency: "weekly", priority: 0.6 },
     { path: "/how-it-works", changeFrequency: "monthly", priority: 0.6 },
+    { path: "/rules", changeFrequency: "monthly", priority: 0.6 },
   ];
   return routes
     .filter((route) => route.when ?? true)

@@ -73,8 +73,11 @@ In order, this rehearses both Preview deployments, builds a staged production
 candidate for each league from the same commit without touching either live
 domain, and checks each candidate: the read-only database attestation in its
 build, its release, live, ready and automation health, and that its home and
-schedule pages load. Neither live site changes. A good run prints these lines
-and ends with `"status": "staged"`:
+schedule pages load. The automation probe gets six tries 30 seconds apart:
+after the worker sleeps (up to an hour), it answers 503 from the wake until the
+next scheduled pass finishes, up to a minute plus the pass. A fault that lasts
+still stops the run. Neither live site changes. A good run
+prints these lines and ends with `"status": "staged"`:
 
 ```text
 Rehearsing both isolated Preview deployments.

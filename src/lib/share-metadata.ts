@@ -7,11 +7,17 @@ import type { Metadata } from "next";
  * title/description would otherwise drop the site's share image + card. This
  * re-includes the deployment's regional brand images so previews keep the image while showing the
  * entity-specific title/description.
+ *
+ * `pageImage` is for a page whose folder draws its own picture (an
+ * opengraph-image and a twitter-image file: the match, team, player and
+ * season pages). It leaves the images out, because Next uses a folder's image
+ * files only where the page's metadata names no images itself.
  */
 export function shareMetadata(
   title: string,
   description: string,
   pathname?: string,
+  options: { pageImage?: boolean } = {},
 ): Metadata {
   return {
     title,
@@ -22,14 +28,18 @@ export function shareMetadata(
       description,
       siteName: LEAGUE_CONFIG.name,
       type: "website",
-      images: [LEAGUE_CONFIG.branding.openGraphImage],
+      ...(options.pageImage
+        ? {}
+        : { images: [LEAGUE_CONFIG.branding.openGraphImage] }),
       ...(pathname ? { url: pathname } : {}),
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: [LEAGUE_CONFIG.branding.twitterImage],
+      ...(options.pageImage
+        ? {}
+        : { images: [LEAGUE_CONFIG.branding.twitterImage] }),
     },
   };
 }
@@ -49,6 +59,9 @@ export function playerProfileMetadata(
     ...shareMetadata(
       `${name} · Player`,
       `${name}'s player profile${highlights.length > 0 ? ` · ${highlights.join(" · ")}` : ""} — match history in ${LEAGUE_CONFIG.name}.`,
+      undefined,
+      // The profile's own picture (players/[id]/opengraph-image).
+      { pageImage: true },
     ),
     robots: { index: false, follow: true },
   };

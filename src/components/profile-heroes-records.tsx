@@ -12,7 +12,11 @@ import {
 } from "@/components/ui";
 import { heroById } from "@/lib/heroes";
 import type { PubHero } from "@/lib/pub-stats";
-import type { PlayerRecord } from "@/lib/records";
+import {
+  recordWatchText,
+  type PlayerRecord,
+  type RecordWatchLine,
+} from "@/lib/records";
 import type { HeroPoolRow } from "@/lib/scouting";
 import { formatNetWorth, hasText } from "@/lib/utils";
 
@@ -21,8 +25,9 @@ const HERO_RATE_MIN_GAMES = 3;
 
 /**
  * The "Player profile" band: the heroes they play (league games, public pubs
- * and their own favorites) and any all-time league record they hold. The page
- * renders the band only when at least one of its cards shows.
+ * and their own favorites), any all-time league record they hold and the one
+ * within reach. The page renders the band only when at least one of its
+ * cards shows.
  */
 export function ProfileHeroesAndRecords({
   showHeroes,
@@ -32,6 +37,7 @@ export function ProfileHeroesAndRecords({
   pubHeroes,
   pubCheckedLabel,
   heldRecords,
+  recordWatch = null,
 }: {
   showHeroes: boolean;
   showRecords: boolean;
@@ -43,11 +49,13 @@ export function ProfileHeroesAndRecords({
   /** How long ago that snapshot was taken ("3d ago"). */
   pubCheckedLabel: string | null;
   heldRecords: PlayerRecord[];
+  /** The league record they are closest to (`recordWatchFor`), if any. */
+  recordWatch?: RecordWatchLine | null;
 }) {
   return (
     <section id="player-about" className="scroll-mt-40 space-y-3">
       <SectionTitle>Player profile</SectionTitle>
-      <div className="space-y-6">
+      <div className="space-y-5">
         {showHeroes ? (
           <Card id="player-heroes" className="min-w-0 scroll-mt-40">
             <CardHeader
@@ -63,6 +71,7 @@ export function ProfileHeroesAndRecords({
                   <HeroPool
                     heroes={leagueHeroes}
                     minGamesForRate={HERO_RATE_MIN_GAMES}
+                    columns="container"
                   />
                 </div>
               ) : null}
@@ -89,6 +98,7 @@ export function ProfileHeroesAndRecords({
                     heroes={pubHeroes}
                     limit={5}
                     minGamesForRate={HERO_RATE_MIN_GAMES}
+                    columns="container"
                   />
                 </div>
               ) : null}
@@ -131,11 +141,32 @@ export function ProfileHeroesAndRecords({
                   </Link>
                 );
               })}
+              {recordWatch ? <WithinReach line={recordWatch} /> : null}
             </CardBody>
           </Card>
         ) : null}
       </div>
     </section>
+  );
+}
+
+/**
+ * The league record this player is closest to breaking, on a row of its own
+ * under the chips (`w-full` in the card's wrapping row): stored marks only,
+ * "Career best 18 kills · record 21, 3 short", never a pace.
+ */
+function WithinReach({ line }: { line: RecordWatchLine }) {
+  return (
+    <div className="w-full min-w-0 rounded-lg border border-dashed border-line px-3 py-2 text-sm">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted">
+        Within reach
+      </p>
+      <p className="mt-0.5 [overflow-wrap:anywhere]">
+        <span aria-hidden>{line.emoji} </span>
+        <span className="font-medium">{line.title}</span>
+        <span className="text-muted">{` · ${recordWatchText(line)}`}</span>
+      </p>
+    </div>
   );
 }
 

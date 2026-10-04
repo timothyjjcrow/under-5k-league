@@ -32,30 +32,36 @@ export function SiteFooter({
   const showCalendar = phase === "REGULAR_SEASON" || phase === "PLAYOFFS";
 
   return (
-    <footer className="mt-8 border-t border-line-soft bg-bg">
-      <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-        <div className="flex flex-col items-center gap-5 sm:flex-row sm:justify-between">
-          <Link
-            href="/"
-            aria-label={`${LEAGUE_CONFIG.name} — home`}
-            className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-          >
-            {/* Use the same regional emblem as the header. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={LEAGUE_CONFIG.branding.navLogo}
-              style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
-              alt={LEAGUE_CONFIG.name}
-              width={LEAGUE_CONFIG.branding.navWidth}
-              height={LEAGUE_CONFIG.branding.navHeight}
-              className="h-14 w-auto sm:h-16"
-            />
-          </Link>
+    // Two compact bands: the brand, the Discord invite and the few links; then
+    // the small print. It used to stack a 64px emblem, the links and a ruled
+    // second band into about 290px on a phone, under every page.
+    <footer className="mt-4 border-t border-line-soft bg-bg">
+      <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/"
+              aria-label={`${LEAGUE_CONFIG.name} — home`}
+              className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              {/* Use the same regional emblem as the header. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={LEAGUE_CONFIG.branding.navLogo}
+                style={{ mixBlendMode: LEAGUE_CONFIG.branding.blendMode }}
+                alt={LEAGUE_CONFIG.name}
+                width={LEAGUE_CONFIG.branding.navWidth}
+                height={LEAGUE_CONFIG.branding.navHeight}
+                className="h-11 w-auto"
+              />
+            </Link>
+            <DiscordButton size="sm" />
+          </div>
 
           <nav aria-label="Footer" className="min-w-0">
             {/* Flex items, so each padded 32px hit box keeps its own row
                 height when the list wraps. */}
-            <ul className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 sm:justify-end">
+            <ul className="flex flex-wrap items-center gap-x-5 gap-y-1">
               {links.map((l) => (
                 <li key={l.href}>
                   <Link href={l.href} className={`${FOOTER_LINK_CLASS} block`}>
@@ -90,13 +96,15 @@ export function SiteFooter({
           </nav>
         </div>
 
-        <div className="mt-6 grid gap-4 border-t border-line-soft pt-6 sm:grid-cols-[auto_1fr] sm:items-center">
-          <div className="flex justify-center sm:justify-start">
-            <DiscordButton size="sm" />
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-xs text-muted sm:justify-end">
+        <div className="mt-5 flex flex-col gap-3 border-t border-line-soft pt-4 text-xs text-muted lg:flex-row lg:items-center lg:justify-between lg:gap-6">
+          {/* Who runs the league and who to ask about a profile, per region.
+              One line on purpose: there is no policy page. */}
+          <p className="leading-relaxed lg:max-w-2xl">
+            {LEAGUE_CONFIG.footerNote}
+          </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 lg:shrink-0 lg:justify-end">
             {seasonName ? (
-              <span className="inline-flex max-w-full flex-wrap items-center justify-center gap-2">
+              <span className="inline-flex max-w-full flex-wrap items-center gap-2">
                 <span>{seasonName}</span>
                 {phase ? (
                   <Badge tone={seasonPhaseTone(phase)}>
@@ -106,12 +114,12 @@ export function SiteFooter({
               </span>
             ) : null}
             {seasonName ? (
-              <span aria-hidden="true" className="hidden text-line sm:inline">
+              <span aria-hidden="true" className="text-line">
                 •
               </span>
             ) : null}
             <span>© {year} {LEAGUE_CONFIG.name}</span>
-            <span aria-hidden="true" className="hidden text-line sm:inline">
+            <span aria-hidden="true" className="text-line">
               •
             </span>
             <a
@@ -123,7 +131,7 @@ export function SiteFooter({
             >
               Merch <span aria-hidden="true">↗</span>
             </a>
-            <span aria-hidden="true" className="hidden text-line sm:inline">
+            <span aria-hidden="true" className="text-line">
               •
             </span>
             <a
@@ -136,11 +144,6 @@ export function SiteFooter({
               Support the league <span aria-hidden="true">↗</span>
             </a>
           </div>
-          {/* Who runs the league and who to ask about a profile, per region.
-              One line on purpose: there is no policy page. */}
-          <p className="text-center text-xs leading-relaxed text-muted sm:col-span-2 sm:text-left">
-            {LEAGUE_CONFIG.footerNote}
-          </p>
         </div>
       </div>
     </footer>

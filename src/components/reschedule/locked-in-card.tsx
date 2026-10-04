@@ -1,5 +1,5 @@
 import { LocalTime } from "@/components/local-time";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import { cn } from "@/lib/utils";
 import type { RecentLock } from "@/lib/reschedule-ready-check-service";
@@ -55,7 +55,7 @@ export function LockedInCard({
           <LocalTime
             ts={lock.timeMs}
             variant="full"
-            initial={formatMatchTime(new Date(lock.timeMs), "full")}
+            initial={formatLeagueMatchTime(new Date(lock.timeMs), "full")}
           />
         </strong>
         {lock.seats > 0 ? (

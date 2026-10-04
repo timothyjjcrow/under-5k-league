@@ -61,7 +61,8 @@ import {
   seasonScenarioReport,
 } from "@/lib/stakes";
 import { standingsMovement } from "@/lib/standings";
-import { formByTeam } from "@/lib/team-matches";
+import { standingsForm, standingsStreaksShown } from "@/lib/team-matches";
+import { biggestUpset, seriesUpset, upsetContext } from "@/lib/upsets";
 import { cn } from "@/lib/utils";
 import {
   NewcomerStandinLine,
@@ -69,8 +70,14 @@ import {
   StandinSignupLink,
 } from "./hero-controls";
 import { HeroStat, type HeroParts, type HomeViewer } from "./hero";
+import { InhouseStrip } from "./inhouse-strip";
 import { MyNextMatch } from "./my-next-match";
 import { ThisWeek } from "./this-week";
+import {
+  UpsetChip,
+  WeekHighlights,
+  recentResultSpoken,
+} from "./week-highlights";
 import { fmtWhen } from "./when";
 
 /**
@@ -198,16 +205,15 @@ export function seasonHero(
   return { action, meta, aside };
 }
 
-// Fallback for the mid-season dashboard. It MUST mirror the real bands — This
-// week, then the full-width standings (in the playoffs, the bracket), the
-// team / Coming up / Recent results band, then the side games — or the page
-// paints one layout and then visibly rearranges into another.
-export function SeasonViewSkeleton() {
-  return (
-    <div className="space-y-6">
-      <CardSkeleton rows={4} />
-      <CardSkeleton rows={6} />
-      <div className="grid gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
+// Fallback for the mid-season dashboard. It MUST mirror the real bands, or
+// the page paints one layout and then visibly rearranges into another. The
+// regular season: This week and the standings, then (a rail from xl) the
+// team / Coming up / Recent results band and the side games. The playoffs:
+// one column, This week, the bracket, then the same band and side games.
+export function SeasonViewSkeleton({ playoffs = false }: { playoffs?: boolean }) {
+  const railColumn = (
+    <>
+      <div className="grid items-start gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
         {Array.from({ length: 2 }).map((_, i) => (
           <CardSkeleton key={i} rows={3} className="min-w-0" />
         ))}
@@ -217,11 +223,43 @@ export function SeasonViewSkeleton() {
           <div key={i} className="skeleton h-16 rounded-[var(--radius)]" />
         ))}
       </div>
+    </>
+  );
+  if (playoffs) {
+    return (
+      <div className="space-y-5">
+        <CardSkeleton rows={3} />
+        <CardSkeleton rows={6} />
+        {railColumn}
+      </div>
+    );
+  }
+  return (
+    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_21rem]">
+      <div className="min-w-0 space-y-5">
+        <CardSkeleton rows={4} />
+        <CardSkeleton rows={6} />
+      </div>
+      <div className="min-w-0 space-y-5">{railColumn}</div>
     </div>
   );
 }
 
-/** "Semifinals underway" — the name of the earliest playoff round still open. */
+/**
+ * The band's short lists: one column in the rail or on a phone, two once the
+ * card itself is 36rem wide (the playoffs' full-width band), so a four-row
+ * list doesn't stand twice as tall as the card beside it. Rules are borders
+ * on the cells, since a divide-y can't draw a two-column grid.
+ */
+const LIST_GRID = "@xl:grid @xl:grid-cols-2";
+const LIST_CELL =
+  "min-w-0 border-t border-line-soft first:border-t-0 @xl:[&:nth-child(2)]:border-t-0 @xl:odd:border-r";
+
+/** A list row that is one link: full-width hover and an inset focus ring. */
+const ROW_LINK =
+  "block text-sm transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60";
+
+/** The earliest open playoff round; only a live series makes it "underway". */
 function currentRoundLabel(playoff: Match[]): string | null {
   const slotted = playoff.filter((m) => m.bracketSlot);
   const first = slotted.filter((m) => slotRound(m.bracketSlot) === 0);
@@ -230,7 +268,11 @@ function currentRoundLabel(playoff: Match[]): string | null {
   const open = slotted.filter((m) => m.status !== "COMPLETED");
   if (open.length === 0) return null;
   const round = Math.min(...open.map((m) => slotRound(m.bracketSlot)));
-  return `${roundName(round, total)} underway`;
+  const live = open.some(
+    (m) => slotRound(m.bracketSlot) === round && m.status === "LIVE",
+  );
+  const name = roundName(round, total);
+  return live ? `${name} underway` : name;
 }
 
 export async function SeasonView({
@@ -240,6 +282,7 @@ export async function SeasonView({
   gamesOnRecord,
   championTeamId,
   showCheckins,
+  rail,
 }: {
   snapshot: SeasonSnapshot;
   userId?: string;
@@ -247,6 +290,8 @@ export async function SeasonView({
   gamesOnRecord: number;
   championTeamId: string | null;
   showCheckins: boolean;
+  /** Home's own sections that end the second column (League news). */
+  rail?: ReactNode;
 }) {
   const { season, teams } = snapshot;
   const playoffField = projectPlayoffField(teams, matches);
@@ -254,10 +299,20 @@ export async function SeasonView({
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
   const playoffRounds = playoffTotalRounds(matches);
-  const teamForm = formByTeam(
+  // The Last 5 strip and the streak chips read ONE list in play order, so a
+  // "W3 streak" always matches the strip beside it.
+  const { form: teamForm, streaks: teamStreaks } = standingsForm(
+    teams.map((t) => t.id),
+    matches,
+    { streaks: standingsStreaksShown(season) },
+  );
+  // Every series is judged against the table going into its week (or the
+  // frozen seeds): one context for Recent results and the week's upset.
+  const upsets = upsetContext(
     teams.map((t) => t.id),
     matches,
   );
+  const weekUpset = biggestUpset(matches, upsets);
 
   // One scenario report powers the standings clinch marks, the this-week
   // stakes chips, and the your-team one-liner — computed once.
@@ -321,6 +376,12 @@ export async function SeasonView({
         b.week - a.week || b.createdAt.getTime() - a.createdAt.getTime(),
     )
     .slice(0, 4);
+  const recentUpsets = new Map(
+    recentResults.flatMap((m) => {
+      const upset = seriesUpset(m, upsets);
+      return upset ? [[m.id, upset] as const] : [];
+    }),
+  );
 
   // Visible to everyone — spectators and unrostered players had no way to
   // see what's coming up without leaving the dashboard. Chronological, not
@@ -374,15 +435,17 @@ export async function SeasonView({
         : false,
   });
 
-  // The side-game band renders BELOW the table. It used to sit above both
-  // the standings and This-week, so the secondary loop (pick'em, fantasy) got
-  // the first full-width band on the page while the primary one — your match,
-  // your team, the table — started below it.
+  // The side-game band renders BELOW the table (in the rail from xl). It used
+  // to sit above both the standings and This-week, so the secondary loop
+  // (pick'em, fantasy) got the first full-width band on the page while the
+  // primary one — your match, your team, the table — started below it.
   //
   // It only offers what is live: Pick'em while a fixture is open for picks,
   // Fantasy by the menus' rule, and Inhouse always (it runs any night). The
-  // Leaders and Hero meta tiles are gone: they repeated the menus. auto-fit,
-  // because the count runs from one to three.
+  // Leaders and Hero meta tiles are gone: they repeated the menus. The
+  // Inhouse tile is the live queue line itself (who is queued, whether a
+  // lobby is on); Home used to print a static Inhouse tile AND that strip
+  // under it. auto-fit, because the count runs from one to three.
   const sideGames = (
     <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
       {pickemOpen > 0 ? (
@@ -407,12 +470,18 @@ export async function SeasonView({
           hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
         />
       ) : null}
-      <SideGameLink
-        href="/inhouse"
-        icon="⚔️"
-        title="Inhouse"
-        hint="Pick-up 5v5s, any night"
-      />
+      <Suspense
+        fallback={
+          <SideGameLink
+            href="/inhouse"
+            icon="⚔️"
+            title="Inhouse"
+            hint="Pick-up 5v5s, any night"
+          />
+        }
+      >
+        <InhouseStrip variant="tile" />
+      </Suspense>
     </div>
   );
 
@@ -497,8 +566,10 @@ export async function SeasonView({
     </Link>
   );
 
-  return (
-    <div className="space-y-6">
+  // The dashboard's first column: this week's games, then the table (in
+  // the playoffs, the bracket).
+  const mainColumn = (
+    <>
       {season.status === "REGULAR_SEASON" ? (
         <TiebreakerNotice
           report={report}
@@ -608,6 +679,7 @@ export async function SeasonView({
                   new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
                 }
                 formByTeam={teamForm}
+                streakByTeam={teamStreaks}
                 playoffCut={playoffField.bracketSize}
                 playoffSeedByTeam={playoffField.seedByTeam}
                 unresolvedPlayoffTeamIds={publicDeadHeatTeamIds(
@@ -627,57 +699,62 @@ export async function SeasonView({
         </div>
       )}
 
-      {/* The viewer's team card (in the playoffs, where it stands in the
-          bracket; mid-season, the stakes of a next series This week doesn't
-          show); then what comes after this slate and what just finished: short plain
-          lists with a link to the rest. auto-fit, because any card can be
-          missing (nothing left to play, nothing played yet), and items-start
-          so the shorter card doesn't stretch into an empty box. There is no
-          week-by-week results grid here: the table's form column and Recent
-          results already say it, and Schedule keeps the full grid. */}
+    </>
+  );
+
+  // The second column: the viewer's team card (in the playoffs, where it
+  // stands in the bracket; mid-season, the stakes of a next series This week
+  // doesn't show); then what comes after this slate and what just finished:
+  // short plain lists with a link to the rest; then the side games. From xl
+  // it is a rail beside the table, where the auto-fit band below stacks into
+  // one column; narrower, it follows the table and the band spreads its
+  // cards across the width. auto-fit, because any card can be missing
+  // (nothing left to play, nothing played yet), and items-start so the
+  // shorter card doesn't stretch into an empty box. There is no week-by-week
+  // results grid here: the table's form column and Recent results already
+  // say it, and Schedule keeps the full grid.
+  const railColumn = (
+    <>
       {myPlayoffCard || myStakeCard || upcoming.length > 0 || recentResults.length > 0 ? (
-        <div className="grid items-start gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
+        <div className="grid items-start gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
           {myPlayoffCard}
           {myStakeCard ? <div className="min-w-0">{myStakeCard}</div> : null}
           {upcoming.length > 0 ? (
-            <Card className="min-w-0 overflow-hidden">
+            <Card className="@container min-w-0 overflow-hidden">
               <CardHeader
-                className="px-4 py-3"
                 headingLevel={2}
                 title="Coming up"
                 subtitle="After this week's slate"
               />
-              <CardBody className="p-0">
-                <ul className="divide-y divide-line/60">
-                  {upcoming.map((m) => (
-                    <li key={m.id}>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="block px-4 py-2.5 text-sm hover:bg-surface-2/40"
-                      >
-                        <div className="text-xs uppercase text-muted">
-                          {matchRoundLabel(m, playoffRounds)}
-                          {m.scheduledAt ? (
-                            <>
-                              {" · "}
-                              <LocalTime
-                                ts={m.scheduledAt.getTime()}
-                                variant="full"
-                                initial={fmtWhen(m.scheduledAt) ?? ""}
-                              />
-                            </>
-                          ) : null}
-                        </div>
-                        <div className="mt-1 font-medium leading-relaxed [overflow-wrap:anywhere]">
-                          {teamName.get(m.homeTeamId) ?? "?"}{" "}
-                          <span className="font-normal text-muted">vs</span>{" "}
-                          {teamName.get(m.awayTeamId) ?? "?"}
-                        </div>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </CardBody>
+              <ul className={LIST_GRID}>
+                {upcoming.map((m) => (
+                  <li key={m.id} className={LIST_CELL}>
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className={cn(ROW_LINK, "px-4 py-2.5")}
+                    >
+                      <p className="text-xs text-muted">
+                        {matchRoundLabel(m, playoffRounds)}
+                        {m.scheduledAt ? (
+                          <>
+                            {" · "}
+                            <LocalTime
+                              ts={m.scheduledAt.getTime()}
+                              variant="full"
+                              initial={fmtWhen(m.scheduledAt) ?? ""}
+                            />
+                          </>
+                        ) : null}
+                      </p>
+                      <p className="mt-0.5 font-medium leading-snug [overflow-wrap:anywhere]">
+                        {teamName.get(m.homeTeamId) ?? "?"}{" "}
+                        <span className="font-normal text-muted">vs</span>{" "}
+                        {teamName.get(m.awayTeamId) ?? "?"}
+                      </p>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
               <Link
                 href="/schedule#fixtures"
                 className={textLink(
@@ -690,72 +767,74 @@ export async function SeasonView({
           ) : null}
 
           {recentResults.length > 0 ? (
-            <Card className="min-w-0 overflow-hidden">
-              <CardHeader
-                className="px-4 py-3"
-                headingLevel={2}
-                title="Recent results"
-              />
-              <CardBody className="p-0">
-                <ul className="divide-y divide-line/60">
-                  {recentResults.map((m) => (
-                    <li key={m.id}>
-                      <Link
-                        href={`/matches/${m.id}`}
-                        className="block space-y-1.5 px-4 py-3 text-sm transition-colors hover:bg-surface-2/60"
-                      >
-                        <p className="text-xs text-muted">
+            <Card className="@container min-w-0 overflow-hidden">
+              <CardHeader headingLevel={2} title="Recent results" />
+              <ul className={LIST_GRID}>
+                {recentResults.map((m) => (
+                  <li key={m.id} className={LIST_CELL}>
+                    {/* A scoreboard row: the round, then each side on one
+                        line with its score. It used to be three roomy rows
+                        per series. */}
+                    <Link
+                      href={`/matches/${m.id}`}
+                      className={cn(ROW_LINK, "px-4 py-2")}
+                    >
+                      <p className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
+                        <span>
                           {matchRoundLabel(m, playoffRounds)} ·{" "}
                           {m.forfeit ? "Forfeit" : "Final score"}
-                        </p>
-                        {[
-                          { id: m.homeTeamId, score: m.homeScore },
-                          { id: m.awayTeamId, score: m.awayScore },
-                        ].map((side) => (
-                          <div
-                            key={side.id}
-                            className="flex items-center gap-2"
+                        </span>
+                        <UpsetChip upset={recentUpsets.get(m.id)} />
+                      </p>
+                      {[
+                        { id: m.homeTeamId, score: m.homeScore },
+                        { id: m.awayTeamId, score: m.awayScore },
+                      ].map((side) => (
+                        <div
+                          key={side.id}
+                          className="flex min-w-0 items-center gap-2 py-0.5"
+                        >
+                          <TeamCrest
+                            name={teamName.get(side.id) ?? "?"}
+                            seed={side.id}
+                            logoUrl={teamLogoUrl.get(side.id)}
+                            size={18}
+                            className="shrink-0 rounded"
+                          />
+                          <span
+                            className={cn(
+                              "min-w-0 flex-1 truncate",
+                              m.winnerTeamId === side.id
+                                ? "font-semibold"
+                                : "text-muted",
+                            )}
                           >
-                            <TeamCrest
-                              name={teamName.get(side.id) ?? "?"}
-                              seed={side.id}
-                              logoUrl={teamLogoUrl.get(side.id)}
-                              size={22}
-                              className="shrink-0 rounded"
-                            />
-                            <span
-                              className={cn(
-                                "min-w-0 flex-1 [overflow-wrap:anywhere]",
-                                m.winnerTeamId === side.id
-                                  ? "font-semibold"
-                                  : "text-muted",
-                              )}
-                            >
-                              {teamName.get(side.id) ?? "?"}
-                            </span>
-                            <span
-                              className={cn(
-                                "grid h-7 w-8 shrink-0 place-items-center rounded font-display text-lg tabular-nums",
-                                m.winnerTeamId === side.id
-                                  ? "bg-success/15 text-success"
-                                  : "bg-surface-2 text-muted",
-                              )}
-                            >
-                              {side.score}
-                            </span>
-                          </div>
-                        ))}
-                        <p className="sr-only">
-                          {m.winnerTeamId
-                            ? `${teamName.get(m.winnerTeamId) ?? "Winning team"} won the series`
-                            : "Series drawn"}{" "}
-                          · Match details
-                        </p>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </CardBody>
+                            {teamName.get(side.id) ?? "?"}
+                          </span>
+                          <span
+                            className={cn(
+                              "w-7 shrink-0 rounded text-center font-display text-base leading-6 tabular-nums",
+                              m.winnerTeamId === side.id
+                                ? "bg-success/15 text-success"
+                                : "bg-surface-2 text-muted",
+                            )}
+                          >
+                            {side.score}
+                          </span>
+                        </div>
+                      ))}
+                      <p className="sr-only">
+                        {recentResultSpoken(
+                          m.winnerTeamId
+                            ? (teamName.get(m.winnerTeamId) ?? "Winning team")
+                            : null,
+                          recentUpsets.has(m.id),
+                        )}
+                      </p>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
               <Link
                 href="/schedule#fixtures"
                 className={textLink(
@@ -768,7 +847,22 @@ export async function SeasonView({
           ) : null}
         </div>
       ) : null}
+      {sideGames}
+    </>
+  );
 
+  // The week's upset and honors (a line each) and the news: under the table
+  // from xl, and last on a phone, after the rail's cards.
+  const closing = (
+    <>
+      {weekUpset ? (
+        <WeekHighlights
+          label={matchRoundLabel(weekUpset.match, playoffRounds)}
+          match={weekUpset.match}
+          upset={weekUpset.upset}
+          teamName={teamName}
+        />
+      ) : null}
       <Suspense fallback={null}>
         <WeeklyHonorsLine
           seasonId={season.id}
@@ -776,7 +870,31 @@ export async function SeasonView({
           teamName={teamName}
         />
       </Suspense>
-      {sideGames}
+      {rail}
+    </>
+  );
+
+  // The playoffs keep one column: the bracket needs the page's full width
+  // (a two-sided bracket is five 208px rounds), and beside a rail it
+  // scrolled sideways on every laptop.
+  if (season.status === "PLAYOFFS") {
+    return (
+      <div className="space-y-5">
+        {mainColumn}
+        {railColumn}
+        {closing}
+      </div>
+    );
+  }
+  // From xl: the table's column, then the rail spanning both rows, then the
+  // closing block back in the first column. `auto 1fr` rows hand a tall
+  // rail's extra height to the second row, so the closing block starts right
+  // under the table instead of below a gap.
+  return (
+    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_21rem] xl:grid-rows-[auto_1fr]">
+      <div className="min-w-0 space-y-5">{mainColumn}</div>
+      <div className="min-w-0 space-y-5 xl:row-span-2">{railColumn}</div>
+      <div className="min-w-0 space-y-5">{closing}</div>
     </div>
   );
 }

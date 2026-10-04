@@ -102,6 +102,43 @@ export function playedSeriesFinalError(
 
 export type ClinchStatus = "CLINCHED" | "ELIMINATED" | null;
 
+type WeekMatchLike = MatchLike & { week: number };
+
+const completedRegularBefore = (m: WeekMatchLike, week: number) =>
+  m.phase === MATCH_PHASE.REGULAR &&
+  m.status === MATCH_STATUS.COMPLETED &&
+  m.week < week;
+
+/**
+ * The table as it stood going into `week`: only completed REGULAR results
+ * from earlier weeks. A postponed fixture counts in its own week, wherever
+ * it was played. Weekly movement and upsets both judge against it.
+ */
+export function regularTableBeforeWeek(
+  teamIds: string[],
+  matches: readonly WeekMatchLike[],
+  week: number,
+): TeamStanding[] {
+  return computeStandings(
+    teamIds,
+    matches.filter((m) => completedRegularBefore(m, week)),
+  );
+}
+
+/**
+ * How many distinct weeks have a completed REGULAR result before `week`:
+ * the evidence behind `regularTableBeforeWeek`. With none, that table is the
+ * all-zero preseason order; with one, it is a single night's results.
+ */
+export function regularWeeksWithResultsBefore(
+  matches: readonly WeekMatchLike[],
+  week: number,
+): number {
+  return new Set(
+    matches.filter((m) => completedRegularBefore(m, week)).map((m) => m.week),
+  ).size;
+}
+
 /**
  * How many places each team moved vs. the table before the latest completed
  * regular week's results (positive = climbed). Zero for everyone until a
@@ -109,7 +146,7 @@ export type ClinchStatus = "CLINCHED" | "ELIMINATED" | null;
  */
 export function standingsMovement(
   teamIds: string[],
-  matches: (MatchLike & { week: number })[],
+  matches: WeekMatchLike[],
 ): Map<string, number> {
   const completedRegular = matches.filter(
     (m) =>
@@ -121,24 +158,12 @@ export function standingsMovement(
   // One completed week is a single data point: the "before" table would be
   // the all-zero preseason ordering (arbitrary teamId order), so any arrows
   // would be alphabetical noise dressed up as movement.
-  if (!completedRegular.some((m) => m.week !== lastWeek)) return movement;
+  if (regularWeeksWithResultsBefore(matches, lastWeek) === 0) return movement;
 
   const rankOf = (rows: TeamStanding[]) =>
     new Map(rows.map((r, i) => [r.teamId, i]));
   const now = rankOf(computeStandings(teamIds, matches));
-  const before = rankOf(
-    computeStandings(
-      teamIds,
-      matches.filter(
-        (m) =>
-          !(
-            m.phase === MATCH_PHASE.REGULAR &&
-            m.status === MATCH_STATUS.COMPLETED &&
-            m.week === lastWeek
-          ),
-      ),
-    ),
-  );
+  const before = rankOf(regularTableBeforeWeek(teamIds, matches, lastWeek));
   for (const id of teamIds) {
     movement.set(id, (before.get(id) ?? 0) - (now.get(id) ?? 0));
   }

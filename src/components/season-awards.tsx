@@ -76,8 +76,9 @@ export async function SeasonAwards({
         <span id="season-awards-title">Season awards</span>
       </SectionTitle>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Completed series" value={completedSeries} />
+        <Stat size="md" label="Completed series" value={completedSeries} />
         <Stat
+          size="md"
           label="Imported games"
           value={games.length}
           hint={
@@ -88,21 +89,19 @@ export async function SeasonAwards({
               : undefined
           }
         />
-        <Stat label="Players" value={players.size} />
+        <Stat size="md" label="Players" value={players.size} />
         <Stat
+          size="md"
           label="Avg game"
           value={avgMins != null ? `${avgMins}m` : "—"}
           hint={`${heroes.size} heroes`}
         />
       </div>
-      {awards.some((a) => a.key === "mvp") ? (
-        <p className="text-sm leading-relaxed text-muted">
-          The MVP is ranked by impact points, the Player of the Week score:{" "}
-          {impactPointsRule()}.
-        </p>
-      ) : null}
       {awards.length > 0 ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        // Rows that fill themselves: each card starts at 16rem and grows,
+        // so however many awards the season produced (they are skipped
+        // until someone qualifies) the last row has no empty cells.
+        <div className="flex flex-wrap gap-3 [&>*]:min-w-0 [&>*]:flex-[1_1_16rem]">
           {awards.map((a) => (
             <AwardCard
               key={a.key}
@@ -125,10 +124,21 @@ export async function SeasonAwards({
           }
         />
       )}
+      {awards.some((a) => a.key === "mvp") ? (
+        <p className="text-xs leading-relaxed text-muted">
+          The MVP is ranked by impact points, the Player of the Week score:{" "}
+          {impactPointsRule()}.
+        </p>
+      ) : null}
     </section>
   );
 }
 
+/**
+ * One award: the title and the figure on one line, the winner under it and
+ * the rule at the foot. The figure used to sit under a rule of its own, so a
+ * card stood about 190px tall; this is about 130px.
+ */
 function AwardCard({
   award,
   user,
@@ -145,29 +155,44 @@ function AwardCard({
 }) {
   const hero = award.heroId ? heroById(award.heroId) : null;
   return (
-    <div className="flex flex-col rounded-xl border border-line bg-surface-2/40 p-4 transition-colors hover:border-muted/60">
-      <div className="flex items-center gap-2">
-        <span className="text-xl" aria-hidden>
-          {award.emoji}
-        </span>
-        <span className="font-display text-sm font-semibold uppercase tracking-wide">
-          {award.title}
-        </span>
+    <div className="flex flex-col rounded-xl border border-line bg-surface-2/40 p-3.5 transition-colors hover:border-muted/60">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-lg leading-none" aria-hidden>
+            {award.emoji}
+          </span>
+          <span className="font-display text-sm font-semibold uppercase tracking-wide">
+            {award.title}
+          </span>
+        </div>
+        <div className="ml-auto text-right">
+          <span className="font-display text-xl font-bold leading-none text-accent">
+            {award.value}
+          </span>
+          {award.detail ? (
+            <span className="mt-1 block text-[11px] leading-tight text-muted">
+              {award.detail}
+            </span>
+          ) : null}
+        </div>
       </div>
 
-      <div className="mt-3 flex min-w-0 items-center gap-3">
+      <div className="mt-2.5 flex min-w-0 items-center gap-2.5">
         {user ? (
           <>
             <PlayerLink userId={user.id}>
-              <Avatar name={user.name} src={user.avatar} size={38} />
+              <Avatar name={user.name} src={user.avatar} size={32} />
             </PlayerLink>
             <div className="min-w-0">
-              <PlayerLink
-                userId={user.id}
-                className="block truncate font-medium"
-              >
-                {user.name}
-              </PlayerLink>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <PlayerLink
+                  userId={user.id}
+                  className="block truncate font-medium"
+                >
+                  {user.name}
+                </PlayerLink>
+                <RankBadge rankTier={user.rankTier} />
+              </span>
               {team ? (
                 <Link
                   href={`/teams/${team.id}`}
@@ -182,14 +207,11 @@ function AwardCard({
                   <span className="truncate">{team.name}</span>
                 </Link>
               ) : null}
-              <span className="mt-0.5 block">
-                <RankBadge rankTier={user.rankTier} />
-              </span>
             </div>
           </>
         ) : hero ? (
           <>
-            <HeroIcon hero={hero} size={38} />
+            <HeroIcon hero={hero} size={32} />
             <div className="min-w-0 truncate font-medium">{hero.name}</div>
           </>
         ) : award.matchId ? (
@@ -206,15 +228,7 @@ function AwardCard({
         )}
       </div>
 
-      <div className="mt-3 flex items-baseline gap-2 border-t border-line/60 pt-3">
-        <span className="font-display text-xl font-bold text-accent">
-          {award.value}
-        </span>
-        {award.detail ? (
-          <span className="text-xs text-muted">{award.detail}</span>
-        ) : null}
-      </div>
-      <div className="mt-1 text-xs text-muted">{award.blurb}</div>
+      <div className="mt-2.5 text-xs text-muted">{award.blurb}</div>
     </div>
   );
 }

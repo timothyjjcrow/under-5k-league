@@ -17,6 +17,7 @@ export function StandingsTable({
   teamName,
   teamLogoUrl,
   formByTeam,
+  streakByTeam,
   playoffCut,
   clinch,
   playoffScenarios,
@@ -32,6 +33,9 @@ export function StandingsTable({
   teamName: Map<string, string>;
   teamLogoUrl?: Map<string, string | null>;
   formByTeam?: Map<string, FormResult[]>;
+  /** Series won in a row (`standingsForm`). Pass it only for a live table
+   *  (`standingsStreaksShown`): a finished season's last run is history. */
+  streakByTeam?: Map<string, number>;
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
   playoffCut?: number;
   /** Per-team clinched/eliminated verdicts (see clinchStatuses). */
@@ -111,6 +115,8 @@ export function StandingsTable({
     playoffSeed: pending || confirmedOut
       ? null
       : playoffSeedByTeam?.get(s.teamId) ?? null,
+    // A withdrawn team's run ended with its forfeits; never badge it.
+    streak: withdrawnIds?.has(s.teamId) ? undefined : streakByTeam?.get(s.teamId),
   });
   });
   return (

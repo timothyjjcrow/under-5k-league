@@ -354,7 +354,7 @@ Every transition is a guarded claim; keep it that way (general rules:
   copy dividing by the whole roster flipped a side's strength when the last
   pick landed.
 - **Other surfaces:** a compact fixed clock bar in the ready check and vote
-  (`useBannerOffscreen`, `top-20`); "Run it back →" with its dismissal in
+  (`useBannerOffscreen`, `top-16`); "Run it back →" with its dismissal in
   localStorage (`e2e/inhouse-storage.spec.ts` covers blocked storage);
   `router.refresh()` when a lobby ends or after a void; `shouldFocusStage`
   scrolls a member's stage into view once per stage. `/inhouse/history` shows

@@ -49,7 +49,7 @@ export function MatchImportControls({
     <ActionForm
       action={submitImport}
       hidden={{ matchId }}
-      className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-end"
+      className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start"
     >
       <SubmitButton
         name="intent"
@@ -63,27 +63,30 @@ export function MatchImportControls({
       </SubmitButton>
 
       <div className="min-w-0 space-y-1.5">
-        <label
-          htmlFor={inputId}
-          className="block text-xs font-medium text-muted"
-        >
-          Dota match ID or URL
-        </label>
-        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+        {/* One line from sm: label, field, Add game (the label above the
+            field cost every admin result row a line). A phone keeps the
+            label on its own line and the field beside Add game. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+          <label
+            htmlFor={inputId}
+            className="block basis-full text-xs font-medium text-muted sm:shrink-0 sm:basis-auto"
+          >
+            Dota match ID or URL
+          </label>
           <input
             id={inputId}
             name="dotaMatchRef"
             required
             aria-describedby={helpId}
             placeholder="Match ID or URL"
-            className="h-9 w-full min-w-0 rounded-md border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60"
+            className="h-9 min-w-0 flex-1 basis-40 rounded-md border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60 sm:max-w-md"
           />
           <SubmitButton
             name="intent"
             value="import"
             variant="secondary"
             size="sm"
-            className="w-full shrink-0 sm:w-auto"
+            className="shrink-0"
           >
             Add game
           </SubmitButton>

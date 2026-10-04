@@ -75,21 +75,22 @@ export function ProfilePerformance({
           <Card className="min-w-0">
             <CardHeader
               title="Performance"
-              subtitle="Averages across every season's imported games"
+              subtitle="Per-game averages across every season's imported games"
             />
             <CardBody className="space-y-4">
               {/* auto-fit, not grid-cols-3: each Stat is individually
                   null-gated (legacy imports lack economy fields), and a
-                  fixed 3-track grid holds a hole per missing metric. */}
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(8rem,100%),1fr))]">
+                  fixed 3-track grid holds a hole per missing metric. The
+                  5.5rem floor keeps all three on one row on a phone; the
+                  short labels (the subtitle already says "averages") fit
+                  a third of it. */}
+              <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(5.5rem,100%),1fr))]">
                 {avgNet != null ? (
-                  <Stat label="Avg net worth" value={formatNetWorth(avgNet)} />
+                  <Stat label="Net worth" value={formatNetWorth(avgNet)} />
                 ) : null}
-                {avgGpm != null ? (
-                  <Stat label="Avg GPM" value={avgGpm} />
-                ) : null}
+                {avgGpm != null ? <Stat label="GPM" value={avgGpm} /> : null}
                 {avgLh != null ? (
-                  <Stat label="Avg last hits" value={avgLh} />
+                  <Stat label="Last hits" value={avgLh} />
                 ) : null}
               </div>
               {kdaByGame.length >= 2 ? (

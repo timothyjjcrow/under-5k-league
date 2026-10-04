@@ -2,7 +2,7 @@ import * as React from "react";
 import Link from "next/link";
 import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
 import { cn, initials, teamInitials } from "@/lib/utils";
-import { teamHueVar } from "@/lib/team-hues";
+import { teamHueVar, teamInkVar } from "@/lib/team-hues";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { heroById, parseHeroList } from "@/lib/heroes";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
@@ -131,16 +131,19 @@ export function CardHeader({
     // column and broke it mid-word: "Schedul / e & / results".
     <div
       className={cn(
-        "flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-line-soft px-5 py-4",
+        // px-4 py-3: the 2026-09 overhaul's density. Single-variant on
+        // purpose, so a caller's own px-/py- still replaces it (twMerge keeps
+        // a responsive variant the caller didn't override).
+        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-line-soft px-4 py-3",
         className,
       )}
     >
       <div className="min-w-0 flex-1 basis-48">
-        <Heading className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
+        <Heading className="text-[0.9375rem] font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
           {title}
         </Heading>
         {subtitle ? (
-          <p className="mt-1.5 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
+          <p className="mt-0.5 text-[13px] leading-relaxed text-muted [overflow-wrap:anywhere]">
             {subtitle}
           </p>
         ) : null}
@@ -154,7 +157,7 @@ export function CardBody({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("p-5", className)} {...props} />;
+  return <div className={cn("p-4", className)} {...props} />;
 }
 
 // ---------- Badge ----------
@@ -552,20 +555,22 @@ export function TeamCrest({
   className?: string;
 }) {
   const src = logoUrl?.trim();
-  // The season hue from the layout's stylesheet, else the hash hue.
+  // The season hue from the layout's stylesheet, else the hash hue. The
+  // initials' ink comes with it: white, or near-black on the yellows.
   const hue = teamHueVar(seed);
   return (
     <span
       aria-hidden
       data-team-hue={seed}
       className={cn(
-        "relative grid shrink-0 place-items-center overflow-hidden rounded-xl font-display font-bold uppercase text-white shadow ring-1 ring-white/15",
+        "relative grid shrink-0 place-items-center overflow-hidden rounded-xl font-display font-bold uppercase shadow ring-1 ring-white/15",
         className,
       )}
       style={{
         width: size,
         height: size,
         fontSize: Math.round(size * 0.4),
+        color: teamInkVar(seed),
         backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
       }}
     >
@@ -599,7 +604,7 @@ export function CardSkeleton({
   return (
     <Card className={className} aria-hidden>
       {header ? (
-        <div className="border-b border-line px-5 py-4">
+        <div className="border-b border-line px-4 py-3">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="mt-1.5 h-3 w-24" />
         </div>
@@ -695,6 +700,7 @@ export function EmptyState({
   icon,
   action,
   compact,
+  inline,
 }: {
   title: string;
   description?: string;
@@ -707,12 +713,34 @@ export function EmptyState({
    * populated page read as a broken one.
    */
   compact?: boolean;
+  /**
+   * One left-aligned line (glyph, title, description, action) for an empty
+   * list inside a card that already carries a header: about 56px where the
+   * compact box is about 125. Wins over `compact`.
+   */
+  inline?: boolean;
 }) {
+  if (inline) {
+    return (
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius)] border border-line-soft bg-surface/50 px-4 py-3">
+        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-line bg-surface-2/60 text-muted">
+          {icon ?? <EmptyGlyph />}
+        </div>
+        <div className="min-w-0 flex-1 basis-40">
+          <p className="text-sm font-semibold text-fg">{title}</p>
+          {description ? (
+            <p className="mt-0.5 text-xs text-muted">{description}</p>
+          ) : null}
+        </div>
+        {action}
+      </div>
+    );
+  }
   return (
     <div
       className={cn(
         "flex flex-col items-center justify-center gap-3 rounded-[var(--radius)] border border-line-soft bg-surface/50 text-center",
-        compact ? "gap-2 px-5 py-6" : "px-6 py-12",
+        compact ? "gap-2 px-4 py-5" : "px-6 py-10",
       )}
     >
       <div
@@ -910,13 +938,13 @@ export function PageTitle({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 border-b border-line-soft pb-5">
+    <div className="mb-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b border-line-soft pb-4">
       <div className="min-w-0 flex-1 basis-64">
-        <h1 className="font-display text-3xl font-semibold leading-tight tracking-tight text-fg [overflow-wrap:anywhere] sm:text-4xl">
+        <h1 className="font-display text-[1.75rem] font-semibold leading-tight tracking-tight text-fg [overflow-wrap:anywhere] sm:text-4xl">
           {title}
         </h1>
         {subtitle ? (
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted sm:text-base">
+          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted sm:text-[0.9375rem]">
             {subtitle}
           </p>
         ) : null}
@@ -992,6 +1020,7 @@ export function HeroPool({
   heroes,
   limit = 8,
   minGamesForRate = 0,
+  columns = "viewport",
 }: {
   /** `kda` is optional and additive: entries without it render byte-identical
    *  to before it existed (team pages and pub heroes pass nothing). */
@@ -1005,9 +1034,23 @@ export function HeroPool({
    * keeps every existing caller byte-identical.
    */
   minGamesForRate?: number;
+  /**
+   * "viewport" (the default) steps from two to four across with the screen.
+   * "container" steps with the nearest `@container` instead (two, three from
+   * 32rem, four from 48rem), for a pool that sits in a side rail on a
+   * desktop and full width on a tablet.
+   */
+  columns?: "viewport" | "container";
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+    <div
+      className={cn(
+        "grid grid-cols-2 gap-2.5",
+        columns === "container"
+          ? "@lg:grid-cols-3 @3xl:grid-cols-4"
+          : "sm:grid-cols-3 lg:grid-cols-4",
+      )}
+    >
       {heroes.slice(0, limit).map((h) => {
         const hero = heroById(h.heroId);
         const winPct = Math.round((h.wins / h.games) * 100);

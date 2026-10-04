@@ -22,6 +22,14 @@ import { LEAGUE_CONFIG } from "./league-config";
  */
 export const DRAFT_PASSED_LABEL = "start overdue";
 
+/**
+ * The same chip for the next season's signup date on Home's Season complete
+ * hero (an admin sets it on /admin's Season handoff card). Home only shows
+ * that date while the league is still in Season complete, so a passed date
+ * means signups haven't opened when they were meant to.
+ */
+export const NEXT_SEASON_PASSED_LABEL = "running late";
+
 export type PhaseCopyInput = {
   /** Has the player count reached `minTeams x teamSize`? SIGNUPS only. */
   canDraft?: boolean;

@@ -39,7 +39,7 @@ import {
   roundName,
   teamByeWeek,
 } from "@/lib/schedule";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { ChampionBanner } from "@/components/champion-banner";
 import { ByeWeekNote } from "@/components/bye-week-note";
 import {
@@ -48,7 +48,7 @@ import {
   seedsFromFirstRound,
 } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
-import { formByTeam } from "@/lib/team-matches";
+import { standingsForm, standingsStreaksShown } from "@/lib/team-matches";
 import {
   captainOverdueResults,
   regularSeasonStatus,
@@ -65,7 +65,9 @@ import {
 import { matchCheckinOpen, postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { adminSeasonCards } from "@/lib/admin-sections";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { matchWatchWindow } from "@/lib/broadcast";
 import { AUTO_SYNC } from "@/lib/constants";
+import { getLeagueStream } from "@/lib/queries";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import {
@@ -76,6 +78,7 @@ import {
   type WeekView,
 } from "@/components/schedule-weeks";
 import { StandingsTable } from "@/components/standings-table-server";
+import { SectionNav } from "@/components/section-nav";
 import {
   Card,
   CardBody,
@@ -105,16 +108,17 @@ type MatchStandin = StandinAssignment & {
   replaced: User | null;
 };
 
-// Both delegate to formatMatchTime — these strings are LocalTime hydration
-// snapshots, so drifting from the client's formatter causes flicker.
+// Both delegate to formatLeagueMatchTime: these strings are LocalTime
+// hydration snapshots, the league's clock with its zone named until the
+// viewer's own clock takes over.
 // "full" keeps the weekday ("Sat" is what players actually plan around);
 // "short" is the phone-width variant where it doesn't fit between team names.
 function fmtWhen(d: Date | null): string | null {
-  return d ? formatMatchTime(d, "full") : null;
+  return d ? formatLeagueMatchTime(d, "full") : null;
 }
 
 function fmtWhenShort(d: Date): string {
-  return formatMatchTime(d, "short");
+  return formatLeagueMatchTime(d, "short");
 }
 
 // Strip the RSVP summary to the two numbers the row badge shows.
@@ -389,9 +393,11 @@ export default async function SchedulePage() {
   // tiebreaker fixtures exist) does it get a tiebreaker badge that holds back
   // its seeds and the projected matchups.
   const shownDeadHeatTeamIds = publicDeadHeatTeamIds(playoffField, matches);
-  const teamForm = formByTeam(
+  // Last 5 and the streak chips from one list in play order (Home's rule).
+  const { form: teamForm, streaks: teamStreaks } = standingsForm(
     teams.map((t) => t.id),
     matches,
+    { streaks: standingsStreaksShown(season) },
   );
   // The scenario engine's report drives the refined clinch marks and the
   // playoff-race notes — only a live regular season has a race to compute.
@@ -444,6 +450,11 @@ export default async function SchedulePage() {
       ? teamName.get(championPresentation.championTeamId)
       : null;
 
+  // The league stream, read only when a playoff or final row could link it.
+  const stream = playoff.some((m) => matchWatchWindow(m, season.isActive))
+    ? await getLeagueStream()
+    : null;
+
   // Serialize weeks for the client-side ScheduleWeeks (filter chips +
   // collapsible weeks). Dates preformatted server-side. Shared with the
   // playoff round list below so RSVP/standin/reschedule chips work everywhere.
@@ -451,6 +462,7 @@ export default async function SchedulePage() {
     // Once per match — each call scans the season's whole assignment list
     // for both sides, and this used to run three times per row.
     const rsvp = rsvpFor(m);
+    const watchWindow = stream ? matchWatchWindow(m, season.isActive) : null;
     return {
       id: m.id,
       homeTeamId: m.homeTeamId,
@@ -492,6 +504,7 @@ export default async function SchedulePage() {
         away: pickRsvp(rsvp.away.summary, rsvp.away.expected),
       },
       reschedulePending: rescheduleByMatch.get(m.id) ?? null,
+      watch: stream && watchWindow ? { stream, window: watchWindow } : null,
     };
   };
   // The week's league night = its earliest kickoff (headers stay scannable
@@ -531,7 +544,7 @@ export default async function SchedulePage() {
         name: teamName.get(id) ?? "?",
       })),
       nightTs: night?.getTime() ?? null,
-      nightInitial: night ? formatMatchTime(night, "date") : null,
+      nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
     };
   });
 
@@ -558,7 +571,7 @@ export default async function SchedulePage() {
       matches: weekMatches.map(toMatchView),
       byes: [],
       nightTs: night?.getTime() ?? null,
-      nightInitial: night ? formatMatchTime(night, "date") : null,
+      nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
     };
   });
   const tiebreakerBrackets = buildTiebreakerBrackets({ projection: playoffField, teams, matches });
@@ -575,7 +588,7 @@ export default async function SchedulePage() {
       matches: r.matches.map(toMatchView),
       byes: [],
       nightTs: night?.getTime() ?? null,
-      nightInitial: night ? formatMatchTime(night, "date") : null,
+      nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
     };
   });
 
@@ -716,6 +729,10 @@ export default async function SchedulePage() {
       weeks={orderScheduleWeeks(weekViews, progress.focusWeek)}
       initialTeamId={[...myTeamIds][0]}
       teams={sortedTeams}
+      // The playoffs' fold carries its own title.
+      heading={
+        postseasonPhase ? undefined : <SectionTitle>Regular season</SectionTitle>
+      }
     />
   );
   const hasTimes = matches.some((m) => m.scheduledAt);
@@ -724,8 +741,212 @@ export default async function SchedulePage() {
   // (lib/match-night), never from the pre-signup text.
   const matchNight = hasTimes ? fixturesMatchNightLabel(matches) : null;
 
+  // The weeks, then the table and its analysis. The regular season sets
+  // them side by side from xl (see the return); every other phase stacks
+  // them.
+  const fixturesBlock = (
+    <>
+      {postseasonPhase && hasFixtures ? (
+        // The playoffs lead the page; the finished regular season folds into
+        // one closed section so the standings stay close to the bracket.
+        <ScheduleFold
+          id="fixtures"
+          title="Regular-season results"
+          description={`${weeks.length} week${weeks.length === 1 ? "" : "s"} · ${status.completed} of ${status.total} series played`}
+        >
+          {regularWeeks}
+        </ScheduleFold>
+      ) : (
+        <div id="fixtures" className="scroll-mt-24 space-y-8">
+          <section className="space-y-4">
+            {!hasFixtures ? (
+              (() => {
+                const copy = emptyScheduleCopy(season.status, draft?.status);
+                const showMatchNight =
+                  season.status === "SIGNUPS" ||
+                  season.status === "DRAFT" ||
+                  season.status === "REGULAR_SEASON";
+                const links = [
+                  teams.length > 0 ? (
+                    <Link
+                      key="teams"
+                      href="/teams"
+                      className={textLink("text-sm")}
+                    >
+                      See the teams →
+                    </Link>
+                  ) : null,
+                  // Only where /admin renders the Schedule & results card:
+                  // before the auction ends there is no card to land on.
+                  viewer?.role === "ADMIN" &&
+                  adminSeasonCards({
+                    seasonStatus: season.status,
+                    draftStatus: draft?.status,
+                    matches,
+                    openBookings: 0,
+                    archivedPostseasonGames: 0,
+                  }).schedule ? (
+                    <Link
+                      key="admin"
+                      href="/admin#adm-schedule"
+                      className={textLink("text-sm")}
+                    >
+                      Open schedule controls →
+                    </Link>
+                  ) : null,
+                ].filter(Boolean);
+                return (
+                  <>
+                    <SectionTitle>Regular season</SectionTitle>
+                    <EmptyState
+                      title={copy.title}
+                      description={copy.description}
+                      action={
+                        showMatchNight || links.length > 0 ? (
+                          <div className="flex w-full max-w-md flex-col gap-3">
+                            {showMatchNight ? (
+                              <ScheduleCallout
+                                label={seasonMatchNightLabel(season, matches)}
+                                description={calloutDescription(season.status)}
+                                className="text-left"
+                              />
+                            ) : null}
+                            {links.length > 0 ? (
+                              <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
+                                {links}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : undefined
+                      }
+                    />
+                  </>
+                );
+              })()
+            ) : (
+              regularWeeks
+            )}
+          </section>
+        </div>
+      )}
+    </>
+  );
+  const standingsBlock = (
+    <>
+      {hasFixtures ? (
+        <Card id="standings" className="scroll-mt-24">
+          <CardHeader
+            headingLevel={2}
+            title="Standings"
+            subtitle={standingsCaption({
+              status,
+              postseason: postseasonPhase,
+              bracketSize: playoffField.bracketSize,
+              eligibleTeams: playoffField.eligibleTeamIds.length,
+            })}
+          />
+          <CardBody className="p-0">
+            <StandingsTable
+              standings={standings}
+              teamName={teamName}
+              teamLogoUrl={teamLogoUrl}
+              eligibleTeams={playoffField.eligibleTeamIds.length}
+              withdrawnIds={
+                new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+              }
+              formByTeam={teamForm}
+              streakByTeam={teamStreaks}
+              playoffCut={
+                season.status === "REGULAR_SEASON"
+                  ? playoffField.bracketSize
+                  : undefined
+              }
+              playoffSeedByTeam={playoffField.seedByTeam}
+              unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
+              clinch={clinchFromReport(stakesReport)}
+              playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
+              viewerTeamId={[...myTeamIds][0]}
+              movement={standingsMovement(
+                teams.map((t) => t.id),
+                matches,
+              )}
+            />
+          </CardBody>
+        </Card>
+      ) : null}
+    </>
+  );
+  const showPlayoffRace =
+    season.status === "REGULAR_SEASON" &&
+    playoffField.eligibleTeamIds.length > 2 &&
+    standings.some((s) => s.played > 0);
+  const showHeadToHead = hasFixtures && teams.length > 1;
+  const analysisBlock = (
+    <>
+      {showPlayoffRace ? (
+        <AnalysisDisclosure
+          id="playoff-analysis"
+          title="Playoff race & possible matchups"
+          description="Projected from today's standings"
+        >
+          <PlayoffPicture
+            standings={playoffField.eligibleStandings}
+            teamName={teamName}
+            teamLogoUrl={teamLogoUrl}
+            report={stakesReport}
+            unresolvedTeamIds={shownDeadHeatTeamIds}
+            tiebreakerError={playoffField.tiebreakers.error}
+          />
+        </AnalysisDisclosure>
+      ) : null}
+
+      {showHeadToHead ? (
+        <AnalysisDisclosure
+          id="head-to-head"
+          title="Head-to-head results grid"
+          description="Each row shows that team's results"
+        >
+          <SeasonGrid
+            teamIds={standings.map((s) => s.teamId)}
+            teamName={teamName}
+            teamLogoUrl={teamLogoUrl}
+            matches={matches}
+          />
+        </AnalysisDisclosure>
+      ) : null}
+    </>
+  );
+  const standingsRail = season.status === "REGULAR_SEASON" && hasFixtures;
+  // A jump bar to each section, in page order, for the phone and tablet
+  // reader: mid-season the standings sat under every week, about 3,000px
+  // down a phone. From xl the regular season's rail already shows them.
+  // The bar leaves the URL's hash to the page (the browser's own anchor
+  // scroll and each fold's opener), and a chip opens only its own section,
+  // never a card's inner disclosures.
+  const tiebreakerJump = showTiebreakers
+    ? { id: "tiebreakers", label: "Tiebreakers" }
+    : null;
+  const analysisJumps = [
+    showPlayoffRace ? { id: "playoff-analysis", label: "Playoff race" } : null,
+    showHeadToHead ? { id: "head-to-head", label: "Head-to-head" } : null,
+  ];
+  const jumpItems = [
+    postseasonSection ? { id: "playoff-bracket", label: "Bracket" } : null,
+    tiebreakersSettled ? null : tiebreakerJump,
+    hasFixtures
+      ? {
+          id: "fixtures",
+          label: postseasonPhase ? "Regular season" : "Fixtures",
+        }
+      : null,
+    hasFixtures ? { id: "standings", label: "Standings" } : null,
+    ...(standingsRail ? analysisJumps : []),
+    tiebreakersSettled ? tiebreakerJump : null,
+    ...(standingsRail ? [] : analysisJumps),
+  ].filter((item): item is { id: string; label: string } => item !== null);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageTitle
         title={
           season.status === "COMPLETE"
@@ -760,6 +981,17 @@ export default async function SchedulePage() {
           ) : undefined
         }
       />
+
+      {jumpItems.length >= 3 ? (
+        <div className={standingsRail ? "xl:hidden" : undefined}>
+          <SectionNav
+            items={jumpItems}
+            label="Schedule sections"
+            followHash={false}
+            openNested="marked"
+          />
+        </div>
+      ) : null}
 
       {viewerByeWeek != null ? (
         <ByeWeekNote week={viewerByeWeek} who="Your team" />
@@ -799,7 +1031,7 @@ export default async function SchedulePage() {
       ) : null}
 
       {scheduleEditingOpen && untimedOpen.length > 0 ? (
-        <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+        <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
           <span aria-hidden className="text-lg leading-none">
             🕒
           </span>
@@ -825,7 +1057,7 @@ export default async function SchedulePage() {
       ) : null}
 
       {pendingMsg && season.status === "REGULAR_SEASON" ? (
-        <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+        <div className="flex items-start gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
           <span className="text-lg leading-none">⏳</span>
           <div>
             <div className="font-medium">Overdue results</div>
@@ -846,7 +1078,7 @@ export default async function SchedulePage() {
       ) : null}
 
       {season.status === "COMPLETE" && !championPresentation.championTeamId ? (
-        <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+        <div className="rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
           <div className="font-medium">Champion state needs review</div>
           <p className="mt-1 text-muted">
             This season is marked complete without an authoritative champion.
@@ -878,128 +1110,32 @@ export default async function SchedulePage() {
         </section>
       ) : null}
 
-      {postseasonPhase && hasFixtures ? (
-        // The playoffs lead the page; the finished regular season folds into
-        // one closed section so the standings stay close to the bracket.
-        <ScheduleFold
-          id="fixtures"
-          title="Regular-season results"
-          description={`${weeks.length} week${weeks.length === 1 ? "" : "s"} · ${status.completed} of ${status.total} series played`}
-        >
-          {regularWeeks}
-        </ScheduleFold>
-      ) : (
-        <div id="fixtures" className="scroll-mt-24 space-y-8">
-          <section className="space-y-4">
-            <SectionTitle>Regular season</SectionTitle>
-            {!hasFixtures ? (
-              (() => {
-                const copy = emptyScheduleCopy(season.status, draft?.status);
-                const showMatchNight =
-                  season.status === "SIGNUPS" ||
-                  season.status === "DRAFT" ||
-                  season.status === "REGULAR_SEASON";
-                const links = [
-                  teams.length > 0 ? (
-                    <Link
-                      key="teams"
-                      href="/teams"
-                      className={textLink("text-sm")}
-                    >
-                      See the teams →
-                    </Link>
-                  ) : null,
-                  // Only where /admin renders the Schedule & results card:
-                  // before the auction ends there is no card to land on.
-                  viewer?.role === "ADMIN" &&
-                  adminSeasonCards({
-                    seasonStatus: season.status,
-                    draftStatus: draft?.status,
-                    matches,
-                    openBookings: 0,
-                    archivedPostseasonGames: 0,
-                  }).schedule ? (
-                    <Link
-                      key="admin"
-                      href="/admin#adm-schedule"
-                      className={textLink("text-sm")}
-                    >
-                      Open schedule controls →
-                    </Link>
-                  ) : null,
-                ].filter(Boolean);
-                return (
-                  <EmptyState
-                    title={copy.title}
-                    description={copy.description}
-                    action={
-                      showMatchNight || links.length > 0 ? (
-                        <div className="flex w-full max-w-md flex-col gap-3">
-                          {showMatchNight ? (
-                            <ScheduleCallout
-                              label={seasonMatchNightLabel(season, matches)}
-                              description={calloutDescription(season.status)}
-                              className="text-left"
-                            />
-                          ) : null}
-                          {links.length > 0 ? (
-                            <div className="flex flex-wrap justify-center gap-x-4 gap-y-2">
-                              {links}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : undefined
-                    }
-                  />
-                );
-              })()
-            ) : (
-              regularWeeks
-            )}
-          </section>
+      {/* The regular season is two columns from xl: the weeks, and a rail
+          with the table and its analysis, so the standings are on the first
+          screen instead of under every week. The other phases keep one
+          column: the playoffs lead with the bracket and fold the finished
+          weeks away, and before the schedule there is nothing to set beside
+          the table. */}
+      {standingsRail ? (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_30rem]">
+          <div className="min-w-0">{fixturesBlock}</div>
+          {/* The rail stretches to the weeks' height so the table can stay
+              in view (sticky) while the reader goes down the weeks. An
+              opened analysis fold makes it taller than the screen, so it
+              scrolls on its own then instead of hiding its end. */}
+          <div className="min-w-0">
+            <div className="space-y-5 xl:sticky xl:top-20 xl:max-h-[calc(100dvh-6rem)] xl:overflow-y-auto xl:[scrollbar-width:thin]">
+              {standingsBlock}
+              {analysisBlock}
+            </div>
+          </div>
         </div>
+      ) : (
+        <>
+          {fixturesBlock}
+          {standingsBlock}
+        </>
       )}
-
-      {hasFixtures ? (
-        <Card id="standings" className="scroll-mt-24">
-          <CardHeader
-            headingLevel={2}
-            title="Standings"
-            subtitle={standingsCaption({
-              status,
-              postseason: postseasonPhase,
-              bracketSize: playoffField.bracketSize,
-              eligibleTeams: playoffField.eligibleTeamIds.length,
-            })}
-          />
-          <CardBody className="p-0">
-            <StandingsTable
-              standings={standings}
-              teamName={teamName}
-              teamLogoUrl={teamLogoUrl}
-              eligibleTeams={playoffField.eligibleTeamIds.length}
-              withdrawnIds={
-                new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
-              }
-              formByTeam={teamForm}
-              playoffCut={
-                season.status === "REGULAR_SEASON"
-                  ? playoffField.bracketSize
-                  : undefined
-              }
-              playoffSeedByTeam={playoffField.seedByTeam}
-              unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
-              clinch={clinchFromReport(stakesReport)}
-              playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
-              viewerTeamId={[...myTeamIds][0]}
-              movement={standingsMovement(
-                teams.map((t) => t.id),
-                matches,
-              )}
-            />
-          </CardBody>
-        </Card>
-      ) : null}
 
       {showTiebreakers && tiebreakersSettled ? (
         <ScheduleFold
@@ -1016,38 +1152,7 @@ export default async function SchedulePage() {
         </ScheduleFold>
       ) : null}
 
-      {season.status === "REGULAR_SEASON" &&
-      playoffField.eligibleTeamIds.length > 2 &&
-      standings.some((s) => s.played > 0) ? (
-        <AnalysisDisclosure
-          id="playoff-analysis"
-          title="Playoff race & possible matchups"
-          description="Projected from today's standings"
-        >
-          <PlayoffPicture
-            standings={playoffField.eligibleStandings}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            report={stakesReport}
-            unresolvedTeamIds={shownDeadHeatTeamIds}
-            tiebreakerError={playoffField.tiebreakers.error}
-          />
-        </AnalysisDisclosure>
-      ) : null}
-
-      {hasFixtures && teams.length > 1 ? (
-        <AnalysisDisclosure
-          title="Head-to-head results grid"
-          description="Each row shows that team's results"
-        >
-          <SeasonGrid
-            teamIds={standings.map((s) => s.teamId)}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            matches={matches}
-          />
-        </AnalysisDisclosure>
-      ) : null}
+      {standingsRail ? null : analysisBlock}
     </div>
   );
 }
@@ -1066,7 +1171,7 @@ function ReportResultPrompt({
   opponent: string;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-5 py-3 text-sm">
+    <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
       <div className="min-w-[14rem] flex-1">
         <div className="font-medium [overflow-wrap:anywhere]">
           Your {label} result against {opponent} hasn&apos;t come through

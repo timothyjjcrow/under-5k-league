@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { careerReportCard } from "./benchmarks";
+import { playerCardFacts, playerCardRoleText } from "./player-card";
 import {
-  latestLeagueLine,
   profileSeasonNote,
   profileSeasonRecord,
   profileSeasonRows,
@@ -261,81 +262,127 @@ describe("profileSeasonRows", () => {
   });
 });
 
-describe("latestLeagueLine", () => {
+describe("the season a player's card names, from these rows", () => {
+  // The card's history branch (playerCardFacts with no current season of
+  // theirs) over real rows: the order profileSeasonRows sorts them in is the
+  // order the card trusts. These replaced latestLeagueLine's tests when the
+  // card took over the header's past-season line.
+  const card = (input: Partial<Parameters<typeof profileSeasonRows>[0]>) => {
+    const facts = playerCardFacts({
+      activeSeason: null,
+      signup: null,
+      membership: null,
+      seasonRows: rows(input),
+      teamLogos: new Map(),
+      rankTier: null,
+      leagueHeroes: [],
+      pubHeroes: [],
+      report: careerReportCard([]),
+      achievements: [],
+      recordsHeld: 0,
+    });
+    return {
+      season: facts.season?.name ?? null,
+      team: facts.team?.name ?? null,
+      role: playerCardRoleText(facts),
+      titles: facts.titles.map((t) => t.seasonName),
+    };
+  };
+
   it("names the newest season and its team", () => {
     expect(
-      latestLeagueLine(
-        rows({
-          tenures: [
-            tenure(),
-            tenure({
-              seasonId: "s2",
-              teamId: "b",
-              teamName: "Bravo",
-              joinedAt: new Date("2026-05-10"),
-            }),
-          ],
-        }),
-      ),
-    ).toBe("Season 2 · Bravo");
+      card({
+        tenures: [
+          tenure(),
+          tenure({
+            seasonId: "s2",
+            teamId: "b",
+            teamName: "Bravo",
+            joinedAt: new Date("2026-05-10"),
+          }),
+        ],
+      }),
+    ).toEqual({
+      season: "Season 2",
+      team: "Bravo",
+      role: "Drafted for $12",
+      titles: [],
+    });
   });
 
-  it("leads with the title when that season was won", () => {
+  it("carries the title when that season was won", () => {
     expect(
-      latestLeagueLine(
-        rows({
-          tenures: [tenure({ captain: true })],
-          champions: new Map([["s1", "a"]]),
-        }),
-      ),
-    ).toBe("Season 1 champion · Alpha");
+      card({
+        tenures: [tenure({ captain: true })],
+        champions: new Map([["s1", "a"]]),
+      }),
+    ).toEqual({
+      season: "Season 1",
+      team: "Alpha",
+      role: "Captain",
+      titles: ["Season 1"],
+    });
   });
 
   it("prefers a title in the newest season over the roster team", () => {
     // Rostered on Alpha, covered for the champion Bravo in the same season.
     expect(
-      latestLeagueLine(
-        rows({
-          tenures: [tenure()],
-          covers: [{ seasonId: "s1", teamId: "b", matchId: "m1" }],
-          champions: new Map([["s1", "b"]]),
-        }),
-      ),
-    ).toBe("Season 1 champion · Bravo");
+      card({
+        tenures: [tenure()],
+        covers: [{ seasonId: "s1", teamId: "b", matchId: "m1" }],
+        champions: new Map([["s1", "b"]]),
+      }),
+    ).toEqual({
+      season: "Season 1",
+      team: null,
+      role: "Stood in for Bravo",
+      titles: ["Season 1"],
+    });
   });
 
   it("does not reach back past the newest season for an older title", () => {
     expect(
-      latestLeagueLine(
-        rows({
-          tenures: [
-            tenure(),
-            tenure({
-              seasonId: "s2",
-              teamId: "b",
-              teamName: "Bravo",
-              joinedAt: new Date("2026-05-10"),
-            }),
-          ],
-          champions: new Map([["s1", "a"]]),
-        }),
-      ),
-    ).toBe("Season 2 · Bravo");
+      card({
+        tenures: [
+          tenure(),
+          tenure({
+            seasonId: "s2",
+            teamId: "b",
+            teamName: "Bravo",
+            joinedAt: new Date("2026-05-10"),
+          }),
+        ],
+        champions: new Map([["s1", "a"]]),
+      }),
+    ).toEqual({
+      season: "Season 2",
+      team: "Bravo",
+      role: "Drafted for $12",
+      // The older title still counts among their titles.
+      titles: ["Season 1"],
+    });
   });
 
   it("says a standin-only season was cover, games played or not", () => {
     const covers = [{ seasonId: "s2", teamId: "c", matchId: "m1" }];
-    expect(latestLeagueLine(rows({ covers }))).toBe(
-      "Season 2 · Stood in for Charlie",
-    );
+    const standin = {
+      season: "Season 2",
+      team: null,
+      role: "Stood in for Charlie",
+      titles: [],
+    };
+    expect(card({ covers })).toEqual(standin);
     expect(
-      latestLeagueLine(
-        rows({ covers, appearances: [app({ seasonId: "s2", teamId: "c" })] }),
-      ),
-    ).toBe("Season 2 · Stood in for Charlie");
+      card({ covers, appearances: [app({ seasonId: "s2", teamId: "c" })] }),
+    ).toEqual(standin);
   });
 
-  it("is null with no league season", () => {
-    expect(latestLeagueLine([])).toBeNull();
+  it("names no season with no league season", () => {
+    expect(card({})).toEqual({
+      season: null,
+      team: null,
+      role: null,
+      titles: [],
+    });
   });
 });

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { pushToast } from "@/components/toaster";
 import {
@@ -7,7 +8,9 @@ import {
   Card,
   CardBody,
   CardHeader,
+  LinkArrow,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 
 /**
@@ -47,7 +50,10 @@ export function LeagueLobbyChecklist({
       <CardBody className="space-y-3 text-sm">
         <p className="[overflow-wrap:anywhere]">
           <b className="text-fg">How to host:</b>{" "}
-          <span className="text-muted">{hostParts.join(" · ")}</span>
+          <span className="text-muted">{hostParts.join(" · ")}</span>{" "}
+          <Link href="/rules#hosting" className={textLink("whitespace-nowrap")}>
+            League rules <LinkArrow />
+          </Link>
         </p>
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/50 p-3">
           <span className="text-xs text-muted">Current league id</span>

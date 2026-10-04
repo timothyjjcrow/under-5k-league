@@ -72,7 +72,9 @@ export function ProfileOverview({
         <div
           className={cn(
             "grid grid-cols-1 gap-4",
-            overviewItems >= 2 && "lg:grid-cols-2",
+            // Sized by the profile's main column (an @container), not the
+            // viewport: from xl it shares the row with the profile rail.
+            overviewItems >= 2 && "@2xl:grid-cols-2",
           )}
         >
           {hasLeagueGames ? (

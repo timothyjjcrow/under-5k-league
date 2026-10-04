@@ -45,6 +45,11 @@ auto-import), `assignStandinGuarded` (double-covered seat), and `deleteSeason`
   code. Use `raceAll` / `raceN`, loop when the losing order is rare, and assert
   the invariant. `raceAll` is concurrent only on Postgres (SQLite pins one
   connection and would queue or time out), so `npm run test:pg` is the real run.
+- **When either order is legitimate, a raced test can only check that each
+  outcome is whole.** An accept that commits before a result is a real
+  retime-then-play, so the end state cannot tell it from a stale accept; the
+  reschedule race test assumed it could and failed about once in 150 rounds.
+  Pin the stale order with a seam (`reschedule.respondReschedule.beforeAccept`).
 - **Use a seam when racing cannot hit the interleaving.** The service awaits
   `raceHook("area.function.point")` between its read and its guarded write; the
   test installs `setRaceHook(onceAt(label, rival))` and clears it in `afterEach`.
@@ -150,7 +155,9 @@ auto-import), `assignStandinGuarded` (double-covered seat), and `deleteSeason`
   claim's first failing test file; verify runs it alone with `--bail` (after it
   passes alone unmutated) and falls back to the whole suite if it does not fail.
   A preflight first proves the unmutated suite green, and each mutant is a fresh
-  `vitest run`, which is why a full sweep is slow.
+  `vitest run`, which is why a full sweep is slow. When the preflight fails, the
+  runner lists each failed test and the first line of its failure (the suite
+  runs `--silent`), so a flake that does not repeat still names its test.
 - **Read counts from the source.** `node scripts/mutation-guard.mjs --static`
   checks the inventory without Postgres and prints the counts.
 - **CI.** The test job always runs `--static`. The four `mutation guard N/4`

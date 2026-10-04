@@ -11,6 +11,10 @@ import {
   projectPlayoffField,
   publicDeadHeatTeamIds,
 } from "@/lib/playoff-field";
+import {
+  filesContaining,
+  sourceFiles,
+} from "../../test/support/source-files";
 
 const row = (teamId: string, points: number): TeamStanding => ({
   teamId, points, played: 5, wins: points / 3, draws: 0,
@@ -205,9 +209,11 @@ describe("one standings table", () => {
     expect(html).toContain(`<caption class="caption-bottom`);
     expect(html).toContain(STANDINGS_RULES);
     // Diff never hides on a phone: only Last 5 does.
-    expect(html.match(/hidden [^"]*sm:table-cell/g) ?? []).toHaveLength(0);
+    expect(html.match(/hidden [^"]*:table-cell/g) ?? []).toHaveLength(0);
   });
 
+  // Last 5 shows once the TABLE is 36rem wide (@xl, a container query), so
+  // it hides on a phone and in /schedule's 30rem rail alike.
   it("keeps the phone-hidden Last 5 column last so every cell sits on its own <col>", () => {
     const html = render({ formByTeam: form });
     const cols = [...html.matchAll(/<col(?: class="([^"]*)")?\/?>/g)].map((m) => m[1] ?? "");
@@ -217,10 +223,10 @@ describe("one standings table", () => {
     expect(cols.at(-1)).toMatch(/^w-0 /);
     const lastHeader = headers(html).at(-1)!;
     expect(lastHeader).toBe("Last 5");
-    expect(html).toMatch(/<th scope="col" class="hidden [^"]*sm:table-cell[^"]*">Last 5<\/th>/);
+    expect(html).toMatch(/<th scope="col" class="hidden [^"]*@xl:table-cell[^"]*">Last 5<\/th>/);
     expect(bodyCells(html, "alpha")).toBe(6);
     const alphaCells = teamRowHtml(html, "alpha").split(/<t[dh]\b/).slice(1);
-    expect(alphaCells.at(-1)).toMatch(/^ class="hidden [^"]*sm:table-cell/);
+    expect(alphaCells.at(-1)).toMatch(/^ class="hidden [^"]*@xl:table-cell/);
     expect(alphaCells.slice(0, -1).some((cell) => /^ class="hidden/.test(cell))).toBe(false);
   });
 
@@ -232,6 +238,79 @@ describe("one standings table", () => {
     expect(chip).not.toBeNull();
     expect(chip![1]).not.toMatch(/text-info/);
     expect(teamRowHtml(html, "alpha")).not.toContain("Your team");
+  });
+
+  describe("win streaks", () => {
+    const streakByTeam = new Map([
+      ["alpha", 3],
+      ["bravo", 1],
+      ["charlie", 2],
+      ["echo", 4],
+    ]);
+    const chipClass = (markup: string, wins: number) =>
+      markup.match(
+        new RegExp(`<span role="img" aria-label="Won the last ${wins} series"[^>]*class="([^"]*)"`),
+      )?.[1];
+
+    it("chips a run of two or more series wins, spoken in full", () => {
+      const html = render({ formByTeam: form, streakByTeam });
+      const alpha = teamRowHtml(html, "alpha");
+      expect(alpha).toContain('aria-label="Won the last 3 series"');
+      expect(alpha).toContain("<span aria-hidden=\"true\">W3 streak</span>");
+      expect(teamRowHtml(html, "charlie")).toContain("W2 streak");
+      // One win is no streak, and no number is no streak.
+      expect(teamRowHtml(html, "bravo")).not.toContain("streak");
+      expect(teamRowHtml(html, "foxtrot")).not.toContain("streak");
+      // The chip rides the status line: the columns don't change.
+      expect(headers(html)).toHaveLength(6);
+      expect(bodyCells(html, "alpha")).toBe(6);
+    });
+
+    it("is neutral, never link blue", () => {
+      const html = render({ streakByTeam });
+      const chip = chipClass(teamRowHtml(html, "alpha"), 3);
+      expect(chip).toBeDefined();
+      expect(chip).toContain("bg-surface-3");
+      expect(chip).not.toMatch(/info/);
+    });
+
+    it("shows on a row with no other status", () => {
+      // No cut, no clinch marks, not the viewer's team: the streak alone.
+      const html = renderToStaticMarkup(createElement(StandingsTable, {
+        standings, teamName: names, streakByTeam,
+      }));
+      expect(teamRowHtml(html, "alpha")).toContain("W3 streak");
+      expect(teamRowHtml(html, "alpha")).not.toContain("Seed");
+    });
+
+    it("never badges a withdrawn team, and is absent unless passed", () => {
+      const html = render({ streakByTeam, withdrawnIds: new Set(["echo"]) });
+      expect(teamRowHtml(html, "echo")).toContain("Withdrawn");
+      expect(teamRowHtml(html, "echo")).not.toContain("streak");
+      expect(render({ formByTeam: form })).not.toContain("streak");
+    });
+
+    // A finished or archived season's last run is history, not news.
+    it("is passed only by live tables, under standingsStreaksShown", () => {
+      const tables = filesContaining(
+        sourceFiles("src/**/*.tsx", 150),
+        "<StandingsTable",
+      );
+      expect(tables.length).toBeGreaterThanOrEqual(4);
+      const live = tables.filter((f) => f.text.includes("streakByTeam="));
+      expect(live.length).toBeGreaterThanOrEqual(2);
+      for (const file of live) {
+        expect(file.text, file.path).toContain("standingsStreaksShown(season)");
+        expect(file.text, file.path).toContain("standingsForm(");
+      }
+      const finished = tables.filter((f) =>
+        /complete-view|seasons\/\[id\]/.test(f.path),
+      );
+      expect(finished).toHaveLength(2);
+      for (const file of finished) {
+        expect(file.text, file.path).not.toContain("streakByTeam");
+      }
+    });
   });
 
   it("states each team's playoff standing under its name", () => {

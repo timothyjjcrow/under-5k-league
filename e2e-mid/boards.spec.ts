@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { MID_DB_URL } from "../playwright.midseason.config";
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import {
   expectNoCollapsedTruncation,
   expectNoHorizontalOverflow,
@@ -489,6 +490,103 @@ test("league pages unfurl with their page name, the season and the fixture", asy
   );
 });
 
+test("match, team, player and season links unfurl with their own picture", async ({
+  page,
+}) => {
+  // Each render compiles its route on first hit in the dev server.
+  test.setTimeout(120_000);
+  const assertNoErrors = trackPageErrors(page);
+  // Discord draws og:image and X twitter:image. These four pages draw their
+  // own (the opengraph-image and twitter-image files beside each page). The
+  // failure is silent: a page whose metadata names an image keeps the
+  // league's, so the tags are checked here, in the rendered head.
+  const picturePath = async (selector: string) => {
+    const content = await page.locator(selector).getAttribute("content");
+    const url = new URL(content!);
+    return url.pathname + url.search;
+  };
+  const expectPicture = async (path: string) => {
+    const picture = await page.request.get(path);
+    expect(picture.status(), path).toBe(200);
+    expect(picture.headers()["content-type"]).toBe("image/png");
+    expect(picture.headers()["cache-control"]).toMatch(/max-age=300/);
+    expect([...(await picture.body()).subarray(0, 4)]).toEqual([
+      0x89, 0x50, 0x4e, 0x47,
+    ]);
+  };
+  const expectOwnPicture = async (path: string, kind: string) => {
+    await page.goto(path);
+    const og = await picturePath('meta[property="og:image"]');
+    expect(og, path).toMatch(new RegExp(`^/${kind}/[^/]+/opengraph-image(\\?|$)`));
+    expect(await picturePath('meta[name="twitter:image"]'), path).toMatch(
+      new RegExp(`^/${kind}/[^/]+/twitter-image(\\?|$)`),
+    );
+    await expectPicture(og);
+  };
+
+  await page.goto("/schedule");
+  const matchHref = await page
+    .locator('#main a[href^="/matches/"]')
+    .first()
+    .getAttribute("href");
+  await expectOwnPicture(matchHref!, "matches");
+  // X's copy is its own route.
+  await expectPicture(await picturePath('meta[name="twitter:image"]'));
+
+  await page.goto("/teams");
+  const teamHref = await page
+    .locator('#main a[href^="/teams/"]')
+    .first()
+    .getAttribute("href");
+  await expectOwnPicture(teamHref!, "teams");
+  const playerHref = await page
+    .locator('#main a[href^="/players/"]:not([href="/players/compare"])')
+    .first()
+    .getAttribute("href");
+  await expectOwnPicture(playerHref!, "players");
+
+  const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
+  await expectOwnPicture(`/seasons/${season.id}`, "seasons");
+
+  // Every other page keeps the league's own picture (each region has its own).
+  await page.goto("/schedule");
+  expect(
+    (await picturePath('meta[property="og:image"]')).split("?")[0],
+  ).toBe(LEAGUE_CONFIG.branding.openGraphImage);
+  // A page that doesn't exist has no picture either.
+  expect(
+    (await page.request.get("/matches/not-a-match/opengraph-image")).status(),
+  ).toBe(404);
+  assertNoErrors();
+});
+
+test("Share copies the page's own link on a desktop", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/schedule");
+  const matchHref = await page
+    .locator('#main a[href^="/matches/"]')
+    .first()
+    .getAttribute("href");
+  // A query on the address the viewer is at stays out of the shared link.
+  await page.goto(`${matchHref}?ref=e2e`);
+  await page.getByRole("button", { name: "Share", exact: true }).click();
+  await expect(
+    page.getByText("Link copied. Paste it in Discord to show its preview."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Copied", exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    new URL(matchHref!, baseURL).href,
+  );
+  assertNoErrors();
+});
+
 test("public stat and content pages stay inside a 360px viewport", async ({
   page,
 }) => {
@@ -731,6 +829,89 @@ test("a player profile hero survives a phone", async ({ page }) => {
     seasonName!.shown / seasonName!.needs,
     `Seasons row team name collapsed: ${seasonName!.shown}px of ${seasonName!.needs}px`,
   ).toBeGreaterThan(0.6);
+  assertNoErrors();
+});
+
+// The season card: the trading-card panel in a profile's header, and the
+// picture the profile's link unfurls into. The fixture's last team carries
+// its longest name ("The Couriers of Catastrophe With Very Long Name"), the
+// widest thing a card holds, and its drafted players were bought for more
+// than $0, so the card has a role to name.
+test("a player's season card names their season and team, and is their link picture", async ({
+  page,
+}) => {
+  // The picture compiles its route on first hit in the dev server.
+  test.setTimeout(90_000);
+  const assertNoErrors = trackPageErrors(page);
+  const member = await db.teamMember.findFirstOrThrow({
+    where: { season: { isActive: true }, isCaptain: false },
+    orderBy: [{ team: { draftOrder: "desc" } }, { userId: "asc" }],
+    include: { user: true, team: true, season: true },
+  });
+  const profile = `/players/${member.userId}`;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(profile);
+  const name = page.locator("#main h1").first();
+  await expect(name).toHaveText(member.user.name);
+  const card = page.getByTestId("player-season-card");
+  await expect(card).toBeVisible();
+  // The season and how they joined it (their tenure: this fixture's
+  // rosters are captured rows, so "Drafted for" their price).
+  await expect(card).toContainText(
+    member.price > 0
+      ? `${member.season.name} · Drafted for $${member.price}`
+      : member.season.name,
+  );
+  // Their team that season, one tap away, in its colour.
+  const team = card.locator(`a[href="/teams/${member.teamId}"]`);
+  await expect(team).toBeVisible();
+  await expect(team).toContainText(member.team.name);
+  await expect(
+    card.locator(`[data-team-hue="${member.teamId}"]`).first(),
+  ).toBeAttached();
+  // They have league games, so the card shows what they played.
+  await expect(card.getByText("Career heroes", { exact: true })).toBeVisible();
+  const heroes = await card.getByRole("listitem").count();
+  expect(heroes).toBeGreaterThanOrEqual(1);
+  expect(heroes).toBeLessThanOrEqual(3);
+  // No signup in this fixture: no MMR on the card.
+  await expect(card.getByText("MMR", { exact: true })).toHaveCount(0);
+
+  // Below lg the card takes its own line under the name, never a slice of
+  // the name's row.
+  const nameBox = (await name.boundingBox())!;
+  const cardBox = (await card.boundingBox())!;
+  expect(cardBox.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height);
+  await expectNoHorizontalOverflow(page, "/players/[id] season card");
+  await expectNoSqueezedText(page, "/players/[id] season card");
+  await expectTapTargets(page, "/players/[id] season card");
+
+  // From lg it sits in the header's right slot, beside the name.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const wideName = (await name.boundingBox())!;
+  const wideCard = (await card.boundingBox())!;
+  expect(wideCard.x).toBeGreaterThanOrEqual(wideName.x + wideName.width);
+  expect(wideCard.y).toBeLessThan(wideName.y + wideName.height);
+  await expectNoHorizontalOverflow(page, "/players/[id] season card, desktop");
+
+  // The same card is the link's picture, on Discord and on X: drawn for this
+  // player, not the league's fallback (a 307 to the league's image, which
+  // maxRedirects: 0 refuses to follow).
+  for (const [selector, route] of [
+    ['meta[property="og:image"]', "opengraph-image"],
+    ['meta[name="twitter:image"]', "twitter-image"],
+  ] as const) {
+    const url = new URL((await page.locator(selector).getAttribute("content"))!);
+    expect(url.pathname).toBe(`${profile}/${route}`);
+    const path = url.pathname + url.search;
+    const picture = await page.request.get(path, { maxRedirects: 0 });
+    expect(picture.status(), path).toBe(200);
+    expect(picture.headers()["content-type"], path).toBe("image/png");
+    expect(picture.headers()["cache-control"], path).toMatch(/max-age=300/);
+    expect([...(await picture.body()).subarray(0, 4)], path).toEqual([
+      0x89, 0x50, 0x4e, 0x47,
+    ]);
+  }
   assertNoErrors();
 });
 

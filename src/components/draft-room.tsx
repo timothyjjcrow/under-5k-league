@@ -1420,8 +1420,8 @@ export function DraftRoom({
         // Outer element is a DIV so the action button can sit beside the
         // scroll-back button — interactive content nested inside a <button>
         // is invalid HTML (unreliable clicks, screen-reader breakage).
-        <div className="fixed inset-x-0 top-20 z-20 border-b border-line bg-bg/90 backdrop-blur">
-          <div className="mx-auto flex h-11 w-full max-w-6xl items-center gap-3 px-4 text-sm sm:px-6">
+        <div className="fixed inset-x-0 top-16 z-20 border-b border-line bg-bg/90 backdrop-blur">
+          <div className="mx-auto flex h-11 w-full max-w-7xl items-center gap-3 px-4 text-sm sm:px-6 lg:px-8">
             {/* No aria-label here: it would REPLACE the accessible name
                 computed from the content, hiding the lot/price/clock from
                 screen readers — the content itself is the announcement. */}
@@ -1980,7 +1980,7 @@ export function DraftRoom({
           on the right. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-6 lg:order-2">
-          {/* scroll-mt clears the 80px sticky header + the fixed clock bar
+          {/* scroll-mt clears the 64px sticky header + the fixed clock bar
               when the NominateBar's #player-pool anchor jumps here. */}
           <div id="player-pool" className="scroll-mt-32 lg:order-2">
             <AvailableList

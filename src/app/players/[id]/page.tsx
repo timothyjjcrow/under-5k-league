@@ -16,9 +16,9 @@ import { prisma } from "@/lib/prisma";
 import { getAllGamesForRecords } from "@/lib/cached-queries";
 import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { getRosterHistory } from "@/lib/player-roster-history";
-import { appearanceCareers } from "@/lib/appearance-careers";
 import { playerProfileMetadata, shareMetadata } from "@/lib/share-metadata";
-import { latestLeagueLine, profileSeasonRows } from "@/lib/profile-seasons";
+import { loadProfileSeasonRows } from "@/lib/profile-season-history";
+import { playerCardFacts } from "@/lib/player-card";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
@@ -36,11 +36,14 @@ import {
   decodeGamePlayers,
   trustedGamePlayers,
 } from "@/lib/player-stats";
-import { playerHeroPool, type ScoutGame } from "@/lib/scouting";
-import { leagueRecords, toRecordGames } from "@/lib/records";
-import { hasText } from "@/lib/utils";
+import { profileGameFolds, profileGameRows } from "@/lib/profile-games";
+import {
+  recordWatchBook,
+  recordWatchFor,
+  toRecordGames,
+} from "@/lib/records";
+import { cn, hasText } from "@/lib/utils";
 import { aboutText } from "@/lib/about-you";
-import { rankMedalName } from "@/lib/rank";
 import {
   parsePubStats,
   poolPubRecord,
@@ -54,7 +57,6 @@ import {
   REGISTRATION_STATUS,
 } from "@/lib/constants";
 import type { FormResult } from "@/lib/team-matches";
-import { achievementsFor, gameMvp } from "@/lib/achievements";
 import {
   groupBySeries,
   pickStandout,
@@ -63,11 +65,12 @@ import {
   seriesOpponent,
   seriesOutcome,
 } from "@/lib/profile-history";
-import { careerReportCard, reportVerdicts } from "@/lib/benchmarks";
+import { reportVerdicts } from "@/lib/benchmarks";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { playoffRunTile, teamPlayoffRun } from "@/lib/playoff-run";
 import { canViewLeagueContact } from "@/lib/visibility";
 import { hasJoinedLeague } from "@/lib/profile-footprint";
+import { loadPlayerPreviewFacts } from "@/lib/link-preview-metadata";
 
 export async function generateMetadata({
   params,
@@ -75,58 +78,24 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [user, gameScores, joined] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id },
-      select: { name: true, rankTier: true, pubStats: true },
-    }),
-    getPlayerGameFacts(id),
-    hasJoinedLeague(id),
-  ]);
+  const player = await loadPlayerPreviewFacts(id);
   // notFound() in metadata: crawlers wait for metadata, so they get a real
   // 404 status. Browsers get streamed metadata, so the not-found page
   // arrives with a 200 and Next's noindex tag (its documented streaming
   // behaviour).
-  if (!user) notFound();
+  if (!player) notFound();
   // An account that only signed in: a plain, unindexed page, no medal or
   // hero highlights (see UnjoinedProfile).
-  if (!joined) {
+  if (!player.joined) {
     return {
       ...shareMetadata(
-        `${user.name} · Player`,
-        `${user.name} hasn't joined a ${LEAGUE_CONFIG.name} season yet.`,
+        `${player.name} · Player`,
+        `${player.name} hasn't joined a ${LEAGUE_CONFIG.name} season yet.`,
       ),
       robots: { index: false },
     };
   }
-  const rank = rankMedalName(user.rankTier);
-  const summary = summarizePlayerGames(
-    gameScores.flatMap(({ players, radiantWin }) =>
-      trustedGamePlayers(decodeGamePlayers(players))
-        .filter((player) => player.userId === id)
-        .map((player) => ({
-          radiantWin,
-          isRadiant: player.isRadiant,
-          kills: player.kills,
-          deaths: player.deaths,
-          assists: player.assists,
-          heroId: player.heroId,
-        })),
-    ),
-  );
-  const favoriteHero = heroById(
-    summary.topHeroes[0]?.heroId ??
-      parsePubStats(user.pubStats)?.topHeroes[0]?.heroId ??
-      0,
-  );
-  const highlights = [
-    rank !== "Unranked" ? `${rank} medal` : null,
-    summary.games > 0
-      ? `${summary.wins}–${summary.losses} league record`
-      : null,
-    favoriteHero ? `${favoriteHero.name} player` : null,
-  ].filter((highlight): highlight is string => highlight !== null);
-  return playerProfileMetadata(user.name, highlights);
+  return playerProfileMetadata(player.name, player.highlights);
 }
 
 export default async function PlayerProfilePage({
@@ -278,11 +247,12 @@ export default async function PlayerProfilePage({
     viewerRegistration?.status === REGISTRATION_STATUS.ACTIVE,
   );
 
-  // All-time league records THIS player holds. Same mapping as /records
-  // (shared toRecordGames) so the chips can never disagree with the book.
-  const heldRecords = leagueRecords(toRecordGames(recordRows)).players.filter(
-    (r) => r.userId === id,
-  );
+  // All-time league records THIS player holds, and the one within reach.
+  // Same mapping as /records (shared toRecordGames) so neither can disagree
+  // with the book.
+  const recordBook = recordWatchBook(toRecordGames(recordRows));
+  const heldRecords = recordBook.records.filter((r) => r.userId === id);
+  const recordWatch = recordWatchFor(recordBook, id);
 
   // Pub scouting (public data — same visibility rule as the medal): the token
   // gate comes from poolPubRecord (null when nothing is scoutable), the hero
@@ -304,89 +274,19 @@ export default async function PlayerProfilePage({
   );
 
   // Seasons card: every season they played in, were rostered in, or stood in
-  // for, with the champion resolved the same way every public page does.
-  const careerSeasonIds = [
-    ...new Set([
-      ...games.map((game) => game.match.seasonId),
-      ...rosterHistory.map((row) => row.seasonId),
-      ...coversServed.map((cover) => cover.match.seasonId),
-    ]),
-  ];
-  const [careerSeasonRows, careerMatches] = careerSeasonIds.length
-    ? await Promise.all([
-        prisma.season.findMany({
-          where: { id: { in: careerSeasonIds } },
-          select: {
-            id: true,
-            name: true,
-            createdAt: true,
-            status: true,
-            championTeamId: true,
-          },
-        }),
-        prisma.match.findMany({ where: { seasonId: { in: careerSeasonIds } } }),
-      ])
-    : [[], []];
-  const champions = new Map(
-    careerSeasonRows.flatMap((row) => {
-      const teamId = resolveChampionPresentation(
-        row,
-        careerMatches.filter((match) => match.seasonId === row.id),
-      ).championTeamId;
-      return teamId ? [[row.id, teamId] as const] : [];
-    }),
-  );
-  const careerRows = appearanceCareers(
+  // for, with the champion resolved the same way every public page does. The
+  // same read feeds their season card and its link picture.
+  const { rows: seasonRows, teamLogos } = await loadProfileSeasonRows(id, {
     games,
-    careerMatches,
-    [...champions].map(([seasonId, teamId]) => ({ seasonId, teamId })),
-  ).rows.filter((row) => row.userId === id);
-  const careerTeamList = [
-    ...games.flatMap((game) => [game.match.homeTeam, game.match.awayTeam]),
-    ...coversServed.flatMap((cover) => [
-      cover.match.homeTeam,
-      cover.match.awayTeam,
-    ]),
-    ...rosterHistory.flatMap((row) =>
-      row.teamId
-        ? [{ id: row.teamId, name: row.teamName, logoUrl: row.teamLogoUrl }]
-        : [],
-    ),
-  ];
-  const teamLogos = new Map(
-    careerTeamList.map((team) => [team.id, team.logoUrl ?? null]),
-  );
-  const seasonRows = profileSeasonRows({
-    seasons: new Map(careerSeasonRows.map((row) => [row.id, row])),
-    appearances: careerRows,
-    tenures: rosterHistory,
-    covers: coversServed.map((cover) => ({
-      seasonId: cover.match.seasonId,
-      teamId: cover.teamId,
-      matchId: cover.matchId,
-    })),
-    teamNames: new Map(careerTeamList.map((team) => [team.id, team.name])),
-    champions,
+    rosterHistory,
+    covers: coversServed,
   });
 
   // Pull this player's line out of each imported game — every season's games.
   // The parsed box score is kept so achievements can identify each game's MVP;
   // won/mvp are computed once here and shared by the tiles, the badge math,
   // the standout game and the match-history rows.
-  const gameRows = games
-    .map((g) => {
-      const parsed = trustedGamePlayers(decodeGamePlayers(g.players));
-      const stat = parsed.find((p) => p.userId === id);
-      if (!stat) return null;
-      return {
-        game: g,
-        stat,
-        parsed,
-        won: stat.isRadiant === g.radiantWin,
-        mvp: gameMvp(parsed, g.radiantWin) === id,
-      };
-    })
-    .filter((r): r is NonNullable<typeof r> => r !== null);
+  const gameRows = profileGameRows(id, games);
 
   const toLine = ({
     game,
@@ -407,42 +307,38 @@ export default async function PlayerProfilePage({
   const seasonSummary = summarizePlayerGames(seasonLines);
   // The overview's tiles show this season once it has games, career before.
   const hasSeasonGames = seasonSummary.games > 0;
-  // Trophy case + report card: career-wide, same rows as the match history.
-  const achievementLines = gameRows.map(({ stat, won, mvp }) => ({
-    kills: stat.kills,
-    deaths: stat.deaths,
-    assists: stat.assists,
-    gpm: stat.gpm,
-    lastHits: stat.lastHits,
-    won,
-    mvp,
-  }));
-  const badges = achievementsFor(achievementLines);
-  // Career report card: worldwide percentile benchmarks over every graded line.
-  const reportCard = careerReportCard(gameRows.map((r) => r.stat));
+  // Trophy case, career report card and the hero card's per-hero W-L/KDA:
+  // career-wide pure folds over the same rows as the match history (zero new
+  // queries), shared with the link picture's season card.
+  // NOTE: playerHeroPool tiebreaks games → winRate → heroId while the old
+  // topHeroes source tiebreaks games → wins — a full tie can reorder tiles.
+  const { badges, reportCard, leagueHeroes } = profileGameFolds(id, gameRows);
   // No letter grades until there are enough graded games to mean something,
   // and "Work on" only for the player themselves.
   const verdicts = reportVerdicts(reportCard, isSelf);
 
-  // Per-hero W-L/KDA for the hero card — a pure fold over lines already in
-  // memory (zero new queries). ScoutGame is the exact shape the match-preview
-  // dossier already consumes.
-  const scoutGames: ScoutGame[] = gameRows.map((r) => ({
-    radiantWin: r.game.radiantWin,
-    durationSecs: r.game.durationSecs,
-    startTime: r.game.startTime,
-    lines: r.parsed.map((p) => ({
-      userId: p.userId ?? null,
-      heroId: p.heroId,
-      isRadiant: p.isRadiant,
-      kills: p.kills,
-      deaths: p.deaths,
-      assists: p.assists,
-    })),
-  }));
-  // NOTE: playerHeroPool tiebreaks games → winRate → heroId while the old
-  // topHeroes source tiebreaks games → wins — a full tie can reorder tiles.
-  const leagueHeroes = playerHeroPool(id, scoutGames);
+  // Their season card in the header, and the titles beside their name: the
+  // reads above, folded by the rule their link picture uses too.
+  const card = playerCardFacts({
+    activeSeason: season ? { id: season.id, name: season.name } : null,
+    signup: activeReg ? { mmr: activeReg.mmr, type: activeReg.type } : null,
+    membership: membership
+      ? {
+          teamId: membership.team.id,
+          teamName: membership.team.name,
+          teamLogoUrl: membership.team.logoUrl,
+          isCaptain: membership.isCaptain,
+        }
+      : null,
+    seasonRows,
+    teamLogos,
+    rankTier: user.rankTier,
+    leagueHeroes,
+    pubHeroes,
+    report: reportCard,
+    achievements: badges,
+    recordsHeld: heldRecords.length,
+  });
 
   const streak = currentStreak(careerLines); // newest-first (games desc)
   const streakLabel =
@@ -520,20 +416,16 @@ export default async function PlayerProfilePage({
 
   const isStandin = activeReg?.type === "STANDIN";
   const isCaptain = !!membership?.isCaptain;
-  // Season context only: the badges already say Captain / Standin and the
-  // team box names the team, so the subtitle doesn't repeat either. Someone
-  // not in the current season (or with no season running) gets their latest
-  // league line instead of a season they haven't joined, so last season's
-  // champion still reads as one after the handoff.
+  // The season card names the season and how they took part: the current
+  // one while they are in it, else their latest league season (so last
+  // season's champion still reads as one after the handoff). Only a player
+  // with no season of their own keeps the bare season name under theirs.
   const inCurrentSeason = !!activeReg || !!team;
-  const pastLine = inCurrentSeason ? null : latestLeagueLine(seasonRows);
-  const subtitle =
-    pastLine ??
-    (season
-      ? activeReg && !team && !isStandin
-        ? `Registered · ${season.name}`
-        : season.name
-      : null);
+  const subtitle = card.season ? null : (season?.name ?? null);
+  // Their own signup link belongs to the current season, never to a past
+  // season's card.
+  const editSignupLink =
+    isSelf && !!season && (inCurrentSeason || seasonRows.length === 0);
   // A signature hero for the banner backdrop: most-played if we have games,
   // otherwise the player's first listed favorite.
   const signatureHero =
@@ -632,13 +524,19 @@ export default async function PlayerProfilePage({
       pubHeroes.length > 0 ||
       hasText(selfPickedHeroes),
     records: heldRecords.length > 0,
+    recordWatch: recordWatch != null,
     achievements: badges.length > 0,
     seasons: seasonRows.length > 0,
     inhouse: !!recentInhouse,
   });
 
+  // From xl the profile is two columns: their league form, games and play on
+  // the left, and a rail with the hero pool, records, achievements and
+  // seasons. A phone reads them in the same order, one column.
+  const hasRail = sections.profile || sections.career;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <ProfileHeader
         user={user}
         isSelf={isSelf}
@@ -650,16 +548,13 @@ export default async function PlayerProfilePage({
         isStandin={isStandin}
         wantsCaptainNow={wantsCaptainNow}
         subtitle={subtitle}
-        subtitleIsPastSeason={!!pastLine}
+        editSignupLink={editSignupLink}
         signup={activeReg}
         pubScout={pubScout}
         pubLast={pubLast}
         nowMs={nowMs}
         accountId={accountId}
-        team={team}
-        draftPrice={
-          membership && !membership.isCaptain ? membership.price : null
-        }
+        card={card}
         signupAbout={signupAbout}
       />
 
@@ -669,60 +564,73 @@ export default async function PlayerProfilePage({
         <SectionNav items={sections.nav} label="Player sections" sticky />
       ) : null}
 
-      <ProfileOverview
-        hasLeagueGames={hasLeagueGames}
-        hasSeasonGames={hasSeasonGames}
-        seasonName={season?.name}
-        seasonSummary={seasonSummary}
-        careerSummary={careerSummary}
-        streakLabel={streakLabel}
-        team={team ? { rank: teamRank, row: teamRow, playoffTile } : null}
-        featured={featured}
-        inhouseUserId={sections.inhouseInOverview ? user.id : null}
-      />
+      <div
+        className={cn(
+          "grid grid-cols-1 items-start gap-5",
+          hasRail && "xl:grid-cols-[minmax(0,1fr)_24rem]",
+        )}
+      >
+        <div className="@container min-w-0 space-y-5">
+          <ProfileOverview
+            hasLeagueGames={hasLeagueGames}
+            hasSeasonGames={hasSeasonGames}
+            seasonName={season?.name}
+            seasonSummary={seasonSummary}
+            careerSummary={careerSummary}
+            streakLabel={streakLabel}
+            team={team ? { rank: teamRank, row: teamRow, playoffTile } : null}
+            featured={featured}
+            inhouseUserId={sections.inhouseInOverview ? user.id : null}
+          />
 
-      {sections.matches ? (
-        <ProfileMatchHistory
-          playerId={id}
-          history={history}
-          recentForm={recentFormStrip}
-        />
-      ) : null}
+          {sections.matches ? (
+            <ProfileMatchHistory
+              playerId={id}
+              history={history}
+              recentForm={recentFormStrip}
+            />
+          ) : null}
 
-      {sections.performance ? (
-        <ProfilePerformance
-          showPerformance={sections.performanceCard}
-          showReportCard={sections.reportCard}
-          avgNet={avgNet}
-          avgGpm={avgGpm}
-          avgLh={avgLh}
-          kdaByGame={kdaByGame}
-          bestView={bestView}
-          reportCard={reportCard}
-          verdicts={verdicts}
-        />
-      ) : null}
+          {sections.performance ? (
+            <ProfilePerformance
+              showPerformance={sections.performanceCard}
+              showReportCard={sections.reportCard}
+              avgNet={avgNet}
+              avgGpm={avgGpm}
+              avgLh={avgLh}
+              kdaByGame={kdaByGame}
+              bestView={bestView}
+              reportCard={reportCard}
+              verdicts={verdicts}
+            />
+          ) : null}
+        </div>
+        {hasRail ? (
+          <div className="@container min-w-0 space-y-5">
+            {sections.profile ? (
+              <ProfileHeroesAndRecords
+                showHeroes={sections.heroes}
+                showRecords={sections.records}
+                leagueHeroes={leagueHeroes}
+                selfPickedHeroes={selfPickedHeroes}
+                pubHeroes={pubHeroes}
+                pubCheckedLabel={pubCheckedLabel}
+                heldRecords={heldRecords}
+                recordWatch={recordWatch}
+              />
+            ) : null}
 
-      {sections.profile ? (
-        <ProfileHeroesAndRecords
-          showHeroes={sections.heroes}
-          showRecords={sections.records}
-          leagueHeroes={leagueHeroes}
-          selfPickedHeroes={selfPickedHeroes}
-          pubHeroes={pubHeroes}
-          pubCheckedLabel={pubCheckedLabel}
-          heldRecords={heldRecords}
-        />
-      ) : null}
-
-      {sections.career ? (
-        <ProfileCareer
-          badges={badges}
-          seasonRows={seasonRows}
-          teamLogos={teamLogos}
-          inhouseUserId={sections.inhouseInCareer ? user.id : null}
-        />
-      ) : null}
+            {sections.career ? (
+              <ProfileCareer
+                badges={badges}
+                seasonRows={seasonRows}
+                teamLogos={teamLogos}
+                inhouseUserId={sections.inhouseInCareer ? user.id : null}
+              />
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -62,7 +62,15 @@ import {
   setLeagueId,
   revokeAllSessions,
   setDraftSettings,
+  setNextSeasonDate,
+  clearNextSeasonDate,
+  setLeagueStreamUrl,
 } from "@/app/actions/admin-season";
+import { parseNextSeasonPlan } from "@/lib/next-season";
+import {
+  parseStoredStream,
+  WATCH_OPENS_BEFORE_KICKOFF_MS,
+} from "@/lib/broadcast";
 import {
   addCaptain,
   changeCaptain,
@@ -125,7 +133,7 @@ import {
   updateNewsPost,
 } from "@/app/actions/news";
 import { NEWS_LIMITS, newsDiscordCopy, type NewsDiscordCopy } from "@/lib/news";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
@@ -300,7 +308,6 @@ import {
   PlayerLink,
   RankMedal,
   RoleBadges,
-  Stat,
   StatCell,
   StatStrip,
   TeamCrest,
@@ -414,6 +421,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     ? (data?.teams.find((team) => team.id === handoffReadiness.championTeamId)
         ?.name ?? null)
     : null;
+  // The next season's signup date Home prints, set on the handoff card.
+  const nextSeasonPlan =
+    season?.status === SEASON_STATUS.COMPLETE && handoffReadiness?.ready
+      ? parseNextSeasonPlan(
+          await getSetting(SETTING_KEYS.NEXT_SEASON_PLAN),
+          season.id,
+        )
+      : null;
   const importQuery = await searchParams;
   // Chasing Discord links is a weekly people task, so it sits beside the
   // signups (before the draft) or the rosters (after it), not inside the
@@ -435,7 +450,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   // the anchor, a jump to Auto-sync would unfold it too.
   const syncCards = season ? (
     <>
-      <AdminAnchor id="adm-sync" className="space-y-8 empty:hidden">
+      <AdminAnchor id="adm-sync" className="space-y-5 empty:hidden">
         <AutoSyncHealth season={season} />
         <Suspense fallback={<CardSkeleton rows={3} />}>
           <ImportProgress seasonId={season.id} page={importQuery.importPage} query={importQuery} />
@@ -502,6 +517,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           { id: "adm-league", label: "League id" },
         ]
       : []),
+    { id: "adm-stream", label: "Match stream" },
     { id: "adm-history", label: "Historical records" },
     { id: "adm-automation", label: "Automation" },
     // Season-independent: inhouse alerts and the queue board are most
@@ -516,7 +532,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   ];
 
   return (
-    <div className="space-y-8">
+    // 20px between cards (was 32): about twenty cards stack here.
+    <div className="space-y-5">
       <PageTitle
         title="Admin"
         subtitle="Run the league — create seasons, pick captains, run the draft, enter results."
@@ -531,6 +548,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           season={season}
           previous={newSeasonDefaults}
           championName={championName}
+          nextSignupsAtMs={nextSeasonPlan?.signupsAtMs ?? null}
         />
       ) : null}
 
@@ -649,6 +667,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <LeagueControls season={season} />
         </>
       ) : null}
+
+      {/* League-wide, like everything below: the stream link outlives the
+          season and needs no active one. */}
+      <AdminAnchor id="adm-stream">
+        <Suspense fallback={<CardSkeleton rows={2} />}>
+          <StreamControls />
+        </Suspense>
+      </AdminAnchor>
 
       <AdminAnchor id="adm-history">
         <AdminSection
@@ -770,12 +796,15 @@ function OpenNextSeason({
   season,
   previous,
   championName,
+  nextSignupsAtMs,
 }: {
   /** The crowned active season; null in the offseason. */
   season: Season | null;
   /** The season the new one follows (carried settings); null for the first. */
   previous: CarriedSeasonSettings & { name: string } | null;
   championName: string | null;
+  /** The next season's planned signup date Home shows; null for none. */
+  nextSignupsAtMs: number | null;
 }) {
   const nextName = nextSeasonName(previous?.name ?? null);
   return (
@@ -834,6 +863,55 @@ function OpenNextSeason({
             Open signups
           </SubmitButton>
         </ActionForm>
+        {season ? (
+          <div className="space-y-3 border-t border-line-soft pt-4">
+            <h3 className="text-base font-semibold text-fg">
+              Next season&rsquo;s date
+            </h3>
+            <p className="text-sm text-muted">
+              Until you open signups, the home page tells players the next
+              season is coming soon. Set the date its signups will open and
+              Home shows that date with a countdown instead. It only informs
+              players: signups still open when you press Open signups above.
+            </p>
+            <ActionForm
+              action={setNextSeasonDate}
+              hidden={{ expectedActiveSeasonId: season.id }}
+              className="flex flex-wrap items-end gap-2"
+            >
+              <div className="flex min-w-0 flex-col gap-1">
+                <label htmlFor="nextSignupsAt" className="text-xs text-muted">
+                  Signups open
+                </label>
+                <LocalDatetimeField
+                  id="nextSignupsAt"
+                  name="nextSignupsAt"
+                  tsName="nextSignupsAtTs"
+                  required
+                  defaultTs={nextSignupsAtMs}
+                  timeZone={LEAGUE_CONFIG.timeZone}
+                  className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+                />
+              </div>
+              <SubmitButton variant="secondary" size="sm">
+                {nextSignupsAtMs != null ? "Update date" : "Set date"}
+              </SubmitButton>
+            </ActionForm>
+            {nextSignupsAtMs != null ? (
+              <ActionForm
+                action={clearNextSeasonDate}
+                className="flex flex-wrap items-center gap-2 text-xs text-muted"
+              >
+                <span>
+                  Home shows {formatLeagueTime(new Date(nextSignupsAtMs))}.
+                </span>
+                <SubmitButton variant="ghost" size="sm">
+                  Clear date
+                </SubmitButton>
+              </ActionForm>
+            ) : null}
+          </div>
+        ) : null}
         {season ? (
           <details className="rounded-lg border border-line bg-surface-2/40 px-4 py-2 text-sm">
             <summary className="flex min-h-11 cursor-pointer items-center font-medium text-fg">
@@ -908,16 +986,17 @@ function AdminSection({
       open={defaultOpen}
       className="group scroll-mt-40 lg:scroll-mt-56 rounded-[var(--radius)] border border-line bg-surface/80 shadow-sm backdrop-blur"
     >
-      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 px-4 py-3 [&::-webkit-details-marker]:hidden">
         <SectionReady />
-        {/* Set like CardHeader's title and subtitle, so a folded section and
-            an open card read as the same kind of heading. */}
+        {/* Set like CardHeader's title and subtitle (padding, sizes), so a
+            folded section and an open card read as the same kind of heading
+            and their titles share one left edge. */}
         <div className="min-w-0">
-          <Heading className="text-base font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
+          <Heading className="text-[0.9375rem] font-semibold leading-snug text-fg [overflow-wrap:anywhere]">
             {title}
           </Heading>
           {subtitle ? (
-            <p className="mt-1.5 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
+            <p className="mt-0.5 text-[13px] leading-relaxed text-muted [overflow-wrap:anywhere]">
               {subtitle}
             </p>
           ) : null}
@@ -953,8 +1032,8 @@ function AdminAnchor({
 }
 
 /**
- * The jump bar. From desktop width it is sticky under the 80px header
- * (`top-20`, the same offset the draft room's clock bar uses) so it stays
+ * The jump bar. From desktop width it is sticky under the 64px header
+ * (`top-16`, the same offset the draft room's clock bar uses) so it stays
  * reachable however far down the page an admin has scrolled. On a phone it
  * scrolls away with the page like every section bar (see SectionNav): pinned,
  * it cost a fifth of the screen on top of the header and the tab bar.
@@ -1287,7 +1366,7 @@ function TonightMatches({
                       <LocalTime
                         ts={m.scheduledAt.getTime()}
                         variant="short"
-                        initial={formatMatchTime(m.scheduledAt, "short")}
+                        initial={formatLeagueMatchTime(m.scheduledAt, "short")}
                       />
                     </p>
                   ) : null}
@@ -1431,7 +1510,7 @@ function AdminAttention({
               return (
                 <li
                   key={item.key}
-                  className="rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm"
+                  className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm"
                 >
                   {item.text}
                   {label ? (
@@ -1453,11 +1532,12 @@ function AdminAttention({
               {matches.length} match{matches.length === 1 ? "" : "es"} to
               review
             </summary>
-            <ul className="space-y-2">
+            {/* One ruled list, not a box per match. */}
+            <ul className="divide-y divide-line-soft rounded-lg border border-line">
               {matches.map((item) => (
                 <li
                   key={item.id}
-                  className="rounded-lg border border-line p-3 text-sm"
+                  className="px-3 py-2 text-sm"
                 >
                   {/* The fixture opens the match page's Admin tools, where
                       it can be fixed; its row in Schedule & results or
@@ -1473,7 +1553,7 @@ function AdminAttention({
                       Result controls ↓
                     </a>
                   </span>
-                  <p className="mt-1 text-muted">
+                  <p className="mt-0.5 text-muted">
                     {item.reasons.join(" · ")}
                     {item.uncovered > 0 && standinsLabel ? (
                       <>
@@ -1490,13 +1570,20 @@ function AdminAttention({
           </details>
         ) : null}
         {/* inline-flex min-h-6: on 12px text TAP_SAFE alone left a 22px
-            target, under the 24px minimum. */}
-        <p className="text-xs">
+            target, under the 24px minimum. gap-y-2 keeps 8px between the
+            two links when they wrap. */}
+        <p className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
           <Link
             href={`/admin/data-quality?season=${season.id}`}
             className={textLink("inline-flex min-h-6 items-center")}
           >
             Check imported-game quality <LinkArrow />
+          </Link>
+          <Link
+            href={`/admin/health?season=${season.id}`}
+            className={textLink("inline-flex min-h-6 items-center")}
+          >
+            League health <LinkArrow />
           </Link>
         </p>
       </CardBody>
@@ -1686,65 +1773,61 @@ function SeasonControls({
       <CardBody className="space-y-5">
         {/* The signup counters only mean something while signups can still
             change the draft; once it has run, the league is teams and
-            fixtures. */}
-        <div
-          className={cn(
-            "grid grid-cols-2 gap-3",
-            configLocked ? "" : "sm:grid-cols-4",
-          )}
-        >
+            fixtures. One band with the phase stepper, not a tile each: four
+            tiles took two rows on a phone. */}
+        <StatStrip className="bg-surface-2/30">
           {configLocked ? null : (
             <>
-              <Stat label="Players" value={data.players.length} />
-              <Stat
+              <StatCell label="Players" value={data.players.length} />
+              <StatCell
                 label="To start"
                 value={cap.minPlayers}
                 hint={cap.canDraft ? "reached" : `${cap.needed} more`}
               />
             </>
           )}
-          <Stat label="Teams" value={data.teams.length} />
-          <Stat label="Matches" value={data.matches.length} />
-        </div>
-
-        {/* Read-only: where the league is. Moving it is the one button below. */}
-        <ol
-          aria-label="Season phases"
-          className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-xs"
-        >
-          {SEASON_PHASE_ORDER.map((phase, index) => (
-            <li
-              key={phase}
-              aria-current={phase === season.status ? "step" : undefined}
-              className="flex items-center gap-1.5"
-            >
-              {index > 0 ? (
-                <span aria-hidden="true" className="text-muted">
-                  →
-                </span>
-              ) : null}
-              <span
-                className={cn(
-                  "rounded-full border px-2.5 py-1",
-                  phase === season.status
-                    ? "border-accent/60 bg-accent/15 font-semibold text-fg"
-                    : index < currentIndex
-                      ? "border-line text-muted"
-                      : "border-dashed border-line text-muted",
-                )}
+          <StatCell label="Teams" value={data.teams.length} />
+          <StatCell label="Matches" value={data.matches.length} />
+          {/* Read-only: where the league is (moving it is the one button
+              below), in the same band as the counts. */}
+          <ol
+            aria-label="Season phases"
+            className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-xs sm:ml-auto"
+          >
+            {SEASON_PHASE_ORDER.map((phase, index) => (
+              <li
+                key={phase}
+                aria-current={phase === season.status ? "step" : undefined}
+                className="flex items-center gap-1.5"
               >
-                {PHASE_LABEL[phase]}
-                <span className="sr-only">
-                  {phase === season.status
-                    ? " (current)"
-                    : index < currentIndex
-                      ? " (done)"
-                      : ""}
+                {index > 0 ? (
+                  <span aria-hidden="true" className="text-muted">
+                    →
+                  </span>
+                ) : null}
+                <span
+                  className={cn(
+                    "rounded-full border px-2.5 py-1",
+                    phase === season.status
+                      ? "border-accent/60 bg-accent/15 font-semibold text-fg"
+                      : index < currentIndex
+                        ? "border-line text-muted"
+                        : "border-dashed border-line text-muted",
+                  )}
+                >
+                  {PHASE_LABEL[phase]}
+                  <span className="sr-only">
+                    {phase === season.status
+                      ? " (current)"
+                      : index < currentIndex
+                        ? " (done)"
+                        : ""}
+                  </span>
                 </span>
-              </span>
-            </li>
-          ))}
-        </ol>
+              </li>
+            ))}
+          </ol>
+        </StatStrip>
 
         <div className="space-y-1.5">
           {advance && advanceState ? (
@@ -1788,9 +1871,11 @@ function SeasonControls({
           </p>
         </div>
 
+        {/* The two folded tools share one ruled box. */}
+        <div className="divide-y divide-line rounded-lg border border-line">
         <details
           open={fixNeeded}
-          className="rounded-lg border border-line px-3 py-1 text-sm"
+          className="px-3 py-1 text-sm"
         >
           <summary className="flex min-h-11 cursor-pointer items-center font-medium">
             Fix the phase
@@ -1882,7 +1967,7 @@ function SeasonControls({
             standing between the phase controls and the rest of the page. */}
         <details
           id="adm-season-settings"
-          className="rounded-lg border border-line px-3 py-1 text-sm"
+          className="px-3 py-1 text-sm"
         >
           <summary className="flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2 font-medium">
             Season settings
@@ -2083,6 +2168,7 @@ function SeasonControls({
             </ActionForm>
           </div>
         </details>
+        </div>
       </CardBody>
     </Card>
   );
@@ -2782,6 +2868,10 @@ function CaptainControls({
                         </span>
                       </p>
                     ) : null}
+                    {/* The row's disclosures share one line, and the one
+                        opened takes the full width under it: stacked, their
+                        summaries took up to four lines a team. */}
+                    <div className="mt-1.5 flex flex-wrap items-start gap-x-4 gap-y-1.5 empty:hidden [&>details]:mt-0 [&>details[open]]:basis-full">
                     {season.status !== SEASON_STATUS.COMPLETE ? (
                       <details className="mt-1.5">
                         <summary className="cursor-pointer text-xs text-muted hover:text-fg">
@@ -2913,6 +3003,7 @@ function CaptainControls({
                         </p>
                       </details>
                     ) : null}
+                    </div>
                     {t.withdrawn ? (
                       <div className="mt-1.5 flex flex-wrap items-center gap-2">
                         <Badge>withdrew</Badge>
@@ -3168,6 +3259,10 @@ function CaptainControls({
                         ) : null}
                       </span>
                     </div>
+                    {/* The chips and the medal editor's summary share a
+                        line (the editor, opened, takes the full width): a
+                        line each made every row about 24px taller. */}
+                    <div className={ROW_META_LINE}>
                     <SignupRowMeta
                       reg={p}
                       sweep={membershipSweep}
@@ -3199,6 +3294,7 @@ function CaptainControls({
                         mmrLocked={data.draft?.status === DRAFT_STATUS.IN_PROGRESS || data.draft?.status === DRAFT_STATUS.PAUSED}
                       />
                     ) : null}
+                    </div>
                   </>
                 ),
               }))}
@@ -3275,6 +3371,7 @@ function CaptainControls({
                           )
                         ) : null}
                       </div>
+                      <div className={ROW_META_LINE}>
                       <SignupRowMeta
                         reg={s}
                         sweep={membershipSweep}
@@ -3290,6 +3387,7 @@ function CaptainControls({
                           rankTierManual={s.user.rankTierManual}
                         />
                       ) : null}
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -3742,7 +3840,10 @@ function ScheduleControls({
               ) : null;
             })()}
             {/* Regular season, grouped by week — completed weeks collapse so
-                the enter-scores workflow starts at the week that needs it. */}
+                the enter-scores workflow starts at the week that needs it.
+                One ruled box: a bordered box per week spent a gap on each. */}
+            {status.weeks.length > 0 ? (
+            <div className="divide-y divide-line rounded-lg border border-line">
             {status.weeks.map((w) => {
               const weekMatches = data.matches.filter(
                 (m) => m.phase === "REGULAR" && m.week === w.week,
@@ -3751,7 +3852,6 @@ function ScheduleControls({
                 <details
                   key={`w${w.week}`}
                   open={w.pending > 0}
-                  className="rounded-lg border border-line"
                 >
                   <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
                     Week {w.week}
@@ -3794,6 +3894,8 @@ function ScheduleControls({
                 </details>
               );
             })}
+            </div>
+            ) : null}
           </div>
         )}
       </CardBody>
@@ -4635,7 +4737,7 @@ function AutomationTimestamp({
     <LocalTime
       ts={value.getTime()}
       variant="short"
-      initial={formatMatchTime(value, "short")}
+      initial={formatLeagueMatchTime(value, "short")}
     />
   ) : (
     emptyLabel
@@ -5094,7 +5196,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                       <LocalTime
                         ts={m.autoSyncedAt.getTime()}
                         variant="short"
-                        initial={formatMatchTime(m.autoSyncedAt, "short")}
+                        initial={formatLeagueMatchTime(m.autoSyncedAt, "short")}
                       />
                       {" · "}
                       {m.autoSyncAttempts} empty scan
@@ -5136,7 +5238,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
             <LocalTime
               ts={cursorTs}
               variant="full"
-              initial={formatMatchTime(new Date(cursorTs), "full")}
+              initial={formatLeagueMatchTime(new Date(cursorTs), "full")}
             />
           ) : (
             "never"
@@ -5148,7 +5250,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
                 <LocalTime
                   ts={leagueTs}
                   variant="short"
-                  initial={formatMatchTime(new Date(leagueTs), "short")}
+                  initial={formatLeagueMatchTime(new Date(leagueTs), "short")}
                 />
               ) : (
                 "never"
@@ -5500,6 +5602,11 @@ function regSignupFlags(reg: AdminData["players"][number], maxMmr: number) {
     { maxMmr },
   );
 }
+
+/** A signup row's chip line and medal editor on one line; the editor,
+ *  opened, takes the full width under it. */
+const ROW_META_LINE =
+  "mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 [&>div]:mt-0 [&>details]:mt-0 [&>details[open]]:basis-full";
 
 /**
  * The readiness line under each row of the signup-moderation lists — the
@@ -6416,7 +6523,7 @@ function DiscordControls({
                 <LocalTime
                   ts={new Date(board.lastEdit).getTime()}
                   variant="full"
-                  initial={formatMatchTime(new Date(board.lastEdit), "full")}
+                  initial={formatLeagueMatchTime(new Date(board.lastEdit), "full")}
                 />
               </span>
             ) : null}
@@ -6561,7 +6668,7 @@ async function AdminActivity() {
                 <LocalTime
                   ts={r.createdAt.getTime()}
                   variant="short"
-                  initial={formatMatchTime(r.createdAt, "short")}
+                  initial={formatLeagueMatchTime(r.createdAt, "short")}
                   className="shrink-0 text-xs text-muted tabular-nums"
                 />
               </li>
@@ -6571,6 +6678,74 @@ async function AdminActivity() {
         <Link href="/admin/activity" className={textLink()}>
           All admin activity →
         </Link>
+      </CardBody>
+    </AdminSection>
+  );
+}
+
+/**
+ * The league's stream channel (broadcast.ts). Playoff and final matches link
+ * to it on Home, the match page and /schedule: where they will be streamed,
+ * then a live link from WATCH_OPENS_BEFORE_KICKOFF_MS before kickoff until the
+ * series should be over, longer once a game is in (matchWatchWindow). One
+ * link for the whole league, kept across seasons.
+ */
+async function StreamControls() {
+  const stream = parseStoredStream(
+    await getSetting(SETTING_KEYS.LEAGUE_STREAM_URL),
+  );
+  return (
+    <AdminSection
+      title="Match stream"
+      subtitle={
+        stream
+          ? `On: playoff and final matches link to ${stream.platform}.`
+          : "Off: no match links to a stream."
+      }
+    >
+      <CardBody className="space-y-3">
+        <p className="text-sm text-muted">
+          One Twitch, YouTube or Kick channel for the league. Every playoff and
+          final match links to it on Home, its match page and the schedule:
+          where it will be streamed before kickoff, then a live link from{" "}
+          {WATCH_OPENS_BEFORE_KICKOFF_MS / 60_000} minutes before kickoff until
+          the series should be over, or longer once a game is in. While it is
+          live, the match page (and Home, when that match is the only one on)
+          also plays it in place, in the streaming service&apos;s own player,
+          which loads only when a visitor presses play. On YouTube that needs
+          the live video&apos;s link or a youtube.com/channel/UC… link. The
+          regular season shows nothing. Remove it on playoff nights nobody
+          streams.
+        </p>
+        <ActionForm
+          action={setLeagueStreamUrl}
+          className="flex flex-wrap items-end gap-2"
+        >
+          <div className="min-w-0 flex-1 basis-64">
+            <label htmlFor="streamUrl" className="mb-1 block text-xs text-muted">
+              Stream link
+            </label>
+            <input
+              id="streamUrl"
+              name="streamUrl"
+              type="url"
+              inputMode="url"
+              defaultValue={stream?.url ?? ""}
+              placeholder="https://www.twitch.tv/yourchannel"
+              className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+            />
+          </div>
+          <SubmitButton variant="secondary" size="sm">
+            Save stream link
+          </SubmitButton>
+        </ActionForm>
+        {stream ? (
+          <ActionForm action={setLeagueStreamUrl} hidden={{ streamUrl: "" }}>
+            <SubmitButton variant="ghost" size="sm">
+              Remove stream link
+            </SubmitButton>
+          </ActionForm>
+        ) : null}
       </CardBody>
     </AdminSection>
   );
@@ -6716,7 +6891,7 @@ function NewsControls({ posts }: { posts: NewsPostRow[] }) {
                     <LocalTime
                       ts={p.createdAt.getTime()}
                       variant="short"
-                      initial={formatMatchTime(p.createdAt, "short")}
+                      initial={formatLeagueMatchTime(p.createdAt, "short")}
                     />
                     {p.author ? ` · ${p.author.name}` : ""}
                     {` · ${newsDiscordLabel(p.discord)}`}
@@ -6971,7 +7146,7 @@ async function PendingReschedules({
                 <LocalTime
                   ts={ts}
                   variant="full"
-                  initial={formatMatchTime(new Date(ts), "full")}
+                  initial={formatLeagueMatchTime(new Date(ts), "full")}
                 />
               </span>
             ))}

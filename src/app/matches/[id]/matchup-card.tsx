@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { CHECKIN_NUDGE_THROTTLE_SECONDS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import type { PickemControl } from "@/lib/pickem";
+import { teamStripe } from "@/lib/team-tint";
 import type { FormResult, HeadToHead } from "@/lib/team-matches";
 import { remindUnansweredCheckins } from "@/app/actions/availability";
 import { ActionForm, SubmitButton } from "@/components/action-form";
@@ -87,8 +88,14 @@ export function MatchupCard({
       />
       <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {sides.map((s) => (
-          <div key={s.teamId} className="rounded-lg border border-line p-3">
-            <div className="mb-2.5 flex items-center justify-between gap-2">
+          <div
+            key={s.teamId}
+            className="rounded-lg border border-line p-3"
+            {...teamStripe(s.teamId)}
+          >
+            {/* flex-wrap: a long name keeps its line and the form drops
+                under it, rather than both squeezing. */}
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
               <Link
                 href={`/teams/${s.teamId}`}
                 className="flex min-w-0 items-center gap-2 font-display text-base font-semibold hover:text-info"
@@ -104,7 +111,9 @@ export function MatchupCard({
                   {s.name}
                 </span>
               </Link>
-              {s.form.length > 0 ? <FormStrip form={s.form} /> : null}
+              {s.form.length > 0 ? (
+                <FormStrip form={s.form} size={5} className="ml-auto" />
+              ) : null}
             </div>
             {/* Its own line, not squeezed into the captain's roster row,
                 which already truncates the name on a phone. */}
@@ -204,7 +213,7 @@ export function MatchupCard({
                   <LocalTime
                     ts={nudge.sentAt.getTime()}
                     variant="short"
-                    initial={formatMatchTime(nudge.sentAt, "short")}
+                    initial={formatLeagueMatchTime(nudge.sentAt, "short")}
                   />
                   . You can send another from{" "}
                   <LocalTime
@@ -213,7 +222,7 @@ export function MatchupCard({
                       CHECKIN_NUDGE_THROTTLE_SECONDS * 1000
                     }
                     variant="short"
-                    initial={formatMatchTime(
+                    initial={formatLeagueMatchTime(
                       new Date(
                         nudge.sentAt.getTime() +
                           CHECKIN_NUDGE_THROTTLE_SECONDS * 1000,
@@ -259,7 +268,7 @@ export function MatchupCard({
             logoUrl: match.awayTeam.logoUrl,
           }}
           locksAt={match.scheduledAt?.getTime() ?? null}
-          className="border-t border-line-soft px-5 py-4"
+          className="border-t border-line-soft px-4 py-3"
         />
       ) : null}
     </Card>

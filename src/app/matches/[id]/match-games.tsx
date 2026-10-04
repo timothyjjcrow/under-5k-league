@@ -54,6 +54,14 @@ export async function MatchGames({
         const direName = g.direTeamId
           ? (teamName.get(g.direTeamId) ?? "Dire")
           : "Dire";
+        // A side wears its team's colour only when the game says which of
+        // this match's teams played it.
+        const radiantTeamId =
+          g.radiantTeamId && teamName.has(g.radiantTeamId)
+            ? g.radiantTeamId
+            : null;
+        const direTeamId =
+          g.direTeamId && teamName.has(g.direTeamId) ? g.direTeamId : null;
         const maxNet = Math.max(1, ...g.parsed.map((p) => p.netWorth ?? 0));
         const mvpId = gameMvp(g.parsed, g.radiantWin);
         const radiantNet = radiant.reduce(
@@ -95,6 +103,7 @@ export async function MatchGames({
               />
               <SidePlayers
                 label={radiantName}
+                teamId={radiantTeamId}
                 win={g.radiantWin}
                 mvpId={mvpId}
                 players={radiant}
@@ -104,6 +113,7 @@ export async function MatchGames({
               />
               <SidePlayers
                 label={direName}
+                teamId={direTeamId}
                 win={!g.radiantWin}
                 mvpId={mvpId}
                 players={dire}
@@ -149,13 +159,14 @@ export async function MatchGames({
               id={`game-${g.id}`}
               className="group/game scroll-mt-24"
             >
-              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-4 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2/40 [&::-webkit-details-marker]:hidden">
                 <div className="min-w-0 flex-1 basis-48">
-                  <h2 className="text-base font-semibold leading-snug text-fg">
+                  {/* Sized like a CardHeader title, as Game 1's is. */}
+                  <h2 className="text-[0.9375rem] font-semibold leading-snug text-fg">
                     Game {i + 1}
                   </h2>
                   {gameLine ? (
-                    <p className="mt-1.5 text-sm text-muted">{gameLine}</p>
+                    <p className="mt-0.5 text-[13px] text-muted">{gameLine}</p>
                   ) : null}
                 </div>
                 <span className="flex min-w-0 items-center gap-3">
@@ -171,7 +182,7 @@ export async function MatchGames({
                 </span>
               </summary>
               <div className="border-t border-line-soft">
-                <p className="flex justify-end px-5 pt-4">{openDota}</p>
+                <p className="flex justify-end px-4 pt-3">{openDota}</p>
                 {boxScore}
               </div>
             </AutoOpenDetails>

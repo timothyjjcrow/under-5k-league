@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { formatMatchTime, matchTimeParts } from "@/lib/match-time";
+import { formatLeagueMatchTime, leagueMatchTimeParts } from "@/lib/match-time";
 import { matchLogisticsOpen } from "@/lib/league-lifecycle";
 import { loadRescheduleDeadline } from "@/lib/reschedule-service";
 import {
@@ -130,7 +130,7 @@ export async function RescheduleSection({
                 <LocalTime
                   ts={option.timeMs}
                   variant="full"
-                  initial={formatMatchTime(new Date(option.timeMs), "full")}
+                  initial={formatLeagueMatchTime(new Date(option.timeMs), "full")}
                 />
               </strong>
             </span>
@@ -147,11 +147,11 @@ export async function RescheduleSection({
       timeParts={Object.fromEntries(
         view.options.map((o) => [
           String(o.timeMs),
-          matchTimeParts(new Date(o.timeMs)),
+          leagueMatchTimeParts(new Date(o.timeMs)),
         ]),
       )}
       kickoffLabel={
-        match.scheduledAt ? formatMatchTime(match.scheduledAt, "full") : null
+        match.scheduledAt ? formatLeagueMatchTime(match.scheduledAt, "full") : null
       }
       composer={isCaptain ? await composerProps(match, nowMs) : null}
     />
@@ -266,13 +266,13 @@ async function composerProps(
     matchId: match.id,
     suggestions: suggestions.map((ts) => ({
       ts,
-      parts: matchTimeParts(new Date(ts)),
+      parts: leagueMatchTimeParts(new Date(ts)),
     })),
     minTs: nowMs,
     // The browser keeps the custom time a minute inside the deadline.
     maxTs: deadline ? deadline.getTime() - 60_000 : null,
     deadline: deadline
-      ? { ts: deadline.getTime(), label: formatMatchTime(deadline, "full") }
+      ? { ts: deadline.getTime(), label: formatLeagueMatchTime(deadline, "full") }
       : null,
     clashHours: Math.round(FIXTURE_CONFLICT_WINDOW_MS / 3_600_000),
     kickoffMs: match.scheduledAt?.getTime() ?? null,

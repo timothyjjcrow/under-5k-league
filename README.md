@@ -1031,7 +1031,10 @@ Monitor `GET /api/health/live` for process reachability,
 `GET /api/health/automation` as the public dead-man signal. Keep those alerts
 separate: `live` deliberately does no dependency work, `ready` returns 503 when
 PostgreSQL is unavailable, and `automation` returns 503 for never-run, stale,
-failed, degraded, expired-lease, or database-unavailable state. The automation
+failed, degraded, expired-lease, or database-unavailable state. It also reads
+stale from each wake of a sleeping worker (at least hourly) until the next
+scheduled pass finishes, up to a minute plus the pass, so alert only on an
+automation 503 that lasts longer than three minutes. The automation
 body exposes only a bounded status enum; detailed failure/backlog state remains
 in Admin. Also alert on non-2xx `/api/cron/automation` responses.
 

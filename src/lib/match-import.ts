@@ -67,6 +67,11 @@ import {
   isWithinScrimResultWindow,
 } from "./scrim-window";
 import {
+  DETECT_WINDOW_AFTER_MS,
+  DETECT_WINDOW_BEFORE_MS,
+  knownPlayersPerSide,
+} from "./league-result-window";
+import {
   expireImportCandidates,
   hasFinalImportDetails,
   IMPORT_COMMIT_RESERVE_MS,
@@ -364,14 +369,9 @@ export const BO2_SERIES_SESSION_GAP_MS = 8 * 60 * 60 * 1000;
 /** How long one roster scan may spend fetching candidate games. */
 export const SCAN_BUDGET_MS = 25_000;
 
-/** How far either side of its kickoff a game may sit and still belong to a
- *  match. Generous backwards because amateur teams often play early without
- *  filing a reschedule; mis-attribution is prevented by `claimsGame` below,
- *  not by keeping this window tight. */
-export const DETECT_WINDOW_BEFORE_MS = 3 * 24 * 60 * 60 * 1000;
-export const DETECT_WINDOW_AFTER_MS = 6 * 24 * 60 * 60 * 1000;
-
-/** Candidate eligibility for one scheduled league fixture. */
+/** Candidate eligibility for one scheduled league fixture: within
+ *  `DETECT_WINDOW_BEFORE_MS` / `DETECT_WINDOW_AFTER_MS` of its kickoff
+ *  (league-result-window.ts, which /rules quotes). */
 export function isWithinLeagueResultWindow(
   startTimeSeconds: number,
   scheduledAtMs: number,
@@ -1204,7 +1204,7 @@ export async function importGameForMatch(
           const cls = classifyGame(od,
             { teamId: fresh.homeTeamId, accountIds: homeSet },
             { teamId: fresh.awayTeamId, accountIds: awaySet },
-            Math.min(3, teamSize));
+            knownPlayersPerSide(teamSize));
           if (!cls.ok) throw new ImportRaceError(cls.reason ?? "Game does not match these teams", "STALE_FIXTURE");
           // One global claim arbitrates official games and casual scrims. The
           // two result tables deliberately stay separate so scrim stats can
@@ -1529,7 +1529,7 @@ export async function autoDetectGamesForMatch(
     ...(opts.ignoreSkips ? [] : await loadImportSkips(match.seasonId)),
   ]);
 
-  const minPerSide = Math.min(3, teamSize);
+  const minPerSide = knownPlayersPerSide(teamSize);
   const valid: (SeriesCandidate & { details: OpenDotaMatch })[] = [];
   await expireImportCandidates();
   const cached = new Map((await loadImportCandidates(match.seasonId, candidateIdStrings))
@@ -2202,7 +2202,7 @@ export async function syncLeagueGames(
           od,
           { teamId: m.homeTeamId, accountIds: acc.home },
           { teamId: m.awayTeamId, accountIds: acc.away },
-          Math.min(3, acc.teamSize),
+          knownPlayersPerSide(acc.teamSize),
         );
         if (cls.ok) {
           fits.push({ m, winnerTeamId: cls.winnerTeamId, kickoffMs });

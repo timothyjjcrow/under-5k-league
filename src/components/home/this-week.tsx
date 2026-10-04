@@ -1,8 +1,13 @@
 import type { Match } from "@prisma/client";
 import Link from "next/link";
+import { Fragment } from "react";
+import { Countdown } from "@/components/countdown";
+import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
+import { StreamPlayer } from "@/components/stream-player";
+import { WatchLink } from "@/components/watch-link";
 import {
   Card,
   CardBody,
@@ -16,9 +21,11 @@ import {
   matchNightRoster,
   teamAvailability,
 } from "@/lib/availability";
+import { matchWatchWindow, streamEmbed } from "@/lib/broadcast";
+import { MATCH_PHASE } from "@/lib/constants";
 import { pickemControlFor } from "@/lib/pickem";
 import { prisma } from "@/lib/prisma";
-import type { SeasonSnapshot } from "@/lib/queries";
+import { getLeagueStream, type SeasonSnapshot } from "@/lib/queries";
 import type { ScenarioReport } from "@/lib/scenarios";
 import {
   focusSlate,
@@ -61,6 +68,18 @@ export async function ThisWeek({
   const { slate: focus, title } = focusSlate(season.status, matches);
   if (focus.length === 0) return null;
   const playoffRounds = playoffTotalRounds(matches);
+  // The last series standing is the grand final: say so, and give it the
+  // gold clock, instead of dressing it like any other round.
+  const finalOnly =
+    focus.length === 1 && focus[0].phase === MATCH_PHASE.FINAL;
+
+  // The league stream, read only when a playoff or final card could link it.
+  const stream = focus.some((m) => matchWatchWindow(m, season.isActive))
+    ? await getLeagueStream()
+    : null;
+  // Its player goes only on a card standing alone (the grand final, a round's
+  // last series): one stream can't play under two matches at once.
+  const embed = stream && focus.length === 1 ? streamEmbed(stream) : null;
 
   const [avail, standinRows] = await Promise.all([
     showCheckins
@@ -110,9 +129,16 @@ export async function ThisWeek({
     <Card>
       <CardHeader
         headingLevel={2}
-        title={title}
+        title={finalOnly ? "The grand final" : title}
         action={
-          <Link href="/schedule#fixtures" className={textLink("text-sm")}>
+          <Link
+            href={
+              season.status === "PLAYOFFS"
+                ? "/schedule#playoff-bracket"
+                : "/schedule#fixtures"
+            }
+            className={textLink("text-sm")}
+          >
             Full schedule <LinkArrow />
           </Link>
         }
@@ -124,11 +150,17 @@ export async function ThisWeek({
           blank block under the score. */}
       <CardBody className="grid items-start gap-3 p-3 [grid-template-columns:repeat(auto-fit,minmax(min(17rem,100%),1fr))] sm:p-4">
         {focus.map((m) => {
+          // A slate of one (a playoff round down to its last series, the
+          // grand final) stretched a card built for a third of the width
+          // across all of it: two short rows and a sea of blank. Alone, the
+          // sides face each other instead, home left and away right.
+          const solo = focus.length === 1;
           const pick = pickemControlFor(m, {
             signedIn: myPicks != null,
             canPlay: pickemPlayable,
             pickedTeamId: myPicks?.get(m.id),
           });
+          const watch = stream ? matchWatchWindow(m, season.isActive) : null;
           const pickSide = (teamId: string) => ({
             id: teamId,
             name: teamName.get(teamId) ?? "?",
@@ -168,17 +200,29 @@ export async function ThisWeek({
                       <span aria-hidden>LIVE</span>
                     </span>
                   ) : m.scheduledAt ? (
-                    <LocalTime
-                      ts={m.scheduledAt.getTime()}
-                      variant="full"
-                      initial={fmtWhen(m.scheduledAt) ?? ""}
-                    />
+                    <span>
+                      <LocalTime
+                        ts={m.scheduledAt.getTime()}
+                        variant="full"
+                        initial={fmtWhen(m.scheduledAt) ?? ""}
+                      />
+                      {/* A lone series gets the big clock below instead. */}
+                      {solo ? null : (
+                        <Countdown targetMs={m.scheduledAt.getTime()} />
+                      )}
+                    </span>
                   ) : (
                     <span>Kickoff time not set</span>
                   )}
                 </div>
-                <div className="my-4 flex-1 space-y-3">
-                  {[m.homeTeamId, m.awayTeamId].map((teamId) => {
+                <div
+                  className={cn(
+                    "my-4 flex-1 space-y-3",
+                    solo &&
+                      "sm:grid sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center sm:gap-x-6 sm:space-y-0",
+                  )}
+                >
+                  {[m.homeTeamId, m.awayTeamId].map((teamId, sideIndex) => {
                     const c = checkins(m.id, teamId);
                     const scenario = report?.teams.get(teamId);
                     // The outlook sits UNDER the row, not inside the name's
@@ -187,17 +231,30 @@ export async function ThisWeek({
                     // beside "Win Qualify" instead of the team name.
                     const outlook =
                       scenario && scenario.nextMatchId === m.id ? scenario : null;
-                    return (
+                    // The away side of a lone fixture mirrors the home side.
+                    const mirrored = solo && sideIndex === 1;
+                    const row = (
                       <div key={teamId} className="min-w-0">
-                        <div className="flex min-w-0 items-center gap-2">
+                        <div
+                          className={cn(
+                            "flex min-w-0 items-center gap-2",
+                            solo && "sm:gap-3",
+                            mirrored && "sm:flex-row-reverse sm:text-right",
+                          )}
+                        >
                           <TeamCrest
                             name={teamName.get(teamId) ?? "?"}
                             seed={teamId}
                             logoUrl={teamLogoUrl.get(teamId)}
-                            size={34}
+                            size={solo ? 40 : 34}
                             className="shrink-0 rounded-lg"
                           />
-                          <p className="min-w-0 flex-1 font-semibold leading-snug [overflow-wrap:anywhere]">
+                          <p
+                            className={cn(
+                              "min-w-0 flex-1 font-semibold leading-snug [overflow-wrap:anywhere]",
+                              solo && "sm:text-base",
+                            )}
+                          >
                             {teamName.get(teamId) ?? "?"}
                           </p>
                           {c ? (
@@ -224,7 +281,10 @@ export async function ThisWeek({
                             >
                               <span
                                 aria-hidden
-                                className="flex flex-col items-end gap-1"
+                                className={cn(
+                                  "flex flex-col items-end gap-1",
+                                  mirrored && "sm:items-start",
+                                )}
                               >
                                 <span className="flex gap-0.5">
                                   {Array.from(
@@ -251,28 +311,94 @@ export async function ThisWeek({
                           {m.status === "LIVE" ? (
                             <span
                               aria-hidden
-                              className="ml-1 font-display text-3xl tabular-nums text-fg"
+                              className={cn(
+                                "ml-1 font-display text-3xl tabular-nums text-fg",
+                                // Alone, the score sits between the sides.
+                                solo && "sm:hidden",
+                              )}
                             >
                               {teamId === m.homeTeamId ? m.homeScore : m.awayScore}
                             </span>
                           ) : null}
                         </div>
                         {outlook ? (
-                          // Indented by the crest (34px) plus the gap, so it
-                          // lines up under the team name.
-                          <div className="mt-1 pl-[2.625rem]">
+                          // Indented by the crest plus the gap, so it lines
+                          // up under the team name (mirrored for the away
+                          // side of a lone fixture).
+                          <div
+                            className={cn(
+                              "mt-1",
+                              solo
+                                ? "pl-12 sm:pl-[3.25rem]"
+                                : "pl-[2.625rem]",
+                              mirrored &&
+                                "sm:flex sm:justify-end sm:pl-0 sm:pr-[3.25rem]",
+                            )}
+                          >
                             <PlayoffOutlook scenario={outlook} teamNames={teamName} matchId={m.id} compact />
                           </div>
                         ) : null}
                       </div>
                     );
+                    return sideIndex === 0 && solo ? (
+                      <Fragment key={teamId}>
+                        {row}
+                        <span
+                          aria-hidden
+                          className="hidden text-center font-display text-2xl tabular-nums text-muted sm:block"
+                        >
+                          {m.status === "LIVE" ? (
+                            <span className="text-fg">
+                              {m.homeScore}
+                              <span className="mx-1.5 text-muted">–</span>
+                              {m.awayScore}
+                            </span>
+                          ) : (
+                            "vs"
+                          )}
+                        </span>
+                      </Fragment>
+                    ) : (
+                      row
+                    );
                   })}
                 </div>
+                {solo && m.status !== "LIVE" && m.scheduledAt ? (
+                  <KickoffCountdown
+                    targetMs={m.scheduledAt.getTime()}
+                    tone={m.phase === MATCH_PHASE.FINAL ? "final" : "default"}
+                    nowText={
+                      m.phase === MATCH_PHASE.FINAL
+                        ? "The grand final is on"
+                        : "It's kickoff time"
+                    }
+                    className="mb-4"
+                  />
+                ) : null}
                 <p className="flex items-center justify-between border-t border-line-soft pt-3 text-xs text-muted group-hover/match:text-info">
                   <span>Match details & check-in</span>
                   <span aria-hidden>→</span>
                 </p>
               </Link>
+              {/* Outside the card's link, like the pick tray: a link can't
+                  hold another. */}
+              {stream && watch ? (
+                <WatchLink
+                  stream={stream}
+                  watch={watch}
+                  matchLabel={`${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`}
+                  wrapperClassName="border-t border-line-soft px-4 py-3"
+                />
+              ) : null}
+              {stream && watch && embed ? (
+                <StreamPlayer
+                  embed={embed}
+                  platform={stream.platform}
+                  watch={watch}
+                  matchLabel={`${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`}
+                  className="border-t border-line-soft"
+                />
+              ) : null}
               {pick ? (
                 <PickemTray
                   control={pick}

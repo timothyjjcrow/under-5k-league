@@ -66,12 +66,14 @@ const STATE_MARKERS: {
   { file: "src/components/standings-table.tsx", what: "tiebreaker resolved chip", pattern: />\s*Settled by tiebreaker\s*</g, min: 1 },
   { file: "src/components/standings-table.tsx", what: "playoff cut line", pattern: /Playoff cut/g, min: 1 },
   { file: "src/components/standings-table.tsx", what: "status line", pattern: /<StatusLine\b/g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "win streak chip", pattern: /W\{wins\} streak/g, min: 1 },
+  { file: "src/components/home/week-highlights.tsx", what: "upset chip", pattern: />\s*Upset\s*</g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "live/final status", pattern: /\{status\}\n/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "forfeit marker", pattern: /Ruled result/g, min: 1 },
   { file: "src/components/schedule-weeks.tsx", what: "bye chip", pattern: />\s*Bye\s*</g, min: 1 },
   { file: "src/components/season-grid.tsx", what: "season grid result letters", pattern: /cell\.live\s+\? "Live"/g, min: 1 },
   { file: "src/components/tiebreaker-bracket.tsx", what: "tiebreaker game status", pattern: /statusLabels\[game\.status\]/g, min: 1 },
-  { file: "src/app/matches/[id]/box-score.tsx", what: "report-card grades", pattern: /Report \{overall\}\s*<|\{r\.grade\}\s*<\/b>/g, min: 2 },
+  { file: "src/app/matches/[id]/box-score-line.tsx", what: "report-card grades", pattern: /Report \{report\.overall\}\s*<|\{r\.grade\}\s*<\/b>/g, min: 2 },
   { file: "src/components/leader-board.tsx", what: "You chip", pattern: />\s*You\s*</g, min: 1 },
 ];
 

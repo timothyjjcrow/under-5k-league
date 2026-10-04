@@ -123,7 +123,13 @@ describe("site navigation", () => {
     expect(full.map((section) => section.links.map((l) => l.label))).toEqual([
       ["Scrims", "Fantasy", "Pick'em"],
       ["Leaders", "Hero meta", "Record book", "Compare players"],
-      ["League news", "How it works", "Hall of Fame", "Season history"],
+      [
+        "League news",
+        "How it works",
+        "Rules",
+        "Hall of Fame",
+        "Season history",
+      ],
     ]);
   });
 
@@ -168,6 +174,7 @@ describe("site navigation", () => {
         "/scrims",
         "/news",
         "/how-it-works",
+        "/rules",
       ]) {
         expect(listed, href).toContain(href);
       }

@@ -18,6 +18,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Badge, TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
+import { WatchLink } from "@/components/watch-link";
+import type { LeagueStream, WatchWindow } from "@/lib/broadcast";
 import { cn } from "@/lib/utils";
 import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { scheduleFilterTeamId, weekStartsCollapsed } from "@/lib/schedule";
@@ -63,6 +65,9 @@ export type MatchView = {
   isFinalPhase: boolean;
   standins: string[];
   rsvp?: { home: RsvpSide; away: RsvpSide };
+  /** The league stream on a playoff or final match still to be played
+   *  (broadcast.ts); the row's link decides "soon" or "live" in the browser. */
+  watch?: { stream: LeagueStream; window: WatchWindow } | null;
   /** Pending reschedule: proposer + epoch so the tooltip renders viewer-local. */
   reschedulePending: {
     by: string;
@@ -99,18 +104,32 @@ export function ScheduleWeeks({
   weeks,
   teams,
   initialTeamId,
+  heading,
 }: {
   weeks: WeekView[];
   initialTeamId?: string;
   teams: { id: string; name: string; logoUrl?: string | null }[];
+  /** The section's title, set on one line with the team filter. */
+  heading?: ReactNode;
 }) {
   const params = useSearchParams();
-  const filterTeam = scheduleFilterTeamId(
+  const urlTeam = scheduleFilterTeamId(
     params.get("team"),
     initialTeamId,
     teams.map((team) => team.id),
   );
+  // The URL is the source of truth, but the router applies a pushState in a
+  // transition, and a controlled <select> snaps back to its old value until
+  // then: the pick flickered to "All teams" first. Hold the pick until the
+  // URL moves off the value it was made from (it caught up, or Back).
+  const [picked, setPicked] = useState<{
+    team: string | null;
+    from: string | null;
+  } | null>(null);
+  if (picked && picked.from !== urlTeam) setPicked(null);
+  const filterTeam = picked ? picked.team : urlTeam;
   const setFilterTeam = (team: string | null) => {
+    setPicked({ team, from: urlTeam });
     const url = new URL(window.location.href);
     url.searchParams.set("team", team ?? "all");
     window.history.pushState(null, "", url.pathname + url.search + url.hash);
@@ -160,55 +179,39 @@ export function ScheduleWeeks({
   }, [weeks, filterTeam]);
 
   return (
-    <div className="space-y-6">
-      {teams.length > 1 ? (
-        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-line-soft bg-surface px-4 py-3 sm:px-5">
-          <label className="min-w-0 flex-1 basis-56 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted sm:max-w-sm">
-            Show matches for
-            <select
-              value={filterTeam ?? "all"}
-              onChange={(event) =>
-                setFilterTeam(
-                  event.target.value === "all" ? null : event.target.value,
-                )
-              }
-              className="mt-1.5 block min-h-11 w-full rounded-lg border border-line bg-surface-2 px-3 text-sm font-medium normal-case tracking-normal text-fg"
-            >
-              <option value="all">All teams</option>
-              {teams.map((team) => (
-                <option key={team.id} value={team.id}>
-                  {team.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div
-            className="hidden min-h-11 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted sm:ml-auto sm:flex"
-            aria-label="Match status legend"
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                className="h-1.5 w-1.5 rounded-full bg-success"
-                aria-hidden
-              />
-              Final score
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                className="h-1.5 w-1.5 rounded-full bg-danger"
-                aria-hidden
-              />
-              Live
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-info" aria-hidden />
-              Upcoming
-            </span>
-          </div>
+    <div className="space-y-4">
+      {/* The title and the filter share one row (two on a phone) instead of
+          a heading over a bordered filter card over the weeks. Each card
+          names its status in words, so the dot legend that sat beside the
+          filter went. */}
+      {heading || teams.length > 1 ? (
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          {heading}
+          {teams.length > 1 ? (
+            <label className="flex w-full min-w-0 items-center gap-2 text-sm text-muted sm:w-auto">
+              <span className="shrink-0">Show matches for</span>
+              <select
+                value={filterTeam ?? "all"}
+                onChange={(event) =>
+                  setFilterTeam(
+                    event.target.value === "all" ? null : event.target.value,
+                  )
+                }
+                className="block min-h-11 w-full min-w-0 rounded-lg border border-line bg-surface-2 px-3 text-sm font-medium text-fg sm:w-56 lg:min-h-10"
+              >
+                <option value="all">All teams</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="space-y-5">
+      <div className="space-y-3">
         {visibleWeeks.map((w, index) => {
           const completed = filterTeam
             ? w.matches.filter((match) => match.done).length
@@ -248,7 +251,10 @@ export function ScheduleWeeks({
                 // the sticky site header.
                 id={w.isCurrent ? "this-week" : undefined}
                 className={cn(
-                  "overflow-hidden rounded-xl border bg-surface",
+                  // @container: the week's cards go two and three across by
+                  // the week's own width, which is the page's full width on
+                  // playoff pages and a column beside the table mid-season.
+                  "@container overflow-hidden rounded-xl border bg-surface",
                   w.isCurrent
                     ? "scroll-mt-24 border-accent/50"
                     : "border-line-soft",
@@ -272,7 +278,7 @@ export function ScheduleWeeks({
                         aria-label={w.label ?? `Week ${w.week}`}
                         aria-expanded={!collapsed}
                         onClick={() => setWeekCollapsed(w.week, !collapsed)}
-                        className="flex min-h-11 items-center gap-2 rounded text-base font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+                        className="flex min-h-11 items-center gap-2 rounded text-left text-base font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
                       >
                         <span>{w.label ?? `Week ${w.week}`}</span>
                         <svg
@@ -361,13 +367,14 @@ export function ScheduleWeeks({
                     <div
                       className={cn(
                         "grid grid-cols-1 gap-px bg-line-soft",
-                        w.matches.length > 1 && "lg:grid-cols-2",
-                        w.matches.length > 2 && "xl:grid-cols-3",
+                        w.matches.length > 1 && "@2xl:grid-cols-2",
+                        w.matches.length > 2 && "@5xl:grid-cols-3",
                       )}
                     >
                       {w.matches.map((m) => (
                         <MatchRow key={m.id} match={m} />
                       ))}
+                      <GridFillers count={w.matches.length} />
                     </div>
                     {byeRow}
                   </div>
@@ -379,6 +386,28 @@ export function ScheduleWeeks({
       </div>
     </div>
   );
+}
+
+/**
+ * Surface-coloured blanks for a week's last, part-filled row of cards. The
+ * grid draws its hairlines as the gap colour between cards (gap-px over
+ * bg-line-soft), so an empty cell showed as a grey block beside an odd
+ * card. Two across from @2xl, three from @5xl, as in the grid above.
+ */
+function GridFillers({ count }: { count: number }) {
+  const two = count > 1 ? count % 2 : 0;
+  const three = count > 2 ? (3 - (count % 3)) % 3 : 0;
+  return Array.from({ length: Math.max(two, three) }, (_, i) => (
+    <div
+      key={i}
+      aria-hidden
+      className={cn(
+        "hidden bg-surface",
+        i < two && "@2xl:block",
+        i < three ? "@5xl:block" : "@5xl:hidden",
+      )}
+    />
+  ));
 }
 
 /** URL flag that keeps the regular-season fold open across a match visit. */
@@ -446,7 +475,7 @@ export function ScheduleFold({
       }}
       className="group scroll-mt-24 rounded-xl border border-line bg-surface/40 open:bg-surface/60"
     >
-      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-5 py-4 transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-4 py-3 transition-colors hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
         <div className="min-w-0">
           <h2 className="text-lg font-semibold leading-snug">{title}</h2>
           {description ? (
@@ -464,7 +493,7 @@ export function ScheduleFold({
           <path d="m6 9 6 6 6-6" />
         </svg>
       </summary>
-      <div className="border-t border-line-soft p-3 sm:p-5">{children}</div>
+      <div className="border-t border-line-soft p-3 sm:p-4">{children}</div>
     </details>
   );
 }
@@ -735,19 +764,18 @@ function MatchRow({ match: m }: { match: MatchView }) {
                 {side.name}
               </span>
               {side.paths && side.paths.length > 0 ? (
-                <dl className="space-y-1 pb-2 text-[11px] leading-relaxed">
+                // The outcomes flow as one wrapping line of pairs instead
+                // of a row each: three rows per side made a two-team card
+                // about 350px tall on a phone.
+                <dl className="flex flex-wrap gap-x-3 gap-y-0.5 pb-2 text-[11px] leading-relaxed">
                   {side.paths.map((path) => (
-                    <div
-                      key={path.key}
-                      className={cn(
-                        "grid gap-1.5",
-                        path.key === "any"
-                          ? "grid-cols-[auto_minmax(0,1fr)]"
-                          : "grid-cols-[2.5rem_minmax(0,1fr)]",
-                      )}
-                    >
-                      <dt className="font-medium text-accent">{path.label}</dt>
-                      <dd className="text-muted [overflow-wrap:anywhere]">{path.description}</dd>
+                    <div key={path.key} className="flex min-w-0 gap-1">
+                      <dt className="shrink-0 font-medium text-accent">
+                        {path.label}
+                      </dt>
+                      <dd className="min-w-0 text-muted [overflow-wrap:anywhere]">
+                        {path.description}
+                      </dd>
                     </div>
                   ))}
                 </dl>
@@ -804,6 +832,16 @@ function MatchRow({ match: m }: { match: MatchView }) {
             </span>
             <span aria-hidden>&nbsp;→</span>
           </Link>
+        ) : null}
+        {m.watch ? (
+          // Above the card's stretched link (relative z-10), like Report
+          // result.
+          <WatchLink
+            stream={m.watch.stream}
+            watch={m.watch.window}
+            variant="row"
+            matchLabel={`${m.homeName} vs ${m.awayName}`}
+          />
         ) : null}
         <Link
           href={`/matches/${m.id}`}

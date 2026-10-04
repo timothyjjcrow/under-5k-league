@@ -1,14 +1,20 @@
 import Link from "next/link";
+import { matchWatchWindow, streamEmbed } from "@/lib/broadcast";
 import { prisma } from "@/lib/prisma";
+import { getLeagueStream } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchResultsOpen } from "@/lib/league-lifecycle";
 import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
 import { teamHueVar } from "@/lib/team-hues";
+import { teamTint } from "@/lib/team-tint";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
+import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
+import { StreamPlayer } from "@/components/stream-player";
+import { WatchLink } from "@/components/watch-link";
 import {
   Badge,
   Card,
@@ -65,9 +71,36 @@ export async function MatchScoreboard({
     match.status === "LIVE" ||
     games.length > 0 ||
     match.homeScore + match.awayScore > 0;
+  // Everyone gets the ticking clock before kickoff, not only the two teams'
+  // players (their check-in banner has its own chip). An archived season's
+  // unplayed fixture never ticks.
+  const kickoffAt =
+    match.scheduledAt &&
+    match.season.isActive &&
+    !hasSeriesScore &&
+    !resultPending
+      ? match.scheduledAt.getTime()
+      : null;
+  // The league stream on a playoff or final match still to be played:
+  // where it will be streamed, then "Live now" and a player (broadcast.ts).
+  const watch = matchWatchWindow(match, match.season.isActive);
+  const stream = watch ? await getLeagueStream() : null;
+  const embed = stream ? streamEmbed(stream) : null;
 
   return (
     <Card className="relative overflow-hidden">
+      {/* Each half washed faintly in its team's colour, clearing before the
+          score in the middle. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/2"
+        {...teamTint(match.homeTeamId, "to right")}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-1/2"
+        {...teamTint(match.awayTeamId, "to left")}
+      />
       <div
         aria-hidden
         className="hero-grid pointer-events-none absolute inset-0 opacity-40"
@@ -89,7 +122,7 @@ export async function MatchScoreboard({
           backgroundColor: `hsl(${teamHueVar(match.awayTeamId)} 70% 50% / 0.24)`,
         }}
       />
-      <CardBody className="relative space-y-6 px-3 py-6 sm:px-6 sm:py-8">
+      <CardBody className="relative space-y-4 px-3 py-5 sm:space-y-5 sm:px-6 sm:py-6">
         {/* The page's h1 names the fixture, like its tab title and link
             preview, so someone moving by headings knows which match this
             is. On screen the team names right below say the same. */}
@@ -129,6 +162,7 @@ export async function MatchScoreboard({
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-8">
           <TeamSide
+            side="home"
             name={match.homeTeam.name}
             teamId={match.homeTeamId}
             logoUrl={match.homeTeam.logoUrl}
@@ -182,22 +216,35 @@ export async function MatchScoreboard({
             </span>
           </div>
           <TeamSide
+            side="away"
             name={match.awayTeam.name}
             teamId={match.awayTeamId}
             logoUrl={match.awayTeam.logoUrl}
             win={match.winnerTeamId === match.awayTeamId}
           />
         </div>
+        {kickoffAt != null ? (
+          <KickoffCountdown
+            targetMs={kickoffAt}
+            tone={match.phase === "FINAL" ? "final" : "default"}
+            nowText={
+              match.phase === "FINAL"
+                ? "The grand final is on"
+                : "It's kickoff time"
+            }
+          />
+        ) : null}
         <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-3 border-t border-line/60 pt-4 text-center text-sm text-muted">
           {match.scheduledAt ? (
             <LocalTime
               ts={match.scheduledAt.getTime()}
               variant="full"
-              initial={formatMatchTime(match.scheduledAt, "full")}
+              initial={formatLeagueMatchTime(match.scheduledAt, "full")}
             />
           ) : (
             <span>Kickoff time TBD</span>
           )}
+          {watch && stream ? <WatchLink stream={stream} watch={watch} /> : null}
           {pickVerdict ? (
             <PickemTray
               control={pickVerdict}
@@ -238,6 +285,15 @@ export async function MatchScoreboard({
           ) : null}
         </div>
       </CardBody>
+      {watch && stream && embed ? (
+        <StreamPlayer
+          embed={embed}
+          platform={stream.platform}
+          watch={watch}
+          matchLabel={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
+          className="border-t border-line"
+        />
+      ) : null}
       {games.length > 0 ? (
         <div className="relative flex flex-wrap justify-center gap-2 border-t border-line bg-bg/30 px-3 py-3">
           {games.map((game, index) => {
@@ -282,22 +338,36 @@ export async function MatchScoreboard({
   );
 }
 
+/**
+ * A team's crest and name. Stacked (crest over name) up to lg; from lg they
+ * sit side by side with the crest next to the score, mirrored for the away
+ * side, so the scoreboard is one row of name, crest, score, crest, name.
+ */
 function TeamSide({
+  side,
   name,
   teamId,
   logoUrl,
   win,
 }: {
+  side: "home" | "away";
   name: string;
   teamId: string;
   logoUrl: string | null;
   win: boolean;
 }) {
   return (
-    <div className="flex min-w-0 flex-col items-center gap-3 self-stretch text-center">
+    <div
+      className={cn(
+        "flex min-w-0 flex-col items-center gap-3 self-stretch text-center lg:gap-4 lg:self-center",
+        side === "home"
+          ? "lg:flex-row-reverse lg:text-right"
+          : "lg:flex-row lg:text-left",
+      )}
+    >
       <div
         className={cn(
-          "rounded-2xl border p-2 shadow-lg shadow-black/15",
+          "shrink-0 rounded-2xl border p-2 shadow-lg shadow-black/15",
           win ? "border-accent/40 bg-accent/5" : "border-line/60 bg-surface/60",
         )}
       >
@@ -312,7 +382,7 @@ function TeamSide({
       </div>
       <Link
         href={`/teams/${teamId}`}
-        className="min-h-11 max-w-full content-center font-display text-base font-semibold leading-tight text-fg [overflow-wrap:anywhere] hover:text-info sm:text-2xl"
+        className="min-h-11 min-w-0 max-w-full content-center font-display text-base font-semibold leading-tight text-fg [overflow-wrap:anywhere] hover:text-info sm:text-2xl"
       >
         {name}
       </Link>

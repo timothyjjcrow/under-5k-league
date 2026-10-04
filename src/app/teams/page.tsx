@@ -254,7 +254,7 @@ export default async function TeamsPage() {
   const powerFrozen = postseason;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageTitle
         title="Teams"
         subtitle={`${season.name} · ${teams.length} teams`}
@@ -276,14 +276,17 @@ export default async function TeamsPage() {
         }
       />
 
-      <section aria-label="Team rosters" className="space-y-4">
+      <section aria-label="Team rosters" className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Rosters</h2>
+          {/* The title's subtitle already counts the teams. */}
           <span className="text-xs text-muted">
-            {teams.length} teams · {season.teamSize} players per roster
+            {season.teamSize} players per roster
           </span>
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* Three across on a desktop: two left a 12-team league four
+            screens tall, each card a wide band with its chips on the left. */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {ordered.map((t) => {
             const rank = rankOf.get(t.id) ?? 0;
             const seed = playoffStatus.size > 0 ? seedOf.get(t.id) : undefined;
@@ -343,13 +346,13 @@ export default async function TeamsPage() {
                       : "border-t-cyan-300/40",
                 )}
               >
-                <div className="border-b border-line-soft bg-gradient-to-br from-surface-2/65 to-surface px-4 py-4 sm:px-5">
+                <div className="border-b border-line-soft bg-gradient-to-br from-surface-2/65 to-surface px-4 py-3">
                   <div
                     className={cn(
                       "grid items-center gap-3",
                       showBudget
-                        ? "grid-cols-[4rem_minmax(0,1fr)_auto]"
-                        : "grid-cols-[4rem_minmax(0,1fr)]",
+                        ? "grid-cols-[3.5rem_minmax(0,1fr)_auto]"
+                        : "grid-cols-[3.5rem_minmax(0,1fr)]",
                     )}
                   >
                     {/* The crest opens the team too. Only the name is
@@ -364,14 +367,14 @@ export default async function TeamsPage() {
                         name={t.name}
                         seed={t.id}
                         logoUrl={t.logoUrl}
-                        size={64}
+                        size={56}
                         imageFit="cover"
                       />
                     </Link>
                     <div className="min-w-0">
                       <Link
                         href={`/teams/${t.id}`}
-                        className="inline-flex min-h-11 items-center gap-1.5 font-display text-xl font-semibold leading-tight hover:text-info sm:text-2xl [overflow-wrap:anywhere]"
+                        className="inline-flex min-h-11 items-center gap-1.5 font-display text-xl font-semibold leading-tight hover:text-info [overflow-wrap:anywhere]"
                       >
                         <span>{t.name}</span>
                         {isChampion ? (
@@ -445,7 +448,7 @@ export default async function TeamsPage() {
                     />
                   ) : null}
                 </div>
-                <CardBody className="p-4 sm:p-5">
+                <CardBody className="p-4">
                   {/* Custom padding must reset PlayerLink's TAP_SAFE outdent so
                       wrapped roster links never overlap another tap target. */}
                   {t.members.length === 0 ? (

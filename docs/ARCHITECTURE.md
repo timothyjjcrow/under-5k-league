@@ -139,7 +139,8 @@ Draft-time acknowledgement remains advisory, but it is available throughout
 the whole setup capability, including DRAFT/NOT_STARTED.
 
 **Live auction draft.** Pure auction math in `src/lib/draft.ts`
-(`maxBid` reserve rule, `canNominate`/`canBid`, snake rotation); the
+(`maxBid` reserve rule, `canNominate`/`canBid`, the `nextNominatorIndex`
+rotation, not a snake); the
 transactional engine in `src/lib/draft-service.ts` (`nominatePlayer`,
 `placeBid`, `resolveExpiredNomination`, `resolveStalledNomination`,
 `getDraftState`). Every state response is one Serializable snapshot containing
@@ -631,7 +632,7 @@ Rules that follow from the layering:
 
 ## 5. Page inventory
 
-25 pages. "Nav from X" = the link appears from that phase onward
+26 pages. "Nav from X" = the link appears from that phase onward
 (`src/lib/site-nav.ts`, the one page list behind the header, Explore, the
 phone tab bar and the footer); most pages still render if visited directly.
 
@@ -661,6 +662,7 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/inhouse/history` | Complete completed-lobby archive, 100 rows per `?page=N`, exact-row admin void                 | Always                                                                                             | Stable formation ordering; authoritative played-time fallback                                                 |
 | `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Always: Explore (also the phone tab bar's sheet), footer                                           | `NewsPost`; create request receipts; `NewsMedia`                                                              |
 | `/how-it-works`    | One-screen explainer: steps, who can join, match night, standins, FAQ, one phase-aware button  | Always: Explore, footer, signups hero; `/features` redirects here                                  | `howItWorksAction` (join / standin / Discord), `seasonMatchNightLabel`                                        |
+| `/rules`           | The league's rules by section, every number from the season's settings or the code             | Always: Explore (League group), `/how-it-works`, the match page's How to host line                 | `leagueRules` (pure), `announcedMatchNight`; the active season, else the latest                               |
 | `/admin`           | The control panel (§8)                                                                         | Admin only                                                                                         | `loadSeasonAdminData`                                                                                         |
 
 API routes (19): `/api/auth/steam` + `/callback`, `/api/auth/discord` +
@@ -980,6 +982,13 @@ revision, exact phase restored, legacy live auction parked); and
 adjacent JSON is explicitly not recovery; production deletion additionally
 requires a recent signed full-database backup receipt. While another season is active,
 reactivation is visibly locked and points the admin to the handoff controls.
+
+Off-page and read-only, each admin-only with the same 404 for everyone else:
+`/admin/activity` (the full admin log), `/admin/data-quality` (imported-game
+box-score issues) and `/admin/health` (one season's signups and seats, check-in
+rate, standin bookings and their lead time, Discord links and posts, and new
+accounts per week, as counts; `?season=` picks any season;
+`league-health-service.ts` over the pure `league-health.ts`).
 
 ## 9. External integrations
 

@@ -156,14 +156,19 @@ const memberRouteBlocked = new Map<string, number>();
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Wait out a known-empty bucket. False = the wait exceeds the cap — don't
+/** Wait out a known-empty bucket. False = the total wait exceeds the cap — don't
  *  spend a request on a guaranteed 429. */
 async function memberGateWait(guildId: string): Promise<boolean> {
-  const wait = (memberRouteBlocked.get(guildId) ?? 0) - Date.now();
-  if (wait <= 0) return true;
-  if (wait > RATE_WAIT_MAX_MS) return false;
-  await sleep(wait + RATE_GATE_SLOP_MS);
-  return true;
+  const deadline = Date.now() + RATE_WAIT_MAX_MS;
+  for (;;) {
+    const blockedUntil = memberRouteBlocked.get(guildId) ?? 0;
+    const wait = blockedUntil - Date.now();
+    if (wait <= 0) return true;
+    if (blockedUntil > deadline) return false;
+    await sleep(wait + RATE_GATE_SLOP_MS);
+    // An in-flight response can extend the gate while we sleep. Recheck it
+    // without giving repeated extensions a fresh wait budget.
+  }
 }
 
 function noteMemberRoute(guildId: string, blockedForSec: number): void {

@@ -5,6 +5,7 @@ import { buildCalendar } from "@/lib/ics";
 import { MATCH_PHASE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
+import { seriesEstimateMinutes } from "@/lib/series-lengths";
 import { resolveSiteUrl } from "@/lib/site-url";
 
 export const dynamic = "force-dynamic";
@@ -123,8 +124,7 @@ export async function GET(req: NextRequest) {
       // replaces its copy instead of keeping the old kickoff.
       sequence: m.scheduleRevision,
       start: m.scheduledAt as Date,
-      // One rough hour per possible game, plus warm-up slack.
-      durationMinutes: m.bestOf * 60 + 30,
+      durationMinutes: seriesEstimateMinutes(m.bestOf),
       summary: `${matchRoundLabel(m, playoffRounds)}: ${teamName.get(m.homeTeamId) ?? "?"} vs ${teamName.get(m.awayTeamId) ?? "?"}`,
       description: `${season.name} · best of ${m.bestOf}`,
       url: `${site}/matches/${m.id}`,

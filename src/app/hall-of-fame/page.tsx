@@ -15,10 +15,13 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { shareMetadata } from "@/lib/share-metadata";
+import { SectionNav } from "@/components/section-nav";
+import { cn } from "@/lib/utils";
 import {
   Avatar,
   Card,
   CardBody,
+  CardHeader,
   EmojiLead,
   EmptyState,
   buttonClasses,
@@ -56,46 +59,48 @@ function countLine(count: number | undefined, one: string, many: string): string
   return `${count} ${count === 1 ? one : many}`;
 }
 
+/**
+ * One career board: the site's card header, then one ruled line per place
+ * (rank, avatar, name over the detail, figure), the same shape as the
+ * Leaders boards. Each place used to be a padded box of its own, about 66px.
+ */
 function BoardCard({ board, userOf }: { board: Board; userOf: Map<string, User> }) {
   return (
-    <Card className="h-full">
-      <CardBody className="h-full">
-        <div className="mb-4">
-          <h3 className="font-display text-xl font-bold"><EmojiLead text={board.title} /></h3>
-          <p className="mt-1 text-sm leading-relaxed text-muted">{board.subtitle}</p>
-        </div>
-        {board.top.rows.length === 0 ? (
+    <Card className="h-full overflow-hidden">
+      <CardHeader title={<EmojiLead text={board.title} />} subtitle={board.subtitle} />
+      {board.top.rows.length === 0 ? (
+        <CardBody>
           <p className="rounded-lg bg-surface-2/50 p-4 text-sm text-muted">Nobody has qualified yet.</p>
-        ) : (
-          <>
-            <ol className="space-y-2">
-              {board.top.rows.map((row) => {
-                const user = userOf.get(row.userId);
-                const detail = board.detail(row.userId);
-                const first = row.place === 1;
-                return (
-                  <li key={row.userId} className={`flex min-w-0 items-center gap-3 rounded-lg px-3 py-3 ${first ? "border border-accent/30 bg-accent/10" : "bg-surface-2/50"}`}>
-                    <span className={`w-5 shrink-0 text-center font-mono text-sm font-bold tabular-nums ${first ? "text-accent" : "text-muted"}`}>{row.place}</span>
-                    <Avatar name={user?.name ?? "Former player"} src={user?.avatar} size={32} />
-                    <div className="min-w-0 flex-1">
-                      {user ? (
-                        <PlayerLink userId={row.userId} className="block truncate text-sm font-semibold">{user.name}</PlayerLink>
-                      ) : <span className="block truncate text-sm font-semibold text-muted">Former player</span>}
-                      {detail ? <p className="truncate text-xs text-muted">{detail}</p> : null}
-                    </div>
-                    <strong className="shrink-0 font-display text-xl tabular-nums">{board.format(row.value)}</strong>
-                  </li>
-                );
-              })}
-            </ol>
-            {board.top.moreTied > 0 ? (
-              <p className="mt-2 px-3 text-xs text-muted">
-                +{board.top.moreTied} more tied at {board.format(board.top.rows[board.top.rows.length - 1].value)}
-              </p>
-            ) : null}
-          </>
-        )}
-      </CardBody>
+        </CardBody>
+      ) : (
+        <>
+          <ol className="divide-y divide-line-soft">
+            {board.top.rows.map((row) => {
+              const user = userOf.get(row.userId);
+              const detail = board.detail(row.userId);
+              const first = row.place === 1;
+              return (
+                <li key={row.userId} className={cn("flex min-w-0 items-center gap-3 px-4 py-2", first && "bg-accent/[0.06]")}>
+                  <span className={cn("w-5 shrink-0 text-center font-mono text-sm font-bold tabular-nums", first ? "text-accent" : "text-muted")}>{row.place}</span>
+                  <Avatar name={user?.name ?? "Former player"} src={user?.avatar} size={28} />
+                  <div className="min-w-0 flex-1">
+                    {user ? (
+                      <PlayerLink userId={row.userId} className="block truncate text-sm font-semibold">{user.name}</PlayerLink>
+                    ) : <span className="block truncate text-sm font-semibold text-muted">Former player</span>}
+                    {detail ? <p className="truncate text-xs text-muted">{detail}</p> : null}
+                  </div>
+                  <strong className={cn("shrink-0 font-display text-lg tabular-nums", first && "text-accent")}>{board.format(row.value)}</strong>
+                </li>
+              );
+            })}
+          </ol>
+          {board.top.moreTied > 0 ? (
+            <p className="border-t border-line-soft px-4 py-2 text-xs text-muted">
+              +{board.top.moreTied} more tied at {board.format(board.top.rows[board.top.rows.length - 1].value)}
+            </p>
+          ) : null}
+        </>
+      )}
     </Card>
   );
 }
@@ -291,7 +296,7 @@ export default async function HallOfFamePage() {
   const shownSections = sections.filter(([, , shown]) => shown);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <PageTitle
         title="Hall of Fame"
         subtitle="The teams that lifted the trophy and the players who built lasting careers."
@@ -304,16 +309,17 @@ export default async function HallOfFamePage() {
       />
 
       {shownSections.length > 1 ? (
-        <nav aria-label="Hall of Fame sections" className="flex flex-wrap gap-2">
-          {shownSections.map(([id, label]) => (
-            <a key={id} href={`#${id}`} className="rounded-full border border-line bg-surface px-3 py-2 text-sm font-medium text-muted hover:border-accent/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{label} ↓</a>
-          ))}
-        </nav>
+        <SectionNav
+          label="Hall of Fame sections"
+          items={shownSections.map(([id, label]) => ({ id, label }))}
+        />
       ) : null}
 
       <section id="champions" className="scroll-mt-24 space-y-3">
         <SectionTitle aside="Only verified completed-season titles">Champion history</SectionTitle>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* A lone last champion takes the whole row (with one title so
+            far, the card sat in the left half of an empty row). */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:[&>:last-child:nth-child(odd)]:col-span-2">
           {champions.map(({ season, teamId }) => {
             const team = teamOf.get(teamId);
             const roster = memberships.filter((member) => member.teamId === teamId);

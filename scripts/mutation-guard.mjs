@@ -57,6 +57,7 @@ import ts from "typescript";
 import { assertPostgresTestUrl } from "./test-db-safety.mjs";
 import {
   discoverClaims,
+  failedTestsFromReport,
   killerFromReport,
   measureMutant,
   resolveKillers,
@@ -193,7 +194,10 @@ const EQUIVALENT = new Set([
   // concurrent lock, decline, withdraw or result on either row forces P2034
   // with or without the copied PENDING / SCHEDULED predicates. The PG tests
   // pin one winner of N accepts, accept vs withdraw, accept vs result, two
-  // captains locking different times, and two last answers racing.
+  // captains locking different times, and two last answers racing; the
+  // `reschedule.respondReschedule.beforeAccept` seam (in lockInTx, before
+  // this call) pins result-vs-retime, and fails only with both the SCHEDULED
+  // predicate and SERIALIZABLE removed.
   "src/lib/reschedule-service.ts::retimeToOption::status#1",
   "src/lib/reschedule-service.ts::retimeToOption::status#2",
   // These admin correction/phase claims were expanded while their authority
@@ -823,6 +827,11 @@ if (preflight.kind === "test-failure") {
       "caught and the result would be meaningless. Fix the suite first:\n" +
       "  npm run test:pg",
   );
+  const failed = failedTestsFromReport(preflight.report, process.cwd());
+  if (failed.length > 0) {
+    console.error("\nFailed on unmutated source:");
+    for (const line of failed) console.error(`  - ${line}`);
+  }
   process.exit(2);
 }
 

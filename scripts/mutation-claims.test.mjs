@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   discoverClaims,
+  failedTestsFromReport,
   killerFromReport,
   measureMutant,
   resolveKillers,
@@ -330,6 +331,51 @@ test("the killer is the first file with a failed test", () => {
     report(["/elsewhere/test/integration/a.itest.ts", ["failed"]]),
   ]) {
     assert.equal(killerFromReport(bad, "/repo"), null);
+  }
+});
+
+test("a failed run names each failed test and why", () => {
+  const vitestReport = {
+    testResults: [
+      {
+        name: "/repo/test/integration/a.itest.ts",
+        status: "passed",
+        assertionResults: [{ status: "passed", fullName: "a passes" }],
+      },
+      {
+        name: "/repo/test/integration/race.itest.ts",
+        status: "failed",
+        assertionResults: [
+          { status: "passed", fullName: "race one" },
+          {
+            status: "failed",
+            fullName: "playoffs › race two",
+            failureMessages: ["\nAssertionError: expected 1 to be 2\n    at x.ts:1"],
+          },
+          { status: "failed", fullName: " ", failureMessages: [] },
+        ],
+      },
+      {
+        name: "/repo/test/integration/broken.itest.ts",
+        status: "failed",
+        message: "Error: Cannot find module './gone'",
+        assertionResults: [],
+      },
+      { name: "/repo/test/integration/hook.itest.ts", status: "failed" },
+    ],
+  };
+  assert.deepEqual(failedTestsFromReport(vitestReport, "/repo"), [
+    "test/integration/race.itest.ts › playoffs › race two: AssertionError: expected 1 to be 2",
+    "test/integration/race.itest.ts › (unnamed test)",
+    "test/integration/broken.itest.ts: Error: Cannot find module './gone'",
+    "test/integration/hook.itest.ts: failed before any test ran",
+  ]);
+  assert.deepEqual(failedTestsFromReport(vitestReport, "/repo", 1), [
+    "test/integration/race.itest.ts › playoffs › race two: AssertionError: expected 1 to be 2",
+    "… and 3 more",
+  ]);
+  for (const bad of [null, {}, { testResults: "x" }, report(["/repo/a.itest.ts", ["passed"]])]) {
+    assert.deepEqual(failedTestsFromReport(bad, "/repo"), []);
   }
 });
 

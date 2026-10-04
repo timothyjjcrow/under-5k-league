@@ -19,11 +19,11 @@ import {
 import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { matchRoundLabel } from "@/lib/schedule";
-import { formatMatchTime } from "@/lib/match-time";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
 import Link from "next/link";
 import { heroById } from "@/lib/heroes";
-import { formatNetWorth } from "@/lib/utils";
+import { cn, formatNetWorth } from "@/lib/utils";
 import {
   Avatar,
   Card,
@@ -327,7 +327,7 @@ export default async function ComparePage({
       : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageTitle
         title="Compare players"
         subtitle="Pick two players — careers, heroes, and their head-to-head"
@@ -414,9 +414,14 @@ export default async function ComparePage({
           description="A player is exactly even with themselves. Pick a rival."
         />
       ) : (
-        <>
+        // From lg the career numbers take the left column and the
+        // head-to-head and hero cards stack on the right, so the two players'
+        // figures sit half a page apart instead of a full one. The DOM (and a
+        // phone) keeps head-to-head, numbers, heroes; `auto_1fr` rows let the
+        // taller numbers card grow the heroes' row, not the head-to-head's.
+        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2 lg:grid-rows-[auto_1fr]">
           {met && (met.opposite.games > 0 || met.together.games > 0) && (
-            <Card>
+            <Card className="min-w-0 lg:col-start-2 lg:row-start-1">
               <CardHeader headingLevel={2} title="Head-to-head" />
               <CardBody className="space-y-1 text-sm">
                 {met.opposite.games > 0 && (
@@ -454,7 +459,7 @@ export default async function ComparePage({
           )}
 
           {met && met.opposite.games === 0 && met.together.games === 0 ? (
-            <Card>
+            <Card className="min-w-0 lg:col-start-2 lg:row-start-1">
               <CardHeader headingLevel={2} title="Head-to-head" />
               <CardBody>
                 <p className="text-sm text-muted">
@@ -465,16 +470,24 @@ export default async function ComparePage({
             </Card>
           ) : null}
 
-          <Card>
+          <Card className="min-w-0 lg:col-start-1 lg:row-span-2 lg:row-start-1">
             <CardHeader
               headingLevel={2}
               title="Career numbers"
               subtitle="All seasons, every imported game"
             />
             <CardBody>
+              {/* Each name heads its own column of figures: A's at the left
+                  edge, B's mirrored to the right edge. */}
               <div className="mb-4 grid grid-cols-2 gap-4">
-                {[a, b].map((u) => (
-                  <div key={u.id} className="flex min-w-0 items-center gap-2.5">
+                {[a, b].map((u, i) => (
+                  <div
+                    key={u.id}
+                    className={cn(
+                      "flex min-w-0 items-center gap-2.5",
+                      i === 1 && "flex-row-reverse text-right",
+                    )}
+                  >
                     <Avatar name={u.name} src={u.avatar} size={36} />
                     <span className="min-w-0">
                       {/* Two lines before a cut: two-up on a phone, one
@@ -529,7 +542,7 @@ export default async function ComparePage({
             </CardBody>
           </Card>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:col-start-2 lg:row-start-2">
             {[
               { u: a, s: sumA! },
               { u: b, s: sumB! },
@@ -564,7 +577,7 @@ export default async function ComparePage({
               </Card>
             ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -603,7 +616,7 @@ function SeriesLinks({
           <LocalTime
             ts={s.playedAt.getTime()}
             variant="date"
-            initial={formatMatchTime(s.playedAt, "date")}
+            initial={formatLeagueMatchTime(s.playedAt, "date")}
           />
         </span>
       ) : null}
