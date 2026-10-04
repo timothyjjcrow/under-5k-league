@@ -262,7 +262,10 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
   the binary still serving** (it keeps serving while they run). Breaking
   changes go expand, deploy, backfill, contract. `scripts/migration-safety.mjs`
   refuses destructive SQL and pins each migration's hash in `MIGRATION_SHA256`:
-  add yours there, never edit an applied one.
+  add yours there, never edit an applied one. Two more lists name every
+  migration in order: `src/lib/migration-safety.test.ts` and both lists in
+  `scripts/migration-rehearsal.mjs` (CI's `db:migrate:rehearse`, which only
+  the Postgres job runs). Add a new migration to all three.
 - **Never `db push` production.** Only `npm run db:migrate:release` applies
   migrations there; `npm run db:push` refuses non-local databases.
 - **Add each new required production env var to
