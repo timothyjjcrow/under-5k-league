@@ -13,6 +13,7 @@ import {
   type HomeViewer,
 } from "@/components/home/hero";
 import { InhouseStrip } from "@/components/home/inhouse-strip";
+import { MatchNightPollCard } from "@/components/home/match-night-poll";
 import { LeagueNews, PinnedNotices } from "@/components/home/news";
 import { OffseasonView } from "@/components/home/offseason-view";
 import {
@@ -309,6 +310,12 @@ export default async function Home() {
           placeholder. */}
       <Suspense fallback={null}>
         <PinnedNotices />
+      </Suspense>
+      {/* Season-independent, like news: an open match-night poll (or one
+          that closed this week) sits above the phase's own sections, since
+          it's the one thing here with a deadline everyone can act on. */}
+      <Suspense fallback={null}>
+        <MatchNightPollCard user={user} />
       </Suspense>
       {view}
       {seasonDashboard ? null : (

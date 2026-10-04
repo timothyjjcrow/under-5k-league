@@ -137,6 +137,8 @@ import { formatLeagueTime } from "@/lib/zoned-time";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
+import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
+import { loadLatestPoll } from "@/lib/match-night-poll-service";
 import {
   ANNOUNCE_FAILED_PREFIX,
   getSetting,
@@ -523,6 +525,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     // important in the offseason, when inhouse is the live mode.
     { id: "adm-discord", label: "Discord" },
     { id: "adm-activity", label: "Activity" },
+    { id: "adm-poll", label: "Match night poll" },
     { id: "adm-news", label: "News" },
     { id: "adm-security", label: "Security" },
     ...(handoffFirst
@@ -709,6 +712,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <AdminActivity />
         </Suspense>
       </div>
+
+      {/* Season-independent, like news: a league polls for its night between
+          seasons as often as during one. */}
+      <Suspense fallback={<CardSkeleton rows={3} />}>
+        <AdminMatchNightPoll
+          admin={user}
+          season={season}
+          fixturesNight={data ? fixturesMatchNightLabel(data.matches) : null}
+        />
+      </Suspense>
 
       <Suspense fallback={<CardSkeleton rows={4} />}><AdminNews searchParams={searchParams} /></Suspense>
 
@@ -6776,6 +6789,48 @@ function SecurityControls() {
           </ActionForm>
         </div>
       </CardBody>
+    </AdminSection>
+  );
+}
+
+async function AdminMatchNightPoll({
+  admin,
+  season,
+  fixturesNight,
+}: {
+  admin: { id: string; role: string };
+  season: Season | null;
+  fixturesNight: string | null;
+}) {
+  // Async server component: rendered once per request.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const poll = await loadLatestPoll(admin, nowMs);
+  return (
+    <AdminSection
+      id="adm-poll"
+      title="Match night poll"
+      subtitle={
+        poll?.open
+          ? `Voting is open: ${poll.ballots} vote${poll.ballots === 1 ? "" : "s"} so far. Signed-up players rank the slots they can make on Home, and the count is instant runoff.`
+          : "Let signed-up players rank the weekly slots they can make. The poll shows on Home, and the count is instant runoff."
+      }
+      defaultOpen={poll?.open ?? false}
+    >
+      <MatchNightPollControls
+        poll={poll}
+        season={
+          season
+            ? {
+                id: season.id,
+                updatedAt: season.updatedAt,
+                matchSchedule: season.matchSchedule,
+                fixturesNight,
+              }
+            : null
+        }
+        nowMs={nowMs}
+      />
     </AdminSection>
   );
 }

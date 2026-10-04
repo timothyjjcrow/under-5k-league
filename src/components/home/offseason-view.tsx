@@ -12,6 +12,7 @@ import {
   PHASE_STEP,
 } from "./hero";
 import { InhouseStrip } from "./inhouse-strip";
+import { MatchNightPollCard } from "./match-night-poll";
 import { LeagueNews, PinnedNotices } from "./news";
 
 /**
@@ -80,6 +81,10 @@ export function OffseasonView({
           announced: the pinned strip and the latest posts show here too. */}
       <Suspense fallback={null}>
         <PinnedNotices className="mt-5" />
+      </Suspense>
+      {/* Between seasons is when a league polls for the next one's night. */}
+      <Suspense fallback={null}>
+        <MatchNightPollCard user={user} className="mt-5 text-left" />
       </Suspense>
       {/* Inhouse is the only live play surface during the offseason. Keep its
           actual queue/lobby state visible here too, rather than replacing a
