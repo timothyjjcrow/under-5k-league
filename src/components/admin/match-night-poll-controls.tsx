@@ -11,7 +11,10 @@ import { DangerSubmit } from "@/components/danger-submit";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
 import { AvailabilityHeatmap } from "@/components/match-night-poll/availability-heatmap";
-import { PollClockProvider } from "@/components/match-night-poll/poll-clock";
+import {
+  ClockNote,
+  PollClockProvider,
+} from "@/components/match-night-poll/poll-clock";
 import { CardBody } from "@/components/ui";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import {
@@ -120,6 +123,7 @@ function CurrentPoll({
           leagueZone={poll.timeZone}
           sampleAt={poll.slots[0]?.nextAt ?? poll.closesAt}
         >
+          <ClockNote className="mb-3" />
           <AvailabilityHeatmap
             slots={poll.slots}
             result={poll.results}

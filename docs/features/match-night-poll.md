@@ -77,11 +77,16 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   paint is the league's clock and the switch is the `useLocalTimeText` trick:
   never a hydration mismatch. All labels use `LEAGUE_LOCALE`, never the
   browser's locale, for the same reason.
+- **The card says so in words:** `ClockNote` reads "Times are shown in your
+  local time (Eastern time)" beside every grid and heatmap, including for a
+  player whose local time is the league's, and "league time (Pacific time)"
+  after the switch. It says "local" only once the browser's zone is known
+  (`localZone`); the server's first paint names the league's zone instead.
 - **The grid keeps the league's day columns;** each row header shows that
   start time on the viewer's clock (`slotOnClock`, from the slot's
   `nextAt`), with a "+1"/"−1" when it lands on another day (6 PM Pacific
   Saturday is 3 AM Sunday in Berlin). A viewer whose clock differs gets a
-  "Your time (Eastern) | Pacific time" switch (`ClockToggle`); the grid and
+  "Your local time (Eastern) | League time (Pacific)" switch (`ClockToggle`); the grid and
   the heatmap share it.
 - **Stored and announced times stay on the league's clock** ("Saturdays at
   2:00 PM Pacific time"). Discord posts add `<t:…>` timestamps so each reader

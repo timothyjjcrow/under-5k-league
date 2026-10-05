@@ -408,7 +408,7 @@ describe("admin controls", () => {
     expect(sendDiscordMessage).toHaveBeenCalledTimes(1);
     const post = vi.mocked(sendDiscordMessage).mock.calls[0][0];
     expect(post).toContain("Times: Every day, 12 PM–6 PM, on the hour");
-    expect(post).toMatch(/\(<t:\d+:t>–<t:\d+:t> your time\)/);
+    expect(post).toMatch(/\(<t:\d+:t>–<t:\d+:t> in your local time\)/);
     expect(
       await prisma.adminAction.findFirst({ where: { action: "createMatchNightPoll" } }),
     ).not.toBeNull();

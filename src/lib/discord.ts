@@ -125,7 +125,7 @@ export function matchNightPollOpenedMessage(m: {
   closesAtMs: number;
 }): string {
   const local = m.hours
-    ? ` (<t:${Math.floor(m.hours.firstMs / 1000)}:t>–<t:${Math.floor(m.hours.lastMs / 1000)}:t> your time)`
+    ? ` (<t:${Math.floor(m.hours.firstMs / 1000)}:t>–<t:${Math.floor(m.hours.lastMs / 1000)}:t> in your local time)`
     : "";
   return `🗳️ **${name(m.question)}** Signed-up players: tap every time you could play, as many as you like. The time the most players can make wins.\nTimes: ${name(m.summary)}, ${name(m.zone)}${local}. Voting closes <t:${Math.floor(m.closesAtMs / 1000)}:F>.\nVote: <${resolveSiteUrl()}/#${POLL_ANCHOR}>`;
 }

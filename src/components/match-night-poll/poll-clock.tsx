@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   slotHour,
+  slotInZone,
   slotOnClock,
   zoneOffsetMinutes,
   type PollSlotView,
@@ -34,6 +35,9 @@ type Clock = {
   leagueZone: string;
   /** The viewer's zone when it differs from the league's, else null. */
   viewerZone: string | null;
+  /** The viewer's zone once the browser has told us (even when it is the
+   *  league's), else null: before hydration, or a zone Intl can't read. */
+  localZone: string | null;
   setUseLeague: (league: boolean) => void;
   useLeague: boolean;
 };
@@ -59,14 +63,18 @@ export function PollClockProvider({
 }) {
   const zone = useSyncExternalStore(emptySubscribe, browserZone, () => null);
   const [useLeague, setUseLeague] = useState(false);
+  const localZone = zone && slotInZone(sampleAt, zone) ? zone : null;
   const viewerZone =
-    zone && zoneOffsetMinutes(sampleAt, leagueZone, zone) !== null ? zone : null;
+    localZone && zoneOffsetMinutes(sampleAt, leagueZone, localZone) !== null
+      ? localZone
+      : null;
   return (
     <ClockContext.Provider
       value={{
         zone: useLeague ? null : viewerZone,
         leagueZone,
         viewerZone,
+        localZone,
         useLeague,
         setUseLeague,
       }}
@@ -82,15 +90,37 @@ export function usePollClock(): Clock {
   return clock;
 }
 
-/** "Pacific time", or the viewer's zone in words when it is the one shown. */
-export function useClockName(): string {
-  const { zone, leagueZone } = usePollClock();
-  return zoneLabel(zone ?? leagueZone);
+/**
+ * Which clock the times are on, in words: "your local time (Eastern time)",
+ * "league time (Pacific time)" after the switch, or plain "Pacific time"
+ * until the browser's zone is known (the server's first paint), so the card
+ * never claims "local" before it is.
+ */
+export function useClockPhrase(): string {
+  const { useLeague, localZone, leagueZone } = usePollClock();
+  if (useLeague) return `league time (${zoneLabel(leagueZone)})`;
+  if (localZone) return `your local time (${zoneLabel(localZone)})`;
+  return zoneLabel(leagueZone);
 }
 
 /**
- * "Your time (Eastern) | Pacific time": shown only when the viewer's clock
- * differs from the league's.
+ * The one line that says whose clock the poll's times are on: "Times are
+ * shown in your local time (Eastern time)." Always shown beside a grid, so a
+ * player never has to guess, including one whose local time is the league's.
+ */
+export function ClockNote({ className }: { className?: string }) {
+  const phrase = useClockPhrase();
+  return (
+    <p className={cn("text-sm text-fg", className)}>
+      <span aria-hidden>🕒 </span>
+      Times are shown in <span className="font-semibold">{phrase}</span>.
+    </p>
+  );
+}
+
+/**
+ * "Your local time (Eastern) | League time (Pacific)": shown only when the
+ * viewer's clock differs from the league's.
  */
 export function ClockToggle({ className }: { className?: string }) {
   const { viewerZone, leagueZone, useLeague, setUseLeague } = usePollClock();
@@ -119,8 +149,8 @@ export function ClockToggle({ className }: { className?: string }) {
         className,
       )}
     >
-      {option(false, `Your time (${zoneName(viewerZone)})`)}
-      {option(true, zoneLabel(leagueZone))}
+      {option(false, `Your local time (${zoneName(viewerZone)})`)}
+      {option(true, `League time (${zoneName(leagueZone)})`)}
     </div>
   );
 }
@@ -155,8 +185,8 @@ export function useSlotOnClock() {
 }
 
 /**
- * "That's Sat 5 PM for you." beside a league-time label, when the viewer's
- * clock differs.
+ * "That's Saturday at 5 PM in your local time (Eastern)." beside a
+ * league-time label, when the viewer's clock differs.
  */
 export function YourTimeNote({ slot }: { slot: PollSlotView }) {
   const { viewerZone } = usePollClock();
@@ -167,8 +197,8 @@ export function YourTimeNote({ slot }: { slot: PollSlotView }) {
   ];
   return (
     <span>
-      That&apos;s {day} at {slotHour(shown.minute, LEAGUE_LOCALE)} your time (
-      {zoneName(viewerZone)}).
+      That&apos;s {day} at {slotHour(shown.minute, LEAGUE_LOCALE)} in your local
+      time ({zoneName(viewerZone)}).
     </span>
   );
 }

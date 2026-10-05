@@ -5,6 +5,7 @@ import { LocalTime } from "@/components/local-time";
 import { AvailabilityGrid } from "@/components/match-night-poll/availability-grid";
 import { AvailabilityHeatmap } from "@/components/match-night-poll/availability-heatmap";
 import {
+  ClockNote,
   ClockToggle,
   PollClockProvider,
   YourTimeNote,
@@ -171,7 +172,14 @@ function PollCard({
           </header>
 
           <div className="space-y-6 p-4 sm:p-5">
-            {heatmap || (poll.open && poll.canVote) ? <ClockToggle /> : null}
+            {/* Whose clock the grid and heatmap use, said up front: every
+                time on them converts to the viewer's own zone. */}
+            {heatmap || (poll.open && poll.canVote) ? (
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                <ClockNote />
+                <ClockToggle />
+              </div>
+            ) : null}
 
             {winner ? (
               <div className="flex min-w-0 flex-wrap items-center gap-4 rounded-lg border border-accent/40 bg-accent/10 p-4">
@@ -232,8 +240,8 @@ function TimesWithAsk({
     <div className="space-y-4">
       <p className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm text-fg">
         <span className="font-semibold">Times on offer:</span> {poll.summary},{" "}
-        {zoneLabel(poll.timeZone)} ({poll.slots.length} start times). Your
-        ballot shows them on your own clock.
+        {zoneLabel(poll.timeZone)} ({poll.slots.length} start times). The
+        ballot shows every time converted to your local time.
       </p>
       {children}
     </div>

@@ -11,7 +11,7 @@ import {
 } from "@/lib/match-night-poll";
 import { cn } from "@/lib/utils";
 import { LEAGUE_LOCALE } from "@/lib/zoned-time";
-import { DayShift, useClockName, usePollClock, useSlotOnClock } from "./poll-clock";
+import { DayShift, useClockPhrase, usePollClock, useSlotOnClock } from "./poll-clock";
 
 /**
  * Who can play when: the same grid as the ballot, each cell showing how many
@@ -35,7 +35,7 @@ export function AvailabilityHeatmap({
   mine: string[] | null;
 }) {
   const { zone } = usePollClock();
-  const clockName = useClockName();
+  const clockPhrase = useClockPhrase();
   const onClock = useSlotOnClock();
   const grid = pollGrid(slots);
   const max = Math.max(0, ...Object.values(result.counts));
@@ -93,7 +93,7 @@ export function AvailabilityHeatmap({
 
       <table
         className="w-full table-fixed border-separate border-spacing-1"
-        aria-label={`How many players can play each time, in ${clockName}`}
+        aria-label={`How many players can play each time, in ${clockPhrase}`}
       >
         <colgroup>
           <col className="w-14 sm:w-20" />

@@ -66,7 +66,8 @@ test.describe("on the league's clock", () => {
     const grid = card.getByRole("table", { name: "Times you could play" });
     await expect(grid).toBeVisible();
     await expect(grid.locator('[data-slot][aria-pressed="false"]')).toHaveCount(49);
-    // Same clock as the league, so no switch.
+    // Same clock as the league: still says the times are local, no switch.
+    await expect(card.getByText(/Times are shown in your local time \((Pacific|Berlin) time\)\.$/)).toBeVisible();
     await expect(card.getByRole("group", { name: "Show times on" })).toHaveCount(0);
     const save = card.getByRole("button", { name: "Save my times" });
     await expect(save).toBeDisabled();
@@ -126,17 +127,18 @@ test.describe("from another time zone", () => {
     await signIn(page, "name=Poll+Voter&steamId=76561190000991003", "/");
     const card = page.locator("#match-night-poll");
     const toggle = card.getByRole("group", { name: "Show times on" });
-    await expect(toggle.getByRole("button", { name: "Your time (Tokyo)" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await expect(
+      toggle.getByRole("button", { name: "Your local time (Tokyo)" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(card.getByText("Times are shown in your local time (Tokyo time).")).toBeVisible();
     const heatmap = card.getByRole("table", { name: /How many players can play each time/ });
     // The first row is noon on the league's clock: a different hour in Tokyo.
     const firstRow = heatmap.getByRole("rowheader").first();
-    await expect(heatmap).toHaveAccessibleName(/in Tokyo time/);
+    await expect(heatmap).toHaveAccessibleName(/in your local time \(Tokyo time\)/);
     await expect(firstRow).not.toHaveText(hour(12));
-    await toggle.getByRole("button", { name: /^(Pacific|Berlin) time$/ }).click();
+    await toggle.getByRole("button", { name: /^League time \((Pacific|Berlin)\)$/ }).click();
     await expect(firstRow).toHaveText(hour(12));
+    await expect(card.getByText(/Times are shown in league time \((Pacific|Berlin) time\)\.$/)).toBeVisible();
     noErrors();
   });
 });

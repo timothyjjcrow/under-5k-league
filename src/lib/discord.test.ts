@@ -171,7 +171,7 @@ describe("discord message formatters", () => {
     expect(msg).toContain("**When should \\*match night\\* be?**");
     expect(msg).toContain("as many as you like");
     expect(msg).toContain(
-      `Times: Every day, 12 PM–6 PM, on the hour, Pacific time (<t:${Date.UTC(2026, 9, 5, 19, 0) / 1000}:t>–<t:${Date.UTC(2026, 9, 6, 1, 0) / 1000}:t> your time).`,
+      `Times: Every day, 12 PM–6 PM, on the hour, Pacific time (<t:${Date.UTC(2026, 9, 5, 19, 0) / 1000}:t>–<t:${Date.UTC(2026, 9, 6, 1, 0) / 1000}:t> in your local time).`,
     );
     expect(msg).toContain(`<t:${Date.UTC(2026, 9, 11, 1, 0) / 1000}:F>`);
     expect(msg).toMatch(/Vote: <[^>]+\/#match-night-poll>$/);

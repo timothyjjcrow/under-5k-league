@@ -15,7 +15,7 @@ import {
 } from "@/lib/match-night-poll";
 import { cn } from "@/lib/utils";
 import { LEAGUE_LOCALE } from "@/lib/zoned-time";
-import { DayShift, useClockName, usePollClock } from "./poll-clock";
+import { DayShift, useClockPhrase, usePollClock } from "./poll-clock";
 
 /**
  * The availability ballot: a grid of days by start times. Tap a cell to mark
@@ -40,7 +40,7 @@ export function AvailabilityGrid({
   saved: string[] | null;
 }) {
   const { zone } = usePollClock();
-  const clockName = useClockName();
+  const clockPhrase = useClockPhrase();
   const grid = pollGrid(slots);
   const known = new Set(slots.map((slot) => slot.key));
   const savedKeys = (saved ?? []).filter((key) => known.has(key));
@@ -108,7 +108,7 @@ export function AvailabilityGrid({
         )}
         <p className="mt-3 text-xs text-muted">
           {savedKeys.length > 0
-            ? `${savedKeys.length} time${savedKeys.length === 1 ? "" : "s"}, shown in ${clockName}. `
+            ? `${savedKeys.length} time${savedKeys.length === 1 ? "" : "s"}, shown in ${clockPhrase}. `
             : ""}
           You can change them until voting closes.
         </p>
@@ -146,8 +146,7 @@ export function AvailabilityGrid({
     <div className="space-y-4">
       <p className="text-sm text-muted">
         Tap every time you could start a match, as many as you like. Drag to
-        mark a range, or tap a day or a time to fill it. Times are in{" "}
-        <span className="font-medium text-fg">{clockName}</span>.
+        mark a range, or tap a day or a time to fill it.
       </p>
 
       <table
