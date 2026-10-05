@@ -221,6 +221,11 @@ export function RankMedal({
   if (tier === 0) return null;
   const stars = rankStars(rankTier);
   const name = rankMedalName(rankTier);
+  // 72px copies (public/ranks/72) cover every medal drawn at up to 24px on a
+  // 3x phone screen: about a tenth of the 256px masters' bytes (/players
+  // downloaded 374KB of medals). Larger medals, and the share pictures
+  // (og-assets.ts), keep the masters.
+  const dir = size <= 24 ? "/ranks/72" : "/ranks";
   const medal = (
     <span
       className="relative inline-block shrink-0"
@@ -228,7 +233,7 @@ export function RankMedal({
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={`/ranks/rank_icon_${tier}.png`}
+        src={`${dir}/rank_icon_${tier}.png`}
         alt=""
         width={size}
         height={size}
@@ -238,7 +243,7 @@ export function RankMedal({
       {tier < 8 && stars > 0 ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={`/ranks/rank_star_${stars}.png`}
+          src={`${dir}/rank_star_${stars}.png`}
           alt=""
           width={size}
           height={size}
@@ -391,19 +396,29 @@ export function EmojiLead({ text }: { text: string }) {
 /**
  * Wraps a player's name/avatar in a link to their season profile. Server-safe,
  * so it works in both server pages and the client player-pool.
+ *
+ * Not prefetched by default. Player links come in lists (the pool, rosters,
+ * box scores, Home's "Who's in"), and every prefetched profile link runs
+ * that profile's link-preview metadata on the server: about eleven queries
+ * a link, so scrolling /players cost roughly ten times the page itself. A
+ * click fetches the profile as it always did.
  */
 export function PlayerLink({
   userId,
   className,
   children,
+  prefetch = false,
 }: {
   userId: string;
   className?: string;
   children: React.ReactNode;
+  /** Prefetch the profile when the link scrolls into view (Next's default). */
+  prefetch?: boolean;
 }) {
   return (
     <Link
       href={`/players/${userId}`}
+      prefetch={prefetch ? null : false}
       // min-w-6 because a Dota name can be ONE character — the live league has
       // a player called "x", whose link was an 8px-wide target. Callers that
       // pass their own min-w (rows that must truncate) still win via cn.

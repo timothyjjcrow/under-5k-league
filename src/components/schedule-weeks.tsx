@@ -572,6 +572,7 @@ function ResultLine({ match: m }: { match: MatchView }) {
   return (
     <Link
       href={`/matches/${m.id}`}
+      prefetch={false}
       className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 px-4 py-2 text-sm transition-colors hover:bg-surface-2/60 sm:px-5"
     >
       <span className={cn("text-right [overflow-wrap:anywhere]", name(m.homeWin))}>
@@ -845,6 +846,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
         ) : null}
         <Link
           href={`/matches/${m.id}`}
+          prefetch={false}
           className="inline-flex min-h-11 shrink-0 items-center justify-end pl-2 text-xs font-semibold text-info hover:underline focus-visible:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-info/60"
         >
           Match page
@@ -897,6 +899,7 @@ function RescheduleChip({
   return (
     <Link
       href={`/matches/${matchId}`}
+      prefetch={false}
       aria-label={`Time change proposed — ${label}. Open the match page to answer the ready check.`}
       title={`Time change proposed — ${label}`}
       className="relative z-10 inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-xs text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"

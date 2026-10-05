@@ -355,6 +355,7 @@ function MatchCard({
       />
       <Link
         href={`/matches/${m.id}`}
+        prefetch={false}
         aria-label={matchLinkLabel}
         className="flex items-center justify-between gap-2 rounded px-1 pt-1 text-xs text-muted hover:text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
       >

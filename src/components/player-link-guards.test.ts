@@ -32,3 +32,19 @@ describe("PlayerLink call sites", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * Player links come in lists, and each prefetched profile link runs that
+ * profile's link-preview metadata on the server (about eleven queries): on
+ * a production build, scrolling /players ran 408 statements against the
+ * page's own 37. PlayerLink therefore doesn't prefetch unless a call site
+ * asks for it.
+ */
+describe("PlayerLink prefetching", () => {
+  it("is off by default", () => {
+    const [ui] = sourceFiles(["src/components/ui.tsx"], 1);
+    const body = ui.text.slice(ui.text.indexOf("export function PlayerLink"));
+    expect(body).toMatch(/prefetch = false,/);
+    expect(body).toMatch(/prefetch=\{prefetch \? null : false\}/);
+  });
+});
