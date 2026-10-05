@@ -140,6 +140,9 @@ export type DeclinedReschedule = {
   /** The time that was refused — named so a channel that has seen several
    *  proposals go by can tell WHICH one this closes. */
   proposedTime: Date;
+  /** Every time the ready check offered (epoch ms, ascending), all of them
+   *  turned down by "None of these work". */
+  optionTimes: number[];
   /** The PROPOSER. They asked a question and have been waiting; a decline is
    *  addressed to exactly one person, same as the proposal was. */
   notifyUserId: string;
@@ -760,12 +763,16 @@ async function lockInTx(
   if (problem) throw new UserFacingError(problem);
 
   const sides = await loadSides(tx, match);
-  // Locking is the locker's own yes.
+  // Locking agrees to the TIME; it is the locker's yes only when they gave
+  // no answer of their own. A captain who said "✗ Can't" can still lock a
+  // time their team can make with cover, and their ✗ stands: it carries
+  // over as an OUT check-in and is listed as out, never silently rewritten
+  // to IN (the team turned up one short, with no "out with no cover" to-do).
+  const stored = await loadOptionVotes(tx, request, time);
+  const own = stored.find((v) => v.userId === userId);
   const votes = [
-    ...(await loadOptionVotes(tx, request, time)).filter(
-      (v) => v.userId !== userId,
-    ),
-    { userId, timeMs: time.getTime(), ready: true },
+    ...stored.filter((v) => v.userId !== userId),
+    own ?? { userId, timeMs: time.getTime(), ready: true },
   ];
   const tally = tallyOption(time.getTime(), sides, votes, activeSeason.teamSize);
   const refusal = lockRefusal(tally, userId, {
@@ -791,13 +798,14 @@ async function lockInTx(
     votes,
     tally.everyoneIn,
   );
-  // Record the yes the lock implied, so the request's answers say who agreed.
+  // Record the yes the lock implied when the locker hadn't answered, so the
+  // request's answers say who agreed; an answer they gave is left as given.
   await tx.rescheduleVote.upsert({
     where: {
       requestId_userId_time: { requestId: request.id, userId, time },
     },
     create: { requestId: request.id, userId, time, ready: true },
-    update: { ready: true },
+    update: {},
   });
   return {
     ...commit,
@@ -1020,6 +1028,11 @@ export async function respondReschedule(
             isPlayoff: isPlayoffPhase(match.phase),
             isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
             proposedTime: request.proposedTime,
+            // Every time on offer: the post names how many were turned down.
+            optionTimes: parseRescheduleOptions(
+              request.options,
+              request.proposedTime,
+            ),
             notifyUserId: request.proposedById,
           };
         }

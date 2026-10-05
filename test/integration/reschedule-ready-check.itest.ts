@@ -335,6 +335,32 @@ describe("reschedule ready check — locking in", () => {
     expect(await statusOf(s.homeCaptain.id)).toBe("IN");
   });
 
+  it("keeps a locking captain's own ✗: their team can play the time, they can't", async () => {
+    const s = await setupReadyCheck();
+    await proposeReschedule(s.homeCaptain.id, s.match.id, [T1, T2]);
+    const request = await openRequest(s.match.id);
+    // The away captain can't make T1 themselves, but their team can (a
+    // standin covers), so they accept and lock it in anyway.
+    await voteReschedule(s.awayCaptain.id, request.id, T1, false);
+
+    const locked = await lockInReschedule(s.awayCaptain.id, request.id, T1);
+
+    expect(locked.newTime.getTime()).toBe(T1.getTime());
+    expect(locked.readyCheck).toMatchObject({ everyoneIn: false, carriedOut: 1 });
+    expect(locked.readyCheck.outNames).toEqual([s.awayCaptain.name]);
+    const own = await prisma.matchAvailability.findUnique({
+      where: { matchId_userId: { matchId: s.match.id, userId: s.awayCaptain.id } },
+    });
+    // OUT, so "can't make it and has no cover yet" asks for a standin.
+    expect(own?.status).toBe("OUT");
+    const vote = await prisma.rescheduleVote.findUniqueOrThrow({
+      where: {
+        requestId_userId_time: { requestId: request.id, userId: s.awayCaptain.id, time: T1 },
+      },
+    });
+    expect(vote.ready).toBe(false);
+  });
+
   it("makes the proposer wait for the other captain's yes before locking", async () => {
     const s = await setupReadyCheck();
     await proposeReschedule(s.homeCaptain.id, s.match.id, [T1, T2]);

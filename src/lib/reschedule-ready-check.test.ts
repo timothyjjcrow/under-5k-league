@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  customTimePrefill,
+  lockOffered,
+  readyCheckLive,
   MAX_RESCHEDULE_OPTIONS,
   buildReadyCheckView,
   withMyAnswer,
@@ -345,6 +348,52 @@ describe("suggestRescheduleTimes", () => {
     expect(
       suggestRescheduleTimes({ ...base, kickoffMs: null, fallbackAnchorMs: null }),
     ).toEqual([]);
+  });
+});
+
+describe("readyCheckLive", () => {
+  it("is live while open with a time still ahead", () => {
+    expect(readyCheckLive({ open: true, options: [{ passed: true }, { passed: false }] })).toBe(true);
+  });
+
+  it("asks nothing once every time has passed, or once closed", () => {
+    expect(readyCheckLive({ open: true, options: [{ passed: true }, { passed: true }] })).toBe(false);
+    expect(readyCheckLive({ open: false, options: [{ passed: false }] })).toBe(false);
+  });
+});
+
+describe("lockOffered", () => {
+  it("offers Lock on an open time the other captain said yes to, everyone in or not", () => {
+    expect(lockOffered({ passed: false, lockRefusal: null })).toBe(true);
+  });
+
+  it("never on a passed time, or one the other captain hasn't agreed", () => {
+    expect(lockOffered({ passed: true, lockRefusal: null })).toBe(false);
+    expect(
+      lockOffered({
+        passed: false,
+        lockRefusal: "The other captain hasn't said yes to this time yet",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("customTimePrefill", () => {
+  const now = Date.UTC(2026, 10, 9, 18, 0);
+  const deadline = Date.UTC(2026, 10, 20, 2, 0);
+
+  it("starts the box on a kickoff that is still ahead and inside the deadline", () => {
+    const kickoff = now + 3 * 60 * 60 * 1000;
+    expect(customTimePrefill(kickoff, now, deadline)).toBe(kickoff);
+    expect(customTimePrefill(kickoff, now, null)).toBe(kickoff);
+  });
+
+  it("leaves the box empty when the kickoff could not be submitted", () => {
+    // A match that wasn't played: its kickoff is under the box's min.
+    expect(customTimePrefill(now - 60_000, now, deadline)).toBeNull();
+    // A kickoff past the playoff deadline is over its max.
+    expect(customTimePrefill(deadline + 60_000, now, deadline)).toBeNull();
+    expect(customTimePrefill(null, now, deadline)).toBeNull();
   });
 });
 

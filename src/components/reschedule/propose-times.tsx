@@ -10,6 +10,7 @@ import { buttonClasses } from "@/components/ui";
 import {
   MAX_RESCHEDULE_OPTIONS,
   RESCHEDULE_NOTE_MAX,
+  customTimePrefill,
 } from "@/lib/reschedule-ready-check";
 import { matchTimeParts } from "@/lib/match-time";
 import { cn } from "@/lib/utils";
@@ -157,7 +158,7 @@ export function ProposeTimes({
             id={customId}
             name="customTime"
             tsName="customTs"
-            defaultTs={kickoffMs}
+            defaultTs={customTimePrefill(kickoffMs, minTs, maxTs)}
             minTs={minTs}
             maxTs={maxTs}
             describedBy={hintId}

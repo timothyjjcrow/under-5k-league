@@ -118,12 +118,11 @@ export async function proposeReschedule(
   if (options.some((t) => t === null))
     return { error: "Pick a valid date & time" };
   if (options.length === 0) {
+    // Never the raw `proposedTime` string: CLAUDE.md's time rule, and no
+    // form posts it any more.
     const single = epoch(formData.get("proposedTs"));
-    const raw = str(formData, "proposedTime");
-    const fallback = single ?? (raw ? new Date(raw) : null);
-    if (!fallback || Number.isNaN(fallback.getTime()))
-      return { error: "Pick at least one time" };
-    options.push(fallback);
+    if (!single) return { error: "Pick at least one time" };
+    options.push(single);
   }
 
   let proposed;
@@ -326,6 +325,7 @@ export async function respondReschedule(
       roundLabel: outcome.roundLabel,
       declinerName: user.name,
       whenMs: outcome.proposedTime.getTime(),
+      optionCount: outcome.optionTimes.length,
       matchId: outcome.matchId,
     }),
     await mentionUsers([outcome.notifyUserId]),

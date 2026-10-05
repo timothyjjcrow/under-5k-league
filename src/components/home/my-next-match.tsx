@@ -7,6 +7,7 @@ import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
 import { prisma } from "@/lib/prisma";
+import { readyCheckLive } from "@/lib/reschedule-ready-check";
 import { loadReadyCheckView } from "@/lib/reschedule-ready-check-service";
 import type { SeasonSnapshot } from "@/lib/queries";
 import {
@@ -230,15 +231,20 @@ export async function MyNextMatch({
   // A ready check the viewer answers gets a strip right on the dashboard —
   // proposals used to rot on the match page unseen.
   const check =
-    readyCheck?.open && readyCheck.viewer.canAnswer ? readyCheck : null;
+    readyCheck && readyCheckLive(readyCheck) && readyCheck.viewer.canAnswer
+      ? readyCheck
+      : null;
   const unanswered = check
     ? check.options.filter((o) => !o.passed && o.myAnswer === null).length
     : 0;
+  // A passed time can't be played, so it is never the "best so far".
   const best = check
-    ? check.options.reduce<(typeof check.options)[number] | null>(
-        (top, o) => (!top || o.readyTotal > top.readyTotal ? o : top),
-        null,
-      )
+    ? check.options
+        .filter((o) => !o.passed)
+        .reduce<(typeof check.options)[number] | null>(
+          (top, o) => (!top || o.readyTotal > top.readyTotal ? o : top),
+          null,
+        )
     : null;
 
   return (

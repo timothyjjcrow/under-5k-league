@@ -341,6 +341,55 @@ export function suggestRescheduleTimes(options: {
     .sort((a, b) => a - b);
 }
 
+/**
+ * Whether an open ready check still asks anything of anyone: at least one of
+ * its times hasn't passed. A passed time can't be answered (answers refuse
+ * it) or usefully locked, so a check whose every time has gone stops
+ * showing on Home and in the captain's "Waiting on you" list instead of
+ * asking for answers nobody can give. The card itself still shows it, with
+ * Withdraw, so the proposer can clear it.
+ */
+export function readyCheckLive(view: {
+  open: boolean;
+  options: readonly { passed: boolean }[];
+}): boolean {
+  return view.open && view.options.some((o) => !o.passed);
+}
+
+/**
+ * Whether a captain is offered Lock for a time: it hasn't passed and they
+ * may lock it (lockRefusal: the other captain said yes). A time showing
+ * "Everyone's in" on a check that is still open is included: the last answer
+ * moves the match by itself, so that is a time whose move was refused (a
+ * clashing scrim, or a player released mid-check), and Lock is the retry.
+ * Hiding Lock there left the card green with nothing to press. The card and
+ * the captain's to-do list both read this.
+ */
+export function lockOffered(option: {
+  passed: boolean;
+  lockRefusal: string | null;
+}): boolean {
+  return !option.passed && option.lockRefusal === null;
+}
+
+/**
+ * What the "Or any time" box starts on: the current kickoff, but only while
+ * the box could submit it. The box sits inside the propose form and carries
+ * `min` (now, when the page loaded) and `max` (a minute inside the playoff
+ * deadline), so a kickoff that has passed (a match that wasn't played, the
+ * case the quick picks are built for) or lies past the deadline made the
+ * browser refuse "Send ready check" over a box the captain never touched.
+ */
+export function customTimePrefill(
+  kickoffMs: number | null,
+  minTs: number,
+  maxTs: number | null,
+): number | null {
+  if (kickoffMs == null || kickoffMs < minTs) return null;
+  if (maxTs != null && kickoffMs > maxTs) return null;
+  return kickoffMs;
+}
+
 export type ReadyCheckSeatView = {
   /** Null on an anonymous seat: only captains and admins see names. */
   userId: string | null;

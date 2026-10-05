@@ -5,6 +5,7 @@ import {
   standinAssignmentOpen,
 } from "@/lib/league-lifecycle";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
+import { lockOffered, readyCheckLive } from "@/lib/reschedule-ready-check";
 import { loadReadyCheckView } from "@/lib/reschedule-ready-check-service";
 import { LocalTime } from "@/components/local-time";
 import { textLink } from "@/components/ui";
@@ -67,7 +68,8 @@ export async function CaptainTodos({
         .map((c) => c.member.user.name)
     : [];
   const open =
-    view?.open &&
+    view &&
+    readyCheckLive(view) &&
     matchLogisticsOpen(match.season.status, draftStatus, match.status)
       ? view
       : null;
@@ -82,11 +84,7 @@ export async function CaptainTodos({
   // This captain's own ready check, where the other captain has said yes to
   // a time that isn't locked in yet: one tap moves the match.
   const lockable =
-    open?.viewer.isProposer
-      ? (open.options.find(
-          (o) => !o.passed && o.lockRefusal === null && !o.everyoneIn,
-        ) ?? null)
-      : null;
+    open?.viewer.isProposer ? (open.options.find(lockOffered) ?? null) : null;
   if (uncoveredOut.length === 0 && !answer && !lockable) return null;
   return (
     <ul

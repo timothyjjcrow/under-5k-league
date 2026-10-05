@@ -105,9 +105,15 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   block it). The answer that completes it retimes the match in the same
   Serializable transaction (`voteReschedule`).
 - **One flaky player never holds a match hostage.** Either captain may lock
-  in an option the OTHER captain has said yes to (`lockRefusal`; the locker's
-  yes is the lock itself), whatever the lineup: the toast and the post say who
-  can't make it and how many haven't answered. The opposing captain's accept
+  in an option the OTHER captain has said yes to (`lockRefusal`), whatever the
+  lineup: the toast and the post say who can't make it and how many haven't
+  answered. The lock agrees to the time and is the locker's yes only when
+  they gave no answer: a captain who said ✗ for themselves can lock a time
+  their team can make with cover, and their ✗ stands (an OUT check-in, listed
+  as out), never rewritten to IN. Lock shows wherever `lockOffered` says,
+  including an "Everyone's in" time on a still-open check: the last answer
+  moves the match by itself, so that is a time whose move was refused (a
+  clashing scrim, a player released mid-check), and Lock is the retry. The opposing captain's accept
   (`respondReschedule`) is that lock and must name the option when there is
   more than one. The proposer's yes on their own times is implied
   (`withProposerYes`), so a proposal made before the ready check still settles.
@@ -131,7 +137,15 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   option that stopped fitting keeps the answer and says why nothing moved.
 - **Decline is cleanup.** "None of these work" (the opposing captain) and
   Withdraw (the proposer, or an admin's Clear) leave kickoff, check-ins and
-  the reminder marker alone (pinned in the itest).
+  the reminder marker alone (pinned in the itest). The decline post says
+  "turned down all N times" when several were offered, not just the earliest.
+- **A check whose every time has passed asks nothing** (`readyCheckLive`):
+  Home's strip and the captain's to-dos drop it (no "Answer the ready check"
+  nobody can answer); the card still shows it, with Withdraw.
+- **The "Or any time" box starts on the kickoff only while it could submit
+  it** (`customTimePrefill`): it sits inside the propose form with the
+  window's `min` and `max`, so a passed kickoff (a match that wasn't played)
+  made the browser refuse Send ready check over a box nobody touched.
 - **Who sees what.** `loadReadyCheckView` (`reschedule-ready-check-service.ts`)
   builds the card per viewer: names for the captains and admins only
   (`canViewNamedMatchAvailability`), everyone else counts plus their own seat,

@@ -15,6 +15,7 @@ import { pushToast } from "@/components/toaster";
 import { Avatar, buttonClasses } from "@/components/ui";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import {
+  lockOffered,
   withMyAnswer,
   type ReadyAnswer,
   type ReadyCheckOptionView,
@@ -158,6 +159,10 @@ export function ReadyCheckCard({
       return;
     }
     if (result.view) setView(result.view);
+    // A captain's "Waiting on you" list sits outside this card and was
+    // rendered with the page: refresh it, or "Answer the ready check" stays
+    // up after they have.
+    if (view.viewer.kind === "captain") router.refresh();
   };
 
   const { viewer } = view;
@@ -341,7 +346,8 @@ function OptionCard({
   );
   const canAnswer = view.viewer.canAnswer && !option.passed;
   const isCaptain = view.viewer.kind === "captain";
-  const showLock = isCaptain && option.lockRefusal === null && !option.everyoneIn;
+  const showLock = isCaptain && lockOffered(option);
+  const stuck = view.open && option.everyoneIn && !option.passed;
   const notReady = option.seatTotal - option.readyTotal;
   const pct = option.seatTotal
     ? Math.round((option.readyTotal / option.seatTotal) * 100)
@@ -403,6 +409,13 @@ function OptionCard({
           </span>{" "}
           ready · {option.statusLine}
         </p>
+        {stuck ? (
+          <p className="mt-1 text-xs text-accent [overflow-wrap:anywhere]">
+            {isCaptain
+              ? "The match hasn't moved to this time yet. Lock it in to move it."
+              : "The match hasn't moved to this time yet: a captain can lock it in."}
+          </p>
+        ) : null}
       </div>
 
       {canAnswer || showLock ? (
