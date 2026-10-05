@@ -8,6 +8,15 @@ describe("zoneName", () => {
     expect(zoneName("America/Argentina/Buenos_Aires")).toBe("Buenos Aires");
   });
 
+  it("spells a renamed city as it is today, whatever id the browser reports", () => {
+    // Chrome and Node report the old ids (ICU's canonical names).
+    expect(zoneName("Europe/Kiev")).toBe("Kyiv");
+    expect(zoneName("Europe/Kyiv")).toBe("Kyiv");
+    expect(zoneName("Asia/Calcutta")).toBe("Kolkata");
+    expect(zoneName("Asia/Kolkata")).toBe("Kolkata");
+    expect(zoneName("Asia/Saigon")).toBe("Ho Chi Minh City");
+  });
+
   it("keeps an id with no city as it is", () => {
     expect(zoneName("UTC")).toBe("UTC");
     expect(zoneName("Etc/GMT-1")).toBe("Etc/GMT-1");
