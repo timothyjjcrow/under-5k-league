@@ -4,6 +4,7 @@ import {
   STREAM_URL_MAX_LENGTH,
   WATCH_OPENS_BEFORE_KICKOFF_MS,
   matchWatchWindow,
+  streamPlayerWindow,
   normalizeStreamUrl,
   parseStoredStream,
   streamEmbed,
@@ -164,7 +165,10 @@ describe("matchWatchWindow", () => {
     // A Bo3 that started an hour late is still on its third game when the
     // plain estimate runs out; once a game is in, the link stays up.
     const live = matchWatchWindow({ ...final, status: "LIVE" }, true)!;
-    expect(live.opensAtMs).toBe(kickoff.getTime() - 15 * MIN);
+    // Open from the moment a game is in, even ahead of the listed kickoff:
+    // a series that started early read "Streamed on Twitch" while LIVE.
+    expect(live.opensAtMs).toBe(0);
+    expect(watchState(live, kickoff.getTime() - 60 * MIN)).toBe("live");
     expect(live.closesAtMs).toBe(kickoff.getTime() + 2 * 210 * MIN);
     expect(watchState(live, kickoff.getTime() + 225 * MIN)).toBe("live");
     // A series that never gets its result still stops saying it is live.
@@ -181,6 +185,40 @@ describe("matchWatchWindow", () => {
     expect(matchWatchWindow({ ...final, forfeit: true }, true)).toBeNull();
     expect(matchWatchWindow({ ...final, scheduledAt: null }, true)).toBeNull();
     expect(matchWatchWindow(final, false)).toBeNull();
+  });
+});
+
+describe("streamPlayerWindow", () => {
+  const kickoff = new Date("2026-10-03T22:00:00Z");
+  const final = {
+    phase: "FINAL",
+    status: "SCHEDULED",
+    forfeit: false,
+    scheduledAt: kickoff,
+    bestOf: 3,
+  };
+
+  it("is the link's window while the match is to be played or under way", () => {
+    expect(streamPlayerWindow(final, true)).toEqual(matchWatchWindow(final, true));
+    const live = { ...final, status: "LIVE" };
+    expect(streamPlayerWindow(live, true)).toEqual(matchWatchWindow(live, true));
+  });
+
+  it("stays, closed, once a playoff or final match is decided, so a player already playing isn't cut off", () => {
+    for (const phase of ["FINAL", "PLAYOFF"]) {
+      const decided = { ...final, phase, status: "COMPLETED" };
+      const window = streamPlayerWindow(decided, true);
+      expect(window).not.toBeNull();
+      // Closed: nothing new starts playing.
+      expect(watchState(window!, kickoff.getTime())).toBeNull();
+    }
+  });
+
+  it("is never there for a forfeit, the regular season or an archived season", () => {
+    const decided = { ...final, status: "COMPLETED" };
+    expect(streamPlayerWindow({ ...decided, forfeit: true }, true)).toBeNull();
+    expect(streamPlayerWindow({ ...decided, phase: "REGULAR" }, true)).toBeNull();
+    expect(streamPlayerWindow(decided, false)).toBeNull();
   });
 });
 
