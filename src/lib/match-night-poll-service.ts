@@ -124,6 +124,41 @@ async function signedUpFor(db: Db, userId: string, seasonId: string) {
   return hasActiveLeagueParticipation(false, !!member || !!captain);
 }
 
+/**
+ * The voters among `userIds` who are signed up for the season now:
+ * signedUpFor, batched (three indexed lookups however many ballots).
+ */
+async function stillSignedUp(
+  db: Db,
+  userIds: readonly string[],
+  seasonId: string,
+): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const ids = [...new Set(userIds)];
+  const [registrations, members, captains] = await Promise.all([
+    db.registration.findMany({
+      where: { seasonId, userId: { in: ids }, status: REGISTRATION_STATUS.ACTIVE },
+      select: { userId: true },
+    }),
+    db.teamMember.findMany({
+      where: { seasonId, userId: { in: ids } },
+      select: { userId: true },
+    }),
+    db.team.findMany({
+      where: { seasonId, captainId: { in: ids } },
+      select: { captainId: true },
+    }),
+  ]);
+  const seated = new Set([
+    ...members.map((m) => m.userId),
+    ...captains.map((t) => t.captainId),
+  ]);
+  const active = new Set(registrations.map((r) => r.userId));
+  return new Set(
+    ids.filter((id) => hasActiveLeagueParticipation(active.has(id), seated.has(id))),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
@@ -133,7 +168,7 @@ async function viewOf(
   viewer: { id: string; role: string } | null,
   nowMs: number,
 ): Promise<PollView> {
-  const [ballots, season] = await Promise.all([
+  const [stored, season] = await Promise.all([
     prisma.matchNightBallot.findMany({
       where: { pollId: poll.id },
       select: { userId: true, ranking: true, updatedAt: true },
@@ -141,8 +176,20 @@ async function viewOf(
     }),
     votingSeason(prisma),
   ]);
+  // A ballot counts only while its voter is signed up ("Only signed-up
+  // players vote", docs/DECISIONS.md): eligibility is checked when a ballot
+  // is cast, but a player who withdraws, or whom an admin removes, would
+  // otherwise keep counting and could swing the result. Their row stays, so
+  // signing up again counts it again.
+  const counted = season
+    ? await stillSignedUp(prisma, stored.map((b) => b.userId), season.id)
+    : null;
+  const ballots = counted ? stored.filter((b) => counted.has(b.userId)) : stored;
   const canVote =
-    !!viewer && !!season && (await signedUpFor(prisma, viewer.id, season.id));
+    !!viewer &&
+    !!season &&
+    (!!counted?.has(viewer.id) ||
+      (await signedUpFor(prisma, viewer.id, season.id)));
   return buildPollView({
     poll,
     ballots,

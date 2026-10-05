@@ -29,15 +29,22 @@ function browserZone(): string | null {
 }
 
 type Clock = {
-  /** The zone times are shown on, or null for the league's own clock. */
-  zone: string | null;
+  /** Minutes the shown clock is ahead of the league's (slotOnClock), or null
+   *  for the league's own clock. */
+  offset: number | null;
   /** The league's zone, "America/Los_Angeles". */
   leagueZone: string;
   /** The viewer's zone when it differs from the league's, else null. */
   viewerZone: string | null;
+  /** The viewer's offset from the league's clock (null when they agree). */
+  viewerOffset: number | null;
   /** The viewer's zone once the browser has told us (even when it is the
    *  league's), else null: before hydration, or a zone Intl can't read. */
   localZone: string | null;
+  /** The viewer's clock moves against the league's between voting and the
+   *  season (a daylight-saving change on one side only), so the shown times
+   *  already allow for it. */
+  clockChanges: boolean;
   setUseLeague: (league: boolean) => void;
   useLeague: boolean;
 };
@@ -50,31 +57,42 @@ const ClockContext = createContext<Clock | null>(null);
  * league's. The viewer's zone is read after hydration (the server can't know
  * it), so the first paint shows the league's clock and the switch to the
  * viewer's is the useLocalTimeText trick: never a hydration mismatch.
+ *
+ * One offset converts every slot, read at `clockAt` (pollClockAt: the
+ * season, not the week people vote in), so a grid row never mixes two hours.
  */
 export function PollClockProvider({
   leagueZone,
-  sampleAt,
+  clockAt,
+  viewedAt,
   children,
 }: {
   leagueZone: string;
-  /** An instant in the poll's week, to tell whether the two clocks differ. */
-  sampleAt: number;
+  /** When the viewer's clock is read to convert the poll (PollView.clockAt). */
+  clockAt: number;
+  /** When the page was built (PollView.viewedAt): the clock while voting. */
+  viewedAt: number;
   children: ReactNode;
 }) {
   const zone = useSyncExternalStore(emptySubscribe, browserZone, () => null);
   const [useLeague, setUseLeague] = useState(false);
-  const localZone = zone && slotInZone(sampleAt, zone) ? zone : null;
-  const viewerZone =
-    localZone && zoneOffsetMinutes(sampleAt, leagueZone, localZone) !== null
-      ? localZone
-      : null;
+  const localZone = zone && slotInZone(clockAt, zone) ? zone : null;
+  const viewerOffset = localZone
+    ? zoneOffsetMinutes(clockAt, leagueZone, localZone)
+    : null;
+  const viewerZone = viewerOffset !== null ? localZone : null;
+  const clockChanges =
+    !!localZone &&
+    zoneOffsetMinutes(viewedAt, leagueZone, localZone) !== viewerOffset;
   return (
     <ClockContext.Provider
       value={{
-        zone: useLeague ? null : viewerZone,
+        offset: useLeague ? null : viewerOffset,
         leagueZone,
         viewerZone,
+        viewerOffset,
         localZone,
+        clockChanges,
         useLeague,
         setUseLeague,
       }}
@@ -110,10 +128,14 @@ export function useClockPhrase(): string {
  */
 export function ClockNote({ className }: { className?: string }) {
   const phrase = useClockPhrase();
+  const { clockChanges, useLeague } = usePollClock();
   return (
     <p className={cn("text-sm text-fg", className)}>
       <span aria-hidden>🕒 </span>
       Times are shown in <span className="font-semibold">{phrase}</span>.
+      {clockChanges && !useLeague
+        ? " Daylight saving changes the gap between your clock and the league's before the season, so these are your times once it starts."
+        : null}
     </p>
   );
 }
@@ -176,9 +198,9 @@ export function DayShift({ shift }: { shift: -1 | 0 | 1 }) {
  * hydrated one print the same text.
  */
 export function useSlotOnClock() {
-  const { zone } = usePollClock();
+  const { offset } = usePollClock();
   return (slot: PollSlotView) => {
-    const shown = slotOnClock(slot, zone);
+    const shown = slotOnClock(slot, offset);
     const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][shown.day];
     return { ...shown, text: `${day} ${slotHour(shown.minute, LEAGUE_LOCALE)}` };
   };
@@ -189,9 +211,9 @@ export function useSlotOnClock() {
  * league-time label, when the viewer's clock differs.
  */
 export function YourTimeNote({ slot }: { slot: PollSlotView }) {
-  const { viewerZone } = usePollClock();
+  const { viewerZone, viewerOffset } = usePollClock();
   if (!viewerZone) return null;
-  const shown = slotOnClock(slot, viewerZone);
+  const shown = slotOnClock(slot, viewerOffset);
   const day = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][
     shown.day
   ];

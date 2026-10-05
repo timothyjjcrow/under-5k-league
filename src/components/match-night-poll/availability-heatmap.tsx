@@ -34,7 +34,7 @@ export function AvailabilityHeatmap({
   /** The viewer's marked times, ringed on the grid. */
   mine: string[] | null;
 }) {
-  const { zone } = usePollClock();
+  const { offset } = usePollClock();
   const clockPhrase = useClockPhrase();
   const onClock = useSlotOnClock();
   const grid = pollGrid(slots);
@@ -77,10 +77,9 @@ export function AvailabilityHeatmap({
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted">
                   {leader ? (open ? "Leading" : "Winner") : `#${index + 1}`}
                 </p>
-                <p className="font-semibold text-fg sm:mt-0.5">
-                  {shown.text}
-                  <DayShift shift={shown.shift} />
-                </p>
+                {/* The text already names the weekday on the shown clock, so
+                    no "+1": "Sun 3 AM+1" read as Monday. */}
+                <p className="font-semibold text-fg sm:mt-0.5">{shown.text}</p>
                 <p className="ml-auto text-xs text-muted sm:ml-0">
                   {count} of {voters} can play
                   {mineSet.has(key) ? " · you can" : ""}
@@ -123,7 +122,7 @@ export function AvailabilityHeatmap({
             const sample = grid.days
               .map((day) => grid.at(day, minute))
               .find((slot): slot is PollSlotView => !!slot);
-            const shown = sample ? slotOnClock(sample, zone) : null;
+            const shown = sample ? slotOnClock(sample, offset) : null;
             return (
               <tr key={minute}>
                 <th

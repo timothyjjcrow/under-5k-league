@@ -241,7 +241,9 @@ export async function announceMatchNightPollResult(
       winner,
       count: result.counts[result.winner],
       voters: result.ballots,
-      nextAtMs: winnerSlot?.nextAt ?? Date.now(),
+      nextAtMs: winnerSlot
+        ? nextSlotOccurrence(winnerSlot, Date.now(), LEAGUE_CONFIG.timeZone)
+        : Date.now(),
       runnerUp:
         runnerKey && runnerCount > 0
           ? { label: label(runnerKey), count: runnerCount }
@@ -259,6 +261,10 @@ export async function announceMatchNightPollResult(
     where: { key: marker },
     data: { value: "sent" },
   });
+  // The post is a durable outbox row: if the first delivery attempt failed,
+  // the worker sends it, so wake the automation gate now rather than at its
+  // next scheduled check (createMatchNightPoll does the same).
+  refresh();
   await logAdminAction({
     action: "announceMatchNightPollResult",
     summary: `Announced on Discord that ${winner} won the match-night poll "${poll.question}"`,

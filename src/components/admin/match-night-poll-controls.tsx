@@ -66,9 +66,9 @@ export function MatchNightPollControls({
         <CurrentPoll poll={poll} season={season} nowMs={nowMs} />
       ) : (
         <p className="text-sm text-muted">
-          No poll yet. Open one to let signed-up players rank the match-night
-          slots they can make. It appears on Home for everyone; only players
-          signed up for the season (or on a roster) can vote.
+          No poll yet. Open one to let signed-up players mark every
+          match-night time they can make. It appears on Home for everyone;
+          only players signed up for the season (or on a roster) can vote.
         </p>
       )}
       {poll?.open ? null : <NewPollForm nowMs={nowMs} hasPoll={!!poll} />}
@@ -121,7 +121,8 @@ function CurrentPoll({
       {poll.results ? (
         <PollClockProvider
           leagueZone={poll.timeZone}
-          sampleAt={poll.slots[0]?.nextAt ?? poll.closesAt}
+          clockAt={poll.clockAt}
+          viewedAt={poll.viewedAt}
         >
           <ClockNote className="mb-3" />
           <AvailabilityHeatmap

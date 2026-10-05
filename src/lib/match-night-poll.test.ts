@@ -14,6 +14,7 @@ import {
   parseSlots,
   pollGrid,
   pollOnHome,
+  pollClockAt,
   pollOpen,
   pollResultsVisible,
   pollSignupsOpen,
@@ -191,15 +192,35 @@ describe("clocks", () => {
   });
 
   it("reads a slot on the viewer's clock, saying when it lands on another day", () => {
-    const sat = { day: 6, minute: 18 * 60, nextAt: Date.UTC(2026, 9, 11, 1, 0) }; // Sat 18:00 PT
+    const sat = { day: 6, minute: 18 * 60 }; // Sat 18:00 PT
     expect(slotOnClock(sat, null)).toEqual({ day: 6, minute: 1080, shift: 0 });
-    expect(slotOnClock(sat, "America/New_York")).toEqual({ day: 6, minute: 1260, shift: 0 });
-    expect(slotOnClock(sat, "Europe/Berlin")).toEqual({ day: 0, minute: 180, shift: 1 });
-    const monNoon = { day: 1, minute: 720, nextAt: Date.UTC(2026, 9, 5, 19, 0) }; // Mon 12:00 PT
-    expect(slotOnClock(monNoon, "Pacific/Pago_Pago")).toEqual({ day: 1, minute: 480, shift: 0 });
-    const monEarly = { day: 1, minute: 60, nextAt: Date.UTC(2026, 9, 5, 8, 0) }; // Mon 01:00 PT
-    expect(slotOnClock(monEarly, "Pacific/Honolulu")).toEqual({ day: 0, minute: 1320, shift: -1 });
-    expect(slotOnClock(sat, "Etc/Unknown")).toEqual({ day: 6, minute: 1080, shift: 0 });
+    expect(slotOnClock(sat, 180)).toEqual({ day: 6, minute: 1260, shift: 0 }); // New York
+    expect(slotOnClock(sat, 540)).toEqual({ day: 0, minute: 180, shift: 1 }); // Berlin
+    const monNoon = { day: 1, minute: 720 };
+    expect(slotOnClock(monNoon, -240)).toEqual({ day: 1, minute: 480, shift: 0 }); // Pago Pago
+    const monEarly = { day: 1, minute: 60 };
+    expect(slotOnClock(monEarly, -180)).toEqual({ day: 0, minute: 1320, shift: -1 }); // Honolulu
+    // A half-hour zone, and Saturday wrapping round to Sunday.
+    expect(slotOnClock({ day: 6, minute: 20 * 60 }, 750)).toEqual({ day: 0, minute: 510, shift: 1 });
+  });
+
+  it("converts the whole poll at one instant in the season, so a grid row never mixes two hours", () => {
+    // Voting closes Sun Oct 25 2026, 9 PM Pacific. Europe has already left
+    // summer time and the US leaves it on Nov 1: converting each slot at its
+    // own next occurrence read Mon–Sat at 8 hours and Sunday at 9.
+    const closesAt = new Date(Date.UTC(2026, 9, 26, 4, 0));
+    const clockAt = pollClockAt(closesAt);
+    expect(clockAt).toBe(closesAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    expect(zoneOffsetMinutes(clockAt, LA, "Europe/Berlin")).toBe(540);
+    // During that week the offset is 8 hours: not the season's.
+    expect(zoneOffsetMinutes(Date.UTC(2026, 9, 28, 19, 0), LA, "Europe/Berlin")).toBe(480);
+    // Arizona keeps one clock all year: level with Pacific while voting in
+    // October, an hour ahead once the season is played.
+    expect(zoneOffsetMinutes(Date.UTC(2026, 9, 20, 19, 0), LA, "America/Phoenix")).toBeNull();
+    expect(zoneOffsetMinutes(clockAt, LA, "America/Phoenix")).toBe(60);
+    const offset = zoneOffsetMinutes(clockAt, LA, "Europe/Berlin");
+    const row = [1, 2, 3, 4, 5, 6, 0].map((day) => slotOnClock({ day, minute: 14 * 60 }, offset));
+    expect(new Set(row.map((cell) => cell.minute))).toEqual(new Set([23 * 60]));
   });
 
   it("measures how far the viewer's clock is from the league's", () => {

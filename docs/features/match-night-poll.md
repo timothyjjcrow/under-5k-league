@@ -44,7 +44,12 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   an ACTIVE signup, player or standin, or a roster or captain seat, in the
   voting season, the way `hasActiveLeagueParticipation` counts it. The voting
   season is the active one, or in the offseason the most recent. Admins are
-  not exempt. Everyone sees the card; a signed-in viewer who can't vote sees
+  not exempt. **A ballot counts only while its voter is still signed up**
+  (`stillSignedUp` in `viewOf`): eligibility is checked when a ballot is cast,
+  and without the recount a player who withdrew, or whom an admin removed,
+  kept counting and could swing the result. The row is kept, so a player who
+  signs up again counts again; while out, they see the card as any non-voter
+  does. Everyone sees the card; a signed-in viewer who can't vote sees
   which times are on offer, who votes, and a link to My account while the
   season still takes a signup.
 - **Mark every time you could start a match, as many as you like** (Tim's call,
@@ -56,8 +61,9 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   drag across cells to mark or clear a range (pointer events with
   `elementFromPoint`, since touch keeps sending events to the cell the finger
   went down on; cells are `touch-none` so a drag paints instead of scrolling),
-  or tap a day or an hour header to fill or clear its column or row. Keyboard
-  users toggle cells as buttons (`aria-pressed`). The whole set posts at once
+  or tap a day or an hour header to fill or clear its column or row. Only a
+  primary press paints: a right-click or a second finger (a pinch) marks
+  nothing. Keyboard users toggle cells as buttons (`aria-pressed`). The whole set posts at once
   (`castMatchNightBallot`), so a half-marked grid never counts.
 - **Ballots store the slots marked, in poll order,** in the `ranking` column
   (named for the ranked-choice first version; order carries no meaning now).
@@ -83,11 +89,23 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   after the switch. It says "local" only once the browser's zone is known
   (`localZone`); the server's first paint names the league's zone instead.
 - **The grid keeps the league's day columns;** each row header shows that
-  start time on the viewer's clock (`slotOnClock`, from the slot's
-  `nextAt`), with a "+1"/"−1" when it lands on another day (6 PM Pacific
-  Saturday is 3 AM Sunday in Berlin). A viewer whose clock differs gets a
-  "Your local time (Eastern) | League time (Pacific)" switch (`ClockToggle`); the grid and
-  the heatmap share it.
+  start time on the viewer's clock (`slotOnClock`), with a "+1"/"−1" when it
+  lands on another day (6 PM Pacific Saturday is 3 AM Sunday in Berlin). A
+  viewer whose clock differs gets a "Your local time (Eastern) | League time
+  (Pacific)" switch (`ClockToggle`); the grid and the heatmap share it. Lists
+  that name the viewer's own weekday ("Sun 3 AM") carry no "+1": it would
+  read as Monday.
+- **One offset converts the whole poll, read in the season, not this week**
+  (`pollClockAt`: a week after voting closes). Converting each slot at its own
+  next occurrence put a daylight-saving change inside one grid row: in the
+  week Europe has left summer time and the US hasn't, a Berlin row labelled
+  "10 PM" held cells reading "11 PM". Reading the clocks in the season also
+  gives each player the times they will actually play (Arizona, on one clock
+  all year, is level with Pacific in October and an hour ahead in winter).
+  When the viewer's gap to the league's clock differs between now
+  (`PollView.viewedAt`) and then, `ClockNote` says so in one sentence.
+  Discord's "next on" time is the slot's real next occurrence
+  (`nextSlotOccurrence`).
 - **Stored and announced times stay on the league's clock** ("Saturdays at
   2:00 PM Pacific time"). Discord posts add `<t:…>` timestamps so each reader
   sees their own time.
@@ -139,5 +157,7 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   (`matchNightPollResultMessage`: the winner, how many can play, the next
   occurrence as `<t:…:F>`, the runner-up) is once per closing time, claimed
   with a `matchNightPollResult:<pollId>:<closesAt>` Setting row that is
-  released if the send fails. Both go through `sendDiscordMessage`, so
+  released if the send fails. The post is a durable outbox row, so the action
+  expires the automation gate (`refresh()`) and the worker delivers a post
+  whose first attempt failed without waiting for the gate's next check. Both go through `sendDiscordMessage`, so
   previews never post.

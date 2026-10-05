@@ -327,6 +327,50 @@ describe("who may vote", () => {
     ).toEqual(refusal);
   });
 
+  it("stops counting a ballot once its voter withdraws or is removed, and counts it again if they sign back up", async () => {
+    const poll = await openPoll(admin.id);
+    // Two for Sunday, two for Saturday: Saturday wins only if the two
+    // Saturday ballots of players who left keep counting.
+    const [a, b, quitter, removed] = await Promise.all(
+      ["A", "B", "Quitter", "Removed"].map((name) => makeVoter(name)),
+    );
+    for (const voter of [a, b]) {
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] });
+    }
+    for (const voter of [quitter, removed]) {
+      await castBallot({ pollId: poll.id, userId: voter.id, availability: [SAT, SUN] });
+    }
+    await prisma.registration.updateMany({
+      where: { userId: quitter.id },
+      data: { status: "WITHDRAWN" },
+    });
+    await prisma.registration.updateMany({
+      where: { userId: removed.id },
+      data: { status: "REMOVED" },
+    });
+    const now = Date.now();
+    const seen = await loadHomePoll({ id: admin.id, role: "ADMIN" }, now);
+    expect(seen?.ballots).toBe(2);
+    expect(seen?.results?.counts[SUN]).toBe(2);
+    expect(seen?.results?.counts[SAT]).toBe(0);
+    // The player who left sees the poll as any non-voter does: no ballot,
+    // no vote, and no count while voting is open.
+    expect(await loadHomePoll({ id: quitter.id, role: "USER" }, now)).toMatchObject({
+      canVote: false,
+      myAvailability: null,
+      results: null,
+    });
+    // The rows are kept: signing up again counts the ballot again.
+    expect(await prisma.matchNightBallot.count()).toBe(4);
+    await prisma.registration.updateMany({
+      where: { userId: quitter.id },
+      data: { status: "ACTIVE" },
+    });
+    const back = await loadHomePoll({ id: quitter.id, role: "USER" }, now);
+    expect(back).toMatchObject({ canVote: true, ballots: 3, myAvailability: [SAT, SUN] });
+    expect(back?.results?.counts[SAT]).toBe(1);
+  });
+
   it("tells Home who votes, and whether this viewer can", async () => {
     const poll = await openPoll(admin.id);
     const voter = await makeVoter("Voter");
