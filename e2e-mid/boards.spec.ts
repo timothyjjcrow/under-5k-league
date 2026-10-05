@@ -685,6 +685,48 @@ test("teams roster chips do not overlap on a phone", async ({ page }) => {
   assertNoErrors();
 });
 
+// Each team card carries its roster's average signup MMR (rosterAverageMmr,
+// the team page's "Avg MMR") beside the record. The fixture's rosters have no
+// signups, so this gives one team's members signups, one of them with no MMR
+// (unknown, left out of the average), and removes them afterwards.
+test("team cards show the roster's average MMR", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
+  const team = await db.team.findFirstOrThrow({
+    where: { seasonId: season.id },
+    include: { members: { orderBy: { id: "asc" } } },
+    orderBy: { draftOrder: "asc" },
+  });
+  const mmrs = [3200, 0, 4100, 3650, 2900];
+  const signups = team.members.map((member, i) => ({
+    id: `e2e-avg-mmr-${member.id}`,
+    seasonId: season.id,
+    userId: member.userId,
+    mmr: mmrs[i % mmrs.length],
+  }));
+  const known = signups.map((s) => s.mmr).filter((mmr) => mmr > 0);
+  const expected = Math.round(known.reduce((a, b) => a + b, 0) / known.length);
+  await db.registration.createMany({ data: signups });
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/teams");
+    const figure = page.locator("#main").getByText(`${expected} avg MMR`, {
+      exact: true,
+    });
+    await expect(figure).toHaveCount(1);
+    await expect(figure).toBeVisible();
+    // Only that team has signups here; the others show no figure at all
+    // rather than a zero.
+    await expect(page.locator("#main").getByText(/ avg MMR$/)).toHaveCount(1);
+    await expectNoHorizontalOverflow(page, "/teams with an average MMR");
+  } finally {
+    await db.registration.deleteMany({
+      where: { id: { in: signups.map((s) => s.id) } },
+    });
+  }
+  assertNoErrors();
+});
+
 // /leaders shipped a 188px horizontal page scroll at 390px: its board grid was
 // `grid gap-4 sm:grid-cols-2` with no base column, so below `sm` the implicit
 // track was `auto` and sized itself to a leaderboard row's max-content (560px

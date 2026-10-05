@@ -18,6 +18,7 @@ import { draftBudgetsForDisplay } from "@/lib/draft-budgets";
 import { powerRankings } from "@/lib/power-rankings";
 import { formByTeam } from "@/lib/team-matches";
 import { rosterOrder } from "@/lib/team-roster";
+import { rosterAverageMmr } from "@/lib/pool-stats";
 import { SeriesRecord } from "@/components/series-record";
 import {
   MATCH_PHASE,
@@ -147,7 +148,8 @@ export default async function TeamsPage() {
     matches,
   );
 
-  // Captains' signup MMR sets the projected (MMR-weighted) draft budgets.
+  // Captains' signup MMR sets the projected (MMR-weighted) draft budgets, and
+  // every member's sets the card's average MMR.
   const registrationUserIds = [
     ...new Set([
       ...teams.map((team) => team.captainId),
@@ -331,6 +333,19 @@ export default async function TeamsPage() {
               summary.push(
                 <span key="players" className="tabular-nums">
                   {t.members.length}/{season.teamSize} players
+                </span>,
+              );
+            }
+            // The roster's strength at a glance, the same figure as the team
+            // page's "Avg MMR". Left out while no member's MMR is known.
+            const avgMmr = rosterAverageMmr(
+              t.members.map((m) => m.userId),
+              regs,
+            );
+            if (avgMmr > 0) {
+              summary.push(
+                <span key="mmr" className="tabular-nums">
+                  <span className="font-medium text-fg">{avgMmr}</span> avg MMR
                 </span>,
               );
             }

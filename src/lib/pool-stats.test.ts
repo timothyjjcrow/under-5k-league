@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { averageMmr, roleCoverage, shortRolesLine } from "./pool-stats";
+import {
+  averageMmr,
+  roleCoverage,
+  rosterAverageMmr,
+  shortRolesLine,
+} from "./pool-stats";
 
 describe("roleCoverage", () => {
   it("counts each position across players", () => {
@@ -68,5 +73,34 @@ describe("shortRolesLine", () => {
   it("is quiet with no players or no teams", () => {
     expect(shortRolesLine(coverage([0, 0, 0, 0, 0]), 6, 0)).toBeNull();
     expect(shortRolesLine(coverage([3, 3, 3, 3, 1]), 0, 5)).toBeNull();
+  });
+});
+
+describe("rosterAverageMmr", () => {
+  const regs = [
+    { userId: "cap", mmr: 4000 },
+    { userId: "p1", mmr: 3000 },
+    { userId: "p2", mmr: 0 }, // never entered one: unknown, not zero
+    { userId: "other-team", mmr: 9000 },
+  ];
+
+  it("averages the members' known MMRs only", () => {
+    expect(rosterAverageMmr(["cap", "p1", "p2"], regs)).toBe(3500);
+  });
+
+  it("ignores signups of players on other teams", () => {
+    expect(rosterAverageMmr(["cap"], regs)).toBe(4000);
+  });
+
+  it("counts a member once even with a duplicate row", () => {
+    expect(
+      rosterAverageMmr(["cap", "p1"], [...regs, { userId: "p1", mmr: 3000 }]),
+    ).toBe(3500);
+  });
+
+  it("is 0 (unknown) for an empty roster or one with no known MMR", () => {
+    expect(rosterAverageMmr([], regs)).toBe(0);
+    expect(rosterAverageMmr(["p2"], regs)).toBe(0);
+    expect(rosterAverageMmr(["no-signup"], regs)).toBe(0);
   });
 });

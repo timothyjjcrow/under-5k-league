@@ -36,7 +36,7 @@ import {
   teamByeWeek,
 } from "@/lib/schedule";
 import { ByeWeekNote } from "@/components/bye-week-note";
-import { roleCoverage } from "@/lib/pool-stats";
+import { roleCoverage, rosterAverageMmr } from "@/lib/pool-stats";
 import {
   summarizePlayerGames,
   type PlayerGameLine,
@@ -288,10 +288,8 @@ export default async function TeamPage({
   const settledStatus =
     hasOutlook && myScenario ? settledPlayoffStatus(myScenario) : null;
   const showOutlookCard = hasOutlook && !settledStatus;
-  const knownMmrs = rosterRegs.map((r) => r.mmr).filter((v) => v > 0);
-  const avgMmr = knownMmrs.length
-    ? Math.round(knownMmrs.reduce((s, v) => s + v, 0) / knownMmrs.length)
-    : null;
+  // Shared with the Teams overview's cards, so the two always agree.
+  const avgMmr = rosterAverageMmr(memberIds, rosterRegs) || null;
   // Role coverage helps a captain decide whom to buy, so it shows only in
   // the draft phase before the auction completes. In signups it is all gaps
   // (only the captain is rostered); after the draft the team can't act on

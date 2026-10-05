@@ -33,6 +33,25 @@ export function averageMmr(players: { mmr: number }[]): number {
 }
 
 /**
+ * A roster's average MMR: the known signup MMRs of its members in that season
+ * (`averageMmr`, so 0 means none is known). `registrations` may hold anyone's
+ * rows for the season; only the members' count, once each. The Teams overview
+ * and each team's page both read it, so the two can't disagree.
+ */
+export function rosterAverageMmr(
+  memberUserIds: readonly string[],
+  registrations: readonly { userId: string; mmr: number }[],
+): number {
+  const members = new Set(memberUserIds);
+  const mmrByMember = new Map(
+    registrations
+      .filter((r) => members.has(r.userId))
+      .map((r) => [r.userId, r.mmr]),
+  );
+  return averageMmr([...mmrByMember.values()].map((mmr) => ({ mmr })));
+}
+
+/**
  * One line naming the positions too few signups list to give every team one,
  * fewest first; null when there is nothing specific to say.
  *

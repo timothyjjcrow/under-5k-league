@@ -520,6 +520,11 @@ the league is already draftable and many visitors have joined. Write for both.
 
 - **The index is three across from `xl`** (two from `md`), each card a
   compact header (56px crest, name, one summary line) over the roster chips.
+- **The summary line ends with the roster's average MMR** ("3394 avg MMR"):
+  `rosterAverageMmr` (`pool-stats.ts`), the members' known signup MMRs in the
+  season, the same figure as the team page's "Avg MMR" tile. It is left out,
+  never shown as 0, while no member's MMR is known. The fixtures' rosters have
+  no signups, so `boards.spec.ts` gives one team signups to check it.
 - **A team page is two columns from `lg` when it has a rail:** the main
   column is the next series, the roster and every fixture; the rail (22rem,
   24rem from `xl`) holds the hero pool, rematches and the playoff outlook.
