@@ -1,12 +1,18 @@
 import { test, expect, type Page } from "@playwright/test";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
-// The match-night poll end to end: an admin opens it from /admin, a player
-// ranks slots on Home and sees the live count, the admin closes it, and the
-// result shows on Home for everyone. A zz- spec because it writes league-wide
-// state Home renders; it deletes its poll at the end.
+// The match-night poll end to end: an admin opens it from /admin (the grid
+// fills itself: every day, noon to 6 PM), a signed-up player marks times on
+// Home and sees who can play when, a viewer in another zone sees the grid on
+// their own clock, and the admin closes and deletes it. A zz- spec because
+// it writes league-wide state Home renders; it deletes its poll at the end.
 
 const QUESTION = "When should match night be? (e2e)";
+const EU = process.env.NEXT_PUBLIC_LEAGUE_REGION === "eu";
+const LEAGUE_ZONE = EU ? "Europe/Berlin" : "America/Los_Angeles";
+/** A grid hour as the league's locale prints it. */
+const hour = (h: number) =>
+  EU ? `${String(h).padStart(2, "0")}:00` : `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
 
 async function signIn(page: Page, query: string, redirect: string) {
   await page.goto(`/api/auth/dev?${query}&redirect=${encodeURIComponent(redirect)}`);
@@ -22,109 +28,155 @@ async function openPollSection(page: Page) {
   return section;
 }
 
-test("players rank match-night slots on Home and see the instant-runoff count", async ({
-  page,
-}) => {
-  test.slow();
-  const noErrors = trackPageErrors(page);
+test.describe.configure({ mode: "serial" });
 
-  // 1. An admin opens a three-slot poll.
-  await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin");
-  let section = await openPollSection(page);
-  await section.getByLabel("Question").fill(QUESTION);
-  const days = section.getByRole("combobox", { name: /^Slot \d day$/ });
-  const times = section.getByLabel(/^Slot \d time$/);
-  const slots: Array<[string, string]> = [
-    ["3", "20:00"], // Wednesday
-    ["4", "20:00"], // Thursday
-    ["0", "18:00"], // Sunday
-  ];
-  for (const [index, [day, time]] of slots.entries()) {
-    await days.nth(index).selectOption(day);
-    await times.nth(index).fill(time);
-  }
-  await section.getByLabel(/Announce it on Discord/).uncheck();
-  await section.getByRole("button", { name: "Open the poll" }).click();
-  await expect(
-    page.getByRole("status").filter({ hasText: "Poll open on Home with 3 slots" }),
-  ).toBeVisible();
+test.describe("on the league's clock", () => {
+  test.use({ timezoneId: LEAGUE_ZONE });
 
-  // 2. An account that isn't signed up sees the slots and who votes, but no
-  // ballot.
-  await signIn(page, "name=Poll+Outsider&steamId=76561190000994102", "/");
-  const card = page.locator("#match-night-poll");
-  await expect(card.getByText(/Voting is for players signed up for .+, and you aren't signed up\./)).toBeVisible();
-  await expect(card.getByRole("link", { name: "My account" })).toHaveAttribute("href", "/me");
-  await expect(card.getByRole("button", { name: /^Rank / })).toHaveCount(0);
+  test("an admin opens a poll and a signed-up player marks the times they can play", async ({
+    page,
+  }) => {
+    test.slow();
+    const noErrors = trackPageErrors(page);
 
-  // 3. A rostered player (stage.ts pins this steamId to a home-team player)
-  // sees the ballot first, not the count.
-  await signIn(page, "name=Poll+Voter&steamId=76561190000991003", "/");
-  await expect(card.getByRole("heading", { name: QUESTION, level: 2 })).toBeVisible();
-  await expect(card.getByText("Voting open", { exact: true })).toBeVisible();
-  await expect(card.getByText("Live count", { exact: true })).toHaveCount(0);
-  const save = card.getByRole("button", { name: "Save my ranking" });
-  await expect(save).toBeDisabled();
+    // 1. The admin opens a poll; the grid fills itself.
+    await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin");
+    const section = await openPollSection(page);
+    await section.getByLabel("Question").fill(QUESTION);
+    await section.getByLabel(/Announce it on Discord/).uncheck();
+    await section.getByRole("button", { name: "Open the poll" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: /Poll open on Home: Every day, .+ \(49 start times\)/ }),
+    ).toBeVisible();
 
-  // Rank Sunday, then Wednesday, then swap them.
-  await card.getByRole("button", { name: /^Rank Sundays at .+ as your 1st choice$/ }).click();
-  await card.getByRole("button", { name: /^Rank Wednesdays at .+ as your 2nd choice$/ }).click();
-  await card.getByRole("button", { name: /^Move Wednesdays at .+ up$/ }).click();
-  const ranking = card.getByRole("list", { name: "Your ranking" });
-  await expect(ranking.getByRole("listitem")).toHaveCount(2);
-  await expect(ranking.getByRole("listitem").first()).toContainText("Wednesdays");
+    // 2. An account that isn't signed up sees which times are on offer and
+    // who votes, but no grid.
+    await signIn(page, "name=Poll+Outsider&steamId=76561190000994102", "/");
+    const card = page.locator("#match-night-poll");
+    await expect(card.getByRole("heading", { name: QUESTION, level: 2 })).toBeVisible();
+    await expect(card.getByText(/Times on offer: Every day/)).toBeVisible();
+    await expect(
+      card.getByText(/Voting is for players signed up for .+, and you aren't signed up\./),
+    ).toBeVisible();
+    await expect(card.getByRole("link", { name: "My account" })).toHaveAttribute("href", "/me");
+    await expect(card.getByRole("table", { name: "Times you could play" })).toHaveCount(0);
 
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expectNoHorizontalOverflow(page, "home poll ballot");
-  await page.setViewportSize({ width: 1280, height: 900 });
+    // 3. A rostered player (stage.ts pins this steamId) gets the grid.
+    await signIn(page, "name=Poll+Voter&steamId=76561190000991003", "/");
+    const grid = card.getByRole("table", { name: "Times you could play" });
+    await expect(grid).toBeVisible();
+    await expect(grid.locator('[data-slot][aria-pressed="false"]')).toHaveCount(49);
+    // Same clock as the league, so no switch.
+    await expect(card.getByRole("group", { name: "Show times on" })).toHaveCount(0);
+    const save = card.getByRole("button", { name: "Save my times" });
+    await expect(save).toBeDisabled();
 
-  await save.click();
-  await expect(
-    page.getByRole("status").filter({ hasText: /Vote saved: 2 slots ranked, Wednesdays/ }),
-  ).toBeVisible();
-  await expect(card.getByText("Your vote is in")).toBeVisible();
-  await expect(card.getByText("Live count", { exact: true })).toBeVisible();
-  await expect(card.getByText(/Wednesdays .+ leads with 1 of the 1 ballot in play/)).toBeVisible();
+    // A whole day from its header, then one time off again.
+    await grid.getByRole("button", { name: "Mark every Saturday time" }).click();
+    await expect(grid.locator('[data-slot][aria-pressed="true"]')).toHaveCount(7);
+    await grid.getByRole("button", { name: `Saturday ${hour(18)}`, exact: true }).click();
+    // A range by dragging down Sunday from noon to 2 PM.
+    const from = await grid
+      .getByRole("button", { name: `Sunday ${hour(12)}`, exact: true })
+      .boundingBox();
+    const to = await grid
+      .getByRole("button", { name: `Sunday ${hour(14)}`, exact: true })
+      .boundingBox();
+    if (!from || !to) throw new Error("grid cells have no box");
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await expect(grid.locator('[data-slot][aria-pressed="true"]')).toHaveCount(9);
+    await expect(card.getByText(/^9 times:/)).toBeVisible();
 
-  // Changing the ranking reopens the editor with the saved order.
-  await card.getByRole("button", { name: "Change my ranking" }).click();
-  await expect(
-    card.getByRole("list", { name: "Your ranking" }).getByRole("listitem").first(),
-  ).toContainText("Wednesdays");
-  await card.getByRole("button", { name: "Cancel" }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectNoHorizontalOverflow(page, "home poll grid");
+    await page.setViewportSize({ width: 1280, height: 900 });
 
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expectNoHorizontalOverflow(page, "home poll count");
-  await page.setViewportSize({ width: 1280, height: 900 });
+    await save.click();
+    await expect(
+      page.getByRole("status").filter({ hasText: /^Saved 9 times: Sat .+, Sun .+ \(.+ time\)\./ }),
+    ).toBeVisible();
+    await expect(card.getByText("Your times are in")).toBeVisible();
+    await expect(card.getByText("Who can play when", { exact: true })).toBeVisible();
+    const heatmap = card.getByRole("table", { name: /How many players can play each time/ });
+    await expect(heatmap).toBeVisible();
+    await expect(card.getByRole("list", { name: "Best times" })).toContainText("1 of 1 can play");
 
-  // 4. The admin closes voting; Home shows the winner to everyone.
-  await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin");
-  section = await openPollSection(page);
-  page.once("dialog", (dialog) => dialog.accept());
-  await section.getByRole("button", { name: "Close voting now" }).click();
-  await expect(
-    page.getByRole("status").filter({ hasText: "Voting closed with 1 vote" }),
-  ).toBeVisible();
+    // Changing reopens the grid with the saved times.
+    await card.getByRole("button", { name: "Change my times" }).click();
+    await expect(grid.locator('[data-slot][aria-pressed="true"]')).toHaveCount(9);
+    await card.getByRole("button", { name: "Cancel" }).click();
 
-  await page.goto("/");
-  await expect(card.getByText("Voting closed", { exact: true })).toBeVisible();
-  await expect(card.getByText("The league picked", { exact: true })).toBeVisible();
-  await expect(card.getByText(/^Wednesdays at .+ time$/)).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectNoHorizontalOverflow(page, "home poll heatmap");
+    noErrors();
+  });
+});
 
-  // 5. Clean up through the typed-confirmation delete.
-  await page.goto("/admin");
-  section = await openPollSection(page);
-  await section.getByRole("button", { name: "Delete poll" }).click();
-  const dialog = page.getByRole("dialog");
-  const confirm = dialog.getByRole("button", { name: "Delete poll" });
-  await expect(confirm).toBeDisabled();
-  await dialog.getByRole("textbox").fill(QUESTION);
-  await confirm.click();
-  await expect(
-    page.getByRole("status").filter({ hasText: "Deleted the poll and its 1 vote" }),
-  ).toBeVisible();
-  await page.goto("/");
-  await expect(page.locator("#match-night-poll")).toHaveCount(0);
+test.describe("from another time zone", () => {
+  // Tokyo is half a day or more from both leagues' clocks.
+  test.use({ timezoneId: "Asia/Tokyo" });
 
-  noErrors();
+  test("a player sees the grid on their own clock and can switch to the league's", async ({
+    page,
+  }) => {
+    const noErrors = trackPageErrors(page);
+    await signIn(page, "name=Poll+Voter&steamId=76561190000991003", "/");
+    const card = page.locator("#match-night-poll");
+    const toggle = card.getByRole("group", { name: "Show times on" });
+    await expect(toggle.getByRole("button", { name: "Your time (Tokyo)" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const heatmap = card.getByRole("table", { name: /How many players can play each time/ });
+    // The first row is noon on the league's clock: a different hour in Tokyo.
+    const firstRow = heatmap.getByRole("rowheader").first();
+    await expect(heatmap).toHaveAccessibleName(/in Tokyo time/);
+    await expect(firstRow).not.toHaveText(hour(12));
+    await toggle.getByRole("button", { name: /^(Pacific|Berlin) time$/ }).click();
+    await expect(firstRow).toHaveText(hour(12));
+    noErrors();
+  });
+});
+
+test.describe("closing", () => {
+  test.use({ timezoneId: LEAGUE_ZONE });
+
+  test("the admin closes voting, Home shows the winner, and the poll can be deleted", async ({
+    page,
+  }) => {
+    const noErrors = trackPageErrors(page);
+    await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin");
+    let section = await openPollSection(page);
+    page.once("dialog", (dialog) => dialog.accept());
+    await section.getByRole("button", { name: "Close voting now" }).click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Voting closed with 1 vote" }),
+    ).toBeVisible();
+
+    await page.goto("/");
+    const card = page.locator("#match-night-poll");
+    await expect(card.getByText("Voting closed", { exact: true })).toBeVisible();
+    await expect(card.getByText("The league picked", { exact: true })).toBeVisible();
+    // Every marked time has the one voter; Saturday 1 PM is the earliest
+    // with a marked time on both sides, so it wins the tie.
+    await expect(card.getByText(/^Saturdays at .+ time$/)).toBeVisible();
+
+    await page.goto("/admin");
+    section = await openPollSection(page);
+    await section.getByRole("button", { name: "Delete poll" }).click();
+    const dialog = page.getByRole("dialog");
+    const confirm = dialog.getByRole("button", { name: "Delete poll" });
+    await expect(confirm).toBeDisabled();
+    await dialog.getByRole("textbox").fill(QUESTION);
+    await confirm.click();
+    await expect(
+      page.getByRole("status").filter({ hasText: "Deleted the poll and its 1 vote" }),
+    ).toBeVisible();
+    await page.goto("/");
+    await expect(page.locator("#match-night-poll")).toHaveCount(0);
+    noErrors();
+  });
 });

@@ -16,8 +16,13 @@ import { bool, localDate, str } from "@/lib/form";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import {
   DEFAULT_POLL_QUESTION,
+  POLL_DAYS,
+  POLL_DEFAULT_FROM_HOUR,
+  POLL_DEFAULT_TO_HOUR,
+  gridSlots,
+  gridSummary,
+  nextSlotOccurrence,
   parseSlotKey,
-  parseSlotRows,
   slotLabel,
 } from "@/lib/match-night-poll";
 import {
@@ -30,6 +35,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { isUniqueViolation } from "@/lib/prisma-errors";
 import { actionErrorMessage } from "@/lib/user-facing-error";
+import { zoneLabel } from "@/lib/zone-label";
 import { LEAGUE_LOCALE, formatLeagueTime } from "@/lib/zoned-time";
 import { adminOrError, refresh } from "./admin-shared";
 
@@ -44,10 +50,18 @@ export async function createMatchNightPoll(
 ): Promise<ActionResult> {
   const admin = await adminOrError();
   if ("error" in admin) return admin;
-  const parsed = parseSlotRows(
-    formData.getAll("slotDay").map(String),
-    formData.getAll("slotTime").map(String),
-  );
+  // The grid fills itself: every ticked day, on the hour, between the two
+  // hours (every day, noon to 6 PM, unless the admin changed them).
+  const hour = (key: string, fallback: number) => {
+    const raw = str(formData, key).trim();
+    return raw === "" ? fallback : Number(raw);
+  };
+  const ticked = formData.getAll("day").map(Number);
+  const parsed = gridSlots({
+    days: formData.has("daysPosted") ? ticked : [...POLL_DAYS],
+    fromHour: hour("fromHour", POLL_DEFAULT_FROM_HOUR),
+    toHour: hour("toHour", POLL_DEFAULT_TO_HOUR),
+  });
   if ("error" in parsed) return parsed;
   const closesAt = localDate(formData, "closesAt", "closesAtTs");
   if (!closesAt) return { error: "Pick when voting closes." };
@@ -73,20 +87,28 @@ export async function createMatchNightPoll(
   }
   if (!outcome.ok) return { error: outcome.error };
 
-  const labels = parsed.slots.map((slot) =>
-    slotLabel(slot, LEAGUE_CONFIG.timeZone, LEAGUE_LOCALE),
-  );
+  const summary = gridSummary(parsed.slots, LEAGUE_LOCALE);
+  const zone = zoneLabel(LEAGUE_CONFIG.timeZone);
   const closing = formatLeagueTime(closesAt);
   await logAdminAction({
     action: "createMatchNightPoll",
-    summary: `Opened the match-night poll "${outcome.poll.question}" with ${labels.length} slots (${labels.join("; ")}), closing ${closing}`,
+    summary: `Opened the match-night poll "${outcome.poll.question}": ${summary} ${zone} (${parsed.slots.length} start times), closing ${closing}`,
   });
+  // The earliest and latest start on the first day, so Discord can print the
+  // hours on each reader's clock.
+  const firstDay = parsed.slots.filter((slot) => slot.day === parsed.slots[0].day);
+  const nowMs = Date.now();
   // After the commit and best-effort: the poll is open whatever Discord says.
   const posted = announce
     ? await sendDiscordMessage(
         matchNightPollOpenedMessage({
           question: outcome.poll.question,
-          slots: labels,
+          summary,
+          zone,
+          hours: {
+            firstMs: nextSlotOccurrence(firstDay[0], nowMs, LEAGUE_CONFIG.timeZone),
+            lastMs: nextSlotOccurrence(firstDay.at(-1)!, nowMs, LEAGUE_CONFIG.timeZone),
+          },
           closesAtMs: closesAt.getTime(),
         }),
       )
@@ -98,7 +120,7 @@ export async function createMatchNightPoll(
       ? "It's announced on Discord."
       : "It couldn't be posted to Discord. Check the league webhook under Discord.";
   return {
-    message: `Poll open on Home with ${labels.length} slots until ${closing}. ${discord}`,
+    message: `Poll open on Home: ${summary} ${zone} (${parsed.slots.length} start times), until ${closing}. ${discord}`,
   };
 }
 
@@ -197,10 +219,12 @@ export async function announceMatchNightPollResult(
   if (!poll) return { error: "This poll no longer exists." };
   if (poll.open) return { error: "Voting is still open. Close it first." };
   const result = poll.results;
-  const final = result?.rounds.at(-1);
-  if (!result?.winner || !final) {
-    return { error: "Nobody ranked a slot, so there's no winner to announce." };
+  if (!result?.winner) {
+    return { error: "Nobody marked a time they can play, so there's no winner to announce." };
   }
+  const winnerSlot = poll.slots.find((slot) => slot.key === result.winner);
+  const runnerKey = result.order[1];
+  const runnerCount = runnerKey ? result.counts[runnerKey] : 0;
   const marker = `matchNightPollResult:${poll.id}:${poll.closesAt}`;
   try {
     await prisma.setting.create({ data: { key: marker, value: "sending" } });
@@ -215,9 +239,13 @@ export async function announceMatchNightPollResult(
     matchNightPollResultMessage({
       question: poll.question,
       winner,
-      votes: final.tallies.find((t) => t.key === result.winner)?.votes ?? 0,
-      counted: result.ballots - final.exhausted,
-      rounds: result.rounds.length,
+      count: result.counts[result.winner],
+      voters: result.ballots,
+      nextAtMs: winnerSlot?.nextAt ?? Date.now(),
+      runnerUp:
+        runnerKey && runnerCount > 0
+          ? { label: label(runnerKey), count: runnerCount }
+          : null,
     }),
   );
   if (!posted) {

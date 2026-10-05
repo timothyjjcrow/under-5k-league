@@ -1,15 +1,17 @@
 # Match-night poll
 
-A ranked-choice vote on the league's weekly match slot, shown on Home. An
-admin offers 2 to 10 slots (a weekday and a time on the league's clock),
-players rank the ones they can make, and the count is instant runoff. Main
-files: `src/lib/match-night-poll.ts` (pure: slots, labels, the count, the
-page's view), `src/lib/match-night-poll-service.ts` (storage and claims),
+An availability vote on the league's weekly match slot, shown on Home. An
+admin opens a poll and its grid fills itself (every day, every hour from noon
+to 6 PM on the league's clock, unless the admin narrows it); signed-up players
+mark every start time they could play, and the time the most players can make
+wins. Main files: `src/lib/match-night-poll.ts` (pure: the grid, labels, the
+count, the viewer's-clock conversion, the page's view),
+`src/lib/match-night-poll-service.ts` (storage and claims),
 `src/app/actions/match-night-poll.ts` (voting),
 `src/app/actions/admin-match-night-poll.ts` (admin),
 `src/components/home/match-night-poll.tsx` (the Home card),
-`src/components/match-night-poll/*` (ballot, count, slot face) and
-`src/components/admin/match-night-poll-controls.tsx` (the Match night poll
+`src/components/match-night-poll/*` (the grid, the heatmap, the shared clock)
+and `src/components/admin/match-night-poll-controls.tsx` (the Match night poll
 section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
 
 ## The model
@@ -22,6 +24,11 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   `matchNightForWeek` does. Slots are stored as JSON on the poll and keyed
   `"<day>@<minute>"` (`slotKey`); `slotLabel` prints them in the same shape
   `fixturesMatchNightLabel` prints a season's night.
+- **The grid fills itself** (`gridSlots`): every ticked day (all seven by
+  default), on the hour, from `POLL_DEFAULT_FROM_HOUR` (12) to
+  `POLL_DEFAULT_TO_HOUR` (18) inclusive on the league's clock, so a default
+  poll offers 49 start times. The admin form only adjusts days and hours;
+  there is no per-slot entry. At most `POLL_MAX_SLOTS` (84).
 - **Slots are fixed once the poll opens.** An edit would reinterpret every
   ballot already cast; the admin deletes the poll and opens a new one.
 - **`closesAt` is the one deadline.** "Close voting now" moves it to now; the
@@ -38,43 +45,57 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   voting season, the way `hasActiveLeagueParticipation` counts it. The voting
   season is the active one, or in the offseason the most recent. Admins are
   not exempt. Everyone sees the card; a signed-in viewer who can't vote sees
-  the slots, who votes, and a link to My account while the season still takes
-  a signup. One ballot per voter per poll, recast freely until voting closes.
-- **Eligibility is checked inside the ballot's transaction, after the
-  claim,** so a refusal throws and rolls the claim back. It is not locked: a
-  signup withdrawn mid-transaction can let that one ballot through, which ends
-  where voting a moment earlier and withdrawing after would (a withdrawal
-  doesn't remove an earlier ballot).
-- **A ballot is the slots the voter can make, best first.** A slot left off
-  means "I can't play then". An empty ranking ("None of these work for me")
-  is a vote too: it counts in turnout and is exhausted from round one.
-- **The ballot posts the whole ranking at once** (`castMatchNightBallot`), so
-  a half-built ranking never counts. Unknown slots and repeats are dropped
-  and the toast says how many (never rewrite silently); a ranking of only
-  unknown slots is refused rather than saved as "none".
+  which times are on offer, who votes, and a link to My account while the
+  season still takes a signup.
+- **Mark every time you could start a match, as many as you like** (Tim's call,
+  2026-10-04, replacing the first ranked-choice version). No cap: a cap makes a
+  player drop times they could make, which is exactly the information that
+  finds a night most people can play. An empty ballot ("None of these work for
+  me") is a vote too: it counts in turnout and marks nothing.
+- **The grid is the ballot** (`AvailabilityGrid`): tap a cell to toggle it,
+  drag across cells to mark or clear a range (pointer events with
+  `elementFromPoint`, since touch keeps sending events to the cell the finger
+  went down on; cells are `touch-none` so a drag paints instead of scrolling),
+  or tap a day or an hour header to fill or clear its column or row. Keyboard
+  users toggle cells as buttons (`aria-pressed`). The whole set posts at once
+  (`castMatchNightBallot`), so a half-marked grid never counts.
+- **Ballots store the slots marked, in poll order,** in the `ranking` column
+  (named for the ranked-choice first version; order carries no meaning now).
+  Unknown slots and repeats are dropped and the toast says how many (never
+  rewrite silently); a ballot of only unknown slots is refused rather than
+  saved as "none".
 - **The count is hidden from signed-in non-voters while voting is open**
-  (`pollResultsVisible`): the tally is left out of the page payload, not just
-  hidden, so people rank what they can make instead of piling onto the
-  leader. Voters and admins see it live; everyone sees it once voting closes.
-  Nothing anywhere says who ranked what.
+  (`pollResultsVisible`): it is left out of the page payload, not just hidden,
+  so people mark the times they can make instead of the ones already winning.
+  Voters and admins see it live; everyone sees it once voting closes. Nothing
+  anywhere says who marked what.
 
-## The count (`instantRunoff`)
+## Time zones
 
-- Each round every ballot counts for its highest-ranked slot still standing.
-  More than half of the ballots still in play wins; otherwise the fewest-vote
-  slot drops and its ballots move on. Exhausted ballots stop counting, so the
-  majority is of ballots in play.
-- **Zero-vote slots drop together** (they carry no ballots, so it lands where
-  one-at-a-time would).
-- **Ties for fewest are deterministic:** fewer votes in the latest earlier
-  round that separates them, then fewer ballots ranking the slot at all
-  (`reach`), then poll order (the later slot drops). The round records which
-  rule decided and `roundStory` says it in words.
-- **Show it as a race:** `PollRunoff` keeps rows in finishing order
-  (`runoffPlacement`) so nothing jumps, draws each bar as a share of the
-  ballots in play against a dashed majority line, and steps or replays the
-  rounds with a one-sentence caption per round. "N of M can make it" under
-  each slot is `reach`, the approval signal an admin also wants.
+- **Every time shows on the viewer's own clock.** `PollClockProvider` reads the
+  browser's zone after hydration (the server can't know it), so the first
+  paint is the league's clock and the switch is the `useLocalTimeText` trick:
+  never a hydration mismatch. All labels use `LEAGUE_LOCALE`, never the
+  browser's locale, for the same reason.
+- **The grid keeps the league's day columns;** each row header shows that
+  start time on the viewer's clock (`slotOnClock`, from the slot's
+  `nextAt`), with a "+1"/"−1" when it lands on another day (6 PM Pacific
+  Saturday is 3 AM Sunday in Berlin). A viewer whose clock differs gets a
+  "Your time (Eastern) | Pacific time" switch (`ClockToggle`); the grid and
+  the heatmap share it.
+- **Stored and announced times stay on the league's clock** ("Saturdays at
+  2:00 PM Pacific time"). Discord posts add `<t:…>` timestamps so each reader
+  sees their own time.
+
+## The count (`tallyAvailability`)
+
+- The best slot is the one the most players can make. A tie goes to the slot
+  with more players free an hour either side on the same day (a late start or
+  a long series still works), then to the earlier slot in the week.
+  Deterministic.
+- **Shown as a heatmap** (`AvailabilityHeatmap`): the same grid, each cell the
+  number who can play, shaded by it, the leader outlined, the viewer's own
+  times ringed, and the top three times listed above it.
 
 ## Concurrency
 
@@ -83,7 +104,8 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   commits first refuses the ballot and one that commits second waits on the
   row lock. The deadline is enforced by that claim alone, never by a
   read-time check (a seam, `matchNightPoll.castBallot.afterRead`, closes the
-  poll between the read and the write in the test).
+  poll between the read and the write in the test). Eligibility is checked
+  inside the same transaction after the claim, so a refusal rolls it back.
 - **"Close voting now" re-asserts the poll is open** (`closePollNow`), so a
   second close is refused and keeps the recorded closing time.
 - **"One open poll" is a write-skew pair:** `createPoll` and the reopen in
@@ -97,18 +119,20 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
 ## Admin
 
 - **The Match night poll section** (`#adm-poll`, between Activity and News)
-  opens itself while a poll is open. It shows the live count, "Close voting
-  now", the closing-time box, and once closed "Reopen voting", "Use as the
-  season's match night" and "Announce the result on Discord".
+  opens itself while a poll is open. It shows the heatmap, "Close voting now",
+  the closing-time box, and once closed "Reopen voting", "Use as the season's
+  match night" and "Announce the result on Discord".
 - **"Use as the season's match night" reuses `setMatchSchedule`** and fills
   the Match night box under Season settings. It never moves fixtures; when
   fixtures already have kickoffs the card says pages show their night and
   points at Move a match night.
 - **Delete is a `DangerSubmit`** whose token is the poll's question, checked
   again on the server (`deletePoll`).
-- **Discord:** opening a poll can post it (`matchNightPollOpenedMessage`, no
-  pings, links to `/#match-night-poll`); the result post
-  (`matchNightPollResultMessage`) is once per closing time, claimed with a
-  `matchNightPollResult:<pollId>:<closesAt>` Setting row that is released if
-  the send fails. Both go through `sendDiscordMessage`, so previews never
-  post.
+- **Discord:** opening a poll can post it (`matchNightPollOpenedMessage`: the
+  grid in words via `gridSummary`, the hours as `<t:…:t>` on each reader's
+  clock, no pings, a link to `/#match-night-poll`); the result post
+  (`matchNightPollResultMessage`: the winner, how many can play, the next
+  occurrence as `<t:…:F>`, the runner-up) is once per closing time, claimed
+  with a `matchNightPollResult:<pollId>:<closesAt>` Setting row that is
+  released if the send fails. Both go through `sendDiscordMessage`, so
+  previews never post.

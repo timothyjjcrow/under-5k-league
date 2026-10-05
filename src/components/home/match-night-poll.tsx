@@ -2,9 +2,13 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Countdown } from "@/components/countdown";
 import { LocalTime } from "@/components/local-time";
-import { PollBallot } from "@/components/match-night-poll/poll-ballot";
-import { PollRunoff } from "@/components/match-night-poll/poll-runoff";
-import { SlotFace } from "@/components/match-night-poll/slot-face";
+import { AvailabilityGrid } from "@/components/match-night-poll/availability-grid";
+import { AvailabilityHeatmap } from "@/components/match-night-poll/availability-heatmap";
+import {
+  ClockToggle,
+  PollClockProvider,
+  YourTimeNote,
+} from "@/components/match-night-poll/poll-clock";
 import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
 import { Badge, textLink } from "@/components/ui";
 import type { SessionUser } from "@/lib/auth";
@@ -12,16 +16,19 @@ import { POLL_ANCHOR, type PollView } from "@/lib/match-night-poll";
 import { loadHomePoll } from "@/lib/match-night-poll-service";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { cn } from "@/lib/utils";
+import { zoneLabel } from "@/lib/zone-label";
 
 /**
  * The match-night poll on Home, in every phase (and in the offseason view):
  * the open poll, or the last one for a week after it closes. Renders nothing
  * when there is neither, so it streams in with a null fallback.
  *
- * What it shows depends on the viewer: a signed-out visitor sees the slots
- * and a Steam sign-in; a signed-in player who hasn't voted gets the ballot
- * first; once they've voted, their ranking folds to one line and the live
- * count takes the space. After voting closes everyone gets the result.
+ * What it shows depends on the viewer: a signed-out visitor sees which times
+ * are on offer and a Steam sign-in; a signed-in player who isn't signed up
+ * for the season sees who votes and where to sign up; a signed-up player gets
+ * the availability grid first, and once they've voted it folds to one line
+ * and the count takes the space. After voting closes everyone gets the
+ * result. Every time is on the viewer's own clock (PollClockProvider).
  */
 export async function MatchNightPollCard({
   user,
@@ -47,46 +54,45 @@ function PollCard({
   user: SessionUser | null;
   className?: string;
 }) {
-  const voted = poll.myRanking !== null;
-  const winner = !poll.open && poll.results?.winner
-    ? poll.slots.find((slot) => slot.key === poll.results?.winner) ?? null
-    : null;
+  const voted = poll.myAvailability !== null;
+  const winner =
+    !poll.open && poll.results?.winner
+      ? (poll.slots.find((slot) => slot.key === poll.results?.winner) ?? null)
+      : null;
   const electorate = poll.electorate
     ? `players signed up for ${poll.electorate.seasonName}`
     : "players signed up for the league";
   const subtitle = poll.open
     ? voted
-      ? "Thanks for voting. Here's how the count stands right now."
-      : `Open to ${electorate}: rank every slot you can make, favourite first, and leave out any you can't. If your top pick is knocked out, your vote moves to your next one.`
+      ? "Thanks for voting. Here's who can play when, so far."
+      : `Open to ${electorate}: tap every time you could play, as many as you like. The time the most players can make wins.`
     : winner
-      ? "Voting has closed. Here's how the ranked-choice count played out."
+      ? "Voting has closed. Here's who could play when."
       : "Voting has closed.";
 
-  // Voters see the count under their own ballot; before voting, the ballot
-  // has the card to itself.
   const ballot = !poll.open ? null : !user ? (
-    <SlotsWithAsk poll={poll}>
+    <TimesWithAsk poll={poll}>
       <SignInAsk electorate={electorate} />
-    </SlotsWithAsk>
+    </TimesWithAsk>
   ) : poll.canVote ? (
-    <PollBallot
+    <AvailabilityGrid
       key={poll.myBallotAt ?? "new"}
       pollId={poll.id}
       slots={poll.slots}
-      savedRanking={poll.myRanking}
+      saved={poll.myAvailability}
     />
   ) : (
-    <SlotsWithAsk poll={poll}>
+    <TimesWithAsk poll={poll}>
       <SignUpAsk poll={poll} electorate={electorate} />
-    </SlotsWithAsk>
+    </TimesWithAsk>
   );
-  const runoff = poll.results ? (
-    <PollRunoff
+  const heatmap = poll.results ? (
+    <AvailabilityHeatmap
       slots={poll.slots}
       result={poll.results}
       open={poll.open}
       noneOfThese={poll.noneOfThese}
-      myFirst={poll.myRanking?.[0] ?? null}
+      mine={poll.myAvailability}
     />
   ) : null;
 
@@ -109,113 +115,113 @@ function PollCard({
         aria-hidden
         className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-accent/10 blur-3xl"
       />
-      <div className="relative">
-        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-line-soft px-4 py-4 sm:px-5">
-          <div className="min-w-0 flex-1 basis-64">
-            <p className="text-xs font-semibold uppercase tracking-wider text-accent">
-              <span aria-hidden>🗳️ </span>Match night poll · ranked choice
-            </p>
-            <h2
-              id={`${POLL_ANCHOR}-title`}
-              className="mt-1.5 text-lg font-semibold leading-snug text-fg [overflow-wrap:anywhere]"
-            >
-              {poll.question}
-            </h2>
-            <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-muted">
-              {subtitle}
-            </p>
-          </div>
-          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted sm:flex-col sm:items-end sm:text-right">
-            {poll.open ? (
-              <Badge tone="success">
-                <span
-                  aria-hidden
-                  className="animate-live-pulse inline-block h-1.5 w-1.5 rounded-full bg-success"
-                />
-                Voting open
-              </Badge>
-            ) : (
-              <Badge>Voting closed</Badge>
-            )}
-            <span>
+      <PollClockProvider
+        leagueZone={poll.timeZone}
+        sampleAt={poll.slots[0]?.nextAt ?? poll.closesAt}
+      >
+        <div className="relative">
+          <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-line-soft px-4 py-4 sm:px-5">
+            <div className="min-w-0 flex-1 basis-64">
+              <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+                <span aria-hidden>🗳️ </span>Match night poll
+              </p>
+              <h2
+                id={`${POLL_ANCHOR}-title`}
+                className="mt-1.5 text-lg font-semibold leading-snug text-fg [overflow-wrap:anywhere]"
+              >
+                {poll.question}
+              </h2>
+              <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-muted">
+                {subtitle}
+              </p>
+            </div>
+            <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted sm:flex-col sm:items-end sm:text-right">
               {poll.open ? (
-                <>
-                  Closes{" "}
-                  <LocalTime
-                    ts={poll.closesAt}
-                    variant="full"
-                    initial={formatLeagueMatchTime(new Date(poll.closesAt), "full")}
+                <Badge tone="success">
+                  <span
+                    aria-hidden
+                    className="animate-live-pulse inline-block h-1.5 w-1.5 rounded-full bg-success"
                   />
+                  Voting open
+                </Badge>
+              ) : (
+                <Badge>Voting closed</Badge>
+              )}
+              <span>
+                {poll.open ? "Closes " : "Closed "}
+                <LocalTime
+                  ts={poll.closesAt}
+                  variant="full"
+                  initial={formatLeagueMatchTime(new Date(poll.closesAt), "full")}
+                />
+                {poll.open ? (
                   <Countdown
                     targetMs={poll.closesAt}
                     eventLabel="Voting"
                     futureVerb="closes"
                     passesAtTarget
                   />
-                </>
-              ) : (
-                <>
-                  Closed{" "}
-                  <LocalTime
-                    ts={poll.closesAt}
-                    variant="full"
-                    initial={formatLeagueMatchTime(new Date(poll.closesAt), "full")}
-                  />
-                </>
-              )}
-            </span>
-            <span className="tabular-nums">
-              {poll.ballots} vote{poll.ballots === 1 ? "" : "s"}
-              {poll.open ? " so far" : ""}
-            </span>
-          </div>
-        </header>
-
-        <div className="space-y-6 p-4 sm:p-5">
-          {winner ? (
-            <div className="flex min-w-0 flex-wrap items-center gap-4 rounded-lg border border-accent/40 bg-accent/10 p-4">
-              <span aria-hidden className="text-3xl">
-                🏆
+                ) : null}
               </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold uppercase tracking-wider text-accent">
-                  The league picked
-                </p>
-                <p className="mt-0.5 text-xl font-bold text-fg [overflow-wrap:anywhere]">
-                  {winner.label}
-                </p>
+              <span className="tabular-nums">
+                {poll.ballots} vote{poll.ballots === 1 ? "" : "s"}
+                {poll.open ? " so far" : ""}
+              </span>
+            </div>
+          </header>
+
+          <div className="space-y-6 p-4 sm:p-5">
+            {heatmap || (poll.open && poll.canVote) ? <ClockToggle /> : null}
+
+            {winner ? (
+              <div className="flex min-w-0 flex-wrap items-center gap-4 rounded-lg border border-accent/40 bg-accent/10 p-4">
+                <span aria-hidden className="text-3xl">
+                  🏆
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+                    The league picked
+                  </p>
+                  <p className="mt-0.5 text-xl font-bold text-fg [overflow-wrap:anywhere]">
+                    {winner.label}
+                  </p>
+                  <p className="mt-0.5 text-sm text-muted">
+                    {poll.results?.counts[winner.key]} of {poll.results?.ballots} voters
+                    can play then. <YourTimeNote slot={winner} />
+                  </p>
+                </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          {/* Stacked, never side by side: a voter's folded ballot is one
-              short strip, and beside the count it left a hole. */}
-          {ballot}
-          {runoff ? (
-            <div className="min-w-0">
-              {poll.open ? (
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
-                  Live count
-                </h3>
-              ) : null}
-              {runoff}
-            </div>
-          ) : null}
+            {/* Stacked, never side by side: a voter's folded grid is one
+                short strip, and beside the count it left a hole. */}
+            {ballot}
+            {heatmap ? (
+              <div className="min-w-0">
+                {poll.open ? (
+                  <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">
+                    Who can play when
+                  </h3>
+                ) : null}
+                {heatmap}
+              </div>
+            ) : null}
 
-          {poll.open && !voted && poll.canVote && !poll.results ? (
-            <p className="text-xs text-muted">
-              The live count opens to you once you&apos;ve voted, so everyone
-              ranks what they can actually make.
-            </p>
-          ) : null}
+            {poll.open && !voted && poll.canVote && !poll.results ? (
+              <p className="text-xs text-muted">
+                The count opens to you once you&apos;ve voted, so everyone marks
+                the times they can actually make.
+              </p>
+            ) : null}
+          </div>
         </div>
-      </div>
+      </PollClockProvider>
     </section>
   );
 }
 
-/** The slots as a read-only list, above whatever the viewer must do to vote. */
-function SlotsWithAsk({
+/** Which times are on offer, in a line, above what the viewer must do to vote. */
+function TimesWithAsk({
   poll,
   children,
 }: {
@@ -224,19 +230,11 @@ function SlotsWithAsk({
 }) {
   return (
     <div className="space-y-4">
-      <ul
-        aria-label="Slots on the ballot"
-        className="grid grid-cols-1 gap-2 sm:grid-cols-2"
-      >
-        {poll.slots.map((slot) => (
-          <li
-            key={slot.key}
-            className="min-w-0 rounded-lg border border-line bg-surface-2/40 p-2 pl-2.5"
-          >
-            <SlotFace slot={slot} />
-          </li>
-        ))}
-      </ul>
+      <p className="rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm text-fg">
+        <span className="font-semibold">Times on offer:</span> {poll.summary},{" "}
+        {zoneLabel(poll.timeZone)} ({poll.slots.length} start times). Your
+        ballot shows them on your own clock.
+      </p>
       {children}
     </div>
   );
