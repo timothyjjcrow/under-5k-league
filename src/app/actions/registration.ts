@@ -294,12 +294,39 @@ export async function saveRegistration(
   });
   let rankTier = dbUser?.rankTier ?? null;
   let medalLabel = "";
+  // The gate's facts other than the medal, judged once with the medal on
+  // file BEFORE asking OpenDota and again with whatever it returns.
+  const gateFacts = {
+    season,
+    type,
+    mmr,
+    hasExisting: !!existing,
+    existingType: (existing?.type as RegistrationType | undefined) ?? null,
+    // The medal half of the ceiling is judged only at ADMISSION — an already
+    // ACTIVE registrant keeps editing (the admin's rank sync is warn-only, so
+    // a medal it merely flagged must not brick their form). existingStatus is
+    // what tells the gate which of the two this submit is.
+    existingStatus: existing?.status ?? null,
+  };
+  // Refuse what no medal could change (an MMR over the ceiling, player
+  // signups closed) before the provider call: a refused submit stores
+  // nothing, so every retry used to ask OpenDota again, and one script could
+  // spend the league's shared allowance a refusal at a time.
+  const earlyGateError = registrationGate({ ...gateFacts, rankTier });
+  if (earlyGateError) return { error: earlyGateError };
   if (!existing && dbUser && dbUser.rankTier == null && !dbUser.rankTierManual) {
     const accountId = effectiveDotaAccountId({
       ...dbUser,
       steamId: user.steamId,
     });
-    const fetched = accountId ? await fetchPlayerRankTier(accountId) : null;
+    // The same per-player OpenDota cooldown as Refresh my Steam & Dota info
+    // (claimed only when a fetch would happen). Inside it, sign up without a
+    // medal; the hourly player data refresh fills it in.
+    const claim = accountId
+      ? await claimProviderCooldown("open-dota-profile", user.id, accountId)
+      : null;
+    const fetched =
+      accountId && claim === "claimed" ? await fetchPlayerRankTier(accountId) : null;
     if (fetched != null) {
       // The OpenDota request can take seconds. Another tab may link a
       // different Dota account while it is in flight, so claim both facts we
@@ -334,19 +361,7 @@ export async function saveRegistration(
   // every signup). Rules live in registrationGate — judged on the RAW claim plus
   // the medal (never the clamped value: the clamp snaps down to a floor
   // under the ceiling, so gating post-clamp would admit any overstated lie).
-  const gateError = registrationGate({
-    season,
-    type,
-    mmr,
-    rankTier,
-    hasExisting: !!existing,
-    existingType: (existing?.type as RegistrationType | undefined) ?? null,
-    // The medal half of the ceiling is judged only at ADMISSION — an already
-    // ACTIVE registrant keeps editing (the admin's rank sync is warn-only, so
-    // a medal it merely flagged must not brick their form). existingStatus is
-    // what tells the gate which of the two this submit is.
-    existingStatus: existing?.status ?? null,
-  });
+  const gateError = registrationGate({ ...gateFacts, rankTier });
   if (gateError) return { error: gateError };
 
   // Draft-night lock: while the auction is LIVE or PAUSED, an existing signup

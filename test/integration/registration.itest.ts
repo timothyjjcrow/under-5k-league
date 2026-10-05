@@ -30,6 +30,8 @@ import { setRegistrationMmr, withdrawSignup } from "@/app/actions/admin-roster";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { fetchPlayerRankTier } from "@/lib/dota";
+import { effectiveDotaAccountId } from "@/lib/dota-account";
+import { claimProviderCooldown } from "@/lib/settings";
 import { sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
 import {
@@ -626,6 +628,50 @@ describe("saveRegistration — medal MMR validation", () => {
     expect((await regFor(season.id, user.id))?.mmr).toBe(3119);
     // Edits never re-hit OpenDota (API budget rule).
     expect(vi.mocked(fetchPlayerRankTier)).not.toHaveBeenCalled();
+  });
+
+  it("refuses what no medal could change without asking OpenDota", async () => {
+    // Nothing is stored on a refusal, so every retry used to fetch again: a
+    // script could spend the league's shared OpenDota allowance this way.
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Refused Again And Again");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 9999 }));
+      expect(res?.error).toMatch(/over 5000/);
+    }
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: "REGULAR_SEASON" },
+    });
+    const closed = await saveRegistration({}, form({ type: "PLAYER", mmr: 3000 }));
+    expect(closed?.error).toMatch(/Player signups are closed/);
+
+    expect(vi.mocked(fetchPlayerRankTier)).not.toHaveBeenCalled();
+    expect(await regFor(season.id, user.id)).toBeNull();
+  });
+
+  it("signs up without a medal inside the player's OpenDota cooldown", async () => {
+    const season = await makeSeason({ status: "SIGNUPS" });
+    const user = await makeUser("Refreshed A Moment Ago");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(user));
+    vi.mocked(fetchPlayerRankTier).mockResolvedValue(54);
+    // Refresh my Steam & Dota info claimed the same cooldown a moment ago.
+    const accountId = effectiveDotaAccountId({
+      steamId: user.steamId,
+      dotaAccountIdV2: null,
+      legacyDotaAccountId: null,
+    });
+    expect(
+      await claimProviderCooldown("open-dota-profile", user.id, accountId!),
+    ).toBe("claimed");
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 2400 }));
+
+    expect(res?.error).toBeUndefined();
+    expect(vi.mocked(fetchPlayerRankTier)).not.toHaveBeenCalled();
+    expect(await regFor(season.id, user.id)).toMatchObject({ mmr: 2400 });
   });
 
   it("changes nothing for a player with no medal on file", async () => {
