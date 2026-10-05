@@ -27,7 +27,12 @@ import {
 import { pendingCoverWhere } from "@/lib/standin";
 import { normalizeDiscordName } from "@/lib/discord-name";
 import { unlinkDiscordAccount } from "@/lib/discord-link-service";
-import { getRoleConfig, setPingRole } from "@/lib/discord-roles";
+import {
+  INHOUSE_PING_TOGGLE_THROTTLE_SECONDS,
+  getRoleConfig,
+  inhousePingToggleKey,
+  setPingRole,
+} from "@/lib/discord-roles";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -52,7 +57,7 @@ import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 import { mergeAccountRefresh } from "@/lib/account-page";
 import { aboutUnchanged, submittedAbout } from "@/lib/about-you";
-import { claimProviderCooldown } from "@/lib/settings";
+import { claimProviderCooldown, claimThrottle } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 
@@ -1537,6 +1542,23 @@ export async function setInhousePingOptIn(
   const cfg = await getRoleConfig();
   if (!cfg) {
     return { error: "Inhouse pings aren't set up yet — ask an admin." };
+  }
+  // Each press is a bot-token role write. A store failure lets the press
+  // through: one extra write is better than a toggle that never works.
+  let claimed = true;
+  try {
+    claimed = await claimThrottle(
+      inhousePingToggleKey(user.id),
+      INHOUSE_PING_TOGGLE_THROTTLE_SECONDS,
+      Date.now(),
+    );
+  } catch {
+    claimed = true;
+  }
+  if (!claimed) {
+    return {
+      error: "You just changed that — give it a few seconds, then try again.",
+    };
   }
 
   const res = await setPingRole(me.discordId, on, cfg);

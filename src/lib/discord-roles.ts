@@ -418,6 +418,19 @@ export async function sweepGuildMemberships(
 export type RoleChange = "ok" | "not-a-member" | "forbidden" | "failed";
 
 /**
+ * The inhouse ping toggle (setInhousePingOptIn) makes one bot-token role
+ * write per press. One change per player in this window, so a script can't
+ * spend the guild's role rate limit, which everyone's opt-in and unlinking
+ * share, one toggle at a time.
+ */
+export const INHOUSE_PING_TOGGLE_THROTTLE_SECONDS = 10;
+
+/** The per-player claimThrottle key behind the inhouse ping toggle. */
+export function inhousePingToggleKey(userId: string): string {
+  return `inhousePingToggle:${userId}`;
+}
+
+/**
  * Add or remove the ping role. PUT is idempotent (adding a role someone
  * already has is a 204), which is what makes a double-click harmless.
  *
