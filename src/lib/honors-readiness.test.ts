@@ -110,7 +110,7 @@ describe("evaluateHonorWeeks", () => {
 
   // An unbooked fill-in from another roster (or a released player) is
   // imported with a userId and no teamId. One such line used to hold the whole
-  // week; three of Season 1's five weeks never got honors.
+  // week, as it held Season 1's week 5.
   it("credits a league player with no team to the side they played on", () => {
     const base = match();
     const raw = JSON.parse(base.games[0].players) as Record<string, unknown>[];

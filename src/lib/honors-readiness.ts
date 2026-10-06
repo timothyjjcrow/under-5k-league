@@ -71,9 +71,9 @@ function validateGame(
   // but registered player) is imported "for attribution only": a userId and
   // no teamId (results-and-opendota.md). For honors they count for the side
   // they played on, which is the team credit a booked standin already gets.
-  // Requiring a stored teamId meant one such line held the whole week: three
-  // of Season 1's five weeks never got honors. A line with no league player
-  // (no userId) or credited to the other team still holds the week.
+  // Requiring a stored teamId meant one such line held the whole week (Season
+  // 1's week 5). A line with no league player (no userId) or credited to the
+  // other team still holds the week: that keeps Season 1's weeks 1 and 3 held.
   const sideTeamId = (isRadiant: boolean) =>
     isRadiant ? game.radiantTeamId : game.direTeamId;
   const players = trustedGamePlayers(decoded).map((player) =>
