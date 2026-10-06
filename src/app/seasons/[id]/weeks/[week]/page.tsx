@@ -79,6 +79,7 @@ export default async function WeekWrapPage({
     select: {
       id: true,
       name: true,
+      isActive: true,
       teams: {
         select: {
           id: true,
@@ -412,8 +413,17 @@ export default async function WeekWrapPage({
           </CardBody>
           {upNext.length ? (
             <CardBody className="border-t border-line-soft pt-3">
-              <Link href="/schedule" className={textLink("text-sm")}>
-                Full schedule <LinkArrow />
+              {/* /schedule is the active season's; an archived season's
+                  fixtures live on its own page. */}
+              <Link
+                href={
+                  season.isActive
+                    ? "/schedule"
+                    : `/seasons/${encodeURIComponent(season.id)}#results`
+                }
+                className={textLink("text-sm")}
+              >
+                {season.isActive ? "Full schedule" : "All results"} <LinkArrow />
               </Link>
             </CardBody>
           ) : null}
