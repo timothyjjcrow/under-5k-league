@@ -45,13 +45,14 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   voting season, the way `hasActiveLeagueParticipation` counts it. The voting
   season is the active one, or in the offseason the most recent. Admins are
   not exempt. **A ballot counts only while its voter is still signed up**
-  (`stillSignedUp` in `viewOf`): eligibility is checked when a ballot is cast,
-  and without the recount a player who withdrew, or whom an admin removed,
-  kept counting and could swing the result. The row is kept, so a player who
-  signs up again counts again; while out, they see the card as any non-voter
-  does. Everyone sees the card; a signed-in viewer who can't vote sees
-  which times are on offer, who votes, and a link to My account while the
-  season still takes a signup.
+  (`stillSignedUp` in `viewOf`, and in `closePollNow` so the admin's "Voting
+  closed with N votes" agrees with Home): eligibility is checked when a
+  ballot is cast, and without the recount a player who withdrew, or whom an
+  admin removed, kept counting and could swing the result. The row is kept,
+  so a player who signs up again counts again; while out, they see the card
+  as any non-voter does. Everyone sees the card; a signed-in viewer who
+  can't vote sees which times are on offer, who votes, and a link to My
+  account while the season still takes a signup.
 - **Mark every time you could start a match, as many as you like** (Tim's call,
   2026-10-04, replacing the first ranked-choice version). No cap: a cap makes a
   player drop times they could make, which is exactly the information that

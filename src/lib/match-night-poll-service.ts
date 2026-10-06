@@ -416,13 +416,25 @@ export async function closePollNow(input: {
   if (closed.count === 0) {
     return { ok: false, error: "This poll has already closed." };
   }
-  const [poll, ballots] = await Promise.all([
+  const [poll, stored, season] = await Promise.all([
     prisma.matchNightPoll.findUnique({
       where: { id: input.pollId },
       select: { question: true },
     }),
-    prisma.matchNightBallot.count({ where: { pollId: input.pollId } }),
+    prisma.matchNightBallot.findMany({
+      where: { pollId: input.pollId },
+      select: { userId: true },
+    }),
+    votingSeason(prisma),
   ]);
+  // The count Home shows (viewOf): a ballot whose voter has since withdrawn,
+  // or been removed, is kept but doesn't count.
+  const counted = season
+    ? await stillSignedUp(prisma, stored.map((b) => b.userId), season.id)
+    : null;
+  const ballots = counted
+    ? stored.filter((b) => counted.has(b.userId)).length
+    : stored.length;
   return { ok: true, question: poll?.question ?? "", ballots };
 }
 

@@ -369,6 +369,8 @@ describe("who may vote", () => {
     const back = await loadHomePoll({ id: quitter.id, role: "USER" }, now);
     expect(back).toMatchObject({ canVote: true, ballots: 3, myAvailability: [SAT, SUN] });
     expect(back?.results?.counts[SAT]).toBe(1);
+    // Closing reports the count Home shows, not every stored row.
+    expect(await closePollNow({ pollId: poll.id })).toMatchObject({ ok: true, ballots: 3 });
   });
 
   it("tells Home who votes, and whether this viewer can", async () => {
