@@ -214,6 +214,7 @@ import {
 } from "@/lib/draft-readiness";
 import { DiscordTag } from "@/components/discord-tag";
 import {
+  MATCH_LIST_ORDER,
   roundName,
   slotRound,
   groupPlayoffRounds,
@@ -1186,7 +1187,7 @@ async function loadSeasonAdminData(seasonId: string) {
       }),
       prisma.match.findMany({
         where: { seasonId },
-        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+        orderBy: MATCH_LIST_ORDER,
         include: {
           games: { select: { id: true, dotaMatchId: true, winnerTeamId: true, durationSecs: true } },
           availability: { select: { id: true, userId: true, status: true, scheduleRevision: true } },
@@ -3426,7 +3427,17 @@ function CaptainControls({
                     <span className="min-w-0 truncate text-muted">
                       {r.user.name}
                     </span>
-                    {season.status !== SEASON_STATUS.COMPLETE ? (
+                    {season.status === SEASON_STATUS.COMPLETE ? null : r.type ===
+                        REGISTRATION_TYPE.PLAYER &&
+                      (data.draft?.status === DRAFT_STATUS.IN_PROGRESS ||
+                        data.draft?.status === DRAFT_STATUS.PAUSED) ? (
+                      // reinstateSignup refuses a player signup while the
+                      // auction runs (they'd rejoin a pool mid-lot), so say
+                      // when it opens instead of offering a button that fails.
+                      <span className="shrink-0 text-xs text-muted">
+                        reinstate after the auction
+                      </span>
+                    ) : (
                       <ActionForm
                         action={reinstateSignup}
                         hidden={{ registrationId: r.id }}
@@ -3435,7 +3446,7 @@ function CaptainControls({
                           reinstate
                         </SubmitButton>
                       </ActionForm>
-                    ) : null}
+                    )}
                   </div>
                 ))}
               </div>
@@ -3483,7 +3494,7 @@ function TiebreakerControls({
             <p className="text-xs text-muted">Keep the season in Regular season. Check the next game’s kickoff after each result; if the opening game has no time, set each new game’s time below.</p>
           ) : null}
           {canSchedule ? (
-            <a href="#playoffs" className={textLink("inline-block py-1")}>
+            <a href="#adm-playoffs" className={textLink("inline-block py-1")}>
               {tiebreakerMatches.length > 0 ? "Next match is ready to create — open tiebreaker controls →" : "Schedule the opening matches in Playoffs controls →"}
             </a>
           ) : null}
@@ -3497,7 +3508,7 @@ function TiebreakerControls({
             </div>
           ) : null}
           {projection.tiebreakers.resolved && tiebreakerMatches.length > 0 && !postseasonStarted ? (
-            <p>Tiebreakers complete. <a href="#playoffs" className={textLink()}>Review the seeds and start playoffs →</a></p>
+            <p>Tiebreakers complete. <a href="#adm-playoffs" className={textLink()}>Review the seeds and start playoffs →</a></p>
           ) : null}
           {postseasonStarted ? <p className="text-xs text-muted">Tiebreaker results are read-only once playoffs begin.</p> : null}
         </div>

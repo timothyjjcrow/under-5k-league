@@ -1,3 +1,4 @@
+import { MATCH_LIST_ORDER } from "./schedule";
 import { cache } from "react";
 import { prisma } from "./prisma";
 import { getActiveSeason } from "./season";
@@ -76,7 +77,7 @@ export const getSeasonMatches = cache(async function getSeasonMatches(
 ) {
   return prisma.match.findMany({
     where: { seasonId },
-    orderBy: [{ week: "asc" }],
+    orderBy: MATCH_LIST_ORDER,
   });
 });
 

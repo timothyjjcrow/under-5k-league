@@ -1,3 +1,5 @@
+import { MATCH_LIST_ORDER } from "@/lib/schedule";
+import { rosterOrder } from "@/lib/team-roster";
 import Link from "next/link";
 import { Suspense } from "react";
 import type { Metadata } from "next";
@@ -201,7 +203,7 @@ export default async function SeasonArchivePage({
             members: { include: { user: true }, orderBy: { price: "desc" } },
           },
         },
-        matches: { orderBy: [{ week: "asc" }, { createdAt: "asc" }] },
+        matches: { orderBy: MATCH_LIST_ORDER },
       },
     }),
     prisma.game.count({ where: { match: { seasonId: id } } }),
@@ -562,7 +564,8 @@ export default async function SeasonArchivePage({
                 />
                 <CardBody className="p-0">
                   <ul className="divide-y divide-line-soft">
-                    {t.members.map((m) => (
+                    {/* Captain first, as on /teams (rosterOrder). */}
+                    {rosterOrder(t.members).map((m) => (
                       // py-1.5 around a 24px avatar: 36px lines, so each
                       // name's 28px tap box keeps 8px from the next one.
                       <li

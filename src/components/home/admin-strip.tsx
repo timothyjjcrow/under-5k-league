@@ -23,6 +23,7 @@ export async function AdminStrip({ snapshot }: { snapshot: SeasonSnapshot }) {
       select: {
         id: true,
         status: true,
+        bestOf: true,
         homeTeamId: true,
         awayTeamId: true,
         scheduledAt: true,

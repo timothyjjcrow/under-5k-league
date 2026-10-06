@@ -47,7 +47,26 @@ describe("read-only match attention", () => {
         teams,
         now,
       )[0].reasons,
-    ).toContain("Started over 2 hours ago; result still open"));
+    ).toContain("Past its expected finish; result still open"));
+
+  // A flat two hours flagged series still being played. The window is the
+  // league's series estimate (bestOf * 60 + 30 min), doubled once a game is
+  // in, the same one that keeps "Live now" up.
+  it("waits out the series' own length, and twice that once it's live", () => {
+    const hoursAgo = (h: number) => new Date(now - h * 3600_000);
+    const flagged = (m: Parameters<typeof matchAttention>[0][number]) =>
+      matchAttention([m], teams, now).length > 0;
+    // Bo3: 210 minutes.
+    expect(flagged({ ...match, bestOf: 3, scheduledAt: hoursAgo(3) })).toBe(false);
+    expect(flagged({ ...match, bestOf: 3, scheduledAt: hoursAgo(4) })).toBe(true);
+    // Live Bo3: 420 minutes.
+    expect(
+      flagged({ ...match, status: "LIVE", bestOf: 3, scheduledAt: hoursAgo(5) }),
+    ).toBe(false);
+    expect(
+      flagged({ ...match, status: "LIVE", bestOf: 3, scheduledAt: hoursAgo(8) }),
+    ).toBe(true);
+  });
   it("ignores completed fixtures even with old logistics rows", () =>
     expect(
       matchAttention(

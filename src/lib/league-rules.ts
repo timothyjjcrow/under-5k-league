@@ -9,6 +9,7 @@
 // anything the code doesn't decide at all (no-show grace, conduct, disputes)
 // is left to the closing line. docs/features/pages-and-ui.md lists those gaps.
 
+import { MAX_RESCHEDULE_OPTIONS } from "./reschedule-ready-check";
 import {
   AUTO_SYNC,
   DEFAULTS,
@@ -312,8 +313,8 @@ function matchNightSection(matchNight: string | null): RuleSection {
         ? `Match night: ${matchNight}. Kickoff times show in your own time zone.`
         : "Match night is to be announced. Kickoff times show in your own time zone.",
       `Once your match has a kickoff time, answer its check-in (I'm in, or Can't make it) so your captain can find cover. It stays open until ${plural(AUTO_SYNC.WINDOW_HOURS, "hour")} after kickoff.`,
-      "A new kickoff time clears every check-in, so everyone answers again.",
-      "Captains move a match together: one proposes a new time on the match page, and the other accepts or declines it. Admins can also move a match or a whole week.",
+      `Captains move a match with a ready check: either captain offers up to ${MAX_RESCHEDULE_OPTIONS} times on the match page, everyone playing answers each one, and the match moves itself once both captains and a full lineup on each side can make a time. Either captain can lock in a time the other captain said yes to without waiting for everyone.`,
+      "After a ready check, each player's answer to the new time becomes their check-in. Admins can also move a match or a whole week; that clears its check-ins, so everyone answers again.",
       `A proposed time can't be more than ${span(RESCHEDULE_PAST_GRACE_MS)} in the past, more than ${span(RESCHEDULE_MAX_AHEAD_MS)} ahead, or ${clash}.`,
       "A regular-season match has to be played before the playoffs start.",
       "A series that has started can't be moved.",

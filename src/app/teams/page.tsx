@@ -1,3 +1,4 @@
+import { MATCH_LIST_ORDER } from "@/lib/schedule";
 import type { ReactNode } from "react";
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "next/link";
@@ -106,7 +107,7 @@ export default async function TeamsPage() {
     }),
     prisma.match.findMany({
       where: { seasonId: season.id },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+      orderBy: MATCH_LIST_ORDER,
     }),
     prisma.draft.findUnique({
       where: { seasonId: season.id },

@@ -29,6 +29,7 @@ import {
 import type { ScenarioReport } from "@/lib/scenarios";
 import { SeasonGrid } from "@/components/season-grid";
 import {
+  MATCH_LIST_ORDER,
   byeTeamsByWeek,
   byKickoff,
   groupPlayoffRounds,
@@ -229,7 +230,7 @@ export default async function SchedulePage() {
       prisma.team.findMany({ where: { seasonId: season.id } }),
       prisma.match.findMany({
         where: { seasonId: season.id },
-        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+        orderBy: MATCH_LIST_ORDER,
       }),
       prisma.standinAssignment.findMany({
         where: { match: { seasonId: season.id } },

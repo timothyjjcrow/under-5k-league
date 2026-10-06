@@ -46,6 +46,16 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   `actorName`:** a deletion's record must outlive what it deleted, and a Steam
   rename must not rewrite history.
 
+- **Needs attention calls a series overdue only past its expected finish**
+  (`matchAttention`): the league's series estimate (`seriesEstimateMinutes`,
+  bestOf × 60 + 30 minutes), doubled once a game is in, the window that keeps
+  "Live now" up (`matchWatchWindow`). A flat two hours flagged Bo2s and Bo3s
+  still being played while Tonight showed them as Live. The Home admin strip
+  feeds it the same `bestOf`.
+- **Reinstate shows only where it works:** a removed player signup reads
+  "reinstate after the auction" while the auction is live or paused, since
+  `reinstateSignup` refuses it then.
+
 ## Destructive controls
 
 - **Put no-undo actions behind `<DangerSubmit>`, everything else behind

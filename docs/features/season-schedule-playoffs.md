@@ -88,6 +88,13 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   postseason kickoff, else the planned playoff night while still ahead. Start
   playoffs refuses while any regular result is outstanding.
 
+- **Fixture lists sort by week, kickoff, then id** (`MATCH_LIST_ORDER`,
+  `byKickoff` with an id tiebreak; `schedule.ts`): /schedule, Home, the season
+  archive, /teams, /pickem, the match preview and /admin. They sorted by week
+  then createdAt, and one `createMany` gives every fixture the same
+  createdAt, so a week listed "Aug 16" above "Aug 15" and could reshuffle
+  once rows were updated.
+
 ## Rescheduling
 
 - **A reschedule is a ready check.** A captain offers one to three times

@@ -9,6 +9,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 
 ## Navigation and info pages
 
+- **Rosters list the captain first** (`rosterOrder`, `team-roster.ts`) on
+  /teams, team pages, the champion moment, the season archive and the match
+  preview: by price alone the $0 captain was listed last.
 - **Every name is a link:** `<PlayerLink userId>` (`ui.tsx`) for players, a
   plain `next/link` to `/teams/[id]` for teams.
 - **`src/lib/site-nav.ts` is the one page list** behind the header, Explore,
@@ -60,6 +63,11 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   fails on any digit in the page's shown text, any number literal but
   `headingLevel`, and any import outside its short list, so a rule number can
   reach the page only through the builder.
+- **The reschedule rules describe the ready check** (up to
+  `MAX_RESCHEDULE_OPTIONS` times, everyone answers, it moves itself, either
+  captain can lock a time the other said yes to, answers become check-ins;
+  an admin move clears check-ins). The page kept the old propose /
+  accept-or-decline flow after #27 because no test pinned it; one does now.
 - **Which season:** the active one, else the latest (worded as how the league
   played it, and that the next season starts with the same settings); with no
   season at all, `carriedSeasonSettings(null)` under a "First-season defaults"

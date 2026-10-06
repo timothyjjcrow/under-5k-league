@@ -3,10 +3,13 @@ import { heroById } from "./heroes";
 import { MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { standinConflict, type StandinSlot } from "./standin";
 import { matchCoverIssues } from "./admin-sections";
+import { seriesEstimateMinutes } from "./series-lengths";
 
 type AttentionMatch = {
   id: string;
   status: string;
+  /** The series length; absent reads as a Bo2. */
+  bestOf?: number;
   homeTeamId: string | null;
   awayTeamId: string | null;
   scheduledAt: Date | null;
@@ -14,6 +17,18 @@ type AttentionMatch = {
   standins: { replacingUserId: string | null; standinUserId: string }[];
   reschedules: { status: string }[];
 };
+
+/**
+ * How long after kickoff an open series counts as overdue: the league's own
+ * series estimate (seriesEstimateMinutes), doubled once a game is in, the
+ * same window the site keeps "Live now" up for (matchWatchWindow). A flat two
+ * hours flagged Bo2s and Bo3s still being played while Tonight showed them
+ * as Live.
+ */
+function overdueAfterMs(match: { status: string; bestOf?: number }): number {
+  const estimates = match.status === MATCH_STATUS.LIVE ? 2 : 1;
+  return estimates * seriesEstimateMinutes(match.bestOf ?? 2) * 60_000;
+}
 
 /**
  * Read-only triage. Future fixtures are never labeled as awaiting results.
@@ -32,8 +47,8 @@ export function matchAttention(
     .flatMap((match) => {
       const reasons: string[] = [];
       if (!match.scheduledAt) reasons.push("Kickoff not set");
-      else if (match.scheduledAt.getTime() + 2 * 60 * 60 * 1000 < now)
-        reasons.push("Started over 2 hours ago; result still open");
+      else if (match.scheduledAt.getTime() + overdueAfterMs(match) < now)
+        reasons.push("Past its expected finish; result still open");
       if (match.reschedules.some((request) => request.status === "PENDING"))
         reasons.push("Reschedule awaiting a response");
       const uncovered = matchCoverIssues(
