@@ -197,19 +197,24 @@ describe("setSeasonPhase — an unfinished auction can't be stranded", () => {
     expect(await statusOf(season.id)).toBe(SEASON_STATUS.REGULAR_SEASON);
     expect(sendDiscordMessage).toHaveBeenCalledOnce();
     // The post carries the opening week: its fixture, its kickoff and the
-    // team sitting it out. Week 2 waits for its own reminder.
+    // team sitting it out. Week 2 waits for its own reminder. No game is in
+    // yet, so fantasy rosters aren't locked and the post says it's open.
     expect(sendDiscordMessage).toHaveBeenCalledWith(
-      regularSeasonStartedMessage(season.name, {
-        week: 1,
-        fixtures: [
-          {
-            home: captain.team.name,
-            away: rival.team.name,
-            whenMs: kickoff.getTime(),
-          },
-        ],
-        byes: [bye.team.name],
-      }),
+      regularSeasonStartedMessage(
+        season.name,
+        {
+          week: 1,
+          fixtures: [
+            {
+              home: captain.team.name,
+              away: rival.team.name,
+              whenMs: kickoff.getTime(),
+            },
+          ],
+          byes: [bye.team.name],
+        },
+        true,
+      ),
     );
   });
 
