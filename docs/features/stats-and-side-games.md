@@ -65,6 +65,24 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   one. `weekOracleLine` is best-effort: a failure costs the line, never the
   award.
 
+## Week wrap (`/seasons/[id]/weeks/[week]`)
+
+- **One page per regular week tells its story from stored results** (Tim's
+  call, 2026-10-05; pure parts in `week-wrap.ts`): the results with upset
+  tags (`seriesUpset`, the same rule as Home), the week's honors through the
+  public readiness cache (or why they are held), the pick'em oracle
+  (`weekOracles`), the best single game (`bestGameOfWeek`: highest impact line
+  by a league player, ties by kills, fewer deaths, user id), the table after
+  the week with places moved (`weekWrapTable`: `regularTableBeforeWeek(week +
+  1)` against `(week)`, no arrows until a week of results is behind it), and
+  next week's fixtures. Under the season's own URL (`weekWrapPath`), so an old
+  link opens its week after the handoff; an unknown week is a 404.
+- **Linked from where a week ends:** each finished week on /schedule, the
+  week label on /leaders' honors, Home's honors line, and the Discord honors
+  post ("Week 4 wrap: …"), which used to link the leaderboards. The post's
+  send-once marker is a digest of the honors, not the text, so the new link
+  never re-posts a week. `e2e-mid/week-wrap.spec.ts` covers the page.
+
 ## Leaders
 
 - **Rank what the player did** (Tim's decision). No total-wins, win-rate or

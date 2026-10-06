@@ -34,6 +34,7 @@ import { honorBestGame, weeklyHonors } from "@/lib/honors";
 import { HONOR_WEEK_STATE } from "@/lib/honors-readiness";
 import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
 import { MyMatchNightCard } from "./my-match-night";
+import { weekWrapPath } from "@/lib/week-wrap";
 import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
 import { leagueProgress } from "@/lib/league-progress";
 import { predictionOpen } from "@/lib/pickem";
@@ -983,6 +984,13 @@ async function WeeklyHonorsLine({
           </Link>
         </p>
       ) : null}
+      {/* The week's whole story (results, honors, the table, what's next). */}
+      <Link
+        href={weekWrapPath(seasonId, latest.week)}
+        className={textLink("text-sm")}
+      >
+        Week {latest.week} wrap <LinkArrow />
+      </Link>
       <Link href="/leaders#weekly-honors" className={textLink("text-sm")}>
         All honors <LinkArrow />
       </Link>

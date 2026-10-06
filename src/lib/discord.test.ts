@@ -2884,15 +2884,17 @@ describe("weeklyHonorsMessage", () => {
     expect(lines).toContain(
       "🔮 Pick'em Oracle of the Week: **Seer** (3 of 3 picks right)",
     );
-    expect(lines.at(-1)).toMatch(/^Full leaderboards: /);
+    expect(lines.at(-1)).toMatch(/^Week \d+ wrap: /);
   });
 
-  it("links that season's leaderboards, so the post outlives the handoff", () => {
+  it("links that week's wrap under the season's URL, so the post outlives the handoff", () => {
     const last = weeklyHonorsMessage(base).split("\n").at(-1);
-    expect(last).toMatch(/^Full leaderboards: <[^>]+\/leaders\?season=s1>$/);
+    expect(last).toMatch(
+      new RegExp(`^Week ${base.week} wrap: <[^>]+/seasons/s1/weeks/${base.week}>$`),
+    );
     expect(
       weeklyHonorsMessage({ ...base, seasonId: "season/one" }),
-    ).toContain("/leaders?season=season%2Fone>");
+    ).toContain(`/seasons/season%2Fone/weeks/${base.week}>`);
   });
 
   it("lists every tied oracle, then caps a long tie", () => {

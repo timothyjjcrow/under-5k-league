@@ -1,3 +1,4 @@
+import { weekWrapPath } from "./week-wrap";
 import { randomUUID } from "node:crypto";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
@@ -1567,7 +1568,10 @@ export function weeklyHonorsMessage(honors: {
     );
   }
   lines.push(
-    `Full leaderboards: <${resolveSiteUrl()}/leaders?season=${encodeURIComponent(honors.seasonId)}>`,
+    // The week's wrap (results, honors, the table, what's next) under the
+    // season's own URL, so an old post still opens its week after the
+    // handoff. It was the leaderboards, which tell no week's story.
+    `Week ${honors.week} wrap: <${resolveSiteUrl()}${weekWrapPath(honors.seasonId, honors.week)}>`,
   );
   return lines.join("\n");
 }

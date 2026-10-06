@@ -80,6 +80,7 @@ import {
 } from "@/components/schedule-weeks";
 import { StandingsTable } from "@/components/standings-table-server";
 import { SectionNav } from "@/components/section-nav";
+import { weekWrapPath } from "@/lib/week-wrap";
 import {
   Card,
   CardBody,
@@ -546,6 +547,11 @@ export default async function SchedulePage() {
       })),
       nightTs: night?.getTime() ?? null,
       nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
+      // A finished week links its wrap (results, honors, the table).
+      wrapHref:
+        raw.length > 0 && (ws?.completed ?? 0) === raw.length
+          ? weekWrapPath(season.id, week)
+          : null,
     };
   });
 

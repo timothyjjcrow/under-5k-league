@@ -16,7 +16,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Badge, TeamCrest } from "@/components/ui";
+import { Badge, LinkArrow, TeamCrest, textLink } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { WatchLink } from "@/components/watch-link";
 import type { LeagueStream, WatchWindow } from "@/lib/broadcast";
@@ -98,6 +98,8 @@ export type WeekView = {
   /** Before the league's current week — listed newest first under a
    *  small "Earlier weeks" heading (see orderScheduleWeeks). */
   earlier?: boolean;
+  /** A finished regular week's wrap page (weekWrapPath), else null. */
+  wrapHref?: string | null;
 };
 
 export function ScheduleWeeks({
@@ -304,6 +306,15 @@ export function ScheduleWeeks({
                       ) : null}
                       {w.isOverdue ? (
                         <Badge tone="accent">Results overdue</Badge>
+                      ) : null}
+                      {w.wrapHref ? (
+                        <Link
+                          href={w.wrapHref}
+                          prefetch={false}
+                          className={textLink("text-xs font-normal")}
+                        >
+                          Week {w.week} wrap <LinkArrow />
+                        </Link>
                       ) : null}
                     </span>
                     {!filterTeam && w.nightTs != null && w.nightInitial ? (
