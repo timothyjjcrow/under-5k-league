@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import {
+  draftRecapMessage,
   newsMessage,
   rescheduleMessage,
   adminRetimeMessage,
@@ -3208,5 +3209,35 @@ describe("reschedule ready-check posts", () => {
     expect(msg).toContain("Locked in by **Notail** with 7/10 ready.");
     expect(msg).toContain("Can't make it: **Ceb**.");
     expect(msg).toContain("2 still to check in.");
+  });
+});
+
+// Fantasy opens as the auction completes and locks at the first imported
+// game; nothing on Discord said so, and 3 of 95 users entered.
+describe("fantasy's pick window on Discord", () => {
+  it("rides the draft recap, which posts as fantasy opens", () => {
+    const recap = draftRecapMessage({
+      biggestSpend: null,
+      bestValue: null,
+      topSpender: null,
+      totalSpent: 120,
+    });
+    expect(recap).toMatch(/🧙 Fantasy is open until the first game is imported: <.+\/fantasy>$/);
+    expect(recap).not.toMatch(/<@/);
+  });
+
+  it("rides the season-start post only while rosters aren't locked", () => {
+    const opening = {
+      week: 1,
+      fixtures: [{ home: "A", away: "B", whenMs: null }],
+      byes: [],
+    };
+    expect(regularSeasonStartedMessage("Season 2", opening, true)).toContain(
+      "🧙 Fantasy is open until the first game is imported",
+    );
+    expect(regularSeasonStartedMessage("Season 2", opening, false)).not.toContain(
+      "Fantasy",
+    );
+    expect(regularSeasonStartedMessage("Season 2")).not.toContain("Fantasy");
   });
 });

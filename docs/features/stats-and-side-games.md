@@ -230,6 +230,12 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
 
 ## Fantasy
 
+- **Discord says when fantasy is open:** the draft recap (it posts as the
+  auction completes, when fantasy opens) and the regular-season start post,
+  while `fantasyLockedAt` is unset, end with "🧙 Fantasy is open until the
+  first game is imported" and a link, no mentions. Nothing on Discord said so
+  before, and 3 of 95 users entered. This promotes it only in its pick
+  window, as the 2026-09-27 "Fantasy stays for good" row allows.
 - **Keep fantasy forever; promote it only in the pick window** (Tim's
   decision). `fantasyListed` (`site-nav.ts`) lists it from the completed
   auction until the lock, then only for viewers who entered; menus, Home's

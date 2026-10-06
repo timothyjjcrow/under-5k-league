@@ -381,11 +381,14 @@ export function regularSeasonStartedMessage(
     fixtures: { home: string; away: string; whenMs: number | null }[];
     byes: string[];
   },
+  /** Fantasy rosters aren't locked yet (no game imported), so say it's open. */
+  fantasyOpen = false,
 ): string {
   const head = `⚔️ **The ${name(seasonName)} regular season is live.**`;
   const link = `<${resolveSiteUrl()}/schedule>`;
+  const fantasy = fantasyOpen ? `\n${fantasyOpenLine()}` : "";
   if (!opening || opening.fixtures.length === 0) {
-    return `${head} Check the schedule, match times, and availability for opening week: ${link}`;
+    return `${head} Check the schedule, match times, and availability for opening week: ${link}${fantasy}`;
   }
   const shown = opening.fixtures.slice(0, OPENING_FIXTURES_SHOWN);
   const lines = shown.map((f) => {
@@ -400,7 +403,7 @@ export function regularSeasonStartedMessage(
   const byes = opening.byes.length
     ? `\nBye: ${opening.byes.map((team) => name(team)).join(", ")}`
     : "";
-  return `${head} Week ${opening.week}:\n${lines.join("\n")}${byes}\nCheck in for your match and see the full schedule: ${link}`;
+  return `${head} Week ${opening.week}:\n${lines.join("\n")}${byes}\nCheck in for your match and see the full schedule: ${link}${fantasy}`;
 }
 
 export function draftPausedMessage(seasonName: string): string {
@@ -460,7 +463,16 @@ export function draftRecapMessage(r: {
       `🏦 Deepest pockets: **${name(r.topSpender.teamName)}** ($${r.topSpender.spent} spent)`,
     );
   }
+  // Fantasy opens as the auction completes and locks at the first imported
+  // game, and nothing on Discord ever said so (3 of 95 users entered). No
+  // mentions: it's news for everyone, not something one person owes.
+  lines.push(fantasyOpenLine());
   return lines.join("\n");
+}
+
+/** Fantasy's pick window, said the same way in both posts that fall in it. */
+function fantasyOpenLine(): string {
+  return `🧙 Fantasy is open until the first game is imported: <${resolveSiteUrl()}/fantasy>`;
 }
 
 /**
