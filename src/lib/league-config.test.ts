@@ -41,6 +41,17 @@ describe("regional league configuration", () => {
     });
   });
 
+  // A new match-night poll's grid. Europe's players asked for evening times:
+  // the window is centred on 8 PM Berlin, while the US keeps noon to 6 PM
+  // Pacific. Both are seven hourly starts a day, 49 in a default poll.
+  it("offers each league its own default poll window", () => {
+    expect(createLeagueConfig({}).pollDefaultHours).toEqual({ from: 12, to: 18 });
+    const europe = createLeagueConfig({ NEXT_PUBLIC_LEAGUE_REGION: "eu" });
+    expect(europe.pollDefaultHours).toEqual({ from: 17, to: 23 });
+    const { from, to } = europe.pollDefaultHours;
+    expect((from + to) / 2).toBe(20);
+  });
+
   it("uses deployment overrides together for an announced European slot", () => {
     const config = createLeagueConfig({
       NEXT_PUBLIC_LEAGUE_REGION: " EU ",
@@ -115,9 +126,11 @@ describe("regional league configuration", () => {
     vi.stubEnv("NEXT_PUBLIC_MATCH_TIME", "");
     vi.stubEnv("NEXT_PUBLIC_INHOUSE_LEAGUE_NAME", "");
     vi.resetModules();
-    const [{ shareMetadata }, constants] = await Promise.all([
-      import("./share-metadata"), import("./constants"),
+    const [{ shareMetadata }, constants, poll] = await Promise.all([
+      import("./share-metadata"), import("./constants"), import("./match-night-poll"),
     ]);
+    // The admin form and the create action read these, not the config.
+    expect([poll.POLL_DEFAULT_FROM_HOUR, poll.POLL_DEFAULT_TO_HOUR]).toEqual([17, 23]);
     expect(shareMetadata("Players", "League players").openGraph).toMatchObject({ siteName: "GGD2L Europe" });
     expect(constants.INHOUSE.LOBBY_NAME).toBe("GGD2L Europe Inhouse");
     expect(constants.INHOUSE.LOBBY_TICKET).toBe("European inhouse league ticket (to be configured)");

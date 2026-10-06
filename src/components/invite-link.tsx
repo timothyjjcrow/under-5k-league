@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { pushToast } from "@/components/toaster";
 import { buttonClasses } from "@/components/ui";
+import { inviteUrl } from "@/lib/invite-credit";
 
 // Copy-the-signup-link button.
 //
@@ -19,12 +20,19 @@ import { buttonClasses } from "@/components/ui";
 // Bare URL, no pitch text — it unfurls into the site's own link preview in
 // Discord, which is a better advert than anything written here, and a message
 // someone can add their own words to gets sent more often than a canned one.
+//
+// A signed-up player passes `refId` (their user id) and the link carries it
+// as `?ref=`, the small invite credit (src/lib/invite-credit.ts): a
+// brand-new player who signs up through it is announced as invited by them.
 export function InviteLink({
   className,
   label = "Copy invite link",
+  refId,
 }: {
   className?: string;
   label?: string;
+  /** The copying player's user id, when they're signed up this season. */
+  refId?: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -32,7 +40,7 @@ export function InviteLink({
       type="button"
       className={buttonClasses("primary", "md", className)}
       onClick={async () => {
-        const url = window.location.origin;
+        const url = inviteUrl(window.location.origin, refId);
         try {
           await navigator.clipboard.writeText(url);
           setCopied(true);

@@ -1,8 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
+import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // The match-night poll end to end: an admin opens it from /admin (the grid
-// fills itself: every day, noon to 6 PM), a signed-up player marks times on
+// fills itself: every day over the league's window, noon to 6 PM Pacific or
+// 5 PM to 11 PM Berlin), a signed-up player marks times on
 // Home and sees who can play when, a viewer in another zone sees the grid on
 // their own clock, and the admin closes and deletes it. A zz- spec because
 // it writes league-wide state Home renders; it deletes its poll at the end.
@@ -10,6 +12,8 @@ import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 const QUESTION = "When should match night be? (e2e)";
 const EU = process.env.NEXT_PUBLIC_LEAGUE_REGION === "eu";
 const LEAGUE_ZONE = EU ? "Europe/Berlin" : "America/Los_Angeles";
+/** The default window's first and last start hours on the league's clock. */
+const { from: FIRST, to: LAST } = LEAGUE_CONFIG.pollDefaultHours;
 /** A grid hour as the league's locale prints it. */
 const hour = (h: number) =>
   EU ? `${String(h).padStart(2, "0")}:00` : `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
@@ -75,13 +79,13 @@ test.describe("on the league's clock", () => {
     // A whole day from its header, then one time off again.
     await grid.getByRole("button", { name: "Mark every Saturday time" }).click();
     await expect(grid.locator('[data-slot][aria-pressed="true"]')).toHaveCount(7);
-    await grid.getByRole("button", { name: `Saturday ${hour(18)}`, exact: true }).click();
-    // A range by dragging down Sunday from noon to 2 PM.
+    await grid.getByRole("button", { name: `Saturday ${hour(LAST)}`, exact: true }).click();
+    // A range by dragging down Sunday over its first three start times.
     const from = await grid
-      .getByRole("button", { name: `Sunday ${hour(12)}`, exact: true })
+      .getByRole("button", { name: `Sunday ${hour(FIRST)}`, exact: true })
       .boundingBox();
     const to = await grid
-      .getByRole("button", { name: `Sunday ${hour(14)}`, exact: true })
+      .getByRole("button", { name: `Sunday ${hour(FIRST + 2)}`, exact: true })
       .boundingBox();
     if (!from || !to) throw new Error("grid cells have no box");
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
@@ -132,12 +136,13 @@ test.describe("from another time zone", () => {
     ).toHaveAttribute("aria-pressed", "true");
     await expect(card.getByText("Times are shown in your local time (Tokyo time).")).toBeVisible();
     const heatmap = card.getByRole("table", { name: /How many players can play each time/ });
-    // The first row is noon on the league's clock: a different hour in Tokyo.
+    // The first row is the window's first hour on the league's clock: a
+    // different hour in Tokyo.
     const firstRow = heatmap.getByRole("rowheader").first();
     await expect(heatmap).toHaveAccessibleName(/in your local time \(Tokyo time\)/);
-    await expect(firstRow).not.toHaveText(hour(12));
+    await expect(firstRow).not.toHaveText(hour(FIRST));
     await toggle.getByRole("button", { name: /^League time \((Pacific|Berlin)\)$/ }).click();
-    await expect(firstRow).toHaveText(hour(12));
+    await expect(firstRow).toHaveText(hour(FIRST));
     await expect(card.getByText(/Times are shown in league time \((Pacific|Berlin) time\)\.$/)).toBeVisible();
     noErrors();
   });
@@ -162,8 +167,8 @@ test.describe("closing", () => {
     const card = page.locator("#match-night-poll");
     await expect(card.getByText("Voting closed", { exact: true })).toBeVisible();
     await expect(card.getByText("The league picked", { exact: true })).toBeVisible();
-    // Every marked time has the one voter; Saturday 1 PM is the earliest
-    // with a marked time on both sides, so it wins the tie.
+    // Every marked time has the one voter; Saturday's second start time is
+    // the earliest with a marked time on both sides, so it wins the tie.
     await expect(card.getByText(/^Saturdays at .+ time$/)).toBeVisible();
 
     await page.goto("/admin");

@@ -494,7 +494,8 @@ the league is already draftable and many visitors have joined. Write for both.
 - **A signed-up player gets `SignupsAside`, not the join buttons:** the
   draft-night confirmation they owe, else "You're in" with `<InviteLink>`,
   which copies `window.location.origin` at click time (never a server prop) so
-  previews and custom domains copy themselves. The hero's counts carry the ask
+  previews and custom domains copy themselves, tagged `?ref=` with the
+  viewer's id (invite credit, players-and-registration.md). The hero's counts carry the ask
   (`needed`, then `toNextTeam`). On draft night the slot gives way to "Enter
   the draft room".
 - **`phaseSubtitle` (`season-copy.ts`) takes `canDraft`,** so a full league is
