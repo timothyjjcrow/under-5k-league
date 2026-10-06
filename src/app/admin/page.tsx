@@ -181,6 +181,8 @@ import {
 import { INHOUSE_ANNOUNCEMENT_STATUS } from "@/lib/inhouse-announcement-outbox";
 import { DangerSubmit } from "@/components/danger-submit";
 import { ChaseCopy } from "@/components/chase-copy";
+import { ReturningCopy } from "@/components/returning-copy";
+import { loadReturningPlayers } from "@/lib/returning-players-service";
 import { cn } from "@/lib/utils";
 import { maskWebhookUrl } from "@/lib/discord";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
@@ -443,6 +445,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         <DiscordReachCard
           seasonId={season.id}
           rosterUnlinked={data ? unlinkedRosterFor(season, data) : null}
+          signupsSeasonName={season.status === "SIGNUPS" ? season.name : null}
         />
       </Suspense>
     </AdminAnchor>
@@ -5750,10 +5753,13 @@ async function MembershipChip({
 async function DiscordReachCard({
   seasonId,
   rosterUnlinked,
+  signupsSeasonName,
 }: {
   seasonId: string;
   /** Once rosters are set: who Needs attention counts (unlinkedRosterFor). */
   rosterUnlinked: string[] | null;
+  /** The season's name while it takes signups: the returning-player line. */
+  signupsSeasonName: string | null;
 }) {
   const reach = await getDiscordReachFunnel(seasonId);
   return (
@@ -5790,8 +5796,77 @@ async function DiscordReachCard({
             Nobody has signed up for this season yet.
           </p>
         )}
+        {signupsSeasonName ? (
+          <Suspense fallback={null}>
+            <ReturningPlayersLine
+              seasonId={seasonId}
+              seasonName={signupsSeasonName}
+            />
+          </Suspense>
+        ) : null}
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * During signups: how many of last season's players are back, who isn't,
+ * and a one-click reminder to paste into Discord. The one-tap rejoin card on
+ * /me means the gap is reaching them, not the form. Database reads only; the
+ * admin's paste is the send, so the site never mass-mentions anyone itself.
+ */
+async function ReturningPlayersLine({
+  seasonId,
+  seasonName,
+}: {
+  seasonId: string;
+  seasonName: string;
+}) {
+  const [players, signedUp] = await Promise.all([
+    loadReturningPlayers(seasonId),
+    prisma.registration.count({
+      where: {
+        seasonId,
+        status: REGISTRATION_STATUS.ACTIVE,
+        type: REGISTRATION_TYPE.PLAYER,
+      },
+    }),
+  ]);
+  if (!players || players.previous === 0) return null;
+  const linked = players.notBack.filter((player) => player.discordId).length;
+  return (
+    <div className="mt-4 border-t border-line-soft pt-3">
+      <p className="text-sm">
+        <b>
+          {players.back} of {players.previous}
+        </b>{" "}
+        {players.previousSeasonName} players have signed up for {seasonName}.
+      </p>
+      {players.notBack.length > 0 ? (
+        <>
+          <p className="mt-1 text-xs text-muted">
+            Not back yet ({players.notBack.length}, {linked} with Discord
+            linked): {cappedNames(players.notBack.map((player) => player.name))}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <ReturningCopy
+              players={players}
+              seasonName={seasonName}
+              signedUp={signedUp}
+            />
+            <span className="text-xs text-muted">
+              One Discord post: it mentions the {linked} with Discord linked
+              (your paste pings them) and names the rest. Their answers carry
+              over, so rejoining is one tap on My account.
+            </span>
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 text-xs text-success">
+          Everyone from {players.previousSeasonName} is back.
+        </p>
+      )}
+    </div>
   );
 }
 

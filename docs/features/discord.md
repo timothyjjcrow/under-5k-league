@@ -329,6 +329,16 @@ actions: `src/app/actions/admin-discord.ts`.
   time and names through `pasteSafeName` (zero-width splices, not
   backslashes). The builders live in client-safe `discord-reach.ts`
   (`discord-roles.ts` re-exports them).
+- **The returning-player reminder** (`returningReminderMessage` +
+  `<ReturningCopy>`, `returning-players.ts`; the read is
+  `loadReturningPlayers`) sits under the reach card while signups are open:
+  "{back} of {previous} {last season} players have signed up", who isn't
+  back yet, and one post that says the season's progress, that last season's
+  answers carry over (the one-tap rejoin card on /me), and mentions everyone
+  not back with Discord linked and names the rest, under 2,000 characters.
+  Like the chase post, the admin's paste is the send, so the site never
+  mass-mentions anyone itself. Anyone who withdrew or was removed this season
+  isn't listed. Names go through `pasteSafeName`.
 - **`reachabilityNote(userId)`** rides the assign-standin (captain and admin)
   and free-agent toasts when the post can't reach the player: silent on
   unknown, raced against 2.5 s, never throws.
