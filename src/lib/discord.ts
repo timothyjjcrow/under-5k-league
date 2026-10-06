@@ -65,6 +65,9 @@ const name = escapeDiscordText;
  * gate: Start draft needs only two captains), the teams the pool already
  * makes and how many more reach the goal; past it, how many more make
  * another full team. Only the signup that reaches the goal celebrates it.
+ * A brand-new player who came through a signed-up player's invite link
+ * names the inviter ("invited by Borpo", inviterForSignup): a shout-out,
+ * never a ping, since the inviter has nothing to do.
  */
 export function signupMessage(
   playerName: string,
@@ -74,6 +77,8 @@ export function signupMessage(
   draftAtMs?: number | null,
   /** They offered to captain: teams are captains, so it's worth saying. */
   wantsCaptain = false,
+  /** Whose invite link brought them (inviterForSignup), if anyone's. */
+  invitedBy: string | null = null,
 ): string {
   const capacity = capacityInfo(season, signedUp);
   let tail: string;
@@ -97,7 +102,8 @@ export function signupMessage(
     ? ` Draft night: <t:${Math.floor(draftAtMs / 1000)}:F>.`
     : "";
   const verb = wantsCaptain ? "signed up and offered to captain" : "signed up";
-  return `📝 **${name(playerName)}** ${verb} — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
+  const credit = invitedBy ? ` (invited by ${name(invitedBy)})` : "";
+  return `📝 **${name(playerName)}** ${verb}${credit} — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
 }
 
 /**

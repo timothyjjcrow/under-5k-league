@@ -1061,10 +1061,11 @@ export default async function MePage({
                       <span className="font-medium text-fg">
                         Know anyone who&apos;d fit?
                       </span>{" "}
-                      Every few more players is another team, and the link
-                      unfurls with the details in Discord.
+                      Every few more players is another team, the link
+                      unfurls with the details in Discord, and a new player
+                      who signs up through it is announced as invited by you.
                     </p>
-                    <InviteLink />
+                    <InviteLink refId={user.id} />
                   </div>
                 ) : null}
 

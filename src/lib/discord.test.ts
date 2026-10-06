@@ -138,6 +138,21 @@ describe("discord message formatters", () => {
     expect(signupMessage("Zai", 17, FOUR_OF_FIVE)).toContain("**Zai** signed up — ");
   });
 
+  // Invite credit (the small version): the post names the inviter, escaped
+  // like every player-chosen name, and pings nobody.
+  it("credits the inviter of a brand-new player, escaped and without a mention", () => {
+    expect(signupMessage("Zai", 17, FOUR_OF_FIVE, null, false, "Borpo")).toContain(
+      "**Zai** signed up (invited by Borpo) — 17 players in",
+    );
+    expect(signupMessage("Zai", 17, FOUR_OF_FIVE, null, true, "Borpo")).toContain(
+      "**Zai** signed up and offered to captain (invited by Borpo) — ",
+    );
+    const sneaky = signupMessage("Zai", 17, FOUR_OF_FIVE, null, false, "**[x](https://evil.example)** @everyone");
+    expect(sneaky).not.toContain("[x](https://evil.example)");
+    expect(sneaky).not.toMatch(/(^|[^\\])\*\*\[x\]/);
+    expect(signupMessage("Zai", 17, FOUR_OF_FIVE, null, false, null)).not.toContain("invited by");
+  });
+
   it("celebrates only the signup that reaches the goal", () => {
     const msg = signupMessage("Zai", 20, FOUR_OF_FIVE);
     expect(msg).toContain("that meets the 4-team goal! 🎉");

@@ -203,6 +203,7 @@ export function signupsHero(
         snapshot={snapshot}
         owed={owedConfirmation}
         captaining={captaining}
+        inviterId={user?.id ?? null}
       />
     ) : null;
 
@@ -230,10 +231,13 @@ function SignupsAside({
   snapshot,
   owed,
   captaining,
+  inviterId,
 }: {
   snapshot: SeasonSnapshot;
   owed: ReturnType<typeof owedDraftConfirmation>;
   captaining: boolean;
+  /** The signed-up viewer: their copied link credits them (invite-credit.ts). */
+  inviterId: string | null;
 }) {
   const { season } = snapshot;
   const { draftAt } = season;
@@ -287,14 +291,15 @@ function SignupsAside({
           <p className="font-display text-lg font-semibold">You&apos;re in</p>
           <p className="mt-1 text-sm text-muted">Know anyone who&apos;d fit?</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <InviteLink />
+            <InviteLink refId={inviterId} />
             <Link href="/how-it-works" className={textLink("text-sm")}>
               How it works <LinkArrow />
             </Link>
           </div>
           <p className="mt-2 text-xs text-muted">
-            Copies this season&apos;s link — it unfurls with the details in
-            Discord.
+            Copies your link to this season. It unfurls with the details in
+            Discord, and a new player who signs up through it is announced as
+            invited by you.
           </p>
         </>
       )}

@@ -54,6 +54,8 @@ import { clampHeroList } from "@/lib/heroes";
 import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
 import { sendDiscordMessage, signupMessage } from "@/lib/discord";
+import { inviterForSignup } from "@/lib/invite-credit-service";
+import { takeInviteRef } from "@/lib/invite-ref-cookie";
 import type { ActionResult } from "@/lib/action-result";
 import { mergeAccountRefresh } from "@/lib/account-page";
 import { aboutUnchanged, submittedAbout } from "@/lib/about-you";
@@ -710,14 +712,27 @@ export async function saveRegistration(
     };
   }
 
+  // A new signup consumes this browser's invite tag, credited or not, so the
+  // first link is the last word (invite-credit.ts).
+  const inviteRef = createdNew ? await takeInviteRef() : null;
+
   // Announce brand-new full-player signups (not updates or standins) with the
   // site's current ask: players to the season's team goal, or past it,
   // players to the next full team. A new captain volunteer says so: teams
-  // are captains, so it's the signup that adds a team.
+  // are captains, so it's the signup that adds a team. A brand-new player
+  // who came through a signed-up player's invite link names the inviter;
+  // that lookup is best-effort, after the commit, and never fails a signup.
   if (createdNew && type === REGISTRATION_TYPE.PLAYER) {
-    const playerCount = await prisma.registration.count({
-      where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
-    });
+    const [playerCount, invitedBy] = await Promise.all([
+      prisma.registration.count({
+        where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
+      }),
+      inviterForSignup({
+        seasonId: season.id,
+        newUserId: user.id,
+        ref: inviteRef,
+      }).catch(() => null),
+    ]);
     await sendDiscordMessage(
       signupMessage(
         user.name,
@@ -725,6 +740,7 @@ export async function saveRegistration(
         season,
         season.draftAt?.getTime() ?? null,
         wantsCaptain,
+        invitedBy,
       ),
     );
   }

@@ -12,6 +12,7 @@ const display = Oswald({
   display: "swap",
 });
 import { SiteHeader } from "@/components/site-header";
+import { InviteRefCapture } from "@/components/invite-ref-capture";
 import { SiteFooter } from "@/components/site-footer";
 import { Toaster } from "@/components/toaster";
 import { ResultSyncPing } from "@/components/result-sync-ping";
@@ -176,6 +177,8 @@ export default async function RootLayout({
         <a href="#main" className="skip-link">
           Skip to main content
         </a>
+        {/* Remembers whose invite link opened this browser (invite-credit.ts). */}
+        <InviteRefCapture />
         <SiteHeader
           // Display fields only: the header is a client component, so the
           // whole session user (Steam id included) would ship in its props.

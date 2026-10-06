@@ -86,6 +86,26 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   `saveRegistration`, so every rule runs; no card when the medal or last
   season's MMR is over the ceiling.
 
+## Invite credit
+
+- **The small version (Tim's pick, 2026-10-06; `src/lib/invite-credit.ts`):**
+  a signed-up player's "Copy invite link" (`<InviteLink refId>`, on Home's
+  "You're in" panel and on /me) copies `/?ref=<their user id>`.
+  `InviteRefCapture`, in the root layout, remembers the tag in the
+  `ggd2l_ref` cookie for 30 days, keeps the first link (a later tag never
+  replaces it), and takes `ref` out of the address bar. It writes the cookie
+  in the page on purpose: a GET that set it would also run for an `<img>`,
+  so any picture URL could claim credit for its viewers
+  (`invite-credit-guards.test.ts`).
+- **A new signup consumes the tag** (`takeInviteRef`, after the commit),
+  credited or not. A new full player's Discord signup post then reads "📝
+  **Zai** signed up (invited by Borpo) — …" (`inviterForSignup`): only when
+  the new player has no signup in any other season, the inviter holds an
+  ACTIVE signup in this season, and they aren't the same person. The lookup
+  is best-effort and never fails the signup. The inviter's name is escaped
+  and never mentioned; nothing is stored, so there are no counts anywhere.
+  `test/integration/invite-credit.itest.ts` drives the real action.
+
 ## Pool scouting (`/players`)
 
 Grid, filter and URL rules: `pages-and-ui.md`.
