@@ -23,12 +23,26 @@ const US_ZONE_NAMES: Record<string, string> = {
 const REGION_PREFIX =
   /^(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific)\//;
 
+// Browsers and Node report some zones by an old id (ICU keeps them as the
+// canonical names), so a player in Ukraine read "Kiev time" and one in India
+// "Calcutta time". Name the city as it is spelled today.
+const RENAMED_CITIES: Record<string, string> = {
+  "Asia/Calcutta": "Kolkata",
+  "Europe/Kiev": "Kyiv",
+  "Asia/Saigon": "Ho Chi Minh City",
+  "Asia/Katmandu": "Kathmandu",
+  "Asia/Rangoon": "Yangon",
+  "Asia/Ulan_Bator": "Ulaanbaatar",
+  "America/Godthab": "Nuuk",
+  "Atlantic/Faeroe": "Faroe",
+};
+
 /**
  * A zone's plain name: "Berlin", "Pacific". A zone with no city in its id
  * ("UTC", "Etc/GMT-1") is named by the id itself.
  */
 export function zoneName(timeZone: string): string {
-  const known = US_ZONE_NAMES[timeZone];
+  const known = US_ZONE_NAMES[timeZone] ?? RENAMED_CITIES[timeZone];
   if (known) return known;
   if (REGION_PREFIX.test(timeZone)) {
     const city = timeZone.slice(timeZone.lastIndexOf("/") + 1).replace(/_/g, " ");

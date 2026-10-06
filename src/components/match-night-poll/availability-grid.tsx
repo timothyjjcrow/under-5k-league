@@ -39,7 +39,7 @@ export function AvailabilityGrid({
   /** The viewer's saved times, or null before they vote. */
   saved: string[] | null;
 }) {
-  const { zone } = usePollClock();
+  const { offset } = usePollClock();
   const clockPhrase = useClockPhrase();
   const grid = pollGrid(slots);
   const known = new Set(slots.map((slot) => slot.key));
@@ -67,7 +67,7 @@ export function AvailabilityGrid({
     describeTimes(
       slots
         .filter((slot) => new Set(keys).has(slot.key))
-        .map((slot) => slotOnClock(slot, zone)),
+        .map((slot) => slotOnClock(slot, offset)),
       LEAGUE_LOCALE,
     );
 
@@ -126,7 +126,7 @@ export function AvailabilityGrid({
       return next;
     });
   const labelOf = (slot: PollSlotView) => {
-    const shown = slotOnClock(slot, zone);
+    const shown = slotOnClock(slot, offset);
     return `${slotDayName(shown)} ${slotHour(shown.minute, LEAGUE_LOCALE)}`;
   };
   const toggleAll = (keys: string[], what: string) => {
@@ -153,6 +153,9 @@ export function AvailabilityGrid({
         className="w-full table-fixed border-separate border-spacing-1 select-none"
         aria-label="Times you could play"
         onPointerDown={(event) => {
+          // Only a plain press marks: a right-click (or a Mac ctrl-click)
+          // opens a menu, and a second finger is a pinch, not a stroke.
+          if (event.button !== 0 || !event.isPrimary) return;
           const cell = cellAt(event.target);
           const key = cell?.dataset.slot;
           if (!key) return;
@@ -162,7 +165,7 @@ export function AvailabilityGrid({
         }}
         onPointerMove={(event) => {
           const drag = painting.current;
-          if (!drag) return;
+          if (!drag || !event.isPrimary) return;
           // Touch keeps sending events to the cell the finger went down on,
           // so find the cell under the finger by position.
           const key = cellAt(
@@ -210,7 +213,7 @@ export function AvailabilityGrid({
               .map((day) => grid.at(day, minute))
               .filter((slot): slot is PollSlotView => !!slot);
             const sample = row[0];
-            const shown = sample ? slotOnClock(sample, zone) : null;
+            const shown = sample ? slotOnClock(sample, offset) : null;
             const keys = row.map((slot) => slot.key);
             const full = keys.every((key) => picked.has(key));
             const time = shown ? slotHour(shown.minute, LEAGUE_LOCALE) : "";

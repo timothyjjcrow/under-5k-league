@@ -5,7 +5,8 @@ import type { NextConfig } from "next";
 // "per new visitor". If a clip is ever updated, give it a new filename to bust
 // the cache.
 const LONG_CACHE = "public, max-age=31536000, immutable";
-const CACHED_MEDIA = ["/hero-loop.mp4"];
+// The small medal copies are Valve's medal art and never change either.
+const CACHED_MEDIA = ["/hero-loop.mp4", "/ranks/72/:file*"];
 
 // Baseline security headers on every response. Deliberately no script/style CSP
 // directives (Next injects inline hydration scripts that a strict script-src

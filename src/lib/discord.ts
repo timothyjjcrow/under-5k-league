@@ -1049,6 +1049,10 @@ export function rescheduleDeclinedMessage(m: {
   roundLabel?: string | null;
   declinerName: string;
   whenMs: number;
+  /** How many times the ready check offered. With more than one, "None of
+   *  these work" turned them all down, and naming only the earliest let the
+   *  proposer think the others were still open. */
+  optionCount?: number;
   /** Deep link to the Reschedule card, where the proposer can try another
    *  time. Optional so hand-built calls stay valid. */
   matchId?: string;
@@ -1057,7 +1061,11 @@ export function rescheduleDeclinedMessage(m: {
   const link = m.matchId
     ? ` <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.reschedule)}>`
     : "";
-  return `⏳ **${name(m.declinerName)}** declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F> — the original kickoff stands.${link}`;
+  const what =
+    m.optionCount != null && m.optionCount > 1
+      ? `turned down all ${m.optionCount} times offered for the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**`
+      : `declined moving the ${label} **${name(m.homeName)}** vs **${name(m.awayName)}** to <t:${Math.floor(m.whenMs / 1000)}:F>`;
+  return `⏳ **${name(m.declinerName)}** ${what} — the original kickoff stands.${link}`;
 }
 
 /** Cap the ping list so one badly-organised team can't produce a wall of

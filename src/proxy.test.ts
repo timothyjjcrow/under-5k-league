@@ -92,4 +92,13 @@ describe("proxy: keep active players signed in", () => {
     );
     expect(keys).toContain(SESSION_COOKIE);
   });
+
+  it("skips Link prefetches, which can't need a renewal the navigation won't give", () => {
+    for (const entry of config.matcher) {
+      expect(entry.missing).toEqual([
+        { type: "header", key: "next-router-prefetch" },
+        { type: "header", key: "purpose", value: "prefetch" },
+      ]);
+    }
+  });
 });

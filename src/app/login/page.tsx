@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { safeReturnPath } from "@/lib/return-path";
+import { singleSearchParam } from "@/lib/search-params";
 import { Card, CardBody, buttonClasses, textLink } from "@/components/ui";
 import { SteamSignInNote } from "@/components/steam-sign-in";
 
@@ -21,15 +22,23 @@ export default async function LoginPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    error?: string;
-    next?: string;
-    signedOut?: string;
+    error?: string | string[];
+    next?: string | string[];
+    signedOut?: string | string[];
   }>;
 }) {
-  const { error, next: rawNext, signedOut } = await searchParams;
+  const {
+    error: rawError,
+    next: rawNext,
+    signedOut: rawSignedOut,
+  } = await searchParams;
+  // A repeated key arrives as an array; singleSearchParam reads it as absent.
+  // `?next=/a&next=/b` used to crash the page on `.trim()`.
+  const error = singleSearchParam(rawError);
+  const signedOut = singleSearchParam(rawSignedOut);
   // Validated same-origin path to land on after sign-in (never echoed as
   // text; only ever used inside our own hrefs/redirects).
-  const next = safeReturnPath(rawNext);
+  const next = safeReturnPath(singleSearchParam(rawNext));
 
   const user = await getSessionUser();
   if (user) redirect(next ?? "/"); // already signed in → straight back

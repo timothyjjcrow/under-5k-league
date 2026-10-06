@@ -42,10 +42,15 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   medal, no clamp. `rankTierExactMinMmr` (unpadded) is for eligibility.
   `approxRankTierFromMmr` shares the constants, and `rank.test.ts` pins that
   the two never disagree.
-- **Keep `saveRegistration`'s order:** fetch a brand-new signup's missing
-  medal, then gate the RAW claim plus medal, then clamp and store. Never gate
-  the clamped value: the clamp snaps under the ceiling, so any overstated
-  claim would pass.
+- **Keep `saveRegistration`'s order:** gate what no medal could change (the
+  ceiling, closed player signups) with the medal on file, fetch a brand-new
+  signup's missing medal, then gate the RAW claim plus medal, then clamp and
+  store. Never gate the clamped value: the clamp snaps under the ceiling, so
+  any overstated claim would pass. The early gate comes before the fetch
+  because a refused submit stores nothing: every retry used to call OpenDota
+  again. The fetch also takes the player's `open-dota-profile` cooldown (the
+  one Refresh my Steam & Dota info uses); inside it the signup saves without
+  a medal and the hourly player data refresh fills it in.
 - **Judge the medal only at admission.** A medal whose exact floor clears the
   ceiling (Divine 3+/Immortal, `medalProvesIneligible`) refuses a new signup
   whatever is typed; an ACTIVE registrant is exempt (WITHDRAWN or REMOVED

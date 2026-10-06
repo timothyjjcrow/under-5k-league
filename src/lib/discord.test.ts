@@ -3123,6 +3123,22 @@ describe("reschedule ready-check posts", () => {
     matchId: "m1",
   };
 
+  it("says a decline turned down every time offered, not just the earliest", () => {
+    const all = rescheduleDeclinedMessage({
+      ...fixture,
+      declinerName: "Puppey",
+      optionCount: 3,
+    });
+    expect(all).toContain(
+      "**Puppey** turned down all 3 times offered for the week 3 match **Radiant Raccoons** vs **Dire Wolves** — the original kickoff stands.",
+    );
+    expect(all).not.toContain("<t:");
+    // One time on offer reads as before, naming it.
+    expect(
+      rescheduleDeclinedMessage({ ...fixture, declinerName: "Puppey", optionCount: 1 }),
+    ).toContain("declined moving the week 3 match **Radiant Raccoons** vs **Dire Wolves** to <t:1800000000:F>");
+  });
+
   it("asks everyone about every option, quoting the note", () => {
     const msg = rescheduleProposedMessage({
       ...fixture,

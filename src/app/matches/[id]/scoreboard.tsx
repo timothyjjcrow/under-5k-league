@@ -1,5 +1,9 @@
 import Link from "next/link";
-import { matchWatchWindow, streamEmbed } from "@/lib/broadcast";
+import {
+  matchWatchWindow,
+  streamEmbed,
+  streamPlayerWindow,
+} from "@/lib/broadcast";
 import { prisma } from "@/lib/prisma";
 import { getLeagueStream } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -84,7 +88,10 @@ export async function MatchScoreboard({
   // The league stream on a playoff or final match still to be played:
   // where it will be streamed, then "Live now" and a player (broadcast.ts).
   const watch = matchWatchWindow(match, match.season.isActive);
-  const stream = watch ? await getLeagueStream() : null;
+  // The player outlives the link: it stays mounted once the series is
+  // decided, so someone watching keeps the post-game (streamPlayerWindow).
+  const playerWatch = streamPlayerWindow(match, match.season.isActive);
+  const stream = playerWatch ? await getLeagueStream() : null;
   const embed = stream ? streamEmbed(stream) : null;
 
   return (
@@ -285,11 +292,11 @@ export async function MatchScoreboard({
           ) : null}
         </div>
       </CardBody>
-      {watch && stream && embed ? (
+      {playerWatch && stream && embed ? (
         <StreamPlayer
           embed={embed}
           platform={stream.platform}
-          watch={watch}
+          watch={playerWatch}
           matchLabel={`${match.homeTeam.name} vs ${match.awayTeam.name}`}
           className="border-t border-line"
         />

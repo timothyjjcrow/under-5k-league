@@ -144,7 +144,9 @@ describe("match page reschedule form", () => {
     expect(PAGE).toContain(
       "maxTs: deadline ? deadline.getTime() - 60_000 : null",
     );
-    expect(PICKER).toContain("defaultTs={kickoffMs}");
+    // ...but only while the box could submit it (customTimePrefill): a
+    // passed kickoff under `min` blocked the whole form.
+    expect(PICKER).toContain("defaultTs={customTimePrefill(kickoffMs, minTs, maxTs)}");
     expect(PICKER).toContain("minTs={minTs}");
     expect(PICKER).toContain("maxTs={maxTs}");
     expect(PICKER).toContain("describedBy={hintId}");
@@ -445,5 +447,19 @@ describe("match page shared reads", () => {
     const card = tools.slice(tools.indexOf("export async function AdminMatchTools("));
     expect(card).toContain("const season = { ...match.season, id: match.seasonId };");
     expect(card).toContain("getSeasonDraftStatus(match.seasonId),");
+  });
+});
+
+describe("the ready check's Lock", () => {
+  // One rule (lockOffered) decides where Lock shows, on the card and in the
+  // captain's to-do list. A time showing "Everyone's in" on an open check is
+  // one whose move was refused, so it must keep its Lock.
+  it("comes from lockOffered on the card and in the captain's to-dos", () => {
+    const card = sourceFile("src/components/reschedule/ready-check-card.tsx").text;
+    const todos = sourceFile("src/app/matches/[id]/captain-todos.tsx").text;
+    expect(card).toContain("const showLock = isCaptain && lockOffered(option);");
+    expect(todos).toContain("open.options.find(lockOffered)");
+    expect(card).not.toMatch(/showLock[^\n]*everyoneIn/);
+    expect(todos).not.toMatch(/lockRefusal === null && !o\.everyoneIn/);
   });
 });

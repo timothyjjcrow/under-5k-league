@@ -34,6 +34,7 @@ export const DEFAULT_POLL_QUESTION = "When should match night be?";
 export const POLL_ANCHOR = "match-night-poll";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MINUTES = 24 * 60;
 const WEEKDAYS = [
   "Sunday",
   "Monday",
@@ -347,18 +348,41 @@ export function slotInZone(
 /**
  * A slot as one clock reads it, for a grid's row header or a list: the start
  * time, the weekday, and how many days that weekday is from the slot's own
- * column (+1 when 6 PM Pacific Saturday is 3 AM Sunday in Berlin). With no
- * zone (the server, or a browser zone Intl can't read) it is the league's
- * clock unchanged.
+ * column (+1 when 6 PM Pacific Saturday is 3 AM Sunday in Berlin).
+ *
+ * `offsetMinutes` is that clock minus the league's (zoneOffsetMinutes),
+ * measured ONCE for the whole poll at `PollView.clockAt`. Converting each
+ * slot at its own next occurrence put a daylight-saving change between the
+ * cells of one grid row (the week Europe has changed its clocks and the US
+ * hasn't), so a row labelled "10 PM" held cells reading "11 PM". With no
+ * offset (the server, the league's own clock, or a zone Intl can't read) it
+ * is the league's clock unchanged.
  */
 export function slotOnClock(
-  slot: { day: number; minute: number; nextAt: number },
-  zone: string | null,
+  slot: { day: number; minute: number },
+  offsetMinutes: number | null,
 ): { day: number; minute: number; shift: -1 | 0 | 1 } {
-  const local = zone ? slotInZone(slot.nextAt, zone) : null;
-  if (!local) return { day: slot.day, minute: slot.minute, shift: 0 };
-  const ahead = (local.day - slot.day + 7) % 7;
-  return { ...local, shift: ahead === 1 ? 1 : ahead === 6 ? -1 : 0 };
+  if (!offsetMinutes) return { day: slot.day, minute: slot.minute, shift: 0 };
+  const total = slot.minute + offsetMinutes;
+  // Real offsets stay within a day of the league's, so this is -1, 0 or 1.
+  const days = Math.floor(total / DAY_MINUTES);
+  return {
+    day: (((slot.day + days) % 7) + 7) % 7,
+    minute: total - days * DAY_MINUTES,
+    shift: days > 0 ? 1 : days < 0 ? -1 : 0,
+  };
+}
+
+/**
+ * The instant whose clock offsets convert a poll's times (slotOnClock): a
+ * week after voting closes, when the winning night is first likely to be
+ * played. A player marks the times they can make during the season, so
+ * their clock is read as it will be then, not as it is while they vote
+ * (Arizona, which keeps one clock all year, is an hour further from Pacific
+ * in winter than in summer).
+ */
+export function pollClockAt(closesAt: Date): number {
+  return closesAt.getTime() + 7 * DAY_MS;
 }
 
 /**
@@ -473,8 +497,6 @@ export type PollSlotView = PollSlot & {
   key: string;
   /** "Sundays at 6:00 PM Pacific time". */
   label: string;
-  /** The next time the slot comes round, for converting to the viewer's clock. */
-  nextAt: number;
 };
 
 export type PollElectorate = {
@@ -491,6 +513,10 @@ export type PollView = {
   open: boolean;
   /** The league's zone, "America/Los_Angeles": the clock slots are stored on. */
   timeZone: string;
+  /** When the viewer's clock is read to convert every slot (pollClockAt). */
+  clockAt: number;
+  /** When this view was built: the clock the viewer is on while voting. */
+  viewedAt: number;
   slots: PollSlotView[];
   /** "Every day, 12 PM–6 PM, on the hour". */
   summary: string;
@@ -543,11 +569,12 @@ export function buildPollView(input: {
     closesAt: poll.closesAt.getTime(),
     open,
     timeZone,
+    clockAt: pollClockAt(poll.closesAt),
+    viewedAt: nowMs,
     slots: slots.map((slot) => ({
       ...slot,
       key: slotKey(slot),
       label: slotLabel(slot, timeZone, locale),
-      nextAt: nextSlotOccurrence(slot, nowMs, timeZone),
     })),
     summary: gridSummary(slots, locale),
     ballots: ballots.length,

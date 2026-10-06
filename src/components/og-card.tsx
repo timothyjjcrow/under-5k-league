@@ -214,6 +214,11 @@ function clampStyle(fontSize: number, maxWidth: number) {
     lineHeight: 1.12,
     maxWidth,
     lineClamp: 2,
+    // A name with no spaces ("ImmovableObjectGaming", a 60-character team
+    // name, a long Steam name) only wrapped at spaces, so it ran off the
+    // picture or over the other team's name; now it breaks inside the word
+    // and clamps at two lines like any other.
+    wordBreak: "break-word",
   } as const;
 }
 
@@ -389,15 +394,21 @@ function OgChip({
   children,
   gold,
   compact,
+  maxWidth,
 }: {
   children: ReactNode;
   gold?: boolean;
   compact?: boolean;
+  /** Clamp the chip's text to one line in this width (a long name). */
+  maxWidth?: number;
 }) {
   return (
     <span
       style={{
-        display: "flex",
+        display: maxWidth ? "block" : "flex",
+        ...(maxWidth
+          ? { maxWidth, lineClamp: 1, wordBreak: "break-word" as const }
+          : {}),
         ...(compact ? { alignItems: "center" } : {}),
         fontSize: compact ? 26 : 30,
         fontWeight: 600,
@@ -686,7 +697,9 @@ export function OgSeasonCard({
             {seasonName}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", marginTop: 26 }}>
-            {champion ? <OgChip gold>{`Champion: ${champion.name}`}</OgChip> : null}
+            {champion ? (
+              <OgChip gold maxWidth={760}>{`Champion: ${champion.name}`}</OgChip>
+            ) : null}
             {facts.map((fact) => (
               <OgChip key={fact}>{fact}</OgChip>
             ))}

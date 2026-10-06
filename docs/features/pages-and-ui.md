@@ -715,7 +715,9 @@ the league is already draftable and many visitors have joined. Write for both.
   card: "Streamed on Twitch" before the window, "Live now · Watch on Twitch"
   from 15 minutes before kickoff until the series estimate ends
   (`seriesEstimateMinutes`, the calendar's event length), then nothing. Once
-  a game is in (LIVE) the window runs a second estimate, so a series that
+  a game is in (LIVE) the window is open from then on, whatever the listed
+  kickoff (a series that started early read "Streamed on Twitch" while its
+  scoreboard said LIVE), and runs a second estimate, so a series that
   started late keeps its link to the end. `matchWatchWindow` picks the
   matches (playoffs and the final of the active season, kickoff set, not
   decided, not a forfeit), and the browser picks the state
@@ -736,7 +738,12 @@ the league is already draftable and many visitors have joined. Write for both.
   visitor who never plays it never contacts the streaming site. Twitch plays
   only inside the host its address names (`parent`), so the browser passes
   `location.hostname` and previews work too. Once playing it outlives the
-  window, which is only an estimate. A link no player can show (a YouTube
+  window, which is only an estimate, and the result: on the match page the
+  player is drawn with `streamPlayerWindow`, a closed window once a playoff
+  or final match is decided, so it stays mounted through the refresh the
+  result triggers and a visitor keeps the post-game (it used to vanish at
+  the trophy). A closed window starts nothing new. Home's player still
+  goes with its card when the slate moves on. A link no player can show (a YouTube
   @handle, a site page) keeps just the link, and the save toast says so.
   `watch-link.test.ts` keeps the player the app's only `<iframe`, created
   only from that press; the postseason e2e stubs Twitch and presses play.

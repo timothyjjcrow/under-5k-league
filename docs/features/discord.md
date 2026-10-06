@@ -192,7 +192,10 @@ actions: `src/app/actions/admin-discord.ts`.
   toggle, so /me's `setInhousePingOptIn` calls `setPingRole` (PUT/DELETE
   `/guilds/{g}/members/{u}/roles/{r}`) on an OAuth-proven `discordId`. Missing
   token, guild or role hides the opt-in (`pingOptInAvailable`), never
-  half-works.
+  half-works. Each press is one bot-token write, so the toggle takes a
+  per-player `claimThrottle` (`INHOUSE_PING_TOGGLE_THROTTLE_SECONDS`, 10s):
+  a script can't spend the guild's role rate limit, which every player's
+  opt-in and unlink share.
 - **`hasPingRole` returns `boolean | null`;** null is unknown (an unticked box
   for an opted-in player invites a click that changes nothing). **`forbidden`
   (403) is its own outcome:** the bot's role sits below the ping role, retrying

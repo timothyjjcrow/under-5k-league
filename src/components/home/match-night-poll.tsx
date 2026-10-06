@@ -118,7 +118,8 @@ function PollCard({
       />
       <PollClockProvider
         leagueZone={poll.timeZone}
-        sampleAt={poll.slots[0]?.nextAt ?? poll.closesAt}
+        clockAt={poll.clockAt}
+        viewedAt={poll.viewedAt}
       >
         <div className="relative">
           <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-line-soft px-4 py-4 sm:px-5">

@@ -130,13 +130,41 @@ export function matchWatchWindow(
   if (match.status === MATCH_STATUS.COMPLETED || match.forfeit) return null;
   if (!match.scheduledAt) return null;
   const kickoff = match.scheduledAt.getTime();
-  const estimates =
-    match.status === MATCH_STATUS.LIVE ? LIVE_SERIES_ESTIMATES : 1;
+  const live = match.status === MATCH_STATUS.LIVE;
+  const estimates = live ? LIVE_SERIES_ESTIMATES : 1;
   return {
-    opensAtMs: kickoff - WATCH_OPENS_BEFORE_KICKOFF_MS,
+    // A game is in, so the series is on whatever the listed kickoff says:
+    // a series that started early used to read "Streamed on Twitch", with
+    // no player, while its scoreboard said LIVE.
+    opensAtMs: live ? 0 : kickoff - WATCH_OPENS_BEFORE_KICKOFF_MS,
     closesAtMs:
       kickoff + estimates * seriesEstimateMinutes(match.bestOf) * 60_000,
   };
+}
+
+/** A window that has closed: nothing new can start playing (watchState). */
+const CLOSED_WINDOW: WatchWindow = { opensAtMs: 0, closesAtMs: 0 };
+
+/**
+ * The window a match page's stream player is drawn with. While the link is
+ * up it is matchWatchWindow's; once a playoff or final match of the active
+ * season is decided it is a closed window rather than none, so the player
+ * stays mounted and a visitor who pressed play keeps watching the post-game.
+ * Unmounting it at the result (the page refreshes when a game is imported)
+ * cut the stream off at the trophy. A closed window starts nothing new:
+ * StreamPlayer draws nothing until it has been pressed.
+ */
+export function streamPlayerWindow(
+  match: Parameters<typeof matchWatchWindow>[0],
+  seasonIsActive: boolean,
+): WatchWindow | null {
+  const watch = matchWatchWindow(match, seasonIsActive);
+  if (watch) return watch;
+  if (!seasonIsActive || match.forfeit) return null;
+  if (match.phase !== MATCH_PHASE.PLAYOFF && match.phase !== MATCH_PHASE.FINAL) {
+    return null;
+  }
+  return match.status === MATCH_STATUS.COMPLETED ? CLOSED_WINDOW : null;
 }
 
 /** What the streaming site's own player can show for the league's link. */

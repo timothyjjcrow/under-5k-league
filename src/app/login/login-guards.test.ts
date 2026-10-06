@@ -26,3 +26,17 @@ describe("login error-copy lookup", () => {
     expect(PAGE).not.toMatch(/LOGIN_ERRORS\[error\]\s*\?\?/);
   });
 });
+
+/**
+ * A repeated query key arrives as an array: `?next=/a&next=/b` handed one to
+ * safeReturnPath, whose `.trim()` threw and took the page to the error
+ * screen. Every value goes through singleSearchParam first.
+ */
+describe("login query values", () => {
+  it("reads next, error and signedOut through singleSearchParam", () => {
+    for (const raw of ["rawNext", "rawError", "rawSignedOut"]) {
+      expect(PAGE).toContain(`singleSearchParam(${raw})`);
+    }
+    expect(PAGE).not.toContain("safeReturnPath(rawNext)");
+  });
+});

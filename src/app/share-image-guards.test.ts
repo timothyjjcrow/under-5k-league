@@ -131,3 +131,15 @@ describe("link preview picture reads", () => {
     expect(bodies).not.toContain("new ImageResponse");
   });
 });
+
+describe("link preview picture layout", () => {
+  it("breaks a long name with no spaces inside its column", () => {
+    // Without word-break a name with no spaces ("ImmovableObjectGaming", a
+    // 60-character team name, a long Steam name) only wrapped at spaces and
+    // ran off the 1200x630 card or over the other team's name.
+    const card = sourceFile("src/components/og-card.tsx").text;
+    const clamp = card.slice(card.indexOf("function clampStyle"));
+    expect(clamp.slice(0, clamp.indexOf("\n}\n"))).toContain('wordBreak: "break-word"');
+    expect(card).toContain("<OgChip gold maxWidth={760}>{`Champion: ${champion.name}`}</OgChip>");
+  });
+});

@@ -82,6 +82,42 @@ describe("identity actions — expired sessions", () => {
   });
 });
 
+describe("inhouse ping toggle", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("makes one Discord role write per player per few seconds, however fast it's pressed", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "test-bot-token");
+    vi.stubEnv("DISCORD_GUILD_ID", "111111111111111111");
+    vi.stubEnv("DISCORD_INHOUSE_ROLE_ID", "222222222222222222");
+    vi.stubEnv("DISCORD_API_BASE", "https://discord.invalid/api/v10");
+    const user = await makeUser("Toggler");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { discordId: "333333333333333333" },
+    });
+    mockRequireUser.mockReset();
+    mockRequireUser.mockResolvedValue(sessionFor(user));
+    const discord = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", discord);
+
+    const results = [];
+    for (let press = 0; press < 6; press++) {
+      const fd = new FormData();
+      fd.set("on", press % 2 ? "0" : "1");
+      results.push(await setInhousePingOptIn({}, fd));
+    }
+
+    expect(discord).toHaveBeenCalledTimes(1);
+    expect(results[0]).toMatchObject({ message: expect.stringMatching(/pinged/) });
+    for (const later of results.slice(1)) {
+      expect(later).toMatchObject({ error: expect.stringMatching(/few seconds/) });
+    }
+  });
+});
+
 async function medalOf(userId: string) {
   return (await prisma.user.findUnique({ where: { id: userId } }))?.rankTier;
 }

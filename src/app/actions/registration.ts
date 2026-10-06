@@ -27,7 +27,12 @@ import {
 import { pendingCoverWhere } from "@/lib/standin";
 import { normalizeDiscordName } from "@/lib/discord-name";
 import { unlinkDiscordAccount } from "@/lib/discord-link-service";
-import { getRoleConfig, setPingRole } from "@/lib/discord-roles";
+import {
+  INHOUSE_PING_TOGGLE_THROTTLE_SECONDS,
+  getRoleConfig,
+  inhousePingToggleKey,
+  setPingRole,
+} from "@/lib/discord-roles";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -52,7 +57,7 @@ import { sendDiscordMessage, signupMessage } from "@/lib/discord";
 import type { ActionResult } from "@/lib/action-result";
 import { mergeAccountRefresh } from "@/lib/account-page";
 import { aboutUnchanged, submittedAbout } from "@/lib/about-you";
-import { claimProviderCooldown } from "@/lib/settings";
+import { claimProviderCooldown, claimThrottle } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 
@@ -294,12 +299,39 @@ export async function saveRegistration(
   });
   let rankTier = dbUser?.rankTier ?? null;
   let medalLabel = "";
+  // The gate's facts other than the medal, judged once with the medal on
+  // file BEFORE asking OpenDota and again with whatever it returns.
+  const gateFacts = {
+    season,
+    type,
+    mmr,
+    hasExisting: !!existing,
+    existingType: (existing?.type as RegistrationType | undefined) ?? null,
+    // The medal half of the ceiling is judged only at ADMISSION — an already
+    // ACTIVE registrant keeps editing (the admin's rank sync is warn-only, so
+    // a medal it merely flagged must not brick their form). existingStatus is
+    // what tells the gate which of the two this submit is.
+    existingStatus: existing?.status ?? null,
+  };
+  // Refuse what no medal could change (an MMR over the ceiling, player
+  // signups closed) before the provider call: a refused submit stores
+  // nothing, so every retry used to ask OpenDota again, and one script could
+  // spend the league's shared allowance a refusal at a time.
+  const earlyGateError = registrationGate({ ...gateFacts, rankTier });
+  if (earlyGateError) return { error: earlyGateError };
   if (!existing && dbUser && dbUser.rankTier == null && !dbUser.rankTierManual) {
     const accountId = effectiveDotaAccountId({
       ...dbUser,
       steamId: user.steamId,
     });
-    const fetched = accountId ? await fetchPlayerRankTier(accountId) : null;
+    // The same per-player OpenDota cooldown as Refresh my Steam & Dota info
+    // (claimed only when a fetch would happen). Inside it, sign up without a
+    // medal; the hourly player data refresh fills it in.
+    const claim = accountId
+      ? await claimProviderCooldown("open-dota-profile", user.id, accountId)
+      : null;
+    const fetched =
+      accountId && claim === "claimed" ? await fetchPlayerRankTier(accountId) : null;
     if (fetched != null) {
       // The OpenDota request can take seconds. Another tab may link a
       // different Dota account while it is in flight, so claim both facts we
@@ -334,19 +366,7 @@ export async function saveRegistration(
   // every signup). Rules live in registrationGate — judged on the RAW claim plus
   // the medal (never the clamped value: the clamp snaps down to a floor
   // under the ceiling, so gating post-clamp would admit any overstated lie).
-  const gateError = registrationGate({
-    season,
-    type,
-    mmr,
-    rankTier,
-    hasExisting: !!existing,
-    existingType: (existing?.type as RegistrationType | undefined) ?? null,
-    // The medal half of the ceiling is judged only at ADMISSION — an already
-    // ACTIVE registrant keeps editing (the admin's rank sync is warn-only, so
-    // a medal it merely flagged must not brick their form). existingStatus is
-    // what tells the gate which of the two this submit is.
-    existingStatus: existing?.status ?? null,
-  });
+  const gateError = registrationGate({ ...gateFacts, rankTier });
   if (gateError) return { error: gateError };
 
   // Draft-night lock: while the auction is LIVE or PAUSED, an existing signup
@@ -1522,6 +1542,23 @@ export async function setInhousePingOptIn(
   const cfg = await getRoleConfig();
   if (!cfg) {
     return { error: "Inhouse pings aren't set up yet — ask an admin." };
+  }
+  // Each press is a bot-token role write. A store failure lets the press
+  // through: one extra write is better than a toggle that never works.
+  let claimed = true;
+  try {
+    claimed = await claimThrottle(
+      inhousePingToggleKey(user.id),
+      INHOUSE_PING_TOGGLE_THROTTLE_SECONDS,
+      Date.now(),
+    );
+  } catch {
+    claimed = true;
+  }
+  if (!claimed) {
+    return {
+      error: "You just changed that — give it a few seconds, then try again.",
+    };
   }
 
   const res = await setPingRole(me.discordId, on, cfg);

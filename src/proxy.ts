@@ -45,14 +45,27 @@ export const config = {
   // everything here is a literal: the session cookie is "__Host-ld2l_session"
   // in production and "ld2l_session" in development, and proxy.test.ts keeps
   // both in step with SESSION_COOKIE.
+  //
+  // Link prefetches are skipped too (`missing`, the shape Next's proxy guide
+  // gives): every <Link> scrolled into view sends one, so a signed-in player
+  // scrolling /players ran the proxy about eighty times for nothing. The
+  // navigation itself still renews the session.
   matcher: [
     {
       source: "/((?!api/|_next/static/|_next/image|.*\\.[A-Za-z0-9]+$).*)",
       has: [{ type: "cookie", key: "__Host-ld2l_session" }],
+      missing: [
+        { type: "header", key: "next-router-prefetch" },
+        { type: "header", key: "purpose", value: "prefetch" },
+      ],
     },
     {
       source: "/((?!api/|_next/static/|_next/image|.*\\.[A-Za-z0-9]+$).*)",
       has: [{ type: "cookie", key: "ld2l_session" }],
+      missing: [
+        { type: "header", key: "next-router-prefetch" },
+        { type: "header", key: "purpose", value: "prefetch" },
+      ],
     },
   ],
 };
