@@ -108,6 +108,24 @@ describe("evaluateHonorWeeks", () => {
     }
   });
 
+  // An unbooked fill-in from another roster (or a released player) is
+  // imported with a userId and no teamId. One such line used to hold the whole
+  // week; three of Season 1's five weeks never got honors.
+  it("credits a league player with no team to the side they played on", () => {
+    const base = match();
+    const raw = JSON.parse(base.games[0].players) as Record<string, unknown>[];
+    const fillIn = raw.map((line, index) =>
+      index === 9 ? { ...line, userId: "fill-in", teamId: null } : line,
+    );
+    const readiness = evaluateHonorWeeks([
+      match({ games: [{ ...base.games[0], players: JSON.stringify(fillIn) }] }),
+    ])[0];
+    expect(readiness).toMatchObject({ state: HONOR_WEEK_STATE.READY, issues: [] });
+    expect(
+      readiness.games[0].players.find((player) => player.userId === "fill-in"),
+    ).toMatchObject({ teamId: "away" });
+  });
+
   it("rejects score/game winner mismatches", () => {
     const readiness = evaluateHonorWeeks([
       match({ homeScore: 0, awayScore: 1 }),

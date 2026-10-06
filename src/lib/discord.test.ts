@@ -2861,7 +2861,7 @@ describe("weeklyHonorsMessage", () => {
       teamName: "Team",
       teamGameWins: 2,
     });
-    expect(message).toContain("134.2 impact points on Lina");
+    expect(message).toContain("134.2 impact points (best game on Lina)");
     expect(message).not.toMatch(/fantasy/i);
   });
 
@@ -2937,7 +2937,7 @@ describe("weeklyHonorsMessage mentions", () => {
   it("mentions a linked Player of the Week on the first post", () => {
     expect(
       weeklyHonorsMessage({ ...base, playerDiscordId: "123456789012345678" }),
-    ).toContain("⭐ Player of the Week: <@123456789012345678> — 50 impact points on Lina");
+    ).toContain("⭐ Player of the Week: <@123456789012345678> — 50 impact points (best game on Lina)");
   });
 
   it("names an unlinked player, or one with a malformed id, in plain text", () => {

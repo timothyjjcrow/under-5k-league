@@ -536,11 +536,13 @@ export default async function LeadersPage({
             will appear after the full slate is final.
           </p>
         ) : null}
+        {/* Every held week, not just one: naming only the newest hid the
+            others (two of Season 1's held weeks were never mentioned). */}
         {awaitingBoxScoreWeeks.length > 0 ? (
           <p className="px-4 py-2.5 text-sm text-muted">
-            Week {awaitingBoxScoreWeeks[0].week} is final, but honors are
-            waiting for complete, valid 5v5 box scores from every played
-            series.
+            {heldWeeksPhrase(awaitingBoxScoreWeeks.map((row) => row.week))}{" "}
+            final, but honors are waiting for complete, valid 5v5 box scores
+            from every played series.
           </p>
         ) : null}
         {honorsByWeek.map(({ week, honors }) =>
@@ -707,4 +709,12 @@ export default async function LeadersPage({
       ) : null}
     </div>
   );
+}
+
+/** "Week 3 is" / "Weeks 1 and 3 are" / "Weeks 1, 3 and 5 are". */
+function heldWeeksPhrase(weeks: number[]): string {
+  const sorted = [...weeks].sort((a, b) => a - b);
+  if (sorted.length === 1) return `Week ${sorted[0]} is`;
+  const list = `${sorted.slice(0, -1).join(", ")} and ${sorted[sorted.length - 1]}`;
+  return `Weeks ${list} are`;
 }

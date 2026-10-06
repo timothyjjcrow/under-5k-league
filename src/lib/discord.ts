@@ -1523,7 +1523,9 @@ export function weeklyHonorsMessage(honors: {
         ? personLabel(player)
         : `**${name(honors.playerName)}**`;
     lines.push(
-      `⭐ Player of the Week: ${who} — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+      // The points are the week's total and the hero is their best game:
+      // "167 impact points on Dark Willow" read as one game's score.
+      `⭐ Player of the Week: ${who} — ${honors.playerPoints} impact points${honors.heroName ? ` (best game on ${honors.heroName})` : ""}`,
     );
   }
   if (honors.teamName) {

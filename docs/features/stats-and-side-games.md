@@ -36,7 +36,17 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   (forfeits may have fewer, never more); each game with ten unique attributed
   users whose teams match Radiant/Dire and whose winner matches the result.
   `/leaders`, Home and `honors-service.ts` share it, so an incomplete week
-  waits for repair instead of crowning from partial data.
+  waits for repair instead of crowning from partial data. **A league player
+  imported with no `teamId`** (an unbooked fill-in from another roster, or a
+  released but registered player: "attribution only" in
+  results-and-opendota.md) **counts for the side they played on**, the credit
+  a booked standin already gets; the stored box score is unchanged. Requiring
+  a stored `teamId` held three of Season 1's five weeks. A line with no league
+  user, or credited to the other team, still holds the week, and /leaders
+  names every held week, not only the newest.
+- **The post says "167 impact points (best game on Dark Willow)":** the
+  points are the week's total and the hero the best game; "on Dark Willow"
+  read as one game's score.
 - **`honorsAnnounced:<season>:<week>` is a retryable CAS state, not a sent
   bit.** Every path that changes a completed regular result calls
   `markWeekHonorsStale(tx, …)` inside its result transaction; the next ready
