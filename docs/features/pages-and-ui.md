@@ -401,6 +401,16 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   a write. Display only: it opens nothing and posts nothing, and its
   countdown carries `passedLabel={NEXT_SEASON_PASSED_LABEL}` for a date that
   slips.
+- **"Your match night" leads the main column for 72 hours after the
+  viewer's series** (`MyMatchNightCard`, `my-match-night.tsx`; rules in
+  `myMatchNight`, `src/lib/my-match-night.ts`; Tim's call, 2026-10-05): their
+  line in each game (hero, K/D/A, impact points, Match MVP, win or loss), the
+  night's impact total and MVPs, and any badge their career had never earned
+  before, with links to the match page and their profile. Only a decided
+  series (COMPLETED) counts, "latest" is by when a game ended (start plus
+  duration), never an update time, and outside the window it renders nothing
+  (streamed with a null fallback). It reads the viewer's own games
+  (`getPlayerGameFacts`, as the profile does); no Discord, no schema.
 - **The regular season is two columns from `xl`:** This week and the
   standings, then the honors line and the news under them; the rail holds the
   Your team / Coming up / Recent results band and the side games. The
