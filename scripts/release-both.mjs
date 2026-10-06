@@ -183,6 +183,38 @@ export async function requireHealthy(read, kind, failure, {
   }
 }
 
+// After `vercel promote` the alias API names the new deployment at once, but
+// Vercel's edge keeps answering some requests from the previous one for a few
+// seconds. On 2026-10-06 the US domain alternated between the old and new
+// commit for about five seconds after its alias moved, and the single read of
+// /api/health/release that followed rolled back three promotions of f08bf29
+// (US once, Europe twice), while every probe of the candidates passed. Read
+// the canonical domain until it reports the reviewed commit and league
+// several times in a row; a domain that never does still fails the release.
+export const CANONICAL_RELEASE_ATTEMPTS = 20;
+export const CANONICAL_RELEASE_WAIT_MS = 3_000;
+export const CANONICAL_RELEASE_CONSECUTIVE = 3;
+
+export async function requireCanonicalRelease(read, target, sha, {
+  attempts = CANONICAL_RELEASE_ATTEMPTS,
+  consecutive = CANONICAL_RELEASE_CONSECUTIVE,
+  wait = () => sleep(CANONICAL_RELEASE_WAIT_MS),
+} = {}) {
+  let streak = 0;
+  let error = new Error(`${target.region}: the site does not report the reviewed shared version and league`);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      assertReleaseInfo(target, JSON.parse(await read()), sha);
+      if (++streak >= consecutive) return;
+    } catch (thrown) {
+      streak = 0;
+      error = thrown;
+    }
+    if (attempt < attempts) await wait();
+  }
+  throw error;
+}
+
 export function requireMaintenanceEvidence(plan, evidence, now = Date.now()) {
   for (const target of LEAGUE_TARGETS) {
     const impact = plan.classifications[target.region];
@@ -375,7 +407,8 @@ export async function runRelease(argv = process.argv.slice(2)) {
     await promotePair({ bases: report.bases, candidates: report.candidates, readLive, promote,
       verify: async (target, d) => {
         if ((await readLive(target)).id !== d.id) throw new Error("Canonical deployment mismatch");
-        assertReleaseInfo(target, await (await fetch(`${target.origin}/api/health/release`, { cache: "no-store", signal: AbortSignal.timeout(45_000) })).json(), sha);
+        await requireCanonicalRelease(async () =>
+          (await fetch(`${target.origin}/api/health/release`, { cache: "no-store", signal: AbortSignal.timeout(45_000) })).text(), target, sha);
         await verify(target, d, true);
       }, finalize: async () => {
         for (const target of LEAGUE_TARGETS) {
