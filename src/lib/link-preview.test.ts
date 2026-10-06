@@ -8,6 +8,7 @@ import {
   type MatchPreviewInput,
 } from "./link-preview";
 import { leaguePitch } from "./season-copy";
+import { LEAGUE_CONFIG } from "./league-config";
 
 const NOW = Date.parse("2026-09-27T12:00:00Z");
 // Thursday 1 October, 7 PM on the US league's (Pacific) clock.
@@ -63,10 +64,12 @@ describe("homePreview", () => {
     });
   });
 
-  it("gives the signup count, the draft date and how to join during signups", () => {
+  // What "Copy invite link" unfurls into: said to someone who has never
+  // heard of the league, so the pitch and the servers come first.
+  it("opens with the pitch, then the count, the draft date and how to join", () => {
     expect(homePreview(season(), NOW)).toEqual({
       title: "Season 7 · Signups open",
-      description: `37 players signed up · Draft ${DRAFT_TEXT}. Players up to 5,000 MMR can join. Sign in with Steam to sign up.`,
+      description: `${leaguePitch()} 37 players signed up · Draft ${DRAFT_TEXT}. Open to players up to 5,000 MMR, on ${LEAGUE_CONFIG.gameServerRegion} servers. Sign in with Steam to join.`,
     });
   });
 
@@ -75,10 +78,10 @@ describe("homePreview", () => {
       homePreview(season({ playerCount: 0, draftAt: new Date(NOW - 1) }), NOW)
         .description,
     ).toBe(
-      "Signups just opened. Players up to 5,000 MMR can join. Sign in with Steam to sign up.",
+      `${leaguePitch()} Signups just opened. Open to players up to 5,000 MMR, on ${LEAGUE_CONFIG.gameServerRegion} servers. Sign in with Steam to join.`,
     );
     expect(homePreview(season({ playerCount: 1, draftAt: null }), NOW).description)
-      .toMatch(/^1 player signed up\. /);
+      .toContain(" 1 player signed up. ");
   });
 
   it("follows the auction inside the draft phase", () => {

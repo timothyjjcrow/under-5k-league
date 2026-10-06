@@ -71,6 +71,8 @@ export function signupMessage(
   season: { teamSize: number; minTeams: number },
   /** Epoch ms of the scheduled draft night, if the admin has set one. */
   draftAtMs?: number | null,
+  /** They offered to captain: teams are captains, so it's worth saying. */
+  wantsCaptain = false,
 ): string {
   const capacity = capacityInfo(season, signedUp);
   let tail: string;
@@ -93,7 +95,8 @@ export function signupMessage(
   const when = draftAtMs
     ? ` Draft night: <t:${Math.floor(draftAtMs / 1000)}:F>.`
     : "";
-  return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
+  const verb = wantsCaptain ? "signed up and offered to captain" : "signed up";
+  return `📝 **${name(playerName)}** ${verb} — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
 }
 
 /**

@@ -22,6 +22,8 @@ import {
 import { cn } from "@/lib/utils";
 
 type HeaderUser = {
+  /** For the "My profile" link (user ids are already public in profile URLs). */
+  id: string;
   name: string;
   avatar: string | null;
   role: string;
@@ -366,6 +368,18 @@ export function SiteHeader({
                       {/* /me's own name: it is the account and signup page;
                           "profile" is the public page under /players. */}
                       My account
+                    </Link>
+                    {/* The public page captains scout during signups: it was
+                        reachable only from the bottom of /me's Steam card. */}
+                    <Link
+                      href={`/players/${user.id}`}
+                      onClick={() => setAccountOpen(false)}
+                      aria-current={
+                        pathname === `/players/${user.id}` ? "page" : undefined
+                      }
+                      className="flex min-h-11 items-center rounded-lg px-3 text-sm text-muted hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+                    >
+                      My profile
                     </Link>
                     {user.role === "ADMIN" ? (
                       <Link

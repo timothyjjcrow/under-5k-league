@@ -76,9 +76,12 @@ export function homePreview(
           : "Signups just opened",
         draftNight ? `Draft ${draftNight}` : null,
       ].filter(Boolean);
+      // The pitch first: this is what "Copy invite link" unfurls into, often
+      // for a friend who has never heard of the league, so it says what the
+      // league is and which servers it plays on before the count.
       return {
         title,
-        description: `${facts.join(" · ")}. Players ${mmrCeilingPhrase()} can join. Sign in with Steam to sign up.`,
+        description: `${leaguePitch()} ${facts.join(" · ")}. Open to players ${mmrCeilingPhrase()}, on ${LEAGUE_CONFIG.gameServerRegion} servers. Sign in with Steam to join.`,
       };
     }
     case SEASON_STATUS.DRAFT: {

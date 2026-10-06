@@ -174,6 +174,10 @@ for (const phase of [
         await expect(
           account.getByRole("link", { name: "My account", exact: true }),
         ).toBeVisible();
+        // The public page captains scout, one tap from anywhere.
+        await expect(
+          account.getByRole("link", { name: "My profile", exact: true }),
+        ).toHaveAttribute("href", /^\/players\/[^/]+$/);
         await page.keyboard.press("Escape");
         await expect(accountButton).toBeFocused();
       });

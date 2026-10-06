@@ -19,6 +19,9 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   open only in SIGNUPS, standins through the playoffs, COMPLETE freezes all).
   `startDraft` makes one team per captain, so the admin settles the count by
   naming captains: short pool = seats for standins, long pool = free agents.
+  Because teams are captains, Home's "Who's in" says how many players have
+  offered to captain against the teams the season wants, and the Discord
+  signup post says "signed up and offered to captain" for a new volunteer.
   `seatFitSentence` (`draft-setup.ts`) says which before the click.
 - **Nothing closes signups on a clock;** an admin does (Close signups or Start
   draft), sometimes days before draft night. Home and the draft-night

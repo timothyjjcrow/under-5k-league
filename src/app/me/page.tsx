@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { InviteLink } from "@/components/invite-link";
 import type { User } from "@prisma/client";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -1049,6 +1050,22 @@ export default async function MePage({
                       memberInfo={memberInfo}
                     />
                   </Suspense>
+                ) : null}
+
+                {/* The invite ask lived only in Home's hero panel, so a player
+                    who joined here, with no steps left, never saw it. New
+                    signups are the league's best recruiters. */}
+                {isRegistered && signupsOpen ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2/40 px-3 py-3 text-sm">
+                    <p className="min-w-[min(14rem,100%)] flex-1 text-muted">
+                      <span className="font-medium text-fg">
+                        Know anyone who&apos;d fit?
+                      </span>{" "}
+                      Every few more players is another team, and the link
+                      unfurls with the details in Discord.
+                    </p>
+                    <InviteLink />
+                  </div>
                 ) : null}
 
                 {isRegistered ? (

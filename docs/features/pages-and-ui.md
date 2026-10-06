@@ -26,6 +26,11 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   recap" resolves to the finished season's own `/seasons/<id>`.
 - **`isActive` (`site-header.tsx`) stops "Teams" and "My Team" both
   highlighting** on your own team page.
+- **The account menu has My account (`/me`) and My profile
+  (`/players/<id>`)**, the public page captains scout; it used to be reachable
+  only from the bottom of /me's Steam card. The layout passes the header
+  display fields only (`id`, `name`, `avatar`, `role`), never the whole
+  session user.
 - **Page stats come from pure, tested helpers:** `summarizePlayerGames`
   (`player-stats.ts`, from each `Game`'s player JSON) for profiles,
   `recentForm`/`headToHead` (`team-matches.ts`) for team pages.
@@ -481,6 +486,13 @@ the league is already draftable and many visitors have joined. Write for both.
   only for viewers it cannot cover.
 - **"Who's in" lists captains first and names its cap** ("Latest 12 of 30
   players") instead of silently hiding the rest.
+- **"Who's in" carries the captain call** (`captainsWantedLine`): teams are
+  captains (Start draft makes one team per captain), so it says "Captains
+  wanted: 3 of 10 so far. Each team needs one." against the teams the season
+  wants, counting designated captains as offered, and goes quiet once there
+  are enough. A signed-up full player who hasn't offered gets "Offer to
+  captain", which opens /me's saved signup (`#signup-details`), where the box
+  is.
 - **The match-night callout follows an open poll:** while a match-night poll
   is open it reads "Match night — being decided in a player poll" instead of
   the season's text (rules: [match-night-poll](match-night-poll.md)).
@@ -816,6 +828,13 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Side games and account (`/scrims`, `/fantasy`, `/me`)
 
+- **A signed-up player gets the invite ask on `/me` too** while signups are
+  open ("Know anyone who'd fit?" with `<InviteLink>`), under the signup's next
+  steps: it lived only in Home's hero panel, so a player who joined on /me
+  with no steps left never saw it. The link unfurls into Home's preview,
+  which during signups opens with the league pitch and its servers
+  (`homePreview`), since it is often read by someone who has never heard of
+  the league.
 - **`/me` is two columns from `lg`:** the season (signup, away dates) on the
   left and a 24rem rail with the accounts it relies on (Discord, Steam and
   Dota). Phones keep the same order. Copy says "the Discord card", never

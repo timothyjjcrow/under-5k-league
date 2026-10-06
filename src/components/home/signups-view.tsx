@@ -35,7 +35,11 @@ import {
 } from "@/lib/draft-readiness";
 import { draftNightSoon, draftSetupOpen } from "@/lib/draft-setup";
 import { formatLeagueMatchTime } from "@/lib/match-time";
-import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
+import {
+  captainsWantedLine,
+  roleCoverage,
+  shortRolesLine,
+} from "@/lib/pool-stats";
 import { prisma } from "@/lib/prisma";
 import { effectiveSoftMmrLimit } from "@/lib/registration";
 import type { SeasonSnapshot } from "@/lib/queries";
@@ -421,6 +425,13 @@ export function SignupsView({
           playerCount={snapshot.playerCount}
           teamsNeeded={Math.max(season.minTeams, capacity.teamsFormable)}
           captains={snapshot.teams.map((team) => team.captain)}
+          // A signed-up full player who hasn't offered gets a way to offer:
+          // the box is on /me's saved signup ("Edit signup").
+          canOfferToCaptain={
+            isActivePlayer &&
+            !myReg?.wantsCaptain &&
+            !snapshot.teams.some((team) => team.captainId === myReg?.userId)
+          }
         />
       </Suspense>
     </div>
@@ -451,17 +462,19 @@ async function WhoIsIn({
   playerCount,
   teamsNeeded,
   captains,
+  canOfferToCaptain,
 }: {
   seasonId: string;
   playerCount: number;
   teamsNeeded: number;
   captains: SeasonSnapshot["teams"][number]["captain"][];
+  canOfferToCaptain: boolean;
 }) {
   const captainIds = captains.map((captain) => captain.id);
   const [pool, latest] = await Promise.all([
     prisma.registration.findMany({
       where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-      select: { userId: true, roles: true, mmr: true },
+      select: { userId: true, roles: true, mmr: true, wantsCaptain: true },
     }),
     prisma.registration.findMany({
       where: {
@@ -510,6 +523,13 @@ async function WhoIsIn({
   }));
   const shown = captainChips.length + latestChips.length;
   const shortage = shortRolesLine(roleCoverage(pool), teamsNeeded, pool.length);
+  // Teams are captains, so the pool's size only matters up to the number of
+  // players willing to captain. Designated captains count as offered.
+  const offered = new Set([
+    ...pool.filter((reg) => reg.wantsCaptain).map((reg) => reg.userId),
+    ...captainIds,
+  ]).size;
+  const captainCall = captainsWantedLine(offered, teamsNeeded);
 
   return (
     <Card>
@@ -540,6 +560,23 @@ async function WhoIsIn({
           />
         ) : (
           <>
+            {captainCall ? (
+              <p className="text-sm text-muted">
+                <span className="font-medium text-fg">{captainCall}</span>
+                {canOfferToCaptain ? (
+                  <>
+                    {" "}
+                    <Link href="/me#signup-details" className={textLink()}>
+                      Offer to captain <LinkArrow />
+                    </Link>
+                    <span className="block text-xs">
+                      Open Edit signup and tick “I&apos;d like to be considered
+                      as a team captain”.
+                    </span>
+                  </>
+                ) : null}
+              </p>
+            ) : null}
             {shortage ? <p className="text-sm text-muted">{shortage}</p> : null}
             {/* Compact on phones: name, captain mark and MMR only, so the
                 chips wrap two to a row instead of stacking twelve tall rows

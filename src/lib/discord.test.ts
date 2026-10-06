@@ -130,6 +130,13 @@ describe("discord message formatters", () => {
     expect(signupMessage("Zai", 6, FOUR_OF_FIVE)).toContain("enough for 1 team;");
   });
 
+  it("says when a new signup offers to captain", () => {
+    expect(signupMessage("Zai", 17, FOUR_OF_FIVE, null, true)).toContain(
+      "**Zai** signed up and offered to captain — 17 players in",
+    );
+    expect(signupMessage("Zai", 17, FOUR_OF_FIVE)).toContain("**Zai** signed up — ");
+  });
+
   it("celebrates only the signup that reaches the goal", () => {
     const msg = signupMessage("Zai", 20, FOUR_OF_FIVE);
     expect(msg).toContain("that meets the 4-team goal! 🎉");
