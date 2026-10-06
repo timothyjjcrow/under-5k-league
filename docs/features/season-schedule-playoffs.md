@@ -142,6 +142,12 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   confirmed scrim within four hours (`findFixtureConflict`), and the deadline.
   With several options a propose refusal names the option. An everyone-in
   option that stopped fitting keeps the answer and says why nothing moved.
+- **A re-proposal pings the other captain only.** The first proposal of a
+  kickoff pings both rosters; within the next six hours a counter-offer pings
+  only the captain who owes the answer (`readyCheckRosterPingKey`, swept with
+  the season). Each proposal used to ring nine people; players still see the
+  open check on Home and the match page. A lock moves the kickoff and opens a
+  fresh window. `reschedule-pings.itest.ts` pins it.
 - **Decline is cleanup.** "None of these work" (the opposing captain) and
   Withdraw (the proposer, or an admin's Clear) leave kickoff, check-ins and
   the reminder marker alone (pinned in the itest). The decline post says

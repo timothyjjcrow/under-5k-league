@@ -103,7 +103,10 @@ actions: `src/app/actions/admin-discord.ts`.
   never about their own answer. Standin booked or removed: the standin, plus
   the covered captain when someone else acted. Reschedule proposed (a ready
   check): the other captain, then every other seat on both sides, since each
-  must answer; moved: the proposer, booked standins (their ping quoted the old
+  must answer, but only for a kickoff's first proposal in
+  `READY_CHECK_ROSTER_PING_SECONDS` (6h, `readyCheckRosterPingKey`, keyed by
+  match and schedule revision, so a lock opens a fresh window); a re-proposal
+  pings the other captain alone (Tim's call, 2026-10-05); moved: the proposer, booked standins (their ping quoted the old
   time) and the seats that never answered (they still owe a check-in), never
   whoever just acted; declined: the proposer. Week reminder: unanswered players only
   (`unansweredUserIds`). Free-agent signing or release: that player. Draft
