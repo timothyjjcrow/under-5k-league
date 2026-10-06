@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, symlink, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LEAGUE_TARGETS, RELEASE_REPOSITORY, assertDeployment, assertReleaseInfo, promotePair } from "./league-targets.mjs";
-import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory, requireHealthy, AUTOMATION_PROBE_ATTEMPTS, AUTOMATION_PROBE_WAIT_MS } from "./release-both.mjs";
+import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory, requireHealthy, AUTOMATION_PROBE_ATTEMPTS, AUTOMATION_PROBE_WAIT_MS, requireCanonicalRelease, CANONICAL_RELEASE_ATTEMPTS, CANONICAL_RELEASE_CONSECUTIVE } from "./release-both.mjs";
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 import { projectProvider } from "./release-provider.mjs";
 import { classifyEntries } from "./classify-release.mjs";
@@ -386,3 +386,41 @@ test("rollback failure is reported instead of claiming a paired release", async 
   s.promote = async (t, id) => { if (id === "eu-new" || id === "us-old") throw new Error("provider unavailable"); await promote(t, id); };
   await assert.rejects(promotePair(s), /rollback needs operator review/);
 });
+
+test("the canonical release check waits out the edge's switch to the new deployment", async () => {
+  const sha = "a".repeat(40);
+  const us = LEAGUE_TARGETS.find((target) => target.region === "us");
+  const fresh = { ok: true, region: "us", commit: sha };
+  const old = { ok: true, region: "us", commit: "b".repeat(40) };
+  const replies = (...answers) => {
+    const calls = { reads: 0, waits: 0 };
+    const read = async () => {
+      const answer = answers[Math.min(calls.reads++, answers.length - 1)];
+      if (answer instanceof Error) throw answer;
+      return JSON.stringify(answer);
+    };
+    return { calls, read, wait: async () => { calls.waits++; } };
+  };
+  // 2026-10-06: the old deployment still answered between new ones, so a
+  // single read rolled back a good promotion. An old answer restarts the run.
+  let probe = replies(old, fresh, old, fresh, fresh, fresh);
+  await requireCanonicalRelease(probe.read, us, sha, { wait: probe.wait });
+  assert.deepEqual(probe.calls, { reads: 6, waits: 5 });
+  probe = replies(fresh);
+  await requireCanonicalRelease(probe.read, us, sha, { wait: probe.wait });
+  assert.deepEqual(probe.calls, { reads: CANONICAL_RELEASE_CONSECUTIVE, waits: CANONICAL_RELEASE_CONSECUTIVE - 1 });
+  // A dropped request is a miss, not a verdict.
+  probe = replies(new Error("fetch failed"), fresh);
+  await requireCanonicalRelease(probe.read, us, sha, { wait: probe.wait });
+  assert.equal(probe.calls.reads, 1 + CANONICAL_RELEASE_CONSECUTIVE);
+  // A domain that never serves the reviewed commit still fails, with the reason.
+  probe = replies(old);
+  await assert.rejects(requireCanonicalRelease(probe.read, us, sha, { wait: probe.wait }), /us: the site does not report the reviewed shared version/);
+  assert.deepEqual(probe.calls, { reads: CANONICAL_RELEASE_ATTEMPTS, waits: CANONICAL_RELEASE_ATTEMPTS - 1 });
+  // The other league's answer is never taken for this one's.
+  probe = replies({ ...fresh, region: "eu" });
+  await assert.rejects(requireCanonicalRelease(probe.read, us, sha, { wait: probe.wait }), /does not report/);
+  // A promotion waits at most about a minute for the switch.
+  assert.ok(CANONICAL_RELEASE_ATTEMPTS * 3_000 <= 60_000);
+});
+

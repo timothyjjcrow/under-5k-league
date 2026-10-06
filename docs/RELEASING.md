@@ -116,7 +116,10 @@ npm run release:both -- --promote-from output/staged-release.json
 This promotes exactly the staged candidates, one league after the other and
 without rebuilding, and refuses if either live site changed since staging. It
 confirms each site reports the commit and its own league at
-`/api/health/release`, then scans fresh runtime logs and waits for two
+`/api/health/release`, reading it until three answers in a row show the new
+commit (up to a minute: Vercel's edge serves the previous deployment for a few
+seconds after the alias moves, and one stale read rolled back three good
+promotions on 2026-10-06), then scans fresh runtime logs and waits for two
 successful scheduled automation passes on each site. A good run prints these
 lines and ends with `"status": "verified"` and the same candidates:
 
