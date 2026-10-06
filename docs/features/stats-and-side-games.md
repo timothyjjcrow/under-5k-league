@@ -41,9 +41,10 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   released but registered player: "attribution only" in
   results-and-opendota.md) **counts for the side they played on**, the credit
   a booked standin already gets; the stored box score is unchanged. Requiring
-  a stored `teamId` held three of Season 1's five weeks. A line with no league
-  user, or credited to the other team, still holds the week, and /leaders
-  names every held week, not only the newest.
+  a stored `teamId` held Season 1's week 5. A line with no league user, or
+  credited to the other team, still holds the week (a player with no league
+  account keeps Season 1's weeks 1 and 3 held), and /leaders names every held
+  week, not only the newest.
 - **/leaders reads the readiness through the public cache**
   (`getPublicSeasonHonorReadiness`, `cached-queries.ts`: the result revision
   and the "games" tag), so a view doesn't re-read the season's box scores
