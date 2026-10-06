@@ -711,8 +711,9 @@ export async function saveRegistration(
   }
 
   // Announce brand-new full-player signups (not updates or standins) with the
-  // site's current ask: players to the draft minimum, or past it, players to
-  // the next full team.
+  // site's current ask: players to the season's team goal, or past it,
+  // players to the next full team. A new captain volunteer says so: teams
+  // are captains, so it's the signup that adds a team.
   if (createdNew && type === REGISTRATION_TYPE.PLAYER) {
     const playerCount = await prisma.registration.count({
       where: { seasonId: season.id, status: "ACTIVE", type: "PLAYER" },
@@ -723,6 +724,7 @@ export async function saveRegistration(
         playerCount,
         season,
         season.draftAt?.getTime() ?? null,
+        wantsCaptain,
       ),
     );
   }

@@ -15,6 +15,32 @@ import { dateAtWallTime, wallTime, zoneFormatter } from "./zoned-time";
 
 /** Most times one proposal may offer. */
 export const MAX_RESCHEDULE_OPTIONS = 3;
+
+/**
+ * How long a match's first ready check of a kickoff pings both rosters before
+ * re-proposals ping only the other captain (`readyCheckRosterPingKey`). Each
+ * proposal pinged every seat on both sides, nine people with full fives, so
+ * two captains trading offers rang nine phones each time. Players still see
+ * the open check on Home and the match page.
+ */
+export const READY_CHECK_ROSTER_PING_SECONDS = 6 * 60 * 60;
+
+/**
+ * The claimThrottle key behind a ready check's roster ping: one per match per
+ * kickoff (schedule revision), so a lock, which moves the kickoff, gives the
+ * next check a fresh window.
+ */
+export function readyCheckRosterPingKey(
+  matchId: string,
+  scheduleRevision: number,
+): string {
+  return `${readyCheckRosterPingPrefix(matchId)}${scheduleRevision}`;
+}
+
+/** Every ready-check roster-ping row of one match (swept with its season). */
+export function readyCheckRosterPingPrefix(matchId: string): string {
+  return `readyCheckRosterPing:${matchId}:`;
+}
 /** Longest note a proposer may attach. */
 export const RESCHEDULE_NOTE_MAX = 140;
 /** How far ahead of now a suggested time must be. */

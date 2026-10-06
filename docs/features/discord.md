@@ -103,7 +103,10 @@ actions: `src/app/actions/admin-discord.ts`.
   never about their own answer. Standin booked or removed: the standin, plus
   the covered captain when someone else acted. Reschedule proposed (a ready
   check): the other captain, then every other seat on both sides, since each
-  must answer; moved: the proposer, booked standins (their ping quoted the old
+  must answer, but only for a kickoff's first proposal in
+  `READY_CHECK_ROSTER_PING_SECONDS` (6h, `readyCheckRosterPingKey`, keyed by
+  match and schedule revision, so a lock opens a fresh window); a re-proposal
+  pings the other captain alone (Tim's call, 2026-10-05); moved: the proposer, booked standins (their ping quoted the old
   time) and the seats that never answered (they still owe a check-in), never
   whoever just acted; declined: the proposer. Week reminder: unanswered players only
   (`unansweredUserIds`). Free-agent signing or release: that player. Draft
@@ -329,6 +332,16 @@ actions: `src/app/actions/admin-discord.ts`.
   time and names through `pasteSafeName` (zero-width splices, not
   backslashes). The builders live in client-safe `discord-reach.ts`
   (`discord-roles.ts` re-exports them).
+- **The returning-player reminder** (`returningReminderMessage` +
+  `<ReturningCopy>`, `returning-players.ts`; the read is
+  `loadReturningPlayers`) sits under the reach card while signups are open:
+  "{back} of {previous} {last season} players have signed up", who isn't
+  back yet, and one post that says the season's progress, that last season's
+  answers carry over (the one-tap rejoin card on /me), and mentions everyone
+  not back with Discord linked and names the rest, under 2,000 characters.
+  Like the chase post, the admin's paste is the send, so the site never
+  mass-mentions anyone itself. Anyone who withdrew or was removed this season
+  isn't listed. Names go through `pasteSafeName`.
 - **`reachabilityNote(userId)`** rides the assign-standin (captain and admin)
   and free-agent toasts when the post can't reach the player: silent on
   unknown, raced against 2.5 s, never throws.

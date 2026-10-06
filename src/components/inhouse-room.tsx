@@ -39,7 +39,7 @@ import {
   ROOM_ACTION_TIMEOUT_MS,
   ROOM_POLL_TIMEOUT_MS,
 } from "@/lib/constants";
-import { playChime, unlockAudio } from "@/components/chime";
+import { armAudioUnlock, playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
 import type { RoomMe } from "@/components/inhouse/shared";
 import { RoomStages } from "@/components/inhouse/room-stages";
@@ -153,9 +153,9 @@ export function InhouseRoom({
   // played into a suspended context. The draft room has had this since it
   // shipped; this room did not.
   useEffect(() => {
-    const unlock = () => unlockAudio();
-    document.addEventListener("pointerdown", unlock, { once: true });
-    return () => document.removeEventListener("pointerdown", unlock);
+    // Keeps listening until audio actually runs (armAudioUnlock): a one-time
+    // pointerdown never unlocked on phones.
+    return armAudioUnlock();
   }, []);
 
   const toggleSound = useCallback(() => {

@@ -680,3 +680,37 @@ describe("the draft room's finished-auction step", () => {
     ).toBe(DRAFT_DONE_NEEDS_SCHEDULE_TITLE);
   });
 });
+
+// Teams are captains (Start draft makes one per captain), and the signup
+// banner never said so: "Waiting on signups — 19 more to go" with 3 captain
+// volunteers among 31 players.
+describe("the signup steps with the panel's team and captain counts", () => {
+  it("says how many teams the pool makes and who offered to captain", () => {
+    const s = at({
+      playerCount: 31,
+      minPlayers: 50,
+      teamCount: 0,
+      teamSize: 5,
+      captainVolunteers: 3,
+    });
+    // The title Home repeats is unchanged.
+    expect(s.title).toBe("Waiting on signups — 19 more to go.");
+    expect(s.detail).toContain("Enough for 6 teams of 5.");
+    expect(s.detail).toContain("Teams are captains: 0 designated, 3 more offered");
+    expect(s.detail).toContain("Start draft needs only two captains");
+  });
+
+  it("keeps the old detail when the panel doesn't pass the counts", () => {
+    expect(at({ playerCount: 31, minPlayers: 50 }).detail).toBe(
+      "31 of 50 players registered. Share the signup link; you can designate captains at any time.",
+    );
+  });
+
+  it("adds the line to Start draft only while the pool makes more teams than captains", () => {
+    const fewer = at({ playerCount: 30, minPlayers: 10, teamCount: 2, teamSize: 5, captainVolunteers: 1 });
+    expect(fewer.title).toBe("Next step: Start draft.");
+    expect(fewer.detail).toContain("Enough for 6 teams of 5.");
+    const matched = at({ playerCount: 10, minPlayers: 10, teamCount: 2, teamSize: 5, captainVolunteers: 0 });
+    expect(matched.detail).not.toContain("Teams are captains");
+  });
+});

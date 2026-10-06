@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 // Round-robin schedule generation (circle method) + single-elimination seeding.
 // Pure + testable.
 
@@ -408,19 +409,35 @@ export function nextPlayoffRoundName(
 
 /**
  * Chronological comparator for match lists: kickoff time first (unscheduled
- * last), then week, then creation order. Reschedules can move a match past its
- * week-mates, so week order alone is NOT chronological.
+ * last), then week, then creation order, then id. Reschedules can move a
+ * match past its week-mates, so week order alone is NOT chronological, and
+ * one createMany gives every fixture the same createdAt, so the id is the
+ * tiebreak that makes the order stable.
  */
 export function byKickoff(
-  a: { scheduledAt: Date | null; week: number; createdAt?: Date },
-  b: { scheduledAt: Date | null; week: number; createdAt?: Date },
+  a: { scheduledAt: Date | null; week: number; createdAt?: Date; id?: string },
+  b: { scheduledAt: Date | null; week: number; createdAt?: Date; id?: string },
 ): number {
   const at = a.scheduledAt ? a.scheduledAt.getTime() : Infinity;
   const bt = b.scheduledAt ? b.scheduledAt.getTime() : Infinity;
   if (at !== bt) return at - bt;
   if (a.week !== b.week) return a.week - b.week;
-  return (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0);
+  const created = (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0);
+  if (created !== 0) return created;
+  return (a.id ?? "").localeCompare(b.id ?? "");
 }
+
+/**
+ * The database order for a season's fixture lists: week, then kickoff
+ * (unscheduled last), then id. It was week then createdAt, and every fixture
+ * comes from one createMany with the same createdAt, so a week listed "Aug
+ * 16" above "Aug 15" and could reshuffle once rows were updated.
+ */
+export const MATCH_LIST_ORDER: Prisma.MatchOrderByWithRelationInput[] = [
+  { week: "asc" },
+  { scheduledAt: { sort: "asc", nulls: "last" } },
+  { id: "asc" },
+];
 
 /** Pair the winners of one round (in bracket order) into the next round. */
 export function nextRoundPairings(winnersInOrder: string[]): Pairing[] {

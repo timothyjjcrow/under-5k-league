@@ -156,13 +156,20 @@ test("admins see saved import states without downloading provider payloads", asy
 
 test("anonymous visitors cannot read saved import progress", async ({ page }) => {
   await withImportCandidates(async (payloadMarker) => {
-    const response = await page.goto("/admin");
+    // /admin answers a signed-out visitor with a streamed client redirect (a
+    // 200 whose stream ends in NEXT_REDIRECT, plus a one-second meta refresh),
+    // and Chrome drops that document's body once the browser follows it. Read
+    // the server's answer itself, then follow the redirect in the page.
+    const served = await (await page.request.get("/admin")).text();
+    expect(served, "the redirecting /admin response itself").toContain("/login?next=/admin");
+    for (const gameId of Object.values(GAME_IDS)) {
+      expect(served).not.toContain(gameId);
+    }
+    expect(served).not.toContain(payloadMarker);
+    await page.goto("/admin");
     await expect(page).toHaveURL(/\/login\?next=\/admin$/);
     await expect(page.getByRole("region", { name: "Saved import progress" })).toHaveCount(0);
-    for (const gameId of Object.values(GAME_IDS)) {
-      expect(await response!.text()).not.toContain(gameId);
-    }
-    await expectPayloadPrivate(page, response, payloadMarker);
+    expect(await page.content()).not.toContain(payloadMarker);
   });
 });
 

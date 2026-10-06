@@ -83,6 +83,15 @@ export type AdminPhaseInput = {
    * that doesn't know says nothing rather than crying wolf.
    */
   hasLeagueTicket?: boolean;
+  /**
+   * The season's team size and how many signed-up players offered to
+   * captain without being designated yet ("wants C"). Optional and panel-only:
+   * with them the signup steps' detail says how many teams the pool makes and
+   * that teams are captains. Home's line repeats only the title, which they
+   * never change.
+   */
+  teamSize?: number;
+  captainVolunteers?: number;
 };
 
 /** Where the step's control lives: an in-page card anchor or a page. */
@@ -253,10 +262,13 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
   } = i;
 
   if (seasonStatus === SEASON_STATUS.SIGNUPS) {
+    const captainsLine = signupCaptainsLine(i);
     if (playerCount < minPlayers) {
       return {
         title: `Waiting on signups — ${minPlayers - playerCount} more to go.`,
-        detail: `${playerCount} of ${minPlayers} players registered. Share the signup link; you can designate captains at any time.`,
+        detail: captainsLine
+          ? `${playerCount} of ${minPlayers} players registered. ${captainsLine} Start draft needs only two captains, so the league can draft below the team goal. Share the signup link; you can designate captains at any time.`
+          : `${playerCount} of ${minPlayers} players registered. Share the signup link; you can designate captains at any time.`,
         tone: "waiting",
       };
     }
@@ -264,7 +276,8 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: "Next step: designate captains.",
         detail:
-          "Enough players have signed up. Use “make captain” in the Eligible players list on the Captains & draft card. Each captain becomes a team.",
+          "Enough players have signed up. Use “make captain” in the Eligible players list on the Captains & draft card. Each captain becomes a team." +
+          (captainsLine ? ` ${captainsLine}` : ""),
         tone: "action",
         jump: JUMP.captains,
       };
@@ -273,6 +286,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       title: "Next step: Start draft.",
       detail:
         `${teamCount} captain(s) ready. Set the draft night and randomize the order first if you want to — starting the auction locks captain changes until it finishes (Abort draft is the way back).` +
+        (captainsLine && fullTeams(i) > teamCount ? ` ${captainsLine}` : "") +
         captainMmrNote(i) +
         discordChaseNote(i),
       tone: "action",
@@ -471,4 +485,25 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
     detail: "",
     tone: "waiting",
   };
+}
+
+/** Full teams the signed-up players make (0 without a team size). */
+function fullTeams(i: AdminPhaseInput): number {
+  return i.teamSize && i.teamSize > 0 ? Math.floor(i.playerCount / i.teamSize) : 0;
+}
+
+/**
+ * "Enough for 6 teams of 5. Teams are captains: 0 designated, 3 more offered
+ * (“wants C”)." Only with the panel's optional inputs; null otherwise. Start
+ * draft makes one team per captain, so the pool's size matters only up to
+ * the captains, and the banner never said so.
+ */
+function signupCaptainsLine(i: AdminPhaseInput): string | null {
+  if (!i.teamSize || i.teamSize <= 0 || i.captainVolunteers == null) return null;
+  const teams = fullTeams(i);
+  const pool =
+    teams > 0
+      ? `Enough for ${teams} team${teams === 1 ? "" : "s"} of ${i.teamSize}.`
+      : `Not yet a full team of ${i.teamSize}.`;
+  return `${pool} Teams are captains: ${i.teamCount} designated, ${i.captainVolunteers} more offered (“wants C”).`;
 }

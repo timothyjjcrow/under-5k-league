@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  captainsWantedLine,
   averageMmr,
   roleCoverage,
   rosterAverageMmr,
@@ -102,5 +103,23 @@ describe("rosterAverageMmr", () => {
     expect(rosterAverageMmr([], regs)).toBe(0);
     expect(rosterAverageMmr(["p2"], regs)).toBe(0);
     expect(rosterAverageMmr(["no-signup"], regs)).toBe(0);
+  });
+});
+
+describe("captainsWantedLine", () => {
+  // Teams are captains: 31 signups with 3 volunteers draft 3 teams.
+  it("counts volunteers against the teams the season wants", () => {
+    expect(captainsWantedLine(3, 10)).toBe(
+      "Captains wanted: 3 of 10 so far. Each team needs one.",
+    );
+    expect(captainsWantedLine(0, 8)).toBe(
+      "Captains wanted: 0 of 8 so far. Each team needs one.",
+    );
+  });
+
+  it("goes quiet once there are enough, or nothing to count", () => {
+    expect(captainsWantedLine(10, 10)).toBeNull();
+    expect(captainsWantedLine(12, 10)).toBeNull();
+    expect(captainsWantedLine(0, 0)).toBeNull();
   });
 });

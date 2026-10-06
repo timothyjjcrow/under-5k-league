@@ -837,7 +837,8 @@ export async function setSeasonPhase(
     // The phase has committed; a failed read only costs the post its list.
     const opening = await seasonOpeningSlate(season.id).catch(() => undefined);
     const sent = await sendDiscordMessage(
-      regularSeasonStartedMessage(season.name, opening),
+      // Fantasy is open until the first import locks it; say so while it is.
+      regularSeasonStartedMessage(season.name, opening, !season.fantasyLockedAt),
     );
     if (!sent) {
       notificationWarning =
@@ -1026,7 +1027,8 @@ export async function setDraftSettings(
   });
   refresh();
   return {
-    message: `Draft settings saved · teams of ${teamSize}, $${draftBudget} budget`,
+    // The team goal too: it moves Home's "N more to reach the goal" count.
+    message: `Draft settings saved · teams of ${teamSize}, a ${minTeams}-team goal, $${draftBudget} budget`,
   };
 }
 

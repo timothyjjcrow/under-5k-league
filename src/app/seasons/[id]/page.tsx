@@ -1,3 +1,6 @@
+import { MATCH_LIST_ORDER } from "@/lib/schedule";
+import { SectionNav } from "@/components/section-nav";
+import { rosterOrder } from "@/lib/team-roster";
 import Link from "next/link";
 import { Suspense } from "react";
 import type { Metadata } from "next";
@@ -201,7 +204,7 @@ export default async function SeasonArchivePage({
             members: { include: { user: true }, orderBy: { price: "desc" } },
           },
         },
-        matches: { orderBy: [{ week: "asc" }, { createdAt: "asc" }] },
+        matches: { orderBy: MATCH_LIST_ORDER },
       },
     }),
     prisma.game.count({ where: { match: { seasonId: id } } }),
@@ -358,8 +361,27 @@ export default async function SeasonArchivePage({
         </div>
       ) : null}
 
+      {/* The longest public page (standings, bracket, tiebreakers, awards,
+          the head-to-head grid, every week, every roster) had no way to jump
+          to a part of it on a phone. */}
+      {(() => {
+        const sections = [
+          season.teams.length > 0 ? { id: "standings", label: "Standings" } : null,
+          playoff.length > 0 ? { id: "playoffs", label: "Playoffs" } : null,
+          tiebreakers.length > 0 ? { id: "tiebreakers", label: "Tiebreakers" } : null,
+          isFinishedSeason(season) && season.matches.length > 0
+            ? { id: "awards", label: "Awards" }
+            : null,
+          weeks.length > 0 ? { id: "results", label: "Results" } : null,
+          season.teams.length > 0 ? { id: "rosters", label: "Rosters" } : null,
+        ].filter((item): item is { id: string; label: string } => item !== null);
+        return sections.length >= 3 ? (
+          <SectionNav items={sections} label="Season sections" />
+        ) : null;
+      })()}
+
       {season.teams.length > 0 ? (
-        <Card>
+        <Card id="standings" className="scroll-mt-24">
           <CardHeader
             title={
               season.status === "COMPLETE"
@@ -404,7 +426,7 @@ export default async function SeasonArchivePage({
       ) : null}
 
       {tiebreakers.length > 0 ? (
-        <section className="space-y-4">
+        <section id="tiebreakers" className="scroll-mt-24 space-y-4">
           <SectionTitle>Tiebreaker results</SectionTitle>
           <p className="text-sm text-muted">
             Best-of-three series used to settle playoff qualification and seed order.
@@ -435,6 +457,7 @@ export default async function SeasonArchivePage({
           page: /recap redirects to this page. Only for a finished season;
           mid-season the Leaders boards are the running version. */}
       {isFinishedSeason(season) && season.matches.length > 0 ? (
+        <div id="awards" className="scroll-mt-24">
         <Suspense fallback={<CardSkeleton rows={4} />}>
           <SeasonAwards
             seasonId={season.id}
@@ -443,10 +466,11 @@ export default async function SeasonArchivePage({
             }
           />
         </Suspense>
+        </div>
       ) : null}
 
       {weeks.length > 0 ? (
-        <section className="space-y-4">
+        <section id="results" className="scroll-mt-24 space-y-4">
           <SectionTitle>Regular season results</SectionTitle>
           <Card className="min-w-0 overflow-hidden">
             <CardHeader
@@ -523,7 +547,7 @@ export default async function SeasonArchivePage({
       ) : null}
 
       {season.teams.length > 0 ? (
-        <section className="space-y-4">
+        <section id="rosters" className="scroll-mt-24 space-y-4">
           <SectionTitle>Teams &amp; rosters</SectionTitle>
           {/* Four to a row on a wide screen, one player per 36px line: the
               rosters were a column of 370px cards, about 3,000px on a
@@ -562,7 +586,8 @@ export default async function SeasonArchivePage({
                 />
                 <CardBody className="p-0">
                   <ul className="divide-y divide-line-soft">
-                    {t.members.map((m) => (
+                    {/* Captain first, as on /teams (rosterOrder). */}
+                    {rosterOrder(t.members).map((m) => (
                       // py-1.5 around a 24px avatar: 36px lines, so each
                       // name's 28px tap box keeps 8px from the next one.
                       <li

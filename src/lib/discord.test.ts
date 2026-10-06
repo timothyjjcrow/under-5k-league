@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import {
+  draftRecapMessage,
   newsMessage,
   rescheduleMessage,
   adminRetimeMessage,
@@ -114,19 +115,32 @@ describe("Discord mention materialization", () => {
 });
 
 describe("discord message formatters", () => {
-  // 4 teams of 5: the draft minimum is 20 players.
+  // 4 teams of 5: the season's team goal is 20 players.
   const FOUR_OF_FIVE = { teamSize: 5, minTeams: 4 };
 
-  it("counts down remaining signups", () => {
+  // minTeams is a goal, not a gate (Start draft needs two captains), so the
+  // post says what the pool already makes and how far the goal is.
+  it("counts toward the team goal, naming the teams the pool makes", () => {
     const msg = signupMessage("Zai", 17, FOUR_OF_FIVE);
     expect(msg).toContain("**Zai**");
-    expect(msg).toContain("17 players");
-    expect(msg).toContain("3 more to start the draft.");
+    expect(msg).toContain("17 players in, enough for 3 teams; 3 more reaches the 4-team goal.");
+    expect(msg).not.toMatch(/start the draft|minimum/);
+    expect(signupMessage("Zai", 4, FOUR_OF_FIVE)).toContain(
+      "4 players in, 16 more reaches the 4-team goal.",
+    );
+    expect(signupMessage("Zai", 6, FOUR_OF_FIVE)).toContain("enough for 1 team;");
   });
 
-  it("celebrates only the signup that reaches the minimum", () => {
+  it("says when a new signup offers to captain", () => {
+    expect(signupMessage("Zai", 17, FOUR_OF_FIVE, null, true)).toContain(
+      "**Zai** signed up and offered to captain — 17 players in",
+    );
+    expect(signupMessage("Zai", 17, FOUR_OF_FIVE)).toContain("**Zai** signed up — ");
+  });
+
+  it("celebrates only the signup that reaches the goal", () => {
     const msg = signupMessage("Zai", 20, FOUR_OF_FIVE);
-    expect(msg).toContain("that's enough to start the draft! 🎉");
+    expect(msg).toContain("that meets the 4-team goal! 🎉");
     expect(msg).toContain("5 more players makes it 5 full teams.");
   });
 
@@ -2848,7 +2862,7 @@ describe("weeklyHonorsMessage", () => {
       teamName: "Team",
       teamGameWins: 2,
     });
-    expect(message).toContain("134.2 impact points on Lina");
+    expect(message).toContain("134.2 impact points (best game on Lina)");
     expect(message).not.toMatch(/fantasy/i);
   });
 
@@ -2870,15 +2884,17 @@ describe("weeklyHonorsMessage", () => {
     expect(lines).toContain(
       "🔮 Pick'em Oracle of the Week: **Seer** (3 of 3 picks right)",
     );
-    expect(lines.at(-1)).toMatch(/^Full leaderboards: /);
+    expect(lines.at(-1)).toMatch(/^Week \d+ wrap: /);
   });
 
-  it("links that season's leaderboards, so the post outlives the handoff", () => {
+  it("links that week's wrap under the season's URL, so the post outlives the handoff", () => {
     const last = weeklyHonorsMessage(base).split("\n").at(-1);
-    expect(last).toMatch(/^Full leaderboards: <[^>]+\/leaders\?season=s1>$/);
+    expect(last).toMatch(
+      new RegExp(`^Week ${base.week} wrap: <[^>]+/seasons/s1/weeks/${base.week}>$`),
+    );
     expect(
       weeklyHonorsMessage({ ...base, seasonId: "season/one" }),
-    ).toContain("/leaders?season=season%2Fone>");
+    ).toContain(`/seasons/season%2Fone/weeks/${base.week}>`);
   });
 
   it("lists every tied oracle, then caps a long tie", () => {
@@ -2924,7 +2940,7 @@ describe("weeklyHonorsMessage mentions", () => {
   it("mentions a linked Player of the Week on the first post", () => {
     expect(
       weeklyHonorsMessage({ ...base, playerDiscordId: "123456789012345678" }),
-    ).toContain("⭐ Player of the Week: <@123456789012345678> — 50 impact points on Lina");
+    ).toContain("⭐ Player of the Week: <@123456789012345678> — 50 impact points (best game on Lina)");
   });
 
   it("names an unlinked player, or one with a malformed id, in plain text", () => {
@@ -3195,5 +3211,35 @@ describe("reschedule ready-check posts", () => {
     expect(msg).toContain("Locked in by **Notail** with 7/10 ready.");
     expect(msg).toContain("Can't make it: **Ceb**.");
     expect(msg).toContain("2 still to check in.");
+  });
+});
+
+// Fantasy opens as the auction completes and locks at the first imported
+// game; nothing on Discord said so, and 3 of 95 users entered.
+describe("fantasy's pick window on Discord", () => {
+  it("rides the draft recap, which posts as fantasy opens", () => {
+    const recap = draftRecapMessage({
+      biggestSpend: null,
+      bestValue: null,
+      topSpender: null,
+      totalSpent: 120,
+    });
+    expect(recap).toMatch(/🧙 Fantasy is open until the first game is imported: <.+\/fantasy>$/);
+    expect(recap).not.toMatch(/<@/);
+  });
+
+  it("rides the season-start post only while rosters aren't locked", () => {
+    const opening = {
+      week: 1,
+      fixtures: [{ home: "A", away: "B", whenMs: null }],
+      byes: [],
+    };
+    expect(regularSeasonStartedMessage("Season 2", opening, true)).toContain(
+      "🧙 Fantasy is open until the first game is imported",
+    );
+    expect(regularSeasonStartedMessage("Season 2", opening, false)).not.toContain(
+      "Fantasy",
+    );
+    expect(regularSeasonStartedMessage("Season 2")).not.toContain("Fantasy");
   });
 });

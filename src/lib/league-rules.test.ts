@@ -31,6 +31,7 @@ import {
   type RulesSeason,
 } from "./league-rules";
 import { NO_TICKET_RESULT_LEAD } from "./match-hosting";
+import { MAX_RESCHEDULE_OPTIONS } from "./reschedule-ready-check";
 import { projectPlayoffField } from "./playoff-field";
 import { registrationGate } from "./registration";
 import { nextRoundPairings } from "./schedule";
@@ -654,5 +655,18 @@ describe("the /rules page", () => {
         expect(allowedImports.has(specifier), `${file.path} imports ${specifier}`).toBe(true);
       }
     }
+  });
+});
+
+// The page kept describing the old propose / accept-or-decline flow for weeks
+// after the ready check shipped (#27), because nothing pinned it.
+describe("the reschedule rules", () => {
+  it("describe the ready check, not a propose-and-accept", () => {
+    const rules = section(build(), "match-night");
+    expect(rules).toContain("ready check");
+    expect(rules).toContain(`up to ${MAX_RESCHEDULE_OPTIONS} times`);
+    expect(rules).toContain("lock in a time the other captain said yes to");
+    expect(rules).toContain("becomes their check-in");
+    expect(rules).not.toMatch(/accepts or declines|clears every check-in/);
   });
 });

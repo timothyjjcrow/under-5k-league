@@ -9,6 +9,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 
 ## Navigation and info pages
 
+- **Rosters list the captain first** (`rosterOrder`, `team-roster.ts`) on
+  /teams, team pages, the champion moment, the season archive and the match
+  preview: by price alone the $0 captain was listed last.
 - **Every name is a link:** `<PlayerLink userId>` (`ui.tsx`) for players, a
   plain `next/link` to `/teams/[id]` for teams.
 - **`src/lib/site-nav.ts` is the one page list** behind the header, Explore,
@@ -26,6 +29,11 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   recap" resolves to the finished season's own `/seasons/<id>`.
 - **`isActive` (`site-header.tsx`) stops "Teams" and "My Team" both
   highlighting** on your own team page.
+- **The account menu has My account (`/me`) and My profile
+  (`/players/<id>`)**, the public page captains scout; it used to be reachable
+  only from the bottom of /me's Steam card. The layout passes the header
+  display fields only (`id`, `name`, `avatar`, `role`), never the whole
+  session user.
 - **Page stats come from pure, tested helpers:** `summarizePlayerGames`
   (`player-stats.ts`, from each `Game`'s player JSON) for profiles,
   `recentForm`/`headToHead` (`team-matches.ts`) for team pages.
@@ -55,6 +63,11 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   fails on any digit in the page's shown text, any number literal but
   `headingLevel`, and any import outside its short list, so a rule number can
   reach the page only through the builder.
+- **The reschedule rules describe the ready check** (up to
+  `MAX_RESCHEDULE_OPTIONS` times, everyone answers, it moves itself, either
+  captain can lock a time the other said yes to, answers become check-ins;
+  an admin move clears check-ins). The page kept the old propose /
+  accept-or-decline flow after #27 because no test pinned it; one does now.
 - **Which season:** the active one, else the latest (worded as how the league
   played it, and that the next season starts with the same settings); with no
   season at all, `carriedSeasonSettings(null)` under a "First-season defaults"
@@ -388,6 +401,16 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   a write. Display only: it opens nothing and posts nothing, and its
   countdown carries `passedLabel={NEXT_SEASON_PASSED_LABEL}` for a date that
   slips.
+- **"Your match night" leads the main column for 72 hours after the
+  viewer's series** (`MyMatchNightCard`, `my-match-night.tsx`; rules in
+  `myMatchNight`, `src/lib/my-match-night.ts`; Tim's call, 2026-10-05): their
+  line in each game (hero, K/D/A, impact points, Match MVP, win or loss), the
+  night's impact total and MVPs, and any badge their career had never earned
+  before, with links to the match page and their profile. Only a decided
+  series (COMPLETED) counts, "latest" is by when a game ended (start plus
+  duration), never an update time, and outside the window it renders nothing
+  (streamed with a null fallback). It reads the viewer's own games
+  (`getPlayerGameFacts`, as the profile does); no Discord, no schema.
 - **The regular season is two columns from `xl`:** This week and the
   standings, then the honors line and the news under them; the rail holds the
   Your team / Coming up / Recent results band and the side games. The
@@ -456,7 +479,7 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 
 ### The SIGNUPS view
 
-Signups never close on a count (`minTeams` is a floor), so most of signup week
+Signups never close on a count (`minTeams` is a goal), so most of signup week
 the league is already draftable and many visitors have joined. Write for both.
 
 - **A date the page prints must say when it has passed.** `countdownLabel` is
@@ -481,6 +504,16 @@ the league is already draftable and many visitors have joined. Write for both.
   only for viewers it cannot cover.
 - **"Who's in" lists captains first and names its cap** ("Latest 12 of 30
   players") instead of silently hiding the rest.
+- **"Who's in" carries the captain call** (`captainsWantedLine`): teams are
+  captains (Start draft makes one team per captain), so it says "Captains
+  wanted: 3 of 10 so far. Each team needs one." against the teams the season
+  wants, counting designated captains as offered, and goes quiet once there
+  are enough. A signed-up full player who hasn't offered gets "Offer to
+  captain", which opens /me's saved signup (`#signup-details`), where the box
+  is.
+- **The match-night callout follows an open poll:** while a match-night poll
+  is open it reads "Match night — being decided in a player poll" instead of
+  the season's text (rules: [match-night-poll](match-night-poll.md)).
 
 ## Schedule (`/schedule`)
 
@@ -779,6 +812,10 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Stats pages (`/leaders`, `/meta`, `/records`, `/hall-of-fame`, `/seasons/[id]`)
 
+- **The season archive has a jump bar** (`SectionNav`: Standings, Playoffs,
+  Tiebreakers, Awards, Results, Rosters, whichever exist, from three): it is
+  the longest public page and had no way to reach a part of it on a phone.
+
 - **The stats tab bar is one row at every width** (`stats-nav.tsx`): the tabs
   share it as equal tracks (`grid-flow-col auto-cols-fr`) and a long label
   takes two short lines on a phone. A 2x2 grid spent a second 44px row on the
@@ -813,12 +850,22 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Side games and account (`/scrims`, `/fantasy`, `/me`)
 
+- **A signed-up player gets the invite ask on `/me` too** while signups are
+  open ("Know anyone who'd fit?" with `<InviteLink>`), under the signup's next
+  steps: it lived only in Home's hero panel, so a player who joined on /me
+  with no steps left never saw it. The link unfurls into Home's preview,
+  which during signups opens with the league pitch and its servers
+  (`homePreview`), since it is often read by someone who has never heard of
+  the league.
 - **`/me` is two columns from `lg`:** the season (signup, away dates) on the
   left and a 24rem rail with the accounts it relies on (Discord, Steam and
   Dota). Phones keep the same order. Copy says "the Discord card", never
   "below", because it is below on a phone and beside on a desktop. Short
   inputs keep a short width (MMR `sm:max-w-sm`; the Discord handle grows
   beside Save up to `max-w-xs`).
+- **Scrims says so when there are no teams yet:** a season before its draft
+  gets one EmptyState ("Scrims open once teams exist") instead of a sign-in
+  card and six empty lists; the season chips stay.
 - **Scrims pairs its lists.** Open and booked sit side by side from `lg`;
   history, team records and leaders go three across from `xl` as two-row
   subgrids, so the three lists start on one line whatever their subtitles
@@ -856,3 +903,18 @@ the league is already draftable and many visitors have joined. Write for both.
 - **Fixture data covers the edges:** modern box scores except two legacy-shaped
   games (to show degradation), league-night `scheduledAt` on every match (so
   `/api/calendar` has events), and games on completed playoff matches.
+- **Every page streams before it runs.** The root `loading.tsx` sends the
+  shell first, so `notFound()` answers 200 and a page's `redirect()` is a
+  client redirect inside a 200 (a one-second meta refresh plus
+  `NEXT_REDIRECT` in the stream). In e2e, assert the not-found page itself
+  (the noindex meta and the "Page not found" heading, as
+  `e2e-mid/quality-of-life.spec.ts` does), never a 404 status. Read a
+  redirecting page's server answer with `page.request.get`
+  (`e2e-mid/import-progress.spec.ts`): Chrome drops the document's body once
+  the browser follows the redirect.
+- **Run the browser suites locally with CI's environment:** blank
+  `NEXT_PUBLIC_APP_NAME` and the lobby-bot keys (`DOTA_LOBBY_BOT_URL`,
+  `DOTA_LOBBY_BOT_SECRET`, `DOTA_SEASON_LOBBY_BOT_ENABLED`) on the command
+  line. A local `.env` or `.env.local` that sets them fails
+  `e2e-mid/boards.spec.ts` (it refuses the old league name) and the inhouse
+  specs (they see a configured bot).

@@ -1113,7 +1113,15 @@ export async function randomizeDraftOrder(
     seasonId: season.id,
   });
   refresh();
-  return { message: "Draft order shuffled" };
+  // Say the order it landed on, not just that it moved.
+  const order = await prisma.team.findMany({
+    where: { seasonId: season.id },
+    orderBy: [{ draftOrder: "asc" }, { id: "asc" }],
+    select: { name: true },
+  });
+  return {
+    message: `Draft order shuffled: ${order.map((team, index) => `${index + 1}. ${team.name}`).join(", ")}`,
+  };
 }
 
 /** Begin the live auction draft. Sets the season to DRAFT and seeds Draft state. */

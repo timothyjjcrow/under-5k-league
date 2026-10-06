@@ -221,13 +221,43 @@ describe("draftPollCadence", () => {
   const FAST = 1200;
   const base = { activeMs: FAST, reached: true };
 
-  it("polls FAST while the auction is live, for spectators too", () => {
-    // The draft's "active" is the ROOM's phase, not the viewer's stake: a
-    // player watching the lot they might be nominated into needs the same
-    // 1.2s cadence a captain does.
+  it("polls FAST while the auction is live for the viewers who act", () => {
+    // Captains and admins bid, nominate and pause on a live lot. Unknown (no
+    // payload yet) counts as acting, so nobody starts slow.
+    expect(
+      draftPollCadence({ ...base, hidden: false, hasStake: true, live: true, canAct: true }),
+    ).toEqual({ skip: false, delayMs: FAST });
     expect(
       draftPollCadence({ ...base, hidden: false, hasStake: false, live: true }),
     ).toEqual({ skip: false, delayMs: FAST });
+  });
+
+  // Every open tab at 1.2s was about 33 requests a second with 40 viewers, on
+  // a hosting budget both leagues share; a watcher sees bids a beat later.
+  it("polls watchers (spectators, pool players) at the watch rate", () => {
+    for (const hasStake of [false, true]) {
+      expect(
+        draftPollCadence({ ...base, hidden: false, hasStake, live: true, canAct: false }),
+      ).toEqual({ skip: false, delayMs: DRAFT_ROOM.POLL_WATCH_MS });
+      expect(
+        draftPollCadence({ ...base, hidden: false, hasStake, live: false, canAct: false }),
+      ).toEqual({ skip: false, delayMs: DRAFT_ROOM.POLL_WATCH_IDLE_MS });
+    }
+    // A hidden pool player keeps a slower keepalive for "on the block".
+    expect(
+      draftPollCadence({ ...base, hidden: true, hasStake: true, live: true, canAct: false }),
+    ).toEqual({ skip: false, delayMs: DRAFT_ROOM.POLL_WATCH_KEEPALIVE_MS });
+    // A failed poll retries at the watcher's own rate.
+    expect(
+      draftPollCadence({
+        ...base,
+        hidden: false,
+        hasStake: false,
+        live: false,
+        reached: false,
+        canAct: false,
+      }),
+    ).toEqual({ skip: false, delayMs: DRAFT_ROOM.POLL_WATCH_MS });
   });
 
   it("counts a PAUSED auction as live so a resume is caught immediately", () => {

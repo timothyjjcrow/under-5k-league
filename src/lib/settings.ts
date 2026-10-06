@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
 import { checkinNudgePrefix, outPingPrefix } from "./availability";
+import { readyCheckRosterPingPrefix } from "./reschedule-ready-check";
 
 // Tiny key-value store (the `Setting` model) for league-global config that an
 // admin edits at runtime — anything per-season belongs on `Season` instead.
@@ -434,6 +435,7 @@ export function seasonSettingScopeWhere(
     { key: { startsWith: resultNudgePrefix(matchId) } },
     { key: { startsWith: outPingPrefix(matchId) } },
     { key: { startsWith: checkinNudgePrefix(matchId) } },
+    { key: { startsWith: readyCheckRosterPingPrefix(matchId) } },
     {
       key: {
         startsWith: providerCooldownResourcePrefix("open-dota-match-scan", matchId),

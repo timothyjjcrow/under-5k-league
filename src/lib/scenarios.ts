@@ -14,7 +14,7 @@
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { possibleSeriesOutcomes } from "./series-outcomes";
 import type { ScenarioOutlook, ScenarioPaths } from "./scenario-outlook";
-export type { ScenarioOutlook, ScenarioPaths, ScenarioResult } from "./scenario-outlook";
+export type { ScenarioOutlook, ScenarioPaths } from "./scenario-outlook";
 import {
   clinchStatuses,
   type ClinchStatus,

@@ -28,6 +28,7 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { homeMetadata } from "@/lib/link-preview-metadata";
 import { announcedMatchNight } from "@/lib/match-night";
+import { matchNightPollOpen } from "@/lib/match-night-poll-service";
 import { parseNextSeasonPlan } from "@/lib/next-season";
 import { getDefendingChampion } from "@/lib/official-champion";
 import { prisma } from "@/lib/prisma";
@@ -134,13 +135,25 @@ export default async function Home() {
       ? await getDefendingChampion(season.createdAt)
       : null;
 
+  // During signups an open match-night poll means the night isn't settled:
+  // the pitch and the signups view say so instead of printing a time the
+  // vote may change. Later phases print the fixtures' own night.
+  const pollOpen =
+    season.status === "SIGNUPS" ? await matchNightPollOpen() : false;
+
   // The phase switch: what the phase puts in the hero, and its view below.
   let heroParts: HeroParts = {};
   let view: ReactNode = null;
   switch (season.status) {
     case "SIGNUPS":
       heroParts = signupsHero(snapshot, viewer);
-      view = <SignupsView snapshot={snapshot} loggedIn={!!user} />;
+      view = (
+        <SignupsView
+          snapshot={snapshot}
+          loggedIn={!!user}
+          matchNightPollOpen={pollOpen}
+        />
+      );
       break;
     case "DRAFT":
       heroParts = await draftHero(snapshot, viewer);
@@ -253,7 +266,10 @@ export default async function Home() {
           // It takes the phase sentence's place: the badge, the counts and
           // the Steam button already say signups are open and what is
           // missing, and a newcomer first needs to know what this is.
-          <LeaguePitch matchNight={announcedMatchNight(season, [])} />
+          <LeaguePitch
+            matchNight={announcedMatchNight(season, [])}
+            pollOpen={pollOpen}
+          />
         ) : undefined
       }
       action={heroParts.action}

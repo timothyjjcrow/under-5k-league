@@ -125,6 +125,8 @@ export type ProposedReschedule = {
    * after the commit; user ids, not snowflakes.
    */
   readyCheckUserIds: string[];
+  /** The match's kickoff revision: the roster-ping throttle's window key. */
+  scheduleRevision: number;
 };
 
 export type DeclinedReschedule = {
@@ -721,6 +723,7 @@ export async function proposeReschedule(
     ...announcement,
     roundLabel: await postRoundLabel(fixture),
     readyCheckUserIds,
+    scheduleRevision: match.scheduleRevision,
   };
 }
 

@@ -983,6 +983,31 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
     );
   });
 
+  // A week 1 in the past schedules kickoffs that already happened: no
+  // check-in window, an instant "result due", pick'em locked from the start.
+  it("refuses a first match night that has already passed", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    for (let i = 0; i < 4; i++) await makeTeam(season.id, `Past${i}`, i + 1);
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    const past = new Date(Date.now() - 864e5);
+
+    const res = await generateSchedule(
+      empty,
+      fd({
+        firstNight: "2026-10-01T20:00",
+        firstNightTs: String(past.getTime()),
+        expectedActiveSeasonId: season.id,
+      }),
+    );
+
+    expect(res?.error).toMatch(/has already passed/);
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(
+      0,
+    );
+  });
+
   it("gives every generated fixture a kickoff, a week apart", async () => {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
     for (let i = 0; i < 4; i++) await makeTeam(season.id, `Timed${i}`, i + 1);

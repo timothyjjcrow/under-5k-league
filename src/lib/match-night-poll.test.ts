@@ -18,6 +18,9 @@ import {
   pollOpen,
   pollResultsVisible,
   pollSignupsOpen,
+  pollTurnoutLine,
+  closedPollStatus,
+  pollResultMarker,
   slotHour,
   slotInZone,
   slotKey,
@@ -298,5 +301,62 @@ describe("tallyAvailability", () => {
     const empty = tallyAvailability(slots, [[], []]);
     expect(empty.winner).toBeNull();
     expect(empty.order).toEqual([s12, s13, s14, u13]);
+  });
+});
+
+describe("pollTurnoutLine", () => {
+  it("reads the count against the players who could vote", () => {
+    expect(pollTurnoutLine(11, { size: 35 }, true)).toBe("11 of 35 players have voted");
+    expect(pollTurnoutLine(1, { size: 35 }, true)).toBe("1 of 35 players has voted");
+    expect(pollTurnoutLine(0, { size: 35 }, true)).toBe("0 of 35 players have voted");
+    expect(pollTurnoutLine(11, { size: 35 }, false)).toBe("11 of 35 players voted");
+    expect(pollTurnoutLine(1, { size: 1 }, true)).toBe("1 of 1 player has voted");
+  });
+
+  it("falls back to the bare count with no electorate to count", () => {
+    expect(pollTurnoutLine(11, null, true)).toBe("11 votes so far");
+    expect(pollTurnoutLine(1, null, false)).toBe("1 vote");
+    expect(pollTurnoutLine(3, { size: 0 }, true)).toBe("3 votes so far");
+  });
+});
+
+describe("closedPollStatus", () => {
+  const base = {
+    winnerLabel: "Sundays at 5:00 PM Pacific time",
+    count: 9,
+    ballots: 11,
+    usedAsMatchNight: false,
+    announced: false,
+  };
+
+  // A closed poll used to fold away under a generic subtitle, with nothing
+  // saying its winner wasn't the match night yet or hadn't been announced.
+  it("names the winner and what's still to do", () => {
+    expect(closedPollStatus(base)).toEqual({
+      line: "Voting closed: Sundays at 5:00 PM Pacific time won (9 of 11 can play) · not yet the season's match night · not announced on Discord.",
+      needsFollowUp: true,
+    });
+    expect(closedPollStatus({ ...base, usedAsMatchNight: true }).line).toBe(
+      "Voting closed: Sundays at 5:00 PM Pacific time won (9 of 11 can play) · not announced on Discord.",
+    );
+  });
+
+  it("stops asking once it's the match night and announced", () => {
+    expect(
+      closedPollStatus({ ...base, usedAsMatchNight: true, announced: true }),
+    ).toEqual({
+      line: "Voting closed: Sundays at 5:00 PM Pacific time won (9 of 11 can play).",
+      needsFollowUp: false,
+    });
+    expect(closedPollStatus({ ...base, winnerLabel: null })).toEqual({
+      line: "Voting closed with no time anyone can make.",
+      needsFollowUp: false,
+    });
+  });
+
+  it("keys the announce-once marker by poll and closing time", () => {
+    expect(pollResultMarker("poll-1", 1_800_000_000_000)).toBe(
+      "matchNightPollResult:poll-1:1800000000000",
+    );
   });
 });

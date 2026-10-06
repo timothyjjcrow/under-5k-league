@@ -35,10 +35,15 @@ import {
 } from "@/lib/draft-readiness";
 import { draftNightSoon, draftSetupOpen } from "@/lib/draft-setup";
 import { formatLeagueMatchTime } from "@/lib/match-time";
-import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
+import {
+  captainsWantedLine,
+  roleCoverage,
+  shortRolesLine,
+} from "@/lib/pool-stats";
 import { prisma } from "@/lib/prisma";
+import { effectiveSoftMmrLimit } from "@/lib/registration";
 import type { SeasonSnapshot } from "@/lib/queries";
-import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
+import { DRAFT_PASSED_LABEL, MATCH_NIGHT_POLL_LABEL } from "@/lib/season-copy";
 import { CaptainLine } from "./hero-controls";
 import { HeroStat, type HeroParts, type HomeViewer } from "./hero";
 
@@ -137,9 +142,12 @@ export function signupsHero(
           the threshold — only what it's counting toward changes. Which team
           number it would be is left to the card below; up here it just has to
           be true forever, and "another team" can't go stale. */}
+      {/* minTeams is the season's team GOAL, not a gate: Start draft needs
+          only two captains, so "N more to reach the player minimum" promised
+          a block the draft doesn't have. */}
       {capacity.canDraft ? (
         <>
-          <Badge tone="success">Player minimum met</Badge>
+          <Badge tone="success">{season.minTeams}-team goal met</Badge>
           <HeroStat
             value={capacity.toNextTeam}
             label="more for another team"
@@ -149,7 +157,7 @@ export function signupsHero(
       ) : (
         <HeroStat
           value={capacity.needed}
-          label="more to reach the player minimum"
+          label={`more to reach the ${season.minTeams}-team goal`}
           tone="accent"
         />
       )}
@@ -324,9 +332,12 @@ function draftReadinessStatus(readiness: DraftReadiness): string {
 export function SignupsView({
   snapshot,
   loggedIn,
+  matchNightPollOpen = false,
 }: {
   snapshot: SeasonSnapshot;
   loggedIn: boolean;
+  /** A match-night poll is open (it sits above this view on Home). */
+  matchNightPollOpen?: boolean;
 }) {
   const { season, capacity, myReg } = snapshot;
   const isActivePlayer = myReg?.status === "ACTIVE" && myReg.type === "PLAYER";
@@ -341,8 +352,19 @@ export function SignupsView({
 
   return (
     <div className="space-y-6">
-      {/* Signed out, the hero's pitch already names the match night. */}
-      {loggedIn ? <ScheduleCallout label={season.matchSchedule} /> : null}
+      {/* Signed out, the hero's pitch already names the match night. While
+          a poll is choosing it, the callout says so rather than printing a
+          time the vote may change. */}
+      {loggedIn ? (
+        matchNightPollOpen ? (
+          <ScheduleCallout
+            label={MATCH_NIGHT_POLL_LABEL}
+            description="Signed-up players are voting on it in the poll above. The time the most can make wins."
+          />
+        ) : (
+          <ScheduleCallout label={season.matchSchedule} />
+        )
+      ) : null}
       {/* The viewer's own signup, as a status line. Joining is the hero's
           button (a second "Sign in with Steam to join" sat a screen below
           it), and a removed signup is the hero's "Signup removed" button. */}
@@ -359,7 +381,9 @@ export function SignupsView({
             subtitle={
               <>
                 Teams of {season.teamSize}
-                {season.maxMmr > 0 ? ` · ${season.maxMmr} MMR soft limit` : ""}
+                {effectiveSoftMmrLimit(season.maxMmr) > 0
+                  ? ` · ${season.maxMmr} MMR soft limit`
+                  : ""}
                 {myDraftReadiness
                   ? ` · ${draftReadinessStatus(myDraftReadiness)}`
                   : ""}
@@ -401,6 +425,13 @@ export function SignupsView({
           playerCount={snapshot.playerCount}
           teamsNeeded={Math.max(season.minTeams, capacity.teamsFormable)}
           captains={snapshot.teams.map((team) => team.captain)}
+          // A signed-up full player who hasn't offered gets a way to offer:
+          // the box is on /me's saved signup ("Edit signup").
+          canOfferToCaptain={
+            isActivePlayer &&
+            !myReg?.wantsCaptain &&
+            !snapshot.teams.some((team) => team.captainId === myReg?.userId)
+          }
         />
       </Suspense>
     </div>
@@ -431,17 +462,19 @@ async function WhoIsIn({
   playerCount,
   teamsNeeded,
   captains,
+  canOfferToCaptain,
 }: {
   seasonId: string;
   playerCount: number;
   teamsNeeded: number;
   captains: SeasonSnapshot["teams"][number]["captain"][];
+  canOfferToCaptain: boolean;
 }) {
   const captainIds = captains.map((captain) => captain.id);
   const [pool, latest] = await Promise.all([
     prisma.registration.findMany({
       where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-      select: { userId: true, roles: true, mmr: true },
+      select: { userId: true, roles: true, mmr: true, wantsCaptain: true },
     }),
     prisma.registration.findMany({
       where: {
@@ -490,6 +523,13 @@ async function WhoIsIn({
   }));
   const shown = captainChips.length + latestChips.length;
   const shortage = shortRolesLine(roleCoverage(pool), teamsNeeded, pool.length);
+  // Teams are captains, so the pool's size only matters up to the number of
+  // players willing to captain. Designated captains count as offered.
+  const offered = new Set([
+    ...pool.filter((reg) => reg.wantsCaptain).map((reg) => reg.userId),
+    ...captainIds,
+  ]).size;
+  const captainCall = captainsWantedLine(offered, teamsNeeded);
 
   return (
     <Card>
@@ -520,6 +560,23 @@ async function WhoIsIn({
           />
         ) : (
           <>
+            {captainCall ? (
+              <p className="text-sm text-muted">
+                <span className="font-medium text-fg">{captainCall}</span>
+                {canOfferToCaptain ? (
+                  <>
+                    {" "}
+                    <Link href="/me#signup-details" className={textLink()}>
+                      Offer to captain <LinkArrow />
+                    </Link>
+                    <span className="block text-xs">
+                      Open Edit signup and tick “I&apos;d like to be considered
+                      as a team captain”.
+                    </span>
+                  </>
+                ) : null}
+              </p>
+            ) : null}
             {shortage ? <p className="text-sm text-muted">{shortage}</p> : null}
             {/* Compact on phones: name, captain mark and MMR only, so the
                 chips wrap two to a row instead of stacking twelve tall rows

@@ -1,3 +1,5 @@
+import { rosterOrder } from "@/lib/team-roster";
+import { MATCH_LIST_ORDER } from "@/lib/schedule";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { REGISTRATION_STATUS } from "@/lib/constants";
@@ -56,7 +58,7 @@ export async function MatchPreview({
     loadRosters(match),
     prisma.match.findMany({
       where: { seasonId: match.seasonId },
-      orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+      orderBy: MATCH_LIST_ORDER,
     }),
     // The tale of the tape's table place and the opponents on each road.
     prisma.team.findMany({
@@ -74,9 +76,9 @@ export async function MatchPreview({
         })
       : Promise.resolve([]),
   ]);
-  // Most expensive signing first. The sort is stable, so equal prices (the
-  // captain and $0 free agents) keep signing order.
-  const members = [...rosterRows].sort((a, b) => b.price - a.price);
+  // The captain first, then the most expensive signing (rosterOrder, as on
+  // /teams): by price alone the $0 captain was listed last.
+  const members = rosterOrder(rosterRows);
   const regs = await prisma.registration.findMany({
     where: {
       seasonId: match.seasonId,

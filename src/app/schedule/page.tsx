@@ -29,6 +29,7 @@ import {
 import type { ScenarioReport } from "@/lib/scenarios";
 import { SeasonGrid } from "@/components/season-grid";
 import {
+  MATCH_LIST_ORDER,
   byeTeamsByWeek,
   byKickoff,
   groupPlayoffRounds,
@@ -79,6 +80,7 @@ import {
 } from "@/components/schedule-weeks";
 import { StandingsTable } from "@/components/standings-table-server";
 import { SectionNav } from "@/components/section-nav";
+import { weekWrapPath } from "@/lib/week-wrap";
 import {
   Card,
   CardBody,
@@ -229,7 +231,7 @@ export default async function SchedulePage() {
       prisma.team.findMany({ where: { seasonId: season.id } }),
       prisma.match.findMany({
         where: { seasonId: season.id },
-        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+        orderBy: MATCH_LIST_ORDER,
       }),
       prisma.standinAssignment.findMany({
         where: { match: { seasonId: season.id } },
@@ -545,6 +547,11 @@ export default async function SchedulePage() {
       })),
       nightTs: night?.getTime() ?? null,
       nightInitial: night ? formatLeagueMatchTime(night, "date") : null,
+      // A finished week links its wrap (results, honors, the table).
+      wrapHref:
+        raw.length > 0 && (ws?.completed ?? 0) === raw.length
+          ? weekWrapPath(season.id, week)
+          : null,
     };
   });
 

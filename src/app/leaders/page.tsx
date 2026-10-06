@@ -13,7 +13,11 @@ import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
 import { finishedSeasonLink } from "@/lib/season-choices";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { getSeasonGameLeaders } from "@/lib/cached-queries";
+import { weekWrapPath } from "@/lib/week-wrap";
+import {
+  getPublicSeasonHonorReadiness,
+  getSeasonGameLeaders,
+} from "@/lib/cached-queries";
 import { LeaderBoard, type LeaderBoardRow } from "@/components/leader-board";
 import {
   summarizePlayerGames,
@@ -34,9 +38,9 @@ import {
   HONOR_WEEK_STATE,
   isNoPerformanceHonorWeek,
 } from "@/lib/honors-readiness";
-import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
-import { formatNetWorth } from "@/lib/utils";
+import { cn, formatNetWorth } from "@/lib/utils";
 import {
+  TAP_SAFE,
   buttonClasses,
   Card,
   CardBody,
@@ -137,7 +141,7 @@ export default async function LeadersPage({
   // same) — honorsByWeek used to re-parse the week's games per week.
   const [gameRows, honorReadiness, seasonOptions] = await Promise.all([
     getSeasonGameLeaders(season.id),
-    getSeasonHonorReadiness(season.id),
+    getPublicSeasonHonorReadiness(season.id),
     loadSeasonChoices("games", season.id),
   ]);
   const decodedRows = gameRows.map((game) => ({
@@ -536,11 +540,13 @@ export default async function LeadersPage({
             will appear after the full slate is final.
           </p>
         ) : null}
+        {/* Every held week, not just one: naming only the newest hid the
+            others (two of Season 1's held weeks were never mentioned). */}
         {awaitingBoxScoreWeeks.length > 0 ? (
           <p className="px-4 py-2.5 text-sm text-muted">
-            Week {awaitingBoxScoreWeeks[0].week} is final, but honors are
-            waiting for complete, valid 5v5 box scores from every played
-            series.
+            {heldWeeksPhrase(awaitingBoxScoreWeeks.map((row) => row.week))}{" "}
+            final, but honors are waiting for complete, valid 5v5 box scores
+            from every played series.
           </p>
         ) : null}
         {honorsByWeek.map(({ week, honors }) =>
@@ -558,9 +564,13 @@ export default async function LeadersPage({
               // stacked links need.
               className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-4 py-2.5 text-sm"
             >
-              <span className="w-16 shrink-0 text-xs uppercase tracking-wide text-muted">
+              {/* The week label opens that week's wrap. */}
+              <Link
+                href={weekWrapPath(season.id, week)}
+                className={cn(TAP_SAFE, "w-16 shrink-0 text-xs uppercase tracking-wide text-muted hover:text-info")}
+              >
                 Week {week}
-              </span>
+              </Link>
               {/* flex-wrap: on a phone the points-and-hero line drops
                   under the name. As two shrinking siblings, the NAME broke
                   across lines instead ("Pudge / Player4"). */}
@@ -707,4 +717,12 @@ export default async function LeadersPage({
       ) : null}
     </div>
   );
+}
+
+/** "Week 3 is" / "Weeks 1 and 3 are" / "Weeks 1, 3 and 5 are". */
+function heldWeeksPhrase(weeks: number[]): string {
+  const sorted = [...weeks].sort((a, b) => a - b);
+  if (sorted.length === 1) return `Week ${sorted[0]} is`;
+  const list = `${sorted.slice(0, -1).join(", ")} and ${sorted[sorted.length - 1]}`;
+  return `Weeks ${list} are`;
 }

@@ -401,14 +401,21 @@ export function DefendingChampionLine({
  * the fold said what the league is. No step strip: the hero's season
  * timeline already shows the steps.
  */
-export function LeaguePitch({ matchNight }: { matchNight: string | null }) {
+export function LeaguePitch({
+  matchNight,
+  pollOpen = false,
+}: {
+  matchNight: string | null;
+  /** A match-night poll is open, so the night isn't settled yet. */
+  pollOpen?: boolean;
+}) {
   return (
     <>
       <p className="mt-1.5 max-w-xl text-muted sm:text-[1.0625rem]">
         {leaguePitch()}
       </p>
       <p className="mt-1.5 max-w-xl text-sm text-muted">
-        {leagueEligibilityLine(matchNight)}
+        {leagueEligibilityLine(matchNight, pollOpen)}
       </p>
     </>
   );

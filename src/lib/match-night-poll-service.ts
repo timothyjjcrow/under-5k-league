@@ -14,6 +14,7 @@
 //   each side reads the rows the other writes).
 
 import { Prisma, type MatchNightPoll } from "@prisma/client";
+import { cache } from "react";
 import { REGISTRATION_STATUS } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
 import {
@@ -125,37 +126,29 @@ async function signedUpFor(db: Db, userId: string, seasonId: string) {
 }
 
 /**
- * The voters among `userIds` who are signed up for the season now:
- * signedUpFor, batched (three indexed lookups however many ballots).
+ * Everyone who may vote in the season now: signedUpFor for the whole league
+ * at once (three indexed lookups, a few dozen rows). Its size is the
+ * turnout's denominator, and it decides which ballots count and whether the
+ * viewer can vote.
  */
-async function stillSignedUp(
-  db: Db,
-  userIds: readonly string[],
-  seasonId: string,
-): Promise<Set<string>> {
-  if (userIds.length === 0) return new Set();
-  const ids = [...new Set(userIds)];
+async function seasonElectorate(db: Db, seasonId: string): Promise<Set<string>> {
   const [registrations, members, captains] = await Promise.all([
     db.registration.findMany({
-      where: { seasonId, userId: { in: ids }, status: REGISTRATION_STATUS.ACTIVE },
+      where: { seasonId, status: REGISTRATION_STATUS.ACTIVE },
       select: { userId: true },
     }),
-    db.teamMember.findMany({
-      where: { seasonId, userId: { in: ids } },
-      select: { userId: true },
-    }),
-    db.team.findMany({
-      where: { seasonId, captainId: { in: ids } },
-      select: { captainId: true },
-    }),
+    db.teamMember.findMany({ where: { seasonId }, select: { userId: true } }),
+    db.team.findMany({ where: { seasonId }, select: { captainId: true } }),
   ]);
+  const active = new Set(registrations.map((r) => r.userId));
   const seated = new Set([
     ...members.map((m) => m.userId),
     ...captains.map((t) => t.captainId),
   ]);
-  const active = new Set(registrations.map((r) => r.userId));
   return new Set(
-    ids.filter((id) => hasActiveLeagueParticipation(active.has(id), seated.has(id))),
+    [...active, ...seated].filter((id) =>
+      hasActiveLeagueParticipation(active.has(id), seated.has(id)),
+    ),
   );
 }
 
@@ -181,22 +174,22 @@ async function viewOf(
   // is cast, but a player who withdraws, or whom an admin removes, would
   // otherwise keep counting and could swing the result. Their row stays, so
   // signing up again counts it again.
-  const counted = season
-    ? await stillSignedUp(prisma, stored.map((b) => b.userId), season.id)
-    : null;
-  const ballots = counted ? stored.filter((b) => counted.has(b.userId)) : stored;
-  const canVote =
-    !!viewer &&
-    !!season &&
-    (!!counted?.has(viewer.id) ||
-      (await signedUpFor(prisma, viewer.id, season.id)));
+  const electorate = season ? await seasonElectorate(prisma, season.id) : null;
+  const ballots = electorate
+    ? stored.filter((b) => electorate.has(b.userId))
+    : stored;
+  const canVote = !!viewer && !!electorate?.has(viewer.id);
   return buildPollView({
     poll,
     ballots,
     viewerId: viewer?.id ?? null,
     isAdmin: viewer?.role === "ADMIN",
     electorate: season
-      ? { seasonName: season.name, signupsOpen: pollSignupsOpen(season) }
+      ? {
+          seasonName: season.name,
+          signupsOpen: pollSignupsOpen(season),
+          size: electorate?.size ?? 0,
+        }
       : null,
     canVote,
     nowMs,
@@ -222,6 +215,20 @@ export async function loadHomePoll(
   });
   return poll ? viewOf(poll, viewer, nowMs) : null;
 }
+
+/**
+ * Whether a poll is open right now. Pages outside the poll card read it to
+ * say the match night is still being decided, instead of printing a time
+ * the vote may change. Request-cached, so Home's hero and its signups view
+ * share one read.
+ */
+export const matchNightPollOpen = cache(async (): Promise<boolean> => {
+  const open = await prisma.matchNightPoll.findFirst({
+    where: { closesAt: { gt: new Date() } },
+    select: { id: true },
+  });
+  return open !== null;
+});
 
 /** The newest poll, however old, for the admin card. */
 export async function loadLatestPoll(
@@ -429,11 +436,9 @@ export async function closePollNow(input: {
   ]);
   // The count Home shows (viewOf): a ballot whose voter has since withdrawn,
   // or been removed, is kept but doesn't count.
-  const counted = season
-    ? await stillSignedUp(prisma, stored.map((b) => b.userId), season.id)
-    : null;
-  const ballots = counted
-    ? stored.filter((b) => counted.has(b.userId)).length
+  const electorate = season ? await seasonElectorate(prisma, season.id) : null;
+  const ballots = electorate
+    ? stored.filter((b) => electorate.has(b.userId)).length
     : stored.length;
   return { ok: true, question: poll?.question ?? "", ballots };
 }

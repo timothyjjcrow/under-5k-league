@@ -1234,8 +1234,9 @@ export function ScheduleCallout({
   className,
 }: {
   label?: string | null;
-  /** Phase-aware guidance. Signup copy remains the default for other callers. */
-  description?: string;
+  /** Phase-aware guidance (may carry a link). Signup copy remains the
+   *  default for other callers. */
+  description?: React.ReactNode;
   className?: string;
 }) {
   return (

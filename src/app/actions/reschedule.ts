@@ -17,7 +17,12 @@ import {
   type AcceptedReschedule,
 } from "@/lib/reschedule-service";
 import { loadReadyCheckViewById } from "@/lib/reschedule-ready-check-service";
-import type { ReadyCheckView } from "@/lib/reschedule-ready-check";
+import {
+  READY_CHECK_ROSTER_PING_SECONDS,
+  readyCheckRosterPingKey,
+  type ReadyCheckView,
+} from "@/lib/reschedule-ready-check";
+import { claimThrottle } from "@/lib/settings";
 import {
   rescheduleDeclinedMessage,
   rescheduleMessage,
@@ -144,6 +149,20 @@ export async function proposeReschedule(
   }
   // A ready check needs an answer from everyone in the match, so the post
   // mentions them: the other captain first, then both rosters. Best-effort.
+  // Only the first proposal of a kickoff in READY_CHECK_ROSTER_PING_SECONDS
+  // rings the rosters; a re-proposal pings the other captain alone (players
+  // still see the open check on Home and the match page). A store failure
+  // pings everyone: one extra ping beats a check nobody heard about.
+  let rosterPing = true;
+  try {
+    rosterPing = await claimThrottle(
+      readyCheckRosterPingKey(proposed.matchId, proposed.scheduleRevision),
+      READY_CHECK_ROSTER_PING_SECONDS,
+      Date.now(),
+    );
+  } catch {
+    rosterPing = true;
+  }
   await sendDiscordMessage(
     rescheduleProposedMessage({
       homeName: proposed.homeName,
@@ -158,7 +177,11 @@ export async function proposeReschedule(
       optionsMs: proposed.options.map((t) => t.getTime()),
       note: proposed.note,
     }),
-    await mentionUsers([proposed.notifyUserId, ...proposed.readyCheckUserIds]),
+    await mentionUsers(
+      rosterPing
+        ? [proposed.notifyUserId, ...proposed.readyCheckUserIds]
+        : [proposed.notifyUserId],
+    ),
   );
   refresh();
   return {

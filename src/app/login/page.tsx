@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { safeReturnPath } from "@/lib/return-path";
+import { getActiveSeason } from "@/lib/season";
 import { singleSearchParam } from "@/lib/search-params";
 import { Card, CardBody, buttonClasses, textLink } from "@/components/ui";
 import { SteamSignInNote } from "@/components/steam-sign-in";
@@ -58,8 +59,14 @@ export default async function LoginPage({
   const devSuffix = next ? `&redirect=${encodeURIComponent(next)}` : "";
 
   const devLogin = process.env.ALLOW_DEV_LOGIN === "true";
-  const intro =
-    next === "/me"
+  // Every "Join" link (the header, the phone bar, Discord's "Join them")
+  // lands here with next=/me. While a season takes signups, say that this is
+  // the way in, not "continue setting up", which reads as an existing account.
+  const joining =
+    next === "/me" ? await signupsOpenSeasonName() : null;
+  const intro = joining
+    ? `Sign in with Steam to join ${joining}. Your signup form opens next.`
+    : next === "/me"
       ? "Sign in to open your account and continue setting up for the league."
       : next
         ? "Sign in to continue where you left off."
@@ -180,4 +187,10 @@ function SteamIcon() {
       <path d="M12 0C5.6 0 .3 4.9 0 11.1l6.4 2.6c.5-.4 1.2-.6 1.9-.6h.2l2.9-4.2v-.1c0-2.5 2-4.5 4.5-4.5s4.6 2 4.6 4.6-2 4.6-4.6 4.6h-.1L11.6 16v.2c0 1.9-1.5 3.4-3.4 3.4-1.6 0-3-1.2-3.3-2.7L.3 15.1C1.8 20.3 6.4 24 12 24c6.6 0 12-5.4 12-12S18.6 0 12 0zM7.5 18.2l-1.5-.6c.3.6.8 1 1.5 1.3 1.4.6 3-.1 3.6-1.5.3-.7.3-1.4 0-2.1s-.8-1.2-1.5-1.5c-.7-.3-1.4-.3-2 0l1.5.6c1 .4 1.5 1.6 1 2.6s-1.6 1.3-2.6.8zm10.8-6.6c1.7 0 3-1.4 3-3s-1.3-3.1-3-3.1-3 1.4-3 3 1.3 3.1 3 3.1zm0-5.2c1.2 0 2.2 1 2.2 2.2s-1 2.2-2.2 2.2-2.3-1-2.3-2.2 1-2.2 2.3-2.2z" />
     </svg>
   );
+}
+
+/** The active season's name while it takes player signups, else null. */
+async function signupsOpenSeasonName(): Promise<string | null> {
+  const season = await getActiveSeason();
+  return season?.status === "SIGNUPS" ? season.name : null;
 }

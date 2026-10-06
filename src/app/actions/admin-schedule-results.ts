@@ -168,6 +168,14 @@ export async function generateSchedule(
   if (!firstNight) {
     return { error: "Invalid first match night" };
   }
+  // A week 1 in the past schedules kickoffs that already happened: no
+  // check-in window, an instant "result due", and pick'em locked from the
+  // start. The box carries a min too; this is the check that holds.
+  if (firstNight.getTime() < Date.now()) {
+    return {
+      error: `The first match night you picked, ${formatLeagueTime(firstNight)}, has already passed. Pick a future night: week 1 plays then, and each later week a week after.`,
+    };
+  }
 
   // The lib has supported a mirrored second leg since the beginning — this
   // flag was just never wired to a form, locking a 4-6 team league to a 3-5
@@ -1097,7 +1105,15 @@ export async function importGameAction(
     summary: `Imported Dota match ${dotaMatchId} into ${await fixtureLogName(matchId)}`,
   });
   refreshGames();
-  return { ok: true, message: "Game imported" };
+  // The series it leaves, in the captain report's words (match-report-
+  // service): a bare "Game imported" left the admin to open the match to see
+  // what it decided.
+  return {
+    ok: true,
+    message: res.decided
+      ? `Game imported — series final ${res.homeScore}–${res.awayScore}`
+      : `Game imported — series ${res.homeScore}–${res.awayScore}`,
+  };
 }
 
 /** Auto-detect a scheduled match's games from the rosters' recent games. */

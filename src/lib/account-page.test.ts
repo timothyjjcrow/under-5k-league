@@ -457,11 +457,18 @@ describe("MMR field copy", () => {
 
   it("keeps the ceiling and names the admin review above the soft limit", () => {
     expect(mmrRulesLine(0)).toBe(
-      "We don't take anyone over 5000 MMR (no Immortals).",
+      "We don't take anyone over 5000 MMR, or with a Divine 3 or higher medal.",
     );
     expect(mmrRulesLine(4500)).toMatch(
       /Above 4500 you can still sign up, and an admin reviews your signup\.$/,
     );
+  });
+
+  // A soft limit at the ceiling flags nobody: "over 5000 … Above 5000 an
+  // admin reviews" contradicted itself on the live form.
+  it("drops a soft limit at or above the ceiling", () => {
+    expect(mmrRulesLine(5000)).toBe(mmrRulesLine(0));
+    expect(mmrRulesLine(6000)).toBe(mmrRulesLine(0));
   });
 
   const preview = (typed: string, extra: Partial<Parameters<typeof mmrPreviewLine>[0]> = {}) =>

@@ -26,7 +26,18 @@ describe("phaseSubtitle", () => {
       signedUp: true,
     });
     expect(s).not.toMatch(/sign up now/i);
-    expect(s).toMatch(/once enough players/i);
+    expect(s).toMatch(/another team/i);
+  });
+
+  // The season's team goal (minTeams) is a target, not a gate: Start draft
+  // needs only two captains. Neither signup state may promise the draft is
+  // waiting on a player count.
+  it("never says the draft waits for a player count", () => {
+    for (const signedUp of [true, false]) {
+      expect(
+        phaseSubtitle(SEASON_STATUS.SIGNUPS, { canDraft: false, signedUp }),
+      ).not.toMatch(/once enough players|minimum/i);
+    }
   });
 
   // The hero renders this directly beneath a "Ready to draft" badge. Claiming
@@ -251,6 +262,20 @@ describe("the league pitch for new visitors", () => {
   it("says the match night is still to come rather than inventing one", () => {
     expect(leagueEligibilityLine(null)).toBe(
       "Open to players up to 5,000 MMR · Match night to be announced",
+    );
+  });
+
+  // Home said "Match night: Saturday 2PM PST" right above a poll asking
+  // when match night should be, with Sunday leading.
+  it("says a poll is deciding the night while one is open", () => {
+    expect(leagueEligibilityLine("Saturday 2PM PST", true)).toBe(
+      "Open to players up to 5,000 MMR · Match night: being decided in a player poll",
+    );
+    expect(leagueEligibilityLine(null, true)).toBe(
+      "Open to players up to 5,000 MMR · Match night: being decided in a player poll",
+    );
+    expect(leagueEligibilityLine("Saturday 2PM PST", false)).toBe(
+      "Open to players up to 5,000 MMR · Match night: Saturday 2PM PST",
     );
   });
 });

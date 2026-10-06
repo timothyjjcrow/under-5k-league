@@ -36,7 +36,23 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   (forfeits may have fewer, never more); each game with ten unique attributed
   users whose teams match Radiant/Dire and whose winner matches the result.
   `/leaders`, Home and `honors-service.ts` share it, so an incomplete week
-  waits for repair instead of crowning from partial data.
+  waits for repair instead of crowning from partial data. **A league player
+  imported with no `teamId`** (an unbooked fill-in from another roster, or a
+  released but registered player: "attribution only" in
+  results-and-opendota.md) **counts for the side they played on**, the credit
+  a booked standin already gets; the stored box score is unchanged. Requiring
+  a stored `teamId` held three of Season 1's five weeks. A line with no league
+  user, or credited to the other team, still holds the week, and /leaders
+  names every held week, not only the newest.
+- **/leaders reads the readiness through the public cache**
+  (`getPublicSeasonHonorReadiness`, `cached-queries.ts`: the result revision
+  and the "games" tag), so a view doesn't re-read the season's box scores
+  beside the cached leaderboards. The worker and the announcement paths read
+  it directly; so does Home's honors line, which sits in a nested Suspense
+  where a cached wrapper has hung before (admin-and-operations.md).
+- **The post says "167 impact points (best game on Dark Willow)":** the
+  points are the week's total and the hero the best game; "on Dark Willow"
+  read as one game's score.
 - **`honorsAnnounced:<season>:<week>` is a retryable CAS state, not a sent
   bit.** Every path that changes a completed regular result calls
   `markWeekHonorsStale(tx, …)` inside its result transaction; the next ready
@@ -48,6 +64,24 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   over the week's REGULAR matches, every tie listed, omitted if nobody called
   one. `weekOracleLine` is best-effort: a failure costs the line, never the
   award.
+
+## Week wrap (`/seasons/[id]/weeks/[week]`)
+
+- **One page per regular week tells its story from stored results** (Tim's
+  call, 2026-10-05; pure parts in `week-wrap.ts`): the results with upset
+  tags (`seriesUpset`, the same rule as Home), the week's honors through the
+  public readiness cache (or why they are held), the pick'em oracle
+  (`weekOracles`), the best single game (`bestGameOfWeek`: highest impact line
+  by a league player, ties by kills, fewer deaths, user id), the table after
+  the week with places moved (`weekWrapTable`: `regularTableBeforeWeek(week +
+  1)` against `(week)`, no arrows until a week of results is behind it), and
+  next week's fixtures. Under the season's own URL (`weekWrapPath`), so an old
+  link opens its week after the handoff; an unknown week is a 404.
+- **Linked from where a week ends:** each finished week on /schedule, the
+  week label on /leaders' honors, Home's honors line, and the Discord honors
+  post ("Week 4 wrap: …"), which used to link the leaderboards. The post's
+  send-once marker is a digest of the honors, not the text, so the new link
+  never re-posts a week. `e2e-mid/week-wrap.spec.ts` covers the page.
 
 ## Leaders
 
@@ -220,6 +254,12 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
 
 ## Fantasy
 
+- **Discord says when fantasy is open:** the draft recap (it posts as the
+  auction completes, when fantasy opens) and the regular-season start post,
+  while `fantasyLockedAt` is unset, end with "🧙 Fantasy is open until the
+  first game is imported" and a link, no mentions. Nothing on Discord said so
+  before, and 3 of 95 users entered. This promotes it only in its pick
+  window, as the 2026-09-27 "Fantasy stays for good" row allows.
 - **Keep fantasy forever; promote it only in the pick window** (Tim's
   decision). `fantasyListed` (`site-nav.ts`) lists it from the completed
   auction until the lock, then only for viewers who entered; menus, Home's

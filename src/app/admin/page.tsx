@@ -139,6 +139,12 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
+import {
+  closedPollStatus,
+  pollOnHome,
+  pollResultMarker,
+  pollTurnoutLine,
+} from "@/lib/match-night-poll";
 import { loadLatestPoll } from "@/lib/match-night-poll-service";
 import {
   ANNOUNCE_FAILED_PREFIX,
@@ -180,6 +186,8 @@ import {
 import { INHOUSE_ANNOUNCEMENT_STATUS } from "@/lib/inhouse-announcement-outbox";
 import { DangerSubmit } from "@/components/danger-submit";
 import { ChaseCopy } from "@/components/chase-copy";
+import { ReturningCopy } from "@/components/returning-copy";
+import { loadReturningPlayers } from "@/lib/returning-players-service";
 import { cn } from "@/lib/utils";
 import { maskWebhookUrl } from "@/lib/discord";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
@@ -213,6 +221,7 @@ import {
 } from "@/lib/draft-readiness";
 import { DiscordTag } from "@/components/discord-tag";
 import {
+  MATCH_LIST_ORDER,
   roundName,
   slotRound,
   groupPlayoffRounds,
@@ -400,8 +409,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     }));
 
   // During signups and the draft phase, setting up the season is the job:
-  // the phase and captains cards and the Discord reach card come first.
-  const setupFirst = season?.status === "SIGNUPS" || season?.status === "DRAFT";
+  // the phase and captains cards and the Discord reach card come first. Once
+  // the auction is complete the job is the schedule, and the captains card
+  // (which lists every signup) used to sit between the admin and Generate
+  // schedule on draft night.
+  const auctionDone =
+    season?.status === "DRAFT" && data?.draft?.status === DRAFT_STATUS.COMPLETE;
+  const setupFirst =
+    season?.status === "SIGNUPS" || (season?.status === "DRAFT" && !auctionDone);
   const setupControls = season && data && nextStep ? <>
           <AdminAnchor id="adm-season">
             <SeasonControls season={season} data={data} nextStep={nextStep} />
@@ -441,6 +456,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         <DiscordReachCard
           seasonId={season.id}
           rosterUnlinked={data ? unlinkedRosterFor(season, data) : null}
+          signupsSeasonName={season.status === "SIGNUPS" ? season.name : null}
         />
       </Suspense>
     </AdminAnchor>
@@ -1185,7 +1201,7 @@ async function loadSeasonAdminData(seasonId: string) {
       }),
       prisma.match.findMany({
         where: { seasonId },
-        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+        orderBy: MATCH_LIST_ORDER,
         include: {
           games: { select: { id: true, dotaMatchId: true, winnerTeamId: true, durationSecs: true } },
           availability: { select: { id: true, userId: true, status: true, scheduleRevision: true } },
@@ -1624,12 +1640,19 @@ function adminNextStepFor(
     season,
     data.matches,
   );
+  const captainIds = new Set(data.teams.map((team) => team.captainId));
   return adminNextStep({
     seasonStatus: season.status,
     draftStatus: data.draft?.status ?? null,
     playerCount: data.players.length,
     minPlayers: cap.minPlayers,
     teamCount: data.teams.length,
+    // Panel-only: the signup steps say how many teams the pool makes and
+    // how many players offered to captain (Home repeats only the title).
+    teamSize: season.teamSize,
+    captainVolunteers: data.players.filter(
+      (player) => player.wantsCaptain && !captainIds.has(player.userId),
+    ).length,
     regularMatchCount: regular.length,
     untimedRegularCount: regular.filter(
       (m) =>
@@ -2040,9 +2063,11 @@ function SeasonControls({
                 Save limit
               </SubmitButton>
               <span className="text-xs text-muted">
-                {season.maxMmr > 0
-                  ? `soft limit: signups over ${season.maxMmr} MMR still join the pool, flagged “over soft limit” under Needs review on Captains & draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
-                  : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
+                {season.maxMmr >= HARD_MMR_CEILING
+                  ? `equals the hard ceiling ${HARD_MMR_CEILING}, so it flags nobody and player pages don't mention it · set it lower to flag signups for review, or 0 to turn it off`
+                  : season.maxMmr > 0
+                    ? `soft limit: signups over ${season.maxMmr} MMR still join the pool, flagged “over soft limit” under Needs review on Captains & draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
+                    : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
               </span>
             </ActionForm>
             {/* Editable until the auction starts. These used to be write-once at
@@ -3423,7 +3448,17 @@ function CaptainControls({
                     <span className="min-w-0 truncate text-muted">
                       {r.user.name}
                     </span>
-                    {season.status !== SEASON_STATUS.COMPLETE ? (
+                    {season.status === SEASON_STATUS.COMPLETE ? null : r.type ===
+                        REGISTRATION_TYPE.PLAYER &&
+                      (data.draft?.status === DRAFT_STATUS.IN_PROGRESS ||
+                        data.draft?.status === DRAFT_STATUS.PAUSED) ? (
+                      // reinstateSignup refuses a player signup while the
+                      // auction runs (they'd rejoin a pool mid-lot), so say
+                      // when it opens instead of offering a button that fails.
+                      <span className="shrink-0 text-xs text-muted">
+                        reinstate after the auction
+                      </span>
+                    ) : (
                       <ActionForm
                         action={reinstateSignup}
                         hidden={{ registrationId: r.id }}
@@ -3432,7 +3467,7 @@ function CaptainControls({
                           reinstate
                         </SubmitButton>
                       </ActionForm>
-                    ) : null}
+                    )}
                   </div>
                 ))}
               </div>
@@ -3480,7 +3515,7 @@ function TiebreakerControls({
             <p className="text-xs text-muted">Keep the season in Regular season. Check the next game’s kickoff after each result; if the opening game has no time, set each new game’s time below.</p>
           ) : null}
           {canSchedule ? (
-            <a href="#playoffs" className={textLink("inline-block py-1")}>
+            <a href="#adm-playoffs" className={textLink("inline-block py-1")}>
               {tiebreakerMatches.length > 0 ? "Next match is ready to create — open tiebreaker controls →" : "Schedule the opening matches in Playoffs controls →"}
             </a>
           ) : null}
@@ -3494,7 +3529,7 @@ function TiebreakerControls({
             </div>
           ) : null}
           {projection.tiebreakers.resolved && tiebreakerMatches.length > 0 && !postseasonStarted ? (
-            <p>Tiebreakers complete. <a href="#playoffs" className={textLink()}>Review the seeds and start playoffs →</a></p>
+            <p>Tiebreakers complete. <a href="#adm-playoffs" className={textLink()}>Review the seeds and start playoffs →</a></p>
           ) : null}
           {postseasonStarted ? <p className="text-xs text-muted">Tiebreaker results are read-only once playoffs begin.</p> : null}
         </div>
@@ -3657,7 +3692,15 @@ function ScheduleControls({
                 name="firstNight"
                 tsName="firstNightTs"
                 required
-                defaultTs={season.firstMatchNight?.getTime()}
+                defaultTs={
+                  season.firstMatchNight &&
+                  season.firstMatchNight.getTime() >= nowMs
+                    ? season.firstMatchNight.getTime()
+                    : undefined
+                }
+                // A week 1 already past would schedule kickoffs nobody can
+                // play; the server refuses it too.
+                minTs={nowMs}
                 timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />
@@ -5736,10 +5779,13 @@ async function MembershipChip({
 async function DiscordReachCard({
   seasonId,
   rosterUnlinked,
+  signupsSeasonName,
 }: {
   seasonId: string;
   /** Once rosters are set: who Needs attention counts (unlinkedRosterFor). */
   rosterUnlinked: string[] | null;
+  /** The season's name while it takes signups: the returning-player line. */
+  signupsSeasonName: string | null;
 }) {
   const reach = await getDiscordReachFunnel(seasonId);
   return (
@@ -5776,8 +5822,77 @@ async function DiscordReachCard({
             Nobody has signed up for this season yet.
           </p>
         )}
+        {signupsSeasonName ? (
+          <Suspense fallback={null}>
+            <ReturningPlayersLine
+              seasonId={seasonId}
+              seasonName={signupsSeasonName}
+            />
+          </Suspense>
+        ) : null}
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * During signups: how many of last season's players are back, who isn't,
+ * and a one-click reminder to paste into Discord. The one-tap rejoin card on
+ * /me means the gap is reaching them, not the form. Database reads only; the
+ * admin's paste is the send, so the site never mass-mentions anyone itself.
+ */
+async function ReturningPlayersLine({
+  seasonId,
+  seasonName,
+}: {
+  seasonId: string;
+  seasonName: string;
+}) {
+  const [players, signedUp] = await Promise.all([
+    loadReturningPlayers(seasonId),
+    prisma.registration.count({
+      where: {
+        seasonId,
+        status: REGISTRATION_STATUS.ACTIVE,
+        type: REGISTRATION_TYPE.PLAYER,
+      },
+    }),
+  ]);
+  if (!players || players.previous === 0) return null;
+  const linked = players.notBack.filter((player) => player.discordId).length;
+  return (
+    <div className="mt-4 border-t border-line-soft pt-3">
+      <p className="text-sm">
+        <b>
+          {players.back} of {players.previous}
+        </b>{" "}
+        {players.previousSeasonName} players have signed up for {seasonName}.
+      </p>
+      {players.notBack.length > 0 ? (
+        <>
+          <p className="mt-1 text-xs text-muted">
+            Not back yet ({players.notBack.length}, {linked} with Discord
+            linked): {cappedNames(players.notBack.map((player) => player.name))}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <ReturningCopy
+              players={players}
+              seasonName={seasonName}
+              signedUp={signedUp}
+            />
+            <span className="text-xs text-muted">
+              One Discord post: it mentions the {linked} with Discord linked
+              (your paste pings them) and names the rest. Their answers carry
+              over, so rejoining is one tap on My account.
+            </span>
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 text-xs text-success">
+          Everyone from {players.previousSeasonName} is back.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -6807,16 +6922,43 @@ async function AdminMatchNightPoll({
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
   const poll = await loadLatestPoll(admin, nowMs);
+  // Once voting closes, while the result is still on Home: who won, and
+  // whether it is the season's match night yet and announced. The section
+  // used to fold away under its generic subtitle the moment voting closed.
+  const winner =
+    poll && !poll.open && poll.results?.winner
+      ? (poll.slots.find((slot) => slot.key === poll.results?.winner) ?? null)
+      : null;
+  const announced = winner
+    ? (
+        await prisma.setting.findUnique({
+          where: { key: pollResultMarker(poll!.id, poll!.closesAt) },
+          select: { value: true },
+        })
+      )?.value === "sent"
+    : false;
+  const closed =
+    poll && !poll.open && pollOnHome({ closesAt: new Date(poll.closesAt) }, nowMs)
+      ? closedPollStatus({
+          winnerLabel: winner?.label ?? null,
+          count: winner ? (poll.results?.counts[winner.key] ?? 0) : 0,
+          ballots: poll.results?.ballots ?? poll.ballots,
+          usedAsMatchNight: !!winner && season?.matchSchedule === winner.label,
+          announced,
+        })
+      : null;
   return (
     <AdminSection
       id="adm-poll"
       title="Match night poll"
       subtitle={
         poll?.open
-          ? `Voting is open: ${poll.ballots} vote${poll.ballots === 1 ? "" : "s"} so far. Signed-up players mark every time they could play on Home; the time the most can make wins.`
-          : "Let signed-up players mark every weekly time they could play. The grid fills itself, the poll shows on Home, and the time the most players can make wins."
+          ? `Voting is open: ${pollTurnoutLine(poll.ballots, poll.electorate, true)}. Signed-up players mark every time they could play on Home; the time the most can make wins.`
+          : closed
+            ? closed.line
+            : "Let signed-up players mark every weekly time they could play. The grid fills itself, the poll shows on Home, and the time the most players can make wins."
       }
-      defaultOpen={poll?.open ?? false}
+      defaultOpen={(poll?.open ?? false) || !!closed?.needsFollowUp}
     >
       <MatchNightPollControls
         poll={poll}
@@ -6831,6 +6973,7 @@ async function AdminMatchNightPoll({
             : null
         }
         nowMs={nowMs}
+        announced={announced}
       />
     </AdminSection>
   );

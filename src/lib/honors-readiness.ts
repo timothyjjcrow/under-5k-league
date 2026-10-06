@@ -67,7 +67,20 @@ function validateGame(
   game: HonorReadinessGameInput,
 ): ValidatedGame {
   const decoded = decodeGamePlayers(game.players);
-  const players = trustedGamePlayers(decoded);
+  // A league player outside both rosters (an unbooked fill-in, or a released
+  // but registered player) is imported "for attribution only": a userId and
+  // no teamId (results-and-opendota.md). For honors they count for the side
+  // they played on, which is the team credit a booked standin already gets.
+  // Requiring a stored teamId meant one such line held the whole week: three
+  // of Season 1's five weeks never got honors. A line with no league player
+  // (no userId) or credited to the other team still holds the week.
+  const sideTeamId = (isRadiant: boolean) =>
+    isRadiant ? game.radiantTeamId : game.direTeamId;
+  const players = trustedGamePlayers(decoded).map((player) =>
+    player.userId && !player.teamId && sideTeamId(player.isRadiant)
+      ? { ...player, teamId: sideTeamId(player.isRadiant) }
+      : player,
+  );
   if (players.length !== 10) {
     return { honorsGame: null, issues: ["INVALID_BOX_SCORE"] };
   }

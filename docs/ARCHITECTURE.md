@@ -99,7 +99,7 @@ inside a short Serializable transaction; `startDraft` and a late pool write
 therefore cannot both commit. A conflict retries once for an idempotent double
 submit, then returns reload guidance if the league lifecycle actually moved.
 Signups are
-**uncapped** — `minTeams` is a floor, and `src/lib/capacity.ts` is
+**uncapped** — `minTeams` is a goal, not a gate, and `src/lib/capacity.ts` is
 display-only math, never a gate.
 
 **Admin review.** The `/admin` Captains card supports MMR corrections

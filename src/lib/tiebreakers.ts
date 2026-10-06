@@ -4,7 +4,7 @@ import type { MatchLike, TeamStanding } from "./standings";
 import type { Pairing } from "./schedule";
 import { parseSingleTiebreakerSlot } from "./tiebreaker-format";
 import { singleEliminationPlan } from "./single-elimination";
-export { parseTiebreakerStage, hasLaterTiebreakerStage } from "./tiebreaker-format";
+export { parseTiebreakerStage } from "./tiebreaker-format";
 
 export const TIEBREAKER_BEST_OF = 3;
 

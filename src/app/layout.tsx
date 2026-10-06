@@ -177,7 +177,13 @@ export default async function RootLayout({
           Skip to main content
         </a>
         <SiteHeader
-          user={user}
+          // Display fields only: the header is a client component, so the
+          // whole session user (Steam id included) would ship in its props.
+          user={
+            user
+              ? { id: user.id, name: user.name, avatar: user.avatar, role: user.role }
+              : null
+          }
           phase={season?.status ?? null}
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}

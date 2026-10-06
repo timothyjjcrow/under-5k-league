@@ -33,6 +33,13 @@ describe("eligibilityText", () => {
       /Above 4,500 MMR, an admin looks over your signup before the draft\.$/,
     );
   });
+
+  // Season 2's soft limit sat at the ceiling, so the page said 5,000 MMR
+  // players can join and that above 5,000 an admin reviews them.
+  it("says nothing about a soft limit at or above the ceiling", () => {
+    expect(eligibilityText(5000)).toBe(eligibilityText(0));
+    expect(eligibilityText(5200)).toBe(eligibilityText(0));
+  });
 });
 
 describe("resultsCopy", () => {

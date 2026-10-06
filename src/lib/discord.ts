@@ -1,3 +1,4 @@
+import { weekWrapPath } from "./week-wrap";
 import { randomUUID } from "node:crypto";
 import { getSetting, SETTING_KEYS } from "./settings";
 import { resolveSiteUrl } from "./site-url";
@@ -60,10 +61,10 @@ const name = escapeDiscordText;
 /**
  * A new full-player signup. Every one of these is an advert for the season,
  * so it ends with the signup link. The count line uses the site's own ask:
- * short of the minimum, how many more the draft needs; past it (where the
- * league sits for most of signup week, since minTeams is a floor), how many
- * more make another full team. Only the signup that reaches the minimum
- * celebrates it.
+ * short of the season's team goal (minTeams, a target the admin sets, not a
+ * gate: Start draft needs only two captains), the teams the pool already
+ * makes and how many more reach the goal; past it, how many more make
+ * another full team. Only the signup that reaches the goal celebrates it.
  */
 export function signupMessage(
   playerName: string,
@@ -71,25 +72,32 @@ export function signupMessage(
   season: { teamSize: number; minTeams: number },
   /** Epoch ms of the scheduled draft night, if the admin has set one. */
   draftAtMs?: number | null,
+  /** They offered to captain: teams are captains, so it's worth saying. */
+  wantsCaptain = false,
 ): string {
   const capacity = capacityInfo(season, signedUp);
   let tail: string;
+  const goal = `${season.minTeams}-team goal`;
   if (!capacity.canDraft) {
-    tail = `${capacity.needed} more to start the draft.`;
+    const teams = capacity.teamsFormable;
+    const sofar =
+      teams > 0 ? `enough for ${teams} team${teams === 1 ? "" : "s"}; ` : "";
+    tail = `${sofar}${capacity.needed} more reaches the ${goal}.`;
   } else if (capacity.perTeam <= 0) {
-    tail = "that's enough to start the draft!";
+    tail = `that meets the ${goal}!`;
   } else {
     const n = capacity.toNextTeam;
     const next = `${n} more ${n === 1 ? "player" : "players"} makes it ${capacity.teamsFormable + 1} full teams.`;
     tail =
       capacity.extra === 0
-        ? `that's enough to start the draft! 🎉 ${next}`
+        ? `that meets the ${goal}! 🎉 ${next}`
         : next;
   }
   const when = draftAtMs
     ? ` Draft night: <t:${Math.floor(draftAtMs / 1000)}:F>.`
     : "";
-  return `📝 **${name(playerName)}** signed up — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
+  const verb = wantsCaptain ? "signed up and offered to captain" : "signed up";
+  return `📝 **${name(playerName)}** ${verb} — ${signedUp} player${signedUp === 1 ? "" : "s"} in, ${tail}${when} Join them: <${resolveSiteUrl()}/me>`;
 }
 
 /**
@@ -374,11 +382,14 @@ export function regularSeasonStartedMessage(
     fixtures: { home: string; away: string; whenMs: number | null }[];
     byes: string[];
   },
+  /** Fantasy rosters aren't locked yet (no game imported), so say it's open. */
+  fantasyOpen = false,
 ): string {
   const head = `⚔️ **The ${name(seasonName)} regular season is live.**`;
   const link = `<${resolveSiteUrl()}/schedule>`;
+  const fantasy = fantasyOpen ? `\n${fantasyOpenLine()}` : "";
   if (!opening || opening.fixtures.length === 0) {
-    return `${head} Check the schedule, match times, and availability for opening week: ${link}`;
+    return `${head} Check the schedule, match times, and availability for opening week: ${link}${fantasy}`;
   }
   const shown = opening.fixtures.slice(0, OPENING_FIXTURES_SHOWN);
   const lines = shown.map((f) => {
@@ -393,7 +404,7 @@ export function regularSeasonStartedMessage(
   const byes = opening.byes.length
     ? `\nBye: ${opening.byes.map((team) => name(team)).join(", ")}`
     : "";
-  return `${head} Week ${opening.week}:\n${lines.join("\n")}${byes}\nCheck in for your match and see the full schedule: ${link}`;
+  return `${head} Week ${opening.week}:\n${lines.join("\n")}${byes}\nCheck in for your match and see the full schedule: ${link}${fantasy}`;
 }
 
 export function draftPausedMessage(seasonName: string): string {
@@ -453,7 +464,16 @@ export function draftRecapMessage(r: {
       `🏦 Deepest pockets: **${name(r.topSpender.teamName)}** ($${r.topSpender.spent} spent)`,
     );
   }
+  // Fantasy opens as the auction completes and locks at the first imported
+  // game, and nothing on Discord ever said so (3 of 95 users entered). No
+  // mentions: it's news for everyone, not something one person owes.
+  lines.push(fantasyOpenLine());
   return lines.join("\n");
+}
+
+/** Fantasy's pick window, said the same way in both posts that fall in it. */
+function fantasyOpenLine(): string {
+  return `🧙 Fantasy is open until the first game is imported: <${resolveSiteUrl()}/fantasy>`;
 }
 
 /**
@@ -1516,7 +1536,9 @@ export function weeklyHonorsMessage(honors: {
         ? personLabel(player)
         : `**${name(honors.playerName)}**`;
     lines.push(
-      `⭐ Player of the Week: ${who} — ${honors.playerPoints} impact points${honors.heroName ? ` on ${honors.heroName}` : ""}`,
+      // The points are the week's total and the hero is their best game:
+      // "167 impact points on Dark Willow" read as one game's score.
+      `⭐ Player of the Week: ${who} — ${honors.playerPoints} impact points${honors.heroName ? ` (best game on ${honors.heroName})` : ""}`,
     );
   }
   if (honors.teamName) {
@@ -1546,7 +1568,10 @@ export function weeklyHonorsMessage(honors: {
     );
   }
   lines.push(
-    `Full leaderboards: <${resolveSiteUrl()}/leaders?season=${encodeURIComponent(honors.seasonId)}>`,
+    // The week's wrap (results, honors, the table, what's next) under the
+    // season's own URL, so an old post still opens its week after the
+    // handoff. It was the leaderboards, which tell no week's story.
+    `Week ${honors.week} wrap: <${resolveSiteUrl()}${weekWrapPath(honors.seasonId, honors.week)}>`,
   );
   return lines.join("\n");
 }

@@ -41,6 +41,7 @@ import { PickemPickForm } from "@/components/pickem-pick-form";
 import { PickemDeadlineRefresh } from "@/components/pickem-deadline-refresh";
 import { singleSearchParam } from "@/lib/search-params";
 import {
+  MATCH_LIST_ORDER,
   matchRoundLabel,
   playoffTotalRounds,
   roundGroupLabel,
@@ -107,7 +108,7 @@ export default async function PickemPage({
       }),
       prisma.match.findMany({
         where: { seasonId: season.id },
-        orderBy: [{ week: "asc" }, { createdAt: "asc" }],
+        orderBy: MATCH_LIST_ORDER,
       }),
       prisma.team.findMany({ where: { seasonId: season.id } }),
       prisma.prediction.findMany({ where: { match: { seasonId: season.id } } }),

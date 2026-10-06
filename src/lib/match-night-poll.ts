@@ -499,12 +499,70 @@ export type PollSlotView = PollSlot & {
   label: string;
 };
 
+/**
+ * The Setting row that makes a result's Discord post once-only, keyed by the
+ * poll and its closing time (a reopened poll that closes again can announce
+ * its new result). The admin card reads it to show "Announced".
+ */
+export function pollResultMarker(pollId: string, closesAtMs: number): string {
+  return `matchNightPollResult:${pollId}:${closesAtMs}`;
+}
+
+/**
+ * The admin section's line once voting has closed, and whether it still
+ * needs the admin: a closed poll used to fold away under a generic subtitle,
+ * with nothing saying the winner wasn't the season's match night yet or that
+ * nobody had announced it.
+ */
+export function closedPollStatus(input: {
+  winnerLabel: string | null;
+  count: number;
+  ballots: number;
+  usedAsMatchNight: boolean;
+  announced: boolean;
+}): { line: string; needsFollowUp: boolean } {
+  if (!input.winnerLabel) {
+    return {
+      line: "Voting closed with no time anyone can make.",
+      needsFollowUp: false,
+    };
+  }
+  const pending = [
+    input.usedAsMatchNight ? null : "not yet the season's match night",
+    input.announced ? null : "not announced on Discord",
+  ].filter((part): part is string => part !== null);
+  return {
+    line: `Voting closed: ${input.winnerLabel} won (${input.count} of ${input.ballots} can play)${pending.length ? ` · ${pending.join(" · ")}` : ""}.`,
+    needsFollowUp: pending.length > 0,
+  };
+}
+
 export type PollElectorate = {
   seasonName: string;
   /** The season still takes signups (players or standins), so a viewer who
    *  isn't signed up has somewhere to go. */
   signupsOpen: boolean;
+  /** How many players may vote right now: the turnout's denominator. */
+  size: number;
 };
+
+/**
+ * The turnout line: "11 of 35 players have voted" while voting is open, so
+ * the number reads against the players who could, not on its own ("11 votes
+ * so far" said nothing about whether that was most of the league). Without
+ * an electorate (no season to count) it is the bare ballot count.
+ */
+export function pollTurnoutLine(
+  ballots: number,
+  electorate: Pick<PollElectorate, "size"> | null,
+  open: boolean,
+): string {
+  if (!electorate || electorate.size <= 0) {
+    return `${ballots} vote${ballots === 1 ? "" : "s"}${open ? " so far" : ""}`;
+  }
+  const verb = open ? (ballots === 1 ? "has voted" : "have voted") : "voted";
+  return `${ballots} of ${electorate.size} player${electorate.size === 1 ? "" : "s"} ${verb}`;
+}
 
 export type PollView = {
   id: string;

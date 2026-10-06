@@ -1,5 +1,6 @@
 import { execFileSync, execSync } from "node:child_process";
 import { MID_DB_URL } from "../playwright.midseason.config";
+import { expireFixtureCache } from "../e2e/fixture-cache";
 
 // Reset the dedicated mid-season fixture DB (prisma/e2e-fixture.db) before
 // the run: schema, the regular-season fixture seed, then the staged extras
@@ -24,12 +25,5 @@ export default async function globalSetup() {
   });
   execSync("npx tsx scripts/seed-fixture.ts", { stdio: "inherit", env });
   execSync("npx tsx e2e-mid/stage.ts", { stdio: "inherit", env });
-  const cache = await fetch("http://localhost:3212/api/test/cache", {
-    method: "POST",
-  });
-  if (!cache.ok) {
-    throw new Error(
-      `Couldn't expire the reused midseason fixture cache (${cache.status})`,
-    );
-  }
+  await expireFixtureCache("http://localhost:3212", "midseason");
 }

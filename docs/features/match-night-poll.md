@@ -45,7 +45,7 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   voting season, the way `hasActiveLeagueParticipation` counts it. The voting
   season is the active one, or in the offseason the most recent. Admins are
   not exempt. **A ballot counts only while its voter is still signed up**
-  (`stillSignedUp` in `viewOf`, and in `closePollNow` so the admin's "Voting
+  (`seasonElectorate` in `viewOf`, and in `closePollNow` so the admin's "Voting
   closed with N votes" agrees with Home): eligibility is checked when a
   ballot is cast, and without the recount a player who withdrew, or whom an
   admin removed, kept counting and could swing the result. The row is kept,
@@ -121,6 +121,23 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   number who can play, shaded by it, the leader outlined, the viewer's own
   times ringed, and the top three times listed above it.
 
+## Turnout, and the match night elsewhere
+
+- **Turnout reads against who could vote:** "11 of 35 players have voted"
+  (`pollTurnoutLine`) on the Home card and in the admin section, not "11
+  votes so far", which said nothing about whether that was most of the
+  league. `viewOf` loads the season's electorate once (`seasonElectorate`:
+  ACTIVE signups plus roster and captain seats) and derives the turnout, the
+  counted ballots and `canVote` from it.
+- **While a poll is open during signups, every "Match night" line says the
+  poll is deciding it** (`matchNightPollOpen`, `MATCH_NIGHT_POLL_LABEL`):
+  the signed-out pitch on Home, Home's signups callout and /me's callout.
+  Home printed "Match night: Saturday 2PM PST" right above a poll asking when
+  match night should be, with Sunday leading. Fixtures with kickoffs still
+  win on /me, and later phases print the fixtures' night. It never names the
+  leading time: the count stays hidden from non-voters while voting is open.
+  `dashboard-guards.test.ts` pins the three surfaces.
+
 ## Concurrency
 
 - **A ballot claims the poll row** (`castBallot`): its first write is
@@ -146,6 +163,13 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   opens itself while a poll is open. It shows the heatmap, "Close voting now",
   the closing-time box, and once closed "Reopen voting", "Use as the season's
   match night" and "Announce the result on Discord".
+- **Once voting closes, the section keeps saying what's left** while the
+  result is on Home (`closedPollStatus`): "Voting closed: X won (9 of 11 can
+  play) · not yet the season's match night · not announced on Discord", and
+  it opens itself until both are done. "Announce the result on Discord"
+  becomes "Announced on Discord ✓" once its marker (`pollResultMarker`, shared
+  with the action) reads sent; the button used to stay, and a second press
+  was refused. The close toast names the winner.
 - **"Use as the season's match night" reuses `setMatchSchedule`** and fills
   the Match night box under Season settings. It never moves fixtures; when
   fixtures already have kickoffs the card says pages show their night and

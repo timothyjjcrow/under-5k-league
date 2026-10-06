@@ -1256,6 +1256,9 @@ export async function getDraftState(
               },
             },
           }),
+          // The pool's display fields only. The nominee's profile and
+          // contact are read once, below: every poll used to read every
+          // player's free text (up to 2,000 characters each) to use one.
           tx.registration.findMany({
             where: { seasonId, status: "ACTIVE", type: "PLAYER" },
             orderBy: { mmr: "desc" },
@@ -1263,19 +1266,11 @@ export async function getDraftState(
               userId: true,
               mmr: true,
               roles: true,
-              favoriteHeroes: true,
-              statement: true,
-              captainNote: true,
               user: {
                 select: {
                   name: true,
                   avatar: true,
                   rankTier: true,
-                  dotaAccountIdV2: true,
-                  legacyDotaAccountId: true,
-                  steamId: true,
-                  discordName: true,
-                  discordId: true,
                 },
               },
             },
@@ -1372,7 +1367,7 @@ export async function getDraftState(
         : undefined;
 
       const historyRun = draft?.activeRunId
-        ? await tx.draftRun.findUniqueOrThrow({ where: { id: draft.activeRunId } }) : null;
+        ? await tx.draftRun.findUniqueOrThrow({ where: { id: draft.activeRunId }, select: { id: true, provenance: true } }) : null;
       const observedSales = teams
         .flatMap((team) =>
           team.members
@@ -1388,8 +1383,14 @@ export async function getDraftState(
         )
         .sort((a, b) => b.at - a.at)
         .slice(0, 8);
+      // A live room shows the last 8 sales; the finished room's recap reads
+      // them all.
       const commandSales = historyRun?.provenance === "COMMAND"
-        ? await readDraftSales(tx, historyRun.id)
+        ? await readDraftSales(
+            tx,
+            historyRun.id,
+            draft?.status === DRAFT_STATUS.COMPLETE ? undefined : 8,
+          )
         : null;
       const recentSales = commandSales ? commandSales.slice(0, 8) : observedSales;
       // The finished room's recap: the same draftRecap math over the same
@@ -1413,9 +1414,9 @@ export async function getDraftState(
             viewerRegistration?.status === "ACTIVE",
           )
         : false;
-      const lotBidRows =
+      const [lotBidRows, nomineeProfile] = await Promise.all([
         draft?.nominatedUserId != null
-          ? await tx.bid.findMany({
+          ? tx.bid.findMany({
               where: {
                 draftId: draft.id,
                 userId: draft.nominatedUserId,
@@ -1424,7 +1425,30 @@ export async function getDraftState(
               take: 9,
               select: { teamId: true, amount: true, createdAt: true },
             })
-          : [];
+          : [],
+        // The nominee's scouting profile and contact, for the lot card.
+        nominatedPlayer
+          ? tx.registration.findUnique({
+              where: {
+                seasonId_userId: { seasonId, userId: nominatedPlayer.userId },
+              },
+              select: {
+                favoriteHeroes: true,
+                statement: true,
+                captainNote: true,
+                user: {
+                  select: {
+                    dotaAccountIdV2: true,
+                    legacyDotaAccountId: true,
+                    steamId: true,
+                    discordName: true,
+                    discordId: true,
+                  },
+                },
+              },
+            })
+          : null,
+      ]);
 
       return {
         seasonId: season.id,
@@ -1460,7 +1484,7 @@ export async function getDraftState(
         lotBidsTruncated: lotBidRows.length > 8,
         recentSales,
         recap,
-        nominatedPlayer: nominatedPlayer
+        nominatedPlayer: nominatedPlayer && nomineeProfile
           ? {
               userId: nominatedPlayer.userId,
               name: nominatedPlayer.user.name,
@@ -1468,15 +1492,15 @@ export async function getDraftState(
               mmr: nominatedPlayer.mmr,
               rankTier: nominatedPlayer.user.rankTier,
               roles: nominatedPlayer.roles,
-              favoriteHeroes: nominatedPlayer.favoriteHeroes,
-              statement: nominatedPlayer.statement,
-              captainNote: nominatedPlayer.captainNote,
-              accountId: effectiveDotaAccountId(nominatedPlayer.user),
+              favoriteHeroes: nomineeProfile.favoriteHeroes,
+              statement: nomineeProfile.statement,
+              captainNote: nomineeProfile.captainNote,
+              accountId: effectiveDotaAccountId(nomineeProfile.user),
               discordName: canSeeNominatedContact
-                ? nominatedPlayer.user.discordName
+                ? nomineeProfile.user.discordName
                 : "",
               discordVerified:
-                canSeeNominatedContact && !!nominatedPlayer.user.discordId,
+                canSeeNominatedContact && !!nomineeProfile.user.discordId,
             }
           : null,
         teams: teamViews,
@@ -1704,7 +1728,7 @@ export async function placeBid(
       return { ok: false as const, error: "The auction is not in the Draft phase" };
     }
     const historyRun = draft.activeRunId
-      ? await tx.draftRun.findUniqueOrThrow({ where: { id: draft.activeRunId } }) : null;
+      ? await tx.draftRun.findUniqueOrThrow({ where: { id: draft.activeRunId }, select: { id: true, provenance: true } }) : null;
     if (historyRun?.provenance === "COMMAND" &&
         (!draft.currentLotId || expected?.currentLotId !== draft.currentLotId)) {
       return { ok: false as const, error: "The auction lot changed — refresh the room before bidding." };

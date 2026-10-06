@@ -82,3 +82,15 @@ export function shortRolesLine(
     scarce.length === 1 ? "it" : "them"
   }, and ${teams} teams need one each.`;
 }
+
+/**
+ * The captain call on Home during signups: how many players have offered to
+ * captain (or already captain) against the teams the season wants. Teams
+ * are captains — Start draft makes one team per captain — so a pool of 31
+ * with 3 volunteers drafts 3 teams however many players sign up. Null once
+ * there are enough.
+ */
+export function captainsWantedLine(offered: number, teams: number): string | null {
+  if (teams <= 0 || offered >= teams) return null;
+  return `Captains wanted: ${offered} of ${teams} so far. Each team needs one.`;
+}

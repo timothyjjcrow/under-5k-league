@@ -26,7 +26,6 @@ import { raceHook } from "./race-hook";
 import { scrimEndedMessage } from "./scrim-view";
 
 const MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000;
-export { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
 export const SCRIM_GUEST_LIMIT_PER_TEAM = 5;
 export const SCRIM_GUEST_NAME_MAX_LENGTH = 60;
 

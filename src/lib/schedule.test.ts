@@ -893,3 +893,24 @@ describe("focusSlate", () => {
     expect(slate.some((s) => later.some((l) => l.id === s.id))).toBe(false);
   });
 });
+
+describe("byKickoff ties", async () => {
+  const { byKickoff } = await import("./schedule");
+  // One createMany gives every fixture the same createdAt, so without the id
+  // a week's unscheduled (or same-time) fixtures had no stable order.
+  it("breaks a full tie by id", () => {
+    const at = new Date("2026-08-15T21:00:00Z");
+    const made = new Date("2026-08-01T00:00:00Z");
+    const a = { id: "m-b", scheduledAt: at, week: 1, createdAt: made };
+    const b = { id: "m-a", scheduledAt: at, week: 1, createdAt: made };
+    expect([a, b].sort(byKickoff).map((m) => m.id)).toEqual(["m-a", "m-b"]);
+    expect([b, a].sort(byKickoff).map((m) => m.id)).toEqual(["m-a", "m-b"]);
+  });
+
+  it("still orders by kickoff first", () => {
+    const made = new Date("2026-08-01T00:00:00Z");
+    const later = { id: "a", scheduledAt: new Date("2026-08-16T21:00:00Z"), week: 1, createdAt: made };
+    const sooner = { id: "z", scheduledAt: new Date("2026-08-15T21:00:00Z"), week: 1, createdAt: made };
+    expect([later, sooner].sort(byKickoff).map((m) => m.id)).toEqual(["z", "a"]);
+  });
+});
