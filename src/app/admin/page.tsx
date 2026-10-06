@@ -139,7 +139,12 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
-import { pollTurnoutLine } from "@/lib/match-night-poll";
+import {
+  closedPollStatus,
+  pollOnHome,
+  pollResultMarker,
+  pollTurnoutLine,
+} from "@/lib/match-night-poll";
 import { loadLatestPoll } from "@/lib/match-night-poll-service";
 import {
   ANNOUNCE_FAILED_PREFIX,
@@ -1629,12 +1634,19 @@ function adminNextStepFor(
     season,
     data.matches,
   );
+  const captainIds = new Set(data.teams.map((team) => team.captainId));
   return adminNextStep({
     seasonStatus: season.status,
     draftStatus: data.draft?.status ?? null,
     playerCount: data.players.length,
     minPlayers: cap.minPlayers,
     teamCount: data.teams.length,
+    // Panel-only: the signup steps say how many teams the pool makes and
+    // how many players offered to captain (Home repeats only the title).
+    teamSize: season.teamSize,
+    captainVolunteers: data.players.filter(
+      (player) => player.wantsCaptain && !captainIds.has(player.userId),
+    ).length,
     regularMatchCount: regular.length,
     untimedRegularCount: regular.filter(
       (m) =>
@@ -6896,6 +6908,31 @@ async function AdminMatchNightPoll({
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
   const poll = await loadLatestPoll(admin, nowMs);
+  // Once voting closes, while the result is still on Home: who won, and
+  // whether it is the season's match night yet and announced. The section
+  // used to fold away under its generic subtitle the moment voting closed.
+  const winner =
+    poll && !poll.open && poll.results?.winner
+      ? (poll.slots.find((slot) => slot.key === poll.results?.winner) ?? null)
+      : null;
+  const announced = winner
+    ? (
+        await prisma.setting.findUnique({
+          where: { key: pollResultMarker(poll!.id, poll!.closesAt) },
+          select: { value: true },
+        })
+      )?.value === "sent"
+    : false;
+  const closed =
+    poll && !poll.open && pollOnHome({ closesAt: new Date(poll.closesAt) }, nowMs)
+      ? closedPollStatus({
+          winnerLabel: winner?.label ?? null,
+          count: winner ? (poll.results?.counts[winner.key] ?? 0) : 0,
+          ballots: poll.results?.ballots ?? poll.ballots,
+          usedAsMatchNight: !!winner && season?.matchSchedule === winner.label,
+          announced,
+        })
+      : null;
   return (
     <AdminSection
       id="adm-poll"
@@ -6903,9 +6940,11 @@ async function AdminMatchNightPoll({
       subtitle={
         poll?.open
           ? `Voting is open: ${pollTurnoutLine(poll.ballots, poll.electorate, true)}. Signed-up players mark every time they could play on Home; the time the most can make wins.`
-          : "Let signed-up players mark every weekly time they could play. The grid fills itself, the poll shows on Home, and the time the most players can make wins."
+          : closed
+            ? closed.line
+            : "Let signed-up players mark every weekly time they could play. The grid fills itself, the poll shows on Home, and the time the most players can make wins."
       }
-      defaultOpen={poll?.open ?? false}
+      defaultOpen={(poll?.open ?? false) || !!closed?.needsFollowUp}
     >
       <MatchNightPollControls
         poll={poll}
@@ -6920,6 +6959,7 @@ async function AdminMatchNightPoll({
             : null
         }
         nowMs={nowMs}
+        announced={announced}
       />
     </AdminSection>
   );

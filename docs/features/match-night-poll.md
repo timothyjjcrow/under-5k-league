@@ -163,6 +163,13 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   opens itself while a poll is open. It shows the heatmap, "Close voting now",
   the closing-time box, and once closed "Reopen voting", "Use as the season's
   match night" and "Announce the result on Discord".
+- **Once voting closes, the section keeps saying what's left** while the
+  result is on Home (`closedPollStatus`): "Voting closed: X won (9 of 11 can
+  play) · not yet the season's match night · not announced on Discord", and
+  it opens itself until both are done. "Announce the result on Discord"
+  becomes "Announced on Discord ✓" once its marker (`pollResultMarker`, shared
+  with the action) reads sent; the button used to stay, and a second press
+  was refused. The close toast names the winner.
 - **"Use as the season's match night" reuses `setMatchSchedule`** and fills
   the Match night box under Season settings. It never moves fixtures; when
   fixtures already have kickoffs the card says pages show their night and

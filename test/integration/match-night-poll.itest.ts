@@ -542,8 +542,11 @@ describe("admin controls", () => {
     const voter = await makeVoter("Voter");
     await castBallot({ pollId: poll.id, userId: voter.id, availability: [SUN] });
     const first = await closeMatchNightPoll(null, form({ pollId: poll.id }));
+    // The toast names the winner, as the admin card's next steps follow it.
     expect(first).toEqual({
-      message: "Voting closed with 1 vote. The result shows on Home for the next week.",
+      message: expect.stringMatching(
+        /^Voting closed with 1 vote\. Sundays at .+ won \(1 can play\)\. The result shows on Home for the next week\.$/,
+      ),
     });
     const closedAt = (
       await prisma.matchNightPoll.findUniqueOrThrow({ where: { id: poll.id } })

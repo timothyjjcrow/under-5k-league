@@ -56,15 +56,23 @@ export function MatchNightPollControls({
   poll,
   season,
   nowMs,
+  announced = false,
 }: {
   poll: PollView | null;
   season: PollSeason | null;
   nowMs: number;
+  /** This result's Discord post went out (its pollResultMarker is "sent"). */
+  announced?: boolean;
 }) {
   return (
     <CardBody className="space-y-6">
       {poll ? (
-        <CurrentPoll poll={poll} season={season} nowMs={nowMs} />
+        <CurrentPoll
+          poll={poll}
+          season={season}
+          nowMs={nowMs}
+          announced={announced}
+        />
       ) : (
         <p className="text-sm text-muted">
           No poll yet. Open one to let signed-up players mark every
@@ -81,7 +89,9 @@ function CurrentPoll({
   poll,
   season,
   nowMs,
+  announced,
 }: {
+  announced: boolean;
   poll: PollView;
   season: PollSeason | null;
   nowMs: number;
@@ -196,14 +206,22 @@ function CurrentPoll({
                     </SubmitButton>
                   </ActionForm>
                 ) : null}
-                <ActionForm
-                  action={announceMatchNightPollResult}
-                  hidden={{ pollId: poll.id }}
-                >
-                  <SubmitButton variant="secondary" size="sm">
-                    Announce the result on Discord
-                  </SubmitButton>
-                </ActionForm>
+                {/* The button used to stay after the post went out, and a
+                    second press was refused ("already announced"). */}
+                {announced ? (
+                  <span className="text-sm text-success">
+                    Announced on Discord ✓
+                  </span>
+                ) : (
+                  <ActionForm
+                    action={announceMatchNightPollResult}
+                    hidden={{ pollId: poll.id }}
+                  >
+                    <SubmitButton variant="secondary" size="sm">
+                      Announce the result on Discord
+                    </SubmitButton>
+                  </ActionForm>
+                )}
               </div>
               <p className="text-xs text-muted">
                 {season

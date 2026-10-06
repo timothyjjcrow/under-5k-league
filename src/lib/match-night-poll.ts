@@ -499,6 +499,44 @@ export type PollSlotView = PollSlot & {
   label: string;
 };
 
+/**
+ * The Setting row that makes a result's Discord post once-only, keyed by the
+ * poll and its closing time (a reopened poll that closes again can announce
+ * its new result). The admin card reads it to show "Announced".
+ */
+export function pollResultMarker(pollId: string, closesAtMs: number): string {
+  return `matchNightPollResult:${pollId}:${closesAtMs}`;
+}
+
+/**
+ * The admin section's line once voting has closed, and whether it still
+ * needs the admin: a closed poll used to fold away under a generic subtitle,
+ * with nothing saying the winner wasn't the season's match night yet or that
+ * nobody had announced it.
+ */
+export function closedPollStatus(input: {
+  winnerLabel: string | null;
+  count: number;
+  ballots: number;
+  usedAsMatchNight: boolean;
+  announced: boolean;
+}): { line: string; needsFollowUp: boolean } {
+  if (!input.winnerLabel) {
+    return {
+      line: "Voting closed with no time anyone can make.",
+      needsFollowUp: false,
+    };
+  }
+  const pending = [
+    input.usedAsMatchNight ? null : "not yet the season's match night",
+    input.announced ? null : "not announced on Discord",
+  ].filter((part): part is string => part !== null);
+  return {
+    line: `Voting closed: ${input.winnerLabel} won (${input.count} of ${input.ballots} can play)${pending.length ? ` · ${pending.join(" · ")}` : ""}.`,
+    needsFollowUp: pending.length > 0,
+  };
+}
+
 export type PollElectorate = {
   seasonName: string;
   /** The season still takes signups (players or standins), so a viewer who

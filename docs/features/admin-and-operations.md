@@ -46,6 +46,12 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   `actorName`:** a deletion's record must outlive what it deleted, and a Steam
   rename must not rewrite history.
 
+- **The signup steps of the next-step banner count captains** when the
+  panel passes `teamSize` and `captainVolunteers` (`adminNextStep`): "Enough
+  for 6 teams of 5. Teams are captains: 0 designated, 3 more offered (“wants
+  C”). Start draft needs only two captains, so the league can draft below the
+  team goal." Home's admin strip repeats only the title, which those inputs
+  never change, so it needs no extra query.
 - **Needs attention calls a series overdue only past its expected finish**
   (`matchAttention`): the league's series estimate (`seriesEstimateMinutes`,
   bestOf × 60 + 30 minutes), doubled once a game is in, the window that keeps

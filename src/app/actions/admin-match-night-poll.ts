@@ -23,6 +23,7 @@ import {
   gridSummary,
   nextSlotOccurrence,
   parseSlotKey,
+  pollResultMarker,
   slotLabel,
 } from "@/lib/match-night-poll";
 import {
@@ -130,15 +131,26 @@ export async function closeMatchNightPoll(
 ): Promise<ActionResult> {
   const admin = await adminOrError();
   if ("error" in admin) return admin;
-  const outcome = await closePollNow({ pollId: str(formData, "pollId").trim() });
+  const pollId = str(formData, "pollId").trim();
+  const outcome = await closePollNow({ pollId });
   if (!outcome.ok) return { error: outcome.error };
   await logAdminAction({
     action: "closeMatchNightPoll",
     summary: `Closed voting on the match-night poll "${outcome.question}" with ${outcome.ballots} vote${outcome.ballots === 1 ? "" : "s"}`,
   });
   refresh();
+  // Name the winner in the toast: the card folds the result below its
+  // header, and the next steps (use it, announce it) follow from it.
+  const closed = await loadPollById(pollId, admin, Date.now());
+  const winnerKey = closed?.results?.winner ?? null;
+  const winner = winnerKey
+    ? (closed?.slots.find((slot) => slot.key === winnerKey) ?? null)
+    : null;
+  const won = winner
+    ? ` ${winner.label} won (${closed?.results?.counts[winner.key] ?? 0} can play).`
+    : "";
   return {
-    message: `Voting closed with ${outcome.ballots} vote${outcome.ballots === 1 ? "" : "s"}. The result shows on Home for the next week.`,
+    message: `Voting closed with ${outcome.ballots} vote${outcome.ballots === 1 ? "" : "s"}.${won} The result shows on Home for the next week.`,
   };
 }
 
@@ -225,7 +237,7 @@ export async function announceMatchNightPollResult(
   const winnerSlot = poll.slots.find((slot) => slot.key === result.winner);
   const runnerKey = result.order[1];
   const runnerCount = runnerKey ? result.counts[runnerKey] : 0;
-  const marker = `matchNightPollResult:${poll.id}:${poll.closesAt}`;
+  const marker = pollResultMarker(poll.id, poll.closesAt);
   try {
     await prisma.setting.create({ data: { key: marker, value: "sending" } });
   } catch (error) {
