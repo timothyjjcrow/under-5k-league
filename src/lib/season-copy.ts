@@ -196,9 +196,12 @@ export function phaseSubtitle(status: string, i: PhaseCopyInput = {}): string {
     case SEASON_STATUS.SIGNUPS:
       if (i.canDraft)
         return `Enough players have joined to draft — and signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}, so every few more is another team.`;
+      // Short of the season's team goal. The goal (minTeams) is a target,
+      // not a gate: Start draft needs only two captains, so "the draft begins
+      // once enough players have joined" promised a block that isn't there.
       return i.signedUp
-        ? "The draft begins once enough players have joined."
-        : "Sign up now — the draft begins once enough players have joined.";
+        ? `Signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}, and every few more players is another team.`
+        : `Sign up now — signups stay open ${PLAYER_SIGNUPS_OPEN_UNTIL}, and every few more players is another team.`;
     case SEASON_STATUS.DRAFT:
       switch (i.draftStatus) {
         case DRAFT_STATUS.IN_PROGRESS:

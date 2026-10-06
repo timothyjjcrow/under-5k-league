@@ -37,6 +37,7 @@ import { draftNightSoon, draftSetupOpen } from "@/lib/draft-setup";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
 import { prisma } from "@/lib/prisma";
+import { effectiveSoftMmrLimit } from "@/lib/registration";
 import type { SeasonSnapshot } from "@/lib/queries";
 import { DRAFT_PASSED_LABEL, MATCH_NIGHT_POLL_LABEL } from "@/lib/season-copy";
 import { CaptainLine } from "./hero-controls";
@@ -137,9 +138,12 @@ export function signupsHero(
           the threshold — only what it's counting toward changes. Which team
           number it would be is left to the card below; up here it just has to
           be true forever, and "another team" can't go stale. */}
+      {/* minTeams is the season's team GOAL, not a gate: Start draft needs
+          only two captains, so "N more to reach the player minimum" promised
+          a block the draft doesn't have. */}
       {capacity.canDraft ? (
         <>
-          <Badge tone="success">Player minimum met</Badge>
+          <Badge tone="success">{season.minTeams}-team goal met</Badge>
           <HeroStat
             value={capacity.toNextTeam}
             label="more for another team"
@@ -149,7 +153,7 @@ export function signupsHero(
       ) : (
         <HeroStat
           value={capacity.needed}
-          label="more to reach the player minimum"
+          label={`more to reach the ${season.minTeams}-team goal`}
           tone="accent"
         />
       )}
@@ -373,7 +377,9 @@ export function SignupsView({
             subtitle={
               <>
                 Teams of {season.teamSize}
-                {season.maxMmr > 0 ? ` · ${season.maxMmr} MMR soft limit` : ""}
+                {effectiveSoftMmrLimit(season.maxMmr) > 0
+                  ? ` · ${season.maxMmr} MMR soft limit`
+                  : ""}
                 {myDraftReadiness
                   ? ` · ${draftReadinessStatus(myDraftReadiness)}`
                   : ""}

@@ -114,19 +114,25 @@ describe("Discord mention materialization", () => {
 });
 
 describe("discord message formatters", () => {
-  // 4 teams of 5: the draft minimum is 20 players.
+  // 4 teams of 5: the season's team goal is 20 players.
   const FOUR_OF_FIVE = { teamSize: 5, minTeams: 4 };
 
-  it("counts down remaining signups", () => {
+  // minTeams is a goal, not a gate (Start draft needs two captains), so the
+  // post says what the pool already makes and how far the goal is.
+  it("counts toward the team goal, naming the teams the pool makes", () => {
     const msg = signupMessage("Zai", 17, FOUR_OF_FIVE);
     expect(msg).toContain("**Zai**");
-    expect(msg).toContain("17 players");
-    expect(msg).toContain("3 more to start the draft.");
+    expect(msg).toContain("17 players in, enough for 3 teams; 3 more reaches the 4-team goal.");
+    expect(msg).not.toMatch(/start the draft|minimum/);
+    expect(signupMessage("Zai", 4, FOUR_OF_FIVE)).toContain(
+      "4 players in, 16 more reaches the 4-team goal.",
+    );
+    expect(signupMessage("Zai", 6, FOUR_OF_FIVE)).toContain("enough for 1 team;");
   });
 
-  it("celebrates only the signup that reaches the minimum", () => {
+  it("celebrates only the signup that reaches the goal", () => {
     const msg = signupMessage("Zai", 20, FOUR_OF_FIVE);
-    expect(msg).toContain("that's enough to start the draft! 🎉");
+    expect(msg).toContain("that meets the 4-team goal! 🎉");
     expect(msg).toContain("5 more players makes it 5 full teams.");
   });
 

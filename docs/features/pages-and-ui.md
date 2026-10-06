@@ -456,7 +456,7 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 
 ### The SIGNUPS view
 
-Signups never close on a count (`minTeams` is a floor), so most of signup week
+Signups never close on a count (`minTeams` is a goal), so most of signup week
 the league is already draftable and many visitors have joined. Write for both.
 
 - **A date the page prints must say when it has passed.** `countdownLabel` is

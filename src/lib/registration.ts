@@ -8,6 +8,17 @@ import {
 } from "./constants";
 import { rankMedalName, rankTierExactMinMmr } from "./rank";
 
+/**
+ * The season's soft MMR limit as players read it: none (0) when it is set at
+ * or above the hard ceiling, which already refuses everyone over it, so a
+ * soft limit there flags nobody. With Season 2's limit at 5,000, How it works
+ * printed "Players up to 5,000 MMR can join … Above 5,000 MMR, an admin looks
+ * over your signup", contradicting itself.
+ */
+export function effectiveSoftMmrLimit(maxMmr: number): number {
+  return maxMmr > 0 && maxMmr < HARD_MMR_CEILING ? maxMmr : 0;
+}
+
 export type RegistrationGateInput = {
   season: { maxMmr: number; status: string };
   type: RegistrationType;

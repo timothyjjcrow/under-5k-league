@@ -143,7 +143,9 @@ describe("pages that print the weekly night once fixtures exist", () => {
   it("go through the fixtures, not matchSchedule or firstMatchNight", async () => {
     const { readFileSync } = await import("node:fs");
     for (const [page, call] of [
-      ["src/app/me/page.tsx", "label={seasonMatchNightLabel(season, seasonFixtures)}"],
+      // /me: the label is the fixtures' night, or a poll's "being decided"
+      // while one is open during signups (pollDecidesNight).
+      ["src/app/me/page.tsx", ": seasonMatchNightLabel(season, seasonFixtures)"],
       ["src/app/schedule/page.tsx", "label={seasonMatchNightLabel(season, matches)}"],
       ["src/app/admin/page.tsx", "fixturesMatchNightLabel(data.matches)"],
       ["src/app/how-it-works/page.tsx", "{seasonMatchNightLabel(season, fixtures)}"],

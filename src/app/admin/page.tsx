@@ -2041,9 +2041,11 @@ function SeasonControls({
                 Save limit
               </SubmitButton>
               <span className="text-xs text-muted">
-                {season.maxMmr > 0
-                  ? `soft limit: signups over ${season.maxMmr} MMR still join the pool, flagged “over soft limit” under Needs review on Captains & draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
-                  : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
+                {season.maxMmr >= HARD_MMR_CEILING
+                  ? `equals the hard ceiling ${HARD_MMR_CEILING}, so it flags nobody and player pages don't mention it · set it lower to flag signups for review, or 0 to turn it off`
+                  : season.maxMmr > 0
+                    ? `soft limit: signups over ${season.maxMmr} MMR still join the pool, flagged “over soft limit” under Needs review on Captains & draft · only the hard ceiling ${HARD_MMR_CEILING} refuses (no Immortals)`
+                    : `no soft limit · hard ceiling ${HARD_MMR_CEILING} (no Immortals)`}
               </span>
             </ActionForm>
             {/* Editable until the auction starts. These used to be write-once at

@@ -7,7 +7,7 @@ test("home shows the signups phase for the seeded season", async ({ page }) => {
   await expect(
     page.locator("#main").getByText("Signups open", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText(/more to reach the player minimum/)).toBeVisible();
+  await expect(page.getByText(/more to reach the \d+-team goal/)).toBeVisible();
   // Signed out, the hero says what the league is and who can join.
   const main = page.locator("#main");
   await expect(main.getByText(/is an amateur Dota 2 league/)).toBeVisible();

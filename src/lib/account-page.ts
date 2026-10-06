@@ -14,6 +14,7 @@ import {
   mmrRangeForRankTier,
   rankMedalName,
 } from "./rank";
+import { effectiveSoftMmrLimit } from "./registration";
 import { heroById, parseHeroList } from "./heroes";
 import { parsePubStats } from "./pub-stats";
 import { DOTA_ROLES, roleLabels } from "./roles";
@@ -430,9 +431,12 @@ export function mmrLeadLine(rankTier: number | null | undefined): string | null 
 
 /** The ceiling and the soft limit, in one short line under the MMR box. */
 export function mmrRulesLine(softLimit: number): string {
-  const ceiling = `We don't take anyone over ${HARD_MMR_CEILING} MMR (no Immortals).`;
-  return softLimit > 0
-    ? `${ceiling} Above ${softLimit} you can still sign up, and an admin reviews your signup.`
+  // The same rule as registrationGate and How it works: the MMR ceiling, and
+  // a Divine 3 or higher medal is over it whatever number is typed.
+  const ceiling = `We don't take anyone over ${HARD_MMR_CEILING} MMR, or with a Divine 3 or higher medal.`;
+  const soft = effectiveSoftMmrLimit(softLimit);
+  return soft > 0
+    ? `${ceiling} Above ${soft} you can still sign up, and an admin reviews your signup.`
     : ceiling;
 }
 

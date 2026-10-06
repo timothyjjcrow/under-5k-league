@@ -60,10 +60,10 @@ const name = escapeDiscordText;
 /**
  * A new full-player signup. Every one of these is an advert for the season,
  * so it ends with the signup link. The count line uses the site's own ask:
- * short of the minimum, how many more the draft needs; past it (where the
- * league sits for most of signup week, since minTeams is a floor), how many
- * more make another full team. Only the signup that reaches the minimum
- * celebrates it.
+ * short of the season's team goal (minTeams, a target the admin sets, not a
+ * gate: Start draft needs only two captains), the teams the pool already
+ * makes and how many more reach the goal; past it, how many more make
+ * another full team. Only the signup that reaches the goal celebrates it.
  */
 export function signupMessage(
   playerName: string,
@@ -74,16 +74,20 @@ export function signupMessage(
 ): string {
   const capacity = capacityInfo(season, signedUp);
   let tail: string;
+  const goal = `${season.minTeams}-team goal`;
   if (!capacity.canDraft) {
-    tail = `${capacity.needed} more to start the draft.`;
+    const teams = capacity.teamsFormable;
+    const sofar =
+      teams > 0 ? `enough for ${teams} team${teams === 1 ? "" : "s"}; ` : "";
+    tail = `${sofar}${capacity.needed} more reaches the ${goal}.`;
   } else if (capacity.perTeam <= 0) {
-    tail = "that's enough to start the draft!";
+    tail = `that meets the ${goal}!`;
   } else {
     const n = capacity.toNextTeam;
     const next = `${n} more ${n === 1 ? "player" : "players"} makes it ${capacity.teamsFormable + 1} full teams.`;
     tail =
       capacity.extra === 0
-        ? `that's enough to start the draft! 🎉 ${next}`
+        ? `that meets the ${goal}! 🎉 ${next}`
         : next;
   }
   const when = draftAtMs

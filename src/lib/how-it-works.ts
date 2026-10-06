@@ -2,6 +2,7 @@
 
 import { REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import { NO_TICKET_RESULT_LEAD } from "./match-hosting";
+import { effectiveSoftMmrLimit } from "./registration";
 import { mmrCeilingPhrase } from "./season-copy";
 import { joinSeasonCta } from "./site-nav";
 
@@ -56,8 +57,9 @@ export function resultsCopy(hasLeagueTicket: boolean | null): {
  */
 export function eligibilityText(softLimit: number): string {
   const ceiling = `Players ${mmrCeilingPhrase()} can join; Divine 3 and higher medals and Immortal players can't.`;
-  if (softLimit <= 0) return ceiling;
-  return `${ceiling} Above ${softLimit.toLocaleString("en-US")} MMR, an admin looks over your signup before the draft.`;
+  const soft = effectiveSoftMmrLimit(softLimit);
+  if (soft <= 0) return ceiling;
+  return `${ceiling} Above ${soft.toLocaleString("en-US")} MMR, an admin looks over your signup before the draft.`;
 }
 
 /**

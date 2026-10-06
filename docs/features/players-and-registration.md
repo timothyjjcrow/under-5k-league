@@ -14,7 +14,7 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   `signup-readiness.ts`), and no copy may say the limit refuses signups
   (`admin-copy-guard.test.ts`). Set with `setMaxMmr` (`admin-season.ts`); new
   seasons copy it (`carriedSeasonSettings`).
-- **Signups are uncapped; `Season.minTeams` is a floor.** `registrationGate`
+- **Signups are uncapped; `Season.minTeams` is a goal, not a gate.** `registrationGate`
   judges the ceiling, the medal and the phase, never a count (PLAYER signups
   open only in SIGNUPS, standins through the playoffs, COMPLETE freezes all).
   `startDraft` makes one team per captain, so the admin settles the count by
@@ -24,13 +24,19 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   draft), sometimes days before draft night. Home and the draft-night
   reminder say so in one phrase, `PLAYER_SIGNUPS_OPEN_UNTIL`
   (`season-copy.ts`); never promise signups run until draft night.
-- **`capacityInfo` is display only, never a gate.** Keep `extra`, `leftover`,
-  `toNextTeam` and `nextTeamTarget` uncapped: past the minimum the SIGNUPS
-  home card (`src/components/home/signups-view.tsx`) counts toward the next
-  team, because "31 / 30" over a full bar reads as sold out to the person
-  deciding whether to join. Scale that bar on `nextTeamTarget`, never
-  `leftover / perTeam` (empty at an exact multiple). See it with
-  `npm run fixture:signups`.
+- **`capacityInfo` is display only, never a gate,** and `minTeams` is the
+  season's team GOAL, never a minimum: Start draft needs only two captains.
+  So players read "N more to reach the 10-team goal" (Home's hero),
+  "{n}-team goal met" once it is, and the Discord signup post says "enough
+  for 6 teams; 19 more reaches the 10-team goal" (`signupMessage`). "N more to
+  reach the player minimum" and "N more to start the draft" promised a block
+  the draft doesn't have. Past the goal, Home counts toward the next team
+  (`toNextTeam`, kept uncapped). See it with `npm run fixture:signups`.
+- **A soft MMR limit at or above the hard ceiling is no soft limit**
+  (`effectiveSoftMmrLimit`): it flags nobody, so How it works, /rules, /me's
+  MMR line and Home's signup card don't print it. Season 2's limit sat at
+  5,000, and How it works said 5,000 MMR players can join and that above
+  5,000 an admin reviews them. The admin hint says it flags nobody.
 
 ## Medal-checked MMR
 

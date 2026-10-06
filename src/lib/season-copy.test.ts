@@ -26,7 +26,18 @@ describe("phaseSubtitle", () => {
       signedUp: true,
     });
     expect(s).not.toMatch(/sign up now/i);
-    expect(s).toMatch(/once enough players/i);
+    expect(s).toMatch(/another team/i);
+  });
+
+  // The season's team goal (minTeams) is a target, not a gate: Start draft
+  // needs only two captains. Neither signup state may promise the draft is
+  // waiting on a player count.
+  it("never says the draft waits for a player count", () => {
+    for (const signedUp of [true, false]) {
+      expect(
+        phaseSubtitle(SEASON_STATUS.SIGNUPS, { canDraft: false, signedUp }),
+      ).not.toMatch(/once enough players|minimum/i);
+    }
   });
 
   // The hero renders this directly beneath a "Ready to draft" badge. Claiming

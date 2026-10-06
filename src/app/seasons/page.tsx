@@ -2,6 +2,7 @@ import { shareMetadata } from "@/lib/share-metadata";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
 import { getSessionUser } from "@/lib/auth";
 import {
   deleteSeason,
@@ -35,7 +36,7 @@ export const metadata = shareMetadata(
 );
 
 export default async function SeasonsPage() {
-  const [seasons, viewer] = await Promise.all([
+  const [seasons, viewer, activePlayers] = await Promise.all([
     prisma.season.findMany({
       orderBy: { createdAt: "desc" },
       include: {
@@ -57,7 +58,21 @@ export default async function SeasonsPage() {
       },
     }),
     getSessionUser(),
+    // Players as Home and /players count them: ACTIVE full-player signups.
+    // _count.registrations also counts withdrawn, removed and standin rows,
+    // so this page said "36 signups" beside Home's "31 players signed up".
+    prisma.registration.groupBy({
+      by: ["seasonId"],
+      where: {
+        status: REGISTRATION_STATUS.ACTIVE,
+        type: REGISTRATION_TYPE.PLAYER,
+      },
+      _count: { _all: true },
+    }),
   ]);
+  const playersIn = new Map(
+    activePlayers.map((row) => [row.seasonId, row._count._all]),
+  );
   const isAdmin = viewer?.role === "ADMIN";
   const activeSeason = seasons.find((season) => season.isActive) ?? null;
   const championOf = new Map(
@@ -163,9 +178,18 @@ export default async function SeasonsPage() {
                       </div>
                     )}
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                      <span>{s.teams.length} teams</span>
-                      <span>{s._count.registrations} signups</span>
-                      <span>{s._count.matches} matches</span>
+                      {/* A season still in signups has no teams or
+                          matches yet: "0 teams · 0 matches" read as empty. */}
+                      {s.teams.length > 0 ? (
+                        <span>{s.teams.length} teams</span>
+                      ) : null}
+                      <span>
+                        {playersIn.get(s.id) ?? 0} player
+                        {(playersIn.get(s.id) ?? 0) === 1 ? "" : "s"}
+                      </span>
+                      {s._count.matches > 0 ? (
+                        <span>{s._count.matches} matches</span>
+                      ) : null}
                       <span>{new Date(s.createdAt).getFullYear()}</span>
                     </div>
                   </CardBody>

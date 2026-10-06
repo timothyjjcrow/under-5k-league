@@ -205,7 +205,7 @@ seams: [concurrency-and-testing](docs/features/concurrency-and-testing.md).
   names survive in database names and ids; leave them. Read regional times,
   zones and names from `LEAGUE_CONFIG`, never hardcode US ones.
 - **The soft MMR limit never blocks, and signups are uncapped** (`minTeams` is
-  a floor; `capacityInfo` is display only).
+  a goal, not a gate; `capacityInfo` is display only).
 - **Delete dead exports with their tests.** `npm run lint:unused-exports` lists
   unimported `src/lib` exports; it is advisory (test hooks stay test-only).
 
