@@ -14,10 +14,10 @@ test("signed-out profile requests explain sign-in without a duplicate header CTA
   await expect(
     page.getByRole("heading", { name: `Sign in to ${LEAGUE_CONFIG.name}`, level: 1 }),
   ).toBeVisible();
+  // The seed is in signups, so /me's sign-in says it is the way to join
+  // (every Join link lands here with next=/me), not "continue setting up".
   await expect(
-    page.getByText(
-      "Sign in to open your account and continue setting up for the league.",
-    ),
+    page.getByText(/^Sign in with Steam to join .+\. Your signup form opens next\.$/),
   ).toBeVisible();
   await expect(
     page.getByRole("banner").getByRole("link", { name: "Sign in" }),
