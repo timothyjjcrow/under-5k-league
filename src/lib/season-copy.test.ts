@@ -253,4 +253,18 @@ describe("the league pitch for new visitors", () => {
       "Open to players up to 5,000 MMR · Match night to be announced",
     );
   });
+
+  // Home said "Match night: Saturday 2PM PST" right above a poll asking
+  // when match night should be, with Sunday leading.
+  it("says a poll is deciding the night while one is open", () => {
+    expect(leagueEligibilityLine("Saturday 2PM PST", true)).toBe(
+      "Open to players up to 5,000 MMR · Match night: being decided in a player poll",
+    );
+    expect(leagueEligibilityLine(null, true)).toBe(
+      "Open to players up to 5,000 MMR · Match night: being decided in a player poll",
+    );
+    expect(leagueEligibilityLine("Saturday 2PM PST", false)).toBe(
+      "Open to players up to 5,000 MMR · Match night: Saturday 2PM PST",
+    );
+  });
 });

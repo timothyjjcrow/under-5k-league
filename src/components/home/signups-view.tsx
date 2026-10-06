@@ -38,7 +38,7 @@ import { formatLeagueMatchTime } from "@/lib/match-time";
 import { roleCoverage, shortRolesLine } from "@/lib/pool-stats";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
-import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
+import { DRAFT_PASSED_LABEL, MATCH_NIGHT_POLL_LABEL } from "@/lib/season-copy";
 import { CaptainLine } from "./hero-controls";
 import { HeroStat, type HeroParts, type HomeViewer } from "./hero";
 
@@ -324,9 +324,12 @@ function draftReadinessStatus(readiness: DraftReadiness): string {
 export function SignupsView({
   snapshot,
   loggedIn,
+  matchNightPollOpen = false,
 }: {
   snapshot: SeasonSnapshot;
   loggedIn: boolean;
+  /** A match-night poll is open (it sits above this view on Home). */
+  matchNightPollOpen?: boolean;
 }) {
   const { season, capacity, myReg } = snapshot;
   const isActivePlayer = myReg?.status === "ACTIVE" && myReg.type === "PLAYER";
@@ -341,8 +344,19 @@ export function SignupsView({
 
   return (
     <div className="space-y-6">
-      {/* Signed out, the hero's pitch already names the match night. */}
-      {loggedIn ? <ScheduleCallout label={season.matchSchedule} /> : null}
+      {/* Signed out, the hero's pitch already names the match night. While
+          a poll is choosing it, the callout says so rather than printing a
+          time the vote may change. */}
+      {loggedIn ? (
+        matchNightPollOpen ? (
+          <ScheduleCallout
+            label={MATCH_NIGHT_POLL_LABEL}
+            description="Signed-up players are voting on it in the poll above. The time the most can make wins."
+          />
+        ) : (
+          <ScheduleCallout label={season.matchSchedule} />
+        )
+      ) : null}
       {/* The viewer's own signup, as a status line. Joining is the hero's
           button (a second "Sign in with Steam to join" sat a screen below
           it), and a removed signup is the hero's "Signup removed" button. */}

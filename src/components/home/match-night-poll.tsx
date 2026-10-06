@@ -13,7 +13,11 @@ import {
 import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
 import { Badge, textLink } from "@/components/ui";
 import type { SessionUser } from "@/lib/auth";
-import { POLL_ANCHOR, type PollView } from "@/lib/match-night-poll";
+import {
+  POLL_ANCHOR,
+  pollTurnoutLine,
+  type PollView,
+} from "@/lib/match-night-poll";
 import { loadHomePoll } from "@/lib/match-night-poll-service";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { cn } from "@/lib/utils";
@@ -166,8 +170,7 @@ function PollCard({
                 ) : null}
               </span>
               <span className="tabular-nums">
-                {poll.ballots} vote{poll.ballots === 1 ? "" : "s"}
-                {poll.open ? " so far" : ""}
+                {pollTurnoutLine(poll.ballots, poll.electorate, poll.open)}
               </span>
             </div>
           </header>

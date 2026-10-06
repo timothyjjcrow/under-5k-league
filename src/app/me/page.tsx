@@ -49,7 +49,7 @@ import {
   storedDotaAccountId,
 } from "@/lib/dota-account";
 import { pendingCoverWhere } from "@/lib/standin";
-import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
+import { DRAFT_PASSED_LABEL, MATCH_NIGHT_POLL_LABEL } from "@/lib/season-copy";
 import {
   AUTO_SYNC,
   DISCORD_INVITE_URL,
@@ -67,6 +67,8 @@ import { rankMedalName, rankTierExactMinMmr } from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchRoundLabel } from "@/lib/schedule";
 import { seasonMatchNightLabel } from "@/lib/match-night";
+import { POLL_ANCHOR } from "@/lib/match-night-poll";
+import { matchNightPollOpen } from "@/lib/match-night-poll-service";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
@@ -139,6 +141,7 @@ export default async function MePage({
     coveredMatches,
     nextTeamMatch,
     seasonFixtures,
+    pollOpen,
   ] = await Promise.all([
     season && !reg
       ? prisma.registration.findFirst({
@@ -206,7 +209,12 @@ export default async function MePage({
           select: { scheduledAt: true, status: true },
         })
       : [],
+    // During signups an open match-night poll means the night isn't
+    // settled, so the callout says so (as Home does).
+    season?.status === SEASON_STATUS.SIGNUPS ? matchNightPollOpen() : false,
   ]);
+  // Fixtures, once they have kickoffs, are the night whatever a poll says.
+  const pollDecidesNight = pollOpen && seasonFixtures.length === 0;
   const form = reg ?? previous;
   // A playoff fixture (booked cover, or the team's next match) is named by
   // its round ("Semifinal"), the way the match page, /schedule and Discord
@@ -749,14 +757,26 @@ export default async function MePage({
                 {(member && nextTeamMatch) ||
                 (standinAssignments?.length ?? 0) > 0 ? null : (
                   <ScheduleCallout
-                    label={seasonMatchNightLabel(season, seasonFixtures)}
+                    label={
+                      pollDecidesNight
+                        ? MATCH_NIGHT_POLL_LABEL
+                        : seasonMatchNightLabel(season, seasonFixtures)
+                    }
                     description={
-                      playerLocked ||
-                      (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN)
-                        ? "Games run weekly. Captains book standins for this night when one of their players can't make it."
-                        : isRegistered
-                          ? "Games run weekly on this night."
-                          : undefined
+                      pollDecidesNight ? (
+                        <>
+                          Signed-up players are voting on it{" "}
+                          <Link href={`/#${POLL_ANCHOR}`} className={textLink()}>
+                            on Home
+                          </Link>
+                          . The time the most can make wins.
+                        </>
+                      ) : playerLocked ||
+                        (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN) ? (
+                        "Games run weekly. Captains book standins for this night when one of their players can't make it."
+                      ) : isRegistered ? (
+                        "Games run weekly on this night."
+                      ) : undefined
                     }
                   />
                 )}

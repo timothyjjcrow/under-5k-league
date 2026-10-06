@@ -25,6 +25,7 @@ import {
   POLL_QUESTION_MAX,
   POLL_RESULT_DAYS,
   pollOnHome,
+  pollTurnoutLine,
   slotDayName,
   slotHour,
   type PollView,
@@ -108,7 +109,7 @@ function CurrentPoll({
             variant="full"
             initial={formatLeagueMatchTime(new Date(poll.closesAt), "full")}
           />{" "}
-          · {votes}
+          · {pollTurnoutLine(poll.ballots, poll.electorate, poll.open)}
           {onHome ? " · on Home" : " · no longer on Home"}
         </p>
       </div>

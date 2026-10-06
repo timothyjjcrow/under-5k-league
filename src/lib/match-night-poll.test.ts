@@ -18,6 +18,7 @@ import {
   pollOpen,
   pollResultsVisible,
   pollSignupsOpen,
+  pollTurnoutLine,
   slotHour,
   slotInZone,
   slotKey,
@@ -298,5 +299,21 @@ describe("tallyAvailability", () => {
     const empty = tallyAvailability(slots, [[], []]);
     expect(empty.winner).toBeNull();
     expect(empty.order).toEqual([s12, s13, s14, u13]);
+  });
+});
+
+describe("pollTurnoutLine", () => {
+  it("reads the count against the players who could vote", () => {
+    expect(pollTurnoutLine(11, { size: 35 }, true)).toBe("11 of 35 players have voted");
+    expect(pollTurnoutLine(1, { size: 35 }, true)).toBe("1 of 35 players has voted");
+    expect(pollTurnoutLine(0, { size: 35 }, true)).toBe("0 of 35 players have voted");
+    expect(pollTurnoutLine(11, { size: 35 }, false)).toBe("11 of 35 players voted");
+    expect(pollTurnoutLine(1, { size: 1 }, true)).toBe("1 of 1 player has voted");
+  });
+
+  it("falls back to the bare count with no electorate to count", () => {
+    expect(pollTurnoutLine(11, null, true)).toBe("11 votes so far");
+    expect(pollTurnoutLine(1, null, false)).toBe("1 vote");
+    expect(pollTurnoutLine(3, { size: 0 }, true)).toBe("3 votes so far");
   });
 });

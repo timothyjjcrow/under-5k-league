@@ -107,3 +107,28 @@ describe("dashboard Your team card", () => {
     expect(band.slice(0, 600)).toContain("{myStakeCard ?");
   });
 });
+
+/**
+ * While a match-night poll is open during signups, every "Match night" line a
+ * player reads before the draft says the poll is deciding it. Home printed
+ * "Match night: Saturday 2PM PST" right above a poll asking when match night
+ * should be, with Sunday leading. The pitch's wording is unit-tested in
+ * season-copy.test.ts; this pins the three surfaces to the poll check.
+ */
+describe("match-night lines while a poll is open", () => {
+  const home = stripLineComments(homePageSource());
+  const me = stripLineComments(
+    sourceFiles("src/app/me/page.tsx", 1).map((file) => file.text).join("\n"),
+  );
+
+  it("asks the poll whether the night is settled on Home and /me", () => {
+    expect(home).toContain("await matchNightPollOpen()");
+    expect(me).toContain("matchNightPollOpen()");
+  });
+
+  it("passes the answer to the pitch and both callouts", () => {
+    expect(home).toMatch(/<LeaguePitch[\s\S]{0,120}pollOpen=\{pollOpen\}/);
+    expect(home).toContain("label={MATCH_NIGHT_POLL_LABEL}");
+    expect(me).toContain("? MATCH_NIGHT_POLL_LABEL");
+  });
+});

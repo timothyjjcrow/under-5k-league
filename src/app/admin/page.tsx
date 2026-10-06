@@ -139,6 +139,7 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
+import { pollTurnoutLine } from "@/lib/match-night-poll";
 import { loadLatestPoll } from "@/lib/match-night-poll-service";
 import {
   ANNOUNCE_FAILED_PREFIX,
@@ -6813,7 +6814,7 @@ async function AdminMatchNightPoll({
       title="Match night poll"
       subtitle={
         poll?.open
-          ? `Voting is open: ${poll.ballots} vote${poll.ballots === 1 ? "" : "s"} so far. Signed-up players mark every time they could play on Home; the time the most can make wins.`
+          ? `Voting is open: ${pollTurnoutLine(poll.ballots, poll.electorate, true)}. Signed-up players mark every time they could play on Home; the time the most can make wins.`
           : "Let signed-up players mark every weekly time they could play. The grid fills itself, the poll shows on Home, and the time the most players can make wins."
       }
       defaultOpen={poll?.open ?? false}

@@ -481,6 +481,9 @@ the league is already draftable and many visitors have joined. Write for both.
   only for viewers it cannot cover.
 - **"Who's in" lists captains first and names its cap** ("Latest 12 of 30
   players") instead of silently hiding the rest.
+- **The match-night callout follows an open poll:** while a match-night poll
+  is open it reads "Match night — being decided in a player poll" instead of
+  the season's text (rules: [match-night-poll](match-night-poll.md)).
 
 ## Schedule (`/schedule`)
 

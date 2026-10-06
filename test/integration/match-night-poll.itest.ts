@@ -351,6 +351,8 @@ describe("who may vote", () => {
     const now = Date.now();
     const seen = await loadHomePoll({ id: admin.id, role: "ADMIN" }, now);
     expect(seen?.ballots).toBe(2);
+    // The two who left aren't counted among those who could vote either.
+    expect(seen?.electorate?.size).toBe(2);
     expect(seen?.results?.counts[SUN]).toBe(2);
     expect(seen?.results?.counts[SAT]).toBe(0);
     // The player who left sees the poll as any non-voter does: no ballot,
@@ -368,6 +370,7 @@ describe("who may vote", () => {
     });
     const back = await loadHomePoll({ id: quitter.id, role: "USER" }, now);
     expect(back).toMatchObject({ canVote: true, ballots: 3, myAvailability: [SAT, SUN] });
+    expect(back?.electorate?.size).toBe(3);
     expect(back?.results?.counts[SAT]).toBe(1);
     // Closing reports the count Home shows, not every stored row.
     expect(await closePollNow({ pollId: poll.id })).toMatchObject({ ok: true, ballots: 3 });
@@ -380,7 +383,8 @@ describe("who may vote", () => {
     const now = Date.now();
     expect(await loadHomePoll({ id: voter.id, role: "USER" }, now)).toMatchObject({
       canVote: true,
-      electorate: { seasonName: "Season 10", signupsOpen: true },
+      // The turnout's denominator: the one signed-up player.
+      electorate: { seasonName: "Season 10", signupsOpen: true, size: 1 },
     });
     expect(await loadHomePoll({ id: outsider.id, role: "USER" }, now)).toMatchObject({
       canVote: false,

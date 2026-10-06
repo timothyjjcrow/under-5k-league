@@ -504,7 +504,27 @@ export type PollElectorate = {
   /** The season still takes signups (players or standins), so a viewer who
    *  isn't signed up has somewhere to go. */
   signupsOpen: boolean;
+  /** How many players may vote right now: the turnout's denominator. */
+  size: number;
 };
+
+/**
+ * The turnout line: "11 of 35 players have voted" while voting is open, so
+ * the number reads against the players who could, not on its own ("11 votes
+ * so far" said nothing about whether that was most of the league). Without
+ * an electorate (no season to count) it is the bare ballot count.
+ */
+export function pollTurnoutLine(
+  ballots: number,
+  electorate: Pick<PollElectorate, "size"> | null,
+  open: boolean,
+): string {
+  if (!electorate || electorate.size <= 0) {
+    return `${ballots} vote${ballots === 1 ? "" : "s"}${open ? " so far" : ""}`;
+  }
+  const verb = open ? (ballots === 1 ? "has voted" : "have voted") : "voted";
+  return `${ballots} of ${electorate.size} player${electorate.size === 1 ? "" : "s"} ${verb}`;
+}
 
 export type PollView = {
   id: string;

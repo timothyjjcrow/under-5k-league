@@ -45,7 +45,7 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   voting season, the way `hasActiveLeagueParticipation` counts it. The voting
   season is the active one, or in the offseason the most recent. Admins are
   not exempt. **A ballot counts only while its voter is still signed up**
-  (`stillSignedUp` in `viewOf`, and in `closePollNow` so the admin's "Voting
+  (`seasonElectorate` in `viewOf`, and in `closePollNow` so the admin's "Voting
   closed with N votes" agrees with Home): eligibility is checked when a
   ballot is cast, and without the recount a player who withdrew, or whom an
   admin removed, kept counting and could swing the result. The row is kept,
@@ -120,6 +120,23 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
 - **Shown as a heatmap** (`AvailabilityHeatmap`): the same grid, each cell the
   number who can play, shaded by it, the leader outlined, the viewer's own
   times ringed, and the top three times listed above it.
+
+## Turnout, and the match night elsewhere
+
+- **Turnout reads against who could vote:** "11 of 35 players have voted"
+  (`pollTurnoutLine`) on the Home card and in the admin section, not "11
+  votes so far", which said nothing about whether that was most of the
+  league. `viewOf` loads the season's electorate once (`seasonElectorate`:
+  ACTIVE signups plus roster and captain seats) and derives the turnout, the
+  counted ballots and `canVote` from it.
+- **While a poll is open during signups, every "Match night" line says the
+  poll is deciding it** (`matchNightPollOpen`, `MATCH_NIGHT_POLL_LABEL`):
+  the signed-out pitch on Home, Home's signups callout and /me's callout.
+  Home printed "Match night: Saturday 2PM PST" right above a poll asking when
+  match night should be, with Sunday leading. Fixtures with kickoffs still
+  win on /me, and later phases print the fixtures' night. It never names the
+  leading time: the count stays hidden from non-voters while voting is open.
+  `dashboard-guards.test.ts` pins the three surfaces.
 
 ## Concurrency
 

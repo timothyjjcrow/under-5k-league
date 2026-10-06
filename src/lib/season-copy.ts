@@ -259,11 +259,24 @@ export function mmrCeilingPhrase(): string {
  * one hard limit the signup form enforces (HARD_MMR_CEILING), not a season's
  * soft review threshold, which never turns anyone away. The match night is
  * the announced one (announcedMatchNight), never a hardcoded time, so each
- * region prints its own; null says it is still to be announced.
+ * region prints its own; null says it is still to be announced. While a
+ * match-night poll is open the night isn't settled, so the line says so
+ * instead of printing a time the vote may change.
  */
-export function leagueEligibilityLine(matchNight: string | null): string {
+export function leagueEligibilityLine(
+  matchNight: string | null,
+  pollOpen = false,
+): string {
   const mmr = `Open to players ${mmrCeilingPhrase()}`;
+  if (pollOpen) return `${mmr} · Match night: ${MATCH_NIGHT_POLL_LABEL}`;
   return matchNight
     ? `${mmr} · Match night: ${matchNight}`
     : `${mmr} · Match night to be announced`;
 }
+
+/**
+ * What a match-night line prints in place of the night while a poll is
+ * choosing it (the hero's pitch, and the "Match night —" callouts on Home and
+ * /me during signups).
+ */
+export const MATCH_NIGHT_POLL_LABEL = "being decided in a player poll";
