@@ -409,8 +409,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     }));
 
   // During signups and the draft phase, setting up the season is the job:
-  // the phase and captains cards and the Discord reach card come first.
-  const setupFirst = season?.status === "SIGNUPS" || season?.status === "DRAFT";
+  // the phase and captains cards and the Discord reach card come first. Once
+  // the auction is complete the job is the schedule, and the captains card
+  // (which lists every signup) used to sit between the admin and Generate
+  // schedule on draft night.
+  const auctionDone =
+    season?.status === "DRAFT" && data?.draft?.status === DRAFT_STATUS.COMPLETE;
+  const setupFirst =
+    season?.status === "SIGNUPS" || (season?.status === "DRAFT" && !auctionDone);
   const setupControls = season && data && nextStep ? <>
           <AdminAnchor id="adm-season">
             <SeasonControls season={season} data={data} nextStep={nextStep} />
@@ -3686,7 +3692,15 @@ function ScheduleControls({
                 name="firstNight"
                 tsName="firstNightTs"
                 required
-                defaultTs={season.firstMatchNight?.getTime()}
+                defaultTs={
+                  season.firstMatchNight &&
+                  season.firstMatchNight.getTime() >= nowMs
+                    ? season.firstMatchNight.getTime()
+                    : undefined
+                }
+                // A week 1 already past would schedule kickoffs nobody can
+                // play; the server refuses it too.
+                minTs={nowMs}
                 timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />

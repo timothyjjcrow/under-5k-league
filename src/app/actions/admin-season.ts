@@ -1026,7 +1026,8 @@ export async function setDraftSettings(
   });
   refresh();
   return {
-    message: `Draft settings saved · teams of ${teamSize}, $${draftBudget} budget`,
+    // The team goal too: it moves Home's "N more to reach the goal" count.
+    message: `Draft settings saved · teams of ${teamSize}, a ${minTeams}-team goal, $${draftBudget} budget`,
   };
 }
 

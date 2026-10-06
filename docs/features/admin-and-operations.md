@@ -58,6 +58,16 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   "Live now" up (`matchWatchWindow`). A flat two hours flagged Bo2s and Bo3s
   still being played while Tonight showed them as Live. The Home admin strip
   feeds it the same `bestOf`.
+- **Once the auction is complete, Schedule & results leads the panel**
+  (`setupFirst` is signups, or the draft phase before the auction ends): the
+  captains card, which lists every signup, used to sit between the admin and
+  Generate schedule on draft night.
+- **Generate schedule refuses a week 1 in the past** (server check plus the
+  box's `min`): kickoffs that already happened get no check-in window, an
+  instant "result due" and pick'em locked from the start.
+- **Toasts say what changed:** an admin game import says the series it
+  leaves ("Game imported — series final 2–0", the captain report's words),
+  draft settings name the team goal, and a shuffle lists the new draft order.
 - **Reinstate shows only where it works:** a removed player signup reads
   "reinstate after the auction" while the auction is live or paused, since
   `reinstateSignup` refuses it then.
