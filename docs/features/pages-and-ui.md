@@ -802,6 +802,10 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Stats pages (`/leaders`, `/meta`, `/records`, `/hall-of-fame`, `/seasons/[id]`)
 
+- **The season archive has a jump bar** (`SectionNav`: Standings, Playoffs,
+  Tiebreakers, Awards, Results, Rosters, whichever exist, from three): it is
+  the longest public page and had no way to reach a part of it on a phone.
+
 - **The stats tab bar is one row at every width** (`stats-nav.tsx`): the tabs
   share it as equal tracks (`grid-flow-col auto-cols-fr`) and a long label
   takes two short lines on a phone. A 2x2 grid spent a second 44px row on the
@@ -849,6 +853,9 @@ the league is already draftable and many visitors have joined. Write for both.
   "below", because it is below on a phone and beside on a desktop. Short
   inputs keep a short width (MMR `sm:max-w-sm`; the Discord handle grows
   beside Save up to `max-w-xs`).
+- **Scrims says so when there are no teams yet:** a season before its draft
+  gets one EmptyState ("Scrims open once teams exist") instead of a sign-in
+  card and six empty lists; the season chips stay.
 - **Scrims pairs its lists.** Open and booked sit side by side from `lg`;
   history, team records and leaders go three across from `xl` as two-row
   subgrids, so the three lists start on one line whatever their subtitles

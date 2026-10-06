@@ -205,6 +205,16 @@ export default async function ScrimsPage({
         </Card>
       ) : null}
 
+      {/* A season still before its draft has no teams, so nobody can post
+          or claim anything: one line instead of a sign-in card and six empty
+          lists (and Scrims is one of the few Explore links in signups). */}
+      {seasonOpen && teams.length === 0 ? (
+        <EmptyState
+          title="Scrims open once teams exist"
+          description="Teams form at the draft. After that, captains post practice times here and another team claims them, kept apart from league standings and records."
+        />
+      ) : (
+      <>
       {myCaptainTeam && seasonOpen ? (
         <Card tone="feature">
           <CardHeader
@@ -469,6 +479,8 @@ export default async function ScrimsPage({
           </CardBody>
         </Card>
       ) : null}
+      </>
+      )}
     </div>
   );
 }
