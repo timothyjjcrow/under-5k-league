@@ -272,15 +272,36 @@ export async function abortDraftHistory(tx: Tx, draft: Draft, members: TeamMembe
   await tx.draft.update({ where: { id: draft.id }, data: { activeRunId: null, currentLotId: null } });
 }
 
-export function draftLotPlayer(lot: DraftLot): DraftedPlayer & { at: number } {
+/** The columns a sold lot's display needs: never its accepted-bids log. */
+const SOLD_LOT_COLUMNS = {
+  nomineeSnapshot: true,
+  soldPrice: true,
+  soldAt: true,
+  soldTeamId: true,
+  soldTeamNameSnapshot: true,
+  openingKind: true,
+} as const;
+
+export function draftLotPlayer(
+  lot: Pick<DraftLot, "nomineeSnapshot" | "soldPrice" | "soldAt" | "soldTeamId" | "soldTeamNameSnapshot">,
+): DraftedPlayer & { at: number } {
   const nominee = readObject(lot.nomineeSnapshot);
   if (nominee.version !== 1 || typeof nominee.name !== "string" || lot.soldPrice == null || !lot.soldAt) throw new Error("DRAFT_HISTORY_INVALID_SALE");
   return { name: nominee.name, ...(lot.soldTeamId ? { teamId: lot.soldTeamId } : {}), teamName: lot.soldTeamNameSnapshot ?? "Former team", price: lot.soldPrice,
     isCaptain: false, mmr: typeof nominee.mmr === "number" && nominee.mmr > 0 ? nominee.mmr : null, at: lot.soldAt.getTime() };
 }
 
-export async function readDraftSales(tx: Pick<Tx, "draftLot">, runId: string) {
-  return (await tx.draftLot.findMany({ where: { runId, status: "SOLD" }, orderBy: [{ soldAt: "desc" }, { sequence: "desc" }, { id: "desc" }] }))
+/**
+ * A run's sales, newest first. `take` limits a live room to the few it shows
+ * (every poll used to read every sold lot, bid log included, to keep 8); the
+ * recap needs them all.
+ */
+export async function readDraftSales(
+  tx: Pick<Tx, "draftLot">,
+  runId: string,
+  take?: number,
+) {
+  return (await tx.draftLot.findMany({ where: { runId, status: "SOLD" }, orderBy: [{ soldAt: "desc" }, { sequence: "desc" }, { id: "desc" }], select: SOLD_LOT_COLUMNS, ...(take ? { take } : {}) }))
     // `auto`: the nominator's clock ran out and the draft opened this lot for
     // them, so the draft room can label the sale "auto-picked".
     .map((lot) => ({ ...draftLotPlayer(lot), auto: lot.openingKind === "AUTOMATIC" }));

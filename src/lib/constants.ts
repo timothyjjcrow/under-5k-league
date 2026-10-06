@@ -181,6 +181,16 @@ export const DRAFT_ROOM = {
   /** Backoff after a 429. The tick limiter is a fixed 60s window, so easing
    *  off actually lets it drain instead of re-saturating it every 1.2s. */
   POLL_RATE_LIMITED_MS: 8000,
+  /** A viewer who can't act on a live lot (a spectator, a pool player, a
+   *  drafted player) during the auction. Only captains and admins act; with
+   *  every open tab at 1.2s, 40 viewers made about 33 requests a second on a
+   *  Hobby-plan budget both leagues share. Bids reach watchers this late. */
+  POLL_WATCH_MS: 2500,
+  /** The same viewers in the waiting room or a finished draft. */
+  POLL_WATCH_IDLE_MS: 6000,
+  /** A HIDDEN tab of a pool player (a stake, but no controls): still well in
+   *  time for "you're on the block" on a 30s lot clock. */
+  POLL_WATCH_KEEPALIVE_MS: 10000,
 } as const;
 
 // ---------- Fantasy ----------

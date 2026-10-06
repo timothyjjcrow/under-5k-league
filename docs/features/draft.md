@@ -200,12 +200,26 @@ In the Captains & draft card on `/admin` and inside the room
 ## The draft room client
 
 - **The cadence comes only from `draftPollCadence`** (`src/lib/room-poll.ts`,
-  the draft binding of `roomPollCadence`). Its fast rate keys on the AUCTION
-  (IN_PROGRESS or PAUSED), not the viewer: a spectator watching a live lot
-  needs the fast poll, and PAUSED counts as live so a resume shows at once. A
-  hidden tab keeps polling only for `draftViewerStake` (a captain, an admin, or
-  a player still in the pool). A failed poll in a live auction retries at the
-  live rate, never the waiting-room rate, so `disconnected` trips promptly.
+  the draft binding of `roomPollCadence`). Whether it is fast keys on the
+  AUCTION (IN_PROGRESS or PAUSED; PAUSED counts as live so a resume shows at
+  once); how fast keys on the VIEWER (`canAct`: a captain or an admin). Those
+  who act poll at the room's 1.2s; everyone else (spectators, players in the
+  pool, drafted players) at `DRAFT_ROOM.POLL_WATCH_MS` (2.5s) live and
+  `POLL_WATCH_IDLE_MS` in the waiting room. Every open tab at 1.2s was about
+  33 requests a second with 40 viewers, on a hosting budget both leagues
+  share; a watcher sees a bid a beat later. A hidden tab keeps polling only
+  for `draftViewerStake` (captains and admins at `POLL_KEEPALIVE_MS`, a pool
+  player at `POLL_WATCH_KEEPALIVE_MS`). A failed poll in a live auction
+  retries at the viewer's live rate, never the waiting-room rate, so
+  `disconnected` trips promptly. At a clock's zero only a signed-in tab polls
+  at once (only its poll can settle the lot); a signed-out tab waits for its
+  next poll.
+- **The poll reads only what the room shows:** the pool's display fields,
+  the nominee's profile and contact in one extra read, the run's id and
+  provenance, and the last 8 sales while the auction runs (`readDraftSales`
+  with `take`, never the accepted-bids log; the finished room's recap reads
+  them all). It used to read every player's free text and every sold lot's
+  bid log on every poll.
   `room-source-guards.test.ts` fails if `DRAFT_ROOM.POLL_*` rates reappear in
   `draft-room.tsx`. A 429 is back-pressure, not a failure (see
   `docs/features/admin-and-operations.md`).
@@ -241,8 +255,20 @@ In the Captains & draft card on `/admin` and inside the room
   per room (the ring and the toggle's confirmation) and that the ring reads
   the alerts, since a silent room is otherwise invisible. The persisted
   `draftSound` toggle shows only to viewers the room can ring for
-  (`draftAlertsReachViewer`); audio unlocks in `act()` and on the first
-  `pointerdown`.
+  (`draftAlertsReachViewer`), in the waiting room too. Audio unlocks in
+  `act()` and through `armAudioUnlock` (`chime.ts`), which listens for
+  pointerup, touchend, click and keydown until the context actually runs: a
+  one-time `pointerdown` is not an activation gesture, so on phones it never
+  unlocked and a pool player never heard "you're on the block". Until audio
+  runs the toggle reads "Tap to turn on alerts", and that tap turns the bell
+  on rather than muting it.
+- **Phone order follows the viewer:** a captain or admin gets the pool
+  first; everyone else gets Recent sales, then the rosters, then the pool (DOM
+  order, so screen readers match). Desktop is fixed by grid placement. "next:
+  Team" shows at every size.
+- **The admin's Auto-nominate panel names an absent captain** ("X isn't in
+  the room — nominate for … or auto-nominate"), from the presence the poll
+  already carries.
 - **Clear a selected player who gets drafted or withdraws**, or the sticky bar
   offers a nameless Nominate.
 - **Track a late-mounting element with a callback ref held in state.**

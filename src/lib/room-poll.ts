@@ -19,9 +19,9 @@ import { inhouseReadyInPlay } from "./inhouse";
  *     or in a lobby (inhouse); a captain, an admin, or a player still in the
  *     pool (draft). It gates the hidden-tab keepalive in both.
  *   - `active` — is the ROOM in a second-sensitive phase? For the draft that is
- *     the auction being IN_PROGRESS or PAUSED — a spectator watching a live
- *     lot still needs 1.2s polling, while a captain staring at a finished
- *     draft does not. For the inhouse room the two coincide (the lobby only
+ *     the auction being IN_PROGRESS or PAUSED, while a captain staring at a
+ *     finished draft is not (the draft binding then picks the rate by role:
+ *     captains and admins fast, watchers at POLL_WATCH_MS). For the inhouse room the two coincide (the lobby only
  *     matters to its members), so its binding passes `hasStake` for both.
  *
  * The four rules, in the order they take precedence:
@@ -187,24 +187,36 @@ export function inhousePollCadence(
 }
 
 /**
- * The draft room's binding. Its "active" is the AUCTION's phase, not the
- * viewer's — a spectator watching a live lot still needs the 1.2s cadence, and
- * PAUSED counts as live so a resume is caught immediately rather than up to
- * three seconds later.
+ * The draft room's binding. Its "active" is the AUCTION's phase (PAUSED counts
+ * as live, so a resume is caught at once), and its RATE is the viewer's role:
+ * captains and admins, who act on a live lot, poll at the room's 1.2s; every
+ * other viewer (a spectator, a player in the pool, a drafted player) at
+ * POLL_WATCH_MS. Polling every open tab at 1.2s cost about 33 requests a
+ * second with 40 viewers, on a hosting budget both leagues share, for bids a
+ * watcher sees a second or two later instead.
  */
 export function draftPollCadence(
   o: Omit<RoomPollInput, "active"> & {
     /** `status === "IN_PROGRESS" || status === "PAUSED"`. */
     live: boolean;
     activeMs: number;
+    /** A captain or an admin. Unknown (before the first payload) counts as
+     *  acting, so nobody starts slow. */
+    canAct?: boolean;
   },
 ): RoomPollCadence {
+  const acts = o.canAct ?? true;
+  const activeMs = acts
+    ? o.activeMs
+    : Math.max(o.activeMs, DRAFT_ROOM.POLL_WATCH_MS);
   return roomPollCadence(
     { ...o, active: o.live },
     {
-      activeMs: o.activeMs,
-      idleMs: DRAFT_ROOM.POLL_IDLE_MS,
-      keepaliveMs: DRAFT_ROOM.POLL_KEEPALIVE_MS,
+      activeMs,
+      idleMs: acts ? DRAFT_ROOM.POLL_IDLE_MS : DRAFT_ROOM.POLL_WATCH_IDLE_MS,
+      keepaliveMs: acts
+        ? DRAFT_ROOM.POLL_KEEPALIVE_MS
+        : DRAFT_ROOM.POLL_WATCH_KEEPALIVE_MS,
       rateLimitedMs: DRAFT_ROOM.POLL_RATE_LIMITED_MS,
       // Rule 3, and a deliberate change from what this room used to do: it read
       // its cadence off `live`, which is re-initialised false on every tick and
@@ -213,7 +225,7 @@ export function draftPollCadence(
       // put the recovery poll 2.5x further away and doubled the time to flip
       // `disconnected`, which is the safety gate that disables bidding on
       // stale state.
-      retryMs: o.activeMs,
+      retryMs: activeMs,
       maxRetryMs: 30_000,
     },
   );

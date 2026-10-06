@@ -5,6 +5,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import Link from "next/link";
@@ -24,7 +25,13 @@ import { aboutText } from "@/lib/about-you";
 import { pushToast } from "@/components/toaster";
 import { Countdown } from "@/components/countdown";
 import { DiscordTag } from "@/components/discord-tag";
-import { playChime, unlockAudio } from "@/components/chime";
+import {
+  armAudioUnlock,
+  audioReady,
+  playChime,
+  subscribeAudioReady,
+  unlockAudio,
+} from "@/components/chime";
 import {
   useBannerOffscreen,
   usePersistedFlag,
@@ -381,13 +388,17 @@ export function DraftRoom({
   // their first chime (you're nominated / you're drafted) would be blocked by
   // the browser's autoplay policy — any first click/tap on the page unlocks.
   useEffect(() => {
-    const unlock = () => unlockAudio();
-    document.addEventListener("pointerdown", unlock, { once: true });
-    return () => document.removeEventListener("pointerdown", unlock);
+    // Keeps listening until audio actually runs (armAudioUnlock): a one-time
+    // pointerdown never unlocked on phones.
+    return armAudioUnlock();
   }, []);
 
+  // Whether the browser lets the bell ring yet. Until a gesture unlocks it,
+  // "Sound on" was a promise the room couldn't keep, and tapping it muted.
+  const audioOn = useSyncExternalStore(subscribeAudioReady, audioReady, () => false);
   const toggleSound = useCallback(() => {
-    const next = !soundOn;
+    // Locked audio with the bell on: this tap turns it on, not off.
+    const next = soundOn && !audioReady() ? true : !soundOn;
     setSoundOn(next);
     if (next) playChime(); // confirm + unlock audio on this gesture
   }, [soundOn, setSoundOn]);
@@ -440,10 +451,15 @@ export function DraftRoom({
   // act; a player still in the pool can be nominated at any moment and wants
   // the chime. A drafted player or a logged-out spectator is just watching.
   const hasStakeRef = useRef(false);
+  // Captains and admins act on a live lot and keep the fast poll; everyone
+  // else watches at the slower rate (draftPollCadence). True until the first
+  // payload says otherwise, so nobody starts slow.
+  const canActRef = useRef(true);
   // In an effect, not during render — writing a ref while rendering is exactly
   // what <InhouseRoom> avoids, and React's lint rules flag it.
   useEffect(() => {
     hasStakeRef.current = !!state && draftViewerStake(state);
+    if (state) canActRef.current = state.me.isAdmin || !!state.me.myTeamId;
   }, [state]);
 
   // Self-scheduling poll (not setInterval): the cadence has to react to the
@@ -479,6 +495,7 @@ export function DraftRoom({
         offline: browserOffline,
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
+        canAct: canActRef.current,
         live: false, // irrelevant to the skip decision
         coldStart: isColdStart(seqRef.current),
         activeMs: pollMs,
@@ -570,6 +587,7 @@ export function DraftRoom({
           offline: navigator.onLine === false,
           hidden: document.visibilityState === "hidden",
           hasStake: hasStakeRef.current,
+          canAct: canActRef.current,
           live,
           reached,
           rateLimited,
@@ -706,8 +724,11 @@ export function DraftRoom({
   const reconcileExpiredClock = useCallback(() => {
     if (settlingClockKey === currentClockKey) return;
     setSettlingClockKey(currentClockKey);
-    setPollKick((value) => value + 1);
-  }, [currentClockKey, settlingClockKey]);
+    // Only a signed-in poll can settle the lot (the tick route runs the
+    // resolvers for those alone), so a signed-out tab waits for its next
+    // poll instead of joining every open tab's request at zero.
+    if (state?.me.userId) setPollKick((value) => value + 1);
+  }, [currentClockKey, settlingClockKey, state?.me.userId]);
 
   useEffect(() => {
     if (!soldFlash) return;
@@ -1055,6 +1076,34 @@ export function DraftRoom({
     act("/api/draft/bid", { amount });
   };
 
+  // Only for viewers the room can actually ring for (draftAlertsReachViewer):
+  // a visitor, an admin or a drafted player never hears a thing. Shown in the
+  // waiting room too, where a pool player first opens the room.
+  const soundLocked = soundOn && !audioOn;
+  const soundToggleFor = (className: string) =>
+    draftAlertsReachViewer(state) ? (
+      <button
+        type="button"
+        onClick={toggleSound}
+        aria-pressed={soundOn && audioOn}
+        title={
+          soundLocked
+            ? "Your browser holds sound until you tap the page — tap to turn on the bell"
+            : soundOn
+              ? "Notification sound on — click to mute"
+              : "Notifications muted — click to enable a bell"
+        }
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg",
+          soundLocked && "border-accent/50 text-accent",
+          className,
+        )}
+      >
+        <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
+        {soundLocked ? "Tap to turn on alerts" : soundOn ? "Sound on" : "Muted"}
+      </button>
+    ) : null;
+
   if (state.status === "NOT_STARTED") {
     if (state.seasonStatus !== "SIGNUPS" && state.seasonStatus !== "DRAFT") {
       return (
@@ -1106,6 +1155,7 @@ export function DraftRoom({
           <div className="text-sm text-muted">
             This page goes live automatically — no need to refresh.
           </div>
+          {soundToggleFor("mx-auto mt-3")}
           {state.draftAtMs ? (
             <div className="mt-2 text-sm text-muted">
               🗓️ Draft night:{" "}
@@ -1356,24 +1406,6 @@ export function DraftRoom({
           : ""}
     </span>
   ) : null;
-  // Only for viewers the room can actually ring for (draftAlertsReachViewer):
-  // a visitor, an admin or a drafted player never hears a thing.
-  const soundToggle = draftAlertsReachViewer(state) ? (
-    <button
-      type="button"
-      onClick={toggleSound}
-      aria-pressed={soundOn}
-      title={
-        soundOn
-          ? "Notification sound on — click to mute"
-          : "Notifications muted — click to enable a bell"
-      }
-      className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg"
-    >
-      <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
-      {soundOn ? "Sound on" : "Muted"}
-    </button>
-  ) : null;
 
   // Dim the (stale) clocks while polling is dead: they're ticking on the last
   // state we saw, not the live auction. Everything in the lot card dims
@@ -1581,8 +1613,10 @@ export function DraftRoom({
                     autoNominated: state.lotAutoNominated,
                   })}{" "}
                   <span className="text-fg">{nominatorName}</span>
+                  {/* Every screen size: phone viewers never saw who
+                      nominates next. */}
                   {nextNominatorName ? (
-                    <span className="hidden sm:inline">
+                    <span>
                       {" "}
                       · next: {nextNominatorName}
                     </span>
@@ -1616,10 +1650,10 @@ export function DraftRoom({
                 />
               ) : null}
             </div>
-            {liveTeamLine || soundToggle || iAmNext ? (
+            {liveTeamLine || draftAlertsReachViewer(state) || iAmNext ? (
               <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-5 pb-2 text-xs text-muted">
                 {liveTeamLine}
-                {soundToggle}
+                {soundToggleFor("ml-auto")}
                 {/* Every screen size: the header's "next: Team 3" is hidden
                     on phones, and a turn that starts with searching the pool
                     loses most of its 90 seconds. */}
@@ -1823,6 +1857,23 @@ export function DraftRoom({
                   pending={pending}
                   onNominate={nominate}
                 />
+                {(() => {
+                  // Presence is already in the poll; it showed only as a 10px
+                  // "not in room" label on the team card, so the admin waited
+                  // out the absent captain's clock on every turn.
+                  const clockTeam = state.teams.find((t) => t.id === adminTeam.id);
+                  if (clockTeam?.captainInRoom !== false) return null;
+                  const captain = clockTeam.members.find(
+                    (m) => m.userId === clockTeam.captainId,
+                  );
+                  return (
+                    <p className="text-sm text-accent [overflow-wrap:anywhere]">
+                      {captain?.name ?? "Their captain"} isn&apos;t in the room —
+                      nominate for {adminTeam.name} or auto-nominate instead of
+                      waiting out the clock.
+                    </p>
+                  );
+                })()}
                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
                   <span>Or let the draft choose:</span>
                   <button
@@ -1973,16 +2024,26 @@ export function DraftRoom({
         defaultOpen={false}
       />
 
-      {/* Pool column FIRST in DOM: on a phone the pool is what a captain on
-          the clock needs NOW — team cards would otherwise bury it 3-4 screens
-          down (and screen readers/tab order reach the pool first too).
-          lg:order-* restores the desktop layout: teams left, feed above pool
-          on the right. */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="flex min-w-0 flex-col gap-6 lg:order-2">
-          {/* scroll-mt clears the 64px sticky header + the fixed clock bar
-              when the NominateBar's #player-pool anchor jumps here. */}
-          <div id="player-pool" className="scroll-mt-32 lg:order-2">
+      {/* Desktop is fixed by grid placement: teams on the left across both
+          rows, the feed above the pool on the right (rows auto, then the
+          rest, and the pool starts at its row's top, so a tall roster column
+          never opens a gap between them). Phone ORDER follows the viewer.
+          A captain or admin gets the pool FIRST: on the clock it is what they
+          need now, and team cards would bury it 3-4 screens down. Everyone
+          else (spectators, players in the pool) acts on nothing there, and
+          40-60 pool rows put the sales and rosters they came to watch about
+          2,000px down, so they get those first. DOM order, not CSS order, so
+          screen readers and tab order match what they see. */}
+      {(() => {
+        const watcher = !me.myTeamId && !me.isAdmin;
+        const pool = (
+          // scroll-mt clears the 64px sticky header + the fixed clock bar
+          // when the NominateBar's #player-pool anchor jumps here.
+          <div
+            key="pool"
+            id="player-pool"
+            className="min-w-0 scroll-mt-32 lg:col-start-3 lg:row-start-2 lg:self-start"
+          >
             <AvailableList
               state={state}
               role={poolRole}
@@ -1995,14 +2056,26 @@ export function DraftRoom({
               }}
             />
           </div>
-          <div className="lg:order-1">
+        );
+        const feed = (
+          <div key="feed" className="min-w-0 lg:col-start-3 lg:row-start-1">
             <RecentSales sales={sales} />
           </div>
-        </div>
-        <div className="min-w-0 lg:order-1 lg:col-span-2">
-          <TeamsGrid state={state} />
-        </div>
-      </div>
+        );
+        const rosters = (
+          <div
+            key="rosters"
+            className="min-w-0 lg:col-span-2 lg:col-start-1 lg:row-span-2 lg:row-start-1"
+          >
+            <TeamsGrid state={state} />
+          </div>
+        );
+        return (
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:grid-rows-[auto_1fr]">
+            {watcher ? [feed, rosters, pool] : [pool, feed, rosters]}
+          </div>
+        );
+      })()}
     </div>
   );
 }
