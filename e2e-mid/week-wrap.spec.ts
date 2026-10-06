@@ -52,13 +52,23 @@ test("a finished week has a wrap: results, the table, what's next, no client err
   assertNoErrors();
 });
 
+// The root loading.tsx streams the shell first, so notFound() renders the
+// not-found page under a 200: check what it renders, as quality-of-life does.
 test("a week that doesn't exist is not found", async ({ page }) => {
   const season = await db.season.findFirstOrThrow({
     where: { isActive: true },
     select: { id: true },
   });
-  const res = await page.goto(`/seasons/${season.id}/weeks/999`);
-  expect(res?.status()).toBe(404);
-  const bad = await page.goto(`/seasons/${season.id}/weeks/not-a-week`);
-  expect(bad?.status()).toBe(404);
+  const assertNoErrors = trackPageErrors(page);
+  for (const week of ["999", "not-a-week"]) {
+    await page.goto(`/seasons/${season.id}/weeks/${week}`);
+    await expect(
+      page.locator('meta[name="robots"][content="noindex"]').first(),
+    ).toBeAttached();
+    await expect(
+      page.getByRole("heading", { name: "Page not found", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: /wrap$/ })).toHaveCount(0);
+  }
+  assertNoErrors();
 });
