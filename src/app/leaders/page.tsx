@@ -13,7 +13,10 @@ import { NoSeasonYet, SeasonSwitcher } from "@/components/season-scope";
 import { finishedSeasonLink } from "@/lib/season-choices";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { getSeasonGameLeaders } from "@/lib/cached-queries";
+import {
+  getPublicSeasonHonorReadiness,
+  getSeasonGameLeaders,
+} from "@/lib/cached-queries";
 import { LeaderBoard, type LeaderBoardRow } from "@/components/leader-board";
 import {
   summarizePlayerGames,
@@ -34,7 +37,6 @@ import {
   HONOR_WEEK_STATE,
   isNoPerformanceHonorWeek,
 } from "@/lib/honors-readiness";
-import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
 import { formatNetWorth } from "@/lib/utils";
 import {
   buttonClasses,
@@ -137,7 +139,7 @@ export default async function LeadersPage({
   // same) — honorsByWeek used to re-parse the week's games per week.
   const [gameRows, honorReadiness, seasonOptions] = await Promise.all([
     getSeasonGameLeaders(season.id),
-    getSeasonHonorReadiness(season.id),
+    getPublicSeasonHonorReadiness(season.id),
     loadSeasonChoices("games", season.id),
   ]);
   const decodedRows = gameRows.map((game) => ({

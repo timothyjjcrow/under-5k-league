@@ -44,6 +44,12 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   a stored `teamId` held three of Season 1's five weeks. A line with no league
   user, or credited to the other team, still holds the week, and /leaders
   names every held week, not only the newest.
+- **/leaders reads the readiness through the public cache**
+  (`getPublicSeasonHonorReadiness`, `cached-queries.ts`: the result revision
+  and the "games" tag), so a view doesn't re-read the season's box scores
+  beside the cached leaderboards. The worker and the announcement paths read
+  it directly; so does Home's honors line, which sits in a nested Suspense
+  where a cached wrapper has hung before (admin-and-operations.md).
 - **The post says "167 impact points (best game on Dark Willow)":** the
   points are the week's total and the hero the best game; "on Dark Willow"
   read as one game's score.

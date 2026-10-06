@@ -4,7 +4,6 @@
 
 import type { PrismaClient } from "@prisma/client";
 import {
-  discordProfileFromMe,
   exchangeDiscordCode,
   fetchDiscordIdentity,
   oauthLandingPath,
@@ -250,6 +249,3 @@ export async function handleDiscordCallback(
   };
 }
 
-// Re-exported so the itest can build valid payload shapes the same way the
-// fetcher does.
-export { discordProfileFromMe };

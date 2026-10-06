@@ -1,4 +1,6 @@
 import { prisma } from "./prisma";
+import { createPublicSnapshot } from "./public-cache";
+import { getSeasonHonorReadiness } from "./honors-readiness-service";
 import { compareRecordChronology } from "./records";
 import {
   fetchPublicGameSnapshot,
@@ -114,3 +116,16 @@ export async function getSeasonGameLeaders(seasonId: string) {
     getPublicGameSnapshot(seasonId), getPublicMatchContext(seasonId),
   ]));
 }
+
+/**
+ * Weekly honors readiness for a page body (/leaders): the same rows the
+ * worker announces from, cached like every all-games roll-up (the result
+ * revision and the "games" tag), so a view doesn't re-read the season's box
+ * scores beside the cached leaderboards. The announcement paths keep reading
+ * getSeasonHonorReadiness directly, and so does Home's honors line, which
+ * sits in a nested Suspense where a cached wrapper has hung before.
+ */
+export const getPublicSeasonHonorReadiness = createPublicSnapshot(
+  "honor-readiness-v1",
+  async (seasonId) => (seasonId ? getSeasonHonorReadiness(seasonId) : []),
+);
