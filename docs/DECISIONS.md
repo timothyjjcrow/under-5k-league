@@ -49,7 +49,7 @@ usage figures are the US site's as of 2026-09-26.
 | Date | Not doing | Reason | Revisit when |
 | --- | --- | --- | --- |
 | 2026-10-05 | Showing last season's Leaders and Hero meta during signups. | Tim's call: not needed. | Tim asks. |
-| 2026-10-05 | An admin bidding for an absent captain during the draft. | Tim's call: an admin spending a team's money isn't wanted; Auto-nominate and the "isn't in the room" note cover an absence. | Tim asks. |
+| 2026-10-05 | An admin bidding for an absent captain during the draft. | Tim's call: not needed. Auto-nominate and the "isn't in the room" note already cover an absence. | Tim asks. |
 | 2026-10-05 | Renaming Season 1 ("Under 5K league") to match "Season 2". | Tim's call: leave it. | Tim asks. |
 | 2026-10-05 | Invite credit (`?ref=` on the invite link, "invited by" in the signup post, or a stored recruiter count). | Waiting on Tim's pick between the small version (no schema) and the full one (a column and a maintenance release). | Tim picks one. |
 | 2026-09-27 | Retiring Scrims, or trimming its entry points and stat boards. | Tim keeps Scrims; fixing the booking flow was the change. | Tim asks. |
