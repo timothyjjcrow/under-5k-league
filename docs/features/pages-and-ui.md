@@ -903,3 +903,18 @@ the league is already draftable and many visitors have joined. Write for both.
 - **Fixture data covers the edges:** modern box scores except two legacy-shaped
   games (to show degradation), league-night `scheduledAt` on every match (so
   `/api/calendar` has events), and games on completed playoff matches.
+- **Every page streams before it runs.** The root `loading.tsx` sends the
+  shell first, so `notFound()` answers 200 and a page's `redirect()` is a
+  client redirect inside a 200 (a one-second meta refresh plus
+  `NEXT_REDIRECT` in the stream). In e2e, assert the not-found page itself
+  (the noindex meta and the "Page not found" heading, as
+  `e2e-mid/quality-of-life.spec.ts` does), never a 404 status. Read a
+  redirecting page's server answer with `page.request.get`
+  (`e2e-mid/import-progress.spec.ts`): Chrome drops the document's body once
+  the browser follows the redirect.
+- **Run the browser suites locally with CI's environment:** blank
+  `NEXT_PUBLIC_APP_NAME` and the lobby-bot keys (`DOTA_LOBBY_BOT_URL`,
+  `DOTA_LOBBY_BOT_SECRET`, `DOTA_SEASON_LOBBY_BOT_ENABLED`) on the command
+  line. A local `.env` or `.env.local` that sets them fails
+  `e2e-mid/boards.spec.ts` (it refuses the old league name) and the inhouse
+  specs (they see a configured bot).
