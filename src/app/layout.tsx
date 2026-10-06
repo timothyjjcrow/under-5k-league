@@ -13,6 +13,7 @@ const display = Oswald({
 });
 import { SiteHeader } from "@/components/site-header";
 import { InviteRefCapture } from "@/components/invite-ref-capture";
+import { TRANSLATION_DOM_GUARD } from "@/lib/translation-dom-guard";
 import { SiteFooter } from "@/components/site-footer";
 import { Toaster } from "@/components/toaster";
 import { ResultSyncPing } from "@/components/result-sync-ping";
@@ -169,6 +170,10 @@ export default async function RootLayout({
       data-scroll-behavior="smooth"
     >
       <body className="flex min-h-full flex-col">
+        {/* Keeps a browser-translated page from crashing on React's next
+            update (src/lib/translation-dom-guard.ts). First in <body>, so it
+            runs while the page is still parsing, before any React code. */}
+        <script dangerouslySetInnerHTML={{ __html: TRANSLATION_DOM_GUARD }} />
         {teamHueCss ? (
           // Each season's teams get evenly spaced crest colours (see
           // lib/team-hues.ts). Only team ids and integers go in here.

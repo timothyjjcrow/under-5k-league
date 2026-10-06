@@ -370,6 +370,26 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   `aria-current="step"` and sr-only "(done)"/"(current)"; its ticks are
   `aria-hidden`.
 
+## Translated pages
+
+- **Keep the translation guard first in `<body>`**
+  (`src/lib/translation-dom-guard.ts`, inlined by the root layout). Browser
+  page translation (Chrome's "Translate this page", Edge, Yandex) swaps text
+  nodes for its own `<font>` elements. React's next update that removes or
+  moves one threw `NotFoundError` ("Failed to execute 'removeChild' on
+  'Node'"), and `error.tsx` replaced the page with no reference, because the
+  error happened in the browser. A player reading the US league in Russian
+  hit it the moment their signup saved (2026-10-06); nothing logged it
+  server-side, and an untranslated browser never saw it. The guard (the
+  standard workaround for facebook/react#11538) leaves a moved node alone
+  and appends instead of inserting before one, so translated text can lag a
+  moment instead of crashing.
+- **Never answer this with `translate="no"`:** both leagues have players
+  who read the site translated. `e2e/translated-signup.spec.ts` translates
+  /me the way Chrome does and signs up, and `translation-dom-guard.test.ts`
+  pins the layout. An error page with no `ref:` line came from the browser,
+  not the server: look for translation and extensions before the logs.
+
 ## Home page (`/`)
 
 - **`src/app/page.tsx` loads data and picks the phase; the views live in
