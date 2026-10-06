@@ -1,8 +1,9 @@
 # Match-night poll
 
 An availability vote on the league's weekly match slot, shown on Home. An
-admin opens a poll and its grid fills itself (every day, every hour from noon
-to 6 PM on the league's clock, unless the admin narrows it); signed-up players
+admin opens a poll and its grid fills itself (every day, every hour over the
+league's window on its own clock, unless the admin changes it: noon to 6 PM
+Pacific, 5 PM to 11 PM Berlin); signed-up players
 mark every start time they could play, and the time the most players can make
 wins. Main files: `src/lib/match-night-poll.ts` (pure: the grid, labels, the
 count, the viewer's-clock conversion, the page's view),
@@ -25,9 +26,13 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   `"<day>@<minute>"` (`slotKey`); `slotLabel` prints them in the same shape
   `fixturesMatchNightLabel` prints a season's night.
 - **The grid fills itself** (`gridSlots`): every ticked day (all seven by
-  default), on the hour, from `POLL_DEFAULT_FROM_HOUR` (12) to
-  `POLL_DEFAULT_TO_HOUR` (18) inclusive on the league's clock, so a default
-  poll offers 49 start times. The admin form only adjusts days and hours;
+  default), on the hour, from `POLL_DEFAULT_FROM_HOUR` to
+  `POLL_DEFAULT_TO_HOUR` inclusive on the league's clock, so a default poll
+  offers 49 start times. The window is per league
+  (`LEAGUE_CONFIG.pollDefaultHours`): noon to 6 PM Pacific for the US, and 5
+  PM to 11 PM Berlin for Europe, centred on the 8 PM its players asked for
+  (Tim's call, 2026-10-06; Europe's first poll offered only afternoons and
+  was replaced). The admin form only adjusts days and hours;
   there is no per-slot entry. At most `POLL_MAX_SLOTS` (84).
 - **Slots are fixed once the poll opens.** An edit would reinterpret every
   ballot already cast; the admin deletes the poll and opens a new one.

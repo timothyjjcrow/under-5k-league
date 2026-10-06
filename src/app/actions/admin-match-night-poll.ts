@@ -52,7 +52,8 @@ export async function createMatchNightPoll(
   const admin = await adminOrError();
   if ("error" in admin) return admin;
   // The grid fills itself: every ticked day, on the hour, between the two
-  // hours (every day, noon to 6 PM, unless the admin changed them).
+  // hours (every day over the league's default window unless the admin
+  // changed them: noon to 6 PM Pacific, 5 PM to 11 PM Berlin).
   const hour = (key: string, fallback: number) => {
     const raw = str(formData, key).trim();
     return raw === "" ? fallback : Number(raw);

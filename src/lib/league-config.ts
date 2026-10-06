@@ -106,6 +106,12 @@ export function createLeagueConfig(env: LeagueEnvironment) {
         ? `${day} at ${time} ${zoneLabel(timeZone)}`
         : "Match night to be announced",
     },
+    // The start times a new match-night poll offers, on the league's clock,
+    // both ends included. The US keeps noon to 6 PM Pacific (players span
+    // Pacific to Eastern); Europe's evening is centred on 8 PM Berlin, the
+    // time its players asked for (Tim's call, 2026-10-06). Seven an hour
+    // apart either way, so a default poll is 49 start times in both leagues.
+    pollDefaultHours: europe ? { from: 17, to: 23 } : { from: 12, to: 18 },
   } as const;
 }
 

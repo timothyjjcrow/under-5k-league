@@ -9,6 +9,7 @@
 // Pages show every slot on the viewer's own clock; the league's clock is
 // what gets stored and announced.
 
+import { LEAGUE_CONFIG } from "./league-config";
 import { zoneLabel } from "./zone-label";
 import { dateAtWallTime, wallTime, zoneFormatter } from "./zoned-time";
 
@@ -21,9 +22,11 @@ export type PollSlot = {
 
 /** Every day of the week, Monday first. */
 export const POLL_DAYS = [1, 2, 3, 4, 5, 6, 0] as const;
-/** The grid a new poll offers: every day, on the hour, noon to 6 PM. */
-export const POLL_DEFAULT_FROM_HOUR = 12;
-export const POLL_DEFAULT_TO_HOUR = 18;
+/** The grid a new poll offers: every day, on the hour, over the league's
+ *  default window (`LEAGUE_CONFIG.pollDefaultHours`): noon to 6 PM Pacific
+ *  for the US, 5 PM to 11 PM Berlin for Europe. */
+export const POLL_DEFAULT_FROM_HOUR = LEAGUE_CONFIG.pollDefaultHours.from;
+export const POLL_DEFAULT_TO_HOUR = LEAGUE_CONFIG.pollDefaultHours.to;
 /** Seven days of twelve hourly start times. */
 export const POLL_MAX_SLOTS = 84;
 /** How long Home keeps showing a poll's result after voting closes. */
@@ -105,7 +108,7 @@ export function parseSlots(json: string): PollSlot[] {
  * The start times a poll offers: every chosen day, on the hour, from
  * `fromHour` to `toHour` inclusive on the league's clock, Monday first. The
  * admin form posts the days and the two hours; a new poll defaults to every
- * day, noon to 6 PM.
+ * day over the league's window (POLL_DEFAULT_FROM_HOUR to POLL_DEFAULT_TO_HOUR).
  */
 export function gridSlots(input: {
   days: readonly number[];

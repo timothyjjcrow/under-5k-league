@@ -380,9 +380,11 @@ function NewPollForm({ nowMs, hasPoll }: { nowMs: number; hasPoll: boolean }) {
       <div className="flex flex-wrap items-center gap-3">
         <SubmitButton size="sm">Open the poll</SubmitButton>
         <span className="text-xs text-muted">
-          Every day from noon to 6 PM is 49 start times. They can&apos;t be
-          edited once voting starts; delete the poll and open a new one
-          instead.
+          Every day from {slotHour(POLL_DEFAULT_FROM_HOUR * 60, LEAGUE_LOCALE)}{" "}
+          to {slotHour(POLL_DEFAULT_TO_HOUR * 60, LEAGUE_LOCALE)} is{" "}
+          {POLL_DAYS.length * (POLL_DEFAULT_TO_HOUR - POLL_DEFAULT_FROM_HOUR + 1)}{" "}
+          start times. They can&apos;t be edited once voting starts; delete the
+          poll and open a new one instead.
         </span>
       </div>
     </ActionForm>
