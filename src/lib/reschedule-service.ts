@@ -35,6 +35,7 @@ import {
 import { roundLabelsForPost } from "./playoff-rounds";
 import { isSerializationConflict } from "./prisma-errors";
 import { raceHook } from "./race-hook";
+import { retrySerializable } from "./serializable-retry";
 import { formatLeagueTime } from "./zoned-time";
 import {
   lockRefusal,
@@ -184,8 +185,12 @@ export type VoteOutcome =
       lockBlocked: string | null;
     };
 
-/** Tries for a ready-check answer that loses a serialization race. */
-const VOTE_ATTEMPTS = 3;
+/**
+ * Tries for a ready-check answer that loses a serialization race. The last
+ * answers to a time can arrive together; each loser waits out the winner's
+ * commit before trying again (`retrySerializable`).
+ */
+const VOTE_ATTEMPTS = 6;
 
 // Sanity bounds for a proposed time (`schedule.ts` explains them; /rules
 // quotes them).
@@ -832,7 +837,9 @@ async function lockInTx(
  *
  * An answer that loses a serialization race is retried: it is an idempotent
  * upsert, and the retry is what notices when two last answers arrived at
- * once (each alone saw the option one short).
+ * once (each alone saw the option one short). It waits first, because the
+ * winner may still be committing, and a retry that starts before that commit
+ * lands can't see the winner's answer and loses again.
  */
 export async function voteReschedule(
   userId: string,
@@ -841,111 +848,108 @@ export async function voteReschedule(
   ready: boolean,
   options: { onAcceptedCommit?: () => void } = {},
 ): Promise<VoteOutcome> {
-  for (let attempt = 1; ; attempt++) {
-    let outcome;
-    try {
-      outcome = await prisma.$transaction(
-        async (tx) => {
-          const request = await loadRequest(tx, requestId);
-          if (!request) throw new UserFacingError("That proposal is gone");
-          if (request.status === "ACCEPTED")
-            throw new UserFacingError(
-              "A time is already locked in — reload to see it",
+  let outcome;
+  try {
+    outcome = await retrySerializable(
+      () =>
+        prisma.$transaction(
+          async (tx) => {
+            const request = await loadRequest(tx, requestId);
+            if (!request) throw new UserFacingError("That proposal is gone");
+            if (request.status === "ACCEPTED")
+              throw new UserFacingError(
+                "A time is already locked in — reload to see it",
+              );
+            if (request.status !== "PENDING")
+              throw new UserFacingError("That proposal is no longer open");
+            const { match } = request;
+            const activeSeason = await loadActiveSeason(tx);
+            assertMatchCanMove(activeSeason, match);
+            assertIsOption(request, time);
+            if (time.getTime() <= Date.now())
+              throw new UserFacingError("That time has already passed");
+
+            const sides = await loadSides(tx, match);
+            const plays =
+              sides.home.seatIds.includes(userId) ||
+              sides.away.seatIds.includes(userId) ||
+              userId === match.homeTeam.captainId ||
+              userId === match.awayTeam.captainId;
+            if (!plays)
+              throw new UserFacingError(
+                "Only the players and captains in this match answer its ready check",
+              );
+
+            await tx.rescheduleVote.upsert({
+              where: {
+                requestId_userId_time: { requestId, userId, time },
+              },
+              create: { requestId, userId, time, ready },
+              update: { ready },
+            });
+
+            const votes = await loadOptionVotes(tx, request, time);
+            const tally = tallyOption(
+              time.getTime(),
+              sides,
+              votes,
+              activeSeason.teamSize,
             );
-          if (request.status !== "PENDING")
-            throw new UserFacingError("That proposal is no longer open");
-          const { match } = request;
-          const activeSeason = await loadActiveSeason(tx);
-          assertMatchCanMove(activeSeason, match);
-          assertIsOption(request, time);
-          if (time.getTime() <= Date.now())
-            throw new UserFacingError("That time has already passed");
-
-          const sides = await loadSides(tx, match);
-          const plays =
-            sides.home.seatIds.includes(userId) ||
-            sides.away.seatIds.includes(userId) ||
-            userId === match.homeTeam.captainId ||
-            userId === match.awayTeam.captainId;
-          if (!plays)
-            throw new UserFacingError(
-              "Only the players and captains in this match answer its ready check",
+            if (!tally.everyoneIn) return { locked: null, lockBlocked: null };
+            // Everyone's in. Re-judge the calendar now (it may have moved since
+            // the proposal); a time that no longer fits keeps the answer and
+            // says why it didn't move.
+            const blocked =
+              match.scheduledAt?.getTime() === time.getTime()
+                ? "That is already this match's kickoff"
+                : await calendarProblem(
+                    tx,
+                    match,
+                    activeSeason.firstMatchNight,
+                    time,
+                    "lock",
+                  );
+            if (blocked) return { locked: null, lockBlocked: blocked };
+            const commit = await retimeToOption(
+              tx,
+              request,
+              match,
+              time,
+              sides,
+              votes,
+              true,
             );
-
-          await tx.rescheduleVote.upsert({
-            where: {
-              requestId_userId_time: { requestId, userId, time },
-            },
-            create: { requestId, userId, time, ready },
-            update: { ready },
-          });
-
-          const votes = await loadOptionVotes(tx, request, time);
-          const tally = tallyOption(
-            time.getTime(),
-            sides,
-            votes,
-            activeSeason.teamSize,
-          );
-          if (!tally.everyoneIn) return { locked: null, lockBlocked: null };
-          // Everyone's in. Re-judge the calendar now (it may have moved since
-          // the proposal); a time that no longer fits keeps the answer and
-          // says why it didn't move.
-          const blocked =
-            match.scheduledAt?.getTime() === time.getTime()
-              ? "That is already this match's kickoff"
-              : await calendarProblem(
-                  tx,
-                  match,
-                  activeSeason.firstMatchNight,
-                  time,
-                  "lock",
-                );
-          if (blocked) return { locked: null, lockBlocked: blocked };
-          const commit = await retimeToOption(
-            tx,
-            request,
-            match,
-            time,
-            sides,
-            votes,
-            true,
-          );
-          return {
-            locked: {
-              ...commit,
-              matchId: match.id,
-              seasonId: match.seasonId,
-              phase: match.phase,
-              week: match.week,
-              bracketSlot: match.bracketSlot,
-              homeName: match.homeTeam.name,
-              awayName: match.awayTeam.name,
-              newTime: time,
-              proposerId: request.proposedById,
-            } satisfies LockCommit,
-          };
-        },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+            return {
+              locked: {
+                ...commit,
+                matchId: match.id,
+                seasonId: match.seasonId,
+                phase: match.phase,
+                week: match.week,
+                bracketSlot: match.bracketSlot,
+                homeName: match.homeTeam.name,
+                awayName: match.awayTeam.name,
+                newTime: time,
+                proposerId: request.proposedById,
+              } satisfies LockCommit,
+            };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        ),
+      { attempts: VOTE_ATTEMPTS },
+    );
+  } catch (error) {
+    if (isSerializationConflict(error))
+      throw new UserFacingError(
+        "That ready check just changed — reload and try again",
       );
-    } catch (error) {
-      if (isSerializationConflict(error)) {
-        if (attempt < VOTE_ATTEMPTS) continue;
-        throw new UserFacingError(
-          "That ready check just changed — reload and try again",
-        );
-      }
-      throw error;
-    }
-    if (!outcome.locked)
-      return { locked: null, lockBlocked: outcome.lockBlocked };
-    return {
-      locked: await acceptedFromCommit(
-        outcome.locked,
-        options.onAcceptedCommit,
-      ),
-    };
+    throw error;
   }
+  if (!outcome.locked)
+    return { locked: null, lockBlocked: outcome.lockBlocked };
+  return {
+    locked: await acceptedFromCommit(outcome.locked, options.onAcceptedCommit),
+  };
 }
 
 /**

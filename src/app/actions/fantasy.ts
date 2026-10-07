@@ -13,9 +13,9 @@ import { raceHook } from "@/lib/race-hook";
 import {
   claimSideGameDraft,
   claimSideGameSeason,
-  retrySideGameTransaction,
 } from "@/lib/side-game-claims";
 import { isSerializationConflict } from "@/lib/prisma-errors";
+import { retrySerializable } from "@/lib/serializable-retry";
 
 /**
  * Save the signed-in manager's fantasy five for the active season. Picks are
@@ -78,7 +78,7 @@ export async function saveFantasyRoster(
   if (error) return { error };
 
   try {
-    await retrySideGameTransaction(() =>
+    await retrySerializable(() =>
       prisma.$transaction(
         async (tx) => {
           // The league-wide lock is checked INSIDE the write transaction. The

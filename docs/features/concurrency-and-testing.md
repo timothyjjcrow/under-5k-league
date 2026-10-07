@@ -29,6 +29,16 @@ serializes writers and hides every race here.
   `dotaMatchId`, so `recomputeSeries` never runs again).
 - **Never report success on a lost claim.** `leaveLeague` throws `NOT_ACTIVE` when
   its claim loses, so a player removed mid-withdrawal is not told "Withdrawn".
+- **Wait before retrying a Serializable abort.** Postgres often cancels the
+  loser while the winner is still committing. A retry whose snapshot starts
+  before that commit lands reads the winner's rows as in flight and is
+  cancelled against the same pivot again ("Canceled on conflict out to pivot
+  …, during read"). The ready check's last two answers lost three immediate
+  retries in a row that way in CI. `retrySerializable`
+  (`src/lib/serializable-retry.ts`) waits a jittered, doubling interval (5–10
+  ms, then 10–20, …) and rethrows the last conflict for the caller's "reload
+  and try again". Use it for a new retry; `grep -rn "retrySerializable(" src`
+  lists the callers.
 
 Worked examples, with the damage each guard prevents: `applyPick` (frozen
 inhouse draft), `undoLastSale` (live lot and nomination clock at once),
@@ -192,3 +202,11 @@ keep the old `ld2l_` prefix.)
   every table. `assertPostgresTestUrl` accepts only `ld2l_test` or `ld2l_pgtest`,
   and `pg:up`/`pg:down` require localhost. Never use a production or shared URL,
   and never paste a credential-bearing URL into a command line or shell history.
+- **Slow the commits to flush out a retry flake.** A CI runner's disk can
+  hold a commit open far longer than a laptop's. `psql -d postgres -c "ALTER
+  DATABASE ld2l_pgtest SET commit_delay = 20000" -c "ALTER DATABASE
+  ld2l_pgtest SET commit_siblings = 0"` (superuser) makes every commit wait
+  before it flushes (on macOS each COMMIT then takes 20–100 ms); `pg:down`
+  drops the setting with the database. With it, the ready check's contention
+  test failed 10 of 10 runs with three immediate retries and passed 30 of 30
+  with `retrySerializable`.

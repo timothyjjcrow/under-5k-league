@@ -133,6 +133,11 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   option one short; SSI aborts one, and its retry (`VOTE_ATTEMPTS`) is what
   locks. `reschedule-ready-check.itest.ts` races it on Postgres
   (sabotage-verified: Read Committed or no retry leaves the match unmoved).
+  The retry waits first (`retrySerializable`): the winner may still be
+  committing, and a retry that starts before its commit lands loses again.
+  Three immediate retries all lost that way in CI on 2026-10-06, and the
+  answer was refused; a slow-commit test database reproduces it
+  (`concurrency-and-testing.md`).
 - **One open proposal per match, by Serializable.** There is no unique
   constraint: a new proposal (or a counter-offer from either captain) cancels
   the open one in a Serializable transaction, or two simultaneous proposals

@@ -249,8 +249,9 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
   in `side-game-claims.ts`. A Serializable read alone doesn't conflict with a
   child-row write. Postgres uses `FOR SHARE` (managers stay concurrent;
   import, phase, reschedule and archive writers are excluded); SQLite uses
-  guarded no-op `updateMany`s. `retrySideGameTransaction` retries
-  `isSerializationConflict` (P2034, or raw P2010 with SQLSTATE 40001). Seams
+  guarded no-op `updateMany`s. `retrySerializable` retries
+  `isSerializationConflict` (P2034, or raw P2010 with SQLSTATE 40001) after a
+  short random wait. Seams
   `fantasy.save.afterLockRead`, `pickem.save.afterLockRead`.
 
 ## Fantasy
