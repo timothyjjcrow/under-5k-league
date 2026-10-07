@@ -15,9 +15,11 @@ const UI_PUBLIC_ASSET =
   /\.(?:avif|gif|ico|jpe?g|mp4|png|svg|webm|webp|woff2?)$/i;
 
 const STRICT_FILES = new Set([
+  ".claude/launch.json",
   ".env",
   ".env.example",
   ".gitignore",
+  ".nvmrc",
   ".vercelignore",
   "AGENTS.md",
   "CLAUDE.md",
@@ -26,16 +28,27 @@ const STRICT_FILES = new Set([
   "docs/DECISIONS.md",
   "docs/PRODUCTION-OPERATIONS.md",
   "docs/RELEASING.md",
+  "eslint.config.mjs",
   "next.config.js",
   "next.config.mjs",
   "next.config.ts",
   "package-lock.json",
   "package.json",
+  "playwright.config.ts",
+  "playwright.midseason.config.ts",
+  "playwright.postseason.config.ts",
   "postcss.config.js",
   "postcss.config.mjs",
   "postcss.config.ts",
+  // The Next proxy refreshes the session cookie on page loads. It never
+  // touches the database and never matches /api, so never the cron route
+  // (src/proxy.test.ts pins the matcher).
+  "src/proxy.ts",
   "tsconfig.json",
   "vercel.json",
+  "vitest.config.mts",
+  "vitest.integration.config.mts",
+  "vitest.pg.config.mts",
 ]);
 
 const STRICT_PREFIXES = [
@@ -49,8 +62,17 @@ const STRICT_PREFIXES = [
 ];
 
 const TEST_FILE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/;
-const TEST_PREFIXES = ["e2e/", "test/"];
+// The three Playwright suites with their helpers, seeds and global setups.
+// The app never imports them and the PostgreSQL suite never loads them
+// (src/lib/release-classification.test.ts checks both).
+const BROWSER_TEST_PREFIXES = ["e2e/", "e2e-mid/", "e2e-postseason/"];
+const TEST_PREFIXES = [...BROWSER_TEST_PREFIXES, "test/"];
 const DOC_PREFIXES = ["docs/"];
+// Artwork exports kept outside public/: Next serves only public/ and bundles
+// only what code imports, and nothing imports these. They stay strict for
+// review, with no DB or scheduler controls, and cannot move the ratchet. Any
+// other kind of file under brand/ is still an unknown path.
+const BRAND_ARTWORK_PREFIX = "brand/";
 
 // The mutation ratchet (scripts/mutation-guard.mjs) deletes each protected
 // guard and runs the PostgreSQL integration suite. Its verdict can only move
@@ -255,11 +277,16 @@ function isNeutralPath(path) {
   );
 }
 
+function isBrandArtwork(path) {
+  return path.startsWith(BRAND_ARTWORK_PREFIX) && UI_PUBLIC_ASSET.test(path);
+}
+
 function isStrictPath(path) {
   return (
     STRICT_FILES.has(path) ||
     /^\.env(?:\.|$)/.test(path) ||
-    STRICT_PREFIXES.some((prefix) => path.startsWith(prefix))
+    STRICT_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    isBrandArtwork(path)
   );
 }
 
@@ -349,10 +376,11 @@ function isMutationNeutralPath(path) {
   return (
     MUTATION_NEUTRAL_DOCS.has(path) ||
     DOC_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
-    path.startsWith("e2e/") ||
+    BROWSER_TEST_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
     TEST_FILE.test(path) ||
     isAppPath(path) ||
-    (path.startsWith("public/") && UI_PUBLIC_ASSET.test(path))
+    (path.startsWith("public/") && UI_PUBLIC_ASSET.test(path)) ||
+    isBrandArtwork(path)
   );
 }
 

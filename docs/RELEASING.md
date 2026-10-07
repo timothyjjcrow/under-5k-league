@@ -47,6 +47,11 @@ The full plan is saved to `output/shared-release.json`. Look at
   leagues: this is a routine release. Carry on.
 - Either one `true` for either league: stop. This is a maintenance release;
   follow [Appendix B](#appendix-b-database-and-scheduler-changes) first.
+  Each classification's `reasons` names the files behind it. A file the live
+  classifier does not know reads `unknown path` and sets both flags even when
+  nothing touches the database or scheduler; the README's
+  [classifier notes](../README.md#hosting-and-release-setup) say how a path
+  becomes known.
 
 `"status": "already-current"` means both sites already run this commit and
 passed their health checks, so there is nothing to release.

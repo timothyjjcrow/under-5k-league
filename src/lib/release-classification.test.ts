@@ -23,6 +23,7 @@ import {
   parseNameStatus,
   parseRawDiff,
 } from "../../scripts/classify-release.mjs";
+import { sourceFiles } from "../../test/support/source-files";
 
 const temporaryDirectories: string[] = [];
 
@@ -250,6 +251,23 @@ describe("release classifier policy", () => {
     ["ops/dota-lobby-bot/server.mjs", true],
     ["ops/dota-lobby-relay/src/index.mjs", true],
     ["ops/dota-lobby-relay/wrangler.jsonc", true],
+    // The Next proxy and the root tooling were unknown paths, which select
+    // both controls: src/proxy.ts forced the 2026-10-06 maintenance release
+    // with no migration. Like any config or server file they still run the
+    // ratchet.
+    ["src/proxy.ts", true],
+    [".claude/launch.json", true],
+    [".nvmrc", true],
+    ["eslint.config.mjs", true],
+    ["playwright.config.ts", true],
+    ["playwright.midseason.config.ts", true],
+    ["playwright.postseason.config.ts", true],
+    ["vitest.config.mts", true],
+    ["vitest.integration.config.mts", true],
+    ["vitest.pg.config.mts", true],
+    // Artwork exports outside public/, which nothing serves or imports.
+    ["brand/banner-1024x400.png", false],
+    ["brand/inhouse-square-512.png", false],
   ])(
     "keeps strict review without DB or scheduler controls for %s",
     (file, needsMutation) => {
@@ -263,12 +281,97 @@ describe("release classifier policy", () => {
     },
   );
 
-  it("fails closed for an unknown path", () => {
-    expect(classifyEntries([modified("unknown.txt")])).toMatchObject({
+  // CLAUDE.md names three Playwright folders. Their helpers, seeds and global
+  // setups are test paths, like those in e2e/: e2e-mid/global-setup.ts was
+  // the other unknown path in the 2026-10-06 release.
+  it.each([
+    "e2e-mid/global-setup.ts",
+    "e2e-mid/helpers.ts",
+    "e2e-mid/stage.ts",
+    "e2e-postseason/archive.ts",
+    "e2e-postseason/corrupt-champion.ts",
+    "e2e-postseason/global-setup.ts",
+    "e2e-postseason/remove-games.ts",
+    "e2e-postseason/seed-side-games.ts",
+    "e2e-postseason/seed.ts",
+  ])("treats the browser-suite helper %s as a neutral test path", (file) => {
+    // Alone it establishes no fast lane and selects no controls...
+    expect(classifyEntries([modified(file)])).toMatchObject({
       lane: "strict",
+      needs_postgres: true,
+      needs_mutation: false,
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+    // ...and beside a presentation change it is only a companion.
+    expect(
+      classifyEntries([
+        modified("src/components/site-footer.tsx", { presentationSafe: true }),
+        modified(file),
+      ]),
+    ).toMatchObject({
+      lane: "ui-only",
+      needs_postgres: false,
+      needs_mutation: false,
+    });
+  });
+
+  it.each([
+    "unknown.txt",
+    // Only artwork is known under brand/, and only the three named browser
+    // suites are test folders.
+    "brand/notes.md",
+    "brand/export.mjs",
+    "e2e-smoke/helpers.ts",
+    "tools/jersey.mjs",
+  ])("fails closed for the unknown path %s", (file) => {
+    expect(classifyEntries([modified(file)])).toMatchObject({
+      lane: "strict",
+      needs_mutation: true,
       needs_db_release: true,
       needs_scheduler_pause: true,
     });
+  });
+
+  // An unknown path selects the database release and the scheduler pause, so
+  // a new top-level file or folder must be classified when it is added, not
+  // discovered by a release plan. Production classifies with its live copy of
+  // the classifier, so the new rule spares only the releases after it is live.
+  it("knows every tracked path", () => {
+    const tracked = execFileSync("git", ["ls-files", "-z"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter(Boolean);
+    expect(tracked.length).toBeGreaterThan(1000);
+    const unknown = tracked.filter((file) =>
+      classifyEntries([modified(file)]).reasons.some((reason) =>
+        reason.endsWith(": unknown path"),
+      ),
+    );
+    expect(
+      unknown,
+      "name each path in scripts/classify-release.mjs; an unknown one makes the release a maintenance release",
+    ).toEqual([]);
+  });
+
+  // Neutral test paths ride along with any release because no shipped code
+  // loads them. The app's own files never import one.
+  it("never lets app code import a neutral test folder", () => {
+    const neutralFolder = /^(?:e2e|e2e-mid|e2e-postseason|test)\//;
+    const edges = sourceFiles("src/**/*.{ts,tsx,mts,mjs,js}", 400).flatMap(
+      (file) =>
+        ts
+          .preProcessFile(file.text, true, true)
+          .importedFiles.filter(({ fileName }) => fileName.startsWith("."))
+          .map(({ fileName }) => ({
+            from: file.path,
+            to: path.posix.join(path.posix.dirname(file.path), fileName),
+          })),
+    );
+    expect(edges.length).toBeGreaterThan(200);
+    expect(edges.filter(({ to }) => neutralFolder.test(to))).toEqual([]);
   });
 
   it("does not let documentation-only changes establish a fast lane", () => {
@@ -796,6 +899,14 @@ describe("release classifier mutation ratchet", () => {
     "e2e/zz-admin-draft.spec.ts",
     "e2e/helpers.ts",
     "e2e-mid/boards.spec.ts",
+    // Browser-suite helpers in every Playwright folder skip it like
+    // e2e/helpers.ts: the ratchet runs only the PostgreSQL suite and what it
+    // imports, and the import walk below fails if that ever reaches one.
+    // e2e-mid/helpers.ts used to run it only because it was an unknown path.
+    "e2e-mid/helpers.ts",
+    "e2e-mid/global-setup.ts",
+    "e2e-postseason/seed.ts",
+    "brand/square-512.png",
   ])("skips the ratchet for %s, which the PostgreSQL suite never loads", (file) => {
     const result = classifyEntries([entry(file)]);
     expect(result.needs_mutation).toBe(false);
@@ -840,7 +951,10 @@ describe("release classifier mutation ratchet", () => {
     ".github/workflows/ci.yml",
     ".github/workflows/mutation-nightly.yml",
     "ops/dota-lobby-bot/server.mjs",
-    "e2e-mid/helpers.ts",
+    // Server code and configs outside the neutral kinds run it even where
+    // the suite never loads them.
+    "src/proxy.ts",
+    "playwright.midseason.config.ts",
     "unknown.txt",
   ])("runs the ratchet for %s", (file) => {
     expect(needsMutation(file)).toBe(true);
