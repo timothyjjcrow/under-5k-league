@@ -307,6 +307,11 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
   the Postgres job runs). Add a new migration to all three.
 - **Never `db push` production.** Only `npm run db:migrate:release` applies
   migrations there; `npm run db:push` refuses non-local databases.
+- **A release with a migration migrates both Preview databases first**
+  (`docs/RELEASING.md` Appendix B step 1). Nothing else migrates them, and a
+  Preview build attests its own database read-only through
+  `scripts/production-schema-check.mjs`, so a Preview that is behind fails to
+  build instead of serving runtime errors.
 - **Add each new required production env var to
   `scripts/validate-prod-env.mjs`** (it reports names, never values). Never
   point a Preview or development build at the production database.

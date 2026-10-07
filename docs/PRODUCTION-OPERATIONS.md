@@ -24,7 +24,10 @@ compiling. The subsequent Next.js build still receives its runtime environment
 and must remain side-effect-free.
 In Preview and development, the release pipeline performs no production
 database gate or migration mutation. A build or running preview that needs data
-must use a separately scoped non-production database.
+must use a separately scoped non-production database. A Preview build that has
+one attests it read-only with the same check and stops while it lacks a
+committed migration; a release with a migration migrates both Preview databases
+first (`docs/RELEASING.md` Appendix B).
 
 Schema-neutral UI and application releases require neither a fresh backup nor a
 scheduler pause. A strict classification requires full CI and review, but does

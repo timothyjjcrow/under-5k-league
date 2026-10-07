@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -77,6 +77,56 @@ describe("Vercel build database boundary", () => {
 
     expect(output).toContain("schema attestation skipped");
   });
+
+  it("skips schema attestation for a preview build that has only the inert build URL", () => {
+    const output = execFileSync(
+      process.execPath,
+      [path.resolve(process.cwd(), "scripts/production-schema-check.mjs")],
+      {
+        // Exactly what vercel-build.mjs hands its steps when the Preview has
+        // no database of its own.
+        env: {
+          PATH: process.env.PATH,
+          ...vercelBuildEnvironment({
+            NODE_ENV: "production",
+            VERCEL_ENV: "preview",
+          }),
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(output).toContain("schema attestation skipped");
+  });
+
+  // A Preview database that lacks committed migrations served a Prisma error
+  // on every Preview home page for ten days (2026-10-07), so a Preview with a
+  // database of its own attests it like production and stops the build.
+  it("attests a preview's own database and stops the build when it cannot", () => {
+    const password = "preview-secret-7d1c";
+    const url = `postgresql://preview:${password}@127.0.0.1:9/preview?connect_timeout=2`;
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve(process.cwd(), "scripts/production-schema-check.mjs")],
+      {
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          NODE_ENV: "production",
+          VERCEL_ENV: "preview",
+          DATABASE_URL: url,
+          DIRECT_URL: url,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain("schema attestation skipped");
+    expect(result.stderr).toContain("Preview database attestation failed");
+    expect(result.stderr).toContain("docs/RELEASING.md, Appendix B");
+    expect(`${result.stdout}${result.stderr}`).not.toContain(password);
+  }, 60_000);
 
   it("uses inert loopback datasource values only when a non-production build has none", () => {
     const preview = vercelBuildEnvironment({

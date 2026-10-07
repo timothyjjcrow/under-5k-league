@@ -448,10 +448,12 @@ declares the same runtime line used by every CI job.
    `build:vercel` migration gate cannot apply migrations: in production it
    performs exact, read-only migration, schema, and native-object attestation
    before compiling.
-   In Preview and development, the release pipeline performs no database gate
-   or migration mutation. A build or running preview that needs data must use a
-   separately scoped non-production database. The Cloudflare Worker is deployed
-   separately and remains the sole production clock.
+   In Preview and development, the release pipeline performs no migration
+   mutation. A build or running preview that needs data must use a separately
+   scoped non-production database, and a Preview build that has one attests it
+   read-only like production and stops while it lacks a committed migration
+   (migrate it as in `docs/RELEASING.md` Appendix B). The Cloudflare Worker is
+   deployed separately and remains the sole production clock.
 4. **Set Environment Variables** (Vercel → Project → Settings → Environment
    Variables):
 
@@ -498,9 +500,10 @@ declares the same runtime line used by every CI job.
 
    > Scope production `DATABASE_URL`/`DIRECT_URL` values to the **Production**
    > environment. In Preview and development, the release pipeline performs no
-   > database gate or migration mutation. Point any build or running preview
-   > that needs data at a separate branch database; a preview that shares
-   > production credentials could still read or write live league data.
+   > migration mutation; a Preview build only attests its own database
+   > read-only. Point any build or running preview that needs data at a
+   > separate branch database; a preview that shares production credentials
+   > could still read or write live league data.
 
 5. **Classify and deploy only the reviewed commit through a manual approval.**
    For release authorization, run the classifier blob from the commit on the
@@ -633,8 +636,11 @@ declares the same runtime line used by every CI job.
    5. complete `next build`.
 
    Production compilation stops on a missing, pending, failed, extra, or changed
-   migration or schema/native-object drift. Preview, development, and local
-   builds perform no production database attestation or migration deploy. The
+   migration or schema/native-object drift. A Preview build that has its own
+   database runs the same read-only attestation against it and stops the same
+   way, so a Preview never serves on a database that is behind (migrate it as
+   in `docs/RELEASING.md` Appendix B). Development and local builds attest
+   nothing, and no build deploys migrations. The
    subsequent Next.js build still receives the configured runtime environment,
    so application build code must remain side-effect-free; the read-only claim
    applies to the release gate, not arbitrary application code.
