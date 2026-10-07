@@ -62,6 +62,7 @@ import { aboutUnchanged, submittedAbout } from "@/lib/about-you";
 import { claimProviderCooldown, claimThrottle } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
+import { waitBeforeSerializableRetry } from "@/lib/serializable-retry";
 
 function refresh() {
   updateTag(AUTOMATION_GATE_TAG);
@@ -695,7 +696,10 @@ export async function saveRegistration(
         };
       }
       const staleWrite = isUniqueViolation(error) || isSerializationConflict(error);
-      if (staleWrite && attempt === 0) continue;
+      if (staleWrite && attempt === 0) {
+        await waitBeforeSerializableRetry(1);
+        continue;
+      }
       if (staleWrite) {
         return {
           error:

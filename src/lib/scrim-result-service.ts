@@ -33,6 +33,7 @@ import { claimProviderCooldown } from "./settings";
 import { isWithinScrimResultWindow } from "./scrim-window";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
+import { waitBeforeSerializableRetry } from "./serializable-retry";
 
 export {
   isWithinScrimResultWindow,
@@ -712,7 +713,10 @@ async function commitFetchedScrimGame(
         };
       }
       if (isSerializationConflict(error)) {
-        if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) continue;
+        if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) {
+          await waitBeforeSerializableRetry(attempt + 1);
+          continue;
+        }
         return {
           ok: false,
           error:
@@ -1156,7 +1160,10 @@ export async function removeScrimGame(
         return { ok: false, error: error.message };
       }
       if (isSerializationConflict(error)) {
-        if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) continue;
+        if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) {
+          await waitBeforeSerializableRetry(attempt + 1);
+          continue;
+        }
         return {
           ok: false,
           error: "This scrim changed while the game was removed — try again",

@@ -12,6 +12,7 @@ import { gameMvp } from "./achievements";
 import { databaseNow } from "./database-time";
 import { heroById } from "./heroes";
 import { prisma } from "./prisma";
+import { waitBeforeSerializableRetry } from "./serializable-retry";
 import { stampResultChange } from "./settings";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 
@@ -278,7 +279,10 @@ async function reconcileOneResult(
     } catch (error) {
       const code = (error as { code?: string }).code;
       if (code === "P2002") return "skipped";
-      if (code === "P2034" && attempt < 2) continue;
+      if (code === "P2034" && attempt < 2) {
+        await waitBeforeSerializableRetry(attempt + 1);
+        continue;
+      }
       throw error;
     }
   }

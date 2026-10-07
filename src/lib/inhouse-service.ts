@@ -64,6 +64,7 @@ import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
 import { logAdminAction } from "./admin-log";
 import { raceHook } from "./race-hook";
+import { waitBeforeSerializableRetry } from "./serializable-retry";
 import type { SessionUser } from "./auth";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
 
@@ -1080,11 +1081,11 @@ export async function joinQueue(
         attempt + 1 < QUEUE_WRITE_RETRY_ATTEMPTS
       ) {
         // Queue-wide deadline writes intentionally serialize semantic changes.
-        // Brief backoff lets the winner commit before this request re-reads the
-        // active-lobby guard and current queue composition.
-        await new Promise<void>((resolve) =>
-          setTimeout(resolve, 2 ** attempt),
-        );
+        // A jittered backoff lets the winner commit before this request
+        // re-reads the active-lobby guard and current queue composition, and
+        // spreads the losers out: a fixed delay retried them in step, one
+        // winner per round, so a ninth simultaneous join ran out of tries.
+        await waitBeforeSerializableRetry(attempt + 1);
         continue;
       }
       if (code !== "P2034" && code !== "P2002") throw error;

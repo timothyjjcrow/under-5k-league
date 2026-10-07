@@ -37,6 +37,18 @@ export function serializableRetryDelayMs(retry: number, jitter: number): number 
 }
 
 /**
+ * Wait before retry `retry` (1 for the first) of a Serializable transaction:
+ * `serializableRetryDelayMs` with a fresh random jitter. For a retry loop that
+ * can't hand its transaction to `retrySerializable`, because it returns its
+ * own refusals from inside the loop or retries a unique violation too. Call
+ * it only when another try follows.
+ */
+export function waitBeforeSerializableRetry(retry: number): Promise<void> {
+  const delayMs = serializableRetryDelayMs(retry, Math.random());
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+/**
  * Run `run`, one whole Serializable transaction, again after an ordinary SSI
  * abort: up to `attempts` tries in all, waiting `serializableRetryDelayMs`
  * before each retry. Every try is a fresh transaction that re-reads and
@@ -54,7 +66,6 @@ export async function retrySerializable<T>(
     } catch (error) {
       if (!isSerializationConflict(error) || attempt >= attempts) throw error;
     }
-    const delayMs = serializableRetryDelayMs(attempt, Math.random());
-    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    await waitBeforeSerializableRetry(attempt);
   }
 }

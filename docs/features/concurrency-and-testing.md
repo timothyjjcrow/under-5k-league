@@ -37,8 +37,13 @@ serializes writers and hides every race here.
   retries in a row that way in CI. `retrySerializable`
   (`src/lib/serializable-retry.ts`) waits a jittered, doubling interval (5–10
   ms, then 10–20, …) and rethrows the last conflict for the caller's "reload
-  and try again". Use it for a new retry; `grep -rn "retrySerializable(" src`
-  lists the callers.
+  and try again". A loop that returns its own refusals from inside (the
+  imports, the signup save) awaits `waitBeforeSerializableRetry` before its
+  `continue` instead. Every Serializable retry goes through one of the two;
+  `grep -rnE "retrySerializable\(|waitBeforeSerializableRetry\(" src` lists
+  them. A fixed delay is not enough under contention either: `joinQueue`'s
+  `2 ** attempt` ms retried every loser in step, one winner per round, so a
+  ninth simultaneous join ran out of its eight tries.
 
 Worked examples, with the damage each guard prevents: `applyPick` (frozen
 inhouse draft), `undoLastSale` (live lot and nomination clock at once),

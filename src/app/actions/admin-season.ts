@@ -66,6 +66,7 @@ import {
   isSerializationConflict,
   isUniqueViolation,
 } from "@/lib/prisma-errors";
+import { retrySerializable } from "@/lib/serializable-retry";
 import {
   adminOrError,
   ActiveSeasonChangedError,
@@ -1079,17 +1080,19 @@ export async function setSeriesLengths(
   // Test seam: another settings save landing between the rendered claim's
   // read and this transaction must refuse inside it, before any fixture moves.
   await raceHook("admin.setSeriesLengths.beforeTransaction");
-  let syncs: SeriesLengthSync[] | null = null;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      // Serializable, because the bracket and the schedule create fixtures
-      // from these settings in their own Serializable transactions: a round
-      // built from the old length either commits first (and this sync moves
-      // it) or conflicts. Result writers (recordResult, imports, withdrawals)
-      // re-read bestOf and write the same Match row in Serializable
-      // transactions, so a score judged against the old length cannot land on
-      // the new one.
-      syncs = await prisma.$transaction(
+  let syncs: SeriesLengthSync[] | null;
+  try {
+    // Serializable, because the bracket and the schedule create fixtures
+    // from these settings in their own Serializable transactions: a round
+    // built from the old length either commits first (and this sync moves
+    // it) or conflicts. Result writers (recordResult, imports, withdrawals)
+    // re-read bestOf and write the same Match row in Serializable
+    // transactions, so a score judged against the old length cannot land on
+    // the new one. A conflict is retried: the worker's result scan touches
+    // fixture rows every minute, and a fresh attempt re-claims the rendered
+    // season, so a real change still refuses.
+    syncs = await retrySerializable(() =>
+      prisma.$transaction(
         async (tx) => {
           // The first write: a stale form may still refuse here without
           // leaving anything half-done.
@@ -1102,18 +1105,14 @@ export async function setSeriesLengths(
           );
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-      );
-      break;
-    } catch (error) {
-      if (!isSerializationConflict(error)) throw error;
-      // The worker's result scan touches fixture rows every minute; a fresh
-      // attempt re-claims the rendered season, so a real change still refuses.
-      if (attempt < 3) continue;
-      return {
-        error:
-          "A match or the season changed while saving — reload and try again.",
-      };
-    }
+      ),
+    );
+  } catch (error) {
+    if (!isSerializationConflict(error)) throw error;
+    return {
+      error:
+        "A match or the season changed while saving — reload and try again.",
+    };
   }
   if (!syncs) return staleSeasonSettingsError;
   const note = seriesLengthSyncNote(syncs);
