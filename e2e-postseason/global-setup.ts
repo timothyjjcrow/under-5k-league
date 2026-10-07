@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { POSTSEASON_DB_URL } from "../playwright.postseason.config";
+import { expireFixtureCache } from "../e2e/fixture-cache";
 
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
@@ -29,12 +30,5 @@ export default async function globalSetup() {
     stdio: "inherit",
     env,
   });
-  const cache = await fetch("http://localhost:3214/api/test/cache", {
-    method: "POST",
-  });
-  if (!cache.ok) {
-    throw new Error(
-      `Couldn't expire the reused postseason fixture cache (${cache.status})`,
-    );
-  }
+  await expireFixtureCache("http://localhost:3214", "postseason");
 }

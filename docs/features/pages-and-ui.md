@@ -933,6 +933,21 @@ the league is already draftable and many visitors have joined. Write for both.
   redirecting page's server answer with `page.request.get`
   (`e2e-mid/import-progress.spec.ts`): Chrome drops the document's body once
   the browser follows the redirect.
+- **A fresh `next dev` can 404 a route that exists.** Its router matches
+  against a table the file watcher fills in asynchronously, and overlapping
+  rebuilds can leave a partial table in place, so a request gets the global
+  404 page in about 0.1s with no compile (CI, 2026-10-06: `POST
+  /api/test/cache` at startup, then `/seasons/[id]/weeks/[week]` minutes into
+  a run). Every suite's global setup calls `expireFixtureCache`
+  (`e2e/fixture-cache.ts`), which first runs `waitForDevRoutes`
+  (`e2e/dev-routes.ts`): it requests every route handler and dynamic page
+  under `src/app` once, retries a 404, touches a file that stays unrouted so
+  the watcher rebuilds its table, and fails naming any route that never
+  matches. It leaves static pages alone on purpose: every compiled page slows
+  each later page load's HMR exchange, and compiling all of them up front
+  made a spec lose a click under load. Its log line lists the routes that
+  weren't routed at first. Give a new suite the same call; don't mask the
+  race with Playwright retries (they stay 0) or per-spec 404 retries.
 - **Run the browser suites locally with CI's environment:** blank
   `NEXT_PUBLIC_APP_NAME` and the lobby-bot keys (`DOTA_LOBBY_BOT_URL`,
   `DOTA_LOBBY_BOT_SECRET`, `DOTA_SEASON_LOBBY_BOT_ENABLED`) on the command
