@@ -311,7 +311,11 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
   `scripts/validate-prod-env.mjs`** (it reports names, never values). Never
   point a Preview or development build at the production database.
 - **Release strictness comes from `scripts/classify-release.mjs` taken from
-  the live commit**, never the candidate.
+  the live commit**, never the candidate. A path it does not name is unknown
+  and selects the database release and the scheduler pause, so name a new
+  top-level file or folder there when you add it
+  (`release-classification.test.ts` fails until you do). The new rule spares
+  only the releases after the classifier change is live.
 - **A verified checksum is not a restorable backup.** `db:backup:verify`
   proves bytes; only a restore (`db:backup:rehearse`, or a disposable provider
   restore) proves the league comes back.

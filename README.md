@@ -570,6 +570,18 @@ declares the same runtime line used by every CI job.
    scheduler pause. A new `ops/` folder selects scheduler controls until it is
    deliberately added to that exemption list.
 
+   The root tooling (`.claude/launch.json`, `.nvmrc`, `eslint.config.mjs`, the
+   Playwright and Vitest configs), the Next proxy `src/proxy.ts` and the
+   artwork exports in `brand/` are strict without either impact flag. The
+   helpers, seeds and global setups of all three browser suites (`e2e/`,
+   `e2e-mid/`, `e2e-postseason/`) are neutral test paths. Any other path the
+   classifier does not name, such as a new top-level file or folder, is
+   unknown and selects both flags, so name it in the classifier when you add
+   it: `src/lib/release-classification.test.ts` fails while any tracked path
+   is unknown. Releases are classified by the live commit's copy, so a newly
+   named path stops selecting the flags only once that classifier change is
+   itself live.
+
    A UI-only or app release does **not** require a fresh database backup or a
    scheduler pause. Its migration gate contains no writer, and the classifier
    reports neither impact flag. Do not force an unknown change into a faster
