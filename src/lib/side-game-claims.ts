@@ -1,32 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { MATCH_STATUS } from "./constants";
 import { predictionOpenWhere } from "./pickem";
-import { isSerializationConflict } from "./prisma-errors";
 
 const ON_POSTGRES = /^(postgres|postgresql):/.test(
   process.env.DATABASE_URL ?? "",
 );
 
 type Tx = Prisma.TransactionClient;
-
-/** Retry a fresh Serializable snapshot for ordinary deadline-burst conflicts. */
-export async function retrySideGameTransaction<T>(
-  run: () => Promise<T>,
-  attempts = 3,
-): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      return await run();
-    } catch (error) {
-      lastError = error;
-      if (!isSerializationConflict(error) || attempt === attempts - 1) {
-        throw error;
-      }
-    }
-  }
-  throw lastError;
-}
 
 /**
  * Hold a shared lock on the exact Season snapshot that authorizes a side-game

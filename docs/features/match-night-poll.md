@@ -156,7 +156,8 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   second close is refused and keeps the recorded closing time.
 - **"One open poll" is a write-skew pair:** `createPoll` and the reopen in
   `setPollClosesAt` each re-read the other open polls inside a Serializable
-  transaction and retry on an SSI abort. Postgres-only seam tests
+  transaction and retry on an SSI abort (`retrySerializable`, which waits a
+  short random time first). Postgres-only seam tests
   (`createPoll.afterOpenCheck`, `setPollClosesAt.afterOpenCheck`) prove each
   side; downgrading either to READ COMMITTED fails them.
 - Both claims are in the mutation ratchet (`FILES`, protected in

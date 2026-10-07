@@ -14,9 +14,9 @@ import {
   claimOpenPredictionMatch,
   claimSideGameDraft,
   claimSideGameSeason,
-  retrySideGameTransaction,
 } from "@/lib/side-game-claims";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
+import { retrySerializable } from "@/lib/serializable-retry";
 
 /**
  * Save (or change) the signed-in user's predicted winner for a match. Picks
@@ -53,7 +53,7 @@ export async function savePrediction(
 
   let name: string;
   try {
-    name = await retrySideGameTransaction(() =>
+    name = await retrySerializable(() =>
       prisma.$transaction(
         async (tx) => {
           // One authoritative snapshot owns phase, matchup, deadline and write.

@@ -31,6 +31,7 @@ import { prisma } from "./prisma";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 import { raceHook } from "./race-hook";
 import { singleActiveSeason } from "./season";
+import { retrySerializable } from "./serializable-retry";
 import { hasActiveLeagueParticipation } from "./visibility";
 import { LEAGUE_LOCALE } from "./zoned-time";
 
@@ -48,17 +49,6 @@ class PollGoneError extends Error {}
 class PollAlreadyOpenError extends Error {
   constructor(readonly question: string) {
     super("POLL_ALREADY_OPEN");
-  }
-}
-
-/** Run a Serializable transaction again after an ordinary SSI abort. */
-async function retrySerializable<T>(run: () => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await run();
-    } catch (error) {
-      if (!isSerializationConflict(error) || attempt >= 3) throw error;
-    }
   }
 }
 
