@@ -2,6 +2,7 @@ import { prisma } from "./prisma";
 import { createPublicSnapshot } from "./public-cache";
 import { getSeasonHonorReadiness } from "./honors-readiness-service";
 import { compareRecordChronology } from "./records";
+import type { HeroPageGame } from "./hero-games";
 import {
   fetchPublicGameSnapshot,
   getPublicGameSnapshot,
@@ -49,6 +50,27 @@ function recapGames(games: PublicGameSnapshot) {
     .map(({ matchId, radiantWin, radiantScore, direScore, durationSecs, players }) => ({
       matchId, radiantWin, radiantScore, direScore, durationSecs, players,
     }));
+}
+
+/** A season's games with their fixture's week and teams, for the hero pages. */
+function heroGames(
+  games: PublicGameSnapshot,
+  contexts: PublicMatchContext,
+  teams: PublicTeamNames,
+): HeroPageGame[] {
+  const byMatch = new Map(contexts.map((match) => [match.id, match]));
+  const byTeam = new Map(teams.map((team) => [team.id, team.name]));
+  return games.flatMap(({ id, matchId, startTime, durationSecs, radiantWin, players }) => {
+    const match = byMatch.get(matchId);
+    if (!match) return []; // A concurrent deletion can finish an older render.
+    const home = byTeam.get(match.homeTeamId), away = byTeam.get(match.awayTeamId);
+    if (home === undefined || away === undefined) return [];
+    return [{
+      id, matchId, startTime, durationSecs, radiantWin, players, week: match.week,
+      homeTeam: { id: match.homeTeamId, name: home },
+      awayTeam: { id: match.awayTeamId, name: away },
+    }];
+  });
 }
 
 function leaderGames(games: PublicGameSnapshot, contexts: PublicMatchContext) {
@@ -114,6 +136,16 @@ export async function fetchSeasonGameLeaders(seasonId: string) {
 export async function getSeasonGameLeaders(seasonId: string) {
   return leaderGames(...await Promise.all([
     getPublicGameSnapshot(seasonId), getPublicMatchContext(seasonId),
+  ]));
+}
+export async function fetchSeasonHeroGames(seasonId: string) {
+  return heroGames(...await Promise.all([
+    fetchPublicGameSnapshot(seasonId), fetchPublicMatchContext(seasonId), fetchPublicTeamNames(seasonId),
+  ]));
+}
+export async function getSeasonHeroGames(seasonId: string) {
+  return heroGames(...await Promise.all([
+    getPublicGameSnapshot(seasonId), getPublicMatchContext(seasonId), getPublicTeamNames(seasonId),
   ]));
 }
 

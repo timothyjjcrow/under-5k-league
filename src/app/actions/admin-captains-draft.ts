@@ -1805,7 +1805,7 @@ export async function refreshPlayerData(
 
   const gamesPart =
     enrich && (enrich.enriched > 0 || enrich.remaining > 0)
-      ? ` · ${enrich.enriched} older game${enrich.enriched === 1 ? "" : "s"} given report-card stats${enrich.remaining ? ` (${enrich.remaining} to go)` : ""}`
+      ? ` · ${enrich.enriched} older game${enrich.enriched === 1 ? "" : "s"} given report-card stats and items${enrich.remaining ? ` (${enrich.remaining} to go)` : ""}`
       : "";
   const summary = `${regs.length} signup${regs.length === 1 ? "" : "s"} checked · ${ranked} ranked${stats > 0 ? ` · ${stats} scouting profile${stats === 1 ? "" : "s"}` : ""}${deferred > 0 ? ` (${deferred} more in the hourly refresh)` : ""}${steamPart}${gamesPart}`;
   await logAdminAction({

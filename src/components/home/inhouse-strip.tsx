@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { LinkArrow } from "@/components/ui";
+import {
+  InhouseNightInterest,
+  InhouseNightWhen,
+  loadCurrentInhouseNight,
+} from "@/components/inhouse-night";
 import { INHOUSE, INHOUSE_ACTIVE_STATUSES } from "@/lib/constants";
 import { queuePresentCutoff } from "@/lib/inhouse";
+import { inhouseNightPhase } from "@/lib/inhouse-night";
 import { prisma } from "@/lib/prisma";
 
 // The inhouse scene runs year-round but was invisible from the dashboard.
@@ -16,17 +22,36 @@ export async function InhouseStrip({
 }: {
   variant?: "strip" | "tile";
 } = {}) {
-  const [queued, liveLobby] = await Promise.all([
+  // eslint-disable-next-line react-hooks/purity -- async server component
+  const nowMs = Date.now();
+  const [queued, liveLobby, night] = await Promise.all([
     // Same presence rule as /inhouse: only recently-seen players count.
     prisma.inhouseQueueEntry.count({
-      // eslint-disable-next-line react-hooks/purity -- async server component
-      where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
+      where: { lastSeenAt: { gte: queuePresentCutoff(nowMs) } },
     }),
     prisma.inhouseLobby.findFirst({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
       select: { id: true },
     }),
+    // The planned inhouse night (src/lib/inhouse-night.ts), until it's over.
+    loadCurrentInhouseNight(nowMs),
   ]);
+  const nightOn = !!night && inhouseNightPhase(night, nowMs) === "on";
+  // A line of its own under the queue's: when the next night is, or that it
+  // is on now, plus the Discord event's interested count.
+  const nightLine = night ? (
+    <span className="block text-xs text-muted">
+      {nightOn ? (
+        "Inhouse night is on now"
+      ) : (
+        <>
+          {"Inhouse night: "}
+          <InhouseNightWhen night={night} />
+        </>
+      )}
+      <InhouseNightInterest night={night} prefix=" · " />
+    </span>
+  ) : null;
 
   const label = liveLobby
     ? queued > 0
@@ -37,7 +62,7 @@ export async function InhouseStrip({
       : "The inhouse queue is open";
   const cta = liveLobby
     ? "Watch or queue"
-    : queued > 0
+    : queued > 0 || nightOn
       ? "Jump in"
       : "Start the queue";
   const liveDot = liveLobby ? (
@@ -67,6 +92,7 @@ export async function InhouseStrip({
             </span>
           </span>
           <span className="block text-xs text-muted">{label}</span>
+          {nightLine}
         </span>
       </Link>
     );
@@ -82,7 +108,10 @@ export async function InhouseStrip({
         {liveDot}
         {/* Two lines on a phone rather than "The inhouse queue i…": the
             sentence is the strip's whole message. */}
-        <span className="line-clamp-2 text-muted">{label}</span>
+        <span className="min-w-0">
+          <span className="line-clamp-2 text-muted">{label}</span>
+          {nightLine}
+        </span>
       </span>
       <span className="shrink-0 font-medium text-accent group-hover:underline">
         {cta} <LinkArrow />

@@ -7,6 +7,7 @@ import {
   draftReminderKey,
   honorsAnnouncedKey,
   honorsAnnouncedPrefix,
+  inhouseNightStartKey,
   playoffRoundAnnouncedKey,
   resultAnnouncedKey,
   resultNudgeKey,
@@ -17,6 +18,7 @@ import {
 import { AUTO_SYNC } from "@/lib/constants";
 import { RESULT_NUDGE } from "@/lib/result-nudge";
 import { makeSeason, makeTeam } from "./factories";
+import { serializeInhouseNight } from "@/lib/inhouse-night";
 
 const NOW = Date.parse("2026-09-05T20:00:00.000Z");
 
@@ -151,6 +153,45 @@ describe("automation gate database reads", () => {
     await prisma.setting.create({
       data: {
         key: draftReminderKey(season.id, 2),
+        value: "sent:v2:11111111-1111-4111-8111-111111111111:1",
+      },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: Number.MAX_SAFE_INTEGER,
+      reason: null,
+    });
+  });
+
+  it("reads the inhouse night and its start-post marker, with no season at all", async () => {
+    const night = {
+      id: "night-gate",
+      startsAtMs: NOW + 5 * 60 * 60_000,
+      note: "",
+      createdAtMs: NOW - 60_000,
+      revision: 0,
+      discordEventId: null,
+    };
+    await prisma.setting.create({
+      data: { key: SETTING_KEYS.INHOUSE_NIGHT, value: serializeInhouseNight(night) },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: night.startsAtMs,
+      reason: "REMINDER",
+    });
+
+    // Started: due until its own marker says the post is done.
+    const started = { ...night, startsAtMs: NOW - 60_000 };
+    await prisma.setting.update({
+      where: { key: SETTING_KEYS.INHOUSE_NIGHT },
+      data: { value: serializeInhouseNight(started) },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "REMINDER",
+    });
+    await prisma.setting.create({
+      data: {
+        key: inhouseNightStartKey(started.id, started.startsAtMs),
         value: "sent:v2:11111111-1111-4111-8111-111111111111:1",
       },
     });

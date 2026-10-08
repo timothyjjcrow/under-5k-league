@@ -2,6 +2,9 @@
 // from imported box scores. Pure + DB-free — the /meta page parses each Game's
 // stored player JSON into MetaGames, this module does the math.
 
+import type { PlayerStat } from "./match-import";
+import { trustedGamePlayers, type ParsedGamePlayers } from "./player-stats";
+
 export type MetaLine = {
   /** Mapped league user, or null for an unmapped account (still counts as a pick). */
   userId: string | null;
@@ -53,6 +56,38 @@ export function allHeroesKnown(
   return (
     lines.length > 0 && lines.every((line) => knownHeroIds.has(line.heroId))
   );
+}
+
+/**
+ * The lines of one imported game that count toward the meta: a trusted,
+ * complete 5v5 box score whose every hero is in the catalogue, else none (the
+ * game is dropped whole, so coverage can't pass 100%). /meta and the hero
+ * pages share it, so a hero page always counts the games its /meta row does.
+ */
+export function metaLines(
+  decoded: ParsedGamePlayers,
+  knownHeroIds: ReadonlySet<number>,
+): PlayerStat[] {
+  const trusted = trustedGamePlayers(decoded);
+  return allHeroesKnown(trusted, knownHeroIds) ? trusted : [];
+}
+
+/** One game in the shape `heroMeta` reads. */
+export function toMetaGame(
+  radiantWin: boolean,
+  lines: readonly PlayerStat[],
+): MetaGame {
+  return {
+    radiantWin,
+    lines: lines.map((line) => ({
+      userId: line.userId,
+      heroId: line.heroId,
+      isRadiant: line.isRadiant,
+      kills: line.kills,
+      deaths: line.deaths,
+      assists: line.assists,
+    })),
+  };
 }
 
 /** Roll every game's lines up into per-hero meta rows. */

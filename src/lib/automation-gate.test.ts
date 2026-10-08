@@ -16,7 +16,7 @@ const cacheMocks = vi.hoisted(() => ({
 const prismaMocks = vi.hoisted(() => ({
   automationRunState: { findUnique: vi.fn() },
   season: { findMany: vi.fn() },
-  setting: { findMany: vi.fn() },
+  setting: { findMany: vi.fn(), findUnique: vi.fn() },
   inhouseLobby: { findMany: vi.fn(), findFirst: vi.fn() },
   inhouseQueueEntry: { findMany: vi.fn() },
   leagueAnnouncement: { findMany: vi.fn() },
@@ -68,11 +68,16 @@ import { detectIntervalSeconds } from "./inhouse";
 import {
   draftReminderKey,
   honorsAnnouncedKey,
+  inhouseNightStartKey,
   resultAnnouncedKey,
   resultNudgeKey,
   SETTING_KEYS,
   weekReminderKey,
 } from "./settings";
+import {
+  INHOUSE_NIGHT_START_POST_WINDOW_MS,
+  serializeInhouseNight,
+} from "./inhouse-night";
 
 const NOW = Date.parse("2026-08-16T20:00:00.000Z");
 
@@ -158,7 +163,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 9,
+      version: 10,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -252,7 +257,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 9,
+      version: 10,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -938,6 +943,61 @@ describe("computeAutomationGateSnapshot", () => {
     ).toMatchObject(quiet);
     expect(gate({ draftAt: null })).toMatchObject(quiet);
     expect(gate({ draftAt: new Date(soon) }, {}, false)).toMatchObject(quiet);
+  });
+
+  it("wakes at an inhouse night's start and follows its start-post marker", () => {
+    const uuidA = "11111111-1111-4111-8111-111111111111";
+    const uuidB = "22222222-2222-4222-8222-222222222222";
+    const quiet = { nextWakeAtMs: Number.MAX_SAFE_INTEGER, reason: null };
+    const night = (startsAtMs: number) => ({
+      id: "night-1",
+      startsAtMs,
+      note: "",
+      createdAtMs: NOW - 86_400_000,
+      revision: 0,
+      discordEventId: null,
+    });
+    const gate = (startsAtMs: number, marker?: string) =>
+      computeAutomationGateSnapshot(
+        inputs({
+          settings: {
+            [SETTING_KEYS.INHOUSE_NIGHT]: serializeInhouseNight(night(startsAtMs)),
+            ...(marker === undefined
+              ? {}
+              : { [inhouseNightStartKey("night-1", startsAtMs)]: marker }),
+          },
+        }),
+        NOW,
+      );
+
+    // Before the start: wake exactly at it. No season is needed.
+    expect(gate(NOW + 3_600_000)).toMatchObject({
+      nextWakeAtMs: NOW + 3_600_000,
+      reason: "REMINDER",
+    });
+    // Started, no marker yet (or a failed one): due now.
+    const started = NOW - 60_000;
+    expect(gate(started)).toMatchObject({ nextWakeAtMs: NOW, reason: "REMINDER" });
+    expect(gate(started, `failed:v2:${uuidA}:${NOW - 1_000}`)).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "REMINDER",
+    });
+    // A live claim wakes at its lease expiry; a sent or covered marker is done.
+    const claimExpiry = NOW + 55_000;
+    expect(gate(started, `claim:v2:${claimExpiry}:${uuidA}:${uuidB}`)).toMatchObject({
+      nextWakeAtMs: claimExpiry,
+      reason: "REMINDER",
+    });
+    expect(gate(started, `sent:v2:${uuidA}:${NOW}`)).toMatchObject(quiet);
+    // Past the post window nothing wakes, posted or not.
+    expect(gate(NOW - INHOUSE_NIGHT_START_POST_WINDOW_MS - 1)).toMatchObject(quiet);
+    // A value that won't parse wakes nothing.
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({ settings: { [SETTING_KEYS.INHOUSE_NIGHT]: "{nope" } }),
+        NOW,
+      ),
+    ).toMatchObject(quiet);
   });
 
   it("detects a decided playoff round and missing series-result recovery", () => {
@@ -1628,7 +1688,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 9,
+      version: 10,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

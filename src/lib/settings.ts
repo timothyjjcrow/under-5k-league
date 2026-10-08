@@ -84,6 +84,12 @@ export const SETTING_KEYS = {
   // broadcast.ts), set on /admin's Match stream card. Playoff and final
   // matches link to it; absent means no watch links anywhere.
   LEAGUE_STREAM_URL: "leagueStreamUrl",
+  // The inhouse night an admin set on /admin's Inhouse night card, as JSON
+  // (inhouse-night.ts): its id, start, note, revision and the Discord event's
+  // id. Home and /inhouse show it until it is over; the worker posts its
+  // start (inhouseNightStartKey). Only inhouse-night-service.ts writes it,
+  // always by compare-and-swap on the exact value it read.
+  INHOUSE_NIGHT: "inhouseNight",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -96,7 +102,8 @@ export const SETTING_KEYS = {
 // state blobs (playoffGamesArchive:<season>, importSkip:<season>,
 // leagueSyncSkip:<season>) and per-pair throttles
 // (outPing:<matchId>:<userId>, providerCooldown:*), plus tiebreakerDraw:
-// <season>:<group> opening draws.
+// <season>:<group> opening draws and the inhouse night's start post
+// (inhouseNightStart:<nightId>:<startsAtMs>).
 // Every key format is built ONLY through the helpers below — a prefix that
 // drifts between the writer and the sweep that startsWith-matches it fails
 // silently, with no compile error. seasonSettingScopeWhere sweeps every
@@ -239,6 +246,15 @@ export function honorsAnnouncedPrefix(seasonId: string): string {
 }
 
 /** Merge-only archive of deleted playoff games' dotaMatchIds (JSON array). */
+/**
+ * Once-only marker for an inhouse night's start post. Keyed by the start as
+ * well as the night, so a night moved after its post was claimed is posted
+ * again at its new time. Not season-scoped: inhouse has no season.
+ */
+export function inhouseNightStartKey(nightId: string, startsAtMs: number): string {
+  return `inhouseNightStart:${nightId}:${startsAtMs}`;
+}
+
 export function playoffGamesArchiveKey(seasonId: string): string {
   return `playoffGamesArchive:${seasonId}`;
 }

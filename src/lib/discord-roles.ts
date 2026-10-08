@@ -12,8 +12,9 @@ import { discordMutationsAllowed } from "./discord-mutation-policy";
 // ticks a box on /me and we add the role over the REST API.
 //
 // This is the ONE place the app uses a bot token, and it stays deliberately
-// tiny: two calls (add role, remove role) plus a read, no gateway connection,
-// no background process, no slash commands. The token is a bearer credential
+// tiny: role add and remove, the inhouse night's server event (create, edit,
+// delete, interested count) and reads; no gateway connection, no background
+// process, no slash commands. The token is a bearer credential
 // under the same rule as the webhook URL — server-only, never rendered, never
 // logged, never returned to the browser.
 //
@@ -70,7 +71,7 @@ export async function pingOptInAvailable(): Promise<boolean> {
 async function call(
   cfg: GuildConfig,
   path: string,
-  method: "GET" | "PUT" | "DELETE",
+  method: "GET" | "PUT" | "POST" | "PATCH" | "DELETE",
   body?: unknown,
 ): Promise<Response | null> {
   // Preview may carry the real bot token so membership/health GETs can be
@@ -458,6 +459,131 @@ export async function setPingRole(
 }
 
 // ---------------------------------------------------------------------------
+// The inhouse night's Discord server event
+// ---------------------------------------------------------------------------
+
+/** What a night's event says (inhouseNightEvent in inhouse-night.ts). */
+export type GuildEventFields = {
+  name: string;
+  description: string;
+  location: string;
+  startsAt: Date;
+  endsAt: Date;
+};
+
+/**
+ * `unconfigured`: no bot token or guild (or a preview, which never writes).
+ * `forbidden`: the bot lacks Create Events, which retrying never fixes.
+ * `gone`: the event no longer exists (someone deleted it in Discord).
+ */
+export type GuildEventWrite =
+  | { ok: true; eventId: string }
+  | { ok: false; reason: "unconfigured" | "forbidden" | "gone" | "failed" };
+
+function eventBody(fields: GuildEventFields) {
+  return {
+    name: fields.name,
+    description: fields.description,
+    // An EXTERNAL event happens "somewhere else" (the site): Discord needs a
+    // location and an end time for it, and starts and ends it on its own.
+    entity_type: 3,
+    entity_metadata: { location: fields.location },
+    privacy_level: 2, // GUILD_ONLY, the only level Discord offers
+    scheduled_start_time: fields.startsAt.toISOString(),
+    scheduled_end_time: fields.endsAt.toISOString(),
+  };
+}
+
+async function eventWrite(res: Response | null): Promise<GuildEventWrite> {
+  if (!res) return { ok: false, reason: "failed" };
+  if (res.status === 403) return { ok: false, reason: "forbidden" };
+  if (res.status === 404) return { ok: false, reason: "gone" };
+  if (!res.ok) return { ok: false, reason: "failed" };
+  let id: unknown = null;
+  try {
+    id = ((await res.json()) as { id?: unknown })?.id;
+  } catch {
+    id = null;
+  }
+  return typeof id === "string" && /^\d{5,25}$/.test(id)
+    ? { ok: true, eventId: id }
+    : { ok: false, reason: "failed" };
+}
+
+/** Create the night's server event. Needs Create Events. */
+export async function createGuildEvent(
+  fields: GuildEventFields,
+): Promise<GuildEventWrite> {
+  const cfg = getGuildConfig();
+  if (!cfg || !discordMutationsAllowed()) return { ok: false, reason: "unconfigured" };
+  return eventWrite(
+    await call(cfg, `/guilds/${cfg.guildId}/scheduled-events`, "POST", eventBody(fields)),
+  );
+}
+
+/** Move or reword the event. A bot may always edit an event it created. */
+export async function updateGuildEvent(
+  eventId: string,
+  fields: GuildEventFields,
+): Promise<GuildEventWrite> {
+  const cfg = getGuildConfig();
+  if (!cfg || !discordMutationsAllowed()) return { ok: false, reason: "unconfigured" };
+  return eventWrite(
+    await call(
+      cfg,
+      `/guilds/${cfg.guildId}/scheduled-events/${eventId}`,
+      "PATCH",
+      eventBody(fields),
+    ),
+  );
+}
+
+/** Delete the event; `gone` (already deleted) counts as done. */
+export async function deleteGuildEvent(
+  eventId: string,
+): Promise<"ok" | "unconfigured" | "forbidden" | "failed"> {
+  const cfg = getGuildConfig();
+  if (!cfg || !discordMutationsAllowed()) return "unconfigured";
+  const res = await call(cfg, `/guilds/${cfg.guildId}/scheduled-events/${eventId}`, "DELETE");
+  if (!res) return "failed";
+  if (res.ok || res.status === 404) return "ok";
+  if (res.status === 403) return "forbidden";
+  return "failed";
+}
+
+/** How long an interested count is reused: Home renders it for every visitor. */
+export const GUILD_EVENT_INTEREST_TTL_MS = 2 * 60_000;
+const interestMemo = new Map<string, { at: number; value: number | null }>();
+
+/**
+ * How many members marked the event interested, or null when unknown (no
+ * bot, Discord unreachable, or the event is gone): render unknown as nothing,
+ * never as 0. Read live, never stored, and reused for a couple of minutes.
+ */
+export async function guildEventInterest(
+  eventId: string,
+  nowMs = Date.now(),
+): Promise<number | null> {
+  const hit = interestMemo.get(eventId);
+  if (hit && nowMs - hit.at < GUILD_EVENT_INTEREST_TTL_MS) return hit.value;
+  const cfg = getGuildConfig();
+  if (!cfg) return null;
+  const res = await getJson(
+    cfg,
+    `/guilds/${cfg.guildId}/scheduled-events/${eventId}?with_user_count=true`,
+  );
+  const count = (res?.ok ? (res.data as { user_count?: unknown })?.user_count : null) ?? null;
+  const value =
+    typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : null;
+  interestMemo.set(eventId, { at: nowMs, value });
+  return value;
+}
+
+export function _clearGuildEventInterestForTests(): void {
+  interestMemo.clear();
+}
+
+// ---------------------------------------------------------------------------
 // Guild join (OAuth `guilds.join`)
 // ---------------------------------------------------------------------------
 
@@ -552,6 +678,11 @@ export type PingHealth = {
    */
   canInvite: boolean | null;
   /**
+   * CREATE_EVENTS (or MANAGE_EVENTS) — what the inhouse night's server event
+   * needs. A bot invited for the ping role alone has neither.
+   */
+  canCreateEvents: boolean | null;
+  /**
    * Is the bot token from the SAME application as DISCORD_CLIENT_ID? Discord
    * only honours a `guilds.join` token for the application that issued it, so
    * a mismatched pair fails permanently while every other check stays green.
@@ -587,6 +718,9 @@ async function getJson(cfg: GuildConfig, path: string): Promise<Fetched | null> 
 const ADMINISTRATOR = BigInt("8");
 const MANAGE_ROLES = BigInt("268435456");
 const CREATE_INSTANT_INVITE = BigInt("1");
+// 1<<33 and 1<<44.
+const MANAGE_EVENTS = BigInt("8589934592");
+const CREATE_EVENTS = BigInt("17592186044416");
 
 export async function getPingHealth(): Promise<PingHealth> {
   const hasToken = !!process.env.DISCORD_BOT_TOKEN;
@@ -605,6 +739,7 @@ export async function getPingHealth(): Promise<PingHealth> {
     rolePosition: null,
     hasManageRoles: null,
     canInvite: null,
+    canCreateEvents: null,
     appMatchesOauth: null,
     problem: null,
   };
@@ -684,6 +819,10 @@ export async function getPingHealth(): Promise<PingHealth> {
   const hasManageRoles = isAdmin || (perms & MANAGE_ROLES) === MANAGE_ROLES;
   const canInvite =
     isAdmin || (perms & CREATE_INSTANT_INVITE) === CREATE_INSTANT_INVITE;
+  const canCreateEvents =
+    isAdmin ||
+    (perms & CREATE_EVENTS) === CREATE_EVENTS ||
+    (perms & MANAGE_EVENTS) === MANAGE_EVENTS;
 
   return {
     ...known,
@@ -695,6 +834,7 @@ export async function getPingHealth(): Promise<PingHealth> {
     rolePosition: target?.position ?? null,
     hasManageRoles,
     canInvite,
+    canCreateEvents,
     // STRICTLY greater: an equal position is not "lower" and Discord refuses
     // it. A managed (integration-owned) role can never be assigned by anyone.
     canGrant: target

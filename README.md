@@ -118,9 +118,11 @@ player demonstrated they own.
    @mention this role OFF** — the site pings it through an explicit allowlist
    regardless, and keeping it off stops members spam-pinging everyone.
 2. Create an application at https://discord.com/developers/applications → Bot →
-   copy the token. Invite it with **Manage Roles** and **Create Invite** (not
-   Administrator). Manage Roles powers the ping toggle; Discord requires Create
-   Invite for the automatic `guilds.join` performed while linking an account.
+   copy the token. Invite it with **Manage Roles**, **Create Invite** and
+   **Create Events** (not Administrator). Manage Roles powers the ping toggle;
+   Discord requires Create Invite for the automatic `guilds.join` performed
+   while linking an account; Create Events lets an inhouse night appear in the
+   server's Events (without it the night is still announced, with no event).
 3. **Drag the bot's role ABOVE the ping role** in Server Settings → Roles.
    Discord refuses to let a bot grant a role above its own; this is the single
    most common setup mistake and the site reports it as its own error.
@@ -468,7 +470,7 @@ declares the same runtime line used by every CI job.
    | `ADMIN_STEAM_IDS`                             | one or more valid, unique SteamID64s, comma-separated                |
    | `OPENDOTA_API_KEY`                            | optional                                                             |
    | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional — enables "Link Discord" account verification               |
-   | `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID`      | optional — Discord join + inhouse role; bot needs Manage Roles + Create Invite |
+   | `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID`      | optional — Discord join, inhouse role, inhouse night events; bot needs Manage Roles + Create Invite + Create Events |
 
    Leave `ALLOW_DEV_LOGIN` unset or set it exactly to `false`. Production does
    not support a first-user admin bootstrap: `ADMIN_STEAM_IDS` must already

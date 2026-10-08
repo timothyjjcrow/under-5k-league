@@ -64,6 +64,7 @@ import {
   maybeAnnounceUpcomingWeek,
 } from "./reminder-service";
 import { maybeNudgeMissingResults } from "./result-nudge-service";
+import { announceInhouseNightStart } from "./inhouse-night-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { refreshPlayerDataAutomatically } from "./player-data-refresh";
 import { recoverableAnnouncementMarker } from "./announcement-marker";
@@ -1197,6 +1198,19 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.REMINDER);
       logStepFailure("result-nudge", error);
+    }
+  }
+
+  // The inhouse night's start post (inhouse-night-service.ts). Inhouse has no
+  // season, so it runs with or without one; the gate wakes the worker for it.
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    skipped.push(RESULT_SYNC_SKIPPED.REMINDER);
+  } else {
+    try {
+      await announceInhouseNightStart();
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.REMINDER);
+      logStepFailure("inhouse-night", error);
     }
   }
 

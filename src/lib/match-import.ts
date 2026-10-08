@@ -14,6 +14,11 @@ import {
   type OpenDotaFetchOptions,
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
+import {
+  NO_PLAYER_ITEMS,
+  playerItemsFromOpenDota,
+  type PlayerItems,
+} from "./player-items";
 import { advancePlayoffBracket } from "./playoff-service";
 import { advanceTiebreakerWeek } from "./tiebreaker-service";
 import {
@@ -624,8 +629,12 @@ export function buildPlayers(
       metadata.ratingSource = mapped.ratingSource;
       metadata.ratingAt = mapped.ratingAt;
     }
+    // Typed as a Partial so PlayerStat keeps the fields optional: legacy
+    // lines (imported before items were stored) have none.
+    const items: Partial<PlayerItems> = playerItemsFromOpenDota(p);
     return {
       ...metadata,
+      ...items,
       accountId: p.account_id,
       heroId: p.hero_id,
       isRadiant,
@@ -1718,27 +1727,35 @@ export type EnrichOptions = OpenDotaFetchOptions & {
 };
 
 /**
- * Backfill report-card fields (benchmarks, XPM, damage numbers…) onto games
- * imported before those fields were stored. Re-fetches each game from OpenDota
- * by its unique dotaMatchId and merges the new per-player fields into the
- * stored JSON — attribution (userId/teamId) and recorded results are never
- * touched. Every processed line gains a `benchmarks` key (null when OpenDota
- * has none), which is also the "already enriched" marker, so runs are
- * idempotent. A game OpenDota answers 404 for gets the same marker with no
- * new fields: asking again can't add stats, and left unmarked it would be
- * fetched, and fail, on every hourly pass forever. Bounded per run so one
- * click can't burn the API budget; run again to continue where it left off.
+ * Backfill report-card fields (benchmarks, XPM, damage numbers…) and
+ * end-of-game items onto games imported before those fields were stored.
+ * Re-fetches each game from OpenDota by its unique dotaMatchId and merges the
+ * new per-player fields into the stored JSON, filling gaps only: attribution
+ * (userId/teamId), recorded results and any field already stored are never
+ * touched. Every processed line gains a `benchmarks` and an `items` key (null
+ * when OpenDota has none), which are also the "already enriched" markers, so
+ * runs are idempotent. A game OpenDota answers 404 for gets the same markers
+ * with no new fields: asking again can't add stats, and left unmarked it
+ * would be fetched, and fail, on every hourly pass forever. Bounded per run
+ * so one click can't burn the API budget; run again to continue where it
+ * left off.
  */
 export async function enrichStoredGames(
   limit = 12,
   options: EnrichOptions = {},
 ): Promise<EnrichResult> {
-  // The `"benchmarks":` key only ever appears as a line's own field — a
-  // player whose persona name is literally `benchmarks` serializes with a
-  // comma after it, so the colon keeps the marker probe honest.
+  // The `"benchmarks":` and `"items":` keys only ever appear as a line's own
+  // fields — a player whose persona name is literally `benchmarks` serializes
+  // with a comma after it, and a quote inside a name is escaped, so the colon
+  // keeps the marker probes honest. A game is due while it lacks either.
   // Fetch only this batch. Count remaining work afterward so a concurrent
   // correction/deletion is reflected accurately without reading its JSON.
-  const unenriched = { NOT: { players: { contains: '"benchmarks":' } } };
+  const unenriched = {
+    OR: [
+      { NOT: { players: { contains: '"benchmarks":' } } },
+      { NOT: { players: { contains: '"items":' } } },
+    ],
+  };
   const batch = await prisma.game.findMany({
     where: unenriched,
     orderBy: [{ fetchedAt: "asc" }, { id: "asc" }],
@@ -1791,12 +1808,17 @@ export async function enrichStoredGames(
       failed++;
       if (report.missing) {
         // OpenDota has no such match any more, so no later run can add
-        // stats either. Mark every line done (benchmarks: null, nothing
-        // else added) so the game leaves the queue. Not a refusal: the
-        // batch, and the hourly refresh, carry on.
+        // stats either. Mark every line done (a null marker for whatever
+        // it lacked, nothing else added; stored values stay) so the game
+        // leaves the queue. Not a refusal: the batch, and the hourly
+        // refresh, carry on.
         await writeIfUnchanged(game, {
           players: JSON.stringify(
-            lines.map((line) => ({ ...line, benchmarks: null })),
+            lines.map((line) => ({
+              ...line,
+              benchmarks: line.benchmarks ?? null,
+              ...("items" in line ? {} : NO_PLAYER_ITEMS),
+            })),
           ),
         });
         continue;
@@ -1827,7 +1849,10 @@ export async function enrichStoredGames(
         heroDamage: line.heroDamage ?? odPlayer?.hero_damage ?? null,
         towerDamage: line.towerDamage ?? odPlayer?.tower_damage ?? null,
         heroHealing: line.heroHealing ?? odPlayer?.hero_healing ?? null,
-        benchmarks: sanitizeBenchmarks(odPlayer?.benchmarks),
+        benchmarks: line.benchmarks ?? sanitizeBenchmarks(odPlayer?.benchmarks),
+        // A line that already has its items keeps them; one imported before
+        // items were stored takes them now (null when OpenDota has none).
+        ...("items" in line ? {} : playerItemsFromOpenDota(odPlayer)),
       };
     });
 

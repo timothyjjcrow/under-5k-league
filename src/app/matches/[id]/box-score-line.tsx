@@ -2,6 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import type { Grade, gradeTone } from "@/lib/benchmarks";
+import { ItemStrip, type ItemStripData } from "@/components/item-icon";
 import { cn } from "@/lib/utils";
 
 type GradeTone = ReturnType<typeof gradeTone>;
@@ -52,6 +53,7 @@ export function BoxScoreLine({
   heroName,
   kda,
   stats,
+  items = null,
   report,
 }: {
   icon: ReactNode;
@@ -62,6 +64,9 @@ export function BoxScoreLine({
   kda: ReactNode;
   /** gpm, lh and net worth, placed by its own classes; null when unknown. */
   stats: ReactNode;
+  /** The player's end-of-game items (itemStripData), a row of their own
+   *  under the line; null for games imported before items were stored. */
+  items?: ItemStripData | null;
   /** Absent for games imported before benchmarks were stored. */
   report: LineReport | null;
 }) {
@@ -107,6 +112,9 @@ export function BoxScoreLine({
       </div>
       {kda}
       {stats}
+      {items ? (
+        <ItemStrip {...items} height={18} className="col-span-full mt-1.5 pl-10" />
+      ) : null}
       {report ? (
         <div id={panelId} hidden={!open} className="col-span-full mt-1.5 pl-10">
           <ul className="max-w-xs space-y-0.5 text-xs">

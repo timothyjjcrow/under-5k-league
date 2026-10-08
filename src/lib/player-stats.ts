@@ -3,6 +3,7 @@
 // lines, then this rolls them up.
 
 import type { PlayerStat } from "./match-import";
+import { normalizedPlayerItems } from "./player-items";
 
 export type ParsedGamePlayers = {
   players: PlayerStat[];
@@ -102,6 +103,7 @@ export function normalizedPlayerStat(value: unknown): PlayerStat | null {
   }
   return {
     ...metadata,
+    ...normalizedPlayerItems(line),
     accountId: nullableAccountId(line.accountId),
     heroId: line.heroId,
     isRadiant: line.isRadiant,

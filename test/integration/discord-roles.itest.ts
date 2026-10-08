@@ -4,6 +4,11 @@ import {
   MEMBERSHIP_MEMBER_TTL_MS,
   MEMBERSHIP_RECHECK_TTL_MS,
   _clearMembershipMemoForTests,
+  _clearGuildEventInterestForTests,
+  createGuildEvent,
+  deleteGuildEvent,
+  guildEventInterest,
+  updateGuildEvent,
   discordChaseMessage,
   discordReachWarning,
   fetchGuildMember,
@@ -349,6 +354,16 @@ describe("getPingHealth — the setup diagnostic", () => {
     expect(h.canGrant).toBe(false);
   });
 
+  it("says whether the bot may create the inhouse night's server event", async () => {
+    respond = guild(5, 2);
+    expect((await getPingHealth()).canCreateEvents).toBe(false);
+    // Create Events (1<<44) or Manage Events (1<<33), beside Manage Roles.
+    respond = guild(5, 2, (BigInt(MANAGE_ROLES) | BigInt("17592186044416")).toString());
+    expect((await getPingHealth()).canCreateEvents).toBe(true);
+    respond = guild(5, 2, (BigInt(MANAGE_ROLES) | BigInt("8589934592")).toString());
+    expect((await getPingHealth()).canCreateEvents).toBe(true);
+  });
+
   it("treats an equal position as not grantable — Discord requires strictly higher", async () => {
     respond = guild(5, 5);
     const h = await getPingHealth();
@@ -408,6 +423,102 @@ describe("getPingHealth — the setup diagnostic", () => {
         : { status: 404 };
     const h = await getPingHealth();
     expect(h.botInGuild).toBe(false);
+  });
+});
+
+describe("the inhouse night's server event", () => {
+  const EVENT = "900000000000000077";
+  const fields = {
+    name: "GGD2L inhouse night",
+    description: "Come play",
+    location: "https://league.example/inhouse",
+    startsAt: new Date("2030-10-10T03:00:00.000Z"),
+    endsAt: new Date("2030-10-10T06:00:00.000Z"),
+  };
+  beforeEach(() => {
+    process.env.DISCORD_API_BASE = base;
+    _clearGuildEventInterestForTests();
+  });
+
+  it("creates an EXTERNAL event at the site with the bot's token", async () => {
+    respond = () => ({ status: 200, body: { id: EVENT } });
+    expect(await createGuildEvent(fields)).toEqual({ ok: true, eventId: EVENT });
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      method: "POST",
+      url: `/guilds/${GUILD}/scheduled-events`,
+      auth: "Bot test-token",
+    });
+    expect(JSON.parse(recorded[0].body)).toEqual({
+      name: fields.name,
+      description: fields.description,
+      entity_type: 3,
+      entity_metadata: { location: fields.location },
+      privacy_level: 2,
+      scheduled_start_time: "2030-10-10T03:00:00.000Z",
+      scheduled_end_time: "2030-10-10T06:00:00.000Z",
+    });
+  });
+
+  it("names a missing permission and a deleted event apart from an outage", async () => {
+    respond = () => ({ status: 403, body: { code: 50013 } });
+    expect(await createGuildEvent(fields)).toEqual({ ok: false, reason: "forbidden" });
+    respond = () => ({ status: 404, body: { code: 10070 } });
+    expect(await updateGuildEvent(EVENT, fields)).toEqual({ ok: false, reason: "gone" });
+    expect(recorded.at(-1)).toMatchObject({
+      method: "PATCH",
+      url: `/guilds/${GUILD}/scheduled-events/${EVENT}`,
+    });
+    respond = () => ({ status: 500 });
+    expect(await createGuildEvent(fields)).toEqual({ ok: false, reason: "failed" });
+    // A 200 without a usable id is not a created event.
+    respond = () => ({ status: 200, body: { id: "nope" } });
+    expect(await createGuildEvent(fields)).toEqual({ ok: false, reason: "failed" });
+  });
+
+  it("deletes an event, counting one already gone as deleted", async () => {
+    respond = () => ({ status: 204 });
+    expect(await deleteGuildEvent(EVENT)).toBe("ok");
+    expect(recorded[0]).toMatchObject({
+      method: "DELETE",
+      url: `/guilds/${GUILD}/scheduled-events/${EVENT}`,
+    });
+    respond = () => ({ status: 404 });
+    expect(await deleteGuildEvent(EVENT)).toBe("ok");
+    respond = () => ({ status: 403 });
+    expect(await deleteGuildEvent(EVENT)).toBe("forbidden");
+  });
+
+  it("writes nothing from a preview or without a bot", async () => {
+    process.env.VERCEL_ENV = "preview";
+    expect(await createGuildEvent(fields)).toEqual({ ok: false, reason: "unconfigured" });
+    expect(await updateGuildEvent(EVENT, fields)).toEqual({ ok: false, reason: "unconfigured" });
+    expect(await deleteGuildEvent(EVENT)).toBe("unconfigured");
+    delete process.env.VERCEL_ENV;
+    delete process.env.DISCORD_BOT_TOKEN;
+    expect(await createGuildEvent(fields)).toEqual({ ok: false, reason: "unconfigured" });
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("reads the interested count live, reusing it for a couple of minutes", async () => {
+    respond = () => ({ status: 200, body: { id: EVENT, user_count: 12 } });
+    expect(await guildEventInterest(EVENT, 1_000)).toBe(12);
+    expect(recorded[0]).toMatchObject({
+      method: "GET",
+      url: `/guilds/${GUILD}/scheduled-events/${EVENT}?with_user_count=true`,
+    });
+    respond = () => ({ status: 200, body: { id: EVENT, user_count: 13 } });
+    expect(await guildEventInterest(EVENT, 60_000)).toBe(12);
+    expect(recorded).toHaveLength(1);
+    expect(await guildEventInterest(EVENT, 1_000 + 2 * 60_000)).toBe(13);
+  });
+
+  it("calls an unknown count unknown, never zero", async () => {
+    respond = () => ({ status: 500 });
+    expect(await guildEventInterest(EVENT)).toBeNull();
+    _clearGuildEventInterestForTests();
+    respond = () => ({ status: 200, body: { id: EVENT } });
+    expect(await guildEventInterest(EVENT)).toBeNull();
   });
 });
 

@@ -203,6 +203,66 @@ export function heroById(id: number): Hero | null {
   return BY_ID.get(id) ?? null;
 }
 
+/**
+ * A hero's address on the hero pages, from its display name: "Anti-Mage" →
+ * "anti-mage", "Nature's Prophet" → "natures-prophet". Never the asset key,
+ * which names Clockwerk "rattletrap" and Io "wisp".
+ */
+export function heroSlug(hero: Hero): string {
+  return hero.name
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** A hero page's address, keeping an archived season the viewer picked. */
+export function heroPagePath(hero: Hero, seasonId?: string): string {
+  const query = seasonId ? `?${new URLSearchParams({ season: seasonId })}` : "";
+  return `/meta/${heroSlug(hero)}${query}`;
+}
+
+const BY_SLUG = new Map<string, Hero>(HEROES.map((h) => [heroSlug(h), h]));
+
+/** The hero a hero-page address names, or null for an unknown one. */
+export function heroBySlug(slug: string): Hero | null {
+  return BY_SLUG.get(slug) ?? null;
+}
+
+/**
+ * Where the hero search sends a submitted query without scripts
+ * (/meta/find): the best match's page, else back to Hero meta. Both keep an
+ * archived season.
+ */
+export function heroSearchDestination(query: string, seasonId?: string): string {
+  const best = searchHeroes(query, 1)[0];
+  if (best) return heroPagePath(best, seasonId);
+  return seasonId ? `/meta?${new URLSearchParams({ season: seasonId })}` : "/meta";
+}
+
+/**
+ * Heroes whose name, asset key or common shorthand matches what someone typed
+ * into the hero search: an exact hero or alias first ("am", "jugg"), then
+ * names that start with the text, then names that contain it, alphabetically.
+ */
+export function searchHeroes(query: string, limit = 8): Hero[] {
+  const n = norm(query);
+  if (!n) return [];
+  const exact = BY_NORM.get(n);
+  const rank = (hero: Hero) => {
+    if (hero === exact) return 0;
+    const name = norm(hero.name);
+    if (name.startsWith(n)) return 1;
+    if (name.includes(n) || norm(hero.key).includes(n)) return 2;
+    return 3;
+  };
+  return HEROES.map((hero) => ({ hero, rank: rank(hero) }))
+    .filter((row) => row.rank < 3)
+    .sort((a, b) => a.rank - b.rank || a.hero.name.localeCompare(b.hero.name))
+    .slice(0, limit)
+    .map((row) => row.hero);
+}
+
 export type ParsedHeroes = { matched: Hero[]; unmatched: string[] };
 
 /**

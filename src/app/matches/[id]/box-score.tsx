@@ -10,6 +10,7 @@ import {
   percentLabel,
 } from "@/lib/benchmarks";
 import { Avatar, Badge, HeroIcon, KDA, PlayerLink } from "@/components/ui";
+import { itemStripData } from "@/components/item-build";
 import { BoxScoreLine, type LineReport } from "./box-score-line";
 
 // The recorded team net-worth split from this game's box score, with an
@@ -246,6 +247,7 @@ export function SidePlayers({
                   </div>
                 ) : null
               }
+              items={itemStripData(p)}
               report={lineReport(p)}
             />
           );

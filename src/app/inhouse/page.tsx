@@ -30,6 +30,7 @@ import { singleSearchParam } from "@/lib/search-params";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
+import { InhouseNightCard } from "@/components/inhouse-night";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
 import { lobbyBotConnection } from "@/lib/dota-lobby-service";
 import { HeroVideo } from "@/components/hero-video";
@@ -167,6 +168,12 @@ export default async function InhousePage({
             ]}
           />
         ) : null}
+        {/* The planned inhouse night, while one is set: when to come back,
+            and the calendar and Discord links. One Setting read, streamed so
+            it never holds up the room. */}
+        <Suspense fallback={null}>
+          <InhouseNightCard />
+        </Suspense>
         <section
           id="live-room"
           className="scroll-mt-28"

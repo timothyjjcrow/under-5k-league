@@ -1,11 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { Hero } from "@/lib/heroes";
-import { HeroIcon, PlayerLink } from "@/components/ui";
+import { HeroIcon, PlayerLink, textLink } from "@/components/ui";
 
 export type HeroMetaTableRow = {
   hero: Hero;
+  /** The hero's page: its games and builds (heroPagePath). */
+  href: string;
   picks: number;
   wins: number;
   losses: number;
@@ -134,7 +137,11 @@ export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
                     <HeroIcon hero={row.hero} size={26} className="rounded" />
                   </span>
                   <div className="min-w-0">
-                    <p className="truncate font-medium text-fg">{row.hero.name}</p>
+                    <p className="truncate font-medium text-fg">
+                      <Link href={row.href} prefetch={false} className={textLink()}>
+                        {row.hero.name}
+                      </Link>
+                    </p>
                     {row.topPlayer ? (
                       <p className="truncate text-xs text-muted sm:hidden">
                         {`Top: ${row.topPlayer.name} · ${gamesLabel(row.topPlayer.games)}`}

@@ -10,6 +10,7 @@ import {
   fetchSeasonGameLeaders,
   fetchSeasonGameScores,
   fetchSeasonGamesForRecap,
+  fetchSeasonHeroGames,
 } from "@/lib/cached-queries";
 import { fetchPublicGameSnapshot } from "@/lib/public-game-snapshot";
 
@@ -188,6 +189,32 @@ describe("cached-queries data-equivalence", () => {
     );
   });
 
+  it("gives the hero pages one season's games with their week and teams", async () => {
+    const a = await seedSeasonWithGames("HeroA", 3);
+    await seedSeasonWithGames("HeroB", 2, false);
+    const inline = await prisma.game.findMany({
+      where: { match: { seasonId: a.season.id } },
+      select: {
+        id: true, matchId: true, startTime: true, durationSecs: true, radiantWin: true, players: true,
+        match: {
+          select: {
+            week: true,
+            homeTeam: { select: { id: true, name: true } },
+            awayTeam: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+    const expected = inline.map(({ match, ...game }) => ({
+      ...game, week: match.week, homeTeam: match.homeTeam, awayTeam: match.awayTeam,
+    }));
+    const heroGames = await fetchSeasonHeroGames(a.season.id);
+    expect(sortById(heroGames, "id")).toEqual(sortById(expected, "id"));
+    expect(heroGames).toHaveLength(3);
+    expect(heroGames.every((game) => game.homeTeam.id === a.home.id && game.awayTeam.id === a.away.id)).toBe(true);
+    expect(await fetchSeasonHeroGames("missing-season")).toEqual([]);
+  });
+
   it("puts unknown record timestamps last and resolves exact times stably", async () => {
     const seeded = await seedSeasonWithGames("Chronology", 3);
     const rows = await prisma.game.findMany({
@@ -258,6 +285,8 @@ describe("cached-queries data-equivalence", () => {
     expect(await measure(() => fetchSeasonGameScores(season.id))).toBe(1);
     expect(await measure(() => fetchSeasonGamesForRecap(season.id))).toBe(1);
     expect(await measure(() => fetchSeasonGameLeaders(season.id))).toBe(2);
+    // The hero pages add the season's team names: one more flat statement.
+    expect(await measure(() => fetchSeasonHeroGames(season.id))).toBe(3);
     // One Game, one flat Match context, and one bulk Team-name statement.
     expect(await measure(fetchAllGamesForRecords)).toBe(3);
   });
