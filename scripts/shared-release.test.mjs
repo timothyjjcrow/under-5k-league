@@ -322,6 +322,14 @@ test("cleanup deletions need no maintenance evidence; schema and scheduler delet
     assert.throws(() => requireMaintenanceEvidence(plan([deleted(file)]), undefined, now), /maintenance evidence/);
   assert.throws(() => requireMaintenanceEvidence(plan([modified("ops/cloudflare-automation-worker/wrangler.jsonc")]), undefined, now), /maintenance evidence/);
 });
+test("the proxy and browser-suite helpers need no maintenance evidence; an unknown path still does", () => {
+  const modified = (file) => ({ status: "M", code: "M", oldPath: null, path: file, oldMode: "100644", newMode: "100644" });
+  const plan = (entries) => ({ sha, bases: { us: { sha: baseSha }, eu: { sha: baseSha } }, classifications: { us: classifyEntries(entries), eu: classifyEntries(entries) } });
+  const now = Date.now();
+  // The two paths that made 2026-10-06 a maintenance release with no migration.
+  requireMaintenanceEvidence(plan([modified("src/proxy.ts"), modified("e2e-mid/global-setup.ts")]), undefined, now);
+  assert.throws(() => requireMaintenanceEvidence(plan([modified("src/proxy.ts"), modified("tools/new-script.mjs")]), undefined, now), /maintenance evidence/);
+});
 test("the shared targets retain separate projects, origins and deployment credentials", () => {
   for (const key of ["projectId", "origin", "tokenEnv", "functionRegion"])
     assert.equal(new Set(LEAGUE_TARGETS.map((target) => target[key])).size, 2);

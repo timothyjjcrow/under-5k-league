@@ -2,11 +2,14 @@ import { Prisma } from "@prisma/client";
 import type { OpenDotaMatch, OpenDotaPlayer } from "./dota";
 import { prisma } from "./prisma";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
+import { waitBeforeSerializableRetry } from "./serializable-retry";
 import { importSkipKey } from "./settings";
 
 export const IMPORT_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const IMPORT_CANDIDATE_MAX_ATTEMPTS = 8;
 export const IMPORT_COMMIT_RESERVE_MS = 5_000;
+/** Tries for the bookkeeping write after a failed fetch. */
+const FETCH_FAILURE_WRITE_ATTEMPTS = 3;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const CLEANUP_BATCH = 100;
 
@@ -164,7 +167,7 @@ export async function recordImportFetchFailure(seasonId: string, dotaMatchId: st
   // bookkeeping against Ignore/removal and a concurrent successful import.
   // Neither a stale failure nor exhausted transaction retries authorizes an
   // exclusion or resurrects work for an already assigned game.
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < FETCH_FAILURE_WRITE_ATTEMPTS; attempt++) {
     try {
       await prisma.$transaction(async (tx) => {
         const now = new Date();
@@ -206,6 +209,7 @@ export async function recordImportFetchFailure(seasonId: string, dotaMatchId: st
       if (!isSerializationConflict(error) && !isUniqueViolation(error)) throw error;
       // A contended bookkeeping update can safely wait for the next pass.
       // Never turn this transient failure into an import suppression.
+      if (attempt + 1 < FETCH_FAILURE_WRITE_ATTEMPTS) await waitBeforeSerializableRetry(attempt + 1);
     }
   }
 }

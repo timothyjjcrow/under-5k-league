@@ -120,8 +120,13 @@ Every transition is a guarded claim; keep it that way (general rules:
   ping) and formation. Use `queuePresence` / `queuePresentCutoff` everywhere.
 - **`joinQueue` guards and upserts at Serializable,** or a concurrent formation
   can roster the player in the live lobby AND queue them. It retries P2034/P2002
-  up to `QUEUE_WRITE_RETRY_ATTEMPTS`, then re-reads to tell "already in a live
-  inhouse" from contention. A repeat join keeps position and idle deadline.
+  up to `QUEUE_WRITE_RETRY_ATTEMPTS` with a jittered wait
+  (`waitBeforeSerializableRetry`), then re-reads to tell "already in a live
+  inhouse" from contention. Every join rewrites every row's idle deadline, so
+  joins go one at a time; a fixed `2 ** attempt` ms delay retried the losers
+  in step, one winner per round, and a ninth simultaneous join was refused
+  ("The queue changed") in 19 of 20 local runs. Jittered, nine and ten
+  simultaneous joins all land. A repeat join keeps position and idle deadline.
   Outsiders may queue during a live lobby (for the next game). The tenth join
   tries formation at once.
 - **MMR trust chain:** latest `Registration.mmr` (used as-is, so an admin

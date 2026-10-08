@@ -1,14 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { productionEnvironmentRequired } from "./vercel-environment.mjs";
+import {
+  INERT_BUILD_DATABASE_URL,
+  productionEnvironmentRequired,
+} from "./vercel-environment.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SCHEMA = fileURLToPath(
   new URL("../prisma/schema.prisma", import.meta.url),
 );
-const PREVIEW_DATABASE_URL =
-  "postgresql://preview_build:preview_build@127.0.0.1:1/preview_build";
 
 export const VERCEL_BUILD_STEPS = Object.freeze([
   Object.freeze({
@@ -46,11 +47,12 @@ export const VERCEL_BUILD_STEPS = Object.freeze([
 export function vercelBuildEnvironment(env) {
   if (productionEnvironmentRequired(env)) return env;
 
-  // Prisma validate/generate require syntactically valid datasource URLs even
-  // though preview/development builds never connect through the release gate.
-  // Preserve separately scoped preview credentials when present; otherwise an
-  // inert loopback URL lets code generation proceed without production access.
-  const databaseUrl = env.DATABASE_URL || PREVIEW_DATABASE_URL;
+  // Prisma validate/generate require syntactically valid datasource URLs.
+  // Preserve separately scoped preview credentials when present (a Preview
+  // then attests that database read-only in production-schema-check.mjs);
+  // otherwise an inert loopback URL lets code generation proceed without
+  // production access, and nothing connects to it.
+  const databaseUrl = env.DATABASE_URL || INERT_BUILD_DATABASE_URL;
   return {
     ...env,
     DATABASE_URL: databaseUrl,

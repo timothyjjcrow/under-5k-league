@@ -1220,8 +1220,9 @@ exact migration ledger, Prisma schema, and required PostgreSQL-native objects
 read-only through `scripts/production-schema-check.mjs` → runs the Next
 production build. Pending, missing, failed, extra, or changed migrations and
 schema/native-object drift stop compilation instead of being applied implicitly.
-Preview, development, and local builds do not run the production database
-attestation or migration deploy. The subsequent Next build
+A Preview build that has its own database runs the same attestation against
+it and stops while it is behind; development and local builds attest nothing,
+and no build deploys migrations. The subsequent Next build
 still receives its runtime environment, so application build code must remain
 side-effect-free; the read-only guarantee belongs to the database gate, not to
 arbitrary application code.

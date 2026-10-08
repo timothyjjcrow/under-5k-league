@@ -47,6 +47,11 @@ The full plan is saved to `output/shared-release.json`. Look at
   leagues: this is a routine release. Carry on.
 - Either one `true` for either league: stop. This is a maintenance release;
   follow [Appendix B](#appendix-b-database-and-scheduler-changes) first.
+  Each classification's `reasons` names the files behind it. A file the live
+  classifier does not know reads `unknown path` and sets both flags even when
+  nothing touches the database or scheduler; the README's
+  [classifier notes](../README.md#hosting-and-release-setup) say how a path
+  becomes known.
 
 `"status": "already-current"` means both sites already run this commit and
 passed their health checks, so there is nothing to release.
@@ -155,6 +160,12 @@ report's `status` becomes `failed` and its `error` repeats the reason.
   "A regional build or smoke check failed. Neither production domain was
   changed." and the report's `buildFailures` names the league. Fix the cause
   and run the release again.
+- **"Preview database attestation failed"** in a Preview build (Prepare both
+  leagues or the release's Preview rehearsal): that league's Preview database
+  is unreachable or lacks a committed migration, usually because a release
+  with a migration has not migrated it yet. Follow
+  [Appendix B](#appendix-b-database-and-scheduler-changes) step 1, then run the
+  release again. Neither live site has changed.
 - **"Production changed since the staged review"** or **"production changed
   during staging; re-plan the release"**: someone deployed a site after you
   staged. Run `--check` again, then stage again.
@@ -265,12 +276,34 @@ GitHub Actions cannot accept a maintenance override.
 The linked sections are authoritative; follow each one exactly. A change that
 needs a database release always needs the scheduler pause as well.
 
-1. **Pause the scheduler** when `needs_scheduler_pause` is set: US
+1. **Migrate the Preview database first** when `needs_db_release` is set.
+   Previews run on their own non-production database (Neon branch
+   `vercel-preview`: database `neondb` in the US project,
+   `ggd2l_preview_release_20260914` in Europe's). A Preview build attests it
+   read-only, like production, and stops while it lacks a committed
+   migration, so Prepare both leagues and the release's Preview rehearsal fail
+   until this is done. It also rehearses the migration on a database with no
+   production data. From a clean checkout of the reviewed commit with
+   dependencies installed, signed in with `npx neonctl@6.2.3 auth`:
+
+   ```bash
+   node scripts/switch-db-provider.mjs postgresql
+   export DIRECT_URL="$(npx neonctl@6.2.3 connection-string vercel-preview --project-id <league's Neon project id> --role-name neondb_owner --database-name <its Preview database>)"
+   DATABASE_URL="$DIRECT_URL" npx prisma migrate deploy
+   DATABASE_URL="$DIRECT_URL" node scripts/migration-postflight.mjs
+   unset DIRECT_URL
+   ```
+
+   The command substitution keeps the connection string out of arguments and
+   shell history; never paste one. The postflight must pass with every
+   committed migration. Then discard the checkout, or switch it back with
+   `node scripts/switch-db-provider.mjs sqlite`.
+2. **Pause the scheduler** when `needs_scheduler_pause` is set: US
    `npm run scheduler:pause`, Europe `npm run scheduler:europe:pause`. Then
    complete the propagation, quiet-slot and lease-drain checks in
    [Pause and resume](PRODUCTION-OPERATIONS.md#pause-and-resume). Keep it
    paused until the release is promoted.
-2. **Back up, rehearse and migrate** when `needs_db_release` is set: follow
+3. **Back up, rehearse and migrate** when `needs_db_release` is set: follow
    [Database- or scheduler-impact prerequisites](PRODUCTION-OPERATIONS.md#database--or-scheduler-impact-prerequisites)
    (configuration and DDL role, fresh backup and PITR point, disposable restore
    rehearsal, provider-branch ownership check) and the README's
@@ -282,11 +315,11 @@ needs a database release always needs the scheduler pause as well.
    [Fully rolled-back failed migration](PRODUCTION-OPERATIONS.md#fully-rolled-back-failed-migration).
    When production values cannot be exported, use the hosted migration job
    described below.
-3. **Record the evidence** in a private file outside the repository (shape
+4. **Record the evidence** in a private file outside the repository (shape
    below), then release with it. Pass `--maintenance-file <private-json>` to
    every command that builds or promotes production: both the `--stage-only`
    and the `--promote-from` run (and `--apply`, which does both).
-4. **Resume the scheduler.** The release ends with
+5. **Resume the scheduler.** The release ends with
    `"status": "promoted-awaiting-scheduler-resume"`. Resume each paused
    scheduler (US `npm run scheduler:deploy`, Europe
    `npm run scheduler:europe:deploy`) and complete the two-pass health gate in

@@ -90,6 +90,7 @@ import {
   type ImportCandidateSnapshot,
 } from "./import-candidates";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
+import { waitBeforeSerializableRetry } from "./serializable-retry";
 
 export type TeamAccounts = { teamId: string; accountIds: Set<number> };
 
@@ -1333,7 +1334,11 @@ export async function importGameForMatch(
         // imported this game. Start a new Serializable snapshot so reminder
         // invalidation remains atomic with the game/result mutation. A true
         // rival import is then observed by the guards or unique constraint.
-        if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) continue;
+        // Wait first: the rival may still be committing.
+        if (attempt + 1 < IMPORT_TRANSACTION_MAX_ATTEMPTS) {
+          await waitBeforeSerializableRetry(attempt + 1);
+          continue;
+        }
         return {
           ok: false,
           code: "RETRYABLE",

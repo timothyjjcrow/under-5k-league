@@ -153,6 +153,10 @@ More rules for guarded writes:
   point, or put a seam between the check and the write.
 - **Never hold a transaction open across an OpenDota or Discord call.** Fetch
   first, then re-check every precondition in one short transaction.
+- **Wait before retrying a Serializable abort** (`retrySerializable`, or
+  `waitBeforeSerializableRetry` in a loop that returns its own refusals). A
+  retry whose snapshot starts while the winner is still committing loses
+  again, so an immediate retry loop can spend every try on one rival.
 - **"Something upstream serializes this" only covers rivals from the SAME
   path.** List the rivals from other paths before calling a guard untestable.
 - **Order by exact stored keys with an id as the last tiebreak,** never by
