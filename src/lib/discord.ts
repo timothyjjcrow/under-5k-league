@@ -735,6 +735,60 @@ export function inhouseQueueMessage(
 }
 
 /**
+ * An admin set an inhouse night (inhouse-night.ts). Pings the opt-in inhouse
+ * role: people who asked to hear about inhouses. The time is Discord
+ * timestamps, so each reader sees their own clock and a live countdown. The
+ * Discord event link stays bare so it unfurls as the event, with its
+ * Interested button; the site link keeps its angle brackets. The note is the
+ * admin's own text, so it isn't escaped.
+ */
+export function inhouseNightMessage(m: {
+  startsAtMs: number;
+  note: string;
+  roleId?: string | null;
+  eventUrl?: string | null;
+}): string {
+  const epoch = Math.floor(m.startsAtMs / 1000);
+  return [
+    `${rolePrefix(m.roleId)}🎮 **Inhouse night** <t:${epoch}:F> (<t:${epoch}:R>)`,
+    ...(m.note ? [m.note] : []),
+    `Join the queue on the site when it starts: <${joinLink()}>`,
+    ...(m.eventUrl ? [`Coming? Mark yourself interested: ${m.eventUrl}`] : []),
+  ].join("\n");
+}
+
+/** The night moved. No ping: the people who planned around it get Discord's
+ *  own event update, and the channel sees the new time. */
+export function inhouseNightMovedMessage(m: {
+  startsAtMs: number;
+  eventUrl?: string | null;
+}): string {
+  const epoch = Math.floor(m.startsAtMs / 1000);
+  return [
+    `🕑 **Inhouse night moved** to <t:${epoch}:F> (<t:${epoch}:R>)`,
+    ...(m.eventUrl ? [m.eventUrl] : []),
+  ].join("\n");
+}
+
+/** The night was called off before it started. No ping. */
+export function inhouseNightCancelledMessage(m: { startsAtMs: number }): string {
+  const epoch = Math.floor(m.startsAtMs / 1000);
+  return `**The inhouse night on <t:${epoch}:F> is off.**`;
+}
+
+/**
+ * The night has started: the second and last ping, with the queue's count so
+ * far and the one-tap join link.
+ */
+export function inhouseNightStartMessage(m: {
+  present: number;
+  lobbySize: number;
+  roleId?: string | null;
+}): string {
+  return `${rolePrefix(m.roleId)}🎮 **Inhouse night is on!** ${m.present}/${m.lobbySize} in the queue so far. Jump in: <${joinLink()}>`;
+}
+
+/**
  * Lobby formed — the scarcest event the league produces, on a short accept
  * clock. Players who linked Discord are mentioned by id so the ping reaches a
  * PHONE; the rest are named as plain text. Queueing earlier is the consent

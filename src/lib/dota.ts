@@ -147,6 +147,19 @@ export type OpenDotaPlayer = {
   tower_damage?: number;
   hero_healing?: number;
   benchmarks?: Record<string, OpenDotaBenchmark> | null;
+  // End-of-game items (ids, 0 for an empty slot), on every payload, parsed
+  // replay or not. Read through playerItemsFromOpenDota (player-items.ts).
+  item_0?: number;
+  item_1?: number;
+  item_2?: number;
+  item_3?: number;
+  item_4?: number;
+  item_5?: number;
+  backpack_0?: number;
+  backpack_1?: number;
+  backpack_2?: number;
+  item_neutral?: number;
+  item_neutral2?: number;
 };
 
 export type OpenDotaMatch = {

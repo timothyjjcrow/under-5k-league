@@ -30,11 +30,22 @@ export function buildParticipantProjection(players: string) {
   const decoded = decodeIndexedGamePlayers(players);
   return {
     complete: decoded.completeRoster,
-    rows: (decoded.indexed.length > 10 ? [] : decoded.indexed).map(({ sourceLineIndex, player }) => ({
-      ...player,
-      sourceLineIndex,
-      benchmarks: player.benchmarks ? JSON.stringify(player.benchmarks) : null,
-    })),
+    rows: (decoded.indexed.length > 10 ? [] : decoded.indexed).map(({ sourceLineIndex, player }) => {
+      // End-of-game items live only in the box-score JSON (Game.players);
+      // GameParticipant has no columns for them, so they stay out of the row.
+      const {
+        items: _items,
+        backpack: _backpack,
+        neutral: _neutral,
+        neutralEnchantment: _neutralEnchantment,
+        ...row
+      } = player;
+      return {
+        ...row,
+        sourceLineIndex,
+        benchmarks: player.benchmarks ? JSON.stringify(player.benchmarks) : null,
+      };
+    }),
   };
 }
 

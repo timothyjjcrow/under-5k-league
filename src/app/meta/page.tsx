@@ -18,13 +18,14 @@ import { finishedSeasonLink } from "@/lib/season-choices";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGameScores } from "@/lib/cached-queries";
 import {
-  allHeroesKnown,
   heroMeta,
   metaHeadlines,
+  metaLines,
+  toMetaGame,
   META_HEADLINE_MIN_PICKS,
   type MetaGame,
 } from "@/lib/hero-meta";
-import { HEROES, heroById, type Hero } from "@/lib/heroes";
+import { HEROES, heroById, heroPagePath, type Hero } from "@/lib/heroes";
 import {
   EmptyState,
   HeroIcon,
@@ -33,6 +34,7 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
+import { HeroSearch } from "@/components/hero-search";
 import { singleSearchParam } from "@/lib/search-params";
 
 type MetaSearchParams = { season?: string | string[] };
@@ -109,22 +111,9 @@ export default async function MetaPage({
   );
   const knownHeroIds = new Set(HEROES.map((hero) => hero.id));
   const metaGames: MetaGame[] = decodedGames
-    .map(({ game, decoded }) => {
-      const trusted = trustedGamePlayers(decoded);
-      return {
-        radiantWin: game.radiantWin,
-        lines: (allHeroesKnown(trusted, knownHeroIds) ? trusted : []).map(
-          (player) => ({
-            userId: player.userId,
-            heroId: player.heroId,
-            isRadiant: player.isRadiant,
-            kills: player.kills,
-            deaths: player.deaths,
-            assists: player.assists,
-          }),
-        ),
-      };
-    })
+    .map(({ game, decoded }) =>
+      toMetaGame(game.radiantWin, metaLines(decoded, knownHeroIds)),
+    )
     // Unusable games cannot dilute the pick-rate denominator.
     .filter((game) => game.lines.length > 0);
 
@@ -151,12 +140,18 @@ export default async function MetaPage({
     />
   );
   const switcher = (
-    <SeasonSwitcher
-      label="hero meta"
-      basePath="/meta"
-      seasons={seasonChoices}
-      selectedId={season.id}
-    />
+    <>
+      <HeroSearch
+        seasonId={season.isActive ? undefined : season.id}
+        className="max-w-md"
+      />
+      <SeasonSwitcher
+        label="hero meta"
+        basePath="/meta"
+        seasons={seasonChoices}
+        selectedId={season.id}
+      />
+    </>
   );
   const dataNotice = (
     <StatsDataNotice
@@ -220,6 +215,7 @@ export default async function MetaPage({
     return [
       {
         hero,
+        href: heroPagePath(hero, season.isActive ? undefined : season.id),
         picks: row.picks,
         wins: row.wins,
         losses: row.losses,

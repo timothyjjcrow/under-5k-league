@@ -85,7 +85,9 @@ actions: `src/app/actions/admin-discord.ts`.
   Don't escape admin-authored text (news, season names) or `<@id>` markup.
   `discord.test.ts` sweeps the formatters for `](`.
 - **Wrap site links in `<angle brackets>`** to stop a huge unfurl card; only
-  `newsMessage`'s media URL stays bare, so the GIF embeds.
+  `newsMessage`'s media URL stays bare, so the GIF embeds, and the inhouse
+  night's Discord event link, so it unfurls as the event with its Interested
+  button.
 - **Write times as `<t:epoch:F|R|T>`**, never formatted strings, and keep
   content within 2,000 characters (`isValidDiscordContent` checks the exact
   rendered text).
@@ -177,8 +179,9 @@ actions: `src/app/actions/admin-discord.ts`.
   `<@discordId>` if linked, escaped name otherwise, plus the accept deadline.
   Queueing is the consent; don't add an opt-out. One tabbed-away player burns
   the league's scarcest event on a short `INHOUSE.ACCEPT_SECONDS` clock.
-- **Only the two interrupting posts carry the ping role** (queue filling, match
-  found), never results or the board. `SETTING_KEYS.INHOUSE_PING_ROLE_ID` (env
+- **Only the interrupting posts carry the ping role:** queue filling, match
+  found, and the inhouse night's two (planned, and on now; `inhouse.md`),
+  never results, the board, or a night moved or called off. `SETTING_KEYS.INHOUSE_PING_ROLE_ID` (env
   fallback `DISCORD_INHOUSE_ROLE_ID`; the admin field takes an id or `<@&id>`).
   Unset pings nobody. It must be self-assignable: an un-opt-out-able ping gets
   the channel muted.
@@ -191,7 +194,13 @@ actions: `src/app/actions/admin-discord.ts`.
 ## The ping role and the bot
 
 - **Keep the bot tiny.** `discord-roles.ts` is the only bot-token user: REST
-  only, no gateway, process or slash commands. Discord has no self-assign
+  only, no gateway, process or slash commands. Besides the role it creates,
+  edits and deletes the inhouse night's server event (`createGuildEvent`,
+  `updateGuildEvent`, `deleteGuildEvent`; `forbidden` means the bot lacks
+  Create Events, `gone` that someone deleted the event) and reads its
+  interested count live (`guildEventInterest`, memoized two minutes, null
+  when unknown). `getPingHealth` reports `canCreateEvents` (Create Events or
+  Manage Events) as its own line in the checklist. Discord has no self-assign
   toggle, so /me's `setInhousePingOptIn` calls `setPingRole` (PUT/DELETE
   `/guilds/{g}/members/{u}/roles/{r}`) on an OAuth-proven `discordId`. Missing
   token, guild or role hides the opt-in (`pingOptInAvailable`), never

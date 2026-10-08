@@ -207,8 +207,38 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
   `<details>`. "Best win rate" needs `META_HEADLINE_MIN_PICKS` (8) picks,
   compared exactly (a 3-0 hero is not a headline).
 - **Only trusted, complete 5v5 boxes count.** A game with any unknown hero is
-  dropped whole (`allHeroesKnown`) so coverage can't pass 100%, with a
-  catalogue-update notice. A deleted player shows as "Former player".
+  dropped whole (`allHeroesKnown`, through `metaLines`) so coverage can't pass
+  100%, with a catalogue-update notice. A deleted player shows as "Former
+  player".
+
+## Hero pages (`/meta/<hero>`)
+
+- **Every hero has a page, picked or not,** at its display-name slug
+  (`heroSlug`: "anti-mage", "natures-prophet", never the asset key that names
+  Clockwerk "rattletrap"); an unknown slug is not found. It is season-scoped
+  like /meta (`?season=`, the same switcher) and reads the cached season
+  snapshot (`getSeasonHeroGames`). Pure rules: `hero-games.ts` (tested).
+- **It counts exactly /meta's games and shows /meta's own numbers.** Both pages
+  take a game's lines from `metaLines`, and the page's record, win %, KDA and
+  pick rate are `heroMeta`'s row for the hero, so the two can never disagree
+  (`hero-games.test.ts` cross-checks).
+- **Builds are end-of-game items only:** the six inventory slots, backpack and
+  neutral slot each player finished with (`player-items.ts`; storage rules in
+  `results-and-opendota.md`). "Most-built items" counts each shop item once
+  per game across inventory and backpack, with the record of the games it was
+  built in; consumables and recipes are left out, and neutral items get their
+  own short list. Buy order and timings need a parsed replay, which league
+  games don't have, so the page says so instead of guessing. Skill builds
+  weren't wanted (DECISIONS.md, 2026-10-07).
+- **Games without stored items still list,** with "Items not recorded yet",
+  and the tallies cover only games with items (the card says "from N of M
+  games" until the backfill catches up).
+- **"Find a hero"** (`HeroSearch`, on /meta and every hero page) matches
+  names, asset keys and the shorthands `findHero` knows ("jugg", "am") through
+  `searchHeroes`, and opens a hero's page; it never filters /meta's table.
+  Without scripts the form GETs `/meta/find`, which redirects to the best
+  match (`heroSearchDestination`).
+- **League games only.** Inhouse games aren't on the hero pages.
 
 ## Power rankings
 

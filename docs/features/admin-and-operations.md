@@ -132,6 +132,14 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   (`setNextSeasonDate`, `clearNextSeasonDate`) is the season-bound one: refused
   outside Season complete and from a stale page, and it lapses at the handoff
   because it names its season (`next-season.ts`).
+- **The Inhouse night card is league-wide** (`#adm-inhouse-night`, just before
+  Discord notifications): `setInhouseNight` plans, moves or re-notes one night
+  and `cancelInhouseNight` takes it down (`admin-inhouse-night.ts`; rules in
+  `inhouse.md`). Its start box is on the league's clock (suggesting the coming
+  Friday at 8 PM) and the form names the night it showed, so a save from a
+  stale page is refused. The toast says what happened on Discord: posted or
+  not, and the server event created, updated, or blocked because the bot lacks
+  Create Events (the bot checklist under Discord notifications has that line).
 - **Render per-match controls only from `admin-match-tools.tsx`.**
   `MatchResultRow` (kickoff, score or ruling, reopen, games, Auto-fetch games,
   Add game) and `StandinMatchBlock` (any-team cover) render on /admin AND in

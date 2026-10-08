@@ -139,6 +139,9 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
+import { InhouseNightControls } from "@/components/admin/inhouse-night-controls";
+import { inhouseNightPhase } from "@/lib/inhouse-night";
+import { readInhouseNight } from "@/lib/inhouse-night-service";
 import {
   closedPollStatus,
   pollOnHome,
@@ -540,6 +543,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     { id: "adm-automation", label: "Automation" },
     // Season-independent: inhouse alerts and the queue board are most
     // important in the offseason, when inhouse is the live mode.
+    { id: "adm-inhouse-night", label: "Inhouse night" },
     { id: "adm-discord", label: "Discord" },
     { id: "adm-activity", label: "Activity" },
     { id: "adm-poll", label: "Match night poll" },
@@ -715,6 +719,12 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           <AutomationRunnerHealth />
         </Suspense>
       </AdminAnchor>
+
+      {/* The planned inhouse night: season-independent like inhouse itself.
+          Streamed: its Discord interested count must never hold up the page. */}
+      <Suspense fallback={<CardSkeleton rows={2} />}>
+        <AdminInhouseNight />
+      </Suspense>
 
       {/* Evergreen because its inhouse channel, ping role and live board do
           not belong to a season; every inhouse control stays usable in the
@@ -5405,8 +5415,9 @@ function LeagueControls({ season }: { season: Season }) {
           <span className="font-medium text-fg">Player data refreshes itself:</span>{" "}
           about once an hour the automation worker updates Steam names and
           avatars, the medals and scouting stats of the few players checked
-          longest ago, and adds report-card stats to a few games imported
-          before report cards existed. It pauses when OpenDota refuses a
+          longest ago, and adds report-card stats and end-of-game items to
+          a few games imported before those were stored. It pauses when
+          OpenDota refuses a
           request and while an auction is live. To refresh right away, use
           the Refresh player data now button in{" "}
           <a href="#adm-captains" className={textLink()}>
@@ -6183,6 +6194,34 @@ function PingHealthLines({
               not request guild-join permission or add members.
             </p>
           ) : null}
+          {/* The inhouse night's server event rides the same bot and fails
+              for its own reason, so it gets its own line too. */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span className="text-muted">Inhouse night events:</span>
+            <span
+              className={
+                health.canCreateEvents === true
+                  ? "text-success"
+                  : health.canCreateEvents === false
+                    ? "text-danger"
+                    : "text-muted"
+              }
+            >
+              {health.canCreateEvents === true
+                ? "✓"
+                : health.canCreateEvents === false
+                  ? "✗"
+                  : "•"}{" "}
+              Bot can create events
+            </span>
+          </div>
+          {health.canCreateEvents === false ? (
+            <p className="mt-1 text-xs text-danger">
+              Server Settings → Roles: give the bot&apos;s role the Create
+              Events permission, so an inhouse night shows in the server&apos;s
+              Events with an Interested button.
+            </p>
+          ) : null}
         </div>
       ) : null}
       {health.problem ? (
@@ -6818,6 +6857,29 @@ async function AdminActivity() {
  * series should be over, longer once a game is in (matchWatchWindow). One
  * link for the whole league, kept across seasons.
  */
+/** The Inhouse night card (src/components/admin/inhouse-night-controls.tsx). */
+async function AdminInhouseNight() {
+  const { night } = await readInhouseNight();
+  // eslint-disable-next-line react-hooks/purity -- async server component
+  const nowMs = Date.now();
+  const phase = night ? inhouseNightPhase(night, nowMs) : null;
+  return (
+    <AdminSection
+      id="adm-inhouse-night"
+      title="Inhouse night"
+      subtitle={
+        night && phase === "upcoming"
+          ? `Planned: ${formatLeagueMatchTime(new Date(night.startsAtMs), "full")}`
+          : phase === "on"
+            ? "On now."
+            : "None planned: pick an evening and it's announced on the site and in Discord."
+      }
+    >
+      <InhouseNightControls night={night} nowMs={nowMs} />
+    </AdminSection>
+  );
+}
+
 async function StreamControls() {
   const stream = parseStoredStream(
     await getSetting(SETTING_KEYS.LEAGUE_STREAM_URL),

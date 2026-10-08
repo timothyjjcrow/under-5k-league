@@ -31,6 +31,7 @@ import {
   championAnnouncedKey,
   draftReminderKey,
   honorsAnnouncedKey,
+  inhouseNightStartKey,
   PLAYOFF_ROUND_ANNOUNCED_PREFIX,
   RESULT_ANNOUNCED_PREFIX,
   resultAnnouncedKey,
@@ -55,6 +56,10 @@ import {
   HONORS_STALE_PREFIX,
 } from "./announcement-marker";
 import { LEAGUE_ANNOUNCEMENT_CLAIM_LEASE_MS } from "./league-announcement-outbox";
+import {
+  INHOUSE_NIGHT_START_POST_WINDOW_MS,
+  parseInhouseNight,
+} from "./inhouse-night";
 
 export {
   AUTOMATION_GATE_CACHE_KEY,
@@ -1062,6 +1067,26 @@ export function computeAutomationGateSnapshot(
     }
   }
 
+  // The inhouse night's start post (announceInhouseNightStart): wake at the
+  // start, then follow its marker until the post window closes. Inhouse has
+  // no season, so neither does this. The worker records the marker as
+  // covered when there is nowhere to post, which ends the wakes.
+  const night = parseInhouseNight(inputs.settings[SETTING_KEYS.INHOUSE_NIGHT]);
+  if (night) {
+    const closesAt = night.startsAtMs + INHOUSE_NIGHT_START_POST_WINDOW_MS;
+    if (nowMs < night.startsAtMs) {
+      addCandidate(candidates, nowMs, night.startsAtMs, "REMINDER");
+    } else if (nowMs < closesAt) {
+      const markerAt = genericMarkerWakeAt(
+        inputs.settings[inhouseNightStartKey(night.id, night.startsAtMs)],
+        nowMs,
+      );
+      if (markerAt !== null && markerAt < closesAt) {
+        addCandidate(candidates, nowMs, markerAt, "REMINDER");
+      }
+    }
+  }
+
   const boardAt = boardWakeAt(inputs.settings, nowMs, inputs.boardNeedsSync);
   if (boardAt !== null) addCandidate(candidates, nowMs, boardAt, "BOARD");
 
@@ -1085,7 +1110,7 @@ export function computeAutomationGateSnapshot(
 export async function loadAutomationGateSnapshot(
   nowMs = Date.now(),
 ): Promise<AutomationGateSnapshot> {
-  const [runner, seasons] = await Promise.all([
+  const [runner, seasons, nightRow] = await Promise.all([
     prisma.automationRunState.findUnique({
       where: { key: "league-maintenance" },
       select: {
@@ -1138,6 +1163,11 @@ export async function loadAutomationGateSnapshot(
         },
       },
     }),
+    // The inhouse night names its own start-post marker, read below.
+    prisma.setting.findUnique({
+      where: { key: SETTING_KEYS.INHOUSE_NIGHT },
+      select: { value: true },
+    }),
   ]);
   invariant(seasons.length <= 1, "multiple active seasons");
   const season = seasons[0] ?? null;
@@ -1148,6 +1178,11 @@ export async function loadAutomationGateSnapshot(
   // recovery remains below, including markers whose match or season was
   // deleted.
   const markerKeys = new Set<string>();
+  const night = parseInhouseNight(nightRow?.value);
+  if (night) {
+    markerKeys.add(SETTING_KEYS.INHOUSE_NIGHT);
+    markerKeys.add(inhouseNightStartKey(night.id, night.startsAtMs));
+  }
   if (season) {
     markerKeys.add(championAnnouncedKey(season.id));
     if (season.draftAt && draftSetupOpen(season.status, season.draft?.status)) {

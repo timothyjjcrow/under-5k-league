@@ -125,9 +125,12 @@ test("hero meta is one table of picked heroes with an honest headline", async ({
     await expect(table.getByRole("columnheader", { name: column })).toBeVisible();
   }
   await expect(table.getByRole("columnheader", { name: "Most played by" })).toBeVisible();
-  // The old explorer's filters, highlight cards and paging are gone.
+  // The old explorer's filters, highlight cards and paging are gone. The one
+  // search box opens a hero's own page (e2e-mid/hero-pages.spec.ts); it never
+  // filters this table.
   await expect(page.getByRole("group", { name: "Hero sample filter" })).toHaveCount(0);
-  await expect(page.getByRole("searchbox")).toHaveCount(0);
+  await expect(page.getByRole("searchbox")).toHaveCount(1);
+  await expect(page.getByRole("searchbox", { name: "Find a hero" })).toBeVisible();
   await expect(page.getByText("The meta, at a glance")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Show more heroes/ })).toHaveCount(0);
   // Never-picked heroes fold into one line.

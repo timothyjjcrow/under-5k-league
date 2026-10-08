@@ -109,6 +109,20 @@ async function main() {
   }
   let dotaId = 8000000000;
   let gameIndex = 0;
+  // Real item ids (src/lib/item-catalogue.ts) for the fixture's end-of-game
+  // items: shop items, a few neutral items, and one enchantment.
+  const ITEM_POOL = [1, 36, 41, 50, 63, 102, 108, 116, 139, 141, 145, 147, 156, 168, 180, 254];
+  const NEUTRAL_POOL = [326, 359, 371, 377];
+  const fixtureItems = (seed: number) => ({
+    // Slot steps of 5 over 16 ids never repeat an item within a line; the
+    // last slot is sometimes empty and sometimes a ward (a consumable).
+    items: [0, 1, 2, 3, 4, 5].map((slot) =>
+      slot < 5 ? ITEM_POOL[(seed + slot * 5) % ITEM_POOL.length] : seed % 3 === 0 ? 42 : 0,
+    ),
+    backpack: [seed % 4 === 0 ? 36 : 0, 0, 0],
+    neutral: NEUTRAL_POOL[seed % NEUTRAL_POOL.length],
+    neutralEnchantment: seed % 2 === 0 ? 1583 : null,
+  });
   // Box scores for every COMPLETED match that doesn't have them yet —
   // callable again after playoff rounds resolve so the bracket's matches get
   // real games too. The first two games ever stay "legacy" (no benchmarks /
@@ -158,6 +172,7 @@ async function main() {
                     heroDamage: 9000 + (seed % 40) * 700,
                     towerDamage: 800 + (seed % 30) * 350,
                     heroHealing: pi % 3 === 2 ? 4000 + (seed % 20) * 400 : 0,
+                    ...fixtureItems(seed),
                     benchmarks: {
                       gold_per_min: { raw: 320 + (seed % 50) * 6, pct: pct(0) },
                       xp_per_min: {

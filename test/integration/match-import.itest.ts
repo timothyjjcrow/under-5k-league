@@ -965,6 +965,117 @@ describe("enrichStoredGames", () => {
     expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
   });
 
+  const OD_ITEMS = {
+    item_0: 1,
+    item_1: 63,
+    item_2: 0,
+    item_3: 116,
+    item_4: 0,
+    item_5: 0,
+    backpack_0: 36,
+    backpack_1: 0,
+    backpack_2: 0,
+    item_neutral: 359,
+    item_neutral2: 1583,
+  };
+
+  it("backfills end-of-game items, keeping a stored report card", async () => {
+    const benchmarks = { gold_per_min: { raw: 480, pct: 0.5 } };
+    const game = await legacyGame("9011", [{ ...LEGACY_LINE, xpm: 600, benchmarks }]);
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 9011,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        {
+          account_id: 111,
+          player_slot: 0,
+          hero_id: 7,
+          isRadiant: true,
+          kills: 3,
+          deaths: 1,
+          assists: 9,
+          xp_per_min: 999,
+          // A later fetch without percentiles must not wipe the stored ones.
+          benchmarks: null,
+          ...OD_ITEMS,
+        },
+      ],
+    });
+
+    // Benchmarks alone no longer make a game "done": it lacks items.
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 1, remaining: 0 });
+    const [line] = JSON.parse(
+      (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
+    );
+    expect(line).toMatchObject({
+      userId: "user-legacy",
+      xpm: 600,
+      benchmarks,
+      items: [1, 63, 0, 116, 0, 0],
+      backpack: [36, 0, 0],
+      neutral: 359,
+      neutralEnchantment: 1583,
+    });
+
+    vi.mocked(fetchOpenDotaMatch).mockClear();
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, remaining: 0 });
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+  });
+
+  it("never replaces items a line already has", async () => {
+    const stored = { items: [41, 0, 0, 0, 0, 0], backpack: [0, 0, 0], neutral: null, neutralEnchantment: null };
+    const game = await legacyGame("9012", [{ ...LEGACY_LINE, ...stored }]);
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 9012,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        {
+          account_id: 111,
+          player_slot: 0,
+          hero_id: 7,
+          isRadiant: true,
+          kills: 3,
+          deaths: 1,
+          assists: 9,
+          benchmarks: { gold_per_min: { raw: 480, pct: 0.66 } },
+          ...OD_ITEMS,
+        },
+      ],
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 1, remaining: 0 });
+    const [line] = JSON.parse(
+      (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
+    );
+    expect(line).toMatchObject({ ...stored, benchmarks: { gold_per_min: { raw: 480, pct: 0.66 } } });
+  });
+
+  it("keeps a stored report card when OpenDota no longer has the game", async () => {
+    const benchmarks = { gold_per_min: { raw: 480, pct: 0.5 } };
+    const game = await legacyGame("9013", [{ ...LEGACY_LINE, benchmarks }]);
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (_id, _o, report) => {
+      if (report) report.missing = true;
+      return null;
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ failed: 1, remaining: 0 });
+    const [line] = JSON.parse(
+      (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
+    );
+    expect(line).toEqual({
+      ...LEGACY_LINE,
+      benchmarks,
+      items: null,
+      backpack: null,
+      neutral: null,
+      neutralEnchantment: null,
+    });
+  });
+
   it("matches an accountless line by side + hero and stamps benchmarks: null", async () => {
     const game = await legacyGame("9002", [
       { ...LEGACY_LINE, accountId: null, heroId: 42, isRadiant: false },
@@ -1037,8 +1148,15 @@ describe("enrichStoredGames", () => {
     const [line] = JSON.parse(
       (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
     );
-    // The done marker and nothing else: attribution and stats as they were.
-    expect(line).toEqual({ ...LEGACY_LINE, benchmarks: null });
+    // The done markers and nothing else: attribution and stats as they were.
+    expect(line).toEqual({
+      ...LEGACY_LINE,
+      benchmarks: null,
+      items: null,
+      backpack: null,
+      neutral: null,
+      neutralEnchantment: null,
+    });
 
     vi.mocked(fetchOpenDotaMatch).mockClear();
     expect(await enrichStoredGames()).toMatchObject({ failed: 0, remaining: 0 });

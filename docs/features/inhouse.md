@@ -366,6 +366,54 @@ Every transition is a guarded claim; keep it that way (general rules:
   `INHOUSE_HISTORY_PAGE_SIZE` games a page. `/inhouse` page order is in
   `docs/features/pages-and-ui.md`.
 
+## Inhouse night
+
+One evening an admin sets aside for inhouses, so players know when to show
+up (DECISIONS.md, 2026-10-07). Rules: `src/lib/inhouse-night.ts` (pure);
+storage and Discord: `inhouse-night-service.ts`; admin:
+`src/app/actions/admin-inhouse-night.ts` and
+`src/components/admin/inhouse-night-controls.tsx` (the Inhouse night card);
+site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
+`test/integration/inhouse-night.itest.ts`.
+
+- **One night at a time, in one Setting row** (`SETTING_KEYS.INHOUSE_NIGHT`:
+  id, start, note, revision, the Discord event's id). No migration. A save
+  moves an upcoming night (same id, revision + 1) or, once the last night has
+  started or is over, plans the next (new id). A note-only save rewords the
+  event and posts nothing.
+- **Every write is a compare-and-swap on the exact stored value.** The admin
+  form carries the night it showed (`expectedNightId`, `expectedNightRevision`)
+  and a save from a stale page is refused. `swapInhouseNight` and
+  `attachInhouseNightEvent` are ratchet claims (seams
+  `inhouseNight.save.beforeSwap`, `inhouseNight.clear.beforeSwap`).
+- **Discord runs after the save, best-effort** (`publishInhouseNight`,
+  `withdrawInhouseNight`). A new night creates the server event (an EXTERNAL
+  event at `/inhouse`, three hours long, which Discord starts and ends by
+  itself), stores its id by swap (an event made for a night that changed
+  meanwhile is deleted again), then posts in the inhouse alert channel
+  pinging the inhouse role, with the event's link bare so it unfurls with its
+  Interested button. A move patches the event (or makes a new one if it was
+  deleted in Discord) and posts without a ping. Cancelling an upcoming night
+  deletes its event and posts that it's off; a started night is left to end.
+  The toast says what happened on Discord; nothing there undoes the save.
+- **The start post pings once** (`announceInhouseNightStart`, a worker step in
+  `runResultSync`): from the start until `INHOUSE_NIGHT_START_POST_WINDOW_MS`
+  after, behind the marker `inhouseNightStartKey(id, start)`, so a moved night
+  posts again at its new time and a late worker never pings hours after. It
+  re-reads the night after its claim and releases the claim if it moved
+  (seam `inhouseNight.start.afterClaim`). With nowhere to post (no webhook, or
+  a preview) it records the marker as covered. The automation gate wakes the
+  worker at the start and follows the marker through the window.
+- **On the site it shows until the night is over** (`currentInhouseNight`:
+  the start plus `INHOUSE_NIGHT_LENGTH_MS`, the countdown's live window).
+  Home's inhouse strip adds a line (time on the viewer's clock, countdown,
+  interested count) and says "Jump in" once the night is on; /inhouse puts a
+  card above the room with the note, the Discord event link, Google Calendar
+  and an `.ics` download (`/api/calendar/inhouse-night`, one event whose UID
+  and SEQUENCE are the night's id and revision). The interested count is read
+  live from Discord (`guildEventInterest`, reused for two minutes, nothing
+  when unknown or zero) and streamed, so a slow Discord never holds a page.
+
 ## Testing
 
 - **Extract room rules into pure tested functions plus a source guard** that

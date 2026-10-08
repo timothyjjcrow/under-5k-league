@@ -189,6 +189,35 @@ describe("buildPlayers report-card fields", () => {
       towerDamage: null,
       heroHealing: null,
       benchmarks: null,
+      // Marked as checked, so the backfill never refetches it for items.
+      items: null,
+      backpack: null,
+      neutral: null,
+      neutralEnchantment: null,
+    });
+  });
+
+  it("stores each player's end-of-game items in slot order", () => {
+    const match = makeMatch([1], [6], true);
+    match.players[0] = {
+      ...match.players[0],
+      item_0: 1,
+      item_1: 0,
+      item_2: 63,
+      item_3: 0,
+      item_4: 0,
+      item_5: 116,
+      backpack_0: 0,
+      backpack_1: 36,
+      backpack_2: 0,
+      item_neutral: 359,
+      item_neutral2: 0,
+    };
+    expect(buildPlayers(match, new Map())[0]).toMatchObject({
+      items: [1, 0, 63, 0, 0, 116],
+      backpack: [0, 36, 0],
+      neutral: 359,
+      neutralEnchantment: null,
     });
   });
 });

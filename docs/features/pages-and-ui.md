@@ -442,7 +442,11 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   streaming.
 - **The inhouse queue is a side-game tile mid-season** (`InhouseStrip
   variant="tile"`, the live line), and ends the COMPLETE view's rail; the
-  other phases keep the full-width strip after the view.
+  other phases keep the full-width strip after the view. While an inhouse
+  night is planned, both carry a second line under the queue's (its time on
+  the viewer's clock, the countdown and the Discord interested count, or "on
+  now"); the strip is one link, so the calendar and Discord links live on
+  /inhouse's card.
 - **The match-night poll card sits under the pinned notices in every phase**
   (and in the offseason view), streamed with a null fallback because it is
   usually absent. Its ballot and live count stack, never side by side: a
@@ -658,8 +662,9 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## The inhouse page (`/inhouse`)
 
-- **Order is the product:** room, `SceneStats`, ladder, recent results, then
-  the OpenDota guide. The ladder is why people return; the history sections are
+- **Order is the product:** the planned inhouse night's card (only while one
+  is set, streamed), room, `SceneStats`, ladder, recent results, then the
+  OpenDota guide. The ladder is why people return; the history sections are
   the costliest queries, so they stream in below the room.
 - **`SceneStats` uses the same memoised `loadBoardStats` as the Discord
   board,** so channel and site agree on counts, last result and MVP. Use
@@ -808,6 +813,9 @@ the league is already draftable and many visitors have joined. Write for both.
   line up). The report chip sits on the hero line and is a button whose
   metrics open as a row under the whole line; a `<details>` kept chip and
   metrics in one box, so the chip needed a line of its own.
+- **Each box score line ends with the player's items** (`ItemStrip` at 18px
+  under the numbers, `pl-10` to clear the hero icon) when the game stored
+  them; older games show none until the backfill reaches them.
 - **The recorded net-worth bar sits between the two totals from `sm`** (grid
   placement, so the reading order stays Radiant, bar, Dire); a phone stacks
   the totals over a full-width bar.
@@ -861,6 +869,22 @@ the league is already draftable and many visitors have joined. Write for both.
   one player per 36px line (a 24px avatar, so each name's 28px tap box keeps
   8px from the next), and the header names the captain only when they are not
   in the list. The head-to-head grid's chips are one line ("W 2–0").
+- **Each hero links to its page** (`/meta/<hero>`, rules in
+  `stats-and-side-games.md`): the table's hero names are `textLink`s, and a
+  "Find a hero" box sits under the stats tab bar on /meta and every hero page.
+  Its matches drop down over the page as plain links (no combobox), and it
+  stays a form so Enter works before scripts load. A hero page is one column:
+  the stat strip, "Most-built items" (two across on a phone, three from
+  `lg`), the games (one `<li>` per game: result, player, matchup, week and
+  date, then the item strip, K/D/A, GPM and length, and "Match"), then who
+  plays it.
+- **Item icons are `ItemIcon`** (`item-icon.tsx`): Valve's 88 × 64 art at any
+  height, the neutral slot round, and an initials tile when the CDN fails or
+  the catalogue doesn't know the item, like `HeroIcon`. A line's items are
+  `ItemStrip` (empty slots as faint tiles so slots line up, backpack dimmed,
+  neutral last), fed plain data from `itemStripData`: the match page's
+  `BoxScoreLine` is a client component, and a server component element
+  passed through its prop drew React key warnings.
 - **Hero meta draws the shape of the meta:** from `sm`, picks (against the
   most-picked hero) and win % each get a thin bar beside the figure, with the
   figure at a fixed width so the bars share a column. Decorative

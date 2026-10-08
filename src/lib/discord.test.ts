@@ -16,6 +16,10 @@ import {
   freeAgentSignedMessage,
   inhouseLobbyMessage,
   inhouseQueueMessage,
+  inhouseNightMessage,
+  inhouseNightMovedMessage,
+  inhouseNightCancelledMessage,
+  inhouseNightStartMessage,
   inhouseResultMessage,
   inhouseResultVoidedMessage,
   matchResultMessage,
@@ -1136,6 +1140,51 @@ describe("draftCompleteAnnouncement", () => {
       ].join("\n"),
     );
     expect(announcement.mentionUserIds).toEqual([]);
+  });
+});
+
+describe("inhouse night messages", () => {
+  const startsAtMs = Date.parse("2026-10-10T03:00:00.000Z");
+  const epoch = startsAtMs / 1000;
+
+  it("announces the night on every reader's clock, pinging the inhouse role", () => {
+    const msg = inhouseNightMessage({
+      startsAtMs,
+      note: "First one: bring a friend",
+      roleId: "555555555555555555",
+      eventUrl: "https://discord.com/events/111111111111111111/222222222222222222",
+    });
+    expect(msg.split("\n")).toEqual([
+      `<@&555555555555555555> 🎮 **Inhouse night** <t:${epoch}:F> (<t:${epoch}:R>)`,
+      "First one: bring a friend",
+      `Join the queue on the site when it starts: <${joinLink()}>`,
+      // Bare, so Discord unfurls it as the event with its Interested button.
+      "Coming? Mark yourself interested: https://discord.com/events/111111111111111111/222222222222222222",
+    ]);
+  });
+
+  it("leaves out the ping, note and event when there are none", () => {
+    const msg = inhouseNightMessage({ startsAtMs, note: "", roleId: null, eventUrl: null });
+    expect(msg).toBe(
+      `🎮 **Inhouse night** <t:${epoch}:F> (<t:${epoch}:R>)\nJoin the queue on the site when it starts: <${joinLink()}>`,
+    );
+  });
+
+  it("says a move and a cancellation without pinging anyone", () => {
+    const moved = inhouseNightMovedMessage({ startsAtMs, eventUrl: null });
+    expect(moved).toBe(`🕑 **Inhouse night moved** to <t:${epoch}:F> (<t:${epoch}:R>)`);
+    expect(inhouseNightCancelledMessage({ startsAtMs })).toBe(
+      `**The inhouse night on <t:${epoch}:F> is off.**`,
+    );
+    for (const msg of [moved, inhouseNightCancelledMessage({ startsAtMs })]) {
+      expect(msg).not.toContain("<@");
+    }
+  });
+
+  it("calls the start with the queue so far and the join link", () => {
+    expect(inhouseNightStartMessage({ present: 3, lobbySize: 10, roleId: "555555555555555555" })).toBe(
+      `<@&555555555555555555> 🎮 **Inhouse night is on!** 3/10 in the queue so far. Jump in: <${joinLink()}>`,
+    );
   });
 });
 
