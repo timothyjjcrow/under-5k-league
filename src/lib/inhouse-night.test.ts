@@ -9,8 +9,12 @@ import {
   inhouseNightChange,
   inhouseNightEvent,
   inhouseNightGoogleCalendarUrl,
+  inhouseNightHeadcount,
+  inhouseNightHeadcountSources,
+  inhouseNightHeadcountText,
   inhouseNightNote,
   inhouseNightPhase,
+  inhouseNightRsvpOpen,
   inhouseNightTimeProblem,
   nextInhouseNight,
   parseInhouseNight,
@@ -78,6 +82,52 @@ describe("a night's phase", () => {
     expect(currentInhouseNight(n, NOW + HOUR)).toBe(n);
     expect(currentInhouseNight(n, NOW + INHOUSE_NIGHT_LENGTH_MS)).toBeNull();
     expect(currentInhouseNight(null, NOW)).toBeNull();
+  });
+});
+
+describe("saying I'm in", () => {
+  it("is open until the night starts; after that the queue is the way in", () => {
+    const n = night();
+    expect(inhouseNightRsvpOpen(n, NOW)).toBe(true);
+    expect(inhouseNightRsvpOpen(n, n.startsAtMs - 1)).toBe(true);
+    expect(inhouseNightRsvpOpen(n, n.startsAtMs)).toBe(false);
+    expect(inhouseNightRsvpOpen(n, n.startsAtMs + INHOUSE_NIGHT_LENGTH_MS)).toBe(false);
+  });
+});
+
+describe("who's coming", () => {
+  const A = "100000000000000001";
+  const B = "100000000000000002";
+  const C = "100000000000000003";
+
+  it("adds Discord's Interested to the site's I'm in, a linked player once", () => {
+    // Site: A (linked), B (linked) and one unlinked player. Discord: A, C.
+    const count = inhouseNightHeadcount([A, null, B], [A, C]);
+    expect(count).toEqual({ site: 3, discordOnly: 1 });
+    expect(inhouseNightHeadcountText(count)).toBe("4 coming");
+    expect(inhouseNightHeadcountSources(count)).toBe("3 on the site, 1 on Discord");
+  });
+
+  it("counts a Discord member listed twice once", () => {
+    expect(inhouseNightHeadcount([], [C, C])).toEqual({ site: 0, discordOnly: 1 });
+  });
+
+  it("says only the site's count when Discord's list couldn't be read", () => {
+    const count = inhouseNightHeadcount([A, null], null);
+    expect(count).toEqual({ site: 2, discordOnly: null });
+    expect(inhouseNightHeadcountText(count)).toBe("2 said I'm in");
+    expect(inhouseNightHeadcountSources(count)).toBeNull();
+    expect(inhouseNightHeadcountText(inhouseNightHeadcount([], null))).toBeNull();
+  });
+
+  it("says nothing while nobody is coming, and names one source alone without a split", () => {
+    expect(inhouseNightHeadcountText(inhouseNightHeadcount([], []))).toBeNull();
+    const siteOnly = inhouseNightHeadcount([null], []);
+    expect(inhouseNightHeadcountText(siteOnly)).toBe("1 coming");
+    expect(inhouseNightHeadcountSources(siteOnly)).toBeNull();
+    const discordOnly = inhouseNightHeadcount([], [A, B]);
+    expect(inhouseNightHeadcountText(discordOnly)).toBe("2 coming");
+    expect(inhouseNightHeadcountSources(discordOnly)).toBeNull();
   });
 });
 

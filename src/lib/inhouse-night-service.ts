@@ -6,7 +6,9 @@
 // Discord event's id is attached by a swap on the exact value the save
 // stored. Discord is never called inside a write: the action saves, then
 // calls publishInhouseNight, best-effort. The worker posts the start once
-// (announceInhouseNightStart, behind a once-only marker).
+// (announceInhouseNightStart, behind a once-only marker). Players' "I'm in"s
+// live in InhouseNightRsvp (inhouse-night-rsvp-service.ts); a new night or a
+// cancel prunes the old night's list here.
 
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
@@ -154,6 +156,8 @@ export async function saveInhouseNight(input: {
   // Test seam: a second admin's save lands between the read and the write.
   await raceHook("inhouseNight.save.beforeSwap");
   if (!(await swapInhouseNight(current.raw, raw))) throw new UserFacingError(STALE);
+  // A new night starts with nobody in: the last night's list goes.
+  if (change === "new") await pruneInhouseNightRsvps({ except: night.id });
   return { night, previous: current.night, change, raw };
 }
 
@@ -169,7 +173,31 @@ export async function clearInhouseNight(input: {
   if (current.raw === null) return null;
   await raceHook("inhouseNight.clear.beforeSwap");
   if (!(await swapInhouseNight(current.raw, null))) throw new UserFacingError(STALE);
+  if (current.night) await pruneInhouseNightRsvps({ of: current.night.id });
   return current.night;
+}
+
+/**
+ * Drop the "I'm in"s of every other night (`except`, after a save that plans
+ * a new one) or of one night (`of`, after a cancel), so the table holds only
+ * the planned night's list. Never all of them: a cancel's prune that runs
+ * late must not take a newer night's list with it. Best-effort, after the
+ * save has committed: a row it misses is never read (every read filters by
+ * the current night's id) and goes with the next prune.
+ */
+async function pruneInhouseNightRsvps(
+  scope: { except: string } | { of: string },
+): Promise<void> {
+  try {
+    await prisma.inhouseNightRsvp.deleteMany({
+      where:
+        "except" in scope ? { nightId: { not: scope.except } } : { nightId: scope.of },
+    });
+  } catch {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[inhouse-night] pruning old I'm-in rows failed");
+    }
+  }
 }
 
 /**
@@ -297,7 +325,8 @@ export async function withdrawInhouseNight(
 /**
  * The worker's start post: once per night (and again if it was moved after
  * posting), only in the first half hour after the start, pinging the inhouse
- * role with the queue's count. With nowhere to post (no inhouse or league
+ * role with the queue's count, and each player who said "I'm in" on the site
+ * with a linked Discord account. With nowhere to post (no inhouse or league
  * webhook, or a preview) the marker is recorded as covered, so the worker
  * isn't woken for it again. True when a post went out.
  */
@@ -336,16 +365,29 @@ export async function announceInhouseNightStart(nowMs = Date.now()): Promise<boo
     return false;
   }
 
-  const [present, roleId] = await Promise.all([
+  const [present, roleId, rsvps] = await Promise.all([
     prisma.inhouseQueueEntry.count({
       where: { lastSeenAt: { gte: queuePresentCutoff(Date.now()) } },
     }),
     getInhousePingRoleId(),
+    prisma.inhouseNightRsvp.findMany({
+      where: { nightId: night.id },
+      orderBy: [{ createdAt: "asc" }, { userId: "asc" }],
+      select: { user: { select: { discordId: true } } },
+    }),
   ]);
-  const sent = await sendInhouseDiscordMessage(
-    inhouseNightStartMessage({ present, lobbySize: INHOUSE.LOBBY_SIZE, roleId }),
-    { roles: roleId ? [roleId] : [] },
-  );
+  const rsvpDiscordIds = rsvps.flatMap(({ user }) => (user.discordId ? [user.discordId] : []));
+  const start = inhouseNightStartMessage({
+    present,
+    lobbySize: INHOUSE.LOBBY_SIZE,
+    roleId,
+    rsvpDiscordIds,
+    rsvpUnlinked: rsvps.length - rsvpDiscordIds.length,
+  });
+  const sent = await sendInhouseDiscordMessage(start.content, {
+    roles: roleId ? [roleId] : [],
+    users: start.mentionUserIds,
+  });
   if (!sent) {
     // A failed marker is retried by later runs inside the window.
     await markAnnouncementFailed(claim);

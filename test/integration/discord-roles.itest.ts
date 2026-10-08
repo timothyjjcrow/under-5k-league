@@ -7,7 +7,7 @@ import {
   _clearGuildEventInterestForTests,
   createGuildEvent,
   deleteGuildEvent,
-  guildEventInterest,
+  guildEventInterested,
   updateGuildEvent,
   discordChaseMessage,
   discordReachWarning,
@@ -500,25 +500,82 @@ describe("the inhouse night's server event", () => {
     expect(recorded).toHaveLength(0);
   });
 
-  it("reads the interested count live, reusing it for a couple of minutes", async () => {
-    respond = () => ({ status: 200, body: { id: EVENT, user_count: 12 } });
-    expect(await guildEventInterest(EVENT, 1_000)).toBe(12);
+  it("reads who is interested live, reusing it for a couple of minutes", async () => {
+    const member = (n: number) => ({
+      guild_scheduled_event_id: EVENT,
+      user: { id: String(BigInt("900000000000001000") + BigInt(n)), username: `p${n}` },
+    });
+    respond = () => ({ status: 200, body: [member(1), member(2)] });
+    expect(await guildEventInterested(EVENT, 1_000)).toEqual([
+      "900000000000001001",
+      "900000000000001002",
+    ]);
     expect(recorded[0]).toMatchObject({
       method: "GET",
-      url: `/guilds/${GUILD}/scheduled-events/${EVENT}?with_user_count=true`,
+      url: `/guilds/${GUILD}/scheduled-events/${EVENT}/users?limit=100`,
+      auth: "Bot test-token",
     });
-    respond = () => ({ status: 200, body: { id: EVENT, user_count: 13 } });
-    expect(await guildEventInterest(EVENT, 60_000)).toBe(12);
+    respond = () => ({ status: 200, body: [member(1), member(2), member(3)] });
+    expect(await guildEventInterested(EVENT, 60_000)).toHaveLength(2);
     expect(recorded).toHaveLength(1);
-    expect(await guildEventInterest(EVENT, 1_000 + 2 * 60_000)).toBe(13);
+    expect(await guildEventInterested(EVENT, 1_000 + 2 * 60_000)).toHaveLength(3);
   });
 
-  it("calls an unknown count unknown, never zero", async () => {
+  it("pages past 100 after the last id, and stops at the page cap", async () => {
+    // Discord returns members by ascending id; a full page means there may
+    // be more after its last one.
+    const page = (from: number, size: number) =>
+      Array.from({ length: size }, (_, i) => ({
+        user: { id: String(BigInt("900000000000002000") + BigInt(from + i)) },
+      }));
+    respond = (r) => ({
+      status: 200,
+      body: r.url.includes("after=") ? page(100, 7) : page(0, 100),
+    });
+    const ids = await guildEventInterested(EVENT);
+    expect(ids).toHaveLength(107);
+    expect(recorded.map((r) => r.url)).toEqual([
+      `/guilds/${GUILD}/scheduled-events/${EVENT}/users?limit=100`,
+      `/guilds/${GUILD}/scheduled-events/${EVENT}/users?limit=100&after=900000000000002099`,
+    ]);
+
+    _clearGuildEventInterestForTests();
+    recorded = [];
+    let calls = 0;
+    respond = () => ({ status: 200, body: page(100 * calls++, 100) });
+    expect(await guildEventInterested(EVENT)).toHaveLength(500);
+    expect(recorded).toHaveLength(5);
+  });
+
+  it("calls an unreadable list unknown, never nobody", async () => {
     respond = () => ({ status: 500 });
-    expect(await guildEventInterest(EVENT)).toBeNull();
+    expect(await guildEventInterested(EVENT)).toBeNull();
+    _clearGuildEventInterestForTests();
+    respond = () => ({ status: 404, body: { code: 10070 } });
+    expect(await guildEventInterested(EVENT)).toBeNull();
+    _clearGuildEventInterestForTests();
+    // A page that fails after a good one is still unknown: half a list
+    // would undercount.
+    let calls = 0;
+    respond = () =>
+      calls++ === 0
+        ? {
+            status: 200,
+            body: Array.from({ length: 100 }, (_, i) => ({
+              user: { id: String(BigInt("900000000000003000") + BigInt(i)) },
+            })),
+          }
+        : { status: 502 };
+    expect(await guildEventInterested(EVENT)).toBeNull();
     _clearGuildEventInterestForTests();
     respond = () => ({ status: 200, body: { id: EVENT } });
-    expect(await guildEventInterest(EVENT)).toBeNull();
+    expect(await guildEventInterested(EVENT)).toBeNull();
+    // Without a bot nothing is asked at all.
+    _clearGuildEventInterestForTests();
+    recorded = [];
+    delete process.env.DISCORD_BOT_TOKEN;
+    expect(await guildEventInterested(EVENT)).toBeNull();
+    expect(recorded).toHaveLength(0);
   });
 });
 

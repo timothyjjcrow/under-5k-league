@@ -20,6 +20,7 @@ import {
   inhouseNightMovedMessage,
   inhouseNightCancelledMessage,
   inhouseNightStartMessage,
+  INHOUSE_NIGHT_START_PINGS_MAX,
   inhouseResultMessage,
   inhouseResultVoidedMessage,
   matchResultMessage,
@@ -1182,9 +1183,49 @@ describe("inhouse night messages", () => {
   });
 
   it("calls the start with the queue so far and the join link", () => {
-    expect(inhouseNightStartMessage({ present: 3, lobbySize: 10, roleId: "555555555555555555" })).toBe(
-      `<@&555555555555555555> 🎮 **Inhouse night is on!** 3/10 in the queue so far. Jump in: <${joinLink()}>`,
+    expect(inhouseNightStartMessage({ present: 3, lobbySize: 10, roleId: "555555555555555555" })).toEqual({
+      content: `<@&555555555555555555> 🎮 **Inhouse night is on!** 3/10 in the queue so far. Jump in: <${joinLink()}>`,
+      mentionUserIds: [],
+    });
+  });
+
+  it("pings the players who said they're in on the site, counting the unlinked", () => {
+    const a = "700000000000000001";
+    const b = "700000000000000002";
+    const start = inhouseNightStartMessage({
+      present: 4,
+      lobbySize: 10,
+      rsvpDiscordIds: [a, b, a],
+      rsvpUnlinked: 3,
+    });
+    expect(start.content).toBe(
+      `🎮 **Inhouse night is on!** 4/10 in the queue so far. Jump in: <${joinLink()}>\nSaid they're in on the site: <@${a}> <@${b}> and 3 more`,
     );
+    // Only the ids in the text are allowlisted, once each.
+    expect(start.mentionUserIds).toEqual([a, b]);
+    // Nobody linked: counted, never pinged.
+    expect(
+      inhouseNightStartMessage({ present: 0, lobbySize: 10, rsvpUnlinked: 1 }),
+    ).toMatchObject({
+      content: expect.stringMatching(/Said they're in on the site: 1 player$/),
+      mentionUserIds: [],
+    });
+  });
+
+  it("allowlists only the start pings that fit the post, and counts the rest", () => {
+    const ids = Array.from({ length: 120 }, (_, i) => String(BigInt("710000000000000000") + BigInt(i)));
+    const start = inhouseNightStartMessage({
+      present: 9,
+      lobbySize: 10,
+      roleId: "555555555555555555",
+      rsvpDiscordIds: ids,
+      rsvpUnlinked: 2,
+    });
+    expect(start.content.length).toBeLessThanOrEqual(2000);
+    expect(start.mentionUserIds).toEqual(ids.slice(0, INHOUSE_NIGHT_START_PINGS_MAX));
+    for (const id of start.mentionUserIds) expect(start.content).toContain(`<@${id}>`);
+    expect(start.content).not.toContain(`<@${ids[INHOUSE_NIGHT_START_PINGS_MAX]}>`);
+    expect(start.content).toMatch(new RegExp(` and ${122 - INHOUSE_NIGHT_START_PINGS_MAX} more$`));
   });
 });
 

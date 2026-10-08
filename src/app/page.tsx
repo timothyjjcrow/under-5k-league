@@ -13,6 +13,10 @@ import {
   type HomeViewer,
 } from "@/components/home/hero";
 import { InhouseStrip } from "@/components/home/inhouse-strip";
+import {
+  InhouseNightBar,
+  loadCurrentInhouseNight,
+} from "@/components/inhouse-night";
 import { MatchNightPollCard } from "@/components/home/match-night-poll";
 import { LeagueNews, PinnedNotices } from "@/components/home/news";
 import { OffseasonView } from "@/components/home/offseason-view";
@@ -58,7 +62,18 @@ export function generateMetadata() {
  */
 export default async function Home() {
   const user = await getSessionUser();
-  const snapshot = await getSeasonSnapshot(user?.id);
+  // eslint-disable-next-line react-hooks/purity -- async server component
+  const nowMs = Date.now();
+  const [snapshot, night] = await Promise.all([
+    getSeasonSnapshot(user?.id),
+    loadCurrentInhouseNight(nowMs),
+  ]);
+  // The planned inhouse night's thin bar leads Home in every phase, the
+  // offseason too: inhouses don't wait for a season. Rendered inline, not
+  // streamed, so it never drops in above a hero that has already painted.
+  const nightBar = night ? (
+    <InhouseNightBar user={user} night={night} nowMs={nowMs} />
+  ) : null;
 
   if (!snapshot) {
     const [latestSeason, defending] = await Promise.all([
@@ -74,6 +89,7 @@ export default async function Home() {
         user={user}
         latestSeason={latestSeason}
         defending={defending}
+        top={nightBar}
       />
     );
   }
@@ -288,6 +304,7 @@ export default async function Home() {
 
   return (
     <div className="space-y-5">
+      {nightBar}
       {defending || isAdmin ? (
         <div className="space-y-3">
           {hero}

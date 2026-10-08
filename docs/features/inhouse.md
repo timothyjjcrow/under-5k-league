@@ -369,12 +369,14 @@ Every transition is a guarded claim; keep it that way (general rules:
 ## Inhouse night
 
 One evening an admin sets aside for inhouses, so players know when to show
-up (DECISIONS.md, 2026-10-07). Rules: `src/lib/inhouse-night.ts` (pure);
-storage and Discord: `inhouse-night-service.ts`; admin:
+up, and say they're coming (DECISIONS.md, 2026-10-08). Rules:
+`src/lib/inhouse-night.ts` (pure); storage and Discord:
+`inhouse-night-service.ts`; players' "I'm in": `inhouse-night-rsvp-service.ts`
+and `src/app/actions/inhouse-night-rsvp.ts`; admin:
 `src/app/actions/admin-inhouse-night.ts` and
 `src/components/admin/inhouse-night-controls.tsx` (the Inhouse night card);
 site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
-`test/integration/inhouse-night.itest.ts`.
+`test/integration/inhouse-night.itest.ts`, `e2e-mid/zz-inhouse-night.spec.ts`.
 
 - **One night at a time, in one Setting row** (`SETTING_KEYS.INHOUSE_NIGHT`:
   id, start, note, revision, the Discord event's id). No migration. A save
@@ -403,16 +405,54 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   re-reads the night after its claim and releases the claim if it moved
   (seam `inhouseNight.start.afterClaim`). With nowhere to post (no webhook, or
   a preview) it records the marker as covered. The automation gate wakes the
-  worker at the start and follows the marker through the window.
+  worker at the start and follows the marker through the window. Besides the
+  role it pings each player who said "I'm in" on the site with a linked
+  Discord account, first to say so first (`inhouseNightStartMessage`): the
+  nudge Discord gives its own Interested members. Only mentions that fit the
+  2,000-character post (at most `INHOUSE_NIGHT_START_PINGS_MAX`) are
+  allowlisted; the rest, and players with no linked account, are counted.
+- **Players say "I'm in" on the site** (`setInhouseNightRsvp`, one
+  `InhouseNightRsvp` row per player keyed by the night's id, which isn't a
+  foreign key: the night is a Setting row). Discord has no way for a bot or a
+  site to mark someone Interested on its event (members mark only
+  themselves), so the site keeps its own list. Any signed-in player can say
+  so while the night is ahead (`inhouseNightRsvpOpen`); once it's on, the
+  queue is the way in. "I'm in" is one toggle on the bar and the card
+  (`InhouseNightRsvpControl`, pressed once you're in), and pressing it again
+  takes you off; it stays for someone in after the start, so taking it back
+  is never hidden, and works even for a night that changed. The form names the night its page showed, and a night that changed
+  or ended meanwhile is refused. A move keeps the list (Discord keeps its
+  Interested members through a move too); planning the next night prunes
+  every other night's rows and a cancel prunes that night's, never all rows,
+  so a late prune can't take a newer night's list. The pruning is
+  best-effort after the save. **The race is left open on purpose:** a save
+  or cancel landing between a player's check and their insert leaves at
+  worst a row for a night that's gone, which every read (filtered by the
+  current night's id) ignores and the next prune removes; a player's two
+  taps meet at the primary key and the second reads as already in.
+- **The headcount adds the two lists** (`inhouseNightHeadcount`): the site's
+  "I'm in"s plus the Discord event's Interested members
+  (`guildEventInterested`, the member list paged 100 at a time up to
+  `GUILD_EVENT_INTEREST_MAX_PAGES`, reused for two minutes, null when
+  unknown), a player on both counted once when their linked Discord id is
+  among them. "12 coming" once Discord's list is read; "5 said I'm in" when
+  it couldn't be, so an outage never reads as fewer people coming. Linked ids
+  stay on the server (`readInhouseNightRsvps` returns display fields to the
+  page and the ids beside them only for the count), and the page names only
+  the site's "I'm in"s, never who is Interested on Discord.
 - **On the site it shows until the night is over** (`currentInhouseNight`:
   the start plus `INHOUSE_NIGHT_LENGTH_MS`, the countdown's live window).
-  Home's inhouse strip adds a line (time on the viewer's clock, countdown,
-  interested count) and says "Jump in" once the night is on; /inhouse puts a
-  card above the room with the note, the Discord event link, Google Calendar
-  and an `.ics` download (`/api/calendar/inhouse-night`, one event whose UID
-  and SEQUENCE are the night's id and revision). The interested count is read
-  live from Discord (`guildEventInterest`, reused for two minutes, nothing
-  when unknown or zero) and streamed, so a slow Discord never holds a page.
+  A thin bar leads Home in every phase, the offseason too (`InhouseNightBar`):
+  the time on the viewer's clock, the countdown, the headcount and "I'm in"
+  (a sign-in link back to Home when signed out), or, once the night is on,
+  the queue count and "Join the queue" (`/inhouse?join=1`). Home's inhouse
+  strip no longer repeats the night; it says "Jump in" while it's on.
+  /inhouse puts a card above the room with the note, "I'm in", the headcount
+  with its sources, who said they're in on the site, the Discord event link,
+  Google Calendar and an `.ics` download (`/api/calendar/inhouse-night`, one
+  event whose UID and SEQUENCE are the night's id and revision). The Discord
+  half of the headcount streams, so a slow Discord never holds a page; the
+  bar itself renders inline, so it never drops in above a painted hero.
 
 ## Testing
 

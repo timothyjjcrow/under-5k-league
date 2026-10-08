@@ -72,6 +72,7 @@ model User {
   standinAssignments     StandinAssignment[]  @relation("StandinUser")
   replacedAssignments    StandinAssignment[]  @relation("ReplacedUser")
   inhouseQueue           InhouseQueueEntry?
+  inhouseNightRsvps      InhouseNightRsvp[]
   inhouseLobbies         InhouseLobbyPlayer[]
   startedInhouses        InhouseLobby[]       @relation("InhouseStarter")
   inhouseBets            InhouseBet[]
@@ -802,6 +803,21 @@ model InhouseQueueEntry {
   idleExpiresAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// A player's "I'm in" for the planned inhouse night (src/lib/inhouse-night.ts).
+// The night itself is one Setting row, so nightId is its id, not a foreign
+// key. Only the current night's rows are ever read; planning the next night or
+// cancelling deletes the rest. Discord's own Interested list stays in Discord.
+model InhouseNightRsvp {
+  nightId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([nightId, userId])
+  @@index([userId])
 }
 
 // A formed inhouse game + its live captain draft. Server-authoritative, like the

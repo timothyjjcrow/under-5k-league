@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
 import { DiscordButton, LinkArrow, buttonClasses } from "@/components/ui";
 import type { SessionUser } from "@/lib/auth";
 import { announcedMatchNight } from "@/lib/match-night";
@@ -24,14 +24,18 @@ export function OffseasonView({
   user,
   latestSeason,
   defending,
+  top,
 }: {
   user: SessionUser | null;
   /** The newest archived season, if any. */
   latestSeason: { id: string; name: string; status: string } | null;
   defending: DefendingChampion | null;
+  /** Above the hero, in the view's column: the inhouse night's bar. */
+  top?: ReactNode;
 }) {
   return (
     <div className="mx-auto max-w-2xl py-10">
+      {top ? <div className="mb-6">{top}</div> : null}
       <Hero
         phase={null}
         title="League offseason"

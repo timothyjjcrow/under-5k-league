@@ -110,7 +110,11 @@ actions: `src/app/actions/admin-discord.ts`.
   match and schedule revision, so a lock opens a fresh window); a re-proposal
   pings the other captain alone (Tim's call, 2026-10-05); moved: the proposer, booked standins (their ping quoted the old
   time) and the seats that never answered (they still owe a check-in), never
-  whoever just acted; declined: the proposer. Week reminder: unanswered players only
+  whoever just acted; declined: the proposer. Inhouse night start
+  (`inhouseNightStartMessage`): the inhouse role plus each player who said
+  "I'm in" on the site with a linked Discord, at most
+  `INHOUSE_NIGHT_START_PINGS_MAX` and only what fits the post; the rest are
+  counted (Tim's call, 2026-10-08). Week reminder: unanswered players only
   (`unansweredUserIds`). Free-agent signing or release: that player. Draft
   started (`draftStartedAnnouncement`, sent by `startDraft`): the linked
   captains only, in draft order, unlinked captains named in plain text; a
@@ -197,9 +201,12 @@ actions: `src/app/actions/admin-discord.ts`.
   only, no gateway, process or slash commands. Besides the role it creates,
   edits and deletes the inhouse night's server event (`createGuildEvent`,
   `updateGuildEvent`, `deleteGuildEvent`; `forbidden` means the bot lacks
-  Create Events, `gone` that someone deleted the event) and reads its
-  interested count live (`guildEventInterest`, memoized two minutes, null
-  when unknown). `getPingHealth` reports `canCreateEvents` (Create Events or
+  Create Events, `gone` that someone deleted the event) and reads who marked
+  it Interested (`guildEventInterested`: the member ids, paged 100 at a time
+  after the last id, memoized two minutes, null when any page fails). The
+  ids only feed the site's headcount; they are never shown. Discord has no
+  endpoint for a bot to mark someone Interested, so the site's "I'm in" is
+  its own list ([inhouse](inhouse.md#inhouse-night)). `getPingHealth` reports `canCreateEvents` (Create Events or
   Manage Events) as its own line in the checklist. Discord has no self-assign
   toggle, so /me's `setInhousePingOptIn` calls `setPingRole` (PUT/DELETE
   `/guilds/{g}/members/{u}/roles/{r}`) on an OAuth-proven `discordId`. Missing

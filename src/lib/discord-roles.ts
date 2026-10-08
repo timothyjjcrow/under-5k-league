@@ -551,30 +551,48 @@ export async function deleteGuildEvent(
   return "failed";
 }
 
-/** How long an interested count is reused: Home renders it for every visitor. */
+/** How long an interested list is reused: Home renders it for every visitor. */
 export const GUILD_EVENT_INTEREST_TTL_MS = 2 * 60_000;
-const interestMemo = new Map<string, { at: number; value: number | null }>();
+/** Discord pages the list 100 members at a time; past this many, stop reading. */
+export const GUILD_EVENT_INTEREST_MAX_PAGES = 5;
+const interestMemo = new Map<string, { at: number; value: string[] | null }>();
 
 /**
- * How many members marked the event interested, or null when unknown (no
- * bot, Discord unreachable, or the event is gone): render unknown as nothing,
- * never as 0. Read live, never stored, and reused for a couple of minutes.
+ * The Discord ids of the members who marked the event Interested, or null
+ * when unknown (no bot, Discord unreachable, or the event is gone): render
+ * unknown as nothing, never as nobody. The site only counts them, adding the
+ * players who also said "I'm in" on the site once (inhouseNightHeadcount);
+ * nobody's Discord id is ever shown. Read live, never stored, and reused for
+ * a couple of minutes. Discord returns the list by ascending user id, so
+ * each page continues after the last id of the one before.
  */
-export async function guildEventInterest(
+export async function guildEventInterested(
   eventId: string,
   nowMs = Date.now(),
-): Promise<number | null> {
+): Promise<string[] | null> {
   const hit = interestMemo.get(eventId);
   if (hit && nowMs - hit.at < GUILD_EVENT_INTEREST_TTL_MS) return hit.value;
   const cfg = getGuildConfig();
   if (!cfg) return null;
-  const res = await getJson(
-    cfg,
-    `/guilds/${cfg.guildId}/scheduled-events/${eventId}?with_user_count=true`,
-  );
-  const count = (res?.ok ? (res.data as { user_count?: unknown })?.user_count : null) ?? null;
-  const value =
-    typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : null;
+  const found: string[] = [];
+  let value: string[] | null = found;
+  let after: string | null = null;
+  for (let page = 0; page < GUILD_EVENT_INTEREST_MAX_PAGES; page++) {
+    const res = await getJson(
+      cfg,
+      `/guilds/${cfg.guildId}/scheduled-events/${eventId}/users?limit=100${after ? `&after=${after}` : ""}`,
+    );
+    if (!res?.ok || !Array.isArray(res.data)) {
+      value = null;
+      break;
+    }
+    const ids = res.data
+      .map((row) => (row as { user?: { id?: unknown } } | null)?.user?.id)
+      .filter((id): id is string => typeof id === "string" && /^\d{5,25}$/.test(id));
+    found.push(...ids);
+    if (res.data.length < 100 || ids.length === 0) break;
+    after = ids[ids.length - 1];
+  }
   interestMemo.set(eventId, { at: nowMs, value });
   return value;
 }
