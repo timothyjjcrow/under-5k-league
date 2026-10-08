@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   retrySerializable,
   serializableRetryDelayMs,
+  waitBeforeSerializableRetry,
 } from "./serializable-retry";
 
 // Shaped like Prisma's PrismaClientKnownRequestError: an Error carrying
@@ -33,6 +34,27 @@ describe("serializableRetryDelayMs", () => {
   it("clamps a jitter outside [0, 1]", () => {
     expect(serializableRetryDelayMs(1, -3)).toBe(5);
     expect(serializableRetryDelayMs(1, 7)).toBe(10);
+  });
+});
+
+describe("waitBeforeSerializableRetry", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("waits the retry's jittered delay, for loops that can't use retrySerializable", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    let waited = false;
+    const third = waitBeforeSerializableRetry(3).then(() => {
+      waited = true;
+    });
+    await vi.advanceTimersByTimeAsync(19);
+    expect(waited).toBe(false);
+    await vi.advanceTimersByTimeAsync(1); // 20 ms: the third retry's floor
+    await third;
+    expect(waited).toBe(true);
   });
 });
 
