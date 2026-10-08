@@ -776,16 +776,49 @@ export function inhouseNightCancelledMessage(m: { startsAtMs: number }): string 
   return `**The inhouse night on <t:${epoch}:F> is off.**`;
 }
 
+/** At most this many site "I'm in"s are pinged by name in the start post. */
+export const INHOUSE_NIGHT_START_PINGS_MAX = 50;
+
 /**
  * The night has started: the second and last ping, with the queue's count so
- * far and the one-tap join link.
+ * far and the one-tap join link. The inhouse role hears it, and so does each
+ * player who said "I'm in" on the site and linked Discord: the nudge Discord
+ * itself gives the members who clicked Interested on the event. Only the
+ * mentions that fit the 2,000-character post are allowlisted; the rest, and
+ * players with no linked account, are counted, never pinged.
  */
 export function inhouseNightStartMessage(m: {
   present: number;
   lobbySize: number;
   roleId?: string | null;
-}): string {
-  return `${rolePrefix(m.roleId)}🎮 **Inhouse night is on!** ${m.present}/${m.lobbySize} in the queue so far. Jump in: <${joinLink()}>`;
+  /** Linked Discord ids of the site's "I'm in"s, first to say so first. */
+  rsvpDiscordIds?: readonly string[];
+  /** Site "I'm in"s with no linked Discord account. */
+  rsvpUnlinked?: number;
+}): { content: string; mentionUserIds: string[] } {
+  const head = `${rolePrefix(m.roleId)}🎮 **Inhouse night is on!** ${m.present}/${m.lobbySize} in the queue so far. Jump in: <${joinLink()}>`;
+  const linked = [...new Set(m.rsvpDiscordIds ?? [])];
+  const total = linked.length + Math.max(0, m.rsvpUnlinked ?? 0);
+  const render = (shown: number): string => {
+    if (total === 0) return head;
+    const named = linked.slice(0, shown).map((id) => `<@${id}>`).join(" ");
+    const rest = total - shown;
+    const more =
+      rest > 0
+        ? named
+          ? ` and ${rest} more`
+          : `${rest} ${rest === 1 ? "player" : "players"}`
+        : "";
+    return `${head}\nSaid they're in on the site: ${named}${more}`;
+  };
+  let shown = 0;
+  while (
+    shown < Math.min(linked.length, INHOUSE_NIGHT_START_PINGS_MAX) &&
+    render(shown + 1).length <= DISCORD_CONTENT_MAX
+  ) {
+    shown += 1;
+  }
+  return { content: render(shown), mentionUserIds: linked.slice(0, shown) };
 }
 
 /**

@@ -611,7 +611,7 @@ outside this runbook rather than improvising against production data.
 1. Build a case-specific source inventory before changing or disclosing data.
    Check the live `User` identity/profile/link fields; registrations, rosters,
    captaincy, bids, stand-ins, availability, reschedules, predictions and fantasy
-   data; game and inhouse JSON; the retained Cred balances and relationless
+   data; inhouse night "I'm in" rows (current night only); game and inhouse JSON; the retained Cred balances and relationless
    ledger (Cred betting was removed on 2026-09-27, but its rows remain); news,
    admin actions and announcement outboxes; hosted application logs; database
    replicas, backups and PITR; delivered Discord messages and roles; and source

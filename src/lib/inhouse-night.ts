@@ -1,10 +1,12 @@
 // The inhouse night: one evening an admin sets aside for inhouses, so players
-// know when to show up. Home and /inhouse show it with a countdown, the
-// inhouse Discord channel gets a post when it is set and another when it
-// starts, and the bot adds it to the server's Discord events, where players
-// mark themselves interested and Discord reminds them. One night at a time:
-// saving a new one replaces the last. Pure; inhouse-night-service.ts stores it
-// in one Setting row (SETTING_KEYS.INHOUSE_NIGHT) and the pages read it here.
+// know when to show up. Home's bar and /inhouse show it with a countdown and
+// an "I'm in" button, the inhouse Discord channel gets a post when it is set
+// and another when it starts (pinging the "I'm in"s too), and the bot adds it
+// to the server's Discord events, where players can mark themselves
+// interested instead. One night at a time: saving a new one replaces the
+// last. Pure; inhouse-night-service.ts stores it in one Setting row
+// (SETTING_KEYS.INHOUSE_NIGHT), inhouse-night-rsvp-service.ts keeps the
+// "I'm in"s, and the pages read them here.
 
 import { LIVE_WINDOW_MS } from "./countdown";
 import { icsDate, type CalendarEvent } from "./ics";
@@ -105,6 +107,65 @@ export function currentInhouseNight(
   nowMs: number,
 ): InhouseNight | null {
   return night && inhouseNightPhase(night, nowMs) !== "over" ? night : null;
+}
+
+/**
+ * Whether a player can still say "I'm in" on the site: only before the night
+ * starts, since once it's on the queue is the way in. Taking it back stays
+ * open while the night shows: cleanup is never hidden.
+ */
+export function inhouseNightRsvpOpen(night: InhouseNight, nowMs: number): boolean {
+  return inhouseNightPhase(night, nowMs) === "upcoming";
+}
+
+/**
+ * Who's coming, from both places a player can say so: "I'm in" on the site
+ * and Interested on the night's Discord event. Discord lets members mark only
+ * themselves, so the two lists stay apart and are added up here. A player on
+ * both counts once when their Discord account is linked, the one way to know
+ * it's the same person.
+ */
+export type InhouseNightHeadcount = {
+  /** Said "I'm in" on the site. */
+  site: number;
+  /** Interested on Discord and not already counted from the site; null when
+   *  Discord's list couldn't be read (unknown, never shown as zero). */
+  discordOnly: number | null;
+};
+
+export function inhouseNightHeadcount(
+  /** One entry per "I'm in" on the site: that player's linked Discord id, or null. */
+  siteDiscordIds: readonly (string | null)[],
+  /** The Discord event's interested members: [] with no event, null when unknown. */
+  discordIds: readonly string[] | null,
+): InhouseNightHeadcount {
+  const onSite = new Set(siteDiscordIds.filter((id): id is string => id !== null));
+  return {
+    site: siteDiscordIds.length,
+    discordOnly:
+      discordIds === null
+        ? null
+        : new Set(discordIds.filter((id) => !onSite.has(id))).size,
+  };
+}
+
+/**
+ * The headcount in words: "12 coming" once Discord's list is read, else only
+ * the site's own count ("5 said I'm in"), so a Discord outage never reads as
+ * fewer people coming. Null while nobody has said so anywhere.
+ */
+export function inhouseNightHeadcountText(count: InhouseNightHeadcount): string | null {
+  if (count.discordOnly === null) {
+    return count.site > 0 ? `${count.site} said I'm in` : null;
+  }
+  const total = count.site + count.discordOnly;
+  return total > 0 ? `${total} coming` : null;
+}
+
+/** Where the headcount comes from, when both places add to it. */
+export function inhouseNightHeadcountSources(count: InhouseNightHeadcount): string | null {
+  if (!count.site || !count.discordOnly) return null;
+  return `${count.site} on the site, ${count.discordOnly} on Discord`;
 }
 
 /** Why a start time can't be saved, or null when it can. */

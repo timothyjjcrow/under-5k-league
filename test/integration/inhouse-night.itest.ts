@@ -33,7 +33,8 @@ vi.mock("@/lib/discord-roles", async (importOriginal) => {
 });
 
 import { cancelInhouseNight, setInhouseNight } from "@/app/actions/admin-inhouse-night";
-import { requireAdmin } from "@/lib/auth";
+import { setInhouseNightRsvpAction } from "@/app/actions/inhouse-night-rsvp";
+import { requireAdmin, requireUser } from "@/lib/auth";
 import {
   getInhouseAlertWebhookUrl,
   sendInhouseDiscordMessage,
@@ -50,6 +51,10 @@ import {
   type InhouseNight,
 } from "@/lib/inhouse-night";
 import {
+  readInhouseNightRsvps,
+  setInhouseNightRsvp,
+} from "@/lib/inhouse-night-rsvp-service";
+import {
   announceInhouseNightStart,
   attachInhouseNightEvent,
   clearInhouseNight,
@@ -62,6 +67,7 @@ import { prisma } from "@/lib/prisma";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { runResultSync } from "@/lib/result-sync-service";
 import { SETTING_KEYS, inhouseNightStartKey } from "@/lib/settings";
+import { SIGN_IN_REQUIRED } from "@/lib/sign-in";
 import { makeUser, raceN, sessionFor } from "./factories";
 
 const HOUR = 3_600_000;
@@ -425,8 +431,33 @@ describe("the start post", () => {
     expect(content).toBe(
       `<@&${ROLE}> 🎮 **Inhouse night is on!** 3/10 in the queue so far. Jump in: <${(await import("@/lib/discord")).joinLink()}>`,
     );
-    expect(mentions).toEqual({ roles: [ROLE] });
+    expect(mentions).toEqual({ roles: [ROLE], users: [] });
     expect((await markerOf(night))?.value).toMatch(/^sent:/);
+  });
+
+  it("also pings the players who said they're in on the site, counting the unlinked", async () => {
+    const night = await storeNight();
+    const linked = await prisma.user.create({
+      data: { steamId: "76561197960999001", name: "Linked", discordId: "700000000000000001" },
+    });
+    const unlinked = await makeUser("Unlinked");
+    const otherNight = await prisma.user.create({
+      data: { steamId: "76561197960999002", name: "Old night", discordId: "700000000000000002" },
+    });
+    // Stored straight in: the night has started, so the form no longer takes "I'm in".
+    await prisma.inhouseNightRsvp.createMany({
+      data: [
+        { nightId: night.id, userId: linked.id },
+        { nightId: night.id, userId: unlinked.id },
+        // A row left by a night that's gone is never pinged.
+        { nightId: "night-0", userId: otherNight.id },
+      ],
+    });
+    expect(await announceInhouseNightStart()).toBe(true);
+    const [content, mentions] = mockSend.mock.calls[0];
+    expect(content).toMatch(/\nSaid they're in on the site: <@700000000000000001> and 1 more$/);
+    expect(content).not.toContain("700000000000000002");
+    expect(mentions).toEqual({ roles: [ROLE], users: ["700000000000000001"] });
   });
 
   it("posts only once when two workers run together", async () => {
@@ -490,6 +521,160 @@ describe("the start post", () => {
     expect(mockSend.mock.calls.map(([content]) => content)).toEqual([
       expect.stringContaining("**Inhouse night is on!**"),
     ]);
+  });
+});
+
+describe("saying I'm in on the site", () => {
+  const upcoming = () => storeNight({ startsAtMs: Date.now() + DAY });
+  const count = () => prisma.inhouseNightRsvp.count();
+
+  it("puts a player on the night's list once, and takes them off again", async () => {
+    const night = await upcoming();
+    const player = await makeUser("Player");
+    const say = (going: boolean) =>
+      setInhouseNightRsvp({ userId: player.id, nightId: night.id, going });
+    expect(await say(true)).toMatchObject({ outcome: "in", linked: false, night: { id: night.id } });
+    expect(await say(true)).toMatchObject({ outcome: "already-in" });
+    expect((await readInhouseNightRsvps(night.id)).players).toEqual([
+      { id: player.id, name: "Player", avatar: null },
+    ]);
+    expect(await say(false)).toMatchObject({ outcome: "out" });
+    expect(await say(false)).toMatchObject({ outcome: "already-out" });
+    expect(await count()).toBe(0);
+  });
+
+  it("leaves one row when one player's two taps race", async () => {
+    const night = await upcoming();
+    const player = await makeUser("Double tap");
+    const outcomes = await raceN(2, () =>
+      setInhouseNightRsvp({ userId: player.id, nightId: night.id, going: true }),
+    );
+    expect(outcomes.map((r) => r.outcome).sort()).toEqual(["already-in", "in"]);
+    expect(await count()).toBe(1);
+  });
+
+  it("refuses a night that changed, has started or is gone; taking it back always works", async () => {
+    const player = await makeUser("Late");
+    const say = (nightId: string, going = true) =>
+      setInhouseNightRsvp({ userId: player.id, nightId, going });
+    await expect(say("night-1")).rejects.toThrow(/changed or is over/);
+    const night = await upcoming();
+    await expect(say("night-0")).rejects.toThrow(/changed or is over/);
+    await storeNight({ id: night.id, startsAtMs: Date.now() - 60_000 });
+    await expect(say(night.id)).rejects.toThrow(/has started/);
+    expect(await count()).toBe(0);
+    // A row from before the start (or for a night since replaced) still goes.
+    await prisma.inhouseNightRsvp.create({ data: { nightId: night.id, userId: player.id } });
+    await prisma.inhouseNightRsvp.create({ data: { nightId: "night-0", userId: player.id } });
+    expect(await say(night.id, false)).toMatchObject({ outcome: "out" });
+    expect(await say("night-0", false)).toMatchObject({ outcome: "out", night: null });
+    expect(await count()).toBe(0);
+  });
+
+  it("lists the first to say so first and keeps linked Discord ids beside them", async () => {
+    const night = await upcoming();
+    const first = await prisma.user.create({
+      data: { steamId: "76561197960999101", name: "First", discordId: "700000000000000101" },
+    });
+    const second = await makeUser("Second");
+    await prisma.inhouseNightRsvp.create({
+      data: { nightId: night.id, userId: second.id, createdAt: new Date(Date.now() - 1_000) },
+    });
+    await prisma.inhouseNightRsvp.create({
+      data: { nightId: night.id, userId: first.id, createdAt: new Date(Date.now() - 5_000) },
+    });
+    const rsvps = await readInhouseNightRsvps(night.id);
+    expect(rsvps.players.map((p) => p.name)).toEqual(["First", "Second"]);
+    expect(rsvps.discordIds).toEqual(["700000000000000101", null]);
+    // Display fields only: nothing else about the player leaves the read.
+    expect(Object.keys(rsvps.players[0]).sort()).toEqual(["avatar", "id", "name"]);
+    expect((await readInhouseNightRsvps("night-0")).players).toEqual([]);
+  });
+
+  it("keeps the list through a move, and planning the next night starts it empty", async () => {
+    const save = await saveInhouseNight({ startsAtMs: Date.now() + DAY, note: "", expected: null });
+    const player = await makeUser("Coming");
+    await setInhouseNightRsvp({ userId: player.id, nightId: save.night.id, going: true });
+    await prisma.inhouseNightRsvp.create({ data: { nightId: "night-gone", userId: player.id } });
+
+    const moved = await saveInhouseNight({
+      startsAtMs: save.night.startsAtMs + HOUR,
+      note: "",
+      expected: { id: save.night.id, revision: save.night.revision },
+    });
+    expect(moved.change).toBe("moved");
+    expect(await count()).toBe(2);
+
+    // Once it has started, a save plans the next night: only that list survives.
+    const next = await saveInhouseNight({
+      startsAtMs: moved.night.startsAtMs + 7 * DAY,
+      note: "",
+      expected: { id: moved.night.id, revision: moved.night.revision },
+      nowMs: moved.night.startsAtMs + HOUR,
+    });
+    expect(next.change).toBe("new");
+    expect(await count()).toBe(0);
+  });
+
+  it("drops a cancelled night's list, never another night's", async () => {
+    const save = await saveInhouseNight({ startsAtMs: Date.now() + DAY, note: "", expected: null });
+    const player = await makeUser("Was coming");
+    await setInhouseNightRsvp({ userId: player.id, nightId: save.night.id, going: true });
+    // A newer night's row, as if one was planned right after this cancel.
+    await prisma.inhouseNightRsvp.create({ data: { nightId: "night-newer", userId: player.id } });
+    await clearInhouseNight({ expected: { id: save.night.id, revision: save.night.revision } });
+    expect(await prisma.inhouseNightRsvp.findMany({ select: { nightId: true } })).toEqual([
+      { nightId: "night-newer" },
+    ]);
+  });
+
+  it("goes with the player's account", async () => {
+    const night = await upcoming();
+    const player = await makeUser("Leaving");
+    await setInhouseNightRsvp({ userId: player.id, nightId: night.id, going: true });
+    await prisma.user.delete({ where: { id: player.id } });
+    expect(await count()).toBe(0);
+  });
+
+  describe("the action", () => {
+    function form(fields: Record<string, string>) {
+      const data = new FormData();
+      for (const [key, value] of Object.entries(fields)) data.set(key, value);
+      return data;
+    }
+
+    it("says the player is in, and how they'll hear about the start", async () => {
+      const night = await upcoming();
+      const player = await makeUser("Player");
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+      const inForm = form({ nightId: night.id, going: "1" });
+      expect((await setInhouseNightRsvpAction(null, inForm))?.message).toMatch(
+        /^You're in for .+\. Link Discord under My account to get a ping when it starts\.$/,
+      );
+      expect((await setInhouseNightRsvpAction(null, inForm))?.message).toMatch(/^You're already in for /);
+      await prisma.user.update({ where: { id: player.id }, data: { discordId: "700000000000000201" } });
+      await setInhouseNightRsvpAction(null, form({ nightId: night.id, going: "0" }));
+      expect((await setInhouseNightRsvpAction(null, inForm))?.message).toMatch(
+        /You'll get a Discord ping when it starts\.$/,
+      );
+      expect((await setInhouseNightRsvpAction(null, form({ nightId: night.id, going: "0" })))?.message).toBe(
+        "Okay, you're off the list for this inhouse night.",
+      );
+    });
+
+    it("asks a signed-out player to sign in, and refuses a night that's gone", async () => {
+      const night = await upcoming();
+      vi.mocked(requireUser).mockRejectedValue(new Error("signed out"));
+      expect(await setInhouseNightRsvpAction(null, form({ nightId: night.id, going: "1" }))).toEqual({
+        error: SIGN_IN_REQUIRED,
+      });
+      const player = await makeUser("Player");
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+      expect(
+        (await setInhouseNightRsvpAction(null, form({ nightId: "night-0", going: "1" })))?.error,
+      ).toMatch(/changed or is over/);
+      expect(await count()).toBe(0);
+    });
   });
 });
 

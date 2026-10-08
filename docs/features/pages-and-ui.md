@@ -440,13 +440,21 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **`SeasonViewSkeleton` mirrors the season bands** (`playoffs` picks the
   one-column shape); change both together or the page rearranges after
   streaming.
+- **A planned inhouse night leads the page** (`InhouseNightBar`, rules:
+  [inhouse](inhouse.md#inhouse-night)): one thin bar above the hero in every
+  phase, and inside the offseason view's column. It renders inline, never
+  streamed, because a bar that drops in above an already painted hero shoves
+  the whole page down; only its Discord headcount streams. It is one
+  wrapping row of single items (title link, time, countdown, headcount, then
+  a spacer and the button), so a phone packs it into two lines. "I'm in" is
+  one toggle (`aria-pressed`, the kit's small button), pressed once you're
+  in, the way Discord's Interested button works: a separate "can't make it"
+  control took a third line on a phone.
 - **The inhouse queue is a side-game tile mid-season** (`InhouseStrip
   variant="tile"`, the live line), and ends the COMPLETE view's rail; the
-  other phases keep the full-width strip after the view. While an inhouse
-  night is planned, both carry a second line under the queue's (its time on
-  the viewer's clock, the countdown and the Discord interested count, or "on
-  now"); the strip is one link, so the calendar and Discord links live on
-  /inhouse's card.
+  other phases keep the full-width strip after the view. The night itself
+  is the bar's: the strip and the tile only turn their call to action into
+  "Jump in" while it's on.
 - **The match-night poll card sits under the pinned notices in every phase**
   (and in the offseason view), streamed with a null fallback because it is
   usually absent. Its ballot and live count stack, never side by side: a
@@ -663,8 +671,9 @@ the league is already draftable and many visitors have joined. Write for both.
 ## The inhouse page (`/inhouse`)
 
 - **Order is the product:** the planned inhouse night's card (only while one
-  is set, streamed), room, `SceneStats`, ladder, recent results, then the
-  OpenDota guide. The ladder is why people return; the history sections are
+  is set, streamed: "I'm in", the headcount, who said they're in on the site
+  as profile chips, the Discord event and calendar links), room,
+  `SceneStats`, ladder, recent results, then the OpenDota guide. The ladder is why people return; the history sections are
   the costliest queries, so they stream in below the room.
 - **`SceneStats` uses the same memoised `loadBoardStats` as the Discord
   board,** so channel and site agree on counts, last result and MVP. Use

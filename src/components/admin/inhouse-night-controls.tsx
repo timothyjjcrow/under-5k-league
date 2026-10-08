@@ -1,6 +1,6 @@
 import { cancelInhouseNight, setInhouseNight } from "@/app/actions/admin-inhouse-night";
 import { ActionForm, SubmitButton } from "@/components/action-form";
-import { InhouseNightInterest } from "@/components/inhouse-night";
+import { InhouseNightHeadcount } from "@/components/inhouse-night";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
 import { CardBody } from "@/components/ui";
@@ -9,6 +9,7 @@ import {
   inhouseNightPhase,
   type InhouseNight,
 } from "@/lib/inhouse-night";
+import type { InhouseNightRsvps } from "@/lib/inhouse-night-rsvp-service";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { nextSlotOccurrence } from "@/lib/match-night-poll";
 import { formatLeagueMatchTime } from "@/lib/match-time";
@@ -27,12 +28,16 @@ const SUGGESTED_SLOT = { day: 5, minute: 20 * 60 };
  */
 export function InhouseNightControls({
   night,
+  rsvps,
   nowMs,
 }: {
   /** The stored night, over or not. */
   night: InhouseNight | null;
+  /** Its "I'm in" list (readInhouseNightRsvps); null with no night. */
+  rsvps: InhouseNightRsvps | null;
   nowMs: number;
 }) {
+  const saidIn = rsvps?.players.length ?? 0;
   const phase = night ? inhouseNightPhase(night, nowMs) : null;
   const upcoming = phase === "upcoming" ? night : null;
   // Every save names the night this page showed, so one made from a stale
@@ -51,14 +56,16 @@ export function InhouseNightControls({
   return (
     <CardBody className="space-y-4">
       <p className="text-sm text-muted">
-        Pick an evening for inhouses. Home and the inhouse page show it with a
-        countdown and calendar links. Planning a night posts in the inhouse
+        Pick an evening for inhouses. Home shows it in a bar at the top and
+        the inhouse page in a card, with a countdown, calendar links and an
+        &ldquo;I&apos;m in&rdquo; button. Planning a night posts in the inhouse
         channel, pinging the inhouse role, and the bot adds it to the
-        server&apos;s Discord events, where players mark themselves interested
-        and Discord reminds them when it starts. At the start the inhouse
-        channel is pinged again with the queue so far. A new time moves the
-        planned night (the channel hears about it, without a ping); once a
-        night has started, saving plans the next one.
+        server&apos;s Discord events, where players can mark themselves
+        interested instead. At the start the inhouse channel is pinged again
+        with the queue so far, and so is everyone who said they&apos;re in on
+        the site with a linked Discord account. A new time moves the planned
+        night (the channel hears about it, without a ping) and keeps its
+        list; once a night has started, saving plans the next one.
       </p>
 
       {night && phase !== "over" ? (
@@ -72,8 +79,19 @@ export function InhouseNightControls({
             {night.discordEventId
               ? "In the server's Discord events."
               : "No Discord event: the bot checklist under Discord notifications says what the bot needs."}
-            <InhouseNightInterest night={night} prefix=" " />
           </p>
+          {rsvps ? (
+            <p className="text-xs text-muted">
+              {saidIn === 0
+                ? "Nobody has said they're in on the site yet. "
+                : `${saidIn} said they're in on the site. `}
+              <InhouseNightHeadcount
+                night={night}
+                siteDiscordIds={rsvps.discordIds}
+                sources
+              />
+            </p>
+          ) : null}
         </div>
       ) : night ? (
         <p className="text-sm text-muted">Last inhouse night: {when(night)}</p>
@@ -126,7 +144,7 @@ export function InhouseNightControls({
           <SubmitButton
             variant="ghost"
             size="sm"
-            confirm={`Cancel the inhouse night on ${formatLeagueMatchTime(new Date(upcoming.startsAtMs), "full")}? It comes off Home and the inhouse page, its Discord event is deleted, and the inhouse channel is told it's off.`}
+            confirm={`Cancel the inhouse night on ${formatLeagueMatchTime(new Date(upcoming.startsAtMs), "full")}? It comes off Home and the inhouse page, its Discord event is deleted, and the inhouse channel is told it's off.${saidIn > 0 ? ` ${saidIn} ${saidIn === 1 ? "player said they're" : "players said they're"} in on the site; their list goes with it.` : ""}`}
           >
             Cancel inhouse night
           </SubmitButton>

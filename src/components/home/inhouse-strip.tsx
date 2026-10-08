@@ -1,10 +1,6 @@
 import Link from "next/link";
 import { LinkArrow } from "@/components/ui";
-import {
-  InhouseNightInterest,
-  InhouseNightWhen,
-  loadCurrentInhouseNight,
-} from "@/components/inhouse-night";
+import { loadCurrentInhouseNight } from "@/components/inhouse-night";
 import { INHOUSE, INHOUSE_ACTIVE_STATUSES } from "@/lib/constants";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import { inhouseNightPhase } from "@/lib/inhouse-night";
@@ -34,24 +30,11 @@ export async function InhouseStrip({
       select: { id: true },
     }),
     // The planned inhouse night (src/lib/inhouse-night.ts), until it's over.
+    // Home's bar at the top carries it; here it only turns the call to
+    // action into "Jump in" while the night is on.
     loadCurrentInhouseNight(nowMs),
   ]);
   const nightOn = !!night && inhouseNightPhase(night, nowMs) === "on";
-  // A line of its own under the queue's: when the next night is, or that it
-  // is on now, plus the Discord event's interested count.
-  const nightLine = night ? (
-    <span className="block text-xs text-muted">
-      {nightOn ? (
-        "Inhouse night is on now"
-      ) : (
-        <>
-          {"Inhouse night: "}
-          <InhouseNightWhen night={night} />
-        </>
-      )}
-      <InhouseNightInterest night={night} prefix=" · " />
-    </span>
-  ) : null;
 
   const label = liveLobby
     ? queued > 0
@@ -92,7 +75,6 @@ export async function InhouseStrip({
             </span>
           </span>
           <span className="block text-xs text-muted">{label}</span>
-          {nightLine}
         </span>
       </Link>
     );
@@ -110,7 +92,6 @@ export async function InhouseStrip({
             sentence is the strip's whole message. */}
         <span className="min-w-0">
           <span className="line-clamp-2 text-muted">{label}</span>
-          {nightLine}
         </span>
       </span>
       <span className="shrink-0 font-medium text-accent group-hover:underline">
