@@ -230,7 +230,15 @@ export class LobbyController {
       if (bot && [0, 1].includes(bot.team)) this.transport.removeBotFromTeam();
     }
     this.save();
-    if (lobby.state === 3 || (job.releasing && safeToLeave(lobby, job)))
+    // A running game no longer needs its nonplaying bot. Once Dota has given
+    // it a match id, leave on our own: the game plays on Valve's server, the
+    // job keeps the id for the site's result lookup, and departure frees the
+    // bot to set up the next lobby, so two in-house games can run at once.
+    if (
+      lobby.state === 3 ||
+      (lobby.state === 2 && job.matchId) ||
+      (job.releasing && safeToLeave(lobby, job))
+    )
       this.transport.leave();
   }
   departed() {

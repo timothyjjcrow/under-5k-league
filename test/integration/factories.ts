@@ -48,9 +48,10 @@ export async function raceN<T>(n: number, fn: () => Promise<T>): Promise<T[]> {
 
 /** Wipe every table (children first) so each test starts from empty. */
 /**
- * PostgreSQL enforces "one active season" and "one live inhouse lobby" with
- * partial unique indexes that Prisma's datamodel can't declare (migration
- * 20260804010000_release_readiness), so `db push` never creates them on the
+ * PostgreSQL enforces "one active season" and "one live inhouse lobby per game
+ * slot" with partial unique indexes that Prisma's datamodel can't declare
+ * (migrations 20260804010000_release_readiness and
+ * 20261009000000_inhouse_game_slots), so `db push` never creates them on the
  * SQLite suite. Without a copy, a test that makes two active seasons passes
  * here and only fails in CI's Postgres job. These are the same predicates in
  * SQLite's dialect: every row inside each partial set indexes one value, so a
@@ -60,13 +61,16 @@ export async function raceN<T>(n: number, fn: () => Promise<T>): Promise<T[]> {
 const SQLITE_PARTIAL_UNIQUE_INDEXES: Record<string, string> = {
   Season_one_active_idx:
     'CREATE UNIQUE INDEX IF NOT EXISTS "Season_one_active_idx" ON "Season" ("isActive") WHERE "isActive" = 1',
-  InhouseLobby_one_active_idx:
-    'CREATE UNIQUE INDEX IF NOT EXISTS "InhouseLobby_one_active_idx" ON "InhouseLobby" (("status" IS NOT NULL)) ' +
+  InhouseLobby_live_slot_idx:
+    'CREATE UNIQUE INDEX IF NOT EXISTS "InhouseLobby_live_slot_idx" ON "InhouseLobby" ("slot") ' +
     "WHERE \"status\" IN ('READY_CHECK', 'CAPTAIN_VOTE', 'DRAFTING', 'READY', 'IN_PROGRESS')",
 };
 
 export async function ensureSqlitePartialUniqueIndexes() {
   if (ON_POSTGRES) return;
+  // A test.db made before game slots still carries the one-live-lobby copy,
+  // which would refuse every second game.
+  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "InhouseLobby_one_active_idx"');
   for (const sql of Object.values(SQLITE_PARTIAL_UNIQUE_INDEXES)) {
     await prisma.$executeRawUnsafe(sql);
   }

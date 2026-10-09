@@ -5,6 +5,7 @@ import { textLink } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import { DISCORD_INVITE_URL, INHOUSE } from "@/lib/constants";
+import { inhouseHandLobbyName, inhouseVoiceChannel } from "@/lib/inhouse";
 import type { InhouseState } from "@/lib/inhouse-service";
 import {
   DotaLobbyControls,
@@ -65,8 +66,10 @@ export function GameSetupCard({
   const [bot, setBot] = useState<LobbyBotAvailability>("checking");
   const botOn = bot === "on";
   const showBotPanel = me.isAdmin || botOn || bot === "unavailable";
-  const voiceByTeam = (team: number) =>
-    team === 1 ? INHOUSE.VOICE_TEAM_1 : INHOUSE.VOICE_TEAM_2;
+  // Each live game has its own voice channels and hand-hosted lobby name, so
+  // two games set up at once never meet in the same place.
+  const voiceByTeam = (team: number) => inhouseVoiceChannel(lobby.slot, team);
+  const handLobbyName = inhouseHandLobbyName(lobby.slot);
 
   const stepClass = (last: boolean) =>
     cn(
@@ -88,7 +91,7 @@ export function GameSetupCard({
         <div>
           <dt className="mb-1 text-[11px] text-muted">Lobby name</dt>
           <dd>
-            <CopyChip value={INHOUSE.LOBBY_NAME} label="lobby name" />
+            <CopyChip value={handLobbyName} label="lobby name" />
           </dd>
         </div>
         <div>

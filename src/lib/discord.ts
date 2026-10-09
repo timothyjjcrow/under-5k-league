@@ -840,11 +840,15 @@ export function inhouseNightStartMessage(m: {
  * their own time zone and a countdown that keeps moving with no edits: a
  * player coming out of a pub game can tell at a glance whether there is still
  * time to open the site.
+ *
+ * `gameLabel` ("Game 2") names the game when another one is already live, so
+ * the second ping doesn't read as a repeat of the first.
  */
 export function inhouseLobbyMessage(
   players: { name: string; discordId: string | null }[],
   roleId?: string | null,
   acceptEndsAt?: Date | null,
+  gameLabel?: string | null,
 ): string {
   const who = players
     .map((p) => (p.discordId ? `<@${p.discordId}>` : name(p.name)))
@@ -854,7 +858,10 @@ export function inhouseLobbyMessage(
     epoch != null
       ? `Accept your game by <t:${epoch}:T> (<t:${epoch}:R>) or you lose your spot`
       : "Accept your game before the clock runs out";
-  return `${rolePrefix(roleId)}🚨 **Inhouse match found!** ${deadline} — <${resolveSiteUrl()}/inhouse>\n${who}`;
+  const found = gameLabel
+    ? `Inhouse match found (${gameLabel})!`
+    : "Inhouse match found!";
+  return `${rolePrefix(roleId)}🚨 **${found}** ${deadline} — <${resolveSiteUrl()}/inhouse>\n${who}`;
 }
 
 export function inhouseResultMessage(m: {

@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { SessionUser } from "./auth";
 import { prisma } from "./prisma";
-import { INHOUSE, INHOUSE_ACTIVE_STATUSES, LEAGUE_GAME_MODE } from "./constants";
+import { INHOUSE, INHOUSE_PLAYING_STATUSES, LEAGUE_GAME_MODE } from "./constants";
 import { getActiveSeason } from "./season";
 import { matchResultsOpen } from "./league-lifecycle";
 import { matchNightRoster } from "./availability";
@@ -205,16 +205,13 @@ export async function resolveDotaLobby(
         "Only this lobby's players and admins can use its bot controls.",
       );
     canControl = admin || !!member?.isCaptain;
-    if (["READY", "IN_PROGRESS"].includes(lobby.status)) {
-      // Match the room's live slot, and fail closed if inconsistent legacy
-      // data contains multiple active lobbies. History can still release its bot.
-      const active = await prisma.inhouseLobby.findMany({
-        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-        select: { id: true },
-        take: 2,
-      });
-      playable = active.length === 1 && active[0].id === lobby.id;
-    }
+    // Any live game with its teams locked can use the bot; two games can be
+    // live at once, and each has its own bot job. The one Steam account hosts
+    // one Dota lobby at a time, answering BUSY until the other game starts.
+    // A finished lobby can still release its bot.
+    playable = (INHOUSE_PLAYING_STATUSES as readonly string[]).includes(
+      lobby.status,
+    );
     spec = inhouseLobbySpec(lobby);
   } else {
     const match = await prisma.match.findUnique({
@@ -314,7 +311,7 @@ export async function callLobbyBot(
     // Only our controlled service's small, fixed response contract is exposed.
     if (!response.ok) {
       const messages: Record<string, string> = {
-        BUSY: "The bot is hosting another game. Try again after that game finishes or its captain releases the bot.",
+        BUSY: "The bot is setting up another game's lobby. It's free again once that game starts, usually within a few minutes: try again then, or host this game by hand.",
         OFFLINE: "The bot is not connected to Dota yet. Try again shortly.",
         // Inhouses have no match page and no stand-ins: the ten drafted
         // players are the whole roster.

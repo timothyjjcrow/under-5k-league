@@ -679,6 +679,10 @@ the league is already draftable and many visitors have joined. Write for both.
   links; opened from the invite link it says "I'm in" once), room,
   `SceneStats`, ladder, recent results, then the OpenDota guide. The ladder is why people return; the history sections are
   the costliest queries, so they stream in below the room.
+- **Two live games share the room** ([inhouse](inhouse.md#two-games-at-once)):
+  a player sees their own game, with the other folded to one line under it; a
+  spectator sees the next-game queue card, then each live game read-only,
+  named "Game N" once two are live. Only one pinned clock bar ever shows.
 - **`SceneStats` uses the same memoised `loadBoardStats` as the Discord
   board,** so channel and site agree on counts, last result and MVP. Use
   `inhouseEndedAt`/`inhousePlayedAt` (`src/lib/inhouse-history.ts`) for game

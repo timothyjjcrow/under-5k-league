@@ -5,6 +5,7 @@ import {
   escapeMarkdown,
   rack,
   renderBoard,
+  type BoardLobby,
   type BoardSnapshot,
   type BoardStats,
 } from "./inhouse-board";
@@ -27,21 +28,26 @@ function stats(over: Partial<BoardStats> = {}): BoardStats {
   };
 }
 
-function snap(over: Partial<BoardSnapshot> = {}): BoardSnapshot {
+/** A snapshot; `lobby` is shorthand for one live game. */
+function snap(
+  over: Partial<BoardSnapshot> & { lobby?: BoardLobby | null } = {},
+): BoardSnapshot {
+  const { lobby: one, ...rest } = over;
   return {
     presentNames: [],
     awayCount: 0,
     lobbySize: 10,
-    lobby: null,
+    lobbies: one ? [one] : [],
     stats: null,
     pingOptIn: false,
     siteUrl: "https://ggd2l.test",
     nowMs: T0,
-    ...over,
+    ...rest,
   };
 }
 
-const lobby = (over: Partial<NonNullable<BoardSnapshot["lobby"]>> = {}) => ({
+const lobby = (over: Partial<BoardLobby> = {}): BoardLobby => ({
+  slot: 1,
   status: INHOUSE_STATUS.READY_CHECK,
   acceptedCount: 0,
   playerCount: 10,
@@ -552,5 +558,70 @@ describe("boardStateLabel — the admin's 'is it lying?' line", () => {
         }),
       ),
     ).toBe("lobby in progress, 2 waiting");
+  });
+});
+
+describe("two live games", () => {
+  const drafting = lobby({ slot: 1, status: INHOUSE_STATUS.DRAFTING });
+  const checking = lobby({ slot: 2, acceptedCount: 4 });
+
+  it("leads with the game that needs the channel most and lists the other", () => {
+    const { embed } = renderBoard(snap({ lobbies: [drafting, checking] }));
+    // The ready check is ten people on a clock; the draft gets one line.
+    expect(embed.title).toBe("Game 2 · Match Found — 4 / 10 accepted");
+    expect(embed.fields?.find((f) => f.name === "ALSO LIVE")?.value).toBe(
+      "**Game 1** · captains drafting",
+    );
+    // Equal urgency: the lower game number leads.
+    const both = renderBoard(
+      snap({
+        lobbies: [
+          lobby({ slot: 1, status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0 }),
+          lobby({ slot: 2, status: INHOUSE_STATUS.IN_PROGRESS, startedAtMs: T0 }),
+        ],
+      }),
+    ).embed;
+    expect(both.title).toBe("Game 1 · Match in Progress");
+    expect(both.fields?.find((f) => f.name === "ALSO LIVE")?.value).toBe(
+      `**Game 2** · live, started <t:${T0 / 1000}:R>`,
+    );
+  });
+
+  it("keeps a lone game 1 exactly as one game always looked", () => {
+    const { embed } = renderBoard(snap({ lobby: drafting }));
+    expect(embed.title).toBe("Preparing Your Match");
+    expect(embed.fields?.some((f) => f.name === "ALSO LIVE")).toBe(false);
+  });
+
+  it("says the next lobby waits for a game to finish once every slot is taken", () => {
+    const value = (lobbies: BoardLobby[]) =>
+      renderBoard(snap({ lobbies, presentNames: names(3) })).embed.fields?.find(
+        (f) => f.name.startsWith("IN LINE FOR THE NEXT GAME"),
+      )?.value;
+    const playing = lobby({
+      slot: 2,
+      status: INHOUSE_STATUS.IN_PROGRESS,
+      startedAtMs: T0,
+    });
+    expect(value([drafting])).toContain("7 more and the next lobby forms.");
+    expect(value([drafting, playing])).toContain(
+      "The next lobby forms when a game finishes.",
+    );
+  });
+
+  it("repaints when the other game moves, never for the clock", () => {
+    const digest = (other: BoardLobby, nowMs = T0) =>
+      renderBoard(snap({ lobbies: [checking, other], nowMs })).digest;
+    const vote = lobby({ slot: 1, status: INHOUSE_STATUS.CAPTAIN_VOTE });
+    expect(digest(vote)).not.toBe(digest(drafting));
+    expect(digest(drafting, T0 + 60_000)).toBe(digest(drafting));
+  });
+
+  it("names both games on the admin's state line", () => {
+    expect(
+      boardStateLabel(snap({ lobbies: [drafting, checking], presentNames: names(2) })),
+    ).toBe("game 1 drafting, game 2 ready check, 2 waiting");
+    // A lone game 2 is still called by its number.
+    expect(boardStateLabel(snap({ lobby: checking }))).toBe("game 2 ready check");
   });
 });

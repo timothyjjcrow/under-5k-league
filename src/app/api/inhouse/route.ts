@@ -143,6 +143,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   }
 
+  // The game an action is for: the room sends the lobby it showed, so a
+  // click is judged against that game even with two live (see
+  // chooseActionLobby in inhouse-service.ts).
+  const lobbyId = typeof body.lobbyId === "string" ? body.lobbyId : null;
   try {
     let res: { ok: true } | { ok: false; error: string };
     switch (action) {
@@ -153,38 +157,36 @@ export async function POST(req: NextRequest) {
         res = await leaveQueue(user);
         break;
       case "accept":
-        res = await acceptMatch(user);
+        res = await acceptMatch(user, lobbyId);
         break;
       case "decline":
-        res = await declineMatch(user);
+        res = await declineMatch(user, lobbyId);
         break;
       case "vote":
         res = await castVote(
           user,
           String(body.method ?? ""),
           body.nomineeId ? String(body.nomineeId) : undefined,
+          lobbyId,
         );
         break;
       case "pick":
-        res = await makePick(user, String(body.userId ?? ""));
+        res = await makePick(user, String(body.userId ?? ""), lobbyId);
         break;
       case "start":
-        res = await startGame(user);
+        res = await startGame(user, lobbyId);
         break;
       case "record":
-        res = await recordMatch(user, String(body.matchId ?? ""));
+        res = await recordMatch(user, String(body.matchId ?? ""), lobbyId);
         break;
       case "detect":
-        res = await autoDetectResult(user);
+        res = await autoDetectResult(user, lobbyId);
         break;
       case "cancel":
-        res = await cancelLobby(user);
+        res = await cancelLobby(user, lobbyId);
         break;
       case "void":
-        res = await voidLastResult(
-          user,
-          typeof body.lobbyId === "string" ? body.lobbyId : null,
-        );
+        res = await voidLastResult(user, lobbyId);
         break;
       default:
         throw new Error("Unsupported inhouse mutation");

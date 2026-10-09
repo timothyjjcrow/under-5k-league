@@ -29,6 +29,7 @@ const MATCH_NIGHT_POLL_MIGRATION = "20261004000000_match_night_poll";
 const RESCHEDULE_READY_CHECK_MIGRATION =
   "20261004120000_reschedule_ready_check";
 const INHOUSE_NIGHT_RSVP_MIGRATION = "20261008000000_inhouse_night_rsvp";
+const INHOUSE_GAME_SLOTS_MIGRATION = "20261009000000_inhouse_game_slots";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -162,6 +163,7 @@ async function rehearseFreshDatabase(url) {
           MATCH_NIGHT_POLL_MIGRATION,
           RESCHEDULE_READY_CHECK_MIGRATION,
           INHOUSE_NIGHT_RSVP_MIGRATION,
+          INHOUSE_GAME_SLOTS_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -420,6 +422,7 @@ async function rehearseExistingLegacyDatabase(url) {
           MATCH_NIGHT_POLL_MIGRATION,
           RESCHEDULE_READY_CHECK_MIGRATION,
           INHOUSE_NIGHT_RSVP_MIGRATION,
+          INHOUSE_GAME_SLOTS_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );
@@ -811,17 +814,22 @@ async function rehearseExistingLegacyDatabase(url) {
         ),
       "database must reject a second active season",
     );
+    // Two games may be live at once, one per slot; a slot holds one.
     await client.$executeRawUnsafe(
       `INSERT INTO "InhouseLobby" ("id", "status", "updatedAt")
        VALUES ('active-lobby-a', 'READY_CHECK', CURRENT_TIMESTAMP)`,
     );
+    await client.$executeRawUnsafe(
+      `INSERT INTO "InhouseLobby" ("id", "status", "slot", "updatedAt")
+       VALUES ('active-lobby-b', 'DRAFTING', 2, CURRENT_TIMESTAMP)`,
+    );
     await expectUniqueViolation(
       () =>
         client.$executeRawUnsafe(
-          `INSERT INTO "InhouseLobby" ("id", "status", "updatedAt")
-           VALUES ('active-lobby-b', 'DRAFTING', CURRENT_TIMESTAMP)`,
+          `INSERT INTO "InhouseLobby" ("id", "status", "slot", "updatedAt")
+           VALUES ('active-lobby-c', 'IN_PROGRESS', 2, CURRENT_TIMESTAMP)`,
         ),
-      "database must reject a second active inhouse lobby",
+      "database must reject a second live inhouse lobby in one slot",
     );
   });
   await inspectPostflightDatabase({

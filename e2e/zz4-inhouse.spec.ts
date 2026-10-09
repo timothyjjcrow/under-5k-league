@@ -230,10 +230,9 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   const admin = adminBrowser.request;
   for (let guard = 0; guard < 10; guard++) {
     const s = await act(admin, { action: "state" });
-    const l = s.json.lobby as null | {
-      status: string;
-      pool: { userId: string }[];
-    };
+    // The admin isn't playing: the game is one they watch, not `lobby`.
+    type Game = { status: string; pool: { userId: string }[] };
+    const l = (s.json.otherLobbies as Game[])[0];
     if (!l || l.status !== "DRAFTING") break;
     const picked = await act(admin, {
       action: "pick",
@@ -322,6 +321,12 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await spectatorPage.goto(
     "/api/auth/dev?name=IH+Next+Player&steamId=76561190000002997&redirect=/inhouse",
   );
+  // One game is live and a second slot is free: ten more start another game.
+  await expect(
+    spectatorPage.getByText(
+      "This game is underway. Ten in the queue start another game alongside it.",
+    ),
+  ).toBeVisible();
   await spectatorPage.getByLabel("MMR").fill("4200");
   await spectatorPage
     .getByRole("button", { name: /Join next-game queue/ })
@@ -330,7 +335,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     spectatorPage.getByRole("heading", { name: "Next-game queue" }),
   ).toBeVisible();
   await expect(
-    spectatorPage.getByText("Ready check after this game"),
+    spectatorPage.getByText("First 10 in → ready check"),
   ).toBeVisible();
   await expect(
     spectatorPage.getByRole("progressbar", {
@@ -368,9 +373,10 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await expect(
     page.getByText(/Waiting for \d+ players to come back/),
   ).toBeVisible();
-  // …and the server agrees there is no active lobby holding it.
+  // …and the server agrees there is no live game holding it.
   const after = await act(admin, { action: "state" });
   expect(after.json.lobby).toBeNull();
+  expect(after.json.liveGames).toBe(0);
 
   expect(errors).toEqual([]);
   expect(adminErrors).toEqual([]);

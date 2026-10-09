@@ -199,7 +199,31 @@ test("start requires exactly the ten current players on their assigned sides", (
   c.request("start", spec);
   c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
   assert.equal(c.status(spec.key).matchId, "8123456789");
+  assert.deepEqual(calls, ["create", "start", "leave"]);
+});
+test("a launched game sheds the bot once Dota gives it a match id", (t) => {
+  const { controller: c, calls } = setup(t);
+  const next = { ...spec, key: "inhouse:next:1", name: "GGD2L Inhouse next" };
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  // Running with no match id yet: stay until there is one to report.
+  c.snapshot(snapshot({ state: 2 }));
+  c.snapshot(snapshot({ state: 2, matchId: "0" }));
   assert.deepEqual(calls, ["create", "start"]);
+  c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
+  assert.deepEqual(calls, ["create", "start", "leave"]);
+  // The claim holds until Dota confirms the departure.
+  assert.throws(() => c.request("create", next), /BUSY/);
+  c.departed();
+  // The site still reads the game's match id after the bot has gone.
+  assert.deepEqual(c.status(spec.key), {
+    state: "started",
+    lobbyId: "123456789012345678",
+    matchId: "8123456789",
+  });
+  assert.equal(c.request("create", next).state, "creating");
+  assert.deepEqual(calls, ["create", "start", "leave", "create"]);
 });
 test("stale allMembers entries do not count as connected players", () => {
   assert.equal(rosterMatches(snapshot({ memberIndices: [] }), spec), false);
@@ -255,10 +279,12 @@ test("an unconfirmed launch cannot be released using a stale UI snapshot", (t) =
     assert.throws(() => resumed.request("release", spec), /STATE/);
   }
   assert.deepEqual(calls, ["create", "start"]);
-  // Confirmed running games can safely shed their nonplaying lobby bot.
+  // Confirmed running games shed their nonplaying lobby bot on their own, and
+  // a captain's release then is a harmless repeat.
   resumed.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
-  resumed.request("release", spec);
   assert.deepEqual(calls, ["create", "start", "leave"]);
+  resumed.request("release", spec);
+  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
 });
 test("pending release retries wait through GC allocation states", (t) => {
   const { controller: c, calls } = setup(t);

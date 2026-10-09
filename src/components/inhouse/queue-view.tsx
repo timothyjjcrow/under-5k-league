@@ -152,8 +152,9 @@ export function NextGameQueueCard({
             <Badge tone="accent">{present} queued</Badge>
           </div>
           <p className="mt-1 max-w-xl text-sm text-muted">
-            This lobby is already underway. The next ready check can only start
-            after it closes.
+            {state.liveGames >= state.maxLiveGames
+              ? `${state.liveGames === 2 ? "Both games are" : "Every game is"} underway. The next ready check starts when one finishes.`
+              : "This game is underway. Ten in the queue start another game alongside it."}
           </p>
         </div>
         <div className="shrink-0">
@@ -192,10 +193,13 @@ export function QueueView({
   signupMmr: number;
   firstGame: boolean;
   act: (body: Record<string, unknown>) => void;
-  /** The visible queue will not form until the active lobby closes. */
+  /** Shown beside a live game: the queue for the game after it. */
   nextGame?: boolean;
 }) {
   const { queue, lobbySize, needed, me } = state;
+  // Every game slot is taken, so a full queue waits for a game to finish;
+  // with a slot free, ten queued players start another game at once.
+  const waitsForGame = nextGame && state.liveGames >= state.maxLiveGames;
   // "Away" players (heartbeat gone quiet, or re-queued by a cancelled lobby
   // and not back yet) stay queued but don't count toward forming. queueSlots
   // keeps them out of the ten slots, which are for players who are here, and
@@ -302,8 +306,8 @@ export function QueueView({
                   <p className="mt-1.5 text-sm text-muted">
                     {needed > 0
                       ? `${needed} more ${needed === 1 ? "player" : "players"} to play`
-                      : nextGame
-                        ? "Full · waiting for this game to finish"
+                      : waitsForGame
+                        ? "Full · waiting for a game to finish"
                         : "Full · starting the ready check…"}
                   </p>
                   {queueAvg > 0 ? (
@@ -331,8 +335,8 @@ export function QueueView({
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold">Who’s playing</h3>
                 <span className="text-xs text-muted">
-                  {nextGame ? (
-                    "Ready check after this game"
+                  {waitsForGame ? (
+                    "Ready check when a game finishes"
                   ) : (
                     <>First {lobbySize} in → ready check</>
                   )}

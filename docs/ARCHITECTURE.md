@@ -456,8 +456,9 @@ well as relational data.
 ## 3. The inhouse lifecycle
 
 State machine on `InhouseLobby.status`: `READY_CHECK → CAPTAIN_VOTE →
-DRAFTING → READY → IN_PROGRESS → COMPLETED | CANCELLED`, one active lobby at a
-time. Pure rules in `src/lib/inhouse.ts`, the engine in
+DRAFTING → READY → IN_PROGRESS → COMPLETED | CANCELLED`, with up to
+`INHOUSE.MAX_LIVE_GAMES` (2) live lobbies at once, one per game slot
+(`InhouseLobby.slot`). Pure rules in `src/lib/inhouse.ts`, the engine in
 `src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery, and
 the viewer payload builder `getInhouseState`), the client in
 `src/components/inhouse-room.tsx` (poll loop and actions) with one file per
@@ -469,13 +470,16 @@ completion, and the real no-active-season offseason.
    typed value > last lobby snapshot) into the userId-unique
    `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
    by the player's own polls); stale entries dim to "away" and are pruned.
-   Outsiders may queue for the next game while a lobby is active. A queue
-   crossing 4 present players fires a throttled Discord ping.
-2. **Formation** — `maybeFormLobby` (Serializable; the one-active-lobby
-   invariant lives here) takes 10 present players in exact
-   `[joinedAt, userId]` order, snapshots `joinedAt` as each player's immutable
-   `queuedAt` plus their W/L record, and Discord-mentions all ten by
-   `<@discordId>`. The state payload uses the same total queue order.
+   Outsiders may queue for the next game while a lobby is active; nobody in
+   a live lobby can queue. A queue crossing 4 present players fires a
+   throttled Discord ping.
+2. **Formation** — `maybeFormLobby` fills free game slots: each formation
+   (Serializable, one slot) takes the lowest free slot and 10 present players
+   in exact `[joinedAt, userId]` order, snapshots `joinedAt` as each player's
+   immutable `queuedAt` plus their W/L record, and Discord-mentions all ten by
+   `<@discordId>` ("Game 2" when another game is live). The partial unique
+   `InhouseLobby_live_slot_idx` holds one live lobby per slot. The state
+   payload uses the same total queue order.
 3. **Ready check** — 90s; all ten must `acceptMatch` (claim guarded on both
    `acceptedAt: null` and the lobby still being in READY_CHECK). Decline or
    expiry fails the check. A decline drops the decliner, keeps accepters at the
@@ -494,9 +498,10 @@ completion, and the real no-active-season offseason.
    Captains act normally; timed auto-pick and the displayed pool both rank MMR
    descending, then exact `[queuedAt, userId]`. An admin has an explicitly
    labelled recovery pick without receiving captain-only title/chime attention.
-6. **Game setup** — READY/IN_PROGRESS render the fixed `GGD2L Inhouse` lobby
-   name, `ggd2l` password, required `Under 5K In-House League` ticket, and team
-   voice channels. Player-account matching remains authoritative; the ticket
+6. **Game setup** — READY/IN_PROGRESS render the game's hand-hosted lobby
+   name (`GGD2L Inhouse`, `GGD2L Inhouse 2` for game 2), `ggd2l` password,
+   required `Under 5K In-House League` ticket, and the game's team voice
+   channels. Player-account matching remains authoritative; the ticket
    is what makes the private game available to OpenDota for that scan.
 7. **Result detection and publication** — OpenDota only, no manual winner:
    background scan
@@ -842,7 +847,8 @@ enums, so every status column is a string whose allowed values live in
   the rest ([inhouse](features/inhouse.md#inhouse-night)).
 - `InhouseLobby` — the game + state machine + result columns (`boxScore`
   JSON, `winnerTeam`, `eloDeltas`, `matchStartTime`, immutable result clock
-  `completedAt`). Its mutable `updatedAt` is never result chronology. The
+  `completedAt`), its game `slot`, and a unique `dotaMatchId` (one Dota match
+  is one lobby's result). Its mutable `updatedAt` is never result chronology. The
   retired Cred columns (`betDeltas`, `betsCloseAt`, `betSettlement`) remain in
   the schema, dormant.
 - `InhouseLobbyPlayer` — `@@unique([lobbyId, userId])`; team, captaincy,

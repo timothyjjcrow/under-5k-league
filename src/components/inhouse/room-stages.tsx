@@ -12,6 +12,11 @@ const ROOM_STAGES = [
   { status: "IN_PROGRESS", label: "Play" },
 ] as const;
 
+/** The strip's name for a lobby phase ("Draft"), for one-line summaries. */
+export function roomStageLabel(status: string): string {
+  return ROOM_STAGES.find((stage) => stage.status === status)?.label ?? status;
+}
+
 /** A shared orientation strip, with no new state machine or extra polling. */
 export function RoomStages({ lobby }: { lobby: InhouseState["lobby"] }) {
   const current = ROOM_STAGES.findIndex(

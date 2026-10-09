@@ -48,17 +48,19 @@ describe("automatic inhouse detection read budget", () => {
     // Started the moment teams locked, so neither clock has opened yet.
     await game(new Date(NOW), null, new Date(NOW - 5 * 60_000));
     vi.spyOn(Date, "now").mockReturnValue(NOW);
-    const probe = vi.spyOn(prisma.inhouseLobby, "findFirst");
+    const probe = vi.spyOn(prisma.inhouseLobby, "findMany");
     const roster = vi.spyOn(prisma.inhouseLobbyPlayer, "findMany");
     const claim = vi.spyOn(prisma.inhouseLobby, "updateMany");
 
     expect(await maybeAutoDetectResult()).toBe(false);
     expect(probe).toHaveBeenCalledOnce();
-    // This hot probe must not hydrate result JSON or joined user profiles.
+    // This hot probe (every game being played, at most MAX_LIVE_GAMES) must
+    // not hydrate result JSON or joined user profiles.
     expect(probe.mock.calls[0]?.[0]).toEqual({
       where: { status: { in: INHOUSE_PLAYING_STATUSES } },
       select: {
         id: true,
+        slot: true,
         status: true,
         createdAt: true,
         startedAt: true,

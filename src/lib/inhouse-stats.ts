@@ -77,9 +77,13 @@ function toMs(v: Date | number): number {
  * then wins, then win rate.
  */
 export function summarizeInhouse(lobbies: FinishedLobby[]): InhouseRecord[] {
-  // Oldest → newest so streaks + Elo accumulate in chronological order.
+  // Oldest → newest so streaks + Elo accumulate in chronological order. The
+  // id breaks a tie, so two games formed in the same millisecond rate the same
+  // way whatever order the database returned them in.
   const chrono = [...lobbies].sort(
-    (a, b) => toMs(a.createdAt) - toMs(b.createdAt),
+    (a, b) =>
+      toMs(a.createdAt) - toMs(b.createdAt) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
 
   type Acc = Omit<InhouseRecord, "winRate" | "rating" | "peak"> & {

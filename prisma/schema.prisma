@@ -825,6 +825,11 @@ model InhouseNightRsvp {
 model InhouseLobby {
   id           String    @id @default(cuid())
   status       String    @default("READY_CHECK") // READY_CHECK | CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | COMPLETED | CANCELLED
+  // The game's number while it is live (1..INHOUSE.MAX_LIVE_GAMES): two games
+  // can run at once, and the slot names its voice channels and hand-hosted
+  // Dota lobby. Postgres's partial unique InhouseLobby_live_slot_idx (migration
+  // 20261009000000_inhouse_game_slots) allows one live lobby per slot.
+  slot         Int       @default(1)
   acceptEndsAt DateTime? // ready-check deadline (READY_CHECK phase) — all ten must accept before it
   voteEndsAt   DateTime? // captain-selection vote deadline (CAPTAIN_VOTE phase)
   pickTeam     Int? // 1 | 2 — team on the clock while DRAFTING
@@ -837,7 +842,9 @@ model InhouseLobby {
   // updatedAt, settlement retries cannot move this and make an old game look
   // like the result that just finished.
   completedAt  DateTime?
-  dotaMatchId  String? // OpenDota match id, once the result is recorded
+  // OpenDota match id, once the result is recorded. Unique: with two games
+  // live, one Dota match must never be recorded as both.
+  dotaMatchId  String?   @unique
   detectedAt   DateTime? // throttles the automatic OpenDota result scan
   durationSecs Int? // game length once recorded
   radiantScore Int? // Radiant kills (box-score header)

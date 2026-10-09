@@ -593,8 +593,10 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
   });
   const recorded = detected.recorded;
   if (detected.deadlineReached) {
+    // One game's result can land before the pass runs out of time on the
+    // other's scan.
     return {
-      recorded: false,
+      recorded,
       watch: true,
       deadlineReached: true,
       ...(notificationFailed ? { notificationFailed: true } : {}),

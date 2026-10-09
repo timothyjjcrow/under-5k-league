@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
-  allowLegacyDuplicateActives,
   sessionFor as asSession,
   makeCaptain,
   makeSeason,
@@ -389,7 +388,7 @@ describe("Dota lobby authorization and settings", () => {
       for (const action of ["create", "start"]) {
         const result = await POST(request({ kind: "inhouse", id: lobby.id, action }));
         expect(result.status).toBe(400);
-        expect(await result.json()).toMatchObject({ error: expect.stringContaining("current active") });
+        expect(await result.json()).toMatchObject({ error: expect.stringContaining("once its teams are locked") });
       }
       expect(fetch).not.toHaveBeenCalled();
     },
@@ -428,29 +427,53 @@ describe("Dota lobby authorization and settings", () => {
     expect((await POST(request({ kind: "inhouse", id: old.id, action: "release" }))).status).toBe(400);
     expect(fetch).toHaveBeenCalledTimes(3);
   });
-  it("rejects duplicate active in-house games in PostgreSQL or legacy data", async () => {
-    const user = await makeUser("Captain");
-    const lobby = await prisma.inhouseLobby.create({
-      data: {
-        status: "READY",
-        players: { create: { userId: user.id, team: 1, isCaptain: true } },
-      },
-    });
-    if (process.env.PG_TEST_URL) {
-      // PostgreSQL's partial unique index prevents the legacy state itself.
-      await expect(prisma.inhouseLobby.create({ data: { status: "READY_CHECK" } }))
-        .rejects.toMatchObject({ code: "P2002" });
-      return;
+  it("lets each of two live games use the bot under its own job", async () => {
+    const one = await makeUser("Game One Captain");
+    const two = await makeUser("Game Two Captain");
+    const games = [];
+    for (const [slot, user] of [
+      [1, one],
+      [2, two],
+    ] as const) {
+      games.push(
+        await prisma.inhouseLobby.create({
+          data: {
+            status: "READY",
+            slot,
+            players: { create: { userId: user.id, team: 1, isCaptain: true } },
+          },
+        }),
+      );
     }
-    await allowLegacyDuplicateActives();
-    await prisma.inhouseLobby.create({ data: { status: "READY_CHECK" } });
-    vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
-    const fetch = vi.fn();
+    // The slot index holds one live lobby per slot, on both providers.
+    await expect(
+      prisma.inhouseLobby.create({ data: { status: "READY_CHECK", slot: 2 } }),
+    ).rejects.toMatchObject({ code: "P2002" });
+    const fetch = vi
+      .fn()
+      .mockImplementation(async () => Response.json({ state: "ready" }));
     vi.stubGlobal("fetch", fetch);
-    for (const action of ["create", "start"]) {
-      expect((await POST(request({ kind: "inhouse", id: lobby.id, action }))).status).toBe(400);
+    for (const [game, captain] of [
+      [games[0], one],
+      [games[1], two],
+    ] as const) {
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+      expect(
+        (await POST(request({ kind: "inhouse", id: game.id, action: "create" })))
+          .status,
+      ).toBe(200);
+      expect(JSON.parse(fetch.mock.calls.at(-1)![1].body)).toMatchObject({
+        action: "create",
+        spec: { key: `${keyPrefix}inhouse:${game.id}:1` },
+      });
     }
-    expect(fetch).not.toHaveBeenCalled();
+    // A captain controls only their own game's bot.
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(one));
+    expect(
+      (await POST(request({ kind: "inhouse", id: games[1].id, action: "create" })))
+        .status,
+    ).toBe(400);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
   it("words the bot's roster refusal for the kind of game", async () => {
     const { match, home } = await fixture();

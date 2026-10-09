@@ -3,9 +3,16 @@ import {
   autoJoinDecision,
   avgKnownMmr,
   detectIntervalSeconds,
+  freeGameSlot,
   inhouseAlerts,
   inhouseDetectWindow,
+  inhouseGameLabel,
+  inhouseHandLobbyName,
   inhouseLobbyCode,
+  inhouseVoiceChannel,
+  liveGameEnded,
+  otherGameFlags,
+  pollingLobby,
   inhouseReadyInPlay,
   inhouseScanStatus,
   inhouseTitleFlag,
@@ -20,6 +27,7 @@ import {
   requeueLastSeenAt,
   seedOrder,
   shouldFocusStage,
+  showGameLabel,
   tallyMethod,
   wasInReadyCheck,
   type CaptainCandidate,
@@ -371,6 +379,107 @@ describe("queueSlots", () => {
       overflow: [{ name: "a", away: false }],
       away: [{ name: "b", away: true }],
     });
+  });
+});
+
+describe("game slots", () => {
+  it("puts a new game in the lowest free slot, and none once all are taken", () => {
+    expect(freeGameSlot([], 2)).toBe(1);
+    expect(freeGameSlot([1], 2)).toBe(2);
+    // Game 1 ended while game 2 plays on: the next game is game 1 again.
+    expect(freeGameSlot([2], 2)).toBe(1);
+    expect(freeGameSlot([1, 2], 2)).toBeNull();
+    expect(freeGameSlot([2, 1], 2)).toBeNull();
+    expect(freeGameSlot([], INHOUSE.MAX_LIVE_GAMES)).toBe(1);
+  });
+
+  it("names a game by its number only when that tells two games apart", () => {
+    expect(inhouseGameLabel(2)).toBe("Game 2");
+    expect(showGameLabel(1, 1)).toBe(false);
+    expect(showGameLabel(1, 2)).toBe(true);
+    // A lone game 2 still says so: its channels and lobby name aren't game 1's.
+    expect(showGameLabel(2, 1)).toBe(true);
+  });
+
+  it("gives every slot its own voice channels and hand-hosted lobby name", () => {
+    expect(INHOUSE.VOICE_CHANNELS).toHaveLength(INHOUSE.MAX_LIVE_GAMES);
+    const channels = new Set<string>();
+    const names = new Set<string>();
+    for (let slot = 1; slot <= INHOUSE.MAX_LIVE_GAMES; slot += 1) {
+      channels.add(inhouseVoiceChannel(slot, 1));
+      channels.add(inhouseVoiceChannel(slot, 2));
+      names.add(inhouseHandLobbyName(slot));
+    }
+    expect(channels.size).toBe(INHOUSE.MAX_LIVE_GAMES * 2);
+    expect(names.size).toBe(INHOUSE.MAX_LIVE_GAMES);
+    // Game 1 keeps the names the league already uses.
+    expect(inhouseVoiceChannel(1, 1)).toBe("inhouse team 1");
+    expect(inhouseVoiceChannel(1, 2)).toBe("inhouse team 2");
+    expect(inhouseHandLobbyName(1)).toBe(INHOUSE.LOBBY_NAME);
+    expect(inhouseHandLobbyName(2)).toBe(`${INHOUSE.LOBBY_NAME} 2`);
+  });
+});
+
+describe("another live game in the room", () => {
+  it("gives a player nothing to do in a game they aren't in", () => {
+    for (const status of Object.values(INHOUSE_STATUS)) {
+      const flags = otherGameFlags(false, status);
+      expect(flags).toMatchObject({
+        inLobby: false,
+        canAccept: false,
+        canVote: false,
+        isOnClock: false,
+        canPick: false,
+        canStart: false,
+        canRecord: false,
+        canCancel: false,
+      });
+    }
+  });
+
+  it("keeps an admin's per-game controls, each in its own phase", () => {
+    expect(otherGameFlags(true, INHOUSE_STATUS.READY_CHECK)).toMatchObject({
+      canAccept: false,
+      canCancel: true,
+      canStart: false,
+    });
+    expect(otherGameFlags(true, INHOUSE_STATUS.DRAFTING)).toMatchObject({
+      canPick: true,
+      isOnClock: false,
+    });
+    expect(otherGameFlags(true, INHOUSE_STATUS.READY)).toMatchObject({
+      canStart: true,
+      canRecord: true,
+    });
+    expect(otherGameFlags(true, INHOUSE_STATUS.IN_PROGRESS)).toMatchObject({
+      canStart: false,
+      canRecord: true,
+    });
+  });
+
+  it("polls on the viewer's own game, else the other game on the shortest clock", () => {
+    const lobby = (status: string, scanOpensAt: number | null = null) => ({
+      status,
+      scanOpensAt,
+    });
+    const playing = lobby(INHOUSE_STATUS.IN_PROGRESS);
+    const drafting = lobby(INHOUSE_STATUS.DRAFTING);
+    expect(pollingLobby(playing, [drafting], 0)).toBe(playing);
+    expect(pollingLobby(null, [playing, drafting], 0)).toBe(drafting);
+    expect(pollingLobby(null, [playing], 0)).toBe(playing);
+    expect(pollingLobby(null, [], 0)).toBeNull();
+    // A READY game already being played is not on a short clock.
+    const inPlay = lobby(INHOUSE_STATUS.READY, 100);
+    expect(pollingLobby(null, [inPlay, playing], 200)).toBe(inPlay);
+    const settingUp = lobby(INHOUSE_STATUS.READY, 300);
+    expect(pollingLobby(null, [playing, settingUp], 200)).toBe(settingUp);
+  });
+
+  it("refreshes the page below the room when a game ends, not when one forms", () => {
+    expect(liveGameEnded(null, ["a"])).toBe(false);
+    expect(liveGameEnded(["a"], ["a", "b"])).toBe(false);
+    expect(liveGameEnded(["a", "b"], ["b"])).toBe(true);
+    expect(liveGameEnded(["a"], [])).toBe(true);
   });
 });
 

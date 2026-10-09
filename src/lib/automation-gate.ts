@@ -469,7 +469,10 @@ export function computeAutomationGateSnapshot(
     "now is invalid",
   );
   invariant(inputs.seasons.length <= 1, "multiple active seasons");
-  invariant(inputs.activeLobbies.length <= 1, "multiple active lobbies");
+  invariant(
+    inputs.activeLobbies.length <= INHOUSE.MAX_LIVE_GAMES,
+    "more active lobbies than game slots",
+  );
   const candidates: Candidate[] = [];
   let hardWakeAtMs = nowMs + AUTOMATION_GATE_HARD_HORIZON_MS;
   let runnerHealthy = false;
@@ -644,12 +647,15 @@ export function computeAutomationGateSnapshot(
     );
   }
 
-  const lobby = inputs.activeLobbies[0] ?? null;
   const presentCutoff = nowMs - INHOUSE.QUEUE_AWAY_SECONDS * 1_000;
   const present = inputs.queue.filter(
     (entry) => dateMs(entry.lastSeenAt, "queue.lastSeenAt") >= presentCutoff,
   );
-  if (!lobby && present.length >= INHOUSE.LOBBY_SIZE) {
+  // A free game slot and ten present players: the next game forms now.
+  if (
+    inputs.activeLobbies.length < INHOUSE.MAX_LIVE_GAMES &&
+    present.length >= INHOUSE.LOBBY_SIZE
+  ) {
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
   }
   for (const [index, entry] of inputs.queue.entries()) {
@@ -679,7 +685,9 @@ export function computeAutomationGateSnapshot(
     }
   }
 
-  if (lobby) {
+  // Every live game's own clocks: one game waiting on a long clock must never
+  // put the worker to sleep through the other's deadline.
+  for (const lobby of inputs.activeLobbies) {
     invariant(INHOUSE_ACTIVE_STATUSES.includes(lobby.status as never), "lobby status is unknown");
     const lobbyDeadline = (value: Date | null, label: string) => {
       const deadline = optionalDateMs(value, label);
@@ -1260,7 +1268,8 @@ export async function loadAutomationGateSnapshot(
     prisma.inhouseLobby.findMany({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
       orderBy: { createdAt: "desc" },
-      take: 2,
+      // One past the slot count, so corruption fails open, not picks a winner.
+      take: INHOUSE.MAX_LIVE_GAMES + 1,
       select: {
         status: true,
         acceptEndsAt: true,

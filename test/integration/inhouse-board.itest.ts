@@ -152,6 +152,45 @@ describe("inhouse board — stable last-game chronology", () => {
   });
 });
 
+describe("inhouse board — the last game is the last to finish", () => {
+  it("shows the game that finished last, not the one that formed last", async () => {
+    // Two games ran at once: game 2 formed later but finished first.
+    const now = Date.now();
+    const formedFirst = await prisma.inhouseLobby.create({
+      data: {
+        status: "COMPLETED",
+        createdAt: new Date(now - 90 * 60_000),
+        completedAt: new Date(now - 10 * 60_000),
+        winnerTeam: 1,
+        radiantTeam: 1,
+        dotaMatchId: "7000000901",
+      },
+    });
+    await prisma.inhouseLobby.create({
+      data: {
+        status: "COMPLETED",
+        slot: 2,
+        createdAt: new Date(now - 80 * 60_000),
+        completedAt: new Date(now - 30 * 60_000),
+        winnerTeam: 2,
+        radiantTeam: 1,
+        dotaMatchId: "7000000902",
+      },
+    });
+    // A row from before completedAt existed never outranks a stamped one.
+    await prisma.inhouseLobby.create({
+      data: {
+        status: "COMPLETED",
+        createdAt: new Date(now - 5 * 60_000),
+        winnerTeam: 2,
+        radiantTeam: 1,
+      },
+    });
+    resetBoardStatsCache();
+    expect((await loadBoardStats(now)).lastLobbyId).toBe(formedFirst.id);
+  });
+});
+
 describe("inhouse board — shared stats reads", () => {
   it("shares a cold history scan across simultaneous room and board loads", async () => {
     const scan = vi.spyOn(prisma.inhouseLobby, "findMany");
@@ -219,7 +258,14 @@ describe("inhouse board — shared stats reads", () => {
       await expect(loadBoardStats(now + 2_000)).resolves.toMatchObject({
         lobbiesPlayed: 1,
       });
-      expect(scan).toHaveBeenCalledTimes(2);
+      // Two history scans; the scheduler check's read of the live games is
+      // a list query too, so count only the completed-game scans.
+      const historyScans = scan.mock.calls.filter(
+        ([args]) =>
+          (args as { where?: { status?: unknown } } | undefined)?.where
+            ?.status === "COMPLETED",
+      );
+      expect(historyScans).toHaveLength(2);
     } finally {
       release();
       await oldRead;

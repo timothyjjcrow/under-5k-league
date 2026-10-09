@@ -75,6 +75,36 @@ describe("migration SQL safety gate", () => {
     ).toThrow(/forbidden destructive operation/);
   });
 
+  it("allows a reviewed contraction only in its own migration, spelled exactly", () => {
+    const drop = 'DROP INDEX "InhouseLobby_one_active_idx"';
+    expect(() =>
+      validateMigrationSql(
+        "20261009000000_inhouse_game_slots",
+        `BEGIN;\n${drop.replace(" INDEX", "\n  INDEX")};\nCOMMIT;`,
+      ),
+    ).not.toThrow();
+    // Another migration, another index, or a different drop is still refused.
+    for (const [name, statement] of [
+      ["20261010000000_other", drop],
+      ["20261009000000_inhouse_game_slots", 'DROP INDEX "Season_one_active_idx"'],
+      ["20261009000000_inhouse_game_slots", 'DROP INDEX IF EXISTS "InhouseLobby_one_active_idx"'],
+      ["20261009000000_inhouse_game_slots", 'DROP TABLE "InhouseLobby"'],
+    ]) {
+      expect(() =>
+        validateMigrationSql(name, `BEGIN; ${drop}; ${statement}; COMMIT;`),
+      ).toThrow(/forbidden destructive operation DROP/);
+    }
+  });
+
+  it("fails when a reviewed contraction leaves its migration", () => {
+    expect(() =>
+      validateMigrationSql(
+        "20261009000000_inhouse_game_slots",
+        'BEGIN; ALTER TABLE "InhouseLobby" ADD COLUMN "slot" INTEGER; COMMIT;',
+      ),
+    ).toThrow(/reviewed contraction is missing/);
+  });
+
   it("rejects an unreviewed statement even when it is not on the denylist", () => {
     expect(() =>
       validateMigrationSql(
@@ -139,6 +169,7 @@ describe("migration SQL safety gate", () => {
       "20261004000000_match_night_poll",
       "20261004120000_reschedule_ready_check",
       "20261008000000_inhouse_night_rsvp",
+      "20261009000000_inhouse_game_slots",
     ]);
   });
 

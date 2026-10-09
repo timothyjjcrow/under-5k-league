@@ -7,6 +7,7 @@ import {
   INHOUSE_STATUS,
 } from "@/lib/constants";
 import { summarizeInhouse } from "@/lib/inhouse-stats";
+import { inhouseLobbyCode } from "@/lib/inhouse";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
 import type { SessionUser } from "@/lib/auth";
 import {
@@ -267,11 +268,283 @@ describe("inhouse — lobby formation", () => {
     );
   });
 
-  it("keeps a second batch of 10 in the queue while one lobby is active", async () => {
-    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // forms lobby #1 (READY_CHECK)
-    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // second batch must wait
-    expect(await prisma.inhouseLobby.count()).toBe(1);
+  it("forms a second game from the next ten while the first is live, and the third ten wait", async () => {
+    const first = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const second = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000); // every slot is taken
+    const live = await liveGames();
+    expect(live.map((l) => l.slot)).toEqual([1, 2]);
+    expect(live.map((l) => l.status)).toEqual([
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.READY_CHECK,
+    ]);
+    expect(rosterOf(live[0])).toEqual(idsOf(first));
+    expect(rosterOf(live[1])).toEqual(idsOf(second));
     expect(await prisma.inhouseQueueEntry.count()).toBe(INHOUSE.LOBBY_SIZE);
+    // The second ping names its game; the first reads as it always did.
+    const found = mockSend.mock.calls
+      .map(([message]) => message)
+      .filter((message) => /match found/i.test(message));
+    expect(found).toHaveLength(2);
+    expect(found[0]).toContain("**Inhouse match found!**");
+    expect(found[1]).toContain("**Inhouse match found (Game 2)!**");
+  });
+});
+
+/** The live lobbies in game order, with their rosters. */
+async function liveGames() {
+  return prisma.inhouseLobby.findMany({
+    where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+    orderBy: { slot: "asc" },
+    include: { players: true },
+  });
+}
+const rosterOf = (l: { players: { userId: string }[] }) =>
+  new Set(l.players.map((p) => p.userId));
+const idsOf = (players: QueuedUser[]) => new Set(players.map((p) => p.user.id));
+
+/** Admin-drive ONE game's draft to READY, naming it (two can be drafting). */
+async function driveGameToReady(admin: SessionUser, lobbyId: string) {
+  for (let guard = 0; guard < 30; guard++) {
+    const lobby = await prisma.inhouseLobby.findFirst({
+      where: { id: lobbyId, status: INHOUSE_STATUS.DRAFTING },
+      include: { players: true },
+    });
+    if (!lobby) break;
+    const pool = lobby.players
+      .filter((p) => p.team === null)
+      .sort((a, b) => b.mmr - a.mmr);
+    if (pool.length === 0) break;
+    const r = await makePick(admin, pool[0].userId, lobbyId);
+    if (!r.ok) throw new Error(`pick failed: ${r.error}`);
+  }
+}
+
+describe("inhouse — two games at once", () => {
+  it("fills a freed slot from the queue while the other game plays on", async () => {
+    const admin = sessionFor(await makeUser("Two-game admin", "ADMIN"));
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const second = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const third = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const [game1, game2] = await liveGames();
+
+    expect(await cancelLobby(admin, game1.id)).toEqual({ ok: true });
+    await maybeFormLobby();
+    const live = await liveGames();
+    // Game 1's slot is game 1 again, for the ten who were waiting; game 2's
+    // players never moved.
+    expect(live.map((l) => l.slot)).toEqual([1, 2]);
+    expect(live[0].id).not.toBe(game1.id);
+    expect(rosterOf(live[0])).toEqual(idsOf(third));
+    expect(live[1].id).toBe(game2.id);
+    expect(rosterOf(live[1])).toEqual(idsOf(second));
+  });
+
+  it("acts on the caller's own game, and an admin must name one of two", async () => {
+    const admin = sessionFor(await makeUser("Two-game cancel admin", "ADMIN"));
+    const first = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const second = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const [game1, game2] = await liveGames();
+
+    // A game 2 player's accept lands in game 2.
+    expect(await acceptMatch(second[0].session)).toEqual({ ok: true });
+    const accepted = await prisma.inhouseLobbyPlayer.findMany({
+      where: { acceptedAt: { not: null } },
+      select: { lobbyId: true, userId: true },
+    });
+    expect(accepted).toEqual([
+      { lobbyId: game2.id, userId: second[0].user.id },
+    ]);
+    // Naming a game they aren't in is refused.
+    expect(await acceptMatch(first[0].session, game2.id)).toEqual({
+      ok: false,
+      error: "You're not in this lobby",
+    });
+    // With two games live, an admin cancel that names neither cancels neither.
+    expect(await cancelLobby(admin)).toEqual({
+      ok: false,
+      error: expect.stringContaining("Two games are live"),
+    });
+    expect(await cancelLobby(admin, game2.id)).toEqual({ ok: true });
+    const after = await prisma.inhouseLobby.findMany({
+      where: { id: { in: [game1.id, game2.id] } },
+      orderBy: { slot: "asc" },
+      select: { status: true },
+    });
+    expect(after.map((l) => l.status)).toEqual([
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CANCELLED,
+    ]);
+  });
+
+  it("runs each game's clocks on their own", async () => {
+    const first = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    const [game1, game2] = await liveGames();
+
+    // Game 2's ready check runs out while game 1's still has time: game 1,
+    // read first, must not hold game 2 up.
+    await prisma.inhouseLobby.update({
+      where: { id: game2.id },
+      data: { acceptEndsAt: new Date(Date.now() - 1000) },
+    });
+    expect(await resolveReadyCheck()).toBe(true);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: game1.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.READY_CHECK);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: game2.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.CANCELLED);
+
+    // The same for a pick clock, with both games drafting. Game 2's no-shows
+    // were dropped, so ten newcomers form the next game 2.
+    await voteAll(first, "MMR");
+    const regrouped = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    const game2b = (await liveGames()).find((l) => l.slot === 2)!;
+    await voteAll(regrouped, "MMR");
+    const drafted = async (id: string) =>
+      prisma.inhouseLobbyPlayer.count({
+        where: { lobbyId: id, team: { not: null } },
+      });
+    const before = [await drafted(game1.id), await drafted(game2b.id)];
+    await prisma.inhouseLobby.update({
+      where: { id: game2b.id },
+      data: { pickEndsAt: new Date(Date.now() - 1000) },
+    });
+    expect(await resolveStalledPick()).toBe(true);
+    expect([await drafted(game1.id), await drafted(game2b.id)]).toEqual([
+      before[0],
+      before[1] + 1,
+    ]);
+  });
+
+  it("shows a player their own game and the other one read-only", async () => {
+    await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const second = await enqueue(INHOUSE.LOBBY_SIZE, () => 3000);
+    const state = await getInhouseState(second[0].session, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
+    expect(state.liveGames).toBe(2);
+    expect(state.maxLiveGames).toBe(INHOUSE.MAX_LIVE_GAMES);
+    expect(state.lobby?.slot).toBe(2);
+    expect(state.otherLobbies.map((l) => l.slot)).toEqual([1]);
+    expect(state.me).toMatchObject({ inLobby: true, canAccept: true });
+
+    const watcher = sessionFor(await makeUser("Two-game watcher"));
+    const spectating = await getInhouseState(watcher, {
+      runMaintenance: false,
+      syncBoard: false,
+    });
+    expect(spectating.lobby).toBeNull();
+    expect(spectating.otherLobbies.map((l) => l.slot)).toEqual([1, 2]);
+    expect(spectating.me).toMatchObject({
+      inLobby: false,
+      canAccept: false,
+      canJoin: true,
+    });
+  });
+
+  it("records each game's own result, and one Dota match only once", async () => {
+    const admin = sessionFor(await makeUser("Two-game result admin", "ADMIN"));
+    const first = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    const second = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+    await voteAll(first, "MMR");
+    await voteAll(second, "MMR");
+    const [game1, game2] = await liveGames();
+    await driveGameToReady(admin, game1.id);
+    await driveGameToReady(admin, game2.id);
+    expect(await startGame(first[0].session)).toEqual({ ok: true });
+    expect(await startGame(second[0].session)).toEqual({ ok: true });
+
+    const one = await teamAccounts(game1.id);
+    const two = await teamAccounts(game2.id);
+    const startTime = Math.floor(Date.now() / 1000) + 60;
+    // A game played by a mix of both lobbies: two of each drafted side from
+    // each lobby, which passes either lobby's pasted-id check.
+    const mixed = fakeMatch({
+      matchId: 7000000801,
+      team1: [...one.team1.slice(0, 2), ...two.team1.slice(0, 2)],
+      team2: [...one.team2.slice(0, 2), ...two.team2.slice(0, 2)],
+      radiantWin: true,
+      startTime,
+    });
+    mockMatch.mockResolvedValue(mixed as never);
+    expect(await recordMatch(second[0].session, "7000000801")).toEqual({
+      ok: true,
+    });
+    expect(await recordMatch(first[0].session, "7000000801")).toEqual({
+      ok: false,
+      error: "That Dota match is already recorded for the other inhouse game.",
+    });
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: game1.id } }))
+        .status,
+    ).toBe(INHOUSE_STATUS.IN_PROGRESS);
+
+    // Game 1's own game, recorded after game 2 finished: its Elo is its own.
+    mockMatch.mockResolvedValue(
+      fakeMatch({
+        matchId: 7000000802,
+        team1: one.team1,
+        team2: one.team2,
+        radiantWin: false,
+        startTime,
+      }) as never,
+    );
+    // Another player: pasted ids are limited to one a minute per player.
+    expect(await recordMatch(first[1].session, "7000000802")).toEqual({
+      ok: true,
+    });
+    const done = await prisma.inhouseLobby.findMany({
+      where: { id: { in: [game1.id, game2.id] } },
+      orderBy: { slot: "asc" },
+      select: { status: true, dotaMatchId: true, eloDeltas: true },
+    });
+    expect(done.map((l) => [l.status, l.dotaMatchId])).toEqual([
+      [INHOUSE_STATUS.COMPLETED, "7000000802"],
+      [INHOUSE_STATUS.COMPLETED, "7000000801"],
+    ]);
+    // Two disjoint first games from an even start: every player moves K/2.
+    for (const lobby of done) {
+      const deltas = Object.values(JSON.parse(lobby.eloDeltas) as Record<string, number>);
+      expect(deltas).toHaveLength(INHOUSE.LOBBY_SIZE);
+      expect(deltas.every((d) => Math.abs(d) === 16)).toBe(true);
+    }
+  });
+});
+
+describe.skipIf(!ON_POSTGRES)("inhouse — two games at once on Postgres", () => {
+  it("forms two games from twenty waiting players, nobody in both, under racing formations", async () => {
+    for (let round = 0; round < 5; round += 1) {
+      await prisma.inhouseLobbyPlayer.deleteMany();
+      await prisma.inhouseLobby.deleteMany();
+      const now = Date.now();
+      for (let i = 0; i < INHOUSE.LOBBY_SIZE * 2; i += 1) {
+        const user = await makeUser(`Formation race ${round}.${i}`);
+        await prisma.inhouseQueueEntry.create({
+          data: {
+            userId: user.id,
+            mmr: 3000,
+            joinedAt: new Date(now - 60_000 + i),
+            lastSeenAt: new Date(now),
+            idleExpiresAt: new Date(now + 3_600_000),
+          },
+        });
+      }
+      await raceN(6, () => maybeFormLobby());
+      // A loser of every race stands down; the winner's loop or the next
+      // poll fills the rest.
+      await maybeFormLobby();
+      const live = await liveGames();
+      expect(live.map((l) => l.slot)).toEqual([1, 2]);
+      const rostered = live.flatMap((l) => l.players.map((p) => p.userId));
+      expect(rostered).toHaveLength(INHOUSE.LOBBY_SIZE * 2);
+      expect(new Set(rostered).size).toBe(INHOUSE.LOBBY_SIZE * 2);
+      expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    }
   });
 });
 
@@ -935,7 +1208,9 @@ describe("inhouse — finding + recording the game from player IDs", () => {
       syncBoard: false,
       detectResults: false,
     });
-    expect(state.lobby?.status).toBe(INHOUSE_STATUS.IN_PROGRESS);
+    // The admin isn't playing, so the game is one they watch.
+    expect(state.lobby).toBeNull();
+    expect(state.otherLobbies[0]?.status).toBe(INHOUSE_STATUS.IN_PROGRESS);
     expect(mockRecent).not.toHaveBeenCalled();
     expect((await prisma.inhouseLobby.findUniqueOrThrow({
       where: { id: lobby.id },
@@ -1262,6 +1537,8 @@ describe("inhouse — cancelling a live game", () => {
     expect(log).toHaveLength(1);
     expect(log[0].summary).toContain(INHOUSE_STATUS.IN_PROGRESS);
     expect(log[0].summary).toContain(`${INHOUSE.LOBBY_SIZE} player(s)`);
+    // Two games can be live: the record names this one by its room code.
+    expect(log[0].summary).toContain(`#${inhouseLobbyCode(lobby.id)}`);
   });
 });
 
