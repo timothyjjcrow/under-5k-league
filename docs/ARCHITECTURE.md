@@ -840,8 +840,8 @@ enums, so every status column is a string whose allowed values live in
 
 - `InhouseQueueEntry` — userId-unique rolling queue with `lastSeenAt`
   presence heartbeat.
-- `InhouseNightRsvp` — a player's "I'm in" for the planned inhouse night,
-  keyed by (`nightId`, `userId`). `nightId` is the night's id inside its
+- `InhouseNightRsvp` — a player's "I'm in" for the planned inhouse night
+  (which needs a linked Discord account), keyed by (`nightId`, `userId`). `nightId` is the night's id inside its
   Setting row, not a foreign key; rows cascade from their player, only the
   current night's are read, and planning the next night or cancelling prunes
   the rest ([inhouse](features/inhouse.md#inhouse-night)).

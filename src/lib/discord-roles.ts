@@ -560,11 +560,12 @@ const interestMemo = new Map<string, { at: number; value: string[] | null }>();
 /**
  * The Discord ids of the members who marked the event Interested, or null
  * when unknown (no bot, Discord unreachable, or the event is gone): render
- * unknown as nothing, never as nobody. The site only counts them, adding the
- * players who also said "I'm in" on the site once (inhouseNightHeadcount);
- * nobody's Discord id is ever shown. Read live, never stored, and reused for
- * a couple of minutes. Discord returns the list by ascending user id, so
- * each page continues after the last id of the one before.
+ * unknown as nothing, never as nobody. Bots are left out: they aren't
+ * coming. The site only counts them, adding the players who also said "I'm
+ * in" on the site once (inhouseNightHeadcount); nobody's Discord id is ever
+ * shown. Read live, never stored, and reused for a couple of minutes.
+ * Discord returns the list by ascending user id, so each page continues
+ * after the last id of the one before, bot or not.
  */
 export async function guildEventInterested(
   eventId: string,
@@ -586,12 +587,15 @@ export async function guildEventInterested(
       value = null;
       break;
     }
-    const ids = res.data
-      .map((row) => (row as { user?: { id?: unknown } } | null)?.user?.id)
-      .filter((id): id is string => typeof id === "string" && /^\d{5,25}$/.test(id));
-    found.push(...ids);
-    if (res.data.length < 100 || ids.length === 0) break;
-    after = ids[ids.length - 1];
+    const users = res.data
+      .map((row) => (row as { user?: { id?: unknown; bot?: unknown } } | null)?.user)
+      .filter(
+        (user): user is { id: string; bot?: unknown } =>
+          typeof user?.id === "string" && /^\d{5,25}$/.test(user.id),
+      );
+    found.push(...users.filter((user) => user.bot !== true).map((user) => user.id));
+    if (res.data.length < 100 || users.length === 0) break;
+    after = users[users.length - 1].id;
   }
   interestMemo.set(eventId, { at: nowMs, value });
   return value;

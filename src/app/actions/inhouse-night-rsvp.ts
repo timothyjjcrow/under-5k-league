@@ -11,9 +11,10 @@ import { actionErrorMessage } from "@/lib/user-facing-error";
 
 /**
  * "I'm in" (`going=1`) for the planned inhouse night, from Home's bar or the
- * inhouse page, or taking it back (`going=0`). Any signed-in player; the form
- * names the night its page showed (`nightId`), so a night that changed
- * meanwhile is refused rather than signed up for.
+ * inhouse page, or taking it back (`going=0`). Any signed-in player with a
+ * linked Discord account (the bar and the card send everyone else through the
+ * account link first); the form names the night its page showed (`nightId`),
+ * so a night that changed meanwhile is refused rather than signed up for.
  */
 export async function setInhouseNightRsvpAction(
   _prev: ActionResult,
@@ -49,9 +50,9 @@ export async function setInhouseNightRsvpAction(
   const when = result.night
     ? ` for ${formatLeagueMatchTime(new Date(result.night.startsAtMs), "full")}`
     : "";
-  const ping = result.linked
-    ? " You'll get a Discord ping when it starts."
-    : " Link Discord under My account to get a ping when it starts.";
+  // Wherever accounts can be linked, everyone who gets in is linked, and the
+  // start post pings them; a deployment that can't link says nothing more.
+  const ping = result.linked ? " You'll get a Discord ping when it starts." : "";
   return {
     message:
       result.outcome === "already-in"

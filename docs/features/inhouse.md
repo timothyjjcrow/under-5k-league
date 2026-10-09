@@ -471,8 +471,18 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   `InhouseNightRsvp` row per player keyed by the night's id, which isn't a
   foreign key: the night is a Setting row). Discord has no way for a bot or a
   site to mark someone Interested on its event (members mark only
-  themselves), so the site keeps its own list. Any signed-in player can say
-  so while the night is ahead (`inhouseNightRsvpOpen`); once it's on, the
+  themselves), so the site keeps its own list. Any signed-in player with a
+  linked Discord account can say so while the night is ahead
+  (`inhouseNightRsvpOpen`). **The link is required** wherever accounts can be
+  linked (`inhouseNightRsvpNeedsDiscord` over `discordLinkingConfigured`, the
+  same test `/api/auth/discord` makes; Tim's call, 2026-10-09, after players
+  on both lists were counted twice): a player without one gets "I'm in" as
+  the account link (`INHOUSE_NIGHT_LINK_DISCORD_PATH`, "Link Discord to say
+  you're in" on the card), which comes back to the invite link once Discord
+  says yes, and the server refuses the form
+  (`INHOUSE_NIGHT_LINK_DISCORD_FIRST`). A failed link lands on My account,
+  which says why. Taking it back never needs one, and a player in from
+  before the rule stays in, with a "Link Discord" nudge on the card. Once it's on, the
   queue is the way in. "I'm in" is one toggle on the bar and the card
   (`InhouseNightRsvpControl`, pressed once you're in), and pressing it again
   takes you off; it stays for someone in after the start, so taking it back
@@ -495,7 +505,9 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   (pure, tested) says: "I'm in" once for a signed-in player not yet on the
   list (`InhouseNightInviteRsvp`, which scrubs `imin` first so a refresh never
   repeats it, and treats a lost answer as unknown), "already in" for one who
-  is, the card's sign-in for a signed-out visitor, and once the night is on,
+  is, the account link for one without a linked Discord (the browser goes
+  straight on to Discord's consent and comes back to the invite, which then
+  says it), the card's sign-in for a signed-out visitor, and once the night is on,
   `/inhouse?join=1` (a server redirect). Every signed-out "I'm in" signs in
   back to the invite, so a new player's first click ends with them in. "Copy
   invite link" sits on /admin's night card and /inhouse's card; the planned
@@ -505,8 +517,9 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   "I'm in"s plus the Discord event's Interested members
   (`guildEventInterested`, the member list paged 100 at a time up to
   `GUILD_EVENT_INTEREST_MAX_PAGES`, reused for two minutes, null when
-  unknown), a player on both counted once when their linked Discord id is
-  among them. "12 coming" once Discord's list is read; "5 said I'm in" when
+  unknown, bots left out), a player on both counted once when their linked
+  Discord id is among them. Every "I'm in" since 2026-10-09 has one, so only
+  a player in from before can count twice. "12 coming" once Discord's list is read; "5 said I'm in" when
   it couldn't be, so an outage never reads as fewer people coming. Linked ids
   stay on the server (`readInhouseNightRsvps` returns display fields to the
   page and the ids beside them only for the count), and the page names only

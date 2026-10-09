@@ -452,7 +452,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   a spacer and the button), so a phone packs it into two lines. "I'm in" is
   one toggle (`aria-pressed`, the kit's small button), pressed once you're
   in, the way Discord's Interested button works: a separate "can't make it"
-  control took a third line on a phone.
+  control took a third line on a phone. For a player without a linked
+  Discord it is the account link under the same label, a plain anchor so
+  nothing prefetches the route that starts it.
 - **The inhouse queue is a side-game tile mid-season** (`InhouseStrip
   variant="tile"`, the live line), and ends the COMPLETE view's rail; the
   other phases keep the full-width strip after the view. The night itself

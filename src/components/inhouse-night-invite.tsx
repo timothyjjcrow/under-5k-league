@@ -7,6 +7,7 @@ import { pushToast } from "@/components/toaster";
 import { buttonClasses, type ButtonSize, type ButtonVariant } from "@/components/ui";
 import {
   INHOUSE_NIGHT_INVITE_PATH,
+  INHOUSE_NIGHT_LINK_DISCORD_PATH,
   type InhouseNightInviteAction,
 } from "@/lib/inhouse-night";
 
@@ -15,14 +16,15 @@ import {
 
 /**
  * Answers the invite once: says "I'm in" for a signed-in player not yet on
- * the list, or says they already are. The server decides which
- * (inhouseNightInviteAction); this only acts. It scrubs `imin` from the
- * address first, so a refresh or a shared copy of this tab never signs anyone
- * up again (the queue's `?join=1` works the same way), then refreshes the
- * page itself once the answer is in: called from an effect during hydration
- * rather than a form, the action's own revalidation never reached the page,
- * and the toggle stayed unpressed. A lost answer is unknown, never failed:
- * the card shows the truth on the next load.
+ * the list, sends one without a linked Discord through the account link
+ * first (it comes back here, and then says it), or says they already are.
+ * The server decides which (inhouseNightInviteAction); this only acts. It
+ * scrubs `imin` from the address first, so a refresh or a shared copy of
+ * this tab never signs anyone up again (the queue's `?join=1` works the same
+ * way), then refreshes the page itself once the answer is in: called from an
+ * effect during hydration rather than a form, the action's own revalidation
+ * never reached the page, and the toggle stayed unpressed. A lost answer is
+ * unknown, never failed: the card shows the truth on the next load.
  */
 export function InhouseNightInviteRsvp({
   nightId,
@@ -43,6 +45,10 @@ export function InhouseNightInviteRsvp({
     answered.current = true;
     if (action === "already-in") {
       pushToast("info", "You're already in for this inhouse night.");
+      return;
+    }
+    if (action === "link") {
+      window.location.assign(INHOUSE_NIGHT_LINK_DISCORD_PATH);
       return;
     }
     if (action !== "rsvp") return;

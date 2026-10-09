@@ -22,6 +22,7 @@ import { INHOUSE } from "@/lib/constants";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import {
   INHOUSE_NIGHT_INVITE_PATH,
+  INHOUSE_NIGHT_LINK_DISCORD_PATH,
   currentInhouseNight,
   inhouseNightGoogleCalendarUrl,
   inhouseNightHeadcountSources,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/inhouse-night";
 import {
   inhouseNightHeadcountFor,
+  inhouseNightNeedsDiscordFor,
   readInhouseNightRsvps,
   type InhouseNightRsvpPlayer,
 } from "@/lib/inhouse-night-rsvp-service";
@@ -135,19 +137,26 @@ export function InhouseNightHeadcount({
  * list. Offered while the night is ahead; once it's on, only someone already
  * in still sees it, so taking it back is never hidden. Signed out, it's a
  * sign-in that comes back to the invite link, which says "I'm in" for them.
+ * Signed in without a linked Discord (`needsDiscord`), it's the account link,
+ * which comes back to the invite link the same way.
  */
 export function InhouseNightRsvpControl({
   night,
   user,
   mine,
+  needsDiscord,
   nowMs,
   signedOutLabel = "I'm in",
+  needsDiscordLabel = "I'm in",
 }: {
   night: InhouseNight;
   user: SessionUser | null;
   mine: boolean;
+  /** inhouseNightNeedsDiscordFor: link Discord before saying "I'm in". */
+  needsDiscord: boolean;
   nowMs: number;
   signedOutLabel?: string;
+  needsDiscordLabel?: string;
 }) {
   if (!mine && !inhouseNightRsvpOpen(night, nowMs)) return null;
   if (!user) {
@@ -158,6 +167,15 @@ export function InhouseNightRsvpControl({
       >
         {signedOutLabel}
       </Link>
+    );
+  }
+  if (!mine && needsDiscord) {
+    // A full-page trip through Discord's consent, so a plain anchor: a Link
+    // would prefetch the route that starts it (account-discord-card's rule).
+    return (
+      <a href={INHOUSE_NIGHT_LINK_DISCORD_PATH} className={buttonClasses("primary", "sm")}>
+        {needsDiscordLabel}
+      </a>
     );
   }
   return (
@@ -194,7 +212,7 @@ export async function InhouseNightBar({
   nowMs: number;
 }) {
   const on = inhouseNightPhase(night, nowMs) === "on";
-  const [rsvps, queued] = await Promise.all([
+  const [rsvps, queued, needsDiscord] = await Promise.all([
     readInhouseNightRsvps(night.id),
     // Same presence rule as /inhouse: only recently seen players count.
     on
@@ -202,6 +220,7 @@ export async function InhouseNightBar({
           where: { lastSeenAt: { gte: queuePresentCutoff(nowMs) } },
         })
       : Promise.resolve(0),
+    on ? Promise.resolve(false) : inhouseNightNeedsDiscordFor(user?.id),
   ]);
   const mine = !!user && rsvps.players.some((player) => player.id === user.id);
   // One wrapping row of single items, not a text block beside a button
@@ -238,7 +257,13 @@ export async function InhouseNightBar({
           Join the queue <LinkArrow />
         </Link>
       ) : (
-        <InhouseNightRsvpControl night={night} user={user} mine={mine} nowMs={nowMs} />
+        <InhouseNightRsvpControl
+          night={night}
+          user={user}
+          mine={mine}
+          needsDiscord={needsDiscord}
+          nowMs={nowMs}
+        />
       )}
     </section>
   );
@@ -287,6 +312,7 @@ export async function InhouseNightCard({ invite = false }: { invite?: boolean } 
     getSessionUser(),
     readInhouseNightRsvps(night.id),
   ]);
+  const needsDiscord = await inhouseNightNeedsDiscordFor(user?.id);
   const phase = inhouseNightPhase(night, nowMs);
   const on = phase === "on";
   const mine = !!user && rsvps.players.some((player) => player.id === user.id);
@@ -295,6 +321,7 @@ export async function InhouseNightCard({ invite = false }: { invite?: boolean } 
     phase,
     signedIn: !!user,
     mine,
+    needsDiscord,
   });
   const eventUrl = inhouseNightEventUrl(night);
   const google = inhouseNightGoogleCalendarUrl(night, resolveSiteUrl(), LEAGUE_CONFIG.name);
@@ -321,12 +348,25 @@ export async function InhouseNightCard({ invite = false }: { invite?: boolean } 
             night={night}
             user={user}
             mine={mine}
+            needsDiscord={needsDiscord}
             nowMs={nowMs}
             signedOutLabel="Sign in to say you're in"
+            needsDiscordLabel="Link Discord to say you're in"
           />
           {mine ? (
             <span className="text-muted">
               You&apos;re on the list. Press it again if you can&apos;t make it.
+              {/* In from before "I'm in" needed Discord: one link counts them
+                  once beside Discord's Interested and gets them the ping. */}
+              {needsDiscord ? (
+                <>
+                  {" "}
+                  <a href={INHOUSE_NIGHT_LINK_DISCORD_PATH} className={textLink()}>
+                    Link Discord
+                  </a>
+                  {" so you're counted once and get a ping when it starts."}
+                </>
+              ) : null}
             </span>
           ) : null}
           <InhouseNightHeadcount

@@ -51,6 +51,8 @@ import {
   type InhouseNight,
 } from "@/lib/inhouse-night";
 import {
+  INHOUSE_NIGHT_LINK_DISCORD_FIRST,
+  inhouseNightNeedsDiscordFor,
   readInhouseNightRsvps,
   setInhouseNightRsvp,
 } from "@/lib/inhouse-night-rsvp-service";
@@ -95,7 +97,11 @@ beforeEach(() => {
   mockDelete.mockReset();
   mockDelete.mockResolvedValue("ok");
 });
-afterEach(() => setRaceHook(null));
+afterEach(() => {
+  setRaceHook(null);
+  // The Discord-linking tests switch the OAuth client on for themselves only.
+  vi.unstubAllEnvs();
+});
 
 const stored = async () => (await readInhouseNight()).night;
 
@@ -636,6 +642,53 @@ describe("saying I'm in on the site", () => {
     expect(await count()).toBe(0);
   });
 
+  describe("where Discord accounts can be linked", () => {
+    beforeEach(() => {
+      vi.stubEnv("DISCORD_CLIENT_ID", "client");
+      vi.stubEnv("DISCORD_CLIENT_SECRET", "secret");
+    });
+
+    it("needs a linked Discord to say I'm in, never to take it back", async () => {
+      const night = await upcoming();
+      const player = await makeUser("Unlinked");
+      const say = (going: boolean) =>
+        setInhouseNightRsvp({ userId: player.id, nightId: night.id, going });
+      expect(await inhouseNightNeedsDiscordFor(player.id)).toBe(true);
+      await expect(say(true)).rejects.toThrow(INHOUSE_NIGHT_LINK_DISCORD_FIRST);
+      expect(await count()).toBe(0);
+      // In from before the rule: taking it back still works.
+      await prisma.inhouseNightRsvp.create({ data: { nightId: night.id, userId: player.id } });
+      expect(await say(false)).toMatchObject({ outcome: "out" });
+      // Linked, they're in, and the start post will ping them.
+      await prisma.user.update({
+        where: { id: player.id },
+        data: { discordId: "700000000000000301" },
+      });
+      expect(await inhouseNightNeedsDiscordFor(player.id)).toBe(false);
+      expect(await say(true)).toMatchObject({ outcome: "in", linked: true });
+      expect(await count()).toBe(1);
+    });
+
+    it("checks the night before the link, so a stale page says what changed", async () => {
+      const player = await makeUser("Unlinked");
+      await upcoming();
+      await expect(
+        setInhouseNightRsvp({ userId: player.id, nightId: "night-0", going: true }),
+      ).rejects.toThrow(/changed or is over/);
+    });
+
+    it("asks nobody signed out", async () => {
+      expect(await inhouseNightNeedsDiscordFor(null)).toBe(false);
+    });
+  });
+
+  it("asks nobody to link where accounts can't be linked", async () => {
+    vi.stubEnv("DISCORD_CLIENT_ID", "");
+    vi.stubEnv("DISCORD_CLIENT_SECRET", "");
+    const player = await makeUser("Unlinked");
+    expect(await inhouseNightNeedsDiscordFor(player.id)).toBe(false);
+  });
+
   describe("the action", () => {
     function form(fields: Record<string, string>) {
       const data = new FormData();
@@ -648,8 +701,9 @@ describe("saying I'm in on the site", () => {
       const player = await makeUser("Player");
       vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
       const inForm = form({ nightId: night.id, going: "1" });
+      // No Discord linking in this deployment: in, with nothing promised.
       expect((await setInhouseNightRsvpAction(null, inForm))?.message).toMatch(
-        /^You're in for .+\. Link Discord under My account to get a ping when it starts\.$/,
+        /^You're in for [^.]+\.$/,
       );
       expect((await setInhouseNightRsvpAction(null, inForm))?.message).toMatch(/^You're already in for /);
       await prisma.user.update({ where: { id: player.id }, data: { discordId: "700000000000000201" } });
@@ -660,6 +714,18 @@ describe("saying I'm in on the site", () => {
       expect((await setInhouseNightRsvpAction(null, form({ nightId: night.id, going: "0" })))?.message).toBe(
         "Okay, you're off the list for this inhouse night.",
       );
+    });
+
+    it("refuses an I'm in without a linked Discord where accounts can be linked", async () => {
+      vi.stubEnv("DISCORD_CLIENT_ID", "client");
+      vi.stubEnv("DISCORD_CLIENT_SECRET", "secret");
+      const night = await upcoming();
+      const player = await makeUser("Player");
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+      expect(
+        (await setInhouseNightRsvpAction(null, form({ nightId: night.id, going: "1" })))?.error,
+      ).toBe(INHOUSE_NIGHT_LINK_DISCORD_FIRST);
+      expect(await count()).toBe(0);
     });
 
     it("asks a signed-out player to sign in, and refuses a night that's gone", async () => {

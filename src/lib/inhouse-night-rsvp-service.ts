@@ -2,7 +2,9 @@
 // inhouse-night.ts). One InhouseNightRsvp row per player for the night.
 // Discord's Interested button can't be pressed from here (Discord lets
 // members mark only themselves), so the site keeps its own list, and Home
-// and /inhouse add the two up (inhouseNightHeadcount).
+// and /inhouse add the two up (inhouseNightHeadcount). Saying "I'm in" needs
+// a linked Discord account (inhouseNightRsvpNeedsDiscord), so a player on
+// both lists counts once.
 //
 // Rivals: an admin's save or cancel is the only other writer of the night,
 // and it can land between a player's check that the night is current and the
@@ -10,15 +12,18 @@
 // filters by the current night's id, and planning the next night or
 // cancelling prunes the rows of any other night (inhouse-night-service.ts).
 // Two taps by one player meet at the primary key, and the second reads as
-// already in.
+// already in. A player who unlinks Discord between the check and the insert
+// leaves an "I'm in" without one, which counts like any from before the rule.
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { UserFacingError } from "./user-facing-error";
+import { discordLinkingConfigured } from "./discord-oauth";
 import { guildEventInterested } from "./discord-roles";
 import {
   currentInhouseNight,
   inhouseNightHeadcount,
+  inhouseNightRsvpNeedsDiscord,
   inhouseNightRsvpOpen,
   type InhouseNight,
   type InhouseNightHeadcount,
@@ -66,6 +71,25 @@ export async function inhouseNightHeadcountFor(
   return inhouseNightHeadcount(siteDiscordIds, discordIds);
 }
 
+/**
+ * Whether this signed-in player must link Discord before saying "I'm in"
+ * (inhouseNightRsvpNeedsDiscord): the bar and the card then send "I'm in"
+ * through the account link. False for nobody signed in.
+ */
+export async function inhouseNightNeedsDiscordFor(
+  userId: string | null | undefined,
+): Promise<boolean> {
+  if (!userId || !discordLinkingConfigured()) return false;
+  return inhouseNightRsvpNeedsDiscord({
+    linkingConfigured: true,
+    linked: await isLinked(userId),
+  });
+}
+
+/** The refusal for an "I'm in" without a linked Discord account. */
+export const INHOUSE_NIGHT_LINK_DISCORD_FIRST =
+  "Link Discord under My account first: saying you're in needs it, so you're counted once if you're also Interested on Discord.";
+
 export type InhouseNightRsvpOutcome = "in" | "already-in" | "out" | "already-out";
 
 export type InhouseNightRsvpResult = {
@@ -73,14 +97,16 @@ export type InhouseNightRsvpResult = {
   /** The night it was for (null for a take-back of a night no longer shown). */
   night: InhouseNight | null;
   /** Whether the player has a linked Discord account (the start post pings
-   *  only linked players). */
+   *  only linked players; saying "I'm in" needs one wherever accounts can be
+   *  linked). */
   linked: boolean;
 };
 
 /**
  * Say "I'm in" for the night on the page (`going`), or take it back. Saying
  * so needs the night the page showed to still be the planned one and not yet
- * started; taking it back always works, even for a night that has changed.
+ * started, and a linked Discord account wherever accounts can be linked;
+ * taking it back always works, even for a night that has changed.
  */
 export async function setInhouseNightRsvp(input: {
   userId: string;
@@ -114,6 +140,10 @@ export async function setInhouseNightRsvp(input: {
       "The inhouse night has started: join the queue on the inhouse page instead.",
     );
   }
+  const linked = await isLinked(input.userId);
+  if (inhouseNightRsvpNeedsDiscord({ linkingConfigured: discordLinkingConfigured(), linked })) {
+    throw new UserFacingError(INHOUSE_NIGHT_LINK_DISCORD_FIRST);
+  }
   let outcome: InhouseNightRsvpOutcome = "in";
   try {
     await prisma.inhouseNightRsvp.create({
@@ -128,7 +158,7 @@ export async function setInhouseNightRsvp(input: {
     }
     outcome = "already-in";
   }
-  return { outcome, night: shown, linked: await isLinked(input.userId) };
+  return { outcome, night: shown, linked };
 }
 
 async function isLinked(userId: string): Promise<boolean> {

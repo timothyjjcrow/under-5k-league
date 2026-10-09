@@ -197,8 +197,8 @@ actions: `src/app/actions/admin-discord.ts`.
   refuse, since the join is for the next game.
 - **The inhouse night's invite (`?imin=1`, `INHOUSE_NIGHT_INVITE_PATH`) is the
   one site link in its planned post** (`inhouseNightInviteLink`): before the
-  night it says "I'm in" on the site, once the night is on /inhouse turns it
-  into `?join=1`. Admins copy it from /admin's night card ("Copy invite link")
+  night it says "I'm in" on the site (after the account link for a player
+  without one), once the night is on /inhouse turns it into `?join=1`. Admins copy it from /admin's night card ("Copy invite link")
   to paste themselves: bare, it unfurls as the night with its own picture.
   The post keeps it in angle brackets beside the Discord event's bare link,
   so the event's Interested embed is the post's one unfurl.
@@ -210,9 +210,9 @@ actions: `src/app/actions/admin-discord.ts`.
   edits and deletes the inhouse night's server event (`createGuildEvent`,
   `updateGuildEvent`, `deleteGuildEvent`; `forbidden` means the bot lacks
   Create Events, `gone` that someone deleted the event) and reads who marked
-  it Interested (`guildEventInterested`: the member ids, paged 100 at a time
-  after the last id, memoized two minutes, null when any page fails). The
-  ids only feed the site's headcount; they are never shown. Discord has no
+  it Interested (`guildEventInterested`: the member ids, bots left out, paged
+  100 at a time after the last id, memoized two minutes, null when any page
+  fails). The ids only feed the site's headcount; they are never shown. Discord has no
   endpoint for a bot to mark someone Interested, so the site's "I'm in" is
   its own list ([inhouse](inhouse.md#inhouse-night)). `getPingHealth` reports `canCreateEvents` (Create Events or
   Manage Events) as its own line in the checklist. Discord has no self-assign
@@ -256,6 +256,11 @@ actions: `src/app/actions/admin-discord.ts`.
   `updateMany({ where: { id, discordId: null } })` (a read-then-write loses to
   the callback and puts a typed handle under the check mark). `unlinkDiscord`
   clears both fields.
+- **The inhouse night's "I'm in" needs a linked account** wherever accounts
+  can be linked (`discordLinkingConfigured`, the one test of that, shared
+  with `/api/auth/discord`): its button is the link for a player without
+  one, with `next` back to the night's invite
+  ([inhouse](inhouse.md#inhouse-night)).
 - **Flow:** `/api/auth/discord` (session required; linking, not login), then
   `/api/auth/discord/callback`, a thin shell over `handleDiscordCallback`
   (`discord-link-service.ts`, `discord-link.itest.ts`). Pure helpers:
