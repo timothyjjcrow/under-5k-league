@@ -7,7 +7,6 @@ import { pushToast } from "@/components/toaster";
 import { buttonClasses, type ButtonSize, type ButtonVariant } from "@/components/ui";
 import {
   INHOUSE_NIGHT_INVITE_PATH,
-  INHOUSE_NIGHT_LINK_DISCORD_PATH,
   type InhouseNightInviteAction,
 } from "@/lib/inhouse-night";
 
@@ -16,8 +15,10 @@ import {
 
 /**
  * Answers the invite once: says "I'm in" for a signed-in player not yet on
- * the list, sends one without a linked Discord through the account link
- * first (it comes back here, and then says it), or says they already are.
+ * the list, tells one without a linked Discord to press the card's "Link
+ * Discord to say you're in" (it comes back here, and then says it), or says
+ * they already are. It never sends anyone to Discord by itself: a page that
+ * bounces to a consent screen on load is jarring, and a reload repeats it.
  * The server decides which (inhouseNightInviteAction); this only acts. It
  * scrubs `imin` from the address first, so a refresh or a shared copy of
  * this tab never signs anyone up again (the queue's `?join=1` works the same
@@ -26,6 +27,11 @@ import {
  * never reached the page, and the toggle stayed unpressed. A lost answer is
  * unknown, never failed: the card shows the truth on the next load.
  */
+/** What the invite says to a player who must link Discord first; the card's
+ *  button beside it carries the label it names. */
+const INHOUSE_NIGHT_LINK_DISCORD_STEP =
+  "One step left: press Link Discord to say you're in, and you're on the list once Discord says yes.";
+
 export function InhouseNightInviteRsvp({
   nightId,
   action,
@@ -48,7 +54,7 @@ export function InhouseNightInviteRsvp({
       return;
     }
     if (action === "link") {
-      window.location.assign(INHOUSE_NIGHT_LINK_DISCORD_PATH);
+      pushToast("info", INHOUSE_NIGHT_LINK_DISCORD_STEP);
       return;
     }
     if (action !== "rsvp") return;

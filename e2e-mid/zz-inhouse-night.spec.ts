@@ -186,22 +186,25 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
     new URL("/inhouse?imin=1", baseURL).href,
   );
 
-  // Without a linked Discord the invite goes straight into the account link,
-  // which sends the browser to Discord's consent (and would come back to the
-  // invite). The spec reads where it would go and stops there, so the suite
-  // never loads Discord.
+  // Without a linked Discord the invite asks for the link, never bouncing to
+  // Discord by itself, and the card's button goes to Discord's consent
+  // (which would come back to the invite). The spec reads where it would go
+  // and stops there, so the suite never loads Discord.
   let consent: URL | null = null;
   const accountLink = (url: URL) => url.pathname === "/api/auth/discord";
-  await page.route(
-    accountLink,
-    async (route) => {
-      const sent = await route.fetch({ maxRedirects: 0 });
-      consent = new URL(sent.headers()["location"]);
-      await route.fulfill({ status: 200, contentType: "text/html", body: "<title>Discord</title>" });
-    },
-  );
+  await page.route(accountLink, async (route) => {
+    const sent = await route.fetch({ maxRedirects: 0 });
+    consent = new URL(sent.headers()["location"]);
+    await route.fulfill({ status: 200, contentType: "text/html", body: "<title>Discord</title>" });
+  });
   await page.context().clearCookies();
   await signIn(page, INVITED, "/inhouse?imin=1");
+  await expect(
+    page.getByRole("status").filter({ hasText: /^One step left: press Link Discord to say you're in/ }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/inhouse$/);
+  expect(consent).toBeNull();
+  await page.getByRole("link", { name: "Link Discord to say you're in" }).click();
   await expect(page).toHaveURL(new URL(LINK_DISCORD, baseURL).href);
   expect(consent).not.toBeNull();
   expect(consent!.origin + consent!.pathname).toBe("https://discord.com/oauth2/authorize");

@@ -29,6 +29,7 @@ import {
   inhouseNightHeadcountText,
   inhouseNightInviteAction,
   inhouseNightPhase,
+  inhouseNightRsvpControlKind,
   inhouseNightRsvpOpen,
   type InhouseNight,
 } from "@/lib/inhouse-night";
@@ -158,8 +159,14 @@ export function InhouseNightRsvpControl({
   signedOutLabel?: string;
   needsDiscordLabel?: string;
 }) {
-  if (!mine && !inhouseNightRsvpOpen(night, nowMs)) return null;
-  if (!user) {
+  const kind = inhouseNightRsvpControlKind({
+    open: inhouseNightRsvpOpen(night, nowMs),
+    signedIn: !!user,
+    mine,
+    needsDiscord,
+  });
+  if (kind === "none") return null;
+  if (kind === "sign-in") {
     return (
       <Link
         href={signInHref(INHOUSE_NIGHT_INVITE_PATH)}
@@ -169,7 +176,7 @@ export function InhouseNightRsvpControl({
       </Link>
     );
   }
-  if (!mine && needsDiscord) {
+  if (kind === "link") {
     // A full-page trip through Discord's consent, so a plain anchor: a Link
     // would prefetch the route that starts it (account-discord-card's rule).
     return (

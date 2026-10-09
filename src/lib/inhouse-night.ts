@@ -134,6 +134,34 @@ export function inhouseNightRsvpNeedsDiscord(input: {
   return input.linkingConfigured && !input.linked;
 }
 
+/** What the viewer's "I'm in" is (InhouseNightRsvpControl). */
+export type InhouseNightRsvpControlKind =
+  /** Nothing: the night has started and they aren't in. */
+  | "none"
+  /** Signed out: a sign-in that comes back to the invite. */
+  | "sign-in"
+  /** Not in and no linked Discord: the account link, which comes back to
+   *  the invite (INHOUSE_NIGHT_LINK_DISCORD_PATH). */
+  | "link"
+  /** The toggle, pressed once they're in. Anyone already in gets it, linked
+   *  or not, so taking it back is never hidden. */
+  | "toggle";
+
+export function inhouseNightRsvpControlKind(input: {
+  /** inhouseNightRsvpOpen: the night is still ahead. */
+  open: boolean;
+  signedIn: boolean;
+  /** Already on the night's list. */
+  mine: boolean;
+  /** inhouseNightRsvpNeedsDiscord for this viewer. */
+  needsDiscord: boolean;
+}): InhouseNightRsvpControlKind {
+  if (input.mine) return "toggle";
+  if (!input.open) return "none";
+  if (!input.signedIn) return "sign-in";
+  return input.needsDiscord ? "link" : "toggle";
+}
+
 /**
  * Who's coming, from both places a player can say so: "I'm in" on the site
  * and Interested on the night's Discord event. Discord lets members mark only
@@ -209,8 +237,9 @@ export type InhouseNightInviteAction =
   | "already-in"
   /** Signed out: the card's sign-in comes back to the invite. */
   | "sign-in"
-  /** Signed in without a linked Discord: the page sends them through the
-   *  account link first (INHOUSE_NIGHT_LINK_DISCORD_PATH), which comes back. */
+  /** Signed in without a linked Discord: say so, beside the card's "Link
+   *  Discord to say you're in", a button they press (never a bounce to
+   *  Discord on load); the account link comes back to the invite. */
   | "link"
   /** The night is on: the queue is the way in (`/inhouse?join=1`). */
   | "join"

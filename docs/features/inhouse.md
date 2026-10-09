@@ -482,7 +482,9 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   says yes, and the server refuses the form
   (`INHOUSE_NIGHT_LINK_DISCORD_FIRST`). A failed link lands on My account,
   which says why. Taking it back never needs one, and a player in from
-  before the rule stays in, with a "Link Discord" nudge on the card. Once it's on, the
+  before the rule stays in, with a "Link Discord" nudge on the card: the
+  control (`inhouseNightRsvpControlKind`) is the pressed toggle for anyone
+  already in, linked or not. Once it's on, the
   queue is the way in. "I'm in" is one toggle on the bar and the card
   (`InhouseNightRsvpControl`, pressed once you're in), and pressing it again
   takes you off; it stays for someone in after the start, so taking it back
@@ -505,9 +507,10 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   (pure, tested) says: "I'm in" once for a signed-in player not yet on the
   list (`InhouseNightInviteRsvp`, which scrubs `imin` first so a refresh never
   repeats it, and treats a lost answer as unknown), "already in" for one who
-  is, the account link for one without a linked Discord (the browser goes
-  straight on to Discord's consent and comes back to the invite, which then
-  says it), the card's sign-in for a signed-out visitor, and once the night is on,
+  is, a note for one without a linked Discord to press the card's "Link
+  Discord to say you're in" (a button they press, never a bounce to Discord
+  on load, which jars and repeats on a reload; it comes back to the invite,
+  which then says it), the card's sign-in for a signed-out visitor, and once the night is on,
   `/inhouse?join=1` (a server redirect). Every signed-out "I'm in" signs in
   back to the invite, so a new player's first click ends with them in. "Copy
   invite link" sits on /admin's night card and /inhouse's card; the planned
