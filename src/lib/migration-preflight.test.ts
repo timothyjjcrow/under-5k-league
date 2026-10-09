@@ -62,6 +62,23 @@ describe("migration capability preflight", () => {
     expect(migrationHistoryCheck).toBeGreaterThan(firstDataCheck);
   });
 
+  it("allows two live inhouse games once game slots exist, one per slot", () => {
+    // With slots, live lobbies are counted per slot; without them (a database
+    // before 20261009000000_inhouse_game_slots), at most one may be live.
+    const slots = PREFLIGHT_SQL.indexOf("IF game_slots_present THEN");
+    const perSlot = PREFLIGHT_SQL.indexOf('GROUP BY "slot" HAVING COUNT(*) > 1');
+    const legacy = PREFLIGHT_SQL.indexOf(
+      "% active inhouse lobbies exist; reconcile to at most one before deploy",
+    );
+    expect(PREFLIGHT_SQL).toContain("column_name = 'slot'");
+    expect(slots).toBeGreaterThanOrEqual(0);
+    expect(perSlot).toBeGreaterThan(slots);
+    expect(legacy).toBeGreaterThan(perSlot);
+    expect(PREFLIGHT_SQL).toContain(
+      "% game slot(s) hold more than one active inhouse lobby; reconcile to one per slot before deploy",
+    );
+  });
+
   it("reports only schema capabilities and object identities", () => {
     expect(PREFLIGHT_SQL).toContain(
       "Migration preflight requires ownership rights for every existing application relation/function in the current schema; inaccessible objects: %",

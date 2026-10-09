@@ -40,6 +40,8 @@ DECLARE
   cross_user_dota_claim_count bigint;
   active_season_count bigint;
   active_lobby_count bigint;
+  game_slots_present boolean;
+  crowded_slot_count bigint;
   unknown_schema_object_count bigint;
   resolved_baseline_count bigint;
 BEGIN
@@ -204,17 +206,42 @@ BEGIN
       active_season_count;
   END IF;
 
-  EXECUTE format(
-    'SELECT COUNT(*) FROM %I.%I WHERE "status" IN ($1, $2, $3, $4, $5)',
-    current_schema(),
-    'InhouseLobby'
-  )
-  INTO active_lobby_count
-  USING 'READY_CHECK', 'CAPTAIN_VOTE', 'DRAFTING', 'READY', 'IN_PROGRESS';
-  IF active_lobby_count > 1 THEN
-    RAISE EXCEPTION
-      'Migration preflight failed: % active inhouse lobbies exist; reconcile to at most one before deploy',
-      active_lobby_count;
+  -- Live inhouse lobbies. Once a database has game slots
+  -- (20261009000000_inhouse_game_slots), two games may be live at once, one
+  -- per slot, as InhouseLobby_live_slot_idx holds. Before that, the
+  -- one-live-lobby index (20260804010000_release_readiness) needs at most one.
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'InhouseLobby'
+      AND column_name = 'slot'
+  ) INTO game_slots_present;
+  IF game_slots_present THEN
+    EXECUTE format(
+      'SELECT COUNT(*) FROM (SELECT "slot" FROM %I.%I WHERE "status" IN ($1, $2, $3, $4, $5) GROUP BY "slot" HAVING COUNT(*) > 1) AS crowded',
+      current_schema(),
+      'InhouseLobby'
+    )
+    INTO crowded_slot_count
+    USING 'READY_CHECK', 'CAPTAIN_VOTE', 'DRAFTING', 'READY', 'IN_PROGRESS';
+    IF crowded_slot_count > 0 THEN
+      RAISE EXCEPTION
+        'Migration preflight failed: % game slot(s) hold more than one active inhouse lobby; reconcile to one per slot before deploy',
+        crowded_slot_count;
+    END IF;
+  ELSE
+    EXECUTE format(
+      'SELECT COUNT(*) FROM %I.%I WHERE "status" IN ($1, $2, $3, $4, $5)',
+      current_schema(),
+      'InhouseLobby'
+    )
+    INTO active_lobby_count
+    USING 'READY_CHECK', 'CAPTAIN_VOTE', 'DRAFTING', 'READY', 'IN_PROGRESS';
+    IF active_lobby_count > 1 THEN
+      RAISE EXCEPTION
+        'Migration preflight failed: % active inhouse lobbies exist; reconcile to at most one before deploy',
+        active_lobby_count;
+    END IF;
   END IF;
 ${migrationHistoryGuard}
 END

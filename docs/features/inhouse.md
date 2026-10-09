@@ -62,6 +62,9 @@ Twenty queued players play two games side by side (Tim's call, 2026-10-09).
   `maybeFormLobby` loops `formOneLobby`, which takes the lowest free slot
   (`freeGameSlot`) and the first ten present players, so a lone game is
   always game 1. A cancelled or finished game's slot is the next game's.
+  The migration preflight (`scripts/migration-preflight.mjs`) refuses two
+  live lobbies in one slot, not two live games, so a release can run during
+  an inhouse night.
 - **Nobody is in two live lobbies.** `joinQueue` refuses anyone in a live
   lobby and formation deletes the ten's queue rows, both Serializable, so the
   two games' players never overlap. Everything below leans on it: the frozen
