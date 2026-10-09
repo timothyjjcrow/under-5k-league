@@ -1,18 +1,37 @@
+import { PrismaClient } from "@prisma/client";
 import { test, expect, type Page } from "@playwright/test";
+import { MID_DB_URL } from "../playwright.midseason.config";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // The inhouse night end to end: an admin plans one on /admin (the start box
 // suggests the coming Friday at 8 PM on the league's clock), Home's bar and
 // /inhouse's card show it with calendar links, a player says "I'm in" from
 // the bar, takes it back on /inhouse and says it again, a second player
-// arrives through the invite link, and the admin cancels it. The suite has no Discord, so nothing posts and the headcount is
-// the site's alone. A zz- spec because it writes league-wide state Home
-// renders; it cancels its night at the end.
+// arrives through the invite link, and the admin cancels it. "I'm in" needs
+// a linked Discord account (the suite switches linking on), so each player is
+// first sent to link it, and the spec links them in the database instead of
+// going through Discord. The suite has no Discord bot or webhook, so nothing
+// posts and the headcount is the site's alone. A zz- spec because it writes
+// league-wide state Home renders; it cancels its night at the end.
 
 const NOTE = "First one (e2e): all ranks welcome";
 const ADMIN = "name=Night+Admin&steamId=76561190000994201&admin=1";
 const PLAYER = "name=Night+Player&steamId=76561190000994202";
 const INVITED = "name=Invited+Player&steamId=76561190000994203";
+const LINK_DISCORD = "/api/auth/discord?next=%2Finhouse%3Fimin%3D1";
+
+const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
+test.afterAll(async () => {
+  await db.$disconnect();
+});
+
+/** What Discord's OAuth callback stores, without a trip to Discord. */
+async function linkDiscord(steamId: string) {
+  await db.user.update({
+    where: { steamId },
+    data: { discordId: `7${steamId.slice(-17)}`, discordName: `e2e_${steamId.slice(-4)}` },
+  });
+}
 
 async function signIn(page: Page, query: string, redirect: string) {
   await page.goto(`/api/auth/dev?${query}&redirect=${encodeURIComponent(redirect)}`);
@@ -78,16 +97,26 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   // The inhouse strip lower down no longer repeats the night.
   await expect(page.getByText("Inhouse night:")).toHaveCount(0);
 
-  // 3. A player says they're in from the bar: one toggle, like Discord's
-  //    Interested button.
+  // 3. A player without a linked Discord is sent to link it first, from the
+  //    bar and the card; linked, they say they're in from the bar: one
+  //    toggle, like Discord's Interested button.
   await signIn(page, PLAYER, "/");
+  bar = page.getByRole("region", { name: "Inhouse night" });
+  await expect(bar.getByRole("link", { name: "I'm in" })).toHaveAttribute("href", LINK_DISCORD);
+  await page.goto("/inhouse");
+  await expect(page.getByRole("link", { name: "Link Discord to say you're in" })).toHaveAttribute(
+    "href",
+    LINK_DISCORD,
+  );
+  await linkDiscord("76561190000994202");
+  await page.goto("/");
   bar = page.getByRole("region", { name: "Inhouse night" });
   const barToggle = bar.getByRole("button", { name: "I'm in" });
   await expect(barToggle).toHaveAttribute("aria-pressed", "false");
   await barToggle.click();
   await expect(
     page.getByRole("status").filter({
-      hasText: /You're in for .+\. Link Discord under My account to get a ping when it starts\./,
+      hasText: /You're in for .+\. You'll get a Discord ping when it starts\./,
     }),
   ).toBeVisible();
   await expect(barToggle).toHaveAttribute("aria-pressed", "true");
@@ -157,8 +186,34 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
     new URL("/inhouse?imin=1", baseURL).href,
   );
 
+  // Without a linked Discord the invite asks for the link, never bouncing to
+  // Discord by itself, and the card's button goes to Discord's consent
+  // (which would come back to the invite). The spec reads where it would go
+  // and stops there, so the suite never loads Discord.
+  let consent: URL | null = null;
+  const accountLink = (url: URL) => url.pathname === "/api/auth/discord";
+  await page.route(accountLink, async (route) => {
+    const sent = await route.fetch({ maxRedirects: 0 });
+    consent = new URL(sent.headers()["location"]);
+    await route.fulfill({ status: 200, contentType: "text/html", body: "<title>Discord</title>" });
+  });
   await page.context().clearCookies();
   await signIn(page, INVITED, "/inhouse?imin=1");
+  await expect(
+    page.getByRole("status").filter({ hasText: /^One step left: press Link Discord to say you're in/ }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/inhouse$/);
+  expect(consent).toBeNull();
+  await page.getByRole("link", { name: "Link Discord to say you're in" }).click();
+  await expect(page).toHaveURL(new URL(LINK_DISCORD, baseURL).href);
+  expect(consent).not.toBeNull();
+  expect(consent!.origin + consent!.pathname).toBe("https://discord.com/oauth2/authorize");
+  expect(consent!.searchParams.get("client_id")).toBe("e2e-discord-client");
+  // The callback's origin is APP_URL when one is set, so only its path is ours to check.
+  expect(consent!.searchParams.get("redirect_uri")).toMatch(/\/api\/auth\/discord\/callback$/);
+  await page.unroute(accountLink);
+  await linkDiscord("76561190000994203");
+  await page.goto("/inhouse?imin=1");
   await expect(
     page.getByRole("status").filter({ hasText: /^You're in for / }),
   ).toBeVisible();

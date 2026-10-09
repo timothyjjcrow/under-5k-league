@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { sourceFiles } from "../../test/support/source-files";
+import {
+  oauthLandingPath,
+  packOauthCookie,
+  randomOauthValue,
+  unpackOauthCookie,
+} from "./discord-oauth";
 import { safeReturnPath } from "./return-path";
 import { signInHref } from "./sign-in";
 import {
   INHOUSE_NIGHT_INVITE_PATH,
   INHOUSE_NIGHT_LENGTH_MS,
+  INHOUSE_NIGHT_LINK_DISCORD_PATH,
   INHOUSE_NIGHT_MAX_LEAD_DAYS,
   INHOUSE_NIGHT_NOTE_MAX,
   currentInhouseNight,
@@ -19,6 +27,8 @@ import {
   inhouseNightNote,
   inhouseNightPhase,
   inhouseNightPreviewText,
+  inhouseNightRsvpControlKind,
+  inhouseNightRsvpNeedsDiscord,
   inhouseNightRsvpOpen,
   inhouseNightTimeProblem,
   nextInhouseNight,
@@ -136,9 +146,78 @@ describe("who's coming", () => {
   });
 });
 
+describe("I'm in needs a linked Discord", () => {
+  it("asks only a player without one, and only where accounts can be linked", () => {
+    expect(inhouseNightRsvpNeedsDiscord({ linkingConfigured: true, linked: false })).toBe(true);
+    expect(inhouseNightRsvpNeedsDiscord({ linkingConfigured: true, linked: true })).toBe(false);
+    // A preview or a bare checkout can't link anyone, and nobody could say it.
+    expect(inhouseNightRsvpNeedsDiscord({ linkingConfigured: false, linked: false })).toBe(false);
+  });
+
+  it("links through the account link, which comes back to the invite", () => {
+    expect(INHOUSE_NIGHT_LINK_DISCORD_PATH).toBe("/api/auth/discord?next=%2Finhouse%3Fimin%3D1");
+    const next = new URL(INHOUSE_NIGHT_LINK_DISCORD_PATH, "https://ggd2l.test").searchParams.get(
+      "next",
+    );
+    expect(safeReturnPath(next)).toBe(INHOUSE_NIGHT_INVITE_PATH);
+    // The return path rides Discord's round trip in the OAuth cookie, query
+    // and all, and a full success lands back on the invite.
+    const packed = packOauthCookie(randomOauthValue(), randomOauthValue(), "player-1", next);
+    expect(unpackOauthCookie(packed)?.next).toBe(INHOUSE_NIGHT_INVITE_PATH);
+    expect(oauthLandingPath("linked", INHOUSE_NIGHT_INVITE_PATH)).toBe(INHOUSE_NIGHT_INVITE_PATH);
+    expect(oauthLandingPath("joined", INHOUSE_NIGHT_INVITE_PATH)).toBe(INHOUSE_NIGHT_INVITE_PATH);
+    expect(oauthLandingPath("taken", INHOUSE_NIGHT_INVITE_PATH)).toBe("/me?discord=taken");
+  });
+
+  it("offers the link only to a player who isn't in, and never hides taking it back", () => {
+    const kind = (input: Partial<Parameters<typeof inhouseNightRsvpControlKind>[0]>) =>
+      inhouseNightRsvpControlKind({
+        open: true,
+        signedIn: true,
+        mine: false,
+        needsDiscord: false,
+        ...input,
+      });
+    expect(kind({})).toBe("toggle");
+    expect(kind({ needsDiscord: true })).toBe("link");
+    // In without a link (from before the rule): the pressed toggle, so they
+    // can take it back, before the night and once it's on.
+    expect(kind({ needsDiscord: true, mine: true })).toBe("toggle");
+    expect(kind({ needsDiscord: true, mine: true, open: false })).toBe("toggle");
+    expect(kind({ signedIn: false })).toBe("sign-in");
+    expect(kind({ open: false })).toBe("none");
+    expect(kind({ open: false, needsDiscord: true })).toBe("none");
+  });
+
+  it("has every I'm in on the bar and the card follow the rule, and the invite ask, not bounce", () => {
+    const [night] = sourceFiles("src/components/inhouse-night.tsx", 1);
+    // Both controls (Home's bar and /inhouse's card) are told whether the
+    // viewer must link, from the one loader, and the control decides by the
+    // one rule.
+    expect(night.text.match(/<InhouseNightRsvpControl\b/g)).toHaveLength(2);
+    expect(night.text.match(/needsDiscord=\{needsDiscord\}/g)).toHaveLength(2);
+    expect(night.text.match(/inhouseNightNeedsDiscordFor\(/g)).toHaveLength(2);
+    expect(night.text).toMatch(/needsDiscord,\n\s*\}\);/);
+    expect(night.text).toContain("inhouseNightRsvpControlKind({");
+    const [invite] = sourceFiles("src/components/inhouse-night-invite.tsx", 1);
+    expect(invite.text).toContain('action === "link"');
+    // Reading the address to scrub `imin` is fine; going anywhere is not.
+    expect(invite.text).not.toMatch(
+      /location\.(assign|replace)\(|location\.href\s*=(?!=)|router\.(push|replace)\(/,
+    );
+  });
+});
+
 describe("the invite link", () => {
   const act = (input: Partial<Parameters<typeof inhouseNightInviteAction>[0]>) =>
-    inhouseNightInviteAction({ param: "1", phase: "upcoming", signedIn: true, mine: false, ...input });
+    inhouseNightInviteAction({
+      param: "1",
+      phase: "upcoming",
+      signedIn: true,
+      mine: false,
+      needsDiscord: false,
+      ...input,
+    });
 
   it("says I'm in for a signed-in player who isn't on the list yet", () => {
     expect(act({})).toBe("rsvp");
@@ -149,6 +228,14 @@ describe("the invite link", () => {
     expect(act({ signedIn: false })).toBe("sign-in");
     expect(safeReturnPath(INHOUSE_NIGHT_INVITE_PATH)).toBe("/inhouse?imin=1");
     expect(signInHref(INHOUSE_NIGHT_INVITE_PATH)).toBe("/login?next=%2Finhouse%3Fimin%3D1");
+  });
+
+  it("sends a signed-in player without a linked Discord to link it first", () => {
+    expect(act({ needsDiscord: true })).toBe("link");
+    // Already in (from before the rule), on, or signed out: as before.
+    expect(act({ needsDiscord: true, mine: true })).toBe("already-in");
+    expect(act({ needsDiscord: true, phase: "on" })).toBe("join");
+    expect(act({ needsDiscord: true, signedIn: false })).toBe("sign-in");
   });
 
   it("joins the queue once the night is on, signed in or not", () => {

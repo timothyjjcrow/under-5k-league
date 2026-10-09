@@ -6,6 +6,7 @@ import {
   DISCORD_OAUTH_MAX_AGE,
   buildDiscordAuthUrl,
   codeChallengeS256,
+  discordLinkingConfigured,
   packOauthCookie,
   randomOauthValue,
 } from "@/lib/discord-oauth";
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest) {
   }
 
   const clientId = process.env.DISCORD_CLIENT_ID;
-  if (!clientId || !process.env.DISCORD_CLIENT_SECRET) {
+  if (!clientId || !discordLinkingConfigured()) {
     return NextResponse.redirect(new URL("/me?discord=unconfigured", req.url));
   }
 

@@ -521,6 +521,44 @@ describe("the inhouse night's server event", () => {
     expect(await guildEventInterested(EVENT, 1_000 + 2 * 60_000)).toHaveLength(3);
   });
 
+  it("leaves bots out: they aren't coming", async () => {
+    respond = () => ({
+      status: 200,
+      body: [
+        { user: { id: "900000000000004001", username: "player" } },
+        { user: { id: "900000000000004002", username: "ggd2l", bot: true } },
+        { user: { id: "900000000000004003", bot: false } },
+        { user: { id: "not-an-id", username: "junk" } },
+        null,
+      ],
+    });
+    expect(await guildEventInterested(EVENT)).toEqual([
+      "900000000000004001",
+      "900000000000004003",
+    ]);
+  });
+
+  it("pages after a bot that ends a full page", async () => {
+    // The cursor is the page's last user, bot or not, so nobody is read twice.
+    const page = (from: number, size: number) =>
+      Array.from({ length: size }, (_, i) => ({
+        user: {
+          id: String(BigInt("900000000000005000") + BigInt(from + i)),
+          username: `m${from + i}`,
+          bot: from + i === 99,
+        },
+      }));
+    respond = (r) => ({
+      status: 200,
+      body: r.url.includes("after=") ? page(100, 3) : page(0, 100),
+    });
+    expect(await guildEventInterested(EVENT)).toHaveLength(102);
+    expect(recorded.map((r) => r.url)).toEqual([
+      `/guilds/${GUILD}/scheduled-events/${EVENT}/users?limit=100`,
+      `/guilds/${GUILD}/scheduled-events/${EVENT}/users?limit=100&after=900000000000005099`,
+    ]);
+  });
+
   it("pages past 100 after the last id, and stops at the page cap", async () => {
     // Discord returns members by ascending id; a full page means there may
     // be more after its last one.

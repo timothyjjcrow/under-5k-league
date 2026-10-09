@@ -119,11 +119,15 @@ export default async function InhousePage({
     // eslint-disable-next-line react-hooks/purity -- async server component
     const nowMs = Date.now();
     const night = await loadCurrentInhouseNight(nowMs);
+    // Only "join" is answered here, before anything renders; the night's
+    // card answers the rest (sign in, link Discord, "I'm in") with the
+    // viewer's own place on the list and Discord link.
     const action = inhouseNightInviteAction({
       param: "1",
       phase: night ? inhouseNightPhase(night, nowMs) : null,
       signedIn: !!user,
       mine: false,
+      needsDiscord: false,
     });
     if (action === "join") redirect("/inhouse?join=1");
   }

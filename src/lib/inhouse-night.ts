@@ -119,6 +119,50 @@ export function inhouseNightRsvpOpen(night: InhouseNight, nowMs: number): boolea
 }
 
 /**
+ * Saying "I'm in" needs a linked Discord account (Tim's call, 2026-10-09):
+ * the site then knows a player who also marked the Discord event Interested
+ * is one person, not two, and the start post can ping everyone on its list.
+ * Only where this deployment can link accounts at all
+ * (discordLinkingConfigured), or nobody could say it. Taking it back never
+ * needs one.
+ */
+export function inhouseNightRsvpNeedsDiscord(input: {
+  linkingConfigured: boolean;
+  /** The player has a linked (OAuth-proven) Discord account. */
+  linked: boolean;
+}): boolean {
+  return input.linkingConfigured && !input.linked;
+}
+
+/** What the viewer's "I'm in" is (InhouseNightRsvpControl). */
+export type InhouseNightRsvpControlKind =
+  /** Nothing: the night has started and they aren't in. */
+  | "none"
+  /** Signed out: a sign-in that comes back to the invite. */
+  | "sign-in"
+  /** Not in and no linked Discord: the account link, which comes back to
+   *  the invite (INHOUSE_NIGHT_LINK_DISCORD_PATH). */
+  | "link"
+  /** The toggle, pressed once they're in. Anyone already in gets it, linked
+   *  or not, so taking it back is never hidden. */
+  | "toggle";
+
+export function inhouseNightRsvpControlKind(input: {
+  /** inhouseNightRsvpOpen: the night is still ahead. */
+  open: boolean;
+  signedIn: boolean;
+  /** Already on the night's list. */
+  mine: boolean;
+  /** inhouseNightRsvpNeedsDiscord for this viewer. */
+  needsDiscord: boolean;
+}): InhouseNightRsvpControlKind {
+  if (input.mine) return "toggle";
+  if (!input.open) return "none";
+  if (!input.signedIn) return "sign-in";
+  return input.needsDiscord ? "link" : "toggle";
+}
+
+/**
  * Who's coming, from both places a player can say so: "I'm in" on the site
  * and Interested on the night's Discord event. Discord lets members mark only
  * themselves, so the two lists stay apart and are added up here. A player on
@@ -176,6 +220,16 @@ export function inhouseNightHeadcountSources(count: InhouseNightHeadcount): stri
  */
 export const INHOUSE_NIGHT_INVITE_PATH = "/inhouse?imin=1";
 
+/**
+ * Where "I'm in" takes a player who must link Discord first: the account
+ * link (`/api/auth/discord`), which comes back to the invite once Discord
+ * says yes, and the invite then says "I'm in" for them. A link that fails
+ * lands on My account, which says why.
+ */
+export const INHOUSE_NIGHT_LINK_DISCORD_PATH = `/api/auth/discord?next=${encodeURIComponent(
+  INHOUSE_NIGHT_INVITE_PATH,
+)}`;
+
 export type InhouseNightInviteAction =
   /** Say "I'm in" for them, once, from the page. */
   | "rsvp"
@@ -183,6 +237,10 @@ export type InhouseNightInviteAction =
   | "already-in"
   /** Signed out: the card's sign-in comes back to the invite. */
   | "sign-in"
+  /** Signed in without a linked Discord: say so, beside the card's "Link
+   *  Discord to say you're in", a button they press (never a bounce to
+   *  Discord on load); the account link comes back to the invite. */
+  | "link"
   /** The night is on: the queue is the way in (`/inhouse?join=1`). */
   | "join"
   /** No invite in the link, or no night to answer it. */
@@ -197,11 +255,14 @@ export function inhouseNightInviteAction(input: {
   signedIn: boolean;
   /** Already on the night's list. */
   mine: boolean;
+  /** Must link Discord before saying "I'm in" (inhouseNightRsvpNeedsDiscord). */
+  needsDiscord: boolean;
 }): InhouseNightInviteAction {
   if (input.param !== "1" || !input.phase || input.phase === "over") return "none";
   if (input.phase === "on") return "join";
   if (!input.signedIn) return "sign-in";
-  return input.mine ? "already-in" : "rsvp";
+  if (input.mine) return "already-in";
+  return input.needsDiscord ? "link" : "rsvp";
 }
 
 /**

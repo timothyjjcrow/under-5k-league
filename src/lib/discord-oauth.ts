@@ -19,6 +19,13 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { deploymentCookieName } from "./cookie-policy";
 import { safeReturnPath } from "./return-path";
 
+/** Whether this deployment can link Discord accounts at all: both halves of
+ *  the OAuth client are set (production; not previews or a bare checkout).
+ *  /api/auth/discord and every rule that asks a player to link go by this. */
+export function discordLinkingConfigured(): boolean {
+  return !!process.env.DISCORD_CLIENT_ID && !!process.env.DISCORD_CLIENT_SECRET;
+}
+
 const AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
 const TOKEN_URL = "https://discord.com/api/v10/oauth2/token";
 const ME_URL = "https://discord.com/api/v10/users/@me";

@@ -62,6 +62,12 @@ export default defineConfig({
       DATABASE_URL: MID_DB_URL,
       FIXTURE_MODE: "regular",
       ALLOW_DEV_LOGIN: "true",
+      // Discord account linking switched on with placeholder app values (no
+      // real client), the way both leagues run it: the inhouse night's "I'm
+      // in" needs a linked account wherever one can be linked, and the spec
+      // stops at Discord's door instead of calling it.
+      DISCORD_CLIENT_ID: "e2e-discord-client",
+      DISCORD_CLIENT_SECRET: "e2e-discord-placeholder",
       // This suite compiles most post-draft routes in one dev-server process.
       // Give Next's dev worker the same test-only heap ceiling as the primary
       // e2e suite so it does not restart between late-suite navigations.
