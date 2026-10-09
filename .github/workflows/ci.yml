@@ -168,7 +168,10 @@ jobs:
     # "Concurrency: the two rules".
     services:
       postgres:
-        image: postgres:16
+        # Docker Hub's official postgres image, from Docker's own ECR Public
+        # mirror (same digest). Hub limits anonymous pulls per IP, which hosted
+        # runners share: on 2026-10-09 all five Postgres jobs failed to pull.
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           # The migration rehearsal has a deliberately narrow destructive
@@ -346,7 +349,8 @@ jobs:
         shard: [1, 2, 3, 4]
     services:
       postgres:
-        image: postgres:16
+        # Not Docker Hub: see the postgres job's service above.
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: ld2l_test
