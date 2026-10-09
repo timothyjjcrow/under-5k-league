@@ -27,6 +27,7 @@ import { runAfterResponse } from "./after-response";
 import { capacityInfo } from "./capacity";
 import { PLAYER_SIGNUPS_OPEN_UNTIL } from "./season-copy";
 import { POLL_ANCHOR } from "./match-night-poll";
+import { INHOUSE_NIGHT_INVITE_PATH } from "./inhouse-night";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -725,6 +726,12 @@ export function joinLink(): string {
   return `${resolveSiteUrl()}/inhouse?join=1`;
 }
 
+/** The inhouse night's invite: "I'm in" before the night, the queue once it's
+ *  on (INHOUSE_NIGHT_INVITE_PATH, inhouseNightInviteAction). */
+export function inhouseNightInviteLink(): string {
+  return `${resolveSiteUrl()}${INHOUSE_NIGHT_INVITE_PATH}`;
+}
+
 export function inhouseQueueMessage(
   present: number,
   lobbySize: number,
@@ -738,9 +745,10 @@ export function inhouseQueueMessage(
  * An admin set an inhouse night (inhouse-night.ts). Pings the opt-in inhouse
  * role: people who asked to hear about inhouses. The time is Discord
  * timestamps, so each reader sees their own clock and a live countdown. The
- * Discord event link stays bare so it unfurls as the event, with its
- * Interested button; the site link keeps its angle brackets. The note is the
- * admin's own text, so it isn't escaped.
+ * invite link says "I'm in" on the site and joins the queue once the night is
+ * on, so it is the one site link. The Discord event link stays bare so it
+ * unfurls as the event, with its Interested button; the site link keeps its
+ * angle brackets. The note is the admin's own text, so it isn't escaped.
  */
 export function inhouseNightMessage(m: {
   startsAtMs: number;
@@ -752,8 +760,8 @@ export function inhouseNightMessage(m: {
   return [
     `${rolePrefix(m.roleId)}🎮 **Inhouse night** <t:${epoch}:F> (<t:${epoch}:R>)`,
     ...(m.note ? [m.note] : []),
-    `Join the queue on the site when it starts: <${joinLink()}>`,
-    ...(m.eventUrl ? [`Coming? Mark yourself interested: ${m.eventUrl}`] : []),
+    `Coming? Tap to say you're in, and the same link joins the queue once it starts: <${inhouseNightInviteLink()}>`,
+    ...(m.eventUrl ? [`Or mark yourself interested here: ${m.eventUrl}`] : []),
   ].join("\n");
 }
 

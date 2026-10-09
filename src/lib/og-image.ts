@@ -287,6 +287,21 @@ export function playerPictureText(
   };
 }
 
+/** What the inhouse night's picture shows (OgInhouseNightCard): /inhouse's
+ *  preview while a night is set, so the invite link unfurls as the night. */
+export type InhouseNightCardData = {
+  /** The night has started: the picture asks them into the queue. */
+  on: boolean;
+  /** leagueMatchTimeParts: "Fri", "Oct 9", "8:00 PM Eastern" (the league's clock). */
+  day: string;
+  date: string;
+  time: string;
+  /** The admin's note, "" for none. */
+  note: string;
+  /** "12 coming" (inhouseNightHeadcountText), or null. */
+  headcount: string | null;
+};
+
 /** What a season's picture shows (OgSeasonCard). */
 export type SeasonCardData = {
   seasonName: string;

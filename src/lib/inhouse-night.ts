@@ -168,6 +168,70 @@ export function inhouseNightHeadcountSources(count: InhouseNightHeadcount): stri
   return `${count.site} on the site, ${count.discordOnly} on Discord`;
 }
 
+/**
+ * The night's invite link, the one an admin pastes in Discord: it unfurls as
+ * the night (the /inhouse page's preview and picture), and opening it says
+ * "I'm in" for the player (inhouseNightInviteAction). Sign-in links on the
+ * bar and the card come back to it, so a new player's first visit ends in.
+ */
+export const INHOUSE_NIGHT_INVITE_PATH = "/inhouse?imin=1";
+
+export type InhouseNightInviteAction =
+  /** Say "I'm in" for them, once, from the page. */
+  | "rsvp"
+  /** They already are: say so. */
+  | "already-in"
+  /** Signed out: the card's sign-in comes back to the invite. */
+  | "sign-in"
+  /** The night is on: the queue is the way in (`/inhouse?join=1`). */
+  | "join"
+  /** No invite in the link, or no night to answer it. */
+  | "none";
+
+/** What opening the invite link does for this viewer. */
+export function inhouseNightInviteAction(input: {
+  /** The link's `imin` value (singleSearchParam). */
+  param: string | null | undefined;
+  /** The night on show (currentInhouseNight), or none. */
+  phase: InhouseNightPhase | null;
+  signedIn: boolean;
+  /** Already on the night's list. */
+  mine: boolean;
+}): InhouseNightInviteAction {
+  if (input.param !== "1" || !input.phase || input.phase === "over") return "none";
+  if (input.phase === "on") return "join";
+  if (!input.signedIn) return "sign-in";
+  return input.mine ? "already-in" : "rsvp";
+}
+
+/**
+ * The /inhouse link preview while a night is set (Discord, X and Slack show
+ * og:title and og:description): when it is on the league's clock, who's
+ * coming, the admin's note, and what the link does.
+ */
+export function inhouseNightPreviewText(input: {
+  /** The start on the league's clock, zone named (formatLeagueMatchTime). */
+  when: string;
+  phase: Exclude<InhouseNightPhase, "over">;
+  note: string;
+  /** inhouseNightHeadcountText, or null. */
+  headcount: string | null;
+}): { title: string; description: string } {
+  // A note typed without a full stop would run into the next sentence.
+  const note = input.note && !/[.!?…]$/.test(input.note) ? `${input.note}.` : input.note;
+  const lead = [note, input.headcount ? `${input.headcount}.` : ""]
+    .filter(Boolean)
+    .join(" ");
+  const ask =
+    input.phase === "on"
+      ? "It's on now: open this to join the queue. The lobby fires at ten players and captains draft the teams."
+      : "Open this to say you're in, then queue up when it starts. Inhouse 5v5s: the lobby fires at ten players and captains draft the teams.";
+  return {
+    title: input.phase === "on" ? "Inhouse night is on" : `Inhouse night · ${input.when}`,
+    description: [lead, ask].filter(Boolean).join(" "),
+  };
+}
+
 /** Why a start time can't be saved, or null when it can. */
 export function inhouseNightTimeProblem(startsAtMs: number, nowMs: number): string | null {
   if (!Number.isFinite(startsAtMs) || startsAtMs <= nowMs) {

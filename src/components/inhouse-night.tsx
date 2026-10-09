@@ -2,6 +2,10 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { setInhouseNightRsvpAction } from "@/app/actions/inhouse-night-rsvp";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import {
+  CopyInhouseNightInvite,
+  InhouseNightInviteRsvp,
+} from "@/components/inhouse-night-invite";
 import { Countdown } from "@/components/countdown";
 import { LocalTime } from "@/components/local-time";
 import {
@@ -15,19 +19,20 @@ import {
 } from "@/components/ui";
 import { getSessionUser, type SessionUser } from "@/lib/auth";
 import { INHOUSE } from "@/lib/constants";
-import { guildEventInterested } from "@/lib/discord-roles";
 import { queuePresentCutoff } from "@/lib/inhouse";
 import {
+  INHOUSE_NIGHT_INVITE_PATH,
   currentInhouseNight,
   inhouseNightGoogleCalendarUrl,
-  inhouseNightHeadcount,
   inhouseNightHeadcountSources,
   inhouseNightHeadcountText,
+  inhouseNightInviteAction,
   inhouseNightPhase,
   inhouseNightRsvpOpen,
   type InhouseNight,
 } from "@/lib/inhouse-night";
 import {
+  inhouseNightHeadcountFor,
   readInhouseNightRsvps,
   type InhouseNightRsvpPlayer,
 } from "@/lib/inhouse-night-rsvp-service";
@@ -91,10 +96,7 @@ async function Headcount({
   sources: boolean;
   className?: string;
 }) {
-  const discordIds = night.discordEventId
-    ? await guildEventInterested(night.discordEventId)
-    : [];
-  const count = inhouseNightHeadcount(siteDiscordIds, discordIds);
+  const count = await inhouseNightHeadcountFor(night, siteDiscordIds);
   const text = inhouseNightHeadcountText(count);
   if (!text) return null;
   const from = sources ? inhouseNightHeadcountSources(count) : null;
@@ -132,28 +134,28 @@ export function InhouseNightHeadcount({
  * works. Pressed once they're in, and pressing it again takes them off the
  * list. Offered while the night is ahead; once it's on, only someone already
  * in still sees it, so taking it back is never hidden. Signed out, it's a
- * sign-in that comes back here.
+ * sign-in that comes back to the invite link, which says "I'm in" for them.
  */
 export function InhouseNightRsvpControl({
   night,
   user,
   mine,
   nowMs,
-  returnTo,
   signedOutLabel = "I'm in",
 }: {
   night: InhouseNight;
   user: SessionUser | null;
   mine: boolean;
   nowMs: number;
-  /** The page a signed-out viewer comes back to after signing in. */
-  returnTo: string;
   signedOutLabel?: string;
 }) {
   if (!mine && !inhouseNightRsvpOpen(night, nowMs)) return null;
   if (!user) {
     return (
-      <Link href={signInHref(returnTo)} className={buttonClasses("primary", "sm")}>
+      <Link
+        href={signInHref(INHOUSE_NIGHT_INVITE_PATH)}
+        className={buttonClasses("primary", "sm")}
+      >
         {signedOutLabel}
       </Link>
     );
@@ -236,13 +238,7 @@ export async function InhouseNightBar({
           Join the queue <LinkArrow />
         </Link>
       ) : (
-        <InhouseNightRsvpControl
-          night={night}
-          user={user}
-          mine={mine}
-          nowMs={nowMs}
-          returnTo="/"
-        />
+        <InhouseNightRsvpControl night={night} user={user} mine={mine} nowMs={nowMs} />
       )}
     </section>
   );
@@ -278,8 +274,11 @@ function WhoIsIn({ players }: { players: InhouseNightRsvpPlayer[] }) {
   );
 }
 
-/** The card at the top of /inhouse while a night is set; nothing otherwise. */
-export async function InhouseNightCard() {
+/**
+ * The card at the top of /inhouse while a night is set; nothing otherwise.
+ * Opened from the invite link (`invite`), it answers the invite once.
+ */
+export async function InhouseNightCard({ invite = false }: { invite?: boolean } = {}) {
   // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
   const night = await loadCurrentInhouseNight(nowMs);
@@ -288,8 +287,15 @@ export async function InhouseNightCard() {
     getSessionUser(),
     readInhouseNightRsvps(night.id),
   ]);
-  const on = inhouseNightPhase(night, nowMs) === "on";
+  const phase = inhouseNightPhase(night, nowMs);
+  const on = phase === "on";
   const mine = !!user && rsvps.players.some((player) => player.id === user.id);
+  const inviteAction = inhouseNightInviteAction({
+    param: invite ? "1" : null,
+    phase,
+    signedIn: !!user,
+    mine,
+  });
   const eventUrl = inhouseNightEventUrl(night);
   const google = inhouseNightGoogleCalendarUrl(night, resolveSiteUrl(), LEAGUE_CONFIG.name);
   return (
@@ -316,7 +322,6 @@ export async function InhouseNightCard() {
             user={user}
             mine={mine}
             nowMs={nowMs}
-            returnTo="/inhouse"
             signedOutLabel="Sign in to say you're in"
           />
           {mine ? (
@@ -332,7 +337,9 @@ export async function InhouseNightCard() {
           />
         </div>
         {rsvps.players.length > 0 ? <WhoIsIn players={rsvps.players} /> : null}
-        <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+        {invite ? <InhouseNightInviteRsvp nightId={night.id} action={inviteAction} /> : null}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <CopyInhouseNightInvite />
           {eventUrl ? (
             <a href={eventUrl} target="_blank" rel="noreferrer" className={textLink()}>
               Or mark yourself interested on Discord <LinkArrow out />

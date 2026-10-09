@@ -4,14 +4,15 @@ import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 // The inhouse night end to end: an admin plans one on /admin (the start box
 // suggests the coming Friday at 8 PM on the league's clock), Home's bar and
 // /inhouse's card show it with calendar links, a player says "I'm in" from
-// the bar, takes it back on /inhouse and says it again, and the admin
-// cancels it. The suite has no Discord, so nothing posts and the headcount is
+// the bar, takes it back on /inhouse and says it again, a second player
+// arrives through the invite link, and the admin cancels it. The suite has no Discord, so nothing posts and the headcount is
 // the site's alone. A zz- spec because it writes league-wide state Home
 // renders; it cancels its night at the end.
 
 const NOTE = "First one (e2e): all ranks welcome";
 const ADMIN = "name=Night+Admin&steamId=76561190000994201&admin=1";
 const PLAYER = "name=Night+Player&steamId=76561190000994202";
+const INVITED = "name=Invited+Player&steamId=76561190000994203";
 
 async function signIn(page: Page, query: string, redirect: string) {
   await page.goto(`/api/auth/dev?${query}&redirect=${encodeURIComponent(redirect)}`);
@@ -29,6 +30,8 @@ async function openNightSection(page: Page) {
 
 test("an admin plans an inhouse night that Home and the inhouse page show, then cancels it", async ({
   page,
+  context,
+  baseURL,
 }) => {
   test.slow();
   const noErrors = trackPageErrors(page);
@@ -62,9 +65,11 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   const barTop = (await bar.boundingBox())!.y;
   const heroTop = (await page.getByRole("heading", { level: 1 }).boundingBox())!.y;
   expect(barTop).toBeLessThan(heroTop);
+  // Signed out, "I'm in" signs in and comes back through the invite link,
+  // which then says it for them.
   await expect(bar.getByRole("link", { name: "I'm in" })).toHaveAttribute(
     "href",
-    "/login?next=%2F",
+    "/login?next=%2Finhouse%3Fimin%3D1",
   );
   await expect(bar.getByRole("link", { name: "Inhouse night" })).toHaveAttribute(
     "href",
@@ -127,12 +132,50 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   await expect(cardToggle).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText("Said I'm in on the site:")).toBeVisible();
 
-  // 5. Cancel it: the confirm counts who said they're in, it comes off Home
+  // 5. The invite link: it unfurls as the night with its own picture, the
+  //    card copies it, and a new player who opens it is in after signing in,
+  //    with the invite scrubbed from the address so a refresh can't repeat it.
+  await expect(page.locator('meta[property="og:title"]')).toHaveAttribute(
+    "content",
+    /^Inhouse night · /,
+  );
+  await expect(page.locator('meta[property="og:description"]')).toHaveAttribute(
+    "content",
+    /1 coming\. Open this to say you're in/,
+  );
+  const picture = await page.locator('meta[property="og:image"]').getAttribute("content");
+  expect(picture).toMatch(/\/inhouse\/opengraph-image/);
+  const drawn = await page.request.get(new URL(picture!).pathname + new URL(picture!).search);
+  expect(drawn.status()).toBe(200);
+  expect(drawn.headers()["content-type"]).toBe("image/png");
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy invite link" }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: /paste it in Discord and it shows the night/ }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    new URL("/inhouse?imin=1", baseURL).href,
+  );
+
+  await page.context().clearCookies();
+  await signIn(page, INVITED, "/inhouse?imin=1");
+  await expect(
+    page.getByRole("status").filter({ hasText: /^You're in for / }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "I'm in" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page).toHaveURL(/\/inhouse$/);
+  await expect(page.getByRole("link", { name: "Invited Player" })).toBeVisible();
+
+  // 6. Cancel it: the confirm counts who said they're in, it comes off Home
   //    and the calendar file is gone.
   await signIn(page, ADMIN, "/admin");
   section = await openNightSection(page);
   await expect(section.getByText(NOTE)).toBeVisible();
-  await expect(section.getByText("1 said they're in on the site.")).toBeVisible();
+  await expect(section.getByText("2 said they're in on the site.")).toBeVisible();
+  await expect(section.getByRole("button", { name: "Copy invite link" })).toBeVisible();
   let confirmText = "";
   page.once("dialog", (dialog) => {
     confirmText = dialog.message();
@@ -144,7 +187,7 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
       .getByRole("status")
       .filter({ hasText: /cancelled: Home and the inhouse page no longer show it\./ }),
   ).toBeVisible();
-  expect(confirmText).toContain("1 player said they're in on the site; their list goes with it.");
+  expect(confirmText).toContain("2 players said they're in on the site; their list goes with it.");
   await page.goto("/");
   await expect(page.getByRole("link").filter({ hasText: "Inhouse" }).first()).toBeVisible();
   await expect(page.getByRole("region", { name: "Inhouse night" })).toHaveCount(0);
