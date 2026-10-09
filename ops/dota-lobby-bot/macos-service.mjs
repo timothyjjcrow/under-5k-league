@@ -12,6 +12,8 @@ import { parseEnv } from "node:util";
 export const LABEL = "com.ggd2l.dota-lobby-bot";
 const workerDir = dirname(fileURLToPath(import.meta.url));
 const USAGE = "Usage: node macos-service.mjs install [--keep-awake] [--instance eu] | status|stop|start|uninstall [--instance eu]";
+// launchd gives the bot this long to exit after SIGTERM, then kills it.
+const EXIT_TIMEOUT_SECONDS = 15;
 
 export function serviceInstance(instance) {
   if (instance !== undefined && !/^[a-z][a-z0-9-]{0,31}$/.test(instance))
@@ -62,7 +64,7 @@ ${argumentsList.map((argument) => `    <string>${xml(argument)}</string>`).join(
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>30</integer>
-  <key>ExitTimeOut</key><integer>15</integer>
+  <key>ExitTimeOut</key><integer>${EXIT_TIMEOUT_SECONDS}</integer>
   <key>ProcessType</key><string>Background</string>
   <key>Umask</key><integer>63</integer>
   <key>StandardOutPath</key><string>${xml(resolve(logDir, "stdout.log"))}</string>
@@ -148,6 +150,29 @@ function launchctl(args, optional = false) {
   }
 }
 
+/**
+ * `launchctl bootout` can return while launchd is still tearing the job down,
+ * and `print` finds the service until it is gone. A `start` in that window
+ * would enable and kickstart the dying job and then lose it. The bound
+ * outlasts ExitTimeOut, after which launchd kills the job.
+ */
+export function waitForUnload({
+  probe, sleep, now, timeoutMs = (EXIT_TIMEOUT_SECONDS + 5) * 1000, intervalMs = 250,
+}) {
+  const deadline = now() + timeoutMs;
+  while (probe()) {
+    // The probe only answers loaded or not, so no launchctl output reaches this.
+    if (now() >= deadline)
+      throw new Error(`The Mac service did not unload within ${timeoutMs / 1000} seconds. Run status until it shows "Loaded: no", then run this command again.`);
+    sleep(intervalMs);
+  }
+}
+
+// Blocks like the execFileSync calls around it; nothing else runs in this helper.
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 function describeService(service, plistPath) {
   const output = launchctl(["print", service], true);
   console.log(`LaunchAgent: ${existsSync(plistPath) ? "installed" : "not installed"}`);
@@ -194,16 +219,20 @@ export function main(args = process.argv.slice(2)) {
   const launchAgentsDir = resolve(homedir(), "Library/LaunchAgents");
   const plistPath = resolve(launchAgentsDir, `${label}.plist`);
   if (command === "status") return describeService(service, plistPath);
+  const isLoaded = () => launchctl(["print", service], true) !== null;
 
   if (command === "stop" || command === "uninstall") {
     launchctl(["disable", service]);
-    if (launchctl(["print", service], true) !== null) launchctl(["bootout", service]);
+    if (isLoaded()) {
+      launchctl(["bootout", service]);
+      waitForUnload({ probe: isLoaded, sleep: sleepSync, now: () => performance.now() });
+    }
     if (command === "uninstall" && existsSync(plistPath)) unlinkSync(plistPath);
     console.log(command === "stop" ? "Bot service stopped and disabled until you run start." : "Mac service removed. Bot configuration, Steam session, and logs are retained.");
     return;
   }
 
-  const loaded = launchctl(["print", service], true) !== null;
+  const loaded = isLoaded();
   if (command === "start" && loaded) {
     launchctl(["enable", service]);
     launchctl(["kickstart", service]);

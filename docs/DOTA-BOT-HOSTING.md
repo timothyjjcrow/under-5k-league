@@ -39,6 +39,8 @@ node macos-service.mjs stop
 node macos-service.mjs start
 ```
 
+`stop` and `uninstall` return only once launchd has finished unloading the bot, usually within a few seconds, so `start` can follow `stop` straight away. `launchctl bootout` returns before that teardown ends; on October 9, 2026 a `start` run in that window kickstarted the dying job and left the service unloaded. If `stop` reports that the service did not unload within 20 seconds, run `status` until it shows `Loaded: no` before `start`.
+
 Stopping the bot does not disable the website's ordinary in-house queue or manual Dota hosting. Before changing hosts or Steam accounts, finish/release any bot lobby and stop the old worker. Admins can check the connection indicator on `/inhouse`.
 
 ## Moving to a cloud host
