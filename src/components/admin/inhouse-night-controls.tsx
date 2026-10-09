@@ -1,6 +1,7 @@
 import { cancelInhouseNight, setInhouseNight } from "@/app/actions/admin-inhouse-night";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { InhouseNightHeadcount } from "@/components/inhouse-night";
+import { CopyInhouseNightInvite } from "@/components/inhouse-night-invite";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
 import { CardBody } from "@/components/ui";
@@ -92,6 +93,14 @@ export function InhouseNightControls({
               />
             </p>
           ) : null}
+          {/* The link to paste in Discord: it unfurls as the night, and
+              opening it says "I'm in" (the queue once the night is on). */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1">
+            <CopyInhouseNightInvite />
+            <span className="text-xs text-muted">
+              Paste it in Discord: it shows the night, and one tap says they&apos;re in.
+            </span>
+          </div>
         </div>
       ) : night ? (
         <p className="text-sm text-muted">Last inhouse night: {when(night)}</p>

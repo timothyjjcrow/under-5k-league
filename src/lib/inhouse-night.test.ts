@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { safeReturnPath } from "./return-path";
+import { signInHref } from "./sign-in";
 import {
+  INHOUSE_NIGHT_INVITE_PATH,
   INHOUSE_NIGHT_LENGTH_MS,
   INHOUSE_NIGHT_MAX_LEAD_DAYS,
   INHOUSE_NIGHT_NOTE_MAX,
@@ -12,8 +15,10 @@ import {
   inhouseNightHeadcount,
   inhouseNightHeadcountSources,
   inhouseNightHeadcountText,
+  inhouseNightInviteAction,
   inhouseNightNote,
   inhouseNightPhase,
+  inhouseNightPreviewText,
   inhouseNightRsvpOpen,
   inhouseNightTimeProblem,
   nextInhouseNight,
@@ -128,6 +133,64 @@ describe("who's coming", () => {
     const discordOnly = inhouseNightHeadcount([], [A, B]);
     expect(inhouseNightHeadcountText(discordOnly)).toBe("2 coming");
     expect(inhouseNightHeadcountSources(discordOnly)).toBeNull();
+  });
+});
+
+describe("the invite link", () => {
+  const act = (input: Partial<Parameters<typeof inhouseNightInviteAction>[0]>) =>
+    inhouseNightInviteAction({ param: "1", phase: "upcoming", signedIn: true, mine: false, ...input });
+
+  it("says I'm in for a signed-in player who isn't on the list yet", () => {
+    expect(act({})).toBe("rsvp");
+    expect(act({ mine: true })).toBe("already-in");
+  });
+
+  it("sends a signed-out player through sign-in, and the sign-in comes back to it", () => {
+    expect(act({ signedIn: false })).toBe("sign-in");
+    expect(safeReturnPath(INHOUSE_NIGHT_INVITE_PATH)).toBe("/inhouse?imin=1");
+    expect(signInHref(INHOUSE_NIGHT_INVITE_PATH)).toBe("/login?next=%2Finhouse%3Fimin%3D1");
+  });
+
+  it("joins the queue once the night is on, signed in or not", () => {
+    expect(act({ phase: "on" })).toBe("join");
+    expect(act({ phase: "on", signedIn: false })).toBe("join");
+    expect(act({ phase: "on", mine: true })).toBe("join");
+  });
+
+  it("does nothing without the invite or without a night to answer it", () => {
+    expect(act({ param: undefined })).toBe("none");
+    expect(act({ param: null })).toBe("none");
+    expect(act({ param: "yes" })).toBe("none");
+    expect(act({ phase: null })).toBe("none");
+    expect(act({ phase: "over" })).toBe("none");
+  });
+
+  it("unfurls as the night: when, who's coming, the note, and what the link does", () => {
+    expect(
+      inhouseNightPreviewText({
+        when: "Fri, Oct 9, 8:00 PM Eastern",
+        phase: "upcoming",
+        note: "All ranks welcome.",
+        headcount: "12 coming",
+      }),
+    ).toEqual({
+      title: "Inhouse night · Fri, Oct 9, 8:00 PM Eastern",
+      description:
+        "All ranks welcome. 12 coming. Open this to say you're in, then queue up when it starts. Inhouse 5v5s: the lobby fires at ten players and captains draft the teams.",
+    });
+    const on = inhouseNightPreviewText({
+      when: "Fri, Oct 9, 8:00 PM Eastern",
+      phase: "on",
+      note: "",
+      headcount: null,
+    });
+    expect(on.title).toBe("Inhouse night is on");
+    // A note typed without a full stop doesn't run into the next sentence.
+    expect(
+      inhouseNightPreviewText({ when: "x", phase: "upcoming", note: "come try it", headcount: null })
+        .description,
+    ).toMatch(/^come try it\. Open this/);
+    expect(on.description).toMatch(/^It's on now: open this to join the queue\./);
   });
 });
 

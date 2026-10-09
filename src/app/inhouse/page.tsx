@@ -1,5 +1,7 @@
+import type { Metadata } from "next";
 import { shareMetadata } from "@/lib/share-metadata";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Fragment, Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -30,7 +32,20 @@ import { singleSearchParam } from "@/lib/search-params";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
-import { InhouseNightCard } from "@/components/inhouse-night";
+import {
+  InhouseNightCard,
+  loadCurrentInhouseNight,
+} from "@/components/inhouse-night";
+import {
+  inhouseNightHeadcountText,
+  inhouseNightInviteAction,
+  inhouseNightPhase,
+  inhouseNightPreviewText,
+} from "@/lib/inhouse-night";
+import {
+  inhouseNightHeadcountFor,
+  readInhouseNightRsvps,
+} from "@/lib/inhouse-night-rsvp-service";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
 import { lobbyBotConnection } from "@/lib/dota-lobby-service";
 import { HeroVideo } from "@/components/hero-video";
@@ -54,24 +69,64 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
-export const metadata = shareMetadata(
-  "Inhouse",
-  "Pick-up Dota 2 games, drafted live: queue up, vote captains, draft teams, and play — results auto-record from OpenDota onto the Elo ladder.",
-  "/inhouse",
-);
+const INHOUSE_DESCRIPTION =
+  "Pick-up Dota 2 games, drafted live: queue up, vote captains, draft teams, and play — results auto-record from OpenDota onto the Elo ladder.";
+
+/**
+ * The link preview follows the planned inhouse night, so its invite link
+ * (INHOUSE_NIGHT_INVITE_PATH) unfurls in Discord as the night: when it is,
+ * who's coming and what the link does, with the night's own picture
+ * (opengraph-image.tsx). The tab keeps the page's name.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const nowMs = Date.now();
+  const night = await loadCurrentInhouseNight(nowMs);
+  if (!night) {
+    return shareMetadata("Inhouse", INHOUSE_DESCRIPTION, "/inhouse", { pageImage: true });
+  }
+  const { discordIds } = await readInhouseNightRsvps(night.id);
+  const count = await inhouseNightHeadcountFor(night, discordIds);
+  const preview = inhouseNightPreviewText({
+    when: formatLeagueMatchTime(new Date(night.startsAtMs), "full"),
+    phase: inhouseNightPhase(night, nowMs) === "on" ? "on" : "upcoming",
+    note: night.note,
+    headcount: inhouseNightHeadcountText(count),
+  });
+  return {
+    ...shareMetadata(preview.title, preview.description, "/inhouse", { pageImage: true }),
+    title: "Inhouse",
+  };
+}
 
 export default async function InhousePage({
   searchParams,
 }: {
-  searchParams: Promise<{ ladder?: string | string[] }>;
+  searchParams: Promise<{ ladder?: string | string[]; imin?: string | string[] }>;
 }) {
   const user = await getSessionUser();
+  const params = await searchParams;
   // Anything but the one known value is the default board, so a stale or
   // hand-edited link still lands on a ladder rather than an error.
   const ladderView: LadderView =
-    singleSearchParam((await searchParams).ladder) === "month"
+    singleSearchParam(params.ladder) === "month"
       ? "month"
       : "all";
+  // The inhouse night's invite link (?imin=1). Once the night is on the queue
+  // is the way in, so it becomes the one-tap join; before, the night's card
+  // answers it.
+  const invite = singleSearchParam(params.imin) === "1";
+  if (invite) {
+    // eslint-disable-next-line react-hooks/purity -- async server component
+    const nowMs = Date.now();
+    const night = await loadCurrentInhouseNight(nowMs);
+    const action = inhouseNightInviteAction({
+      param: "1",
+      phase: night ? inhouseNightPhase(night, nowMs) : null,
+      signedIn: !!user,
+      mine: false,
+    });
+    if (action === "join") redirect("/inhouse?join=1");
+  }
 
   // The player's most recent league signup MMR, if any (the join panel shows
   // it instead of an MMR field), and the medal so the join panel can explain
@@ -172,7 +227,7 @@ export default async function InhousePage({
             and the calendar and Discord links. One Setting read, streamed so
             it never holds up the room. */}
         <Suspense fallback={null}>
-          <InhouseNightCard />
+          <InhouseNightCard invite={invite} />
         </Suspense>
         <section
           id="live-room"

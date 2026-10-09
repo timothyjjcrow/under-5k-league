@@ -33,6 +33,7 @@ import {
   maskWebhookUrl,
   rolePrefix,
   joinLink,
+  inhouseNightInviteLink,
   webhookIdOf,
   webhookApiUrl,
   draftCancelledMessage,
@@ -1158,16 +1159,18 @@ describe("inhouse night messages", () => {
     expect(msg.split("\n")).toEqual([
       `<@&555555555555555555> 🎮 **Inhouse night** <t:${epoch}:F> (<t:${epoch}:R>)`,
       "First one: bring a friend",
-      `Join the queue on the site when it starts: <${joinLink()}>`,
+      // One site link: "I'm in" before the night, the queue once it's on.
+      `Coming? Tap to say you're in, and the same link joins the queue once it starts: <${inhouseNightInviteLink()}>`,
       // Bare, so Discord unfurls it as the event with its Interested button.
-      "Coming? Mark yourself interested: https://discord.com/events/111111111111111111/222222222222222222",
+      "Or mark yourself interested here: https://discord.com/events/111111111111111111/222222222222222222",
     ]);
+    expect(inhouseNightInviteLink()).toMatch(/\/inhouse\?imin=1$/);
   });
 
   it("leaves out the ping, note and event when there are none", () => {
     const msg = inhouseNightMessage({ startsAtMs, note: "", roleId: null, eventUrl: null });
     expect(msg).toBe(
-      `🎮 **Inhouse night** <t:${epoch}:F> (<t:${epoch}:R>)\nJoin the queue on the site when it starts: <${joinLink()}>`,
+      `🎮 **Inhouse night** <t:${epoch}:F> (<t:${epoch}:R>)\nComing? Tap to say you're in, and the same link joins the queue once it starts: <${inhouseNightInviteLink()}>`,
     );
   });
 

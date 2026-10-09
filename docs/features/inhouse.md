@@ -430,7 +430,22 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   worst a row for a night that's gone, which every read (filtered by the
   current night's id) ignores and the next prune removes; a player's two
   taps meet at the primary key and the second reads as already in.
-- **The headcount adds the two lists** (`inhouseNightHeadcount`): the site's
+- **The invite link** (`INHOUSE_NIGHT_INVITE_PATH`, `/inhouse?imin=1`; Tim's
+  call, 2026-10-08) is what an admin pastes in Discord: /inhouse's preview
+  follows the night (`inhouseNightPreviewText`: the time on the league's
+  clock, the note, the headcount, what the link does) with the night's own
+  picture (`OgInhouseNightCard`, `inhouse/opengraph-image.tsx`; the league's
+  picture with no night). Opening it does what `inhouseNightInviteAction`
+  (pure, tested) says: "I'm in" once for a signed-in player not yet on the
+  list (`InhouseNightInviteRsvp`, which scrubs `imin` first so a refresh never
+  repeats it, and treats a lost answer as unknown), "already in" for one who
+  is, the card's sign-in for a signed-out visitor, and once the night is on,
+  `/inhouse?join=1` (a server redirect). Every signed-out "I'm in" signs in
+  back to the invite, so a new player's first click ends with them in. "Copy
+  invite link" sits on /admin's night card and /inhouse's card; the planned
+  Discord post carries the link too.
+- **The headcount adds the two lists** (`inhouseNightHeadcount`, loaded by
+  `inhouseNightHeadcountFor` for every surface): the site's
   "I'm in"s plus the Discord event's Interested members
   (`guildEventInterested`, the member list paged 100 at a time up to
   `GUILD_EVENT_INTEREST_MAX_PAGES`, reused for two minutes, null when

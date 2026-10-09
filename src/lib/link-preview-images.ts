@@ -20,6 +20,7 @@ import {
   fitPictureFacts,
   matchCardStatus,
   playerPictureText,
+  type InhouseNightCardData,
   type MatchCardData,
   type PlayerCardData,
   type SeasonCardData,
@@ -34,6 +35,17 @@ import { ordinalPlace } from "./tale-of-the-tape";
 import { seriesRecordText } from "./team-matches";
 import { hashHue, seasonTeamHues } from "./team-hues";
 import { formatLeagueTime } from "./zoned-time";
+import {
+  currentInhouseNight,
+  inhouseNightHeadcountText,
+  inhouseNightPhase,
+} from "./inhouse-night";
+import {
+  inhouseNightHeadcountFor,
+  readInhouseNightRsvps,
+} from "./inhouse-night-rsvp-service";
+import { readInhouseNight } from "./inhouse-night-service";
+import { leagueMatchTimeParts } from "./match-time";
 
 /**
  * A season's crest hues, the colours its pages paint (the root layout's
@@ -270,5 +282,25 @@ export async function loadSeasonCard(id: string): Promise<SeasonCardData | null>
       champion && hue
         ? { name: champion.name, hue: hue(champion.id), logo }
         : null,
+  };
+}
+
+/**
+ * The inhouse night's picture: when it is on the league's clock, the note and
+ * who's coming. Null with no night set, or once the last is over: /inhouse
+ * then keeps the league's own picture.
+ */
+export async function loadInhouseNightCard(
+  nowMs: number,
+): Promise<InhouseNightCardData | null> {
+  const night = currentInhouseNight((await readInhouseNight()).night, nowMs);
+  if (!night) return null;
+  const { discordIds } = await readInhouseNightRsvps(night.id);
+  const count = await inhouseNightHeadcountFor(night, discordIds);
+  return {
+    on: inhouseNightPhase(night, nowMs) === "on",
+    ...leagueMatchTimeParts(new Date(night.startsAtMs)),
+    note: night.note,
+    headcount: inhouseNightHeadcountText(count),
   };
 }

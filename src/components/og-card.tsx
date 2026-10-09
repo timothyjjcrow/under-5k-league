@@ -5,6 +5,7 @@
 import type { ReactNode } from "react";
 import {
   hueHex,
+  type InhouseNightCardData,
   type MatchCardData,
   type MatchCardStatus,
   type OgMedal,
@@ -704,6 +705,79 @@ export function OgSeasonCard({
               <OgChip key={fact}>{fact}</OgChip>
             ))}
           </div>
+        </div>
+      </div>
+    </OgFrame>
+  );
+}
+
+/**
+ * The inhouse night, the picture its invite link unfurls with: the day and the
+ * time on the league's clock, the admin's note, who's coming, and what the
+ * link does. Once the night is on, it asks them into the queue instead.
+ */
+export function OgInhouseNightCard({
+  emblem,
+  leagueName,
+  on,
+  day,
+  date,
+  time,
+  note,
+  headcount,
+}: InhouseNightCardData & OgBrand) {
+  return (
+    <OgFrame
+      emblem={emblem}
+      leagueName={leagueName}
+      kicker="Inhouse night"
+      pill={on ? "On now" : "Inhouse 5v5s"}
+      pillGold={on}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          justifyContent: "center",
+          padding: "0 8px",
+        }}
+      >
+        <div style={{ display: "flex", fontSize: 120, fontWeight: 600, lineHeight: 1.02 }}>
+          {on ? "Inhouse night is on" : `${day}, ${date}`}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            fontSize: 60,
+            fontWeight: 600,
+            lineHeight: 1.15,
+            color: COLOR.accent,
+            marginTop: 6,
+          }}
+        >
+          {on ? "Open the link to join the queue" : time}
+        </div>
+        {note ? (
+          <div
+            style={{
+              display: "block",
+              fontSize: 32,
+              lineHeight: 1.25,
+              color: COLOR.muted,
+              maxWidth: 1060,
+              lineClamp: 2,
+              wordBreak: "break-word",
+              marginTop: 18,
+            }}
+          >
+            {note}
+          </div>
+        ) : null}
+        <div style={{ display: "flex", flexWrap: "wrap", marginTop: 28 }}>
+          {headcount ? <OgChip>{headcount}</OgChip> : null}
+          <OgChip gold>{on ? "The lobby fires at ten" : "Tap to say you're in"}</OgChip>
+          {on ? null : <OgChip>Captains draft the teams</OgChip>}
         </div>
       </div>
     </OgFrame>

@@ -194,6 +194,13 @@ actions: `src/app/actions/admin-discord.ts`.
   effect cascades a render). `autoJoinDecision` (`inhouse.ts`, tested): nothing
   signed out, "already in" if queued or in the lobby; a live lobby doesn't
   refuse, since the join is for the next game.
+- **The inhouse night's invite (`?imin=1`, `INHOUSE_NIGHT_INVITE_PATH`) is the
+  one site link in its planned post** (`inhouseNightInviteLink`): before the
+  night it says "I'm in" on the site, once the night is on /inhouse turns it
+  into `?join=1`. Admins copy it from /admin's night card ("Copy invite link")
+  to paste themselves: bare, it unfurls as the night with its own picture.
+  The post keeps it in angle brackets beside the Discord event's bare link,
+  so the event's Interested embed is the post's one unfurl.
 
 ## The ping role and the bot
 

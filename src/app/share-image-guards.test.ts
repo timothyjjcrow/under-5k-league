@@ -10,7 +10,8 @@ import {
 
 /**
  * Source contracts for the link preview pictures: the opengraph-image and
- * twitter-image routes beside the match, team, player and season pages. The
+ * twitter-image routes beside the match, team, player and season pages, and
+ * /inhouse's (the inhouse night). The
  * e2e suite checks that the pages point at them; these pin what no request
  * shows: that every picture is drawn per request, and that the server only
  * ever fetches a crest or avatar through the allowlisted fetchOgImage.
@@ -25,6 +26,7 @@ describe("link preview picture routes", () => {
         .sort();
     expect(folders("opengraph-image.tsx")).toEqual(folders("twitter-image.tsx"));
     expect(folders("opengraph-image.tsx")).toEqual([
+      "src/app/inhouse",
       "src/app/matches/[id]",
       "src/app/players/[id]",
       "src/app/seasons/[id]",
@@ -42,7 +44,7 @@ describe("link preview picture routes", () => {
       expect(text, route.path).toContain('export const contentType = "image/png";');
       expect(text, route.path).toMatch(/export const alt = "[^"]+";/);
       expect(text, route.path).toMatch(
-        /return (match|team|player|season)ShareImage\(\(await params\)\.id\);/,
+        /return (?:(match|team|player|season)ShareImage\(\(await params\)\.id\)|inhouseShareImage\(\));/,
       );
       expect(text, route.path).not.toMatch(/ImageResponse|prisma\.|fetch\(/);
     }
@@ -127,7 +129,10 @@ describe("link preview picture reads", () => {
     const bodies = stripLineComments(
       sourceFile("src/components/og-share-images.tsx").text,
     );
-    expect(bodies.match(/return renderOgImage\(</g)).toHaveLength(4);
+    // One draw per exported picture body, whatever their number.
+    const pictures = bodies.match(/export function \w+ShareImage\(/g) ?? [];
+    expect(pictures.length).toBeGreaterThanOrEqual(5);
+    expect(bodies.match(/return renderOgImage\(</g)).toHaveLength(pictures.length);
     expect(bodies).not.toContain("new ImageResponse");
   });
 });

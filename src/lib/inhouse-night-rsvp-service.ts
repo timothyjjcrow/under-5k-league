@@ -15,10 +15,13 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { UserFacingError } from "./user-facing-error";
+import { guildEventInterested } from "./discord-roles";
 import {
   currentInhouseNight,
+  inhouseNightHeadcount,
   inhouseNightRsvpOpen,
   type InhouseNight,
+  type InhouseNightHeadcount,
 } from "./inhouse-night";
 import { readInhouseNight } from "./inhouse-night-service";
 
@@ -46,6 +49,21 @@ export async function readInhouseNightRsvps(nightId: string): Promise<InhouseNig
     players: rows.map(({ user }) => ({ id: user.id, name: user.name, avatar: user.avatar })),
     discordIds: rows.map(({ user }) => user.discordId),
   };
+}
+
+/**
+ * Who's coming (inhouseNightHeadcount): the site's list plus the Discord
+ * event's Interested members, read live and reused for a couple of minutes
+ * (guildEventInterested). Every place that shows the count asks here.
+ */
+export async function inhouseNightHeadcountFor(
+  night: InhouseNight,
+  siteDiscordIds: (string | null)[],
+): Promise<InhouseNightHeadcount> {
+  const discordIds = night.discordEventId
+    ? await guildEventInterested(night.discordEventId)
+    : [];
+  return inhouseNightHeadcount(siteDiscordIds, discordIds);
 }
 
 export type InhouseNightRsvpOutcome = "in" | "already-in" | "out" | "already-out";

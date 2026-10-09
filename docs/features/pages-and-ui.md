@@ -113,7 +113,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Preview text comes from `link-preview.ts`** (pure, tested), loaded by
   `link-preview-metadata.ts`; a result reads the same everywhere through
   `seriesResultText`.
-- **The match, team, player and season pages draw their own picture:** an
+- **The match, team, player and season pages draw their own picture,** and
+  /inhouse draws the planned inhouse night's (`OgInhouseNightCard`, the
+  league's picture with no night; its preview text follows the night too, so
+  the night's invite link unfurls as the night): an
   `opengraph-image.tsx` and a `twitter-image.tsx` beside each page, one line
   each over `src/components/og-share-images.tsx`. The layouts are
   `src/components/og-card.tsx` (Satori: an element with more than one child
@@ -672,7 +675,8 @@ the league is already draftable and many visitors have joined. Write for both.
 
 - **Order is the product:** the planned inhouse night's card (only while one
   is set, streamed: "I'm in", the headcount, who said they're in on the site
-  as profile chips, the Discord event and calendar links), room,
+  as profile chips, "Copy invite link", the Discord event and calendar
+  links; opened from the invite link it says "I'm in" once), room,
   `SceneStats`, ladder, recent results, then the OpenDota guide. The ladder is why people return; the history sections are
   the costliest queries, so they stream in below the room.
 - **`SceneStats` uses the same memoised `loadBoardStats` as the Discord
