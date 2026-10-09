@@ -228,7 +228,7 @@ describe("POST /api/inhouse request boundary", () => {
       syncBoard: false,
     });
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v10", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
       expire: 0,
     });
   });
@@ -240,7 +240,7 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v10", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
       expire: 0,
     });
   });
@@ -251,7 +251,7 @@ describe("POST /api/inhouse request boundary", () => {
     await expect(POST(request({ action: "leave" }))).rejects.toThrow(
       "read failed",
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v10", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
       expire: 0,
     });
   });
@@ -270,7 +270,7 @@ describe("POST /api/inhouse request boundary", () => {
       detectResults: false,
       syncBoard: true,
     });
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v10", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
       expire: 0,
     });
   });
@@ -312,7 +312,21 @@ describe("POST /api/inhouse request boundary", () => {
     await POST(request({ action: "cancel", force: true }));
 
     expect(mocks.cancelLobby).toHaveBeenCalledOnce();
-    expect(mocks.cancelLobby).toHaveBeenCalledWith(user);
+    expect(mocks.cancelLobby).toHaveBeenCalledWith(user, null);
+  });
+
+  it("hands each lobby action the game the room showed", async () => {
+    // Two games can be live: the click is judged against the lobby it was on.
+    await POST(request({ action: "cancel", lobbyId: "lobby-2" }));
+    await POST(request({ action: "accept", lobbyId: "lobby-2" }));
+    await POST(request({ action: "pick", userId: "u9", lobbyId: "lobby-2" }));
+    // Only a string names a game.
+    await POST(request({ action: "decline", lobbyId: { id: "lobby-2" } }));
+
+    expect(mocks.cancelLobby).toHaveBeenCalledWith(user, "lobby-2");
+    expect(mocks.acceptMatch).toHaveBeenCalledWith(user, "lobby-2");
+    expect(mocks.makePick).toHaveBeenCalledWith(user, "u9", "lobby-2");
+    expect(mocks.declineMatch).toHaveBeenCalledWith(user, null);
   });
 
   it("refuses the retired bet action as unknown", async () => {

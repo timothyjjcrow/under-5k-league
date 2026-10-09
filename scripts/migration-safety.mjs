@@ -10,6 +10,8 @@ export const MIGRATION_SHA256 = Object.freeze({
     "da2ea9d5373bda63c5b80d7c2435290edb330b6e8521aa0fa85f0a7040618155",
   "20261008000000_inhouse_night_rsvp":
     "d33fb8a0d758ad2cf30c054bb5f74c1b2cd94de7492ef1d3b382ded124f67c36",
+  "20261009000000_inhouse_game_slots":
+    "f3ba48a351a1f4f27801d396547131d6920ad11b93bfcb1a6980a18777da1fd8",
   "20260927000000_review_followups":
     "2c53b367b55dc02d2d837791ab67bfcb075ffb635be6d2bba73a839e076387b9",
   "20260925020000_historical_participation":
@@ -174,6 +176,24 @@ const DESTRUCTIVE = [
   [/\bCREATE\s+OR\s+REPLACE\b/i, "CREATE OR REPLACE"],
 ];
 
+/**
+ * Reviewed contractions: the only destructive statements a migration may run,
+ * each spelled exactly and allowed only in the one migration named here. Each
+ * drops something the binary still serving does not rely on (the migration's
+ * own comment says why), so it ships like an additive migration. Every other
+ * statement that matches DESTRUCTIVE still fails, and a listed statement the
+ * migration no longer contains fails too, so the list cannot go stale.
+ */
+const REVIEWED_CONTRACTIONS = Object.freeze({
+  // Two inhouse games can be live at once: the per-slot index created just
+  // before it replaces the one-live-lobby index.
+  "20261009000000_inhouse_game_slots": Object.freeze([
+    'DROP INDEX "InhouseLobby_one_active_idx"',
+  ]),
+});
+
+const normalizeStatement = (statement) => statement.replace(/\s+/g, " ").trim();
+
 const SAFE_STATEMENT_STARTS = [
   /^DO\s+\$/i,
   /^ALTER\s+TABLE\b/i,
@@ -204,7 +224,14 @@ export function validateMigrationSql(name, sql, { baseline = false } = {}) {
 
   if (baseline) return statements;
 
+  const contractions = REVIEWED_CONTRACTIONS[name] ?? [];
+  const contracted = new Set();
   for (const [offset, statement] of statements.slice(1, -1).entries()) {
+    const normalized = normalizeStatement(statement);
+    if (contractions.includes(normalized)) {
+      contracted.add(normalized);
+      continue;
+    }
     for (const [pattern, label] of DESTRUCTIVE) {
       if (pattern.test(statement)) {
         throw new Error(
@@ -216,6 +243,13 @@ export function validateMigrationSql(name, sql, { baseline = false } = {}) {
       const start = statement.replace(/\s+/g, " ").slice(0, 80);
       throw new Error(
         `${name}: statement ${offset + 2} is not in the additive SQL allowlist: ${start}`,
+      );
+    }
+  }
+  for (const statement of contractions) {
+    if (!contracted.has(statement)) {
+      throw new Error(
+        `${name}: reviewed contraction is missing from the migration: ${statement}`,
       );
     }
   }

@@ -3,7 +3,7 @@ import type { InhouseState } from "@/lib/inhouse-service";
 // Types and small helpers shared by the inhouse room shell
 // (src/components/inhouse-room.tsx) and its stage views in this folder.
 
-/** The active lobby, once the room has one. */
+/** A live lobby: the viewer's own, or another game they watch. */
 export type RoomLobby = NonNullable<InhouseState["lobby"]>;
 
 export type LobbyTeam = RoomLobby["teams"][number];

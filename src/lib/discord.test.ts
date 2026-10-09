@@ -1277,6 +1277,20 @@ describe("inhouse messages", () => {
     expect(plain).not.toContain("<t:");
   });
 
+  it("names the game when another one is already live", () => {
+    const second = inhouseLobbyMessage(
+      [{ name: "A", discordId: null }],
+      null,
+      null,
+      "Game 2",
+    );
+    expect(second).toContain("**Inhouse match found (Game 2)!**");
+    // A lone game reads exactly as it always has.
+    expect(inhouseLobbyMessage([{ name: "A", discordId: null }])).toContain(
+      "**Inhouse match found!**",
+    );
+  });
+
   it("mentions linked players by id so the ping reaches a phone", () => {
     // A formed lobby is on a short accept clock and the site's chime can't reach
     // a backgrounded phone. Linked players get a real mention; the rest are

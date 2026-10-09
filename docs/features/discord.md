@@ -180,7 +180,8 @@ actions: `src/app/actions/admin-discord.ts`.
   low on purpose (the first queuers are invisible to anyone off the site); raise
   it if it cries wolf. It links `joinLink()` (`/inhouse?join=1`).
 - **Lobby formed mentions all ten** (`maybeFormLobby`, after commit):
-  `<@discordId>` if linked, escaped name otherwise, plus the accept deadline.
+  `<@discordId>` if linked, escaped name otherwise, plus the accept deadline,
+  and "(Game 2)" when another game is already live.
   Queueing is the consent; don't add an opt-out. One tabbed-away player burns
   the league's scarcest event on a short `INHOUSE.ACCEPT_SECONDS` clock.
 - **Only the interrupting posts carry the ping role:** queue filling, match
@@ -407,8 +408,14 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
   pinned message.
 - **Keep the clock out of the digest.** Semantic state only; elapsed time is
   `<t:...:R>`. A time-varying digest costs a PATCH every throttle window,
-  forever. Both builders (`loadBoardSnapshot`, `getInhouseState`) go through
-  `lobbyView`; if they disagreed they would repaint each other in a loop.
+  forever. Both builders (`loadBoardSnapshot`, `getInhouseState`) list every
+  live game in game order through `lobbyView`; if they disagreed they would
+  repaint each other in a loop.
+- **Two live games:** the board leads with the one that needs the channel
+  most (a ready check, then a draft, then a game being played; the lower game
+  number on a tie), titled "Game N · ...", with an ALSO LIVE line for the
+  other. Once both slots are taken the waiting list says the next lobby forms
+  when a game finishes. A lone game 1 renders as it always did.
 - **Throttle:** `claimThrottle` on `inhouseBoardAt`, `BOARD_MIN_SECONDS`
   doubling per failure up to 300 s. A lost claim is fine: the digest still
   differs.
@@ -452,9 +459,10 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
   summary). **Load it only for the empty board:** `resolveSnapshot` calls it
   and `pingOptInAvailable` only with no lobby and no present player, so a busy
   queue, when the board syncs most, never pays for the full-history Elo scan;
-  keep that condition when you add to the empty state. Last game: newest
-  formed COMPLETED lobby by `[createdAt desc, id desc]`, ended at
-  `inhouseEndedAt`; never `updatedAt`.
+  keep that condition when you add to the empty state. Last game: the
+  latest FINISHED COMPLETED lobby by `[completedAt desc, id desc]` (two games
+  overlap, so formation order isn't finish order; rows from before
+  `completedAt` come after), ended at `inhouseEndedAt`; never `updatedAt`.
   Monotonic figures only, never a trailing window ("this week" rots in a quiet
   stretch); omit what's missing; no "updated <t:R>" line ("3 days ago").
 - **Keep `public/brand/banner.png` off the board:** its "Under 4.5K, sub-4500

@@ -2,7 +2,7 @@
 
 Prices checked September 4, 2026, in USD before tax, optional backups and overages.
 
-The current setup runs one bot on this Mac and connects it to the site through the Cloudflare relay. It hosts the current active in-house game, with Captains Mode, US East and league ticket 20004. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
+The current setup runs one bot on this Mac and connects it to the site through the Cloudflare relay. It hosts the in-house games one Dota lobby at a time (it leaves each game once it is running, so two can run at once), with Captains Mode, US East and league ticket 20004. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
 
 The approved Europe plan can share this same worker and relay, with one lobby
 at a time across both leagues. Set `DOTA_GAME_SERVER_REGIONS="2,3"` only after

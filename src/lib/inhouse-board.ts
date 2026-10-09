@@ -1,6 +1,7 @@
 import { LEAGUE_CONFIG } from "./league-config";
 import { INHOUSE, INHOUSE_STATUS } from "./constants";
 import { escapeDiscordText } from "./discord-escape";
+import { inhouseGameLabel, showGameLabel } from "./inhouse";
 
 // The live inhouse queue board: ONE Discord message the site rewrites in place
 // instead of posting a new "6/10 queued" line every time somebody joins.
@@ -36,6 +37,8 @@ import { escapeDiscordText } from "./discord-escape";
 // counting in every client with no further edits from us.
 
 export type BoardLobby = {
+  /** The game's number while it is live (InhouseLobby.slot). */
+  slot: number;
   status: string;
   /** READY_CHECK only: how many of the ten have pressed accept. */
   acceptedCount: number;
@@ -87,7 +90,8 @@ export type BoardSnapshot = {
   /** Entries whose heartbeat went quiet — listed on site, never counted. */
   awayCount: number;
   lobbySize: number;
-  lobby: BoardLobby | null;
+  /** Every live game, in game order (up to INHOUSE.MAX_LIVE_GAMES). */
+  lobbies: BoardLobby[];
   /** Only loaded for the empty render; null everywhere else. */
   stats: BoardStats | null;
   /** True when the league has a ping role AND the site can grant it, i.e. the
@@ -228,6 +232,41 @@ function lobbyPhase(status: string): "check" | "picking" | "live" | null {
 
 const RAIL = `5v5 · captains draft · rated on the ${LEAGUE_CONFIG.name} ladder`;
 
+/** How much a phase needs the channel: a ready check is ten people on a clock. */
+const PHASE_URGENCY = { check: 0, picking: 1, live: 2 } as const;
+
+/**
+ * The game the board leads with when two are live: the one that needs the
+ * channel most (a ready check, then a draft, then a game being played), the
+ * lower game number on a tie. The other game gets one line under it.
+ */
+function leadLobby(lobbies: BoardLobby[]): BoardLobby | null {
+  let lead: BoardLobby | null = null;
+  let leadUrgency = Infinity;
+  for (const l of lobbies) {
+    const phase = lobbyPhase(l.status);
+    if (!phase) continue;
+    const urgency = PHASE_URGENCY[phase];
+    if (urgency < leadUrgency || (urgency === leadUrgency && lead && l.slot < lead.slot)) {
+      lead = l;
+      leadUrgency = urgency;
+    }
+  }
+  return lead;
+}
+
+/** One line for a live game the board isn't leading with. */
+function otherGameLine(l: BoardLobby): string {
+  const label = `**${inhouseGameLabel(l.slot)}**`;
+  if (l.status === INHOUSE_STATUS.READY_CHECK)
+    return `${label} · match found, ${l.acceptedCount} / ${l.playerCount} accepted`;
+  if (l.status === INHOUSE_STATUS.CAPTAIN_VOTE)
+    return `${label} · voting on captains`;
+  if (l.status === INHOUSE_STATUS.DRAFTING) return `${label} · captains drafting`;
+  if (l.status === INHOUSE_STATUS.READY) return `${label} · teams set`;
+  return `${label} · live${l.startedAtMs ? `, started ${relative(l.startedAtMs)}` : ""}`;
+}
+
 export function renderBoard(s: BoardSnapshot): BoardRender {
   const rendered = renderBoardContent(s);
   return {
@@ -261,25 +300,59 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
     url,
   };
   const present = s.presentNames.length;
-  const phase = s.lobby ? lobbyPhase(s.lobby.status) : null;
+  const lead = leadLobby(s.lobbies);
+  const phase = lead ? lobbyPhase(lead.status) : null;
 
   // --- A lobby is up ---------------------------------------------------------
-  if (s.lobby && phase) {
-    const lobby = s.lobby;
+  if (lead && phase) {
+    const lobby = lead;
+    const live = s.lobbies.filter((l) => lobbyPhase(l.status) !== null);
+    const others = live.filter((l) => l !== lead);
+    // "Game 2 · Match Found" once two games are live (or a lone game 2).
+    const labelled = showGameLabel(lead.slot, live.length);
+    const titled = (title: string) =>
+      labelled ? `${inhouseGameLabel(lead.slot)} · ${title}` : title;
     // presentNames during a lobby is the queue for the NEXT game — the ten who
     // are playing aren't in the queue table at all. So these states are built
     // around the split rack and the waiting list, which is the more useful
     // information anyway: not who's playing, but how close the next one is.
+    const slotFree = live.length < INHOUSE.MAX_LIVE_GAMES;
     const nextUp: BoardField[] =
       present > 0
         ? [
             {
               name: `IN LINE FOR THE NEXT GAME — ${present}`,
-              value: `${plainList(s.presentNames)}\n-# ${Math.max(0, s.lobbySize - present)} more and the next lobby forms.`,
+              value: `${plainList(s.presentNames)}\n-# ${
+                slotFree
+                  ? `${Math.max(0, s.lobbySize - present)} more and the next lobby forms.`
+                  : "The next lobby forms when a game finishes."
+              }`,
               inline: false,
             },
           ]
         : [];
+    const alsoLive: BoardField[] =
+      others.length > 0
+        ? [
+            {
+              name: "ALSO LIVE",
+              value: others.map(otherGameLine).join("\n"),
+              inline: false,
+            },
+          ]
+        : [];
+    // The other games' semantic state, so a change there repaints. startedAtMs
+    // is stable for a game's life; elapsed time renders as <t:…:R>.
+    const othersKey = JSON.stringify(
+      others.map((l) => [
+        l.slot,
+        l.status,
+        l.acceptedCount,
+        l.playerCount,
+        l.startedAtMs ?? "",
+      ]),
+    );
+    const leadKey = labelled ? `game${lead.slot}` : "";
 
     if (phase === "check") {
       const acc = lobby.acceptedCount;
@@ -317,9 +390,11 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
           rosterKey(lobby.pendingNames),
           present,
           rosterKey(s.presentNames),
+          leadKey,
+          othersKey,
         ].join("|"),
         embed: {
-          title: `Match Found — ${acc} / ${lobby.playerCount} accepted`,
+          title: titled(`Match Found — ${acc} / ${lobby.playerCount} accepted`),
           url,
           author,
           color: COLOR.READY_CHECK,
@@ -332,7 +407,7 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
             `**[Accept your match →](${url})**`,
             "-# Anyone who doesn't accept is dropped and their slot reopens.",
           ].join("\n"),
-          fields,
+          fields: [...fields, ...alsoLive],
           footer: {
             text: `${INHOUSE.ACCEPT_SECONDS} seconds to accept. No-shows are dropped from the queue.`,
           },
@@ -367,9 +442,11 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
           lobby.playerCount,
           present,
           rosterKey(s.presentNames),
+          leadKey,
+          othersKey,
         ].join("|"),
         embed: {
-          title: "Preparing Your Match",
+          title: titled("Preparing Your Match"),
           url,
           author,
           color: COLOR.PICKING,
@@ -382,7 +459,7 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
             `**[Queue for the next one →](${joinUrl})**`,
             `-# ${RAIL}`,
           ].join("\n"),
-          fields: nextUp,
+          fields: [...alsoLive, ...nextUp],
           footer: {
             text: "This lobby is full — anyone joining now is first into the next game.",
           },
@@ -402,9 +479,11 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
         lobby.startedAtMs ?? "",
         present,
         rosterKey(s.presentNames),
+        leadKey,
+        othersKey,
       ].join("|"),
       embed: {
-        title: "Match in Progress",
+        title: titled("Match in Progress"),
         url,
         author,
         color: COLOR.LIVE,
@@ -417,7 +496,7 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
           `**[Queue for the next one →](${joinUrl})**`,
           `-# ${RAIL}`,
         ].join("\n"),
-        fields: nextUp,
+        fields: [...alsoLive, ...nextUp],
         footer: {
           text: "Results import from match history — nobody has to report anything.",
         },
@@ -593,10 +672,16 @@ function renderBoardContent(s: BoardSnapshot): BoardRender {
  * live board: is the channel currently showing the truth?
  */
 export function boardStateLabel(s: BoardSnapshot): string {
-  if (s.lobby) {
+  if (s.lobbies.length > 0) {
     const waiting =
       s.presentNames.length > 0 ? `, ${s.presentNames.length} waiting` : "";
-    return `lobby ${s.lobby.status.toLowerCase().replace(/_/g, " ")}${waiting}`;
+    const games = s.lobbies
+      .map(
+        (l) =>
+          `${showGameLabel(l.slot, s.lobbies.length) ? `game ${l.slot}` : "lobby"} ${l.status.toLowerCase().replace(/_/g, " ")}`,
+      )
+      .join(", ");
+    return `${games}${waiting}`;
   }
   const away = s.awayCount > 0 ? ` (+${s.awayCount} away)` : "";
   return `${s.presentNames.length}/${s.lobbySize} queued${away}`;

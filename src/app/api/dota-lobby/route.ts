@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
     if ((action === "create" || action === "start") && !playable)
       throw new UserFacingError(
         kind === "inhouse"
-          ? "Only the current active in-house game can create or start a Dota lobby after teams are locked."
+          ? "Only a live in-house game can create or start a Dota lobby, once its teams are locked."
           : "This match is not open for play.",
       );
     const status = await callLobbyBot(

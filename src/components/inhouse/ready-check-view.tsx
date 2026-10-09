@@ -13,17 +13,24 @@ export function ReadyCheckView({
   offset,
   pending,
   act,
+  clockBar = true,
 }: {
   lobby: RoomLobby;
   me: InhouseState["me"];
   offset: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
+  /**
+   * Pin a compact clock bar under the header when the banner scrolls away.
+   * Off for a game the viewer only watches beside their own (or beside the
+   * other live game), where a second pinned bar would cover the first.
+   */
+  clockBar?: boolean;
 }) {
   const check = lobby.readyCheck;
   // The accept clock must stay visible if the player scrolls — same
   // compact-bar treatment as the vote and pick clocks.
-  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
+  const { ref: bannerRef, offscreen } = useBannerOffscreen(clockBar);
   if (!check) return null;
 
   const waitingOn = check.total - check.acceptedCount;

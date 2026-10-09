@@ -66,6 +66,18 @@ describe("summarizeInhouse", () => {
     expect(recs[0].streak).toBe(-1); // last game was a loss
   });
 
+  it("orders games formed at the same instant by id, whatever the input order", () => {
+    // Two games can be live at once; a shared formation time must not leave
+    // the rating to the database's row order.
+    const first = lobby("g1", 5, 1, [["a", 1], ["b", 2]]);
+    const second = lobby("g2", 5, 2, [["a", 1], ["b", 2]]);
+    const a = (lobbies: FinishedLobby[]) =>
+      summarizeInhouse(lobbies).find((r) => r.userId === "a")!;
+    expect(a([second, first])).toEqual(a([first, second]));
+    // g2 counts last: a's streak ends on its loss.
+    expect(a([second, first]).streak).toBe(-1);
+  });
+
   it("ranks by rating", () => {
     const recs = summarizeInhouse([
       lobby("g1", 1, 1, [["a", 1], ["b", 2]]),

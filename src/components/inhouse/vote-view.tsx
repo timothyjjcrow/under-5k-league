@@ -17,18 +17,25 @@ export function VoteView({
   offset,
   pending,
   act,
+  clockBar = true,
 }: {
   lobby: RoomLobby;
   me: InhouseState["me"];
   offset: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
+  /**
+   * Pin a compact clock bar under the header when the banner scrolls away.
+   * Off for a game the viewer only watches beside their own (or beside the
+   * other live game), where a second pinned bar would cover the first.
+   */
+  clockBar?: boolean;
 }) {
   const vote = lobby.vote;
   const candidatesRef = useRef<HTMLDivElement>(null);
   // The 25s vote clock must stay visible while a player scrolls the nominate
   // list — same compact-bar treatment as the draft's pick clock.
-  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
+  const { ref: bannerRef, offscreen } = useBannerOffscreen(clockBar);
   if (!vote) return null;
 
   const myMethod = me.myVote?.method ?? null;

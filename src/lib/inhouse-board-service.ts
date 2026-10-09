@@ -263,14 +263,18 @@ async function swapState(expected: string, next: BoardState): Promise<boolean> {
 export async function loadBoardSnapshot(
   nowMs: number = Date.now(),
 ): Promise<BoardSnapshotInput> {
-  const [queue, lobby] = await Promise.all([
+  const [queue, lobbies] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
       orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
       select: { lastSeenAt: true, user: { select: { name: true } } },
     }),
-    prisma.inhouseLobby.findFirst({
+    // getInhouseState lists the live games in the same order, so the room and
+    // the worker always render the same board.
+    prisma.inhouseLobby.findMany({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      orderBy: [{ slot: "asc" }, { createdAt: "asc" }, { id: "asc" }],
       select: {
+        slot: true,
         status: true,
         startedAt: true,
         acceptEndsAt: true,
@@ -287,7 +291,7 @@ export async function loadBoardSnapshot(
     presentNames: present.map((q) => q.user.name),
     awayCount: queue.length - present.length,
     lobbySize: INHOUSE.LOBBY_SIZE,
-    lobby: lobby ? lobbyView(lobby) : null,
+    lobbies: lobbies.map(lobbyView),
     siteUrl: resolveSiteUrl(),
     nowMs,
   };
@@ -298,6 +302,7 @@ export async function loadBoardSnapshot(
 export type BoardSnapshotInput = Omit<BoardSnapshot, "stats" | "pingOptIn">;
 
 type LobbyRow = {
+  slot: number;
   status: string;
   startedAt: Date | null;
   acceptEndsAt: Date | null;
@@ -307,8 +312,9 @@ type LobbyRow = {
 /** Shared by loadBoardSnapshot and getInhouseState so the two can never drift
  *  into describing the same lobby differently — both feed the digest, so a
  *  disagreement would make the two paths repaint each other in a loop. */
-export function lobbyView(l: LobbyRow): NonNullable<BoardSnapshot["lobby"]> {
+export function lobbyView(l: LobbyRow): BoardSnapshot["lobbies"][number] {
   return {
+    slot: l.slot,
     status: l.status,
     acceptedCount: l.players.filter((p) => p.acceptedAt != null).length,
     playerCount: l.players.length,
@@ -394,27 +400,36 @@ async function loadFreshBoardStats(
   }
 }
 
+const LAST_GAME_SELECT = {
+  id: true,
+  winnerTeam: true,
+  radiantTeam: true,
+  radiantScore: true,
+  direScore: true,
+  matchStartTime: true,
+  startedAt: true,
+  createdAt: true,
+  completedAt: true,
+  durationSecs: true,
+  boxScore: true,
+} as const;
+
 async function readBoardStats(summary: InhouseLadderSummary): Promise<BoardStats> {
-  const last = await prisma.inhouseLobby.findFirst({
-    where: { status: INHOUSE_STATUS.COMPLETED },
-    // Formation order is stable under later settlement/refund retries. Only
-    // one lobby can be active, so the newest formed completed lobby is also
-    // the latest game in this rolling mode.
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    select: {
-      id: true,
-      winnerTeam: true,
-      radiantTeam: true,
-      radiantScore: true,
-      direScore: true,
-      matchStartTime: true,
-      startedAt: true,
-      createdAt: true,
-      completedAt: true,
-      durationSecs: true,
-      boxScore: true,
-    },
-  });
+  // The latest FINISHED game. With two games live, the one that formed later
+  // can finish first, so formation order isn't finish order. completedAt is
+  // the immutable result clock (never updatedAt); PostgreSQL sorts its nulls
+  // first in DESC, so the rows from before it existed are read apart, after.
+  const last =
+    (await prisma.inhouseLobby.findFirst({
+      where: { status: INHOUSE_STATUS.COMPLETED, completedAt: { not: null } },
+      orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+      select: LAST_GAME_SELECT,
+    })) ??
+    (await prisma.inhouseLobby.findFirst({
+      where: { status: INHOUSE_STATUS.COMPLETED, completedAt: null },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: LAST_GAME_SELECT,
+    }));
 
   let mvpName: string | null = null;
   let mvpHero: string | null = null;
@@ -481,7 +496,7 @@ async function resolveSnapshot(
   base: BoardSnapshotInput,
   statsLoader: (nowMs: number) => Promise<BoardStats> = loadBoardStats,
 ): Promise<BoardSnapshot> {
-  const empty = !base.lobby && base.presentNames.length === 0;
+  const empty = base.lobbies.length === 0 && base.presentNames.length === 0;
   // Both extras are only consulted for the EMPTY render — the state that has
   // room for them and the one people actually read.
   const [stats, pingOptIn] = await Promise.all([

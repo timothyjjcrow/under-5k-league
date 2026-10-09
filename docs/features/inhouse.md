@@ -17,8 +17,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   empty; don't gate Europe's inhouse on its ticket; no retire checkpoint or
   adoption features (plan-a-time, rally button) unless Tim asks.
 - **Status flows `READY_CHECK → CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS
-  → COMPLETED | CANCELLED`, one active lobby** (`INHOUSE_ACTIVE_STATUSES`). A
-  lobby is played from team lock: `INHOUSE_PLAYING_STATUSES` is READY and
+  → COMPLETED | CANCELLED`, with up to two live lobbies, one per game slot**
+  (`INHOUSE_ACTIVE_STATUSES`, `INHOUSE.MAX_LIVE_GAMES`; see "Two games at
+  once" below). A lobby is played from team lock: `INHOUSE_PLAYING_STATUSES` is READY and
   IN_PROGRESS, and Start is optional. Both IN_PROGRESS writers (`startGame`,
   the bot launch in `src/app/api/dota-lobby/route.ts`) are guarded on READY and
   stamp `startedAt`.
@@ -46,10 +47,55 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   repaints. Don't make every poll sync the board to "fix" this.
 - **API contract:** `state` plus `join`, `leave`, `accept`, `decline`, `vote`,
   `pick`, `start`, `record`, `detect`, `cancel`, `void`. The body must be a JSON
-  object with a non-empty string `action`, else 400. `state` allows 1,200/min
+  object with a non-empty string `action`, else 400. Lobby actions carry the
+  `lobbyId` the room showed. `state` allows 1,200/min
   per IP; mutations 300/min per signed-in user (signed-out attempts are
   IP-limited, then 401), in a separate bucket so poll back-pressure never eats
   an action allowance.
+
+## Two games at once
+
+Twenty queued players play two games side by side (Tim's call, 2026-10-09).
+`INHOUSE.MAX_LIVE_GAMES` is 2; anyone past that waits for a game to finish.
+
+- **Every live lobby holds a game slot** (`InhouseLobby.slot`, 1 or 2).
+  `maybeFormLobby` loops `formOneLobby`, which takes the lowest free slot
+  (`freeGameSlot`) and the first ten present players, so a lone game is
+  always game 1. A cancelled or finished game's slot is the next game's.
+- **Nobody is in two live lobbies.** `joinQueue` refuses anyone in a live
+  lobby and formation deletes the ten's queue rows, both Serializable, so the
+  two games' players never overlap. Everything below leans on it: the frozen
+  records, the Elo deltas, the per-player action lookup.
+- **Every action names its game.** The room sends the `lobbyId` it showed;
+  `chooseActionLobby` judges that lobby, and each action re-reads it with its
+  own phase filter, so a stale click never lands on the other game. Without
+  an id (a page from before two games, an API caller) it falls back to the
+  caller's own lobby, then the one lobby in that phase, and refuses with
+  "Two games are live" rather than pick one. An admin cancel names its game.
+- **Resolvers walk every lobby in their phase** (`lobbyIdsIn`), one
+  transaction each, so a game waiting on its clock never holds up the other.
+  The result scan goes stalest `detectedAt` first, so a pass that runs out of
+  time on one game leaves the other first in line. The automation gate wakes
+  for the earliest clock of every live game, and for formation only while a
+  slot is free.
+- **The room shows the viewer's own game; every `me` flag is about it.**
+  `getInhouseState` returns `lobby` (the viewer's, or null), `otherLobbies`
+  (read-only, game order), `liveGames` and `maxLiveGames`. The room renders
+  other games with `otherGameFlags` (an admin keeps start, record, pick and
+  cancel, each naming the game); beside the viewer's own game they fold to
+  one line. Only the viewer's game (or the one game a spectator watches) pins
+  a clock bar. The poll rate follows `pollingLobby`, and the page below
+  refreshes when a game ends (`liveGameEnded`). A lone game 1 reads exactly
+  as one game always did; a game is named ("Game 1") once two are live, and
+  game 2 always, since its channels and lobby name differ (`showGameLabel`).
+- **Elo stays correct with overlap.** `summarizeInhouse` rates in formation
+  order (id breaks a tie), and since the two games' players are disjoint, a
+  later-formed game finishing first never changes the other's deltas.
+- **One bot hosts both, one after the other** (docs/DOTA-LOBBY-BOT.md). The
+  Steam account holds one Dota lobby, but only until launch: it leaves each
+  game once Dota reports it running with a match id, keeping the id for the
+  result lookup. The other game's captain gets BUSY meanwhile, or hosts by
+  hand under its own lobby name.
 
 ## Guarded transitions
 
@@ -64,9 +110,9 @@ Every transition is a guarded claim; keep it that way (general rules:
   before installing captains; `startCaptainVote` on `READY_CHECK →
   CAPTAIN_VOTE`; `startGame` on READY; `resolveAbandonedLobby` on the exact
   status it read (a Start or a result landing after its read wins, and two
-  chains tear a dead lobby down once). `maybeFormLobby` runs Serializable and
+  chains tear a dead lobby down once). `maybeFormLobby` forms each game Serializable and
   treats P2034 or P2002 as the benign loser; Postgres's partial unique
-  `InhouseLobby_one_active_idx` is the final one-active barrier. The queue ping
+  `InhouseLobby_live_slot_idx` is the final one-lobby-per-slot barrier. The queue ping
   throttle is `claimThrottle` on `inhouseQueuePingAt`.
 - **`applyPick` must THROW, never return, after nulling `pickTeam`.** That null
   is the turn claim, and a return commits it: DRAFTING with `pickTeam = null`
@@ -188,7 +234,8 @@ Every transition is a guarded claim; keep it that way (general rules:
   ladder.
 - **Records are frozen at formation.** `maybeFormLobby` scans history once and
   writes `wins/losses/games` onto each lobby player; views and RECORD read
-  those, so polls never scan history (no result can land meanwhile).
+  those, so polls never scan history (a result landing meanwhile is the other
+  game's, whose ten are none of these).
 - **Snake draft:** `nextPickTeam` gives `F O O F F O O F` so summed pick
   positions match; team 2 picks first (`FIRST_PICK_TEAM`). An expired
   `PICK_SECONDS` clock auto-picks; pool and auto-pick sort MMR desc, then
@@ -201,11 +248,13 @@ Every transition is a guarded claim; keep it that way (general rules:
   the by-hand steps plus the optional "Start the game clock" fold under "Bot
   not working?". Players never see a bot panel that can't help; admins keep
   its status line. See `docs/DOTA-LOBBY-BOT.md`.
-- **By-hand values are constants:** `INHOUSE.LOBBY_NAME` (`<league name>
-  Inhouse`), password `ggd2l`, `INHOUSE.LOBBY_TICKET` (from
-  `LEAGUE_CONFIG.inhouseLeagueName`; Europe shows a placeholder until
-  `NEXT_PUBLIC_INHOUSE_LEAGUE_NAME` is set), and `VOICE_TEAM_1` / `_2` with the
-  viewer's side highlighted. The host must be a ticket admin.
+- **By-hand values are per game:** `inhouseHandLobbyName(slot)`
+  (`<league name> Inhouse`, `... Inhouse 2` for game 2, so two games never
+  share a name in Dota's lobby list), password `ggd2l`, `INHOUSE.LOBBY_TICKET`
+  (from `LEAGUE_CONFIG.inhouseLeagueName`; Europe shows a placeholder until
+  `NEXT_PUBLIC_INHOUSE_LEAGUE_NAME` is set), and the game's voice channels
+  (`inhouseVoiceChannel(slot, team)` over `INHOUSE.VOICE_CHANNELS`) with the
+  viewer's side highlighted. The Discord server needs every slot's channels. The host must be a ticket admin.
 - **The ticket is required:** Valve won't publish an unticketed private game to
   OpenDota, so it can't be recorded. The card says so.
 - **Formation sets team 1 as Radiant; the played game may rewrite
@@ -229,6 +278,10 @@ Every transition is a guarded claim; keep it that way (general rules:
   while OpenDota lacks it the history scan waits
   `DETECT_BOT_MATCH_WAIT_MINUTES`. `findInhouseGame` then needs a game in 4 of
   the ten recent-match lists and takes the newest started after formation.
+- **One Dota match is one lobby's result.** `InhouseLobby.dotaMatchId` is
+  unique, so a game played by a mix of both live lobbies' players can't be
+  recorded on both: the second `applyResult` gets P2002, rolls back whole and
+  reports "duplicate" ("already recorded for the other inhouse game").
 - **Pasted and bot ids go through `checkMatchForLobby`:** the game must start
   after formation (yesterday's game can't replay) and needs 2 linked players
   per side, not the scan's 3 (the escape hatch when most data is private).

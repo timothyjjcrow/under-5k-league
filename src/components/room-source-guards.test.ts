@@ -388,6 +388,21 @@ describe("live rooms delegate their payload ordering", () => {
 });
 
 describe("live rooms delegate their alert triggers", () => {
+  it("inhouse-room shows the other live game through the lib's rules", () => {
+    // Two games can be live. Which flags a viewer gets in a game they aren't
+    // in, which game sets the poll rate, when a game ending refreshes the page
+    // and when a game is named are pure, tested rules in src/lib/inhouse.ts.
+    const src = roomText(INHOUSE_ROOM);
+    for (const rule of [
+      "otherGameFlags(",
+      "pollingLobby(",
+      "liveGameEnded(",
+      "showGameLabel(",
+    ]) {
+      expect(src, `${rule} is no longer called by the room`).toContain(rule);
+    }
+  });
+
   it("inhouse-room computes the chime and the tab title through the lib", () => {
     const src = roomText(INHOUSE_ROOM);
     expect(src).toContain("inhouseAlerts(");

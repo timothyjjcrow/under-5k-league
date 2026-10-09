@@ -163,7 +163,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 10,
+      version: 11,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -257,7 +257,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 10,
+      version: 11,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -510,6 +510,56 @@ describe("computeAutomationGateSnapshot", () => {
         NOW,
       ),
     ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+  });
+
+  it("wakes for whichever live game's clock comes first", () => {
+    type Lobby = AutomationGateInputs["activeLobbies"][number];
+    const lobby = (overrides: Partial<Lobby>): Lobby => ({
+      status: "DRAFTING",
+      acceptEndsAt: null,
+      voteEndsAt: null,
+      pickEndsAt: null,
+      startedAt: null,
+      detectedAt: null,
+      createdAt: new Date(NOW),
+      ...overrides,
+    });
+    // Game 1's pick clock is far off; game 2's ready check closes first.
+    const drafting = lobby({ pickEndsAt: new Date(NOW + 50_000) });
+    const checking = lobby({
+      status: "READY_CHECK",
+      acceptEndsAt: new Date(NOW + 20_000),
+    });
+    for (const activeLobbies of [
+      [drafting, checking],
+      [checking, drafting],
+    ]) {
+      expect(
+        computeAutomationGateSnapshot(inputs({ activeLobbies }), NOW),
+      ).toMatchObject({ nextWakeAtMs: NOW + 20_000, reason: "INHOUSE" });
+    }
+
+    // Ten present players form the next game only while a slot is free.
+    const queue = Array.from({ length: INHOUSE.LOBBY_SIZE }, () => queued());
+    expect(
+      computeAutomationGateSnapshot(
+        inputs({ activeLobbies: [drafting], queue }),
+        NOW,
+      ),
+    ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+    const full = Array.from({ length: INHOUSE.MAX_LIVE_GAMES }, () => drafting);
+    expect(
+      computeAutomationGateSnapshot(inputs({ activeLobbies: full, queue }), NOW)
+        .nextWakeAtMs,
+    ).toBe(NOW + 50_000);
+
+    // More live lobbies than game slots is corruption: fail open.
+    expect(() =>
+      computeAutomationGateSnapshot(
+        inputs({ activeLobbies: [...full, drafting] }),
+        NOW,
+      ),
+    ).toThrow(/more active lobbies than game slots/);
   });
 
   it("runs immediately for a legacy queue older than four hours", () => {
@@ -1688,7 +1738,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 10,
+      version: 11,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

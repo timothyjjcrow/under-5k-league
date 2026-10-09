@@ -30,6 +30,7 @@ export function DraftView({
   setSelected,
   pending,
   act,
+  clockBar = true,
 }: {
   state: InhouseState;
   me: RoomMe;
@@ -39,11 +40,17 @@ export function DraftView({
   setSelected: (id: string | null) => void;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
+  /**
+   * Pin a compact clock bar under the header when the banner scrolls away.
+   * Off for a game the viewer only watches beside their own (or beside the
+   * other live game), where a second pinned bar would cover the first.
+   */
+  clockBar?: boolean;
 }) {
   const { teamSize } = state;
   // Same mobile treatment as the league draft room: when the pick-clock
   // banner scrolls away, a compact fixed bar keeps the clock visible.
-  const { ref: bannerRef, offscreen } = useBannerOffscreen(true);
+  const { ref: bannerRef, offscreen } = useBannerOffscreen(clockBar);
   const onClockTeam = lobby.teams.find((t) => t.team === lobby.pickTeam);
   const onClockSide = onClockTeam ? sideMeta(onClockTeam.isRadiant) : null;
   // "Pick 4 of 8" — captains fill one slot each, the rest are drafted.

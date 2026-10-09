@@ -20,14 +20,14 @@ export async function InhouseStrip({
 } = {}) {
   // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
-  const [queued, liveLobby, night] = await Promise.all([
+  const [queued, liveGames, night] = await Promise.all([
     // Same presence rule as /inhouse: only recently-seen players count.
     prisma.inhouseQueueEntry.count({
       where: { lastSeenAt: { gte: queuePresentCutoff(nowMs) } },
     }),
-    prisma.inhouseLobby.findFirst({
+    // Up to INHOUSE.MAX_LIVE_GAMES games run at once.
+    prisma.inhouseLobby.count({
       where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
-      select: { id: true },
     }),
     // The planned inhouse night (src/lib/inhouse-night.ts), until it's over.
     // Home's bar at the top carries it; here it only turns the call to
@@ -36,10 +36,13 @@ export async function InhouseStrip({
   ]);
   const nightOn = !!night && inhouseNightPhase(night, nowMs) === "on";
 
+  const liveLobby = liveGames > 0;
+  const live =
+    liveGames > 1 ? `${liveGames} inhouse games are live` : "An inhouse is live";
   const label = liveLobby
     ? queued > 0
-      ? `An inhouse is live · ${queued} / ${INHOUSE.LOBBY_SIZE} queued next`
-      : "An inhouse is live — the next-game queue is open"
+      ? `${live} · ${queued} / ${INHOUSE.LOBBY_SIZE} queued next`
+      : `${live} — the next-game queue is open`
     : queued > 0
       ? `${queued} / ${INHOUSE.LOBBY_SIZE} queued for the next inhouse`
       : "The inhouse queue is open";

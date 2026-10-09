@@ -210,7 +210,7 @@ export const EXPECTED_RELEASE_NATIVE = Object.freeze({
     }),
   }),
   partialIndexes: Object.freeze({
-    InhouseLobby_one_active_idx: Object.freeze({
+    InhouseLobby_live_slot_idx: Object.freeze({
       table: "InhouseLobby",
       unique: true,
       valid: true,
@@ -218,7 +218,7 @@ export const EXPECTED_RELEASE_NATIVE = Object.freeze({
       live: true,
       primary: false,
       accessMethod: "btree",
-      expression: "1",
+      expression: "",
       predicate:
         "(status = ANY (ARRAY['READY_CHECK'::text, 'CAPTAIN_VOTE'::text, 'DRAFTING'::text, 'READY'::text, 'IN_PROGRESS'::text]))",
       keyCount: 1,

@@ -197,6 +197,51 @@ export function queueSlots<T extends { away: boolean }>(
 }
 
 /**
+ * The lowest free game slot (1..max), given the slots the live lobbies hold,
+ * or null when every slot is taken. Formation puts a new game here, so a game
+ * that forms while none is live is always game 1.
+ */
+export function freeGameSlot(
+  taken: readonly number[],
+  max: number = INHOUSE.MAX_LIVE_GAMES,
+): number | null {
+  for (let slot = 1; slot <= max; slot += 1) {
+    if (!taken.includes(slot)) return slot;
+  }
+  return null;
+}
+
+/** What a live game is called once two are running: "Game 2". */
+export function inhouseGameLabel(slot: number): string {
+  return `Game ${slot}`;
+}
+
+/**
+ * Whether to name a game by its number. A lone game 1 reads exactly like the
+ * single game the league always had; the number appears once another game is
+ * live, and always for a later slot, whose voice channels and hand-hosted
+ * lobby name differ from game 1's.
+ */
+export function showGameLabel(slot: number, liveGames: number): boolean {
+  return slot > 1 || liveGames > 1;
+}
+
+/**
+ * The Dota lobby name for a game hosted by hand. Game 1 keeps the league's
+ * plain name, so two games hosted at once never share one in the lobby list.
+ */
+export function inhouseHandLobbyName(slot: number): string {
+  return slot > 1 ? `${INHOUSE.LOBBY_NAME} ${slot}` : INHOUSE.LOBBY_NAME;
+}
+
+/** The Discord voice channel a game's team (1 | 2) talks in. */
+export function inhouseVoiceChannel(slot: number, team: number): string {
+  const channels =
+    INHOUSE.VOICE_CHANNELS[slot - 1] ?? INHOUSE.VOICE_CHANNELS[0];
+  return channels[team === 2 ? 1 : 0];
+}
+
+/**
  * A stable 4-digit code for a lobby, derived from its id. The public setup card
  * uses fixed Dota credentials; this per-lobby value is the short "#1234" label
  * the room header shows, so players and admins can tell back-to-back games
@@ -217,10 +262,9 @@ export function inhouseLobbyCode(lobbyId: string): string {
  *
  * Queue membership has teeth — a filled queue drags you into a timed ready
  * check whose failure DROPS you — so the room fires this at most once per page
- * load and scrubs the param. A live lobby is deliberately NOT a refusal: only
- * one lobby exists at a time, so a new joiner simply queues for the next game,
- * and refusing here broke the board's own "Queue for the next one →" link,
- * which exists for precisely that case.
+ * load and scrubs the param. A live lobby is deliberately NOT a refusal: a new
+ * joiner simply queues for the next game, and refusing here broke the board's
+ * own "Queue for the next one →" link, which exists for precisely that case.
  */
 export type AutoJoinDecision = "join" | "already-in" | "signed-out";
 
@@ -445,6 +489,72 @@ export function inhouseReadyInPlay(
     serverNow != null &&
     serverNow >= scanOpensAt
   );
+}
+
+/**
+ * The viewer's flags for a live game they aren't in: the room shows the other
+ * game read-only, so nothing in it is theirs to accept, vote on or draft. An
+ * admin keeps the controls the service lets an admin use on any game (start
+ * the clock, record a result, pick for a stalled captain, cancel), each of
+ * which names that game. Spread over the room's `me`.
+ */
+export function otherGameFlags(isAdmin: boolean, status: string) {
+  return {
+    inLobby: false,
+    myTeam: null,
+    isCaptain: false,
+    isOnClock: false,
+    canVote: false,
+    myVote: null,
+    canAccept: false,
+    hasAccepted: false,
+    canStart: isAdmin && status === INHOUSE_STATUS.READY,
+    canRecord:
+      isAdmin &&
+      (status === INHOUSE_STATUS.READY || status === INHOUSE_STATUS.IN_PROGRESS),
+    canCancel: isAdmin,
+    canPick: isAdmin && status === INHOUSE_STATUS.DRAFTING,
+  } as const;
+}
+
+/** Phases on a short clock, which the room polls at its fast rate. */
+const TIMED_PHASES: readonly string[] = [
+  INHOUSE_STATUS.READY_CHECK,
+  INHOUSE_STATUS.CAPTAIN_VOTE,
+  INHOUSE_STATUS.DRAFTING,
+  INHOUSE_STATUS.READY,
+];
+
+/**
+ * The lobby whose phase sets the room's poll rate: the viewer's own game, or
+ * for a spectator the other game on the shortest clock, so watching a draft
+ * stays as live as it was when one game ran at a time.
+ */
+export function pollingLobby<
+  T extends { status: string; scanOpensAt: number | null },
+>(mine: T | null, others: readonly T[], serverNow: number | null): T | null {
+  if (mine) return mine;
+  return (
+    others.find(
+      (l) =>
+        TIMED_PHASES.includes(l.status) &&
+        !inhouseReadyInPlay(l.status, l.scanOpensAt, serverNow),
+    ) ??
+    others[0] ??
+    null
+  );
+}
+
+/**
+ * Whether a game the last poll showed has ended (a result, a cancel), which
+ * refreshes the ladder and results the server rendered below the room. A game
+ * forming is not news there.
+ */
+export function liveGameEnded(
+  previous: readonly string[] | null,
+  current: readonly string[],
+): boolean {
+  return !!previous && previous.some((id) => !current.includes(id));
 }
 
 export function readyCheckEndedToast(o: {

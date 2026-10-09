@@ -231,7 +231,7 @@ export const INHOUSE_STATUS = {
 export type InhouseStatus =
   (typeof INHOUSE_STATUS)[keyof typeof INHOUSE_STATUS];
 
-// A lobby is "active" (occupies the single live slot) until it ends.
+// A lobby is "active" (holds one of the live game slots) until it ends.
 export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.READY_CHECK,
   INHOUSE_STATUS.CAPTAIN_VOTE,
@@ -251,11 +251,18 @@ export const INHOUSE_PLAYING_STATUSES: InhouseStatus[] = [
 export const INHOUSE = {
   TEAM_SIZE: 5,
   LOBBY_SIZE: 10, // players needed before a lobby forms
-  // The two Discord voice channels players join to talk during the game (one
-  // per team). Match the channel names in the Discord server exactly — change
-  // here if they're ever renamed.
-  VOICE_TEAM_1: "inhouse team 1",
-  VOICE_TEAM_2: "inhouse team 2",
+  // How many games can be live at once. Each live lobby holds a numbered slot
+  // (InhouseLobby.slot), so twenty queued players play two games side by side
+  // and anyone past that waits for a slot to free up. The lobby bot hosts
+  // them one after the other: it leaves each game once it is running.
+  MAX_LIVE_GAMES: 2,
+  // The Discord voice channels each game's teams talk in, one pair per game
+  // slot (team 1, team 2). Match the channel names in the Discord server
+  // exactly — change here if they're ever renamed.
+  VOICE_CHANNELS: [
+    ["inhouse team 1", "inhouse team 2"],
+    ["inhouse 2 team 1", "inhouse 2 team 2"],
+  ],
   // Fixed custom-lobby details. The league ticket is operationally required:
   // without it Valve does not publish the private game to OpenDota, so the
   // existing player-account result scan has nothing to discover.
@@ -295,8 +302,8 @@ export const INHOUSE = {
   // advantage — see nextPickTeam.
   FIRST_PICK_TEAM: 2,
   // Auto result detection (OpenDota): don't scan until a game could plausibly be
-  // over, and don't scan more than once per interval (there's only ever one
-  // active lobby, so this bounds API usage globally). The interval grows with
+  // over, and don't scan more than once per interval per lobby (at most
+  // MAX_LIVE_GAMES are live, so this bounds API usage globally). The interval grows with
   // the game's age — an abandoned lobby nobody cancels must not scan every 3
   // minutes forever — up to the cap.
   //

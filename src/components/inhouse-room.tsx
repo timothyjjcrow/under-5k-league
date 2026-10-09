@@ -15,10 +15,15 @@ import { usePersistedFlag, usePollHealth } from "@/components/room-clock";
 import {
   autoJoinDecision,
   inhouseAlerts,
+  inhouseGameLabel,
   inhouseLobbyCode,
   inhouseTitleFlag,
+  liveGameEnded,
+  otherGameFlags,
+  pollingLobby,
   readyCheckEndedToast,
   shouldFocusStage,
+  showGameLabel,
   wasInReadyCheck,
   type InhouseAlertSnapshot,
   type InhouseFocusSnapshot,
@@ -41,14 +46,22 @@ import {
 } from "@/lib/constants";
 import { armAudioUnlock, playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
-import type { RoomMe } from "@/components/inhouse/shared";
-import { RoomStages } from "@/components/inhouse/room-stages";
+import type { RoomLobby, RoomMe } from "@/components/inhouse/shared";
+import { RoomStages, roomStageLabel } from "@/components/inhouse/room-stages";
 import { NextGameQueueCard, QueueView } from "@/components/inhouse/queue-view";
 import { ReadyCheckView } from "@/components/inhouse/ready-check-view";
 import { VoteView } from "@/components/inhouse/vote-view";
 import { DraftView } from "@/components/inhouse/draft-view";
 import { ReadyView } from "@/components/inhouse/ready-view";
 import { InProgressView } from "@/components/inhouse/in-progress-view";
+
+/**
+ * The lobby whose phase sets the poll rate: the viewer's own game, or the
+ * other live game on the shortest clock (pollingLobby).
+ */
+function clockLobby(s: InhouseState | null) {
+  return s ? pollingLobby(s.lobby, s.otherLobbies, s.now) : null;
+}
 
 export function InhouseRoom({
   pollMs = 1500,
@@ -110,7 +123,9 @@ export function InhouseRoom({
   // ready check whose failure drops you from the queue), so an accidental
   // re-enqueue on a re-render would be a real cost, not a cosmetic one.
   const autoJoinedRef = useRef(false);
-  const prevLobbyId = useRef<string | null>(null);
+  // The live games the last poll showed, so a game ending refreshes the
+  // server-rendered ladder and results below the room.
+  const prevLiveIds = useRef<string[] | null>(null);
   // What the LAST poll said about this viewer — the one input to both the
   // chime (inhouseAlerts) and the "match cancelled" toast, so the two can
   // never disagree about what just changed. null = nothing seen yet, which is
@@ -244,12 +259,13 @@ export function InhouseRoom({
       // reasoning in inhousePollCadence, where they're unit-tested.
       const browserOffline = navigator.onLine === false;
       if (browserOffline) setConnectivity("offline");
+      const preClock = clockLobby(latestStateRef.current);
       const pre = inhousePollCadence({
         offline: browserOffline,
         hidden: document.visibilityState === "hidden",
         hasStake: hasStakeRef.current,
-        lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
-        scanOpensAt: latestStateRef.current?.lobby?.scanOpensAt ?? null,
+        lobbyStatus: preClock?.status ?? null,
+        scanOpensAt: preClock?.scanOpensAt ?? null,
         serverNow: latestStateRef.current?.now ?? null,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
         // for everyone — fetch once rather than skipping forever (a tab that is
@@ -336,14 +352,15 @@ export function InhouseRoom({
       // the hidden-tab keepalive, so refocus stays snappy. Stake is MEMBERSHIP, not
       // mere existence of a lobby — five people watching a 45min game were each
       // firing 40 req/min because one existed.
+      const postClock = clockLobby(latestStateRef.current);
       schedule(
         inhousePollCadence({
           offline: navigator.onLine === false,
           hidden: document.visibilityState === "hidden",
           // Keep the latest ACCEPTED state through a failed or stale poll.
           hasStake: hasStakeRef.current,
-          lobbyStatus: latestStateRef.current?.lobby?.status ?? null,
-          scanOpensAt: latestStateRef.current?.lobby?.scanOpensAt ?? null,
+          lobbyStatus: postClock?.status ?? null,
+          scanOpensAt: postClock?.scanOpensAt ?? null,
           serverNow: latestStateRef.current?.now ?? null,
           rateLimited,
           reached: !!next,
@@ -393,13 +410,19 @@ export function InhouseRoom({
   // components (see <SecondsClock>/<ElapsedClock>), so the per-second update
   // doesn't re-render this room or the drafting pool.
 
-  // When a lobby ends (or a new one forms), refresh the server-rendered
-  // leaderboard + recent games sitting below this component.
+  // When a live game ends, refresh the server-rendered leaderboard + recent
+  // games sitting below this component.
+  const liveIdsKey = state
+    ? [state.lobby, ...state.otherLobbies]
+        .flatMap((l) => (l ? [l.id] : []))
+        .join(",")
+    : null;
   useEffect(() => {
-    const cur = state?.lobby?.id ?? null;
-    if (prevLobbyId.current && prevLobbyId.current !== cur) router.refresh();
-    prevLobbyId.current = cur;
-  }, [state?.lobby?.id, router]);
+    if (liveIdsKey === null) return;
+    const cur = liveIdsKey ? liveIdsKey.split(",") : [];
+    if (liveGameEnded(prevLiveIds.current, cur)) router.refresh();
+    prevLiveIds.current = cur;
+  }, [liveIdsKey, router]);
 
   // Ring a bell on the moments that matter to this viewer: their match found
   // (ready check), the captain vote opening, their turn to pick, teams locking
@@ -662,7 +685,9 @@ export function InhouseRoom({
     );
   }
 
-  const { lobby } = state;
+  // `lobby` is the viewer's own game; `otherLobbies` are the other live games,
+  // which they watch read-only. Every flag in `state.me` is about `lobby`.
+  const { lobby, otherLobbies } = state;
   // The service already authorizes administrators to recover a stuck draft by
   // picking for the captain on the current side. Keep that broader CAPABILITY
   // separate from `isOnClock`, which remains the captain-only attention flag
@@ -680,11 +705,158 @@ export function InhouseRoom({
   // player, it sorts the pool the same way — came back on the clock two picks
   // later holding a dead id. The old footer Draft button then rendered
   // ENABLED with no name, and every click was a "Player already drafted"
-  // toast while their real 60s clock burned.
-  const selectedInPool =
-    selected && lobby?.pool.some((p) => p.userId === selected)
-      ? selected
-      : null;
+  // toast while their real 60s clock burned. Nobody is in two pools, so one
+  // selection serves every game (an admin picking for a stalled captain).
+  const selectedIn = (l: RoomLobby) =>
+    selected && l.pool.some((p) => p.userId === selected) ? selected : null;
+  // "Game 2" once two games are live (or for a lone game 2).
+  const gameLabel = (l: RoomLobby) =>
+    showGameLabel(l.slot, state.liveGames) ? inhouseGameLabel(l.slot) : null;
+  // A spectator of the one live game sees it as the room's stage, exactly as
+  // before two games could run; beside the viewer's own game, or beside the
+  // other live game, a pinned clock bar would cover the one that matters.
+  const soleWatched = !lobby && otherLobbies.length === 1;
+
+  // One game's stage view. Its actions name the game, so a click is judged
+  // against the lobby it was made on even with two live.
+  const stageView = (l: RoomLobby, viewer: RoomMe, clockBar: boolean) => {
+    const actOn = (body: Record<string, unknown>) =>
+      act({ ...body, lobbyId: l.id });
+    return l.status === "READY_CHECK" ? (
+      <ReadyCheckView
+        key={l.id}
+        lobby={l}
+        me={viewer}
+        offset={offset}
+        pending={pending}
+        act={actOn}
+        clockBar={clockBar}
+      />
+    ) : l.status === "CAPTAIN_VOTE" ? (
+      <VoteView
+        key={l.id}
+        lobby={l}
+        me={viewer}
+        offset={offset}
+        pending={pending}
+        act={actOn}
+        clockBar={clockBar}
+      />
+    ) : l.status === "DRAFTING" ? (
+      <DraftView
+        key={l.id}
+        state={state}
+        me={viewer}
+        lobby={l}
+        offset={offset}
+        selected={selectedIn(l)}
+        setSelected={setSelected}
+        pending={pending}
+        act={actOn}
+        clockBar={clockBar}
+      />
+    ) : l.status === "READY" ? (
+      <ReadyView
+        key={l.id}
+        lobby={l}
+        me={viewer}
+        serverNow={state.now}
+        pending={pending}
+        act={actOn}
+      />
+    ) : (
+      <InProgressView
+        key={l.id}
+        lobby={l}
+        me={viewer}
+        offset={offset}
+        serverNow={state.now}
+        pending={pending}
+        act={actOn}
+      />
+    );
+  };
+
+  // An admin scraps one game; its ten requeue. The confirm names the game
+  // when two are live.
+  const cancelButton = (l: RoomLobby) => {
+    const label = gameLabel(l);
+    return (
+      <div className="text-right">
+        <button
+          disabled={pending}
+          onClick={async () => {
+            if (
+              window.confirm(
+                label
+                  ? `Scrap ${label}? Its ten players go back into the queue.`
+                  : "Scrap the current inhouse lobby? Everyone goes back into the queue.",
+              )
+            ) {
+              // Only claim success once the server agrees — the cancel can
+              // legitimately lose to a result landing mid-confirm.
+              if (await act({ action: "cancel", lobbyId: l.id })) {
+                pushToast("success", "Lobby cancelled — players re-queued");
+              }
+            }
+          }}
+          className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
+        >
+          {label ? `Admin: cancel ${label}` : "Admin: cancel this lobby"}
+        </button>
+      </div>
+    );
+  };
+
+  // The other live games, read-only: nothing in them is the viewer's to
+  // accept, vote on or draft, while an admin keeps their per-game controls.
+  const otherGame = (l: RoomLobby) => {
+    const viewer: RoomMe = {
+      ...state.me,
+      ...otherGameFlags(state.me.isAdmin, l.status),
+    };
+    const label = gameLabel(l);
+    const body = (
+      <>
+        {stageView(l, viewer, soleWatched)}
+        {viewer.canCancel ? cancelButton(l) : null}
+      </>
+    );
+    // Beside the viewer's own game it folds away to one line.
+    if (lobby) {
+      return (
+        <details
+          key={l.id}
+          className="rounded-[var(--radius)] border border-line bg-surface/40"
+        >
+          <summary className="flex min-h-11 cursor-pointer items-center gap-2 px-4 text-sm text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+            <span className="font-medium text-fg">
+              {label ?? inhouseGameLabel(l.slot)}
+            </span>
+            <span>is also live · {roomStageLabel(l.status)}</span>
+          </summary>
+          <div className="space-y-3 border-t border-line p-4">{body}</div>
+        </details>
+      );
+    }
+    return (
+      <section
+        key={l.id}
+        aria-label={label ?? "Live game"}
+        className="space-y-3"
+      >
+        {label ? (
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            {label}
+            <span className="font-mono text-[11px] font-normal text-muted">
+              #{inhouseLobbyCode(l.id)}
+            </span>
+          </h2>
+        ) : null}
+        {body}
+      </section>
+    );
+  };
 
   return (
     <div className="space-y-5">
@@ -708,9 +880,17 @@ export function InhouseRoom({
             <span className="font-mono text-[11px]">
               #{inhouseLobbyCode(lobby.id)}
             </span>
+          ) : soleWatched ? (
+            <span className="font-mono text-[11px]">
+              #{inhouseLobbyCode(otherLobbies[0].id)}
+            </span>
           ) : null}
           {me.inLobby ? (
-            <Badge tone="accent">Your lobby</Badge>
+            <Badge tone="accent">
+              {lobby && gameLabel(lobby)
+                ? `Your lobby · ${gameLabel(lobby)}`
+                : "Your lobby"}
+            </Badge>
           ) : me.inQueue ? (
             <Badge tone="success">You’re queued</Badge>
           ) : null}
@@ -731,7 +911,7 @@ export function InhouseRoom({
         </button>
       </div>
 
-      <RoomStages lobby={lobby} />
+      <RoomStages lobby={lobby ?? (soleWatched ? otherLobbies[0] : null)} />
 
       {/* ONE status line, chosen by priority — the draft room's too. */}
       <RoomStatusLine
@@ -814,10 +994,10 @@ export function InhouseRoom({
         </div>
       ) : null}
 
-      {/* A live lobby does not close the queue. People outside it need a clear
+      {/* A live game does not close the queue. People outside it need a clear
           next-game entry point; once queued, the full view keeps their position
           and Leave control visible for the life of the current game. */}
-      {lobby && !me.inLobby ? (
+      {!lobby && otherLobbies.length > 0 ? (
         me.inQueue ? (
           <QueueView
             state={state}
@@ -845,7 +1025,9 @@ export function InhouseRoom({
 
       {/* scroll-mt clears the 64px sticky header (see shouldFocusStage). */}
       <div ref={stageRef} className="scroll-mt-24">
-        {!lobby ? (
+        {lobby ? (
+          stageView(lobby, me, true)
+        ) : otherLobbies.length === 0 ? (
           <QueueView
             state={state}
             pending={pending}
@@ -856,81 +1038,12 @@ export function InhouseRoom({
             firstGame={firstGame}
             act={act}
           />
-        ) : lobby.status === "READY_CHECK" ? (
-          <ReadyCheckView
-            key={lobby.id}
-            lobby={lobby}
-            me={me}
-            offset={offset}
-            pending={pending}
-            act={act}
-          />
-        ) : lobby.status === "CAPTAIN_VOTE" ? (
-          <VoteView
-            key={lobby.id}
-            lobby={lobby}
-            me={me}
-            offset={offset}
-            pending={pending}
-            act={act}
-          />
-        ) : lobby.status === "DRAFTING" ? (
-          <DraftView
-            key={lobby.id}
-            state={state}
-            me={me}
-            lobby={lobby}
-            offset={offset}
-            selected={selectedInPool}
-            setSelected={setSelected}
-            pending={pending}
-            act={act}
-          />
-        ) : lobby.status === "READY" ? (
-          <ReadyView
-            key={lobby.id}
-            lobby={lobby}
-            me={me}
-            serverNow={state.now}
-            pending={pending}
-            act={act}
-          />
-        ) : (
-          <InProgressView
-            key={lobby.id}
-            lobby={lobby}
-            me={me}
-            offset={offset}
-            serverNow={state.now}
-            pending={pending}
-            act={act}
-          />
-        )}
+        ) : null}
       </div>
 
-      {me.canCancel ? (
-        <div className="text-right">
-          <button
-            disabled={pending}
-            onClick={async () => {
-              if (
-                window.confirm(
-                  "Scrap the current inhouse lobby? Everyone goes back into the queue.",
-                )
-              ) {
-                // Only claim success once the server agrees — the cancel can
-                // legitimately lose to a result landing mid-confirm.
-                if (await act({ action: "cancel" })) {
-                  pushToast("success", "Lobby cancelled — players re-queued");
-                }
-              }
-            }}
-            className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-          >
-            Admin: cancel this lobby
-          </button>
-        </div>
-      ) : null}
+      {lobby && me.canCancel ? cancelButton(lobby) : null}
+
+      {otherLobbies.map(otherGame)}
 
       {/* A wrong result used to be permanent — the ladder and history both
           filter on COMPLETED, so voiding the lobby removes it and every
