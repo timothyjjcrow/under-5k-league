@@ -46,7 +46,11 @@ import {
   inhouseNightHeadcountFor,
   readInhouseNightRsvps,
 } from "@/lib/inhouse-night-rsvp-service";
-import { InhouseTimesCard, PLAY_LATER_ANCHOR } from "@/components/inhouse-times";
+import {
+  InhouseTimesCard,
+  InhouseTimesStrip,
+  PLAY_LATER_ANCHOR,
+} from "@/components/inhouse-times";
 import { inhouseTimePreviewText, parseInhouseTimeParam } from "@/lib/inhouse-times";
 import { readInhouseTime } from "@/lib/inhouse-times-service";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
@@ -266,6 +270,13 @@ export default async function InhousePage({
         <Suspense fallback={null}>
           <InhouseNightCard invite={invite} />
         </Suspense>
+        {/* Play later's open times, above the queue so nobody scrolls to
+            find them (Tim, 2026-10-10): a strip of the soonest few, or
+            nothing while none is open or when a time's link put the whole
+            card here instead. Streamed: it never holds up the room. */}
+        <Suspense fallback={null}>
+          <InhouseTimesStrip linked={linkedTime !== undefined} />
+        </Suspense>
         {linkedTime !== undefined ? <PlayLater linked={linkedTime} /> : null}
         <section
           id="live-room"
@@ -279,8 +290,8 @@ export default async function InhousePage({
           />
           {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
         </section>
-        {/* Players' own times, under the room: the queue stays first. One
-            small read, streamed so it never holds up the room. */}
+        {/* Players' own times in full, under the room: posting, the links
+            and everyone's names. The strip above shares its one read. */}
         {linkedTime === undefined ? <PlayLater /> : null}
 
         {/* The room above paints immediately; the history-scanning sections

@@ -723,8 +723,9 @@ Players' own short-notice times on /inhouse ("I can play at 8, who's
 in?"; DECISIONS.md, 2026-10-10). Kept apart from the inhouse night on
 purpose: no Discord post, no ping, no admin. Rules: `src/lib/inhouse-times.ts`
 (pure); storage: `inhouse-times-service.ts`; the action:
-`src/app/actions/inhouse-times.ts`; the card: `src/components/inhouse-times.tsx`
-with the time box and "Copy link" in `inhouse-times-client.tsx`; the calendar
+`src/app/actions/inhouse-times.ts`; the card and the strip:
+`src/components/inhouse-times.tsx`, with the time box, "Copy link" and the
+strip's "Today, 8:00 PM" in `inhouse-times-client.tsx`; the calendar
 file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
 `test/integration/inhouse-times.itest.ts`, `e2e-mid/zz-inhouse-times.spec.ts`.
 
@@ -772,8 +773,31 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   the link does) with the league's own picture, since the page's picture is
   the night's. Opening it puts the card above the room with that time picked
   out, or says the time is gone; it never signs anyone up.
-- **Under the room otherwise.** The queue stays first (the never de-promote
-  rule); the section nav lists Play later after the live room.
+- **Open times lead the page as a strip; the card stays under the room**
+  (Tim, 2026-10-10: a posted time should be seen without scrolling past the
+  queue). While any time is on or ahead, a compact strip sits between the
+  inhouse night's card and the live room: the soonest
+  `INHOUSE_TIMES_STRIP_SHOWN` (3), each a tile with its start ("Today,
+  8:00 PM" on the viewer's clock, `inhouseTimeDayWord`; the server writes the
+  same words on the league's clock, zone named), its countdown, a stack of up
+  to five faces labelled with who's in (`inhouseTimeWhoText`), the count, and
+  the same buttons as its row in the card. A link down to the card says "N
+  more times", else "Post a time", else "All times" at the cap
+  (`inhouseTimesStripLinkText`). `inhouseTimesStrip` alone decides whether it
+  shows: nothing while no time is open (no empty box) and nothing on a page
+  opened from a time's link, which already puts the whole card first. The
+  card keeps posting, the links and everyone's names, and the section nav's
+  Play later still points at it. Both read through one request-cached
+  `loadPlayLater`, so they show the same times from one query; the strip
+  streams in its own `<Suspense fallback={null}>`, never holding up the room.
+  Each tile's button is described by the tile's own time id
+  (`inhouse-time-next-<ms>`), since the card's row shows the same time. On a
+  phone the tiles are one swipeable row (the next one peeking in) inside the
+  strip's `overflow-hidden` card, so the strip stays one tile high and the
+  queue stays on the first screen; from `sm` up they sit side by side. A tile
+  with two buttons (a time that's on, for a player in on it: "Join the queue"
+  and the pressed "I'm in", since taking it back is never hidden) puts them
+  at its foot, clear of the time and its countdown.
 
 ## Testing
 
