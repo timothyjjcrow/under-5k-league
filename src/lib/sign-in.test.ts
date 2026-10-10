@@ -33,7 +33,7 @@ describe("the signed-out form error", () => {
       join(__dirname, "../components/action-form.tsx"),
       "utf8",
     );
-    expect(form).toContain("state.error === SIGN_IN_REQUIRED ? (");
+    expect(form).toContain("shownError === SIGN_IN_REQUIRED ? (");
     expect(form).toContain("<SignInRequired />");
   });
 
