@@ -3707,12 +3707,20 @@ describe("inhouse — the draft can't be left off the clock", () => {
     expect(
       after.status === INHOUSE_STATUS.DRAFTING && after.pickTeam === null,
     ).toBe(false);
-    // And the turn was consumed once, not once per racer.
+    // And the expired turn was consumed once, not once per racer: pick 0 plus
+    // exactly one auto-pick, since the pair's second turn starts a fresh clock
+    // and an auto-pick claims only the turn it judged expired. A racer can
+    // read the lobby before the winner commits and its players after (two
+    // statements, two snapshots), so it targets the NEXT player, and before
+    // the auto-pick claimed its judged deadline it took the pair's fresh
+    // second turn: a third player drafted. That order is rare here; the seam
+    // test "won't auto-pick … when the captain's pick lands as the clock runs
+    // out" pins the same claim deterministically.
     const drafted = after.players.filter(
       (p) => p.team !== null && !p.isCaptain,
     );
     expect(new Set(drafted.map((p) => p.userId)).size).toBe(drafted.length);
-    expect(drafted.length).toBeLessThanOrEqual(3); // pick 0 + at most the pair
+    expect(drafted.length).toBe(2);
   });
 });
 
@@ -4258,6 +4266,109 @@ describe.skipIf(!ON_POSTGRES)(
         }),
       ).toBe(2);
     });
+
+    it.each([
+      ["the other team's turn", 0],
+      ["the same team's pair pick", 1],
+    ] as const)(
+      "won't auto-pick %s when the captain's pick lands as the clock runs out",
+      async (_next, picksBefore) => {
+        // resolveStalledPick judges the clock expired on ITS OWN read, then
+        // applyPick re-reads the lobby, and on Postgres that re-read is a fresh
+        // snapshot. A captain's pick committing in between hands the next turn
+        // a full clock, and an auto-pick that claimed the turn its re-read
+        // showed drafted for a captain whose clock never ran out. At a snake
+        // pair the next turn is the SAME team's, so only the judged deadline in
+        // the turn claim tells the two turns apart.
+        const { admin, players, lobby } = await draftingLobby(
+          `Expired${picksBefore}`,
+        );
+        if (picksBefore === 1) {
+          // Pick 0 is the first-pick team's single; the pair follows it.
+          const top = lobby.players
+            .filter((p) => p.team === null)
+            .sort((a, b) => b.mmr - a.mmr)[0];
+          expect((await makePick(admin, top.userId)).ok).toBe(true);
+        }
+        const live = await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+          include: { players: true },
+        });
+        const onClock = live.pickTeam!;
+        const judgedEndsAt = live.pickEndsAt!;
+        const captainId = live.players.find(
+          (p) => p.isCaptain && p.team === onClock,
+        )!.userId;
+        const captain = players.find((p) => p.user.id === captainId)!;
+        // The auto-pick's choice (the top MMR) and the captain's (anyone else).
+        const pool = live.players
+          .filter((p) => p.team === null)
+          .sort((a, b) => b.mmr - a.mmr);
+        const autoChoice = pool[0];
+        const captainsChoice = pool[pool.length - 1];
+
+        let fired = false;
+        const rival: {
+          pick?: Awaited<ReturnType<typeof makePick>>;
+          turn?: { pickTeam: number | null; pickEndsAt: Date | null };
+        } = {};
+        setRaceHook(
+          onceAt("inhouse.resolveStalledPick.beforeApply", async () => {
+            fired = true;
+            // Back before the deadline, when the captain clicked: their real
+            // pick takes the pending turn and starts the next one's clock. It
+            // writes rows the open transaction has only READ.
+            vi.useRealTimers();
+            rival.pick = await makePick(captain.session, captainsChoice.userId);
+            rival.turn = await prisma.inhouseLobby.findUniqueOrThrow({
+              where: { id: lobby.id },
+              select: { pickTeam: true, pickEndsAt: true },
+            });
+          }),
+        );
+
+        let autoPicked: boolean;
+        try {
+          // The poller's clock reads just past the deadline (Date only, so
+          // Prisma's timers stay real).
+          vi.useFakeTimers({ toFake: ["Date"] });
+          vi.setSystemTime(judgedEndsAt.getTime() + 1_000);
+          autoPicked = await resolveStalledPick();
+        } finally {
+          vi.useRealTimers();
+        }
+
+        expect(fired).toBe(true); // the seam was reached — not a vacuous pass
+        expect(rival.pick).toEqual({ ok: true });
+        // The boundary this case is about, with a fresh deadline either way.
+        expect(rival.turn!.pickTeam === onClock).toBe(picksBefore === 1);
+        expect(rival.turn!.pickEndsAt!.getTime()).not.toBe(
+          judgedEndsAt.getTime(),
+        );
+        // The auto-pick refused: its choice is still in the pool…
+        expect(autoPicked).toBe(false);
+        expect(
+          (
+            await prisma.inhouseLobbyPlayer.findUniqueOrThrow({
+              where: { id: autoChoice.id },
+            })
+          ).team,
+        ).toBeNull();
+        // …and the next turn is untouched, its full clock still running.
+        const after = await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+        });
+        expect(after.status).toBe(INHOUSE_STATUS.DRAFTING);
+        expect(after.pickTeam).toBe(rival.turn!.pickTeam);
+        expect(after.pickEndsAt).toEqual(rival.turn!.pickEndsAt);
+        // One turn, one player: the earlier picks plus the captain's own.
+        expect(
+          await prisma.inhouseLobbyPlayer.count({
+            where: { lobbyId: lobby.id, isCaptain: false, team: { not: null } },
+          }),
+        ).toBe(picksBefore + 1);
+      },
+    );
 
     it("refuses a pick whose TARGET was drafted between the read and the claim", async () => {
       const { admin, lobby } = await draftingLobby("Target");

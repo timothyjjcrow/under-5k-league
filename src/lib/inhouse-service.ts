@@ -907,6 +907,11 @@ async function applyPick(
   targetUserId: string,
   /** The team the CALLER authorized against, when it authorized against one. */
   expectTeam?: number | null,
+  /**
+   * The deadline of the turn the CALLER judged, when it judged one: the
+   * auto-pick saw THAT clock run out, so it may take that turn and no other.
+   */
+  expectEndsAt?: Date,
 ): Promise<InhouseActionResult> {
   const lobby = await tx.inhouseLobby.findUnique({
     where: { id: lobbyId },
@@ -955,12 +960,21 @@ async function applyPick(
   // the winner just re-wrote, and claims a turn that was never its own. The
   // winner always stamps a fresh pickDeadline() when it advances, so the
   // deadline is what actually identifies the turn.
+  //
+  // Whose deadline: the caller's, when it judged one. resolveStalledPick
+  // judged the clock expired on ITS OWN read, and the re-read above is a fresh
+  // snapshot, so a captain's pick landing in between shows the NEXT turn here
+  // (the other team's, or the same team's pair pick) with a full clock.
+  // Claiming the re-read's deadline would auto-pick for a captain whose clock
+  // never ran out. makePick judged a team, not a clock, so it takes the turn
+  // the re-read shows (the team check above keeps that turn the caller's).
+  const turnEndsAt = expectEndsAt ?? lobby.pickEndsAt;
   const turn = await tx.inhouseLobby.updateMany({
     where: {
       id: lobbyId,
       status: INHOUSE_STATUS.DRAFTING,
       pickTeam: team,
-      pickEndsAt: lobby.pickEndsAt,
+      pickEndsAt: turnEndsAt,
     },
     data: { pickTeam: null },
   });
@@ -1122,7 +1136,20 @@ export async function resolveStalledPick(): Promise<boolean> {
               a.userId.localeCompare(b.userId),
           );
         if (pool.length === 0) return false;
-        const r = await applyPick(tx, lobby.id, pool[0].userId);
+        // Seam: the clock was judged expired on the read above and nothing is
+        // written yet, so a rival on another connection commits here without
+        // blocking. The rival that matters is the captain's own pick landing
+        // as the clock runs out: it hands the next turn a fresh clock.
+        await raceHook("inhouse.resolveStalledPick.beforeApply");
+        // Pass the turn judged expired, its team AND its deadline: applyPick
+        // re-reads the lobby, and that read may already show the next turn.
+        const r = await applyPick(
+          tx,
+          lobby.id,
+          pool[0].userId,
+          lobby.pickTeam,
+          lobby.pickEndsAt,
+        );
         return r.ok;
       });
       if (ok) picked = true;
