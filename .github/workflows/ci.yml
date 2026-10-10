@@ -171,7 +171,8 @@ jobs:
         # Docker Hub's official postgres image, from Docker's own ECR Public
         # mirror (same digest). Hub limits anonymous pulls per IP, which hosted
         # runners share: on 2026-10-09 all five Postgres jobs failed to pull.
-        image: public.ecr.aws/docker/library/postgres:16
+        # 18 is the major both leagues' Neon databases run.
+        image: public.ecr.aws/docker/library/postgres:18
         env:
           POSTGRES_PASSWORD: postgres
           # The migration rehearsal has a deliberately narrow destructive
@@ -192,6 +193,25 @@ jobs:
           node-version: "22.x"
           cache: npm
       - run: npm ci
+      # The runner image's only PostgreSQL client is 16 (it installs 16 from
+      # apt.postgresql.org, then removes that apt source), and pg_dump refuses
+      # a newer server: "aborting because of server version mismatch". The
+      # backup and restore rehearsals below need the service's major, so
+      # postgresql-common's own script re-adds the source with the key the
+      # package ships, and 18's binaries go first on PATH for later steps.
+      # The image allows apt one retry per URI (it fails over between Ubuntu
+      # mirrors) and apt.postgresql.org has no mirror list, so try three times.
+      - name: Install the PostgreSQL 18 client
+        run: |
+          for attempt in 1 2 3; do
+            sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y &&
+              sudo apt-get install --yes --no-install-recommends postgresql-client-18 &&
+              break
+            if [ "${attempt}" = 3 ]; then exit 1; fi
+            sleep 20
+          done
+          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
       - name: Exercise the guarded production migration release
         run: npm run db:migrate:release -- --apply "${GITHUB_SHA}"
         # This is CI's exercise of the guarded production-writer wrapper. The
@@ -349,8 +369,8 @@ jobs:
         shard: [1, 2, 3, 4]
     services:
       postgres:
-        # Not Docker Hub: see the postgres job's service above.
-        image: public.ecr.aws/docker/library/postgres:16
+        # Not Docker Hub, and production's major: see the postgres job's service.
+        image: public.ecr.aws/docker/library/postgres:18
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: ld2l_test

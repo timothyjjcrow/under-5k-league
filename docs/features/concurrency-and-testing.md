@@ -207,6 +207,11 @@ keep the old `ld2l_` prefix.)
   every table. `assertPostgresTestUrl` accepts only `ld2l_test` or `ld2l_pgtest`,
   and `pg:up`/`pg:down` require localhost. Never use a production or shared URL,
   and never paste a credential-bearing URL into a command line or shell history.
+- **Test on production's major where it matters.** Both leagues and CI run
+  PostgreSQL 18. `pg:up` uses whatever server listens on localhost:5432, so a
+  check that depends on the major (postflight's deparsed predicates and checks,
+  or a backup rehearsal, whose `pg_dump` refuses a newer server) needs a
+  PostgreSQL 18 server and client, such as Homebrew's `postgresql@18`.
 - **Slow the commits to flush out a retry flake.** A CI runner's disk can
   hold a commit open far longer than a laptop's. `psql -d postgres -c "ALTER
   DATABASE ld2l_pgtest SET commit_delay = 20000" -c "ALTER DATABASE
