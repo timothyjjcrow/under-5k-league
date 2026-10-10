@@ -147,7 +147,7 @@ dota.router.on(EGCBaseClientMsg.k_EMsgGCClientWelcome, (welcome) => {
   controller.online = true;
   console.log("[dota-bot] Game Coordinator connected");
   if (freed)
-    console.log("[dota-bot] Reconnected outside the launched game's lobby; free for the next one");
+    console.log("[dota-bot] Reconnected in no lobby; free for the next one");
 });
 dota.router.on(ESOMsg.k_ESOMsg_CacheSubscribed, subscribed);
 dota.router.on(ESOMsg.k_ESOMsg_Create, objectUpdate);

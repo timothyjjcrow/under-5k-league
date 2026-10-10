@@ -379,13 +379,15 @@ export class LobbyController {
    * no lobby proves the account is in none. True when that freed a claim. */
   welcomed(complete) {
     this.absenceConfirmed = complete && !this.lobby;
-    // A drop can swallow the departure from a launched game, and its claim
-    // then answers BUSY to every next Create. A launched game has nothing to
-    // replay, so proven absence is that departure. Every other job keeps its
-    // claim for a deliberate release.
+    const job = this.data.jobs[this.data.active];
+    // A drop can swallow the departure from a launched game or a released
+    // lobby, and its claim then answers BUSY to every next Create. Neither
+    // has anything to replay, so proven absence is that departure: the one a
+    // second Release would record. Every other job keeps its claim for a
+    // deliberate release.
     if (
       !this.absenceConfirmed ||
-      this.data.jobs[this.data.active]?.state !== "started"
+      !(job?.state === "started" || job?.releasing)
     )
       return false;
     this.departed();
