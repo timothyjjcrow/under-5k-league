@@ -15,7 +15,8 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
 - **Tim's calls bind** (`docs/DECISIONS.md`): keep every inhouse feature, the
   captain vote and the Discord board; never hide or de-promote the queue, even
   empty; don't gate Europe's inhouse on its ticket; no retire checkpoint or
-  adoption features (plan-a-time, rally button) unless Tim asks.
+  rally button unless Tim asks. The planned-time features are the ones he
+  asked for: the admin's inhouse night and the players' own Play later times.
 - **Status flows `READY_CHECK → CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS
   → (AWAITING_RESULT →) COMPLETED | CANCELLED`, with up to two live lobbies,
   one per game slot** (`INHOUSE_ACTIVE_STATUSES`, `INHOUSE.MAX_LIVE_GAMES`;
@@ -715,6 +716,64 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   event whose UID and SEQUENCE are the night's id and revision). The Discord
   half of the headcount streams, so a slow Discord never holds a page; the
   bar itself renders inline, so it never drops in above a painted hero.
+
+## Play later
+
+Players' own short-notice times on /inhouse ("I can play at 8, who's
+in?"; DECISIONS.md, 2026-10-10). Kept apart from the inhouse night on
+purpose: no Discord post, no ping, no admin. Rules: `src/lib/inhouse-times.ts`
+(pure); storage: `inhouse-times-service.ts`; the action:
+`src/app/actions/inhouse-times.ts`; the card: `src/components/inhouse-times.tsx`
+with the time box and "Copy link" in `inhouse-times-client.tsx`; the calendar
+file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
+`test/integration/inhouse-times.itest.ts`, `e2e-mid/zz-inhouse-times.spec.ts`.
+
+- **A time is just its "I'm in" rows.** One `InhouseTimeRsvp` row per player
+  per time, keyed by the start and the player, with no parent table. Posting
+  a time is being first in on it, two players posting 8:00 PM share one, and
+  a time is gone once its last player takes it back, so there is no owner,
+  nothing to move or cancel, and nobody's plan is left hanging when its
+  poster drops out. Rows of times that are over are pruned after the next
+  "I'm in" (best-effort; no read shows them).
+- **Any signed-in player, the next day, the quarter hour.** The box takes a
+  clock time on the player's own clock and means the next time it comes
+  round, today or tomorrow (`nextInhouseTimeAt`, worked out in the browser,
+  which alone knows the zone); the line under it names the exact time that
+  will post, a rounding included, and says when it's already up. The server
+  takes only a quarter-hour start ahead and at most 25 hours off
+  (`inhouseTimeProblem`; a day is 25 hours when the clocks go back). No
+  linked Discord is needed: nothing is counted against Discord or pinged.
+- **At most `INHOUSE_TIME_MAX_PER_PLAYER` (3) upcoming times per player,**
+  which also caps what one account can keep on the list. The cap, the
+  "posted" versus "in" answer and the double tap are all judged in one
+  Serializable transaction with `retrySerializable` (six tries: three ran out
+  inside one slow commit); the raced tests in the itest fail without either.
+- **The night comes first.** A new time inside a planned inhouse night's
+  window is refused with a pointer to the night's card; a time posted before
+  the night was planned stays and can still be joined. The night is read
+  before the transaction, so a night planned in that gap leaves at worst the
+  same thing as one planned just after.
+- **It runs on read time.** A time is upcoming, on for `INHOUSE_TIME_ON_MS`
+  (an hour) after its start, then over; nothing is scheduled, so there is no
+  automation-gate wake-up and no worker step. Once it's on, its row says
+  "Join the queue" (a jump to the room on the same page) and "I'm in" is
+  closed, though anyone in keeps the pressed toggle to take it back. Nobody
+  is queued for a time: an absent player would sink the ready check.
+- **Each row decides its controls by one rule** (`inhouseTimeControls`):
+  "I'm in" (a sign-in back to the time's link when signed out, held back at
+  the cap), "Join the queue" once it's on, and calendar links (Google and an
+  `.ics`) only for a player in on it and waiting, which are the reminder the
+  site gives in place of a ping. Every row's "I'm in" is described by its
+  time (`aria-describedby`), since they share a label.
+- **Its link is the one Discord touch.** "Copy link" copies
+  `inhouseTimeLinkPath` (`/inhouse?at=2026-10-11T00:00Z`, the one shape
+  `parseInhouseTimeParam` takes). /inhouse's preview then follows that time
+  (`inhouseTimePreviewText`: the start on the league's clock, the count, what
+  the link does) with the league's own picture, since the page's picture is
+  the night's. Opening it puts the card above the room with that time picked
+  out, or says the time is gone; it never signs anyone up.
+- **Under the room otherwise.** The queue stays first (the never de-promote
+  rule); the section nav lists Play later after the live room.
 
 ## Testing
 

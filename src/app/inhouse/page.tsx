@@ -46,6 +46,9 @@ import {
   inhouseNightHeadcountFor,
   readInhouseNightRsvps,
 } from "@/lib/inhouse-night-rsvp-service";
+import { InhouseTimesCard, PLAY_LATER_ANCHOR } from "@/components/inhouse-times";
+import { inhouseTimePreviewText, parseInhouseTimeParam } from "@/lib/inhouse-times";
+import { readInhouseTime } from "@/lib/inhouse-times-service";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
 import { lobbyBotConnection } from "@/lib/dota-lobby-service";
 import { HeroVideo } from "@/components/hero-video";
@@ -76,10 +79,31 @@ const INHOUSE_DESCRIPTION =
  * The link preview follows the planned inhouse night, so its invite link
  * (INHOUSE_NIGHT_INVITE_PATH) unfurls in Discord as the night: when it is,
  * who's coming and what the link does, with the night's own picture
- * (opengraph-image.tsx). The tab keeps the page's name.
+ * (opengraph-image.tsx). A Play later time's link (`?at=`,
+ * inhouseTimeLinkPath) unfurls as that time instead, with the league's
+ * picture, since the page's picture is the night's. The tab keeps the
+ * page's name.
  */
-export async function generateMetadata(): Promise<Metadata> {
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{ at?: string | string[] }>;
+}): Promise<Metadata> {
   const nowMs = Date.now();
+  const at = singleSearchParam((await searchParams).at);
+  const linkedMs = typeof at === "string" ? parseInhouseTimeParam(at) : null;
+  const time = linkedMs === null ? null : await readInhouseTime(linkedMs, nowMs);
+  if (time) {
+    const preview = inhouseTimePreviewText({
+      when: formatLeagueMatchTime(new Date(time.startsAtMs), "full"),
+      phase: time.phase,
+      count: time.players.length,
+    });
+    return {
+      ...shareMetadata(preview.title, preview.description, "/inhouse"),
+      title: "Inhouse",
+    };
+  }
   const night = await loadCurrentInhouseNight(nowMs);
   if (!night) {
     return shareMetadata("Inhouse", INHOUSE_DESCRIPTION, "/inhouse", { pageImage: true });
@@ -101,10 +125,18 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function InhousePage({
   searchParams,
 }: {
-  searchParams: Promise<{ ladder?: string | string[]; imin?: string | string[] }>;
+  searchParams: Promise<{
+    ladder?: string | string[];
+    imin?: string | string[];
+    at?: string | string[];
+  }>;
 }) {
   const user = await getSessionUser();
   const params = await searchParams;
+  // A Play later time's link (?at=): its card comes first, with that time
+  // picked out ("" for a link that names no one time, which the card says).
+  const timeParam = singleSearchParam(params.at);
+  const linkedTime = timeParam === undefined ? undefined : (timeParam ?? "");
   // Anything but the one known value is the default board, so a stale or
   // hand-edited link still lands on a ladder rather than an error.
   const ladderView: LadderView =
@@ -221,6 +253,7 @@ export default async function InhousePage({
             label="Inhouse sections"
             items={[
               { id: "live-room", label: "Live room" },
+              { id: PLAY_LATER_ANCHOR, label: "Play later" },
               { id: "inhouse-ladder", label: "Ladder" },
               { id: "recent-inhouse", label: "Results" },
               { id: "opendota-setup", label: "Setup help" },
@@ -233,6 +266,7 @@ export default async function InhousePage({
         <Suspense fallback={null}>
           <InhouseNightCard invite={invite} />
         </Suspense>
+        {linkedTime !== undefined ? <PlayLater linked={linkedTime} /> : null}
         <section
           id="live-room"
           className="scroll-mt-28"
@@ -245,6 +279,9 @@ export default async function InhousePage({
           />
           {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
         </section>
+        {/* Players' own times, under the room: the queue stays first. One
+            small read, streamed so it never holds up the room. */}
+        {linkedTime === undefined ? <PlayLater /> : null}
 
         {/* The room above paints immediately; the history-scanning sections
             stream in behind it (CLAUDE.md in-page streaming convention).
@@ -311,6 +348,21 @@ export default async function InhousePage({
         </section>
       </div>
     </>
+  );
+}
+
+/**
+ * Play later (src/components/inhouse-times.tsx) in its section: the anchor
+ * the section nav and the card's sign-in come back to. `linked` is a time
+ * link's `at`, when the page was opened from one.
+ */
+function PlayLater({ linked }: { linked?: string }) {
+  return (
+    <section id={PLAY_LATER_ANCHOR} className="scroll-mt-28" aria-label="Play later">
+      <Suspense fallback={<CardSkeleton rows={2} />}>
+        <InhouseTimesCard linked={linked} />
+      </Suspense>
+    </section>
   );
 }
 
