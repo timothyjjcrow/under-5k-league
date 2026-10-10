@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, mkdir, symlink, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -298,6 +298,18 @@ test("the CI mutation job matches the release gate and the nightly verify runs t
   assert.match(nightly, /\n    name: nightly mutation guard \$\{\{ matrix\.shard \}\}\/4\n/);
   assert.equal(MUTATION_COVERAGE_WORKFLOWS[1].shardPrefix, "nightly ");
   assert.match(read("release.yml"), /\npermissions:\n  contents: read\n  actions: read\n/);
+});
+// Docker Hub limits anonymous pulls per IP, and hosted runners share IPs: on
+// 2026-10-09 all five Postgres jobs on main failed to pull postgres:16 and the
+// release waited for a rerun. ECR Public serves the same official image under
+// a per-second limit that the runner's own pull retry absorbs.
+test("every CI service pulls the official Postgres 16 image from ECR Public, not Docker Hub", () => {
+  const dir = new URL("../.github/workflows/", import.meta.url);
+  const images = readdirSync(dir).filter((file) => /\.ya?ml$/.test(file))
+    .flatMap((file) => [...readFileSync(new URL(file, dir), "utf8").matchAll(/^ +image: *(\S+)/gm)].map((m) => m[1]));
+  // ci.yml's integration job and mutation shards, and the nightly's shards.
+  assert.ok(images.length >= 3, "the workflows' service images were found");
+  assert.deepEqual([...new Set(images)], ["public.ecr.aws/docker/library/postgres:16"]);
 });
 test("maintenance evidence cannot waive an affected database or scheduler", () => {
   const now = Date.now();
