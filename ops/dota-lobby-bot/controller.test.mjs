@@ -70,6 +70,13 @@ function setup(t, configuration = {}) {
     },
   };
 }
+// What server.mjs does with a GC welcome: forget the lobby, replay the caches
+// it resent in full, then settle. `complete` is false when it left some unsent.
+function welcome(c, lobbies = [], complete = true) {
+  c.lobby = null;
+  for (const lobby of lobbies) c.snapshot(lobby);
+  return c.welcomed(complete);
+}
 test("US and EU bots accept only their configured server region", (t) => {
   const eu = { ...spec, serverRegion: 3 };
   assert.equal(validSpec(eu), false);
@@ -229,6 +236,89 @@ test("a launched game sheds the bot once Dota gives it a match id", (t) => {
   });
   assert.equal(c.request("create", next).state, "creating");
   assert.deepEqual(calls, ["create", "start", "leave", "create"]);
+});
+test("a reconnect outside the launched game's lobby frees its claim", (t) => {
+  const { controller: c, calls } = setup(t);
+  const next = { ...spec, key: "inhouse:next:1", name: "GGD2L Inhouse next" };
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
+  assert.deepEqual(calls, ["create", "start", "leave"]);
+  // The GC drops before it confirms the departure. A welcome that left a
+  // cache unsent proves nothing, so the claim holds.
+  c.online = false;
+  assert.equal(welcome(c, [], false), false);
+  c.online = true;
+  assert.throws(() => c.request("create", next), /BUSY/);
+  // A full welcome holding no lobby is the departure the drop swallowed.
+  assert.equal(welcome(c), true);
+  assert.equal(c.data.active, null);
+  assert.deepEqual(c.status(spec.key), {
+    state: "started",
+    lobbyId: "123456789012345678",
+    matchId: "8123456789",
+  });
+  assert.equal(c.request("create", next).state, "creating");
+  assert.deepEqual(calls, ["create", "start", "leave", "create"]);
+});
+test("a restarted worker frees a launched game's claim on its first full welcome", (t) => {
+  const { controller: c, calls, options } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
+  // The watchdog restarts the process before any departure arrives.
+  const resumed = new LobbyController(options);
+  assert.equal(resumed.data.active, spec.key);
+  assert.equal(welcome(resumed), true);
+  resumed.online = true;
+  assert.equal(new LobbyController(options).data.active, null);
+  resumed.request("create", { ...spec, key: "inhouse:next:1" });
+  assert.deepEqual(calls, ["create", "start", "leave", "create"]);
+});
+test("a reconnect still inside the launched game's lobby leaves it again", (t) => {
+  const { controller: c, calls } = setup(t);
+  const running = snapshot({ state: 2, matchId: "8123456789" });
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  c.snapshot(running);
+  // The Leave itself was lost: the welcome replays the running lobby.
+  assert.equal(welcome(c, [running]), false);
+  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
+  assert.equal(c.data.active, spec.key);
+  assert.throws(() => c.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
+});
+test("a reconnect never frees an unlaunched or ambiguous claim", (t) => {
+  const reach = {
+    // An ambiguous create: Dota may still make the lobby.
+    creating: () => {},
+    ready: (c) => c.snapshot(snapshot()),
+    // An unconfirmed launch: Dota may still be allocating a server.
+    starting: (c) => {
+      c.snapshot(snapshot());
+      c.request("start", spec);
+    },
+    blocked: (c) => c.snapshot(snapshot({ leagueid: 0 })),
+  };
+  for (const [state, to] of Object.entries(reach)) {
+    const { controller: c } = setup(t);
+    c.request("create", spec);
+    to(c);
+    assert.equal(c.data.jobs[spec.key].state, state);
+    assert.equal(welcome(c), false, state);
+    assert.equal(c.data.active, spec.key, state);
+    assert.throws(() => c.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
+  }
+});
+test("server.mjs settles every GC welcome through the controller", () => {
+  const server = readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+  const start = server.indexOf("k_EMsgGCClientWelcome,");
+  assert.ok(start > 0);
+  const handler = server.slice(start, server.indexOf("\n});", start));
+  assert.match(handler, /controller\.welcomed\(/);
+  assert.doesNotMatch(handler, /absenceConfirmed\s*=/);
 });
 test("stale allMembers entries do not count as connected players", () => {
   assert.equal(rosterMatches(snapshot({ memberIndices: [] }), spec), false);
