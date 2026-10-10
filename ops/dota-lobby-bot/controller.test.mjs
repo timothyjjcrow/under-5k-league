@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LobbyController, rosterMatches, validSpec } from "./controller.mjs";
@@ -43,12 +43,15 @@ function setup(t, configuration = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ld2l-bot-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const calls = [];
+  // Invites are their own list, so the command sequences below stay exact.
+  const invites = [];
   const transport = {
     steamId: () => bot,
     create: () => calls.push("create"),
     start: () => calls.push("start"),
     leave: () => calls.push("leave"),
     removeBotFromTeam: () => calls.push("kick"),
+    invite: (id) => invites.push(id),
   };
   let now = 100;
   const options = { file: join(dir, "state.json"), transport, now: () => now, ...configuration };
@@ -59,6 +62,8 @@ function setup(t, configuration = {}) {
   return {
     controller,
     calls,
+    invites,
+    transport,
     options,
     later: () => {
       now += 31_000;
@@ -338,4 +343,170 @@ test("unrelated lobbies and offline sessions never receive commands", (t) => {
   c.snapshot(snapshot({ gameName: "Someone else's lobby" }));
   assert.throws(() => c.request("create", spec), /BUSY/);
   assert.deepEqual(calls, []);
+});
+
+// A just-created lobby: only the bot, in the unassigned pool (GC team 4).
+const emptyLobby = (overrides = {}) =>
+  snapshot({ memberIndices: [0], allMembers: [{ id: bot, team: 4 }], ...overrides });
+// The bot plus the given roster players on their sides.
+const lobbyWith = (present, overrides = {}) => {
+  const allMembers = [{ id: bot, team: 4 }, ...present.map((id) => ({ id, team: ids.indexOf(id) < 5 ? 0 : 1 }))];
+  return snapshot({ memberIndices: allMembers.map((_, i) => i), allMembers, ...overrides });
+};
+
+test("the lobby's first ready moment invites every rostered player, once per job", (t) => {
+  const { controller: c, invites, calls, options } = setup(t);
+  c.request("create", spec);
+  assert.deepEqual(invites, []);
+  c.snapshot(lobbyWith(ids.slice(0, 2)));
+  // Already in the lobby: no invite. The bot never invites itself.
+  assert.deepEqual(invites, ids.slice(2));
+  // Later snapshots, a GC reconnect replay, and a worker restart send nothing.
+  c.snapshot(emptyLobby());
+  c.snapshot(lobbyWith(ids.slice(0, 2)));
+  const resumed = new LobbyController(options);
+  resumed.online = true;
+  resumed.snapshot(emptyLobby());
+  assert.deepEqual(invites, ids.slice(2));
+  assert.deepEqual(calls, ["create"]);
+});
+
+test("each invite is saved before it goes out, and a failed send is recorded, not retried", (t) => {
+  const { controller: c, transport, invites, options } = setup(t);
+  c.request("create", spec);
+  transport.invite = (id) => {
+    // Read back from disk: the record exists before the GC command.
+    const saved = JSON.parse(readFileSync(options.file, "utf8"));
+    assert.equal(saved.jobs[spec.key].invites[id].result, "sent");
+    if (id === ids[3]) throw new Error("Cannot send GC message, not logged into Steam Client");
+    invites.push(id);
+  };
+  c.snapshot(emptyLobby());
+  assert.equal(invites.length, 9);
+  const report = c.request("status", { ...spec, withPlayers: true }).players;
+  assert.equal(report.find((p) => p.id === ids[3]).invite, "failed");
+  assert.equal(report.find((p) => p.id === ids[4]).invite, "sent");
+  // The record survives a restart.
+  const resumed = new LobbyController(options);
+  assert.equal(resumed.data.jobs[spec.key].invites[ids[3]].result, "failed");
+});
+
+test("no invites from a lobby that isn't ready: foreign, wrong settings, another host, or releasing", (t) => {
+  const { controller: c, invites } = setup(t);
+  c.request("create", spec);
+  c.snapshot(emptyLobby({ gameName: "Someone else's lobby" }));
+  c.snapshot(emptyLobby({ leagueid: 0 }));
+  c.snapshot(emptyLobby({ leaderId: ids[0] }));
+  assert.equal(c.status(spec.key).state, "blocked");
+  assert.deepEqual(invites, []);
+
+  const second = setup(t);
+  second.controller.request("create", spec);
+  second.controller.data.jobs[spec.key].releasing = true;
+  second.controller.snapshot(emptyLobby());
+  assert.deepEqual(second.invites, []);
+});
+
+test("re-invite sends only to the missing, held back 30 s and five per player", (t) => {
+  const { controller: c, invites, later } = setup(t);
+  c.request("create", spec);
+  c.snapshot(lobbyWith(ids.slice(0, 8)));
+  assert.deepEqual(invites, ids.slice(8));
+  // Straight after the automatic round: held back.
+  assert.equal(c.request("invite", spec).invited, 0);
+  later();
+  assert.equal(c.request("invite", spec).invited, 2);
+  // A press repeated (or a timed-out one resent) inside 30 s sends nothing.
+  assert.equal(c.request("invite", spec).invited, 0);
+  for (let i = 0; i < 5; i++) {
+    later();
+    c.request("invite", spec);
+  }
+  // 1 automatic + 4 more: the fifth is the last for each.
+  assert.equal(invites.filter((id) => id === ids[9]).length, 5);
+  // A player who arrived in the meantime gets none.
+  later();
+  c.snapshot(lobbyWith(ids));
+  assert.equal(c.request("invite", spec).invited, 0);
+});
+
+test("re-invite can name players, including a stand-in booked after create", (t) => {
+  const { controller: c, invites, later } = setup(t);
+  c.request("create", spec);
+  c.snapshot(lobbyWith(ids.slice(0, 9)));
+  later();
+  const standin = "76561198000000050";
+  const fresh = { ...spec, dire: [...ids.slice(5, 9), standin] };
+  const reply = c.request("invite", { ...fresh, invite: [standin] });
+  assert.equal(reply.invited, 1);
+  assert.equal(invites.at(-1), standin);
+  // Only ids on the request's own roster, each once.
+  for (const invite of [[], ["76561198000000077"], [standin, standin], "all", [ids[9]]])
+    assert.throws(() => c.request("invite", { ...fresh, invite }), /INVALID/);
+});
+
+test("re-invite refuses outside this job's own ready lobby", (t) => {
+  const { controller: c, invites, later } = setup(t);
+  assert.throws(() => c.request("invite", spec), /STATE/);
+  c.request("create", spec);
+  // Created, not yet confirmed by the GC: inviting now would make Dota open a default lobby.
+  assert.throws(() => c.request("invite", spec), /STATE/);
+  c.snapshot(emptyLobby({ leaderId: ids[0] }));
+  assert.throws(() => c.request("invite", spec), /STATE/);
+  c.snapshot(emptyLobby());
+  later();
+  assert.throws(() => c.request("invite", { ...spec, leagueId: 999 }), /SETTINGS/);
+  c.online = false;
+  assert.throws(() => c.request("invite", spec), /OFFLINE/);
+  c.online = true;
+  const sent = invites.length;
+  c.snapshot(lobbyWith(ids));
+  c.request("start", spec);
+  assert.throws(() => c.request("invite", spec), /STATE/);
+  assert.equal(invites.length, sent);
+
+  const other = setup(t);
+  other.controller.request("create", spec);
+  other.controller.snapshot(emptyLobby());
+  other.controller.request("release", spec);
+  other.later();
+  assert.throws(() => other.controller.request("invite", spec), /STATE/);
+});
+
+test("the player list shows seats from current members only, and only on request", (t) => {
+  const { controller: c } = setup(t);
+  c.request("create", spec);
+  assert.equal(c.request("status", { ...spec, withPlayers: true }).players, undefined);
+  const lobby = lobbyWith([ids[0], ids[5]]);
+  // ids[1] waits in the pool; ids[2] left (still in allMembers, not memberIndices).
+  lobby.allMembers.push({ id: ids[1], team: 4 }, { id: ids[2], team: 0 });
+  lobby.memberIndices = [0, 1, 2, 3];
+  c.snapshot(lobby);
+  assert.equal(c.request("status", spec).players, undefined);
+  const players = c.request("status", { ...spec, withPlayers: true }).players;
+  assert.deepEqual(players.slice(0, 3), [
+    { id: ids[0], seat: "radiant", invite: "none" },
+    { id: ids[1], seat: "unassigned", invite: "none" },
+    { id: ids[2], seat: "absent", invite: "sent" },
+  ]);
+  assert.deepEqual(players[5], { id: ids[5], seat: "dire", invite: "none" });
+  assert.equal(players.length, 10);
+  // Gone once the lobby is: there is nothing to seat.
+  c.request("release", spec);
+  c.departed();
+  assert.equal(c.request("status", { ...spec, withPlayers: true }).players, undefined);
+});
+
+test("the GC's invite answer marks an offline player, and ignores strangers", (t) => {
+  const { controller: c, options } = setup(t);
+  c.request("create", spec);
+  c.snapshot(emptyLobby());
+  c.inviteCreated(ids[0], true);
+  c.inviteCreated(ids[1], false);
+  c.inviteCreated("76561198000000077", true);
+  const players = c.request("status", { ...spec, withPlayers: true }).players;
+  assert.equal(players[0].invite, "offline");
+  assert.equal(players[1].invite, "sent");
+  const saved = JSON.parse(readFileSync(options.file, "utf8"));
+  assert.equal(saved.jobs[spec.key].invites["76561198000000077"], undefined);
 });
