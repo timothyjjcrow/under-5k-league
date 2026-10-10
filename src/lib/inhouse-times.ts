@@ -197,6 +197,73 @@ export function inhouseTimeCanPost(input: { signedIn: boolean; atCap: boolean })
   return input.signedIn && !input.atCap;
 }
 
+/** Times the strip at the top of /inhouse shows before its "N more times" link. */
+export const INHOUSE_TIMES_STRIP_SHOWN = 3;
+
+/**
+ * What the strip above the live room shows (Tim, 2026-10-10: a time should be
+ * seen without scrolling past the queue): the soonest open times, on now or
+ * ahead, at most INHOUSE_TIMES_STRIP_SHOWN, and how many more the card under
+ * the room has. Null when no time is open, so the top of the page carries no
+ * empty box, and when the page was opened from a time's link (`linked`),
+ * which already puts the whole card first.
+ */
+export function inhouseTimesStrip<T extends { startsAtMs: number; phase: InhouseTimePhase }>(
+  times: readonly T[],
+  input: { linked: boolean },
+): { shown: T[]; more: number } | null {
+  if (input.linked) return null;
+  const open = times
+    .filter((time) => time.phase === "upcoming" || time.phase === "on")
+    .sort((a, b) => a.startsAtMs - b.startsAtMs);
+  if (open.length === 0) return null;
+  const shown = open.slice(0, INHOUSE_TIMES_STRIP_SHOWN);
+  return { shown, more: open.length - shown.length };
+}
+
+/**
+ * The strip's link down to the card: how many more times it has, else
+ * "Post a time" (the card's sign-in for a signed-out viewer), else, for a
+ * player at the cap who can't post, "All times".
+ */
+export function inhouseTimesStripLinkText(input: { more: number; atCap: boolean }): string {
+  if (input.more > 0) return `${input.more} more ${input.more === 1 ? "time" : "times"}`;
+  return input.atCap ? "All times" : "Post a time";
+}
+
+/**
+ * Who's in on a time, for its avatar stack's label: "Ana is in", "Ana and
+ * Bo are in", "Ana, Bo, Cy, Di, Ed and 3 more are in". Names past `shown`
+ * (the faces the stack draws) are counted, not listed.
+ */
+export function inhouseTimeWhoText(names: readonly string[], shown: number): string {
+  const listed = names.slice(0, Math.max(1, shown));
+  const rest = names.length - listed.length;
+  const parts = rest > 0 ? [...listed, `${rest} more`] : listed;
+  const last = parts.pop() ?? "";
+  const text = parts.length > 0 ? `${parts.join(", ")} and ${last}` : last;
+  return `${text} ${names.length === 1 ? "is" : "are"} in`;
+}
+
+/**
+ * Which day a time falls on against now, on `timeZone`'s clock: "Today",
+ * "Tomorrow", or "Yesterday" for one on since before midnight. Null further
+ * out (a 25-hour day can put a time two midnights away), for a full date.
+ */
+export function inhouseTimeDayWord(
+  startsAtMs: number,
+  nowMs: number,
+  timeZone: string,
+): "Today" | "Tomorrow" | "Yesterday" | null {
+  const formatter = zoneFormatter(timeZone);
+  const day = (ms: number) => Math.floor(wallTime(new Date(ms), formatter) / (24 * HOUR_MS));
+  const diff = day(startsAtMs) - day(nowMs);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  if (diff === -1) return "Yesterday";
+  return null;
+}
+
 /**
  * The /inhouse preview for a time's link (Discord, X and Slack show og:title
  * and og:description): when it is on the league's clock, how many are in,

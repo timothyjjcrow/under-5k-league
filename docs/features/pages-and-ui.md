@@ -678,10 +678,12 @@ the league is already draftable and many visitors have joined. Write for both.
 - **Order is the product:** the planned inhouse night's card (only while one
   is set, streamed: "I'm in", the headcount, who said they're in on the site
   as profile chips, "Copy invite link", the Discord event and calendar
-  links; opened from the invite link it says "I'm in" once), room, Play
-  later (players' own times, [inhouse](inhouse.md#play-later); it moves above
-  the room, its time picked out, only when the page is opened from a time's
-  link), `SceneStats`, ladder, recent results, then the OpenDota guide. The ladder is why people return; the history sections are
+  links; opened from the invite link it says "I'm in" once), the Play later
+  strip (the soonest three open times with "I'm in", only while one is open;
+  [inhouse](inhouse.md#play-later)), room, the Play later card (players' own
+  times in full; it moves above the room in the strip's place, its time
+  picked out, only when the page is opened from a time's link), `SceneStats`,
+  ladder, recent results, then the OpenDota guide. The ladder is why people return; the history sections are
   the costliest queries, so they stream in below the room.
 - **Two live games share the room** ([inhouse](inhouse.md#two-games-at-once)):
   a player sees their own game, with the other folded to one line under it; a

@@ -1,15 +1,17 @@
 "use client";
 
-// Play later's browser pieces (the card is inhouse-times.tsx): the time box
-// that turns a clock time into the instant it names on the player's own
-// clock, and the button that copies a time's link.
+// Play later's browser pieces (the card and the strip are inhouse-times.tsx):
+// the time box that turns a clock time into the instant it names on the
+// player's own clock, the button that copies a time's link, and a time's
+// start as the strip says it ("Today, 8:00 PM").
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { pushToast } from "@/components/toaster";
 import { buttonClasses } from "@/components/ui";
 import { countdownLabel } from "@/lib/countdown";
 import {
   defaultInhouseTimeClock,
+  inhouseTimeDayWord,
   inhouseTimeLinkPath,
   inhouseTimeParam,
   nextInhouseTimeAt,
@@ -19,13 +21,56 @@ import {
 
 const viewerZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/** "Today, 8:00 PM" or "Tomorrow, 1:00 AM", on the viewer's clock. */
+/**
+ * "Today, 8:00 PM" or "Tomorrow, 1:00 AM", on the viewer's clock
+ * (inhouseTimeDayWord), or "Sun 1:00 AM" for one further out.
+ */
 function dayAndTime(ms: number, nowMs: number): string {
-  const day = (t: number) => new Date(t).toDateString();
+  const word = inhouseTimeDayWord(ms, nowMs, viewerZone());
+  if (!word) {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(ms));
+  }
   const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
     new Date(ms),
   );
-  return `${day(ms) === day(nowMs) ? "Today" : "Tomorrow"}, ${time}`;
+  return `${word}, ${time}`;
+}
+
+/** Re-read once a minute, so a page left open past midnight moves "Tomorrow" to "Today". */
+function subscribeMinute(onChange: () => void): () => void {
+  const id = setInterval(onChange, 60_000);
+  return () => clearInterval(id);
+}
+
+/**
+ * A time's start in the strip at the top of /inhouse: "Today, 8:00 PM" on
+ * the viewer's clock. `initial` is the server's text, the same words on the
+ * league's clock with its zone named, shown until the browser takes over
+ * (<LocalTime>'s trick).
+ */
+export function InhouseTimeWhen({
+  ts,
+  initial,
+  className,
+}: {
+  ts: number;
+  initial: string;
+  className?: string;
+}) {
+  const text = useSyncExternalStore(
+    subscribeMinute,
+    () => dayAndTime(ts, Date.now()),
+    () => initial,
+  );
+  return (
+    <time dateTime={new Date(ts).toISOString()} className={className}>
+      {text}
+    </time>
+  );
 }
 
 /**
