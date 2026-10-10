@@ -507,6 +507,12 @@ completion, and the real no-active-season offseason.
    required `Under 5K In-House League` ticket, and the game's team voice
    channels. Player-account matching remains authoritative; the ticket
    is what makes the private game available to OpenDota for that scan.
+   When the lobby bot answers, its panel (`DotaLobbyControls` over
+   `POST /api/dota-lobby`) is the path instead and the by-hand steps fold
+   under "Bot not working?": a captain creates the bot's lobby, the bot
+   invites the ten in Dota once it is ready, and the panel shows who is in
+   the lobby, with the name and password as the fallback
+   ([DOTA-LOBBY-BOT.md](DOTA-LOBBY-BOT.md#lobby-invites)).
 7. **Result detection and publication** — OpenDota only, no manual winner:
    background scan
    (`maybeAutoDetectResult`), the detect button, or a pasted match id all
@@ -679,8 +685,9 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/rules`           | The league's rules by section, every number from the season's settings or the code             | Always: Explore (League group), `/how-it-works`, the match page's How to host line                 | `leagueRules` (pure), `announcedMatchNight`; the active season, else the latest                               |
 | `/admin`           | The control panel (§8)                                                                         | Admin only                                                                                         | `loadSeasonAdminData`                                                                                         |
 
-API routes (19): `/api/auth/steam` + `/callback`, `/api/auth/discord` +
-`/callback`, `/api/auth/dev`, `/api/auth/logout` — auth (§2);
+API routes (one per `route.ts` under `src/app/api/`): `/api/auth/steam` +
+`/callback`, `/api/auth/discord` + `/callback`, `/api/auth/dev`,
+`/api/auth/logout` — auth (§2);
 `/api/draft/tick|bid|nominate|admin-nominate` — the auction. Every draft POST
 requires an `application/json` media type and canonical same-origin `Origin`;
 tick takes a 1,200/min/IP preflight before session or database work, then a
@@ -692,6 +699,11 @@ explicit action required. Every call requires the JSON media type. Public state
 reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
 attempts fall back to IP);
+`/api/dota-lobby` — the lobby bot panel's POST (`{kind, id, action:
+status|create|start|release|invite}`; signed in, 30 reads and 10 writes per
+minute per user), relayed to the bot by `callLobbyBot`; the browser gets
+names, sides, seats and invite results, never a Steam ID;
+`/api/dota-lobby/recovery` — the admin-only bot recovery check;
 `/api/sync` — public, read-only GET snapshot for `<ResultSyncPing>` (`watch` +
 result cursor; no POST/mutation path); `/api/cron/automation` — the
 `CRON_SECRET` bearer-authenticated one-minute worker route (Node runtime,
@@ -699,6 +711,8 @@ result cursor; no POST/mutation path); `/api/cron/automation` — the
 liveness; `/api/health/ready` — database readiness (`SELECT 1`, 503 on
 failure); `/api/health/automation` — public, read-only dead-man probe with only
 a bounded status enum (200 for fresh clean success, 503 otherwise);
+`/api/health/release` — public code identity (league region and release
+commit) that a release reads to confirm what is live;
 `/api/calendar` — the .ics feed; `/api/calendar/inhouse-night` — the planned
 inhouse night as a one-event .ics download (404 when none);
 `/api/reschedule?match=<id>` — read-only,

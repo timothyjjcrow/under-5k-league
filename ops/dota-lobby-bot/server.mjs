@@ -75,6 +75,10 @@ const controller = new LobbyController({
     leave: () => send(7040, "Empty"),
     removeBotFromTeam: () =>
       send(8047, "KickFromTeam", { accountId: user.steamID.accountid }),
+    // Dota2User's own encoder: the fixed64 Steam ID goes as a string, and
+    // sendPartial fills the client version that send() would leave undefined.
+    invite: (steamId) =>
+      dota.sendPartial(protos.EGCBaseMsg.k_EMsgGCInviteToLobby, { steamId }),
   },
 });
 
@@ -96,7 +100,7 @@ const relay = new RelayClient({
   handle: control,
 });
 
-const { ESOMsg, EGCBaseClientMsg, CSODOTALobby } = protos;
+const { ESOMsg, EGCBaseClientMsg, EGCBaseMsg, CSODOTALobby } = protos;
 const LOBBY_TYPE_ID = 2004;
 let steamStopped = false;
 let pendingRefreshToken;
@@ -144,10 +148,21 @@ dota.router.on(EGCBaseClientMsg.k_EMsgGCClientWelcome, (welcome) => {
 });
 dota.router.on(ESOMsg.k_ESOMsg_CacheSubscribed, subscribed);
 dota.router.on(ESOMsg.k_ESOMsg_Create, objectUpdate);
-// The published Dota2User router omits the single-object Update mapping.
+// The published Dota2User router omits the single-object Update mapping, and
+// it never routes the GC's answer to a lobby invite.
 user.on("receivedFromGC", (appid, type, payload) => {
   if (appid === 570 && type === ESOMsg.k_ESOMsg_Update)
     objectUpdate(protos.CMsgSOSingleObject.decode(payload));
+  if (appid === 570 && type === EGCBaseMsg.k_EMsgGCInvitationCreated) {
+    let created;
+    try {
+      created = protos.CMsgInvitationCreated.decode(payload);
+    } catch {
+      return console.error("[dota-bot] Unreadable lobby invite answer from the Game Coordinator");
+    }
+    console.log(`[dota-bot] Lobby invite created${created.userOffline ? " (player offline)" : ""}`);
+    controller.inviteCreated(created.steamId, created.userOffline);
+  }
 });
 dota.router.on(ESOMsg.k_ESOMsg_Destroy, removed);
 dota.router.on(ESOMsg.k_ESOMsg_UpdateMultiple, (update) => {

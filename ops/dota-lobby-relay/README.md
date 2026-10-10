@@ -95,10 +95,20 @@ The website sends `POST /lobby` with `Content-Type: application/json` and
 { "action": "status", "spec": { "key": "inhouse:example:1" } }
 ```
 
-`create`, `start`, and `release` use the bot's complete existing lobby spec;
-`active` and `health` have no spec. `POST /health` also accepts
+`create`, `start`, `release`, and `invite` use the bot's complete existing
+lobby spec; `active` and `health` have no spec. `POST /health` also accepts
 `{"action":"health"}` with the same authentication. There is no public status
 endpoint. Requests must be at most 8 KiB.
+
+`invite` asks the bot to send Dota lobby invites. The spec may name its targets
+in `invite` (1–20 unique Steam64 IDs, each on that request's own `radiant` or
+`dire`); without it the bot invites the whole roster. Any lobby action's spec
+may also carry `withPlayers: true` to ask for the seat report below. The relay
+checks only that `spec` is an object; the bot enforces the rest. It accepts an
+invite only for its active job's ready lobby, with matching settings and the
+bot as leader. It skips players already in the lobby, anyone invited in the
+last 30 seconds, and anyone invited five times in this job. The bot also
+invites the roster once by itself, when the lobby is first ready.
 
 The bot connects to `GET /connect` with a WebSocket upgrade, an
 `Authorization: Bearer <DOTA_RELAY_WORKER_SECRET>` header and an
@@ -141,10 +151,40 @@ The bot must reject expired commands and send exactly one correlated response:
 ```
 
 Health reflects the bot's Steam/GC state, not merely whether its relay socket is
-connected. `active` returns `{key: string|null}`. Lobby operations return
-`{state, lobbyId?, matchId?}`. Errors use status 400 or 409 and only `{code}`,
-where code is one of `AUTH`, `INVALID`, `OFFLINE`, `BUSY`, `STATE`, `ROSTER`, or
-`SETTINGS`. Additional response fields are rejected rather than passed through.
+connected. `active` returns `{key: string|null}`. Lobby operations (`status`,
+`create`, `start`, `release`, `invite`) return
+`{state, lobbyId?, matchId?, players?}`, and `invite` adds `invited`, the
+number of invites it sent (an integer from 0 to 20). Errors use status 400 or
+409 and only `{code}`, where code is one of `AUTH`, `INVALID`, `OFFLINE`,
+`BUSY`, `STATE`, `ROSTER`, or `SETTINGS`. Additional response fields are
+rejected rather than passed through: an unknown key, or `invited` on any other
+action, turns the reply into `409 {"code":"STATE"}`.
+
+`players` is the seat report. The bot includes it only when the spec asked
+with `withPlayers: true` and the job's lobby is set up (ready or starting). It
+is an array of at most 20 entries, one per roster player, each with exactly
+these keys:
+
+```json
+{ "id": "76561198000000001", "seat": "unassigned", "invite": "offline" }
+```
+
+| Key | Values |
+| --- | --- |
+| `id` | The player's 17-digit Steam64 ID, as a string |
+| `seat` | `radiant`, `dire`, `unassigned` (in the lobby but on neither side), or `absent` |
+| `invite` | `none`, `sent` (the Game Coordinator accepted it), `offline` (Dota was closed; the invite appears when the player opens Dota), or `failed` (the send threw because Steam dropped) |
+
+`sent` doesn't prove the invite arrived. In a live test on 2026-10-10, a
+player with Dota's "Block party invites from non-friends" setting ticked saw
+nothing, but the Game Coordinator still reported the invite as created. The
+lobby name and password remain the fallback.
+
+Deploy this relay before the bot and the site that use `invite` or
+`withPlayers`. An older relay rejects `invite` with `400 {"code":"INVALID"}`
+and turns any reply carrying `players` or `invited` into
+`409 {"code":"STATE"}`. Roll back in reverse (site, then bot, then relay):
+never run an older relay while the new bot and the new site are both live.
 
 Each request times out after 10 seconds. A timeout, disconnect, or replacement
 returns `409 {"code":"OFFLINE"}`. At most 64 requests can be pending. No request
@@ -156,8 +196,9 @@ claims prevent an ambiguous create/start operation from being repeated.
 ## Verification and maintenance
 
 `npm test` uses Miniflare's actual Workers runtime with simulated bot sockets.
-It verifies authentication, health/status forwarding, malformed/oversized input,
-response filtering, connection replacement and disconnect, concurrency limits,
+It verifies authentication, health/status/invite forwarding,
+malformed/oversized input, response filtering (including every seat-report and
+invite-count field), connection replacement and disconnect, concurrency limits,
 and a real 10-second timeout. These tests never connect to Steam or modify a
 Dota lobby. `npm run check` bundles the deployment without publishing it.
 

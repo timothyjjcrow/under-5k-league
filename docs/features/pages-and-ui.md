@@ -866,6 +866,18 @@ the league is already draftable and many visitors have joined. Write for both.
   renders only once the bot answers with a lobby (`lobbyPanelVisible`): those
   viewers can't fix the bot or the ticket, and the manual steps are not on
   their page.
+- **The panel's invite list and buttons show only while the lobby is ready
+  and the bot reported seats** (`docs/DOTA-LOBBY-BOT.md#lobby-invites`;
+  source guard `dota-lobby-controls.test.ts`). Otherwise, as from an older
+  bot, the "Join through Dota → Play → Custom Lobbies" line stays. "Who's in
+  the lobby" is a list of `lobbyPlayerRow` texts ("(you)" on the viewer's);
+  "Re-invite missing players" and "Send me an invite" render only through
+  `reinviteMissingOpen` and `selfInviteOpen`; invite results toast through
+  `inviteResultToast`, and a lost answer through `inviteUnknownToast`. The
+  browser sends only kind, id and action, never invite targets, and the
+  panel shows the route's fixed messages, never a caught error's text. The
+  list's names are plain text, an exception to "every name is a link": its
+  row carries no user id.
 
 ## Stats pages (`/leaders`, `/meta`, `/records`, `/hall-of-fame`, `/seasons/[id]`)
 

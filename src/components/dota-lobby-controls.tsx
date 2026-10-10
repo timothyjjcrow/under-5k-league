@@ -1,10 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { DotaLobbyView, LobbyAction, LobbyKind } from "@/lib/dota-lobby";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  inviteResultToast,
+  inviteUnknownToast,
+  lobbyPlayerRow,
+  noPopupHelp,
+  reinviteMissingOpen,
+  selfInviteOpen,
+  type DotaLobbyView,
+  type LobbyAction,
+  type LobbyInviteScope,
+  type LobbyKind,
+} from "@/lib/dota-lobby";
 import { LEAGUE_GAME_MODE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { cn } from "@/lib/utils";
+import { pushToast } from "./toaster";
 import { buttonClasses } from "./ui";
+
+const UNREACHABLE = "Could not reach the lobby bot.";
 
 const labels = {
   idle: "No bot lobby yet",
@@ -62,11 +77,20 @@ export function DotaLobbyControls({
   const [pending, setPending] = useState(false);
   const [confirmRelease, setConfirmRelease] = useState(false);
   const busy = useRef(false);
+  const listHeading = useId();
   const request = useCallback(
-    async (action: LobbyAction | "status", signal?: AbortSignal) => {
+    async (
+      action: LobbyAction | "status",
+      signal?: AbortSignal,
+      /** An invite's button: whose invites it asked for, to word the toast. */
+      inviteScope?: LobbyInviteScope,
+    ) => {
       if (busy.current) return;
       busy.current = true;
       setPending(true);
+      // Only the route's own fixed messages reach the viewer, never a caught
+      // error's text.
+      let answered = false;
       try {
         const response = await fetch("/api/dota-lobby", {
           method: "POST",
@@ -75,17 +99,34 @@ export function DotaLobbyControls({
           signal: signal ?? AbortSignal.timeout(20_000),
         });
         const body = await response.json();
-        if (!response.ok)
-          throw new Error(body.error ?? "Could not reach the lobby bot.");
+        answered = true;
+        if (!response.ok) {
+          const message =
+            typeof body?.error === "string" ? body.error : UNREACHABLE;
+          // The bot's leg lost the answer: the invites may have gone out.
+          if (inviteScope && body?.unknown === true)
+            pushToast("info", inviteUnknownToast(inviteScope));
+          else if (inviteScope) pushToast("error", message);
+          else setError(message);
+          return;
+        }
         setView(body);
         setError("");
-      } catch (error) {
-        if (!signal?.aborted)
-          setError(
-            error instanceof Error
-              ? error.message
-              : "Could not reach the lobby bot.",
-          );
+        if (inviteScope) {
+          const toast = inviteResultToast({
+            scope: inviteScope,
+            invited: body.invited,
+            players: body.players,
+          });
+          pushToast(toast.type, toast.message);
+        }
+      } catch {
+        if (signal?.aborted) return;
+        // No answer (timed out, dropped, unreadable): an invite may still
+        // have gone out, so it is unknown, never failed.
+        if (inviteScope && !answered)
+          pushToast("info", inviteUnknownToast(inviteScope));
+        else setError(UNREACHABLE);
       } finally {
         busy.current = false;
         setPending(false);
@@ -126,6 +167,13 @@ export function DotaLobbyControls({
   // Joiners can't create, start or release the lobby, so their copy says who
   // does. An admin on the players' panel can, and gets the hosts' copy.
   const joiner = audience === "player" && !view?.canRelease;
+  // Only a bot that invites reports seats, and only while its lobby is ready:
+  // the invite copy and the list show then, so neither is ever false under
+  // an older bot.
+  const players =
+    view?.enabled && state === "ready" && view.players?.length
+      ? view.players
+      : null;
 
   return (
     <section
@@ -175,11 +223,64 @@ export function DotaLobbyControls({
               Once a captain creates it, join with this name and password.
             </p>
           ) : null}
-          <p className="text-xs text-muted">
-            Ticket {view.leagueId}. Join through Dota → Play → Custom Lobbies.
-            The bot checks the ticket, mode, region, and rosters before
-            starting.
-          </p>
+          {players ? (
+            <>
+              <p className="text-xs text-muted">
+                The bot invites everyone in Dota once the lobby is ready:
+                accept the invite (no password needed), then take a slot on
+                your side. Anyone whose Dota is closed gets the invite when
+                they open it. {noPopupHelp(view.inviteScope)}
+              </p>
+              <p className="text-xs text-muted">
+                Ticket {view.leagueId}. The bot checks the ticket, mode,
+                region, and rosters before starting.
+              </p>
+              <div className="min-w-0">
+                <h4 id={listHeading} className="mb-1.5 text-xs font-semibold">
+                  Who&apos;s in the lobby
+                </h4>
+                <ul
+                  aria-labelledby={listHeading}
+                  className="divide-y divide-line-soft overflow-hidden rounded-lg border border-line"
+                >
+                  {players.map((player, i) => {
+                    const row = lobbyPlayerRow(player);
+                    return (
+                      <li
+                        key={i}
+                        className="flex min-w-0 flex-col gap-0.5 px-3 py-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3"
+                      >
+                        <span className="flex min-w-0 items-baseline gap-1.5">
+                          <span className="min-w-0 truncate text-sm font-medium">
+                            {player.name}
+                          </span>
+                          {player.self ? (
+                            <span className="shrink-0 text-xs text-muted">
+                              (you)
+                            </span>
+                          ) : null}
+                        </span>
+                        <span
+                          className={cn(
+                            "min-w-0 text-xs sm:text-right",
+                            row.settled ? "text-success" : "text-muted",
+                          )}
+                        >
+                          {row.text}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-muted">
+              Ticket {view.leagueId}. Join through Dota → Play → Custom Lobbies.
+              The bot checks the ticket, mode, region, and rosters before
+              starting.
+            </p>
+          )}
           {view.status.lobbyId ? (
             <p className="text-xs text-muted">
               Dota lobby {view.status.lobbyId}
@@ -225,6 +326,26 @@ export function DotaLobbyControls({
                 onClick={() => void request("start")}
               >
                 Start game with bot
+              </button>
+            ) : null}
+            {reinviteMissingOpen(view) ? (
+              <button
+                type="button"
+                disabled={pending}
+                className={buttonClasses("secondary", "sm")}
+                onClick={() => void request("invite", undefined, "missing")}
+              >
+                Re-invite missing players
+              </button>
+            ) : null}
+            {selfInviteOpen(view) ? (
+              <button
+                type="button"
+                disabled={pending}
+                className={buttonClasses("secondary", "sm")}
+                onClick={() => void request("invite", undefined, "self")}
+              >
+                Send me an invite
               </button>
             ) : null}
             {view.canRelease &&
