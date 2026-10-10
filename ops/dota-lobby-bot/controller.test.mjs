@@ -290,7 +290,55 @@ test("a reconnect still inside the launched game's lobby leaves it again", (t) =
   assert.equal(c.data.active, spec.key);
   assert.throws(() => c.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
 });
-test("a reconnect never frees an unlaunched or ambiguous claim", (t) => {
+test("a reconnect outside a released lobby finishes the release", (t) => {
+  const next = { ...spec, key: "inhouse:next:1", name: "GGD2L Inhouse next" };
+  // A ready lobby, and one Dota left blocked (here a wrong ticket).
+  for (const lobby of [snapshot(), snapshot({ leagueid: 0 })]) {
+    const { controller: c, calls } = setup(t);
+    c.request("create", spec);
+    c.snapshot(lobby);
+    c.request("release", spec);
+    assert.deepEqual(calls, ["create", "leave"]);
+    // The GC drops before it confirms the departure. A welcome that left a
+    // cache unsent proves nothing, so the claim holds.
+    c.online = false;
+    assert.equal(welcome(c, [], false), false);
+    c.online = true;
+    assert.throws(() => c.request("create", next), /BUSY/);
+    // A full welcome holding no lobby is the departure the drop swallowed.
+    assert.equal(welcome(c), true);
+    assert.equal(c.data.active, null);
+    assert.equal(c.status(spec.key).state, "released");
+    assert.equal(c.request("create", next).state, "creating");
+    assert.deepEqual(calls, ["create", "leave", "create"]);
+  }
+});
+test("a restarted worker finishes a release on its first full welcome", (t) => {
+  const { controller: c, calls, options } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("release", spec);
+  // The watchdog restarts the process before any departure arrives.
+  const resumed = new LobbyController(options);
+  assert.equal(welcome(resumed), true);
+  resumed.online = true;
+  assert.equal(new LobbyController(options).data.active, null);
+  assert.equal(resumed.status(spec.key).state, "released");
+  resumed.request("create", { ...spec, key: "inhouse:next:1" });
+  assert.deepEqual(calls, ["create", "leave", "create"]);
+});
+test("a reconnect still inside a released lobby leaves it again", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("release", spec);
+  // The Leave itself was lost: the welcome replays the lobby.
+  assert.equal(welcome(c, [snapshot()]), false);
+  assert.deepEqual(calls, ["create", "leave", "leave"]);
+  assert.equal(c.data.active, spec.key);
+  assert.throws(() => c.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
+});
+test("a reconnect never frees an unlaunched or ambiguous claim nobody released", (t) => {
   const reach = {
     // An ambiguous create: Dota may still make the lobby.
     creating: () => {},
