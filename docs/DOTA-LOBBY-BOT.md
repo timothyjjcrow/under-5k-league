@@ -149,7 +149,7 @@ node macos-service.mjs status
 
 The installed LaunchAgent `com.ggd2l.dota-lobby-bot` starts at Mac user login and restarts after a failure. It continues after ChatGPT or the terminal closes. `--keep-awake` prevents idle system sleep while running; keep the Mac powered and its lid open. Locking the screen or turning off the display is fine. Logout, shutdown, network loss, or lid sleep makes the bot unavailable.
 
-Use `node macos-service.mjs stop` before signing in again or moving the bot to another host; `start` brings it back. `uninstall` removes the LaunchAgent without deleting private Steam state. Logs are private files under `state/logs/`. A Node runtime upgrade that removes the installed Node path requires reinstalling the service.
+Use `node macos-service.mjs stop` before signing in again or moving the bot to another host; `start` brings it back. `stop` returns only once launchd has unloaded the bot, so `start` can follow it straight away ([details](DOTA-BOT-HOSTING.md#running-on-this-mac)). `uninstall` removes the LaunchAgent without deleting private Steam state. Logs are private files under `state/logs/`. A Node runtime upgrade that removes the installed Node path requires reinstalling the service.
 
 ## Match-night flow
 
