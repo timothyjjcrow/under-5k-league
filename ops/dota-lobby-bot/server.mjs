@@ -141,10 +141,13 @@ dota.router.on(EGCBaseClientMsg.k_EMsgGCClientWelcome, (welcome) => {
   controller.lobby = null;
   for (const cache of welcome.outofdateSubscribedCaches ?? [])
     subscribed(cache);
-  controller.absenceConfirmed =
-    !controller.lobby && (welcome.uptodateSubscribedCaches ?? []).length === 0;
+  const freed = controller.welcomed(
+    (welcome.uptodateSubscribedCaches ?? []).length === 0,
+  );
   controller.online = true;
   console.log("[dota-bot] Game Coordinator connected");
+  if (freed)
+    console.log("[dota-bot] Reconnected outside the launched game's lobby; free for the next one");
 });
 dota.router.on(ESOMsg.k_ESOMsg_CacheSubscribed, subscribed);
 dota.router.on(ESOMsg.k_ESOMsg_Create, objectUpdate);
