@@ -7,7 +7,7 @@ import {
   sendInhouseDiscordMessage,
 } from "./discord";
 import { parseInhouseBox, type InhouseBoxPlayer } from "./inhouse-box";
-import { summarizeInhouse, toFinishedLobby } from "./inhouse-stats";
+import { inhouseEloDeltasFor, toFinishedLobby } from "./inhouse-stats";
 import { gameMvp } from "./achievements";
 import { databaseNow } from "./database-time";
 import { heroById } from "./heroes";
@@ -163,9 +163,11 @@ async function reconcileOneResult(
             return "skipped";
           }
 
-          // Re-rate only through this lobby. A newer game may have completed
-          // while an old binary was down; using the global ladder's lastChange
-          // would then stamp that newer game's swing onto this result.
+          // Re-rate only through this lobby (inhouseEloDeltasFor, exact on
+          // [createdAt, id]). A newer game may have completed while an old
+          // binary was down, or while this one was marked over and waiting
+          // on OpenDota; the global ladder's lastChange would then stamp that
+          // newer game's swing onto this result.
           const history = await tx.inhouseLobby.findMany({
             where: {
               status: INHOUSE_STATUS.COMPLETED,
@@ -184,18 +186,13 @@ async function reconcileOneResult(
               },
             },
           });
-          const records = summarizeInhouse(history.map(toFinishedLobby));
           const participantIds = new Set(
             source.players
               .filter((player) => player.team === 1 || player.team === 2)
               .map((player) => player.userId),
           );
-          const deltas: Record<string, number> = {};
-          for (const record of records) {
-            if (participantIds.has(record.userId)) {
-              deltas[record.userId] = record.lastChange;
-            }
-          }
+          const deltas =
+            inhouseEloDeltasFor(history.map(toFinishedLobby), source.id) ?? {};
           if (
             participantIds.size === 0 ||
             Object.keys(deltas).length !== participantIds.size

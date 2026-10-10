@@ -225,13 +225,22 @@ export const INHOUSE_STATUS = {
   DRAFTING: "DRAFTING",
   READY: "READY",
   IN_PROGRESS: "IN_PROGRESS",
+  // The game is over in Dota (a player or admin pressed "Game over") and the
+  // site is still waiting for OpenDota to publish it. Not live: the slot and
+  // all ten players are free, so the next game can form at once. The result
+  // still lands on it (INHOUSE_RESULT_STATUSES), or it is given up on after
+  // ABANDON_AWAITING_RESULT_HOURS.
+  AWAITING_RESULT: "AWAITING_RESULT",
   COMPLETED: "COMPLETED",
   CANCELLED: "CANCELLED",
 } as const;
 export type InhouseStatus =
   (typeof INHOUSE_STATUS)[keyof typeof INHOUSE_STATUS];
 
-// A lobby is "active" (holds one of the live game slots) until it ends.
+// A lobby is "active" (holds one of the live game slots and its ten players)
+// until its game is over: a result, a cancel, or "Game over" (AWAITING_RESULT,
+// which is deliberately not here). Postgres's partial unique
+// InhouseLobby_live_slot_idx spells out these same five.
 export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.READY_CHECK,
   INHOUSE_STATUS.CAPTAIN_VOTE,
@@ -241,11 +250,20 @@ export const INHOUSE_ACTIVE_STATUSES: InhouseStatus[] = [
 ];
 
 // A lobby counts as being PLAYED from the moment teams lock (READY), whether or
-// not anyone presses the optional Start: the automatic OpenDota scan, the
-// manual "Record by match ID" path and the result claim all accept both.
+// not anyone presses the optional Start, until "Game over". These are the
+// phases the lobby bot may host and Start or "Game over" may move.
 export const INHOUSE_PLAYING_STATUSES: InhouseStatus[] = [
   INHOUSE_STATUS.READY,
   INHOUSE_STATUS.IN_PROGRESS,
+];
+
+// Where a result can land: a game being played, or one marked over whose
+// result OpenDota hasn't published yet. The automatic scan, "Check now",
+// "Record by match ID" and the result claim all accept these three.
+export const INHOUSE_RESULT_STATUSES: InhouseStatus[] = [
+  INHOUSE_STATUS.READY,
+  INHOUSE_STATUS.IN_PROGRESS,
+  INHOUSE_STATUS.AWAITING_RESULT,
 ];
 
 export const INHOUSE = {
@@ -302,10 +320,13 @@ export const INHOUSE = {
   // advantage — see nextPickTeam.
   FIRST_PICK_TEAM: 2,
   // Auto result detection (OpenDota): don't scan until a game could plausibly be
-  // over, and don't scan more than once per interval per lobby (at most
-  // MAX_LIVE_GAMES are live, so this bounds API usage globally). The interval grows with
-  // the game's age — an abandoned lobby nobody cancels must not scan every 3
-  // minutes forever — up to the cap.
+  // over, and don't scan more than once per interval per lobby. At most
+  // MAX_LIVE_GAMES are live, plus the games marked over and still waiting for
+  // OpenDota (each given up on after ABANDON_AWAITING_RESULT_HOURS, and one
+  // lookup per scan when the bot hosted it); the worker scans the stalest
+  // first. The interval grows with the game's age — an abandoned lobby nobody
+  // cancels must not scan every 3 minutes forever — up to the cap. A game
+  // marked over restarts that growth from the moment it was marked.
   //
   // Two clocks, one per playing status (inhouseDetectWindow in inhouse.ts):
   // an IN_PROGRESS game is timed from Start (or the bot's launch), a READY one
@@ -357,6 +378,16 @@ export const INHOUSE = {
   // scan keeps looking.
   ABANDON_READY_HOURS: 6,
   ABANDON_IN_PROGRESS_HOURS: 6,
+  // A game marked over (AWAITING_RESULT) holds no slot and no players, so
+  // waiting costs only scans. Six hours from the "Game over" press rides out
+  // an OpenDota outage; past it the game is given up on (CANCELLED, with a
+  // reason). It never counted, so nothing else moves.
+  ABANDON_AWAITING_RESULT_HOURS: 6,
+  // How long after "Game over" a result still on the way keeps the sitewide
+  // pingers on their fast `watch` cadence (and the hourly player-data refresh
+  // off the shared OpenDota budget). Most results land well inside it; the
+  // scan itself keeps going until the give-up floor either way.
+  AWAITING_RESULT_WATCH_MINUTES: 60,
   // Discord "queue is filling" ping: fires when a join crosses this many
   // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.
   //

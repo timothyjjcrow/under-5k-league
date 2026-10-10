@@ -456,9 +456,11 @@ well as relational data.
 ## 3. The inhouse lifecycle
 
 State machine on `InhouseLobby.status`: `READY_CHECK → CAPTAIN_VOTE →
-DRAFTING → READY → IN_PROGRESS → COMPLETED | CANCELLED`, with up to
-`INHOUSE.MAX_LIVE_GAMES` (2) live lobbies at once, one per game slot
-(`InhouseLobby.slot`). Pure rules in `src/lib/inhouse.ts`, the engine in
+DRAFTING → READY → IN_PROGRESS → (AWAITING_RESULT →) COMPLETED | CANCELLED`,
+with up to `INHOUSE.MAX_LIVE_GAMES` (2) live lobbies at once, one per game
+slot (`InhouseLobby.slot`). "Game over" (`finishGame`) moves a game being
+played to AWAITING_RESULT, which is not live: its slot and its ten are free
+while the result scan keeps looking for it. Pure rules in `src/lib/inhouse.ts`, the engine in
 `src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery, and
 the viewer payload builder `getInhouseState`), the client in
 `src/components/inhouse-room.tsx` (poll loop and actions) with one file per
@@ -471,8 +473,10 @@ completion, and the real no-active-season offseason.
    `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
    by the player's own polls); stale entries dim to "away" and are pruned.
    Outsiders may queue for the next game while a lobby is active; nobody in
-   a live lobby can queue. A queue crossing 4 present players fires a
-   throttled Discord ping.
+   a live lobby can queue (a game marked over is not live). A queue crossing
+   4 present players fires a throttled Discord ping. Positions (1 to 5) are
+   `User.inhouseRoles`, read live by the room, with the latest signup's
+   `Registration.roles` standing in until a player picks.
 2. **Formation** — `maybeFormLobby` fills free game slots: each formation
    (Serializable, one slot) takes the lowest free slot and 10 present players
    in exact `[joinedAt, userId]` order, snapshots `joinedAt` as each player's
@@ -508,10 +512,14 @@ completion, and the real no-active-season offseason.
    (`maybeAutoDetectResult`), the detect button, or a pasted match id all
    converge on `buildResult` (league `classifyGame` reuse; emits `teamFixes`
    when players sat on the opposite side they were drafted to — the played game
-   is the truth). `applyResult` first commits the guarded
-   `IN_PROGRESS → COMPLETED` claim plus side fixes, immutable `completedAt` and
-   the exact durable RESULT payload in one transaction, computes full-history
-   Elo, then claims that exact completed match again to store `eloDeltas`. A leased outbox worker sends only after
+   is the truth). A game marked over only takes a match that started before
+   its players' next game formed (past its ready check), since its ten may be
+   playing it; it is given up on 6 hours after the press (`finishedAt`). `applyResult` first
+   commits the guarded `READY | IN_PROGRESS | AWAITING_RESULT → COMPLETED`
+   claim plus side fixes, immutable `completedAt` and the exact durable RESULT
+   payload in one transaction, computes Elo through that game
+   (`inhouseEloDeltasFor`), then claims that exact completed match again to
+   store `eloDeltas`. A leased outbox worker sends only after
    commit and outside every transaction. A racing void cancels the RESULT only
    while it is still PENDING; if it is already SENDING or SENT, the durable
    sequence-2 correction waits behind or follows it. `updatedAt` is not result
@@ -679,7 +687,7 @@ tick takes a 1,200/min/IP preflight before session or database work, then a
 signed-in user also takes a 300/min/user allowance. Bid, nominate, and
 admin-nominate share one 120/min-per-user mutation bucket;
 `/api/inhouse` — single POST dispatch (`{action: state|join|leave|accept|
-decline|vote|pick|start|detect|record|cancel|void}`); valid JSON object and
+decline|vote|pick|start|finish|roles|detect|record|cancel|giveup|void}`); valid JSON object and
 explicit action required. Every call requires the JSON media type. Public state
 reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out

@@ -5,11 +5,18 @@ import {
   Badge,
   PlayerLink,
   RankBadge,
+  RoleBadges,
   buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useBannerOffscreen } from "@/components/room-clock";
-import { avgKnownMmr, mmrBalance } from "@/lib/inhouse";
+import {
+  avgKnownMmr,
+  fillsRoleNeed,
+  inhouseTeamRoleNeeds,
+  mmrBalance,
+} from "@/lib/inhouse";
+import { parseRoleOrder, rolesAccessibleName } from "@/lib/roles";
 import type { InhouseState } from "@/lib/inhouse-service";
 import { SecondsClock } from "@/components/inhouse/clocks";
 import {
@@ -20,6 +27,7 @@ import {
   type RoomLobby,
   type RoomMe,
 } from "@/components/inhouse/shared";
+import { TeamRoleNeeds, rosterOf } from "@/components/inhouse/team-role-needs";
 
 export function DraftView({
   state,
@@ -53,6 +61,11 @@ export function DraftView({
   const { ref: bannerRef, offscreen } = useBannerOffscreen(clockBar);
   const onClockTeam = lobby.teams.find((t) => t.team === lobby.pickTeam);
   const onClockSide = onClockTeam ? sideMeta(onClockTeam.isRadiant) : null;
+  // The positions the team on the clock still lacks, so its captain can see
+  // which pool players would round it out ("fills Pos 4" on their rows).
+  const onClockNeeds = onClockTeam
+    ? inhouseTeamRoleNeeds(rosterOf(onClockTeam)).open
+    : [];
   // "Pick 4 of 8" — captains fill one slot each, the rest are drafted.
   const totalPicks = 2 * (teamSize - 1);
   const picksMade = lobby.teams.reduce((s, t) => s + t.players.length, 0);
@@ -190,6 +203,25 @@ export function DraftView({
             {lobby.pool.map((p) => {
               const pickable = me.canPick;
               const isSel = selected === p.userId;
+              // The positions this player would fill for the team on the
+              // clock, shown as "fills Pos 4" and spoken with their roles.
+              const fills = parseRoleOrder(p.roles).filter((k) =>
+                onClockNeeds.includes(k),
+              );
+              const fillsText =
+                fills.length > 0
+                  ? `fills ${fills.map((k) => `Pos ${k}`).join(", ")}`
+                  : null;
+              // The button's label ("Select X to draft") replaces its
+              // contents for a screen reader, so the positions ride along as
+              // its description.
+              const rolesText = [
+                rolesAccessibleName(p.roles, { ranked: p.rolesRanked }),
+                fillsText,
+              ]
+                .filter(Boolean)
+                .join("; ");
+              const rolesId = `pool-roles-${lobby.id}-${p.userId}`;
               return (
                 <div
                   key={p.userId}
@@ -206,6 +238,7 @@ export function DraftView({
                     disabled={!pickable}
                     aria-pressed={isSel}
                     aria-label={`Select ${p.name} to draft`}
+                    aria-describedby={rolesText ? rolesId : undefined}
                     onClick={() => setSelected(isSel ? null : p.userId)}
                     className={cn(
                       "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
@@ -213,8 +246,23 @@ export function DraftView({
                     )}
                   >
                     <Avatar name={p.name} src={p.avatar} size={26} />
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {p.name}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">
+                        {p.name}
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                        <RoleBadges roles={p.roles} ranked={p.rolesRanked} />
+                        {fillsRoleNeed(onClockNeeds, p.roles) ? (
+                          <span className="text-[11px] font-medium text-accent">
+                            {fillsText}
+                          </span>
+                        ) : null}
+                        {rolesText ? (
+                          <span id={rolesId} className="sr-only">
+                            {rolesText}
+                          </span>
+                        ) : null}
+                      </span>
                     </span>
                     {p.record ? (
                       <span
@@ -344,6 +392,7 @@ function TeamColumn({
           {onClock ? <Badge tone="accent">picking</Badge> : null}
         </span>
       </div>
+      <TeamRoleNeeds members={rosterOf(team)} />
       <div className="space-y-1.5 p-3">
         {roster.map((p, i) => (
           <div
@@ -358,12 +407,17 @@ function TeamColumn({
             {p ? (
               <>
                 <Avatar name={p.name} src={p.avatar} size={24} />
-                <PlayerLink
-                  userId={p.userId}
-                  className="min-w-6 flex-1 truncate"
-                >
-                  {p.name}
-                </PlayerLink>
+                <span className="min-w-6 flex-1">
+                  <PlayerLink userId={p.userId} className="block truncate">
+                    {p.name}
+                  </PlayerLink>
+                  <RoleBadges
+                    roles={p.roles}
+                    ranked={p.rolesRanked}
+                    labelled
+                    className="mt-0.5"
+                  />
+                </span>
                 {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}
                 {i > 0 && p.pickIndex != null ? (
                   <span
@@ -384,3 +438,4 @@ function TeamColumn({
     </div>
   );
 }
+

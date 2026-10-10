@@ -284,7 +284,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Results record from Set up too, so Start is optional: the screen says the
   // result records itself and offers the manual paths behind one disclosure.
   await expect(
-    page.getByText("Game over and no result yet? Record it"),
+    page.getByText("Played already and no result yet? Record it"),
   ).toBeVisible();
 
   // The observer (team 1 captain) starts the game clock from the UI.
@@ -300,7 +300,11 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   ).toBeVisible();
   await expect(page.getByText(/Auto-scan starts in \d+ min\./)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Check now/ }),
+    page.getByRole("button", { name: "Check OpenDota now" }),
+  ).toHaveCount(0);
+  // "Game over" shares that window: a game that just started can't be over.
+  await expect(
+    page.getByRole("button", { name: "Game over — queue again" }),
   ).toHaveCount(0);
   await expect(page.getByText("Record by match ID")).toBeVisible();
   await expect(page.getByText("Radiant").first()).toBeVisible();

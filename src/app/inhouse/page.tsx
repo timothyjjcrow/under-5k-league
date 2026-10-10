@@ -695,9 +695,11 @@ function OpenDotaGuide({
           <li className="flex gap-3">
             <GuideStep n={4} />
             <span>
-              Play your inhouse. When it ends, the result is fetched from
-              OpenDota automatically (usually within a few minutes) — or anyone
-              in the game can paste the match ID.
+              Play your inhouse. When it ends, press{" "}
+              <b>Game over — queue again</b> to play the next one straight
+              away. The result is fetched from OpenDota by itself (usually 10
+              to 30 minutes after the game), or anyone in the game can paste
+              the match ID.
             </span>
           </li>
         </ol>

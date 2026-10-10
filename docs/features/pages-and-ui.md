@@ -685,6 +685,15 @@ the league is already draftable and many visitors have joined. Write for both.
   a player sees their own game, with the other folded to one line under it; a
   spectator sees the next-game queue card, then each live game read-only,
   named "Game N" once two are live. Only one pinned clock bar ever shows.
+- **A game marked over gets its own card** ([inhouse](inhouse.md#game-over-result-pending)):
+  "Result on the way" above the queue between games, folded to one line with
+  no controls while the viewer is queued or in their next game, named by
+  `#code`. Positions show on every player row, in the player's order of
+  preference (`RoleBadges ranked`, first choice ringed): `labelled` on queue,
+  roster and matchup rows; the vote and draft-pool buttons, whose label
+  replaces their contents, carry them (and "fills Pos N") as an
+  `aria-describedby` description. The picker sits in the queue's join
+  controls only, its unsaved choice held by the room like the typed MMR.
 - **`SceneStats` uses the same memoised `loadBoardStats` as the Discord
   board,** so channel and site agree on counts, last result and MVP. Use
   `inhouseEndedAt`/`inhousePlayedAt` (`src/lib/inhouse-history.ts`) for game

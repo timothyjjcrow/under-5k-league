@@ -1,4 +1,11 @@
-import { INHOUSE, INHOUSE_STATUS } from "./constants";
+import {
+  INHOUSE,
+  INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_PLAYING_STATUSES,
+  INHOUSE_STATUS,
+} from "./constants";
+import { uncoveredRoles } from "./draft";
+import { parseRoles } from "./roles";
 
 // Pure inhouse-draft rules. All DB effects live in inhouse-service.ts; these
 // functions just encode the "who captains / who picks next" math so they can be
@@ -279,6 +286,21 @@ export function autoJoinDecision(me: {
 }
 
 /**
+ * What a `?join=1` link says when it finds the viewer already in. A player
+ * still in a live game (the board's "Queue for the next one" is what people
+ * press right after a game) is not "in the queue": the way back in is
+ * "Game over — queue again", so the toast names it.
+ */
+export function autoJoinAlreadyInToast(me: {
+  inQueue: boolean;
+  inLobby: boolean;
+}): string {
+  return me.inLobby && !me.inQueue
+    ? "You're in a live game here. When it's over, press “Game over — queue again”."
+    : "You're already in the queue";
+}
+
+/**
  * The toast for a ready check that ended under the viewer, or null.
  *
  * Gated on MEMBERSHIP, never on a list of lobby statuses. The status list got
@@ -308,6 +330,12 @@ export type InhouseAlertSnapshot = {
   isOnClock: boolean;
   /** `lastResult?.lobbyId ?? null`. */
   resultId: string | null;
+  /** `lobby?.id ?? null` — the viewer's own live game. */
+  lobbyId?: string | null;
+  /** The ids in `pendingResults`: games marked over, results on the way. */
+  pendingIds?: readonly string[];
+  /** `me.inQueue`. */
+  inQueue?: boolean;
 };
 
 /**
@@ -333,8 +361,14 @@ export function inhouseAlerts(
   const alerts: InhouseAlert[] = [];
   // Keyed on the lobby appearing, NOT on status === READY_CHECK: a hidden tab
   // on its keepalive can first SEE the lobby already in CAPTAIN_VOTE or
-  // DRAFTING, and that player still needs the bell.
-  if (next.status !== null && prev.status === null && next.inLobby) {
+  // DRAFTING, and that player still needs the bell. Appearing includes
+  // replacing another: "Game over — queue again" can form the presser's next
+  // game in the same press, so one payload goes straight from their old
+  // game to the new ready check.
+  const newLobby =
+    prev.status === null ||
+    (!!prev.lobbyId && !!next.lobbyId && prev.lobbyId !== next.lobbyId);
+  if (next.status !== null && newLobby && next.inLobby) {
     alerts.push("lobby-formed");
   }
   // Its own alert, and the matched pair to the rule above: requiring the
@@ -355,11 +389,56 @@ export function inhouseAlerts(
   // Keyed off lastResult, NOT the lobby vanishing — the active-lobby query
   // drops COMPLETED and CANCELLED identically, so an admin cancel would
   // otherwise ring a victory bell. Compared by id rather than "was null", so
-  // back-to-back games inside the 10-minute window each ring.
-  if (next.resultId && prev.resultId !== next.resultId) {
+  // back-to-back games inside the 10-minute window each ring. Only while the
+  // viewer is between games: a game marked over can land mid-way through the
+  // NEXT one, where a bell reads as "match found" or "your pick" — that case
+  // gets resultLandedToast instead.
+  if (next.resultId && prev.resultId !== next.resultId && next.status === null) {
     alerts.push("game-ended");
   }
   return alerts;
+}
+
+/**
+ * The toast for a player whose game was just marked over, or null. Someone in
+ * it pressed "Game over" (or an admin did): the room drops them back to the
+ * queue on their next poll, and without a word that reads as a crash or a
+ * cancel. Keyed on THEIR live game turning up in `pendingIds`, so an admin
+ * cancel (which leaves no pending row) stays silent, as it always has.
+ */
+export function gameMarkedOverToast(
+  prev: InhouseAlertSnapshot | null,
+  next: InhouseAlertSnapshot,
+): string | null {
+  if (!prev || !prev.inLobby || !prev.lobbyId || next.inLobby) return null;
+  if (!next.pendingIds?.includes(prev.lobbyId)) return null;
+  // The presser (or anyone who already rejoined) is back in line.
+  return next.inQueue
+    ? "Game over: you're back in the queue. The result records itself once OpenDota has it."
+    : "Game over. The result records itself once OpenDota has it — queue for the next game any time.";
+}
+
+/**
+ * The toast for a result that lands while the viewer is already in their next
+ * game, or null. The banner only shows between games, and its bell would land
+ * mid-ready-check or mid-draft (see inhouseAlerts), so the scoreline comes as
+ * a toast instead. `prev === null` stays quiet, like the bell.
+ */
+export function resultLandedToast(
+  prev: InhouseAlertSnapshot | null,
+  next: InhouseAlertSnapshot,
+  result: { lobbyId: string; myTeamWon: boolean; eloDelta: number } | null,
+): string | null {
+  if (!prev || !result || next.status === null) return null;
+  if (!next.resultId || next.resultId !== result.lobbyId) return null;
+  if (prev.resultId === next.resultId) return null;
+  const elo =
+    result.eloDelta === 0
+      ? ""
+      : ` (${result.eloDelta > 0 ? "+" : "−"}${Math.abs(result.eloDelta)} Elo)`;
+  return `Your last game (#${inhouseLobbyCode(result.lobbyId)}) is in: ${
+    result.myTeamWon ? "you won" : "you lost"
+  }${elo}.`;
 }
 
 /**
@@ -512,6 +591,10 @@ export function otherGameFlags(isAdmin: boolean, status: string) {
     canRecord:
       isAdmin &&
       (status === INHOUSE_STATUS.READY || status === INHOUSE_STATUS.IN_PROGRESS),
+    // Who may; inhouseGameOverOpen says when.
+    canFinish:
+      isAdmin &&
+      (status === INHOUSE_STATUS.READY || status === INHOUSE_STATUS.IN_PROGRESS),
     canCancel: isAdmin,
     canPick: isAdmin && status === INHOUSE_STATUS.DRAFTING,
   } as const;
@@ -615,7 +698,8 @@ export function detectIntervalSeconds(elapsedMs: number): number {
 }
 
 /**
- * The clock automatic result detection runs on, for a lobby being played.
+ * The clock automatic result detection runs on, for a lobby whose result can
+ * still land.
  *
  * A lobby counts as played from the moment teams lock (READY): ten people who
  * go straight into Dota without pressing the optional Start must still get
@@ -632,37 +716,137 @@ export function detectIntervalSeconds(elapsedMs: number): number {
  *     that would hide "Check now" on a finished game and hold its result back
  *     another DETECT_MIN_MINUTES. The earlier-opening clock wins, and brings
  *     its `clockMs` with it.
+ *   - AWAITING_RESULT (marked over): the game's own clock as above (from
+ *     `startedAt` if it was started, else formation), open no later than the
+ *     "Game over" press, since the game is known to be over by then.
  *
- * `clockMs` also drives the scan's backoff (detectIntervalSeconds) and the
- * bot-match wait. Null for any phase that is not being played. Shared by the
- * service, the automation gate's wake-up and the room's "auto-scan is
- * running" note, so the three can never disagree about when detection starts.
- * (The abandonment floors are NOT on this clock: they stay on formation for
- * READY and on `startedAt` for IN_PROGRESS — see resolveAbandonedLobby.)
+ * `clockMs` drives the bot-match wait (DETECT_BOT_MATCH_WAIT_MINUTES), so a
+ * "Game over" press never restarts it; `intervalFromMs` drives the scan's
+ * backoff (detectIntervalSeconds), which a game marked over restarts from the
+ * press. Null for any phase whose result can't land. Shared by the service,
+ * the automation gate's wake-up and the room's "auto-scan is running" note,
+ * so the three can never disagree about when detection starts. (The
+ * abandonment floors are NOT on this clock: they stay on formation for READY,
+ * on `startedAt` for IN_PROGRESS and on `finishedAt` for a game marked over —
+ * see resolveAbandonedLobby.)
  */
 export function inhouseDetectWindow(lobby: {
   status: string;
   createdAtMs: number;
   startedAtMs: number | null;
-}): { clockMs: number; opensAtMs: number } | null {
+  /** When "Game over" was pressed (AWAITING_RESULT only). */
+  finishedAtMs?: number | null;
+}): { clockMs: number; opensAtMs: number; intervalFromMs: number } | null {
   const fromFormation = {
     clockMs: lobby.createdAtMs,
     opensAtMs: lobby.createdAtMs + INHOUSE.DETECT_READY_MIN_MINUTES * 60_000,
   };
-  if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
-    // Every IN_PROGRESS writer stamps startedAt; formation is the fallback so
-    // an inconsistent row is still scanned rather than stranded.
-    const clockMs = lobby.startedAtMs ?? lobby.createdAtMs;
-    const fromStart = {
+  // The IN_PROGRESS rule. Every IN_PROGRESS writer stamps startedAt; formation
+  // is the fallback so an inconsistent row is still scanned rather than
+  // stranded.
+  const fromStart = (startedAtMs: number | null) => {
+    const clockMs = startedAtMs ?? lobby.createdAtMs;
+    const started = {
       clockMs,
       opensAtMs: clockMs + INHOUSE.DETECT_MIN_MINUTES * 60_000,
     };
-    return fromStart.opensAtMs <= fromFormation.opensAtMs
-      ? fromStart
+    return started.opensAtMs <= fromFormation.opensAtMs
+      ? started
       : fromFormation;
+  };
+  const played = (w: { clockMs: number; opensAtMs: number }) => ({
+    ...w,
+    intervalFromMs: w.clockMs,
+  });
+  if (lobby.status === INHOUSE_STATUS.IN_PROGRESS) {
+    return played(fromStart(lobby.startedAtMs));
   }
-  if (lobby.status === INHOUSE_STATUS.READY) return fromFormation;
+  if (lobby.status === INHOUSE_STATUS.READY) return played(fromFormation);
+  if (lobby.status === INHOUSE_STATUS.AWAITING_RESULT) {
+    const game =
+      lobby.startedAtMs != null ? fromStart(lobby.startedAtMs) : fromFormation;
+    // A row marked over always has finishedAt; the game's own window is the
+    // fallback so an inconsistent row is still scanned.
+    const finishedAtMs = lobby.finishedAtMs ?? null;
+    return {
+      clockMs: game.clockMs,
+      opensAtMs:
+        finishedAtMs == null
+          ? game.opensAtMs
+          : Math.min(game.opensAtMs, finishedAtMs),
+      intervalFromMs: finishedAtMs ?? game.clockMs,
+    };
+  }
   return null;
+}
+
+/**
+ * Can this lobby be marked over ("Game over")? Only a game being played
+ * (READY or IN_PROGRESS), and only once its result scan window has opened —
+ * the moment "Check now" appears, before which the game can't plausibly be
+ * over. Marking a game over frees its ten players and its game slot (its
+ * voice channels and hand-hosted lobby name go to the next game), so this is
+ * the floor against a press during set-up. ONE predicate for the room's
+ * button and finishGame's refusal, so the two can never disagree. Unlike
+ * inhouseScanStatus, an unknown window is CLOSED.
+ *
+ * `serverNow` is the server clock of the last poll (or the service's now).
+ */
+export function inhouseGameOverOpen(
+  status: string | null | undefined,
+  scanOpensAt: number | null | undefined,
+  serverNow: number | null | undefined,
+): boolean {
+  return (
+    !!status &&
+    (INHOUSE_PLAYING_STATUSES as readonly string[]).includes(status) &&
+    scanOpensAt != null &&
+    serverNow != null &&
+    serverNow >= scanOpensAt
+  );
+}
+
+/**
+ * The lobbies that keep the site on its fast `watch` cadence: every live game,
+ * plus a game marked over in its first AWAITING_RESULT_WATCH_MINUTES (after
+ * that its scan carries on at its own decaying rate, but the whole site need
+ * not poll fast for hours). A plain where-object, shared by the worker and the
+ * /api/sync snapshot so the two can't disagree.
+ */
+export function inhouseWatchedLobbyWhere(nowMs: number) {
+  return {
+    OR: [
+      { status: { in: [...INHOUSE_ACTIVE_STATUSES] } },
+      {
+        status: INHOUSE_STATUS.AWAITING_RESULT,
+        finishedAt: {
+          gte: new Date(nowMs - INHOUSE.AWAITING_RESULT_WATCH_MINUTES * 60_000),
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * The latest Dota start time (epoch seconds) a result for this lobby may have,
+ * or null for none. A game marked over lets its ten go, and the same ten often
+ * run it back at once, so the scan's "newest shared game since formation"
+ * would take their NEXT game. Once a later lobby sharing its players has
+ * formed and passed its ready check (`nextGameFormedAtMs`), nothing that
+ * started after that formation can be this game. Deliberately not the "Game
+ * over" press itself: a press made during set-up would then refuse the real
+ * game that started after it, and one mis-tap by any of the ten would leave
+ * the game unrecordable. Only a game marked over has a next game; a live one's
+ * players are in no other live lobby.
+ */
+export function inhouseResultCeilingSeconds(lobby: {
+  status: string;
+  nextGameFormedAtMs: number | null;
+}): number | null {
+  if (lobby.status !== INHOUSE_STATUS.AWAITING_RESULT) return null;
+  return lobby.nextGameFormedAtMs == null
+    ? null
+    : Math.floor(lobby.nextGameFormedAtMs / 1000);
 }
 
 /**
@@ -670,7 +854,7 @@ export function inhouseDetectWindow(lobby: {
  * window (`inhouseDetectWindow`'s opensAtMs, sent as `lobby.scanOpensAt`) has
  * opened, otherwise the whole minutes until it does (at least 1).
  *
- * `live` also gates the manual "Game over? Check now" button. A press scans
+ * `live` also gates the manual "Check OpenDota now" button. A press scans
  * all ten players' recent OpenDota games, and before the window opens the
  * game can't plausibly be over, so an early press could only fail while
  * spending the OpenDota budget league result sync shares. A null window is
@@ -729,4 +913,32 @@ export function mmrBalance(team1: number[], team2: number[]): MmrBalance {
   const avg1 = avgKnownMmr(team1);
   const avg2 = avgKnownMmr(team2);
   return { avg1, avg2, diff: avg1 - avg2 };
+}
+
+// ---- Positions (role preferences) ------------------------------------------
+
+/**
+ * What a drafting inhouse team still lacks, for the captains: the positions
+ * nobody on it lists (`open`, the season draft's uncoveredRoles, so it is
+ * empty when nobody on the team has set any) and how many of its players
+ * haven't set positions (`unset`), so an unknown never reads as a gap.
+ * Positions are preferences and most players list several: a guide to where
+ * to look, never a rule.
+ */
+export function inhouseTeamRoleNeeds(
+  members: readonly { roles: string }[],
+): { open: string[]; unset: number } {
+  return {
+    open: uncoveredRoles(members),
+    unset: members.filter((m) => parseRoles(m.roles).length === 0).length,
+  };
+}
+
+/** Does a pool player list a position the team still needs (`open`)? */
+export function fillsRoleNeed(
+  open: readonly string[],
+  roles: string | null | undefined,
+): boolean {
+  if (open.length === 0) return false;
+  return parseRoles(roles).some((k) => open.includes(k));
 }

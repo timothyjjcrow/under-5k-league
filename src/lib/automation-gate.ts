@@ -165,6 +165,17 @@ export type AutomationGateInputs = {
     detectedAt: Date | null;
     createdAt: Date;
   }>;
+  /**
+   * Games marked over (AWAITING_RESULT): no slot, so kept apart from
+   * activeLobbies and its slot-count invariant, but each still has a result
+   * scan and a give-up floor to wake for.
+   */
+  awaitingResultLobbies: Array<{
+    startedAt: Date | null;
+    finishedAt: Date | null;
+    detectedAt: Date | null;
+    createdAt: Date;
+  }>;
   queue: Array<{
     joinedAt: Date;
     lastSeenAt: Date;
@@ -725,7 +736,7 @@ export function computeAutomationGateSnapshot(
           : detectedAt === null
             ? nowMs
             : detectedAt +
-              detectIntervalSeconds(nowMs - detect.clockMs) * 1_000 +
+              detectIntervalSeconds(nowMs - detect.intervalFromMs) * 1_000 +
               1;
       addCandidate(candidates, nowMs, detectAt, "INHOUSE");
       addCandidate(
@@ -739,6 +750,41 @@ export function computeAutomationGateSnapshot(
         "INHOUSE",
       );
     }
+  }
+  // Every game marked over: its next result scan (its window is open by the
+  // "Game over" press, and its backoff restarts there) and its give-up floor,
+  // both on the clocks maybeAutoDetectResult and resolveAbandonedLobby read.
+  for (const [index, lobby] of inputs.awaitingResultLobbies.entries()) {
+    const label = `awaitingResultLobbies[${index}]`;
+    const createdAt = dateMs(lobby.createdAt, `${label}.createdAt`);
+    const finishedAt = optionalDateMs(lobby.finishedAt, `${label}.finishedAt`);
+    invariant(finishedAt !== null, "lobby marked over has no finish time");
+    const detect = inhouseDetectWindow({
+      status: INHOUSE_STATUS.AWAITING_RESULT,
+      createdAtMs: createdAt,
+      startedAtMs: optionalDateMs(lobby.startedAt, `${label}.startedAt`),
+      finishedAtMs: finishedAt,
+    });
+    invariant(detect !== null, "lobby marked over has no detection window");
+    const detectedAt = optionalDateMs(lobby.detectedAt, `${label}.detectedAt`);
+    addCandidate(
+      candidates,
+      nowMs,
+      nowMs < detect.opensAtMs
+        ? detect.opensAtMs
+        : detectedAt === null
+          ? nowMs
+          : detectedAt +
+            detectIntervalSeconds(nowMs - detect.intervalFromMs) * 1_000 +
+            1,
+      "INHOUSE",
+    );
+    addCandidate(
+      candidates,
+      nowMs,
+      finishedAt + INHOUSE.ABANDON_AWAITING_RESULT_HOURS * 3_600_000 + 1,
+      "INHOUSE",
+    );
   }
   if (inputs.repairableInhouseResult) {
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
@@ -1216,6 +1262,7 @@ export async function loadAutomationGateSnapshot(
   const [
     settingRows,
     activeLobbies,
+    awaitingResultLobbies,
     queue,
     repairableInhouseResult,
     leagueOutbox,
@@ -1276,6 +1323,19 @@ export async function loadAutomationGateSnapshot(
         voteEndsAt: true,
         pickEndsAt: true,
         startedAt: true,
+        detectedAt: true,
+        createdAt: true,
+      },
+    }),
+    prisma.inhouseLobby.findMany({
+      where: { status: INHOUSE_STATUS.AWAITING_RESULT },
+      orderBy: [{ finishedAt: "asc" }, { id: "asc" }],
+      // A night has a handful; the cap only bounds a pathological pile-up, and
+      // any one of them waking the worker scans them all, stalest first.
+      take: 50,
+      select: {
+        startedAt: true,
+        finishedAt: true,
         detectedAt: true,
         createdAt: true,
       },
@@ -1365,6 +1425,7 @@ export async function loadAutomationGateSnapshot(
       leagueDeliveryAvailable:
         leagueWebhookConfigured && discordMutationsAllowed(),
       activeLobbies,
+      awaitingResultLobbies,
       queue,
       repairableInhouseResult: repairableInhouseResult !== null,
       leagueOutbox,

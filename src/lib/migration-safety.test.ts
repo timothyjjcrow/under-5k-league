@@ -170,6 +170,7 @@ describe("migration SQL safety gate", () => {
       "20261004120000_reschedule_ready_check",
       "20261008000000_inhouse_night_rsvp",
       "20261009000000_inhouse_game_slots",
+      "20261010000000_inhouse_result_pending_roles",
     ]);
   });
 

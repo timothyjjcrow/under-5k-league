@@ -43,8 +43,12 @@ export function noShowReason(names: string[]): string {
  * resolveAbandonedLobby tore down a lobby that never produced a result. Both
  * playing phases get the same window now that Start is optional; they differ
  * only in the clock it runs from (formation for READY, Start for IN_PROGRESS).
+ * A game marked over runs from "Game over" itself.
  */
 export function abandonedReason(status: string): string {
+  if (status === INHOUSE_STATUS.AWAITING_RESULT) {
+    return `No result on OpenDota ${INHOUSE.ABANDON_AWAITING_RESULT_HOURS}h after the game ended`;
+  }
   if (status === INHOUSE_STATUS.IN_PROGRESS) {
     return `No result ${INHOUSE.ABANDON_IN_PROGRESS_HOURS}h after the game started`;
   }
@@ -57,12 +61,14 @@ const PHASE_WORDS: Record<string, string> = {
   [INHOUSE_STATUS.DRAFTING]: "during the draft",
   [INHOUSE_STATUS.READY]: "after teams locked",
   [INHOUSE_STATUS.IN_PROGRESS]: "during the game",
+  [INHOUSE_STATUS.AWAITING_RESULT]: "while waiting for the result",
 };
 
 /**
  * An admin pressed "cancel this lobby". `status` is the phase the admin saw
- * when they pressed it (the cancel claim accepts any active phase, so a draft
- * that locked teams mid-confirm still reads "during the draft").
+ * when they pressed it (the live cancel claim accepts any active phase, so a
+ * draft that locked teams mid-confirm still reads "during the draft"). Giving
+ * up on a game marked over has its own claim on AWAITING_RESULT.
  */
 export function adminCancelReason(adminName: string, status: string): string {
   const when = PHASE_WORDS[status];

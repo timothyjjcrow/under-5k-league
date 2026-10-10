@@ -1224,6 +1224,106 @@ describe("result sync — inhouse (integration)", () => {
     expect(done.boxScore).not.toBeNull();
   });
 
+  /**
+   * The end of a night: the last game marked over ("Game over"), everyone
+   * gone. No live lobby holds a slot and nobody is queued, which is exactly
+   * the state syncInhouse used to leave through its idle early return.
+   */
+  async function markedOver(finishedMinutesAgo: number) {
+    const played = await setupLobby(INHOUSE.DETECT_MIN_MINUTES + 30);
+    const lobby = await prisma.inhouseLobby.update({
+      where: { id: played.lobby.id },
+      data: {
+        status: INHOUSE_STATUS.AWAITING_RESULT,
+        finishedAt: new Date(Date.now() - finishedMinutesAgo * 60_000),
+      },
+    });
+    expect(
+      await prisma.inhouseLobby.count({
+        where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      }),
+    ).toBe(0);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    return { ...played, lobby };
+  }
+
+  it("records a game marked over with an empty queue and no live lobby — the idle exit no longer skips it", async () => {
+    const { lobby, team1, team2 } = await markedOver(2);
+    const G = 7770124;
+    mockRecent.mockResolvedValue([G]);
+    // Played between Start and the "Game over" press.
+    mockMatch.mockResolvedValue(
+      odGame(G, team1, team2, lobby.startedAt!.getTime() + 60_000),
+    );
+
+    const out = await runResultSync();
+    expect(out.inhouse).toBe(true);
+    expect(out.watch).toBe(false); // recorded: nothing left to watch
+    expect(out.cursor).not.toBeNull();
+
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
+    expect(done.dotaMatchId).toBe(String(G));
+    expect(done.winnerTeam).toBe(1);
+    expect(Object.keys(JSON.parse(done.eloDeltas))).toHaveLength(
+      INHOUSE.LOBBY_SIZE,
+    );
+  });
+
+  it("keeps pages watching a game marked over for AWAITING_RESULT_WATCH_MINUTES, then scans it without the fast cadence", async () => {
+    const { lobby } = await markedOver(5);
+    mockRecent.mockResolvedValue([]); // OpenDota hasn't published it yet
+
+    const fresh = await runResultSync();
+    expect(fresh.inhouse).toBe(false);
+    expect(fresh.watch).toBe(true);
+    expect(mockRecent).toHaveBeenCalled(); // it scanned, with nobody queued
+    expect(
+      (
+        await prisma.inhouseLobby.findUniqueOrThrow({
+          where: { id: lobby.id },
+        })
+      ).status,
+    ).toBe(INHOUSE_STATUS.AWAITING_RESULT);
+
+    // Past the watch window the scan carries on, but the site idles.
+    mockRecent.mockClear();
+    await prisma.inhouseLobby.update({
+      where: { id: lobby.id },
+      data: {
+        finishedAt: new Date(
+          Date.now() - (INHOUSE.AWAITING_RESULT_WATCH_MINUTES + 1) * 60_000,
+        ),
+        detectedAt: null,
+      },
+    });
+    const later = await runResultSync();
+    expect(later.inhouse).toBe(false);
+    expect(later.watch).toBe(false);
+    expect(mockRecent).toHaveBeenCalled();
+  });
+
+  it("gives up on a game marked over ABANDON_AWAITING_RESULT_HOURS after Game over, with no room open", async () => {
+    const { lobby } = await markedOver(
+      INHOUSE.ABANDON_AWAITING_RESULT_HOURS * 60 + 1,
+    );
+
+    const out = await runResultSync();
+    expect(out.watch).toBe(false);
+    const gaveUp = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    expect(gaveUp.status).toBe(INHOUSE_STATUS.CANCELLED);
+    expect(gaveUp.endReason).toBe(
+      `No result on OpenDota ${INHOUSE.ABANDON_AWAITING_RESULT_HOURS}h after the game ended`,
+    );
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    // Given up on before the scan: no OpenDota spent on it.
+    expect(mockRecent).not.toHaveBeenCalled();
+  });
+
   it("retries a failed durable inhouse announcement with no room or queue open", async () => {
     const lobby = await prisma.inhouseLobby.create({
       data: {

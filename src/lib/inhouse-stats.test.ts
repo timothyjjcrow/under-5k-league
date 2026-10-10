@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   INHOUSE_ELO,
   MONTH_MIN_GAMES,
+  inhouseEloDeltasFor,
   PROVISIONAL_GAMES,
   parseEloDeltas,
   rankInhouse,
@@ -176,6 +177,113 @@ describe("summarizeInhouse", () => {
     const c = recs.find((r) => r.userId === "c")!;
     expect(c.games).toBe(1);
     expect(c.rating).toBe(INHOUSE_ELO.START);
+  });
+});
+
+// The per-game Elo stamp. A game marked over waits on OpenDota while its ten
+// play the next one, so a LATER-formed game they share can complete FIRST;
+// the stamp for the earlier game must still be that game's own swing.
+describe("inhouseEloDeltasFor", () => {
+  const swingOf = (lobbies: FinishedLobby[], userId: string) =>
+    summarizeInhouse(lobbies).find((r) => r.userId === userId)!.lastChange;
+
+  // e: p beats q, so p is no longer at the start rating when A is rated.
+  const e = lobby("e", 0, 1, [["p", 1], ["q", 2]]);
+  // A: formed first, p beats q again. Marked over, result lands late.
+  const a = lobby("a", 10, 1, [["p", 1], ["q", 2]]);
+  // B: formed after A, p loses to r. Completed before A's result landed.
+  const b = lobby("b", 20, 2, [["p", 1], ["r", 2]]);
+
+  it("stamps the earlier game's own swing, not the later game's that finished first", () => {
+    const deltas = inhouseEloDeltasFor([e, a, b], "a");
+    // A rated over [e, a] only: its swing, both sides.
+    expect(deltas).toEqual({
+      p: swingOf([e, a], "p"),
+      q: swingOf([e, a], "q"),
+    });
+    // The numbers themselves: p (1016) favoured over q (984), so a smaller
+    // win than the even K/2.
+    expect(deltas).toEqual({ p: 15, q: -15 });
+    // The whole ladder's lastChange for p is B's loss: the leak this replaces.
+    expect(swingOf([e, a, b], "p")).toBe(-17);
+    expect(deltas!.p).not.toBe(swingOf([e, a, b], "p"));
+  });
+
+  it("rates the later game through everything formed before it", () => {
+    expect(inhouseEloDeltasFor([e, a, b], "b")).toEqual({
+      p: swingOf([e, a, b], "p"),
+      r: swingOf([e, a, b], "r"),
+    });
+  });
+
+  it("ignores the order the database returned the rows in", () => {
+    const expected = inhouseEloDeltasFor([e, a, b], "a");
+    expect(inhouseEloDeltasFor([b, a, e], "a")).toEqual(expected);
+    expect(inhouseEloDeltasFor([a, b, e], "a")).toEqual(expected);
+  });
+
+  it("cuts on [createdAt, id] exactly: same-instant games by id, else time first", () => {
+    // Two games formed in the same millisecond, the summarizeInhouse order:
+    // g1 before g2 because its id sorts first.
+    const g1 = lobby("g1", 5, 1, [["p", 1], ["q", 2]]);
+    const g2 = lobby("g2", 5, 2, [["p", 1], ["q", 2]]);
+    // Same instant, smaller id: before g1. Earlier instant, larger id: still
+    // before g1. Later instant, smaller id: after g1.
+    const g0 = lobby("g0", 5, 2, [["p", 1], ["q", 2]]);
+    const zz = lobby("zz", 4, 1, [["p", 1], ["q", 2]]);
+    const aa = lobby("aa", 6, 1, [["p", 1], ["q", 2]]);
+    const all = [aa, g2, zz, g1, g0];
+
+    expect(inhouseEloDeltasFor(all, "g1")).toEqual({
+      p: swingOf([zz, g0, g1], "p"),
+      q: swingOf([zz, g0, g1], "q"),
+    });
+    expect(inhouseEloDeltasFor(all, "g2")).toEqual({
+      p: swingOf([zz, g0, g1, g2], "p"),
+      q: swingOf([zz, g0, g1, g2], "q"),
+    });
+    // Each slice is a real cut: dropping g0 or adding g2/aa moves g1's stamp.
+    expect(swingOf([zz, g1], "p")).not.toBe(swingOf([zz, g0, g1], "p"));
+    expect(swingOf([zz, g0, g1, g2], "p")).not.toBe(
+      swingOf([zz, g0, g1], "p"),
+    );
+    expect(swingOf([zz, g0, g1, aa], "p")).not.toBe(
+      swingOf([zz, g0, g1], "p"),
+    );
+  });
+
+  it("reads Date and epoch formation times alike (prisma rows carry Dates)", () => {
+    const at = (l: FinishedLobby): FinishedLobby => ({
+      ...l,
+      createdAt: new Date(l.createdAt as number),
+    });
+    expect(inhouseEloDeltasFor([at(e), a, at(b)], "a")).toEqual({
+      p: 15,
+      q: -15,
+    });
+  });
+
+  it("leaves out players with no team, even ones rated in earlier games", () => {
+    // q sat out A without a side: their last swing (from e) must not be
+    // stamped onto A as if it were A's.
+    const sparse = lobby("a", 10, 1, [
+      ["p", 1],
+      ["q", null],
+      ["s", 2],
+    ]);
+    const deltas = inhouseEloDeltasFor([e, sparse, b], "a");
+    expect(Object.keys(deltas!).sort()).toEqual(["p", "s"]);
+    expect(deltas).not.toHaveProperty("q");
+  });
+
+  it("stamps only this game's players", () => {
+    // r played only in B.
+    expect(inhouseEloDeltasFor([e, a, b], "a")).not.toHaveProperty("r");
+  });
+
+  it("is null for a lobby that isn't in the history", () => {
+    expect(inhouseEloDeltasFor([e, a, b], "missing")).toBeNull();
+    expect(inhouseEloDeltasFor([], "a")).toBeNull();
   });
 });
 
