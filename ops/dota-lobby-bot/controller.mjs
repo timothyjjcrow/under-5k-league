@@ -241,6 +241,23 @@ export class LobbyController {
     )
       this.transport.leave();
   }
+  /** Settle a GC welcome once its out-of-date caches have replayed as
+   * snapshots. Only a welcome that resent every cache (`complete`) and held
+   * no lobby proves the account is in none. True when that freed a claim. */
+  welcomed(complete) {
+    this.absenceConfirmed = complete && !this.lobby;
+    // A drop can swallow the departure from a launched game, and its claim
+    // then answers BUSY to every next Create. A launched game has nothing to
+    // replay, so proven absence is that departure. Every other job keeps its
+    // claim for a deliberate release.
+    if (
+      !this.absenceConfirmed ||
+      this.data.jobs[this.data.active]?.state !== "started"
+    )
+      return false;
+    this.departed();
+    return true;
+  }
   departed() {
     const job = this.data.jobs[this.data.active];
     if (job) {
