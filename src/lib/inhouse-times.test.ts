@@ -16,6 +16,7 @@ import {
   inhouseTimeDayWord,
   inhouseTimeDuringNight,
   inhouseTimeGoogleCalendarUrl,
+  inhouseTimeLinked,
   inhouseTimeLinkPath,
   inhouseTimeParam,
   inhouseTimePhase,
@@ -24,7 +25,6 @@ import {
   inhouseTimesStrip,
   inhouseTimesStripLinkText,
   inhouseTimesWindow,
-  inhouseTimeWhoText,
   nextInhouseTimeAt,
   parseInhouseTimeParam,
   quarterHourClock,
@@ -193,54 +193,99 @@ describe("a time's controls", () => {
   });
 });
 
-describe("the strip at the top of /inhouse", () => {
+describe("the banner at the top of /inhouse", () => {
   const at = (hours: number, phase: "upcoming" | "on" | "over" = "upcoming") => ({
     startsAtMs: START + hours * HOUR,
     phase,
   });
+  const none = { linked: null };
 
   it("shows the soonest open times, three at most, and counts the rest", () => {
-    // Out of order on purpose: the strip sorts, it doesn't trust the read's order.
-    const strip = inhouseTimesStrip([at(5), at(-0.5, "on"), at(3), at(1), at(2)], {
-      linked: false,
-    });
+    // Out of order on purpose: the banner sorts, it doesn't trust the read's order.
+    const strip = inhouseTimesStrip([at(5), at(-0.5, "on"), at(3), at(1), at(2)], none);
     expect(INHOUSE_TIMES_STRIP_SHOWN).toBe(3);
-    expect(strip).toEqual({ shown: [at(-0.5, "on"), at(1), at(2)], more: 2 });
-    expect(inhouseTimesStrip([at(2), at(1)], { linked: false })).toEqual({
+    expect(strip).toEqual({
+      shown: [at(-0.5, "on"), at(1), at(2)],
+      linkedMs: null,
+      gone: false,
+      more: 2,
+    });
+    expect(inhouseTimesStrip([at(2), at(1)], none)).toEqual({
       shown: [at(1), at(2)],
+      linkedMs: null,
+      gone: false,
       more: 0,
     });
   });
 
   it("leaves out times that are over, and counts only open ones as more", () => {
     expect(
-      inhouseTimesStrip([at(-2, "over"), at(1), at(2), at(3), at(4, "over")], { linked: false }),
-    ).toEqual({ shown: [at(1), at(2), at(3)], more: 0 });
+      inhouseTimesStrip([at(-2, "over"), at(1), at(2), at(3), at(4, "over")], none),
+    ).toEqual({ shown: [at(1), at(2), at(3)], linkedMs: null, gone: false, more: 0 });
   });
 
-  it("shows nothing while no time is open", () => {
-    expect(inhouseTimesStrip([], { linked: false })).toBeNull();
-    expect(inhouseTimesStrip([at(-2, "over")], { linked: false })).toBeNull();
+  it("shows nothing while no time is open and no link needs answering", () => {
+    expect(inhouseTimesStrip([], none)).toBeNull();
+    expect(inhouseTimesStrip([at(-2, "over")], none)).toBeNull();
   });
 
-  it("shows nothing on a page opened from a time's link, which puts the whole card first", () => {
-    expect(inhouseTimesStrip([at(1), at(2)], { linked: true })).toBeNull();
+  it("leads with a link's time, picked out, even when it isn't among the soonest three", () => {
+    const times = [at(1), at(2), at(3), at(4), at(5)];
+    // Past the soonest three: shown as well, first, so a phone's first chip is it.
+    expect(inhouseTimesStrip(times, { linked: at(4).startsAtMs })).toEqual({
+      shown: [at(4), at(1), at(2), at(3)],
+      linkedMs: at(4).startsAtMs,
+      gone: false,
+      more: 1,
+    });
+    // Among them: it moves to the front, and the banner still shows three.
+    expect(inhouseTimesStrip(times, { linked: at(2).startsAtMs })).toEqual({
+      shown: [at(2), at(1), at(3)],
+      linkedMs: at(2).startsAtMs,
+      gone: false,
+      more: 2,
+    });
+    // A time that's on counts as open.
+    expect(inhouseTimesStrip([at(-0.5, "on")], { linked: at(-0.5).startsAtMs })).toEqual({
+      shown: [at(-0.5, "on")],
+      linkedMs: at(-0.5).startsAtMs,
+      gone: false,
+      more: 0,
+    });
+  });
+
+  it("says a link's time is over in its place, with any open times after it", () => {
+    // Over, never posted, or a link that names no one time: one line, even alone.
+    for (const linked of [at(-2).startsAtMs, at(7).startsAtMs, "gone" as const]) {
+      expect(inhouseTimesStrip([at(-2, "over")], { linked }), String(linked)).toEqual({
+        shown: [],
+        linkedMs: null,
+        gone: true,
+        more: 0,
+      });
+      expect(inhouseTimesStrip([at(1), at(2)], { linked }), String(linked)).toEqual({
+        shown: [at(1), at(2)],
+        linkedMs: null,
+        gone: true,
+        more: 0,
+      });
+    }
+  });
+
+  it("reads a time's link as the page gets it", () => {
+    expect(inhouseTimeLinked(undefined)).toBeNull();
+    expect(inhouseTimeLinked("2026-10-11T00:00Z")).toBe(START);
+    // A repeated key (null) or a malformed one names no one time.
+    expect(inhouseTimeLinked(null)).toBe("gone");
+    expect(inhouseTimeLinked("2026-10-11T00:07Z")).toBe("gone");
+    expect(inhouseTimeLinked("tonight")).toBe("gone");
   });
 
   it("names its link by what the card adds", () => {
-    expect(inhouseTimesStripLinkText({ more: 2, atCap: false })).toBe("2 more times");
-    expect(inhouseTimesStripLinkText({ more: 1, atCap: true })).toBe("1 more time");
+    expect(inhouseTimesStripLinkText({ more: 2, atCap: false })).toBe("2 more");
+    expect(inhouseTimesStripLinkText({ more: 1, atCap: true })).toBe("1 more");
     expect(inhouseTimesStripLinkText({ more: 0, atCap: false })).toBe("Post a time");
     expect(inhouseTimesStripLinkText({ more: 0, atCap: true })).toBe("All times");
-  });
-
-  it("labels a time's faces with who's in, counting past the ones it draws", () => {
-    expect(inhouseTimeWhoText(["Ana"], 5)).toBe("Ana is in");
-    expect(inhouseTimeWhoText(["Ana", "Bo"], 5)).toBe("Ana and Bo are in");
-    expect(inhouseTimeWhoText(["Ana", "Bo", "Cy"], 5)).toBe("Ana, Bo and Cy are in");
-    expect(inhouseTimeWhoText(["Ana", "Bo", "Cy", "Di", "Ed", "Fy", "Gu"], 5)).toBe(
-      "Ana, Bo, Cy, Di, Ed and 2 more are in",
-    );
   });
 
   it("names a time's day against now on the given clock", () => {
@@ -379,31 +424,50 @@ describe("the card follows the rules", () => {
     expect(box).not.toMatch(/name="at"[^>]*defaultValue/);
   });
 
-  it("draws the strip by its rule, from the one read the card uses", () => {
+  it("draws the banner by its rule, from the one read the card uses", () => {
     const card = stripLineComments(sourceFile("src/components/inhouse-times.tsx").text);
     expect(card).toContain("const strip = inhouseTimesStrip(times, { linked });");
     expect(card).toContain("if (!strip) return null;");
     expect(card).toContain("strip.shown.map((time) => (");
+    expect(card).toContain("linked={time.startsAtMs === strip.linkedMs}");
+    expect(card).toContain("{strip.gone ? (");
+    expect(card).toContain("The time in that link is over, or everyone on it dropped out.");
     expect(card).toContain("inhouseTimesStripLinkText({ more: strip.more, atCap })");
-    // One query per request: the strip and the card share a request-cached read.
+    // One query per request: the banner and the card share a request-cached read.
     expect(card).toMatch(/const loadPlayLater = cache\(async \(\) => \{/);
     expect(card.match(/\breadInhouseTimes\(/g)).toHaveLength(1);
     expect(card.match(/= await loadPlayLater\(\);/g)).toHaveLength(2);
-    // The phone row scrolls inside a card that clips it (CLAUDE.md: an
-    // overflow-x-auto scroller needs overflow-hidden around it).
-    expect(card).toMatch(/<Card className="[^"]*\boverflow-hidden\b[^"]*">[\s\S]*?<ul className="[^"]*\boverflow-x-auto\b/);
+    // The chips scroll in one row inside a banner that clips them (CLAUDE.md:
+    // an overflow-x-auto scroller needs overflow-hidden around it).
+    expect(card).toMatch(
+      /<Card className="[^"]*\boverflow-hidden\b[^"]*">[\s\S]*?<div className="[^"]*\boverflow-x-auto\b/,
+    );
   });
 
-  it("puts the strip above the live room, streamed, shown only by its rule", () => {
+  it("keeps the banner a sliver: one row, no faces, no countdown", () => {
+    const card = stripLineComments(sourceFile("src/components/inhouse-times.tsx").text);
+    // The banner's code is the file from its chip on (the card comes first).
+    const banner = card.slice(card.indexOf("function StripChip("));
+    expect(banner).toContain("export async function InhouseTimesStrip(");
+    // Nothing in it may wrap to a second row or stack its contents.
+    expect(banner).not.toMatch(/\bflex-wrap\b|\bflex-col\b|\bgrid-rows-|\bspace-y-/);
+    expect(banner).not.toMatch(/<Countdown\b|<Avatar\b|<CardHeader\b/);
+    // The card under the room no longer says a link's time is over; the
+    // banner does, once.
+    expect(card.match(/The time in that link is over/g)).toHaveLength(1);
+    expect(card).not.toContain("everyone on it has dropped out");
+  });
+
+  it("puts the banner above the live room, streamed, shown only by its rule", () => {
     const page = stripLineComments(sourceFile("src/app/inhouse/page.tsx").text);
     expect(page.match(/<InhouseTimesStrip\b/g)).toHaveLength(1);
     const strip =
-      /<Suspense fallback=\{null\}>\s*<InhouseTimesStrip linked=\{linkedTime !== undefined\} \/>\s*<\/Suspense>/.exec(
+      /<Suspense fallback=\{null\}>\s*<InhouseTimesStrip linked=\{linkedTime\} \/>\s*<\/Suspense>/.exec(
         page,
       );
     expect(strip).not.toBeNull();
     // Not wrapped in a condition or fragment of the page's own: between the
-    // night card's Suspense and the strip's there is only whitespace and JSX
+    // night card's Suspense and the banner's there is only whitespace and JSX
     // comments, so whether it shows (signed out too) is inhouseTimesStrip's
     // call alone.
     const night = /<InhouseNightCard invite=\{invite\} \/>\s*<\/Suspense>/.exec(page);
@@ -414,12 +478,17 @@ describe("the card follows the rules", () => {
     expect(strip!.index).toBeLessThan(page.indexOf('id="live-room"'));
   });
 
-  it("puts the card first only for a time's link, under the room otherwise", () => {
-    const page = sourceFile("src/app/inhouse/page.tsx").text;
-    expect(page.match(/<PlayLater\b/g)).toHaveLength(2);
-    expect(page).toContain("linkedTime !== undefined ? <PlayLater linked={linkedTime} /> : null");
-    expect(page).toContain("linkedTime === undefined ? <PlayLater /> : null");
-    expect(page.indexOf("<PlayLater linked")).toBeLessThan(page.indexOf('id="live-room"'));
-    expect(page.indexOf("<PlayLater />")).toBeGreaterThan(page.indexOf('id="live-room"'));
+  it("keeps the card under the room in one layout, a time's link too", () => {
+    const page = stripLineComments(sourceFile("src/app/inhouse/page.tsx").text);
+    // One card, straight after the room's section: no link mode that moves it
+    // above the room (Tim, 2026-10-10: a time's link looked like another page).
+    expect(page.match(/<PlayLater\b/g)).toHaveLength(1);
+    const room = page.indexOf('id="live-room"');
+    const card = page.indexOf("<PlayLater linked={linkedTime} />");
+    expect(card).toBeGreaterThan(room);
+    const between = page.slice(page.indexOf("</section>", room) + "</section>".length, card);
+    expect(between.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").trim()).toBe("");
+    expect(page).not.toMatch(/linkedTime (?:!==|===) undefined/);
+    expect(page).toContain("const linkedTime = inhouseTimeLinked(singleSearchParam(params.at));");
   });
 });

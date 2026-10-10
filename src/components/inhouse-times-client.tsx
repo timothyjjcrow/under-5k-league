@@ -1,9 +1,9 @@
 "use client";
 
-// Play later's browser pieces (the card and the strip are inhouse-times.tsx):
+// Play later's browser pieces (the card and the banner are inhouse-times.tsx):
 // the time box that turns a clock time into the instant it names on the
 // player's own clock, the button that copies a time's link, and a time's
-// start as the strip says it ("Today, 8:00 PM").
+// start as the banner says it ("Today, 8:00 PM").
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { pushToast } from "@/components/toaster";
@@ -47,7 +47,7 @@ function subscribeMinute(onChange: () => void): () => void {
 }
 
 /**
- * A time's start in the strip at the top of /inhouse: "Today, 8:00 PM" on
+ * A time's start in the banner at the top of /inhouse: "Today, 8:00 PM" on
  * the viewer's clock. `initial` is the server's text, the same words on the
  * league's clock with its zone named, shown until the browser takes over
  * (<LocalTime>'s trick).
@@ -181,7 +181,8 @@ export function InhouseTimePicker({
 
 /**
  * Copies a time's link (inhouseTimeLinkPath): pasted in Discord it unfurls
- * as the time, and it opens /inhouse with that time's card first. It never
+ * as the time, and it opens /inhouse as it always looks, with that time
+ * leading the banner and outlined in the card under the room. It never
  * signs anyone up. The address comes from `window.location.origin` at click
  * time, so a preview, a custom domain and localhost each copy themselves.
  */

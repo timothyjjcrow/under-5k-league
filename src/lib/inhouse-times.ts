@@ -71,7 +71,7 @@ export function parseInhouseTimeParam(raw: string | null | undefined): number | 
   return inhouseTimeParam(ms) === raw ? ms : null;
 }
 
-/** Where a time's link opens: /inhouse with that time's card first. */
+/** Where a time's link opens: /inhouse with that time picked out in the banner and the card. */
 export function inhouseTimeLinkPath(startsAtMs: number): string {
   return `/inhouse?at=${inhouseTimeParam(startsAtMs)}`;
 }
@@ -197,52 +197,69 @@ export function inhouseTimeCanPost(input: { signedIn: boolean; atCap: boolean })
   return input.signedIn && !input.atCap;
 }
 
-/** Times the strip at the top of /inhouse shows before its "N more times" link. */
+/** Soonest times the banner at the top of /inhouse shows (a time's link adds its own). */
 export const INHOUSE_TIMES_STRIP_SHOWN = 3;
 
 /**
- * What the strip above the live room shows (Tim, 2026-10-10: a time should be
- * seen without scrolling past the queue): the soonest open times, on now or
- * ahead, at most INHOUSE_TIMES_STRIP_SHOWN, and how many more the card under
- * the room has. Null when no time is open, so the top of the page carries no
- * empty box, and when the page was opened from a time's link (`linked`),
- * which already puts the whole card first.
+ * The time a page was opened for, from its link (`?at=`): its start, "gone"
+ * for a link that names no one time, or null when there's no link.
+ */
+export type InhouseTimeLinked = number | "gone" | null;
+
+/**
+ * A time's link as the page reads it (`singleSearchParam(?at=)`: undefined
+ * when absent, null for a repeated key, which names no one time).
+ */
+export function inhouseTimeLinked(at: string | null | undefined): InhouseTimeLinked {
+  if (at === undefined) return null;
+  return parseInhouseTimeParam(at) ?? "gone";
+}
+
+/**
+ * What the thin banner above the live room shows (Tim, 2026-10-10: a sliver
+ * with the time and "I'm in", so nobody scrolls past the queue to find a
+ * time): the soonest open times, on now or ahead, at most
+ * INHOUSE_TIMES_STRIP_SHOWN, and how many more the card under the room has.
+ *
+ * A time's link changes only this, never where the card sits: its time is
+ * shown even when it isn't among the soonest, and leads the row (`linkedMs`,
+ * picked out), since a phone shows one time before the swipe; a link to a
+ * time that's over, or to nothing, puts one line in its place instead
+ * (`gone`), with any open times after it. Null, so the top of the page
+ * carries no empty box, only when no time is open and no link needs
+ * answering.
  */
 export function inhouseTimesStrip<T extends { startsAtMs: number; phase: InhouseTimePhase }>(
   times: readonly T[],
-  input: { linked: boolean },
-): { shown: T[]; more: number } | null {
-  if (input.linked) return null;
+  input: { linked: InhouseTimeLinked },
+): { shown: T[]; linkedMs: number | null; gone: boolean; more: number } | null {
   const open = times
     .filter((time) => time.phase === "upcoming" || time.phase === "on")
     .sort((a, b) => a.startsAtMs - b.startsAtMs);
-  if (open.length === 0) return null;
-  const shown = open.slice(0, INHOUSE_TIMES_STRIP_SHOWN);
-  return { shown, more: open.length - shown.length };
+  const linked =
+    typeof input.linked === "number"
+      ? open.find((time) => time.startsAtMs === input.linked)
+      : undefined;
+  const gone = input.linked !== null && !linked;
+  const soonest = open.slice(0, INHOUSE_TIMES_STRIP_SHOWN);
+  const shown = linked ? [linked, ...soonest.filter((time) => time !== linked)] : soonest;
+  if (shown.length === 0 && !gone) return null;
+  return {
+    shown,
+    linkedMs: linked ? linked.startsAtMs : null,
+    gone,
+    more: open.length - shown.length,
+  };
 }
 
 /**
- * The strip's link down to the card: how many more times it has, else
- * "Post a time" (the card's sign-in for a signed-out viewer), else, for a
- * player at the cap who can't post, "All times".
+ * The banner's link down to the card: how many more times it has ("2
+ * more"), else "Post a time" (the card's sign-in for a signed-out viewer),
+ * else, for a player at the cap who can't post, "All times".
  */
 export function inhouseTimesStripLinkText(input: { more: number; atCap: boolean }): string {
-  if (input.more > 0) return `${input.more} more ${input.more === 1 ? "time" : "times"}`;
+  if (input.more > 0) return `${input.more} more`;
   return input.atCap ? "All times" : "Post a time";
-}
-
-/**
- * Who's in on a time, for its avatar stack's label: "Ana is in", "Ana and
- * Bo are in", "Ana, Bo, Cy, Di, Ed and 3 more are in". Names past `shown`
- * (the faces the stack draws) are counted, not listed.
- */
-export function inhouseTimeWhoText(names: readonly string[], shown: number): string {
-  const listed = names.slice(0, Math.max(1, shown));
-  const rest = names.length - listed.length;
-  const parts = rest > 0 ? [...listed, `${rest} more`] : listed;
-  const last = parts.pop() ?? "";
-  const text = parts.length > 0 ? `${parts.join(", ")} and ${last}` : last;
-  return `${text} ${names.length === 1 ? "is" : "are"} in`;
 }
 
 /**

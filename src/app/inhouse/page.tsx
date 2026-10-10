@@ -51,7 +51,12 @@ import {
   InhouseTimesStrip,
   PLAY_LATER_ANCHOR,
 } from "@/components/inhouse-times";
-import { inhouseTimePreviewText, parseInhouseTimeParam } from "@/lib/inhouse-times";
+import {
+  inhouseTimeLinked,
+  inhouseTimePreviewText,
+  parseInhouseTimeParam,
+  type InhouseTimeLinked,
+} from "@/lib/inhouse-times";
 import { readInhouseTime } from "@/lib/inhouse-times-service";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
 import { lobbyBotConnection } from "@/lib/dota-lobby-service";
@@ -137,10 +142,9 @@ export default async function InhousePage({
 }) {
   const user = await getSessionUser();
   const params = await searchParams;
-  // A Play later time's link (?at=): its card comes first, with that time
-  // picked out ("" for a link that names no one time, which the card says).
-  const timeParam = singleSearchParam(params.at);
-  const linkedTime = timeParam === undefined ? undefined : (timeParam ?? "");
+  // A Play later time's link (?at=): the banner leads with that time, or says
+  // it's over, and the card outlines it. Nothing moves: one layout either way.
+  const linkedTime = inhouseTimeLinked(singleSearchParam(params.at));
   // Anything but the one known value is the default board, so a stale or
   // hand-edited link still lands on a ladder rather than an error.
   const ladderView: LadderView =
@@ -271,13 +275,12 @@ export default async function InhousePage({
           <InhouseNightCard invite={invite} />
         </Suspense>
         {/* Play later's open times, above the queue so nobody scrolls to
-            find them (Tim, 2026-10-10): a strip of the soonest few, or
-            nothing while none is open or when a time's link put the whole
-            card here instead. Streamed: it never holds up the room. */}
+            find them (Tim, 2026-10-10): a thin banner with the soonest few
+            and their "I'm in" (a time's link leads with its time), or
+            nothing while none is open. Streamed: it never holds up the room. */}
         <Suspense fallback={null}>
-          <InhouseTimesStrip linked={linkedTime !== undefined} />
+          <InhouseTimesStrip linked={linkedTime} />
         </Suspense>
-        {linkedTime !== undefined ? <PlayLater linked={linkedTime} /> : null}
         <section
           id="live-room"
           className="scroll-mt-28"
@@ -290,9 +293,10 @@ export default async function InhousePage({
           />
           {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
         </section>
-        {/* Players' own times in full, under the room: posting, the links
-            and everyone's names. The strip above shares its one read. */}
-        {linkedTime === undefined ? <PlayLater /> : null}
+        {/* Players' own times in full, always under the room (a time's
+            link too: Tim, 2026-10-10): posting, the links and everyone's
+            names. The banner above shares its one read. */}
+        <PlayLater linked={linkedTime} />
 
         {/* The room above paints immediately; the history-scanning sections
             stream in behind it (CLAUDE.md in-page streaming convention).
@@ -364,10 +368,10 @@ export default async function InhousePage({
 
 /**
  * Play later (src/components/inhouse-times.tsx) in its section: the anchor
- * the section nav and the card's sign-in come back to. `linked` is a time
- * link's `at`, when the page was opened from one.
+ * the section nav, the banner and the card's sign-in come back to. `linked`
+ * is the time the page was opened for, which the card outlines.
  */
-function PlayLater({ linked }: { linked?: string }) {
+function PlayLater({ linked }: { linked: InhouseTimeLinked }) {
   return (
     <section id={PLAY_LATER_ANCHOR} className="scroll-mt-28" aria-label="Play later">
       <Suspense fallback={<CardSkeleton rows={2} />}>
