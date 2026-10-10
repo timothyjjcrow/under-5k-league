@@ -75,7 +75,10 @@ describe("closed in-house bot recovery", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each(["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "READY", "IN_PROGRESS", "COMPLETED", "CANCELLED"])(
+  // A game marked over (AWAITING_RESULT) has left the room, and with it the
+  // room's own Release control: it counts as closed, so a bot still holding
+  // its Dota lobby can be let go from admin health.
+  it.each(["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "READY", "IN_PROGRESS", "AWAITING_RESULT", "COMPLETED", "CANCELLED"])(
     "offers recovery for %s only when the database says the room is closed",
     async (status) => {
       await admin();
@@ -89,7 +92,7 @@ describe("closed in-house bot recovery", () => {
         enabled: true,
         online: true,
         steamId: botSteamId,
-        id: ["COMPLETED", "CANCELLED"].includes(status) ? lobby.id : null,
+        id: ["AWAITING_RESULT", "COMPLETED", "CANCELLED"].includes(status) ? lobby.id : null,
       });
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ action: "health" });
@@ -149,6 +152,28 @@ describe("closed in-house bot recovery", () => {
   it("allows explicit scoped release while historical create and start remain forbidden", async () => {
     await admin();
     const lobby = await prisma.inhouseLobby.create({ data: { status: "CANCELLED" } });
+    const fetch = vi.fn().mockImplementation(async (_url, init) => {
+      const { action } = JSON.parse(init.body);
+      return Response.json({ state: action === "release" ? "released" : "ready" });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const status = await lobbyPost(request({ kind: "inhouse", id: lobby.id, action: "status" }));
+    expect(await status.json()).toMatchObject({ canControl: false, canRelease: true });
+    for (const action of ["create", "start"])
+      expect((await lobbyPost(request({ kind: "inhouse", id: lobby.id, action }))).status).toBe(400);
+    const released = await lobbyPost(request({ kind: "inhouse", id: lobby.id, action: "release" }));
+    expect(released.status).toBe(200);
+    expect(JSON.parse(fetch.mock.calls.at(-1)![1].body)).toMatchObject({
+      action: "release", spec: { key: `${keyPrefix}inhouse:${lobby.id}:1` },
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets an admin release the bot from a game marked over, never create or start it", async () => {
+    await admin();
+    const lobby = await prisma.inhouseLobby.create({
+      data: { status: "AWAITING_RESULT", finishedAt: new Date() },
+    });
     const fetch = vi.fn().mockImplementation(async (_url, init) => {
       const { action } = JSON.parse(init.body);
       return Response.json({ state: action === "release" ? "released" : "ready" });

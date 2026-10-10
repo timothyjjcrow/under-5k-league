@@ -30,6 +30,8 @@ const RESCHEDULE_READY_CHECK_MIGRATION =
   "20261004120000_reschedule_ready_check";
 const INHOUSE_NIGHT_RSVP_MIGRATION = "20261008000000_inhouse_night_rsvp";
 const INHOUSE_GAME_SLOTS_MIGRATION = "20261009000000_inhouse_game_slots";
+const INHOUSE_RESULT_PENDING_ROLES_MIGRATION =
+  "20261010000000_inhouse_result_pending_roles";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -164,6 +166,7 @@ async function rehearseFreshDatabase(url) {
           RESCHEDULE_READY_CHECK_MIGRATION,
           INHOUSE_NIGHT_RSVP_MIGRATION,
           INHOUSE_GAME_SLOTS_MIGRATION,
+          INHOUSE_RESULT_PENDING_ROLES_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -423,6 +426,7 @@ async function rehearseExistingLegacyDatabase(url) {
           RESCHEDULE_READY_CHECK_MIGRATION,
           INHOUSE_NIGHT_RSVP_MIGRATION,
           INHOUSE_GAME_SLOTS_MIGRATION,
+          INHOUSE_RESULT_PENDING_ROLES_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );

@@ -1,7 +1,12 @@
 import { createHmac } from "node:crypto";
 import type { SessionUser } from "./auth";
 import { prisma } from "./prisma";
-import { INHOUSE, INHOUSE_PLAYING_STATUSES, LEAGUE_GAME_MODE } from "./constants";
+import {
+  INHOUSE,
+  INHOUSE_PLAYING_STATUSES,
+  INHOUSE_STATUS,
+  LEAGUE_GAME_MODE,
+} from "./constants";
 import { getActiveSeason } from "./season";
 import { matchResultsOpen } from "./league-lifecycle";
 import { matchNightRoster } from "./availability";
@@ -78,7 +83,12 @@ export function lobbyBotConnection() {
   }
 }
 
-/** Admin health exposes only a closed in-house room confirmed by the database. */
+/**
+ * Admin health exposes only a closed in-house room confirmed by the database:
+ * finished, cancelled, or marked over (its result on the way). A game marked
+ * over has left the room, and with it the only other Release control, so a
+ * bot still holding its Dota lobby would answer BUSY to every other game.
+ */
 export async function recoverableInhouseBotLobby(viewer: SessionUser) {
   if (viewer.role !== "ADMIN") throw new UserFacingError("Admins only.");
   const connection = lobbyBotConnection();
@@ -118,7 +128,16 @@ export async function recoverableInhouseBotLobby(viewer: SessionUser) {
     const key = ownLobbyKey(body.activeKey);
     if (key?.kind !== "inhouse") return health;
     const lobby = await prisma.inhouseLobby.findFirst({
-      where: { id: key.id, status: { in: ["COMPLETED", "CANCELLED"] } },
+      where: {
+        id: key.id,
+        status: {
+          in: [
+            INHOUSE_STATUS.COMPLETED,
+            INHOUSE_STATUS.CANCELLED,
+            INHOUSE_STATUS.AWAITING_RESULT,
+          ],
+        },
+      },
       select: { id: true },
     });
     return { ...health, id: lobby?.id ?? null };
@@ -362,7 +381,9 @@ const BOT_STATUS_MIN_BUDGET_MS = 1_000;
 /**
  * Server-side, for the scheduled result scan (there is no viewer): what the
  * lobby bot knows about this in-house game — in particular the Dota match id
- * it saw when the game launched, which it keeps after it leaves at postgame.
+ * it saw when the game launched, which it keeps after it leaves the running
+ * game. Also read by "Game over", which waits for an unlaunched bot lobby to
+ * be started or released (botHoldsUnlaunchedLobby).
  * One status read, bounded by the caller's deadline.
  *
  * Never throws: an unconfigured, misconfigured or unreachable bot, a missing

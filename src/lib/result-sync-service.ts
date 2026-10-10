@@ -4,6 +4,7 @@ import {
   AUTO_SYNC,
   DRAFT_STATUS,
   INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
   SEASON_STATUS,
@@ -13,7 +14,7 @@ import {
   leagueFallbackOpensAt,
   minutesSinceAutoSyncOpen,
 } from "./result-sync";
-import { queuePresentCutoff } from "./inhouse";
+import { inhouseWatchedLobbyWhere, queuePresentCutoff } from "./inhouse";
 import {
   ANNOUNCE_FAILED_PREFIX,
   announceSeriesResultOnce,
@@ -469,9 +470,17 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
   }
   let announcementsPending = false;
   let notificationFailed = false;
+  // A game marked over is work too, even with nobody queued: its result scan
+  // and its give-up floor run below. That is the end of a night — the last
+  // game marked over, everyone gone — and the early return would otherwise
+  // leave it unrecorded until someone queued again.
   const [active, queued] = await Promise.all([
     prisma.inhouseLobby.findFirst({
-      where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      where: {
+        status: {
+          in: [...INHOUSE_ACTIVE_STATUSES, INHOUSE_STATUS.AWAITING_RESULT],
+        },
+      },
       select: { id: true },
     }),
     prisma.inhouseQueueEntry.count(),
@@ -606,7 +615,7 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
 
   const [stillActive, present] = await Promise.all([
     prisma.inhouseLobby.findFirst({
-      where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      where: inhouseWatchedLobbyWhere(Date.now()),
       select: { id: true },
     }),
     prisma.inhouseQueueEntry.count({

@@ -13,11 +13,14 @@ import {
   voidLastResult,
   castVote,
   declineMatch,
+  finishGame,
   getInhouseState,
+  giveUpOnResult,
   joinQueue,
   leaveQueue,
   makePick,
   recordMatch,
+  setInhouseRoles,
   startGame,
 } from "@/lib/inhouse-service";
 import { claimThrottle, SETTING_KEYS } from "@/lib/settings";
@@ -40,9 +43,12 @@ const MUTATION_ACTIONS = new Set([
   "vote",
   "pick",
   "start",
+  "finish",
+  "roles",
   "record",
   "detect",
   "cancel",
+  "giveup",
   "void",
 ]);
 
@@ -151,7 +157,9 @@ export async function POST(req: NextRequest) {
     let res: { ok: true } | { ok: false; error: string };
     switch (action) {
       case "join":
-        res = await joinQueue(user, Number(body.mmr));
+        // `roles` only when the room's picker sent them; absent, the stored
+        // choice stands (auto-join, "Run it back", API callers).
+        res = await joinQueue(user, Number(body.mmr), body.roles);
         break;
       case "leave":
         res = await leaveQueue(user);
@@ -176,6 +184,15 @@ export async function POST(req: NextRequest) {
       case "start":
         res = await startGame(user, lobbyId);
         break;
+      case "finish":
+        // "Game over". `requeue` also queues the presser for the next game.
+        res = await finishGame(user, lobbyId, {
+          requeue: body.requeue === true,
+        });
+        break;
+      case "roles":
+        res = await setInhouseRoles(user, body.roles);
+        break;
       case "record":
         res = await recordMatch(user, String(body.matchId ?? ""), lobbyId);
         break;
@@ -184,6 +201,10 @@ export async function POST(req: NextRequest) {
         break;
       case "cancel":
         res = await cancelLobby(user, lobbyId);
+        break;
+      case "giveup":
+        // Give up on a game marked over: its own action, never a cancel.
+        res = await giveUpOnResult(user, lobbyId);
         break;
       case "void":
         res = await voidLastResult(user, lobbyId);

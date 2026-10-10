@@ -12,6 +12,8 @@ export const MIGRATION_SHA256 = Object.freeze({
     "d33fb8a0d758ad2cf30c054bb5f74c1b2cd94de7492ef1d3b382ded124f67c36",
   "20261009000000_inhouse_game_slots":
     "f3ba48a351a1f4f27801d396547131d6920ad11b93bfcb1a6980a18777da1fd8",
+  "20261010000000_inhouse_result_pending_roles":
+    "fffa30af102bbffbdc63be5c18fc402970e40cdb1b0c4c094307782674cc961c",
   "20260927000000_review_followups":
     "2c53b367b55dc02d2d837791ab67bfcb075ffb635be6d2bba73a839e076387b9",
   "20260925020000_historical_participation":

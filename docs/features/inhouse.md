@@ -17,12 +17,15 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   empty; don't gate Europe's inhouse on its ticket; no retire checkpoint or
   adoption features (plan-a-time, rally button) unless Tim asks.
 - **Status flows `READY_CHECK → CAPTAIN_VOTE → DRAFTING → READY → IN_PROGRESS
-  → COMPLETED | CANCELLED`, with up to two live lobbies, one per game slot**
-  (`INHOUSE_ACTIVE_STATUSES`, `INHOUSE.MAX_LIVE_GAMES`; see "Two games at
-  once" below). A lobby is played from team lock: `INHOUSE_PLAYING_STATUSES` is READY and
-  IN_PROGRESS, and Start is optional. Both IN_PROGRESS writers (`startGame`,
-  the bot launch in `src/app/api/dota-lobby/route.ts`) are guarded on READY and
-  stamp `startedAt`.
+  → (AWAITING_RESULT →) COMPLETED | CANCELLED`, with up to two live lobbies,
+  one per game slot** (`INHOUSE_ACTIVE_STATUSES`, `INHOUSE.MAX_LIVE_GAMES`;
+  see "Two games at once" below). A lobby is played from team lock:
+  `INHOUSE_PLAYING_STATUSES` is READY and IN_PROGRESS, and Start is optional.
+  Both IN_PROGRESS writers (`startGame`, the bot launch in
+  `src/app/api/dota-lobby/route.ts`) are guarded on READY and stamp
+  `startedAt`. AWAITING_RESULT is a game marked over whose result is on the
+  way: not live, not playing, but a result still lands on it
+  (`INHOUSE_RESULT_STATUSES`; see "Game over" below).
 - **Two chains run the resolvers; keep them the same SET.** `getInhouseState`
   (room poll) and `syncInhouse` in `result-sync-service.ts` (the
   bearer-authenticated one-minute worker at `/api/cron/automation`, which
@@ -46,7 +49,8 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   signed-out polls never do; otherwise the claim's winner or the worker
   repaints. Don't make every poll sync the board to "fix" this.
 - **API contract:** `state` plus `join`, `leave`, `accept`, `decline`, `vote`,
-  `pick`, `start`, `record`, `detect`, `cancel`, `void`. The body must be a JSON
+  `pick`, `start`, `finish`, `roles`, `record`, `detect`, `cancel`, `giveup`,
+  `void`. The body must be a JSON
   object with a non-empty string `action`, else 400. Lobby actions carry the
   `lobbyId` the room showed. `state` allows 1,200/min
   per IP; mutations 300/min per signed-in user (signed-out attempts are
@@ -56,7 +60,8 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
 ## Two games at once
 
 Twenty queued players play two games side by side (Tim's call, 2026-10-09).
-`INHOUSE.MAX_LIVE_GAMES` is 2; anyone past that waits for a game to finish.
+`INHOUSE.MAX_LIVE_GAMES` is 2; anyone past that waits for a game to finish or
+be marked over.
 
 - **Every live lobby holds a game slot** (`InhouseLobby.slot`, 1 or 2).
   `maybeFormLobby` loops `formOneLobby`, which takes the lowest free slot
@@ -67,8 +72,10 @@ Twenty queued players play two games side by side (Tim's call, 2026-10-09).
   an inhouse night.
 - **Nobody is in two live lobbies.** `joinQueue` refuses anyone in a live
   lobby and formation deletes the ten's queue rows, both Serializable, so the
-  two games' players never overlap. Everything below leans on it: the frozen
-  records, the Elo deltas, the per-player action lookup.
+  two LIVE games' players never overlap. A game marked over is not live, so
+  its ten can be in the next game while its result is on the way: the Elo
+  stamp, the result window and the per-player action lookup are written for
+  that (see "Game over"), and the frozen records may be one game behind.
 - **Every action names its game.** The room sends the `lobbyId` it showed;
   `chooseActionLobby` judges that lobby, and each action re-reads it with its
   own phase filter, so a stale click never lands on the other game. Without
@@ -100,13 +107,155 @@ Twenty queued players play two games side by side (Tim's call, 2026-10-09).
   result lookup. The other game's captain gets BUSY meanwhile, or hosts by
   hand under its own lobby name.
 
+## Game over (result pending)
+
+Tim asked on 2026-10-09: a game ends in Dota 10 to 30 minutes before
+OpenDota publishes it, and the queue used to refuse its ten (and hold its
+slot) until then. That night's game (2026-10-10 UTC) ended about 00:50 and
+recorded at 01:11, and the night stalled. OpenDota can't be hurried: its
+match page needs Valve's sequence-number feed (`GET /matches` is empty until
+then, and `POST /request` only queues a replay parse), and the bot leaves at
+launch, so it never sees the end.
+
+- **"Game over — queue again" (`finishGame`, action `finish`)** moves a game
+  being played (READY or IN_PROGRESS) to AWAITING_RESULT and stamps the
+  immutable `finishedAt`. Not in `INHOUSE_ACTIVE_STATUSES`, so the slot, the
+  index, `joinQueue` and formation treat it as over at once. A player's press
+  also queues them (`requeue`, their own join after the claim); an admin
+  watching sees "Admin: mark game over". The room toasts the other nine
+  (`gameMarkedOverToast`, keyed on their game turning up in
+  `pendingResults`, so an admin cancel stays silent).
+- **One predicate says when:** `inhouseGameOverOpen` (playing status and the
+  result scan's window open), in the room and in `finishGame` alike, the
+  moment "Check OpenDota now" appears. A press frees the slot's voice
+  channels and hand-hosted lobby name, so it is the floor against a press
+  during set-up. Unlike `inhouseScanStatus` an unknown window is closed.
+- **Refused while the bot holds an unlaunched lobby** for that game and is
+  online (creating, ready or starting: `botHoldsUnlaunchedLobby` over the
+  bounded `inhouseBotGameStatus` read; unknown never blocks). Once the game
+  left the room nobody but an admin could release it, and it answers BUSY to
+  every other game. "Blocked" doesn't hold it back: an offline bot reports
+  it too, when its Release can't work either. Bot recovery
+  (`recoverableInhouseBotLobby`) treats AWAITING_RESULT as closed, so an admin
+  releases it later.
+- **The claim:** `updateMany({ id, status in PLAYING })` behind the seam
+  `inhouse.finishGame.beforeClaim`; it loses to a result, a cancel or the
+  abandon sweep. Lost to a result or another press, the presser still
+  queues; lost to a cancel, they were already requeued.
+- **A result must have started before its players' next game formed**
+  (`nextGameCeilingSeconds` over `inhouseResultCeilingSeconds`, in
+  `findInhouseGame` and `checkMatchForLobby`, so the scan, the bot's id and a
+  pasted id alike). The same ten often run it back, and the scan takes the
+  newest shared game, so without the ceiling the old game would record the new
+  one and the new one would then fail as "duplicate". The next game is the
+  earliest later lobby sharing a player that passed its ready check (one that
+  failed it never played). Not the press itself: a press made during set-up
+  would then refuse the real game that started after it, and one mis-tap by
+  any of the ten would leave the game unrecordable. A pasted id past it says
+  "started after these players' next game formed".
+- **A second press** (the game already over, a result in) answers like a
+  lost claim: ok, and the presser is queued if they asked. So does a claim
+  lost to a cancel or the abandon sweep (which requeues nobody): a presser
+  who asked to queue again does.
+- **Scanning carries on:** `inhouseDetectWindow` gives AWAITING_RESULT the
+  game's own `clockMs` (so the bot-match wait never restarts), a window open
+  by the press, and `intervalFromMs` = `finishedAt` (the backoff restarts).
+  The worker's idle return (`syncInhouse`) counts it as work, the gate wakes
+  for it (`awaitingResultLobbies`, kept out of `activeLobbies` and its
+  slot-count invariant), and `inhouseWatchedLobbyWhere` keeps pages on the
+  watch cadence for `AWAITING_RESULT_WATCH_MINUTES`.
+- **Given up on** `ABANDON_AWAITING_RESULT_HOURS` after the press, by
+  `resolveAbandonedLobby`'s exact-status claim, requeueing nobody. An admin
+  can give up sooner from the room's card ("Admin: give up on #1234's
+  result"): its own action, `giveup` (`giveUpOnResult`, always naming its
+  game), with its own claim on AWAITING_RESULT (seam
+  `inhouse.giveUpOnResult.beforeClaim`), which requeues NOBODY (its ten may
+  be queued or in another live game) and logs an `AdminAction`.
+  `cancelLobby` reaches live games only: a cancel that finds its game marked
+  over (a confirm dialog left open across a press, or the race at its claim)
+  refuses and names the give-up control, so a "requeue everyone" click can
+  never become an irreversible give-up on a result about to land.
+- **The room's card** (`PendingResultsView`, `state.pendingResults`: the
+  viewer's own games marked over, every one for an admin, named by `#code`
+  since the slot may be the next game's) carries "Check OpenDota now",
+  "Record by match ID" and the admin give-up, each naming its lobby. Out of
+  the queue and between games it sits above the queue; while the viewer is
+  queued or in their next game it folds to one line with no controls,
+  because a 45-second OpenDota check shares the room's one action lock with
+  ACCEPT (a ready check can open any second while queued) and the pick.
+- **The result landing** refreshes the page below for every viewer: the
+  refresh key covers live ids and `pendingResultIds` (every game marked over,
+  ids only, sent to anyone), so "Game over" itself does not. Between games it is
+  the usual banner and bell; mid-way through the next game the bell would
+  read as "match found", so it is a toast instead (`resultLandedToast`, and
+  `inhouseAlerts` rings `game-ended` only while the viewer has no live game).
+- **Elo is stamped through that game** (`inhouseEloDeltasFor`, formation
+  order, exact on `[createdAt, id]`), in `applyResult` and the reconciler
+  alike. A later-formed game sharing players can complete first, and the
+  global ladder's `lastChange` would then be ITS swing. That later game keeps
+  the stamp it got without this one: accepted drift, like a void (the career
+  ladder is always re-derived).
+- **"Last game" figures** (the board's empty state, `SceneStats`) pick the
+  latest result to land (`completedAt`), so a game marked over whose result
+  lands after a later game's can show as the last one for a while. Accepted:
+  cosmetic, and it rights itself with the next result.
+- **Rollback:** an older binary ignores AWAITING_RESULT rows (no scan,
+  give-up or cancel). They block nothing; roll forward, or close them by
+  hand with an `endReason`.
+
+## Positions
+
+Tim asked on 2026-10-09: players pick the positions they play (1 to 5) before
+queueing, so captains can draft a full team, as many as they like and in the
+order they want to play them (his follow-up the same day). The stored form is
+the order itself, most wanted first (`parseRoleOrder` in `src/lib/roles.ts`,
+"2,3,1" = Mid, then Offlane, then Carry). League signups stay an unordered set
+(`parseRoles` sorts it), so a signup's roles standing in are never shown as a
+preference: every payload carries `rolesRanked` (true only for the player's
+own inhouse choice).
+
+- **Stored on the user** (`User.inhouseRoles`, in order): null = never
+  chosen, so the latest league signup's roles (non-empty, `[createdAt desc,
+  id desc]`) stand in; "" = deliberately none, never refilled from the
+  signup. The player's
+  own inhouse choice wins (`effectiveInhouseRoles`): unlike MMR, both are
+  their own word, and this one is newer.
+- **Read live** on every poll from the joined user row, with one batched
+  `Registration` read for players who never chose (none once everyone shown
+  has). No snapshot on queue or lobby rows: it would need four copy sites and
+  write rows the Serializable join and formation contend on. A change shows
+  at once, mid-draft too.
+- **Saved by** action `roles` (`setInhouseRoles`, strict `parseRoleKeys`:
+  the order is kept, junk is refused, never dropped) or with `join` (the
+  picker's unsaved choice, saved before the join). Auto-join, "Run it back" and API joins
+  send none and keep the stored choice.
+- **The picker** (`RolePicker` in `QueueControls`): five toggles named "Pos N ·
+  Role" ("…, choice 2" once ranked); the order tapped is the order of
+  preference, each pressed toggle shows its rank, and taking one out keeps the
+  others' order. A line spells it out ("Mid first, then Offlane"), "from your
+  league signup" while that is the source (unranked until edited), and "Save
+  positions" while edited. It lives only in the
+  queue view, never in a timed stage, since every save takes the room's
+  action lock.
+- **Shown** on queue slots, a "Positions queued" count line, vote candidates,
+  draft pool and roster rows, and the matchup grid, in the player's order with
+  the first choice ringed (`RoleBadges ranked`, spoken "Pos 2 Mid first, then
+  Pos 3 Offlane"). Each side gets
+  `TeamRoleNeeds` ("Needs Pos 4 (Soft Support)", or every position covered,
+  plus how many haven't set positions: unknown never reads as a gap), and
+  pool rows say "fills Pos 4" for the team on the clock (`fillsRoleNeed`).
+- **Auto-pick is unchanged** (MMR, then queue order). A role-aware auto-pick
+  is Tim's call, and it would first need the expected turn passed into
+  `applyPick`.
+
 ## Guarded transitions
 
 Every transition is a guarded claim; keep it that way (general rules:
 `docs/features/concurrency-and-testing.md`).
 
-- **The claims:** `applyResult` on `status in INHOUSE_PLAYING_STATUSES` (a
-  cancel racing the OpenDota fetch wins); `cancelLobby` inside its transaction
+- **The claims:** `applyResult` on `status in INHOUSE_RESULT_STATUSES` (a
+  cancel racing the OpenDota fetch wins); `finishGame` on PLAYING and
+  `giveUpOnResult` on AWAITING_RESULT (see "Game over"); `cancelLobby` inside its transaction
   (loses to a landed result and requeues nobody); `applyPick` on the turn and on
   the target row `{team: null}` (a double-click is one turn), auto-assigning
   the last pool player; `resolveCaptainVote` on `CAPTAIN_VOTE → DRAFTING`
@@ -130,7 +279,8 @@ Every transition is a guarded claim; keep it that way (general rules:
   `resolveStalledPick` and recomputes the turn from the rosters with
   `nextPickTeam`. It and `applyPick` are the only writers of `DRAFTING → READY`.
 - **`resolveAbandonedLobby` frees a slot held by a dead READY or IN_PROGRESS
-  lobby,** the only phases with no clock. Without it no game could form and the
+  lobby,** the only phases with no clock (and gives up on a game marked over
+  `ABANDON_AWAITING_RESULT_HOURS` after its `finishedAt`; see "Game over"). Without it no game could form and the
   lobby's own ten were refused by `joinQueue`. Floors: `ABANDON_READY_HOURS` off
   formation, `ABANDON_IN_PROGRESS_HOURS` off `startedAt`, never `updatedAt`
   (each scan's `detectedAt` claim bumps it). Generous because results record
@@ -237,8 +387,9 @@ Every transition is a guarded claim; keep it that way (general rules:
   ladder.
 - **Records are frozen at formation.** `maybeFormLobby` scans history once and
   writes `wins/losses/games` onto each lobby player; views and RECORD read
-  those, so polls never scan history (a result landing meanwhile is the other
-  game's, whose ten are none of these).
+  those, so polls never scan history. A player's previous game can still be
+  marked over and waiting on OpenDota then, so its result may land after the
+  snapshot: one game behind, display only.
 - **Snake draft:** `nextPickTeam` gives `F O O F F O O F` so summed pick
   positions match; team 2 picks first (`FIRST_PICK_TEAM`). An expired
   `PICK_SECONDS` clock auto-picks; pool and auto-pick sort MMR desc, then
@@ -286,13 +437,17 @@ Every transition is a guarded claim; keep it that way (general rules:
   recorded on both: the second `applyResult` gets P2002, rolls back whole and
   reports "duplicate" ("already recorded for the other inhouse game").
 - **Pasted and bot ids go through `checkMatchForLobby`:** the game must start
-  after formation (yesterday's game can't replay) and needs 2 linked players
-  per side, not the scan's 3 (the escape hatch when most data is private).
+  after formation (yesterday's game can't replay), and for a game marked over
+  before its players' next game formed (see "Game over"), and needs 2 linked
+  players per side, not the scan's 3 (the escape hatch when most data is
+  private).
   `claimProviderCooldown` limits pasted ids per lobby.
 - **Detection window** (`inhouseDetectWindow`, shared by service, gate and
   room): READY scans from `DETECT_READY_MIN_MINUTES` after formation,
   IN_PROGRESS from `DETECT_MIN_MINUTES` after `startedAt`, and the earlier
-  opening wins so a late Start never closes an open window. Each scan claims
+  opening wins so a late Start never closes an open window. A game marked
+  over keeps its game's window, open by its press at the latest, with the
+  backoff restarted from `finishedAt` (`intervalFromMs`). Each scan claims
   `detectedAt`; `detectIntervalSeconds` stretches the gap with game age (180s
   to 1800s). A scan cut off by the worker deadline restores its own
   `detectedAt` stamp.
@@ -549,7 +704,12 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   (`e2e/zz3-room-poll-resilience.spec.ts` interception pattern). jsdom last.
 - **e2e:** `e2e/zz4-inhouse.spec.ts` (join/leave with a phone overflow check,
   then accept to in-progress with nine API players, zero page errors);
-  `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
+  `e2e/zz4c-inhouse-game-over.spec.ts` (positions in the picker and the draft,
+  "Game over — queue again", a player from that game joining at once, the
+  admin give-up); `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
+- **Game over and positions:** `test/integration/inhouse-game-over.itest.ts`
+  (the claim and its seams, the result window, the Elo stamp with
+  overlapping players, the give-up paths, pending results, positions).
 - **SQLite hides every race here.** `test/integration/inhouse*.itest.ts` stage
   races by hand; `npm run test:pg` runs them on Postgres. Run it after touching
   any claim. Seams are `inhouse.<function>.<point>`.

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   INHOUSE,
-  INHOUSE_PLAYING_STATUSES,
+  INHOUSE_RESULT_STATUSES,
   INHOUSE_STATUS,
 } from "@/lib/constants";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
@@ -54,16 +54,17 @@ describe("automatic inhouse detection read budget", () => {
 
     expect(await maybeAutoDetectResult()).toBe(false);
     expect(probe).toHaveBeenCalledOnce();
-    // This hot probe (every game being played, at most MAX_LIVE_GAMES) must
-    // not hydrate result JSON or joined user profiles.
+    // This hot probe (every game whose result can land: the live games plus
+    // any marked over) must not hydrate result JSON or joined user profiles.
     expect(probe.mock.calls[0]?.[0]).toEqual({
-      where: { status: { in: INHOUSE_PLAYING_STATUSES } },
+      where: { status: { in: INHOUSE_RESULT_STATUSES } },
       select: {
         id: true,
         slot: true,
         status: true,
         createdAt: true,
         startedAt: true,
+        finishedAt: true,
         detectedAt: true,
         radiantTeam: true,
       },
@@ -158,7 +159,7 @@ describe("automatic inhouse detection read budget", () => {
         where: {
           lobbyId: lobby.id,
           lobby: {
-            status: { in: INHOUSE_PLAYING_STATUSES },
+            status: { in: INHOUSE_RESULT_STATUSES },
             detectedAt: new Date(NOW),
           },
         },

@@ -172,6 +172,42 @@ export function summarizeInhouse(lobbies: FinishedLobby[]): InhouseRecord[] {
     );
 }
 
+/**
+ * Each player's Elo swing from ONE game, rating every game up to and including
+ * it in formation order ([createdAt, id], summarizeInhouse's own order) and
+ * nothing after. Its players' latest game in that slice is this one, so their
+ * `lastChange` is this game's swing even when a later-formed game they also
+ * played completed first — which happens once a game marked over waits on
+ * OpenDota while its players play the next one. Null when the lobby isn't in
+ * `lobbies`, and empty for a game with no winner (nothing was rated). Players
+ * with no team (never rated) are left out.
+ */
+export function inhouseEloDeltasFor(
+  lobbies: FinishedLobby[],
+  lobbyId: string,
+): Record<string, number> | null {
+  const target = lobbies.find((l) => l.id === lobbyId);
+  if (!target) return null;
+  // An unrated game moved nobody; its players' lastChange would be their
+  // previous game's swing.
+  if (target.winnerTeam !== 1 && target.winnerTeam !== 2) return {};
+  const at = toMs(target.createdAt);
+  const through = lobbies.filter((l) => {
+    const ms = toMs(l.createdAt);
+    return ms < at || (ms === at && l.id <= lobbyId);
+  });
+  const rated = new Set(
+    target.players
+      .filter((p) => p.team === 1 || p.team === 2)
+      .map((p) => p.userId),
+  );
+  const deltas: Record<string, number> = {};
+  for (const rec of summarizeInhouse(through)) {
+    if (rated.has(rec.userId)) deltas[rec.userId] = rec.lastChange;
+  }
+  return deltas;
+}
+
 export type RankedInhouse = {
   /** Established players (>= PROVISIONAL_GAMES), ladder order — rank = index+1. */
   ranked: InhouseRecord[];

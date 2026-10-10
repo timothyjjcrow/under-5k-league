@@ -48,3 +48,23 @@ export function parseLobbyLeagueId(
   const id = Number(value);
   return id <= 0xffffffff ? id : null;
 }
+
+/**
+ * Is the lobby bot, online, still holding this game's Dota lobby without
+ * having launched it? Then the game can't be over yet (or it was played
+ * somewhere else, and the bot still has to be released): every other game's
+ * Create answers BUSY until the bot lets go, and its Release works now. Only a
+ * definite answer counts — no bot, an unreachable one or a game it never
+ * hosted is `null` and never blocks. Nor does "blocked": the bot also reports
+ * it whenever it is offline from Steam, when Release can't work either, and
+ * admin recovery treats a game marked over as closed and can release it later.
+ */
+export function botHoldsUnlaunchedLobby(
+  status: DotaLobbyStatus | null,
+): boolean {
+  return (
+    status?.state === "creating" ||
+    status?.state === "ready" ||
+    status?.state === "starting"
+  );
+}

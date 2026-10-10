@@ -5,7 +5,12 @@ import { cn, initials, teamInitials } from "@/lib/utils";
 import { teamHueVar, teamInkVar } from "@/lib/team-hues";
 import { rankMedalName, rankMedalTier, rankStars } from "@/lib/rank";
 import { heroById, parseHeroList } from "@/lib/heroes";
-import { DOTA_ROLES, parseRoles } from "@/lib/roles";
+import {
+  DOTA_ROLES,
+  parseRoleOrder,
+  parseRoles,
+  rolesAccessibleName,
+} from "@/lib/roles";
 import type { FormResult } from "@/lib/team-matches";
 import { splitLinks } from "@/lib/linkify";
 import { splitLeadingEmoji } from "@/lib/leading-emoji";
@@ -295,23 +300,51 @@ const ROLE_TONE: Record<string, string> = {
 export function RoleBadges({
   roles,
   className,
+  labelled = false,
+  ranked = false,
 }: {
   roles: string | null | undefined;
   className?: string;
+  /**
+   * Give the pills one accessible name ("Plays Pos 1 Carry, Pos 3 Offlane")
+   * instead of bare digits with a hover-only title. Off by default, which
+   * renders exactly what shipped.
+   */
+  labelled?: boolean;
+  /**
+   * The roles are a preference order (an inhouse choice, most wanted first):
+   * keep that order, ring the first choice, and say "first, then" in the
+   * name. Off by default, which renders exactly what shipped.
+   */
+  ranked?: boolean;
 }) {
-  const keys = parseRoles(roles);
+  const keys = ranked ? parseRoleOrder(roles) : parseRoles(roles);
   if (keys.length === 0) return null;
+  const name = labelled
+    ? (rolesAccessibleName(roles, { ranked }) ?? undefined)
+    : undefined;
   return (
-    <span className={cn("inline-flex flex-wrap items-center gap-1", className)}>
-      {keys.map((k) => {
+    <span
+      role={labelled ? "img" : undefined}
+      aria-label={name}
+      className={cn("inline-flex flex-wrap items-center gap-1", className)}
+    >
+      {keys.map((k, i) => {
         const role = DOTA_ROLES.find((r) => r.key === k);
+        const first = ranked && i === 0 && keys.length > 1;
         return (
           <span
             key={k}
-            title={role ? `${role.short} · ${role.label}` : undefined}
+            aria-hidden={labelled ? true : undefined}
+            title={
+              role
+                ? `${role.short} · ${role.label}${first ? " · first choice" : ""}`
+                : undefined
+            }
             className={cn(
               "inline-flex h-5 min-w-5 items-center justify-center rounded border px-1 text-[11px] font-semibold tabular-nums",
               ROLE_TONE[k],
+              first && "ring-1 ring-current",
             )}
           >
             {k}

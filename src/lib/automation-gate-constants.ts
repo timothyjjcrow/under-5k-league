@@ -4,9 +4,9 @@
  * This module stays dependency-free so mutation paths can import the tag
  * without initializing Prisma or Next's cache implementation in tests.
  */
-export const AUTOMATION_GATE_VERSION = 11 as const;
-export const AUTOMATION_GATE_CACHE_KEY = "automation-gate-v11";
-export const AUTOMATION_GATE_TAG = "automation-gate:v11";
+export const AUTOMATION_GATE_VERSION = 12 as const;
+export const AUTOMATION_GATE_CACHE_KEY = "automation-gate-v12";
+export const AUTOMATION_GATE_TAG = "automation-gate:v12";
 
 /** Even a completely quiet site is re-checked at least this often. */
 export const AUTOMATION_GATE_HARD_HORIZON_MS = 60 * 60_000;

@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   castVote: vi.fn(),
   makePick: vi.fn(),
   startGame: vi.fn(),
+  finishGame: vi.fn(),
+  giveUpOnResult: vi.fn(),
+  setInhouseRoles: vi.fn(),
   recordMatch: vi.fn(),
   autoDetectResult: vi.fn(),
   cancelLobby: vi.fn(),
@@ -38,6 +41,9 @@ vi.mock("@/lib/inhouse-service", () => ({
   castVote: mocks.castVote,
   makePick: mocks.makePick,
   startGame: mocks.startGame,
+  finishGame: mocks.finishGame,
+  giveUpOnResult: mocks.giveUpOnResult,
+  setInhouseRoles: mocks.setInhouseRoles,
   recordMatch: mocks.recordMatch,
   autoDetectResult: mocks.autoDetectResult,
   cancelLobby: mocks.cancelLobby,
@@ -62,6 +68,9 @@ const actionMocks = [
   mocks.castVote,
   mocks.makePick,
   mocks.startGame,
+  mocks.finishGame,
+  mocks.giveUpOnResult,
+  mocks.setInhouseRoles,
   mocks.recordMatch,
   mocks.autoDetectResult,
   mocks.cancelLobby,
@@ -228,7 +237,7 @@ describe("POST /api/inhouse request boundary", () => {
       syncBoard: false,
     });
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
       expire: 0,
     });
   });
@@ -240,7 +249,7 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
       expire: 0,
     });
   });
@@ -251,7 +260,7 @@ describe("POST /api/inhouse request boundary", () => {
     await expect(POST(request({ action: "leave" }))).rejects.toThrow(
       "read failed",
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
       expire: 0,
     });
   });
@@ -270,7 +279,7 @@ describe("POST /api/inhouse request boundary", () => {
       detectResults: false,
       syncBoard: true,
     });
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v11", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
       expire: 0,
     });
   });
@@ -327,6 +336,38 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.acceptMatch).toHaveBeenCalledWith(user, "lobby-2");
     expect(mocks.makePick).toHaveBeenCalledWith(user, "u9", "lobby-2");
     expect(mocks.declineMatch).toHaveBeenCalledWith(user, null);
+  });
+
+  it("marks the game the room showed over, queueing the presser only on a literal true", async () => {
+    await POST(request({ action: "finish", lobbyId: "lobby-2", requeue: true }));
+    await POST(request({ action: "finish", lobbyId: "lobby-1", requeue: "yes" }));
+
+    expect(mocks.finishGame).toHaveBeenNthCalledWith(1, user, "lobby-2", {
+      requeue: true,
+    });
+    expect(mocks.finishGame).toHaveBeenNthCalledWith(2, user, "lobby-1", {
+      requeue: false,
+    });
+  });
+
+  it("gives up on a result only through its own action, naming the game", async () => {
+    await POST(request({ action: "giveup", lobbyId: "lobby-3" }));
+    await POST(request({ action: "cancel", lobbyId: "lobby-3" }));
+
+    expect(mocks.giveUpOnResult).toHaveBeenCalledOnce();
+    expect(mocks.giveUpOnResult).toHaveBeenCalledWith(user, "lobby-3");
+    expect(mocks.cancelLobby).toHaveBeenCalledWith(user, "lobby-3");
+  });
+
+  it("hands the raw role choice to the service, on its own and with a join", async () => {
+    // The service validates strictly; the route never reshapes what was sent.
+    await POST(request({ action: "roles", roles: ["2", "3"] }));
+    await POST(request({ action: "join", mmr: 3000, roles: ["5"] }));
+    await POST(request({ action: "join", mmr: 3000 }));
+
+    expect(mocks.setInhouseRoles).toHaveBeenCalledWith(user, ["2", "3"]);
+    expect(mocks.joinQueue).toHaveBeenNthCalledWith(1, user, 3000, ["5"]);
+    expect(mocks.joinQueue).toHaveBeenNthCalledWith(2, user, 3000, undefined);
   });
 
   it("refuses the retired bet action as unknown", async () => {

@@ -6,18 +6,31 @@ import {
   Badge,
   PlayerLink,
   RankBadge,
+  RoleBadges,
   buttonClasses,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { avgKnownMmr, queueSlots } from "@/lib/inhouse";
 import { INHOUSE } from "@/lib/constants";
+import { roleCoverage } from "@/lib/pool-stats";
+import { parseRoleOrder } from "@/lib/roles";
 import type { InhouseState } from "@/lib/inhouse-service";
+import { RolePicker } from "@/components/inhouse/role-picker";
+
+/**
+ * An unsaved positions choice, tied to the saved value it was edited from. The
+ * room holds it (like the typed MMR), because the queue's controls move
+ * between cards as games form and end, and a remount must not drop it.
+ */
+export type RolesDraft = { value: string; base: string };
 
 type QueueControlProps = {
   me: InhouseState["me"];
   pending: boolean;
   mmr: number;
   setMmr: (n: number) => void;
+  rolesDraft: RolesDraft | null;
+  setRolesDraft: (draft: RolesDraft | null) => void;
   mmrHint: string | null;
   signupMmr: number;
   act: (body: Record<string, unknown>) => void;
@@ -34,12 +47,29 @@ function QueueControls({
   pending,
   mmr,
   setMmr,
+  rolesDraft,
+  setRolesDraft,
   mmrHint,
   signupMmr,
   act,
   nextGame = false,
 }: QueueControlProps) {
   const mmrInputId = useId();
+  // The positions picker holds an unsaved choice until Join or "Save
+  // positions" sends it. It is tied to the saved value it was edited from, so
+  // a save (or a change from another tab) that moves the saved value drops
+  // the stale draft instead of showing it as unsaved.
+  const saved = me.roles ?? { roles: "", source: "none" as const };
+  const shownRoles =
+    rolesDraft && rolesDraft.base === saved.roles
+      ? rolesDraft.value
+      : saved.roles;
+  const rolesDirty = shownRoles !== saved.roles;
+  // Only an edited choice rides along with a join; untouched, the stored one
+  // (or the league signup's) stands, as it does for auto-join and Run it back.
+  const joinBody = rolesDirty
+    ? { action: "join", mmr, roles: parseRoleOrder(shownRoles) }
+    : { action: "join", mmr };
 
   return (
     <div>
@@ -67,7 +97,7 @@ function QueueControls({
             <button
               type="button"
               disabled={pending}
-              onClick={() => act({ action: "join", mmr })}
+              onClick={() => act(joinBody)}
               className={buttonClasses("accent", "lg")}
             >
               {nextGame ? "Join next-game queue →" : "Join queue →"}
@@ -102,7 +132,7 @@ function QueueControls({
             <button
               type="button"
               disabled={pending}
-              onClick={() => act({ action: "join", mmr })}
+              onClick={() => act(joinBody)}
               className={buttonClasses("accent", "lg")}
             >
               {nextGame ? "Join next-game queue →" : "Join queue →"}
@@ -110,6 +140,33 @@ function QueueControls({
           </div>
         )}
       </div>
+
+      {me.isLoggedIn ? (
+        <>
+          <RolePicker
+            value={shownRoles}
+            onChange={(next) =>
+              setRolesDraft({ value: next, base: saved.roles })
+            }
+            source={rolesDirty ? "inhouse" : saved.source}
+            disabled={pending}
+          />
+          {rolesDirty ? (
+            <div className="mt-2 flex justify-center">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() =>
+                  act({ action: "roles", roles: parseRoleOrder(shownRoles) })
+                }
+                className={buttonClasses("secondary", "sm")}
+              >
+                Save positions
+              </button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
 
       {/* Stays visible after joining — it's the explanation for why the listed
           MMR can differ from what was typed. */}
@@ -131,6 +188,8 @@ export function NextGameQueueCard({
   pending,
   mmr,
   setMmr,
+  rolesDraft,
+  setRolesDraft,
   mmrHint,
   signupMmr,
   act,
@@ -163,6 +222,8 @@ export function NextGameQueueCard({
             pending={pending}
             mmr={mmr}
             setMmr={setMmr}
+            rolesDraft={rolesDraft}
+            setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             signupMmr={signupMmr}
             act={act}
@@ -179,6 +240,8 @@ export function QueueView({
   pending,
   mmr,
   setMmr,
+  rolesDraft,
+  setRolesDraft,
   mmrHint,
   signupMmr,
   firstGame,
@@ -189,6 +252,8 @@ export function QueueView({
   pending: boolean;
   mmr: number;
   setMmr: (n: number) => void;
+  rolesDraft: RolesDraft | null;
+  setRolesDraft: (draft: RolesDraft | null) => void;
   mmrHint: string | null;
   signupMmr: number;
   firstGame: boolean;
@@ -214,6 +279,12 @@ export function QueueView({
   const knownMmrs = present.map((q) => q.mmr).filter((m) => m > 0);
   const queueAvg = knownMmrs.length >= 2 ? avgKnownMmr(knownMmrs) : 0;
   const { slots, overflow, away } = queueSlots(queue, lobbySize);
+  // How many present players list each position, so the queue can see a
+  // missing support before ten form (positions are preferences: a nudge to
+  // flex, never a rule). Quiet until someone has set positions.
+  const coverage = roleCoverage(present.map((q) => ({ roles: q.roles })));
+  const showCoverage =
+    present.length >= 2 && coverage.some((role) => role.count > 0);
 
   const myPosition = present.findIndex((q) => q.userId === me.userId) + 1;
 
@@ -223,6 +294,8 @@ export function QueueView({
       pending={pending}
       mmr={mmr}
       setMmr={setMmr}
+      rolesDraft={rolesDraft}
+      setRolesDraft={setRolesDraft}
       mmrHint={mmrHint}
       signupMmr={signupMmr}
       act={act}
@@ -392,6 +465,11 @@ export function QueueView({
                               {q.mmr.toLocaleString()} MMR
                             </span>
                           ) : null}
+                          <RoleBadges
+                            roles={q.roles}
+                            ranked={q.rolesRanked}
+                            labelled
+                          />
                         </span>
                       </div>
                       <span className="hidden xl:block">
@@ -401,6 +479,22 @@ export function QueueView({
                   );
                 })}
               </ul>
+              {showCoverage ? (
+                <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted">
+                  <span>Positions queued:</span>
+                  {coverage.map((role) => (
+                    <span
+                      key={role.key}
+                      className={cn(
+                        "inline-flex items-center gap-1 tabular-nums",
+                        role.count === 0 ? "text-accent" : "",
+                      )}
+                    >
+                      <RoleBadges roles={role.key} />×{role.count}
+                    </span>
+                  ))}
+                </p>
+              ) : null}
               {overflow.length > 0 ? (
                 <div className="mt-3 border-t border-line/60 pt-3">
                   <div className="mb-2 text-xs text-muted">

@@ -201,8 +201,9 @@ export function DotaLobbyControls({
           ) : null}
           {state === "started" && kind === "inhouse" && !recoveryOnly ? (
             <p className="text-xs text-muted">
-              The bot will record this result automatically once the game
-              ends.
+              The result records itself from OpenDota after the game. When
+              it ends, press “Game over — queue again” to play the next one
+              straight away.
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">

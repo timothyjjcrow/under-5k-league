@@ -59,6 +59,11 @@ model User {
   // the typed discordName fallback. @unique stops two site accounts claiming
   // the same Discord account. Null = not linked. No tokens are ever stored.
   discordId           String?   @unique
+  // Inhouse position preferences, most wanted first ("2,3,1": Mid, then
+  // Offlane, then Carry; parseRoleOrder in src/lib/roles.ts). Null = never
+  // chosen, so the latest league signup's roles (an unordered set) stand in;
+  // "" = deliberately none. Read live by the inhouse room.
+  inhouseRoles        String?
   role                String    @default("USER") // USER | ADMIN
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
@@ -824,7 +829,7 @@ model InhouseNightRsvp {
 // league Draft: the pick clock is enforced lazily on poll (no cron/websocket).
 model InhouseLobby {
   id           String    @id @default(cuid())
-  status       String    @default("READY_CHECK") // READY_CHECK | CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | COMPLETED | CANCELLED
+  status       String    @default("READY_CHECK") // READY_CHECK | CAPTAIN_VOTE | DRAFTING | READY | IN_PROGRESS | AWAITING_RESULT | COMPLETED | CANCELLED
   // The game's number while it is live (1..INHOUSE.MAX_LIVE_GAMES): two games
   // can run at once, and the slot names its voice channels and hand-hosted
   // Dota lobby. Postgres's partial unique InhouseLobby_live_slot_idx (migration
@@ -842,6 +847,12 @@ model InhouseLobby {
   // updatedAt, settlement retries cannot move this and make an old game look
   // like the result that just finished.
   completedAt  DateTime?
+  // When "Game over" moved the lobby to AWAITING_RESULT: the game is over in
+  // Dota and its ten are free while OpenDota publishes it. Written once by that
+  // claim, never updatedAt. The give-up floor and the scan's backoff run from
+  // it. (A result is held to before the players' NEXT game formed instead, so
+  // a press made during set-up still records the real game.)
+  finishedAt   DateTime?
   // OpenDota match id, once the result is recorded. Unique: with two games
   // live, one Dota match must never be recorded as both.
   dotaMatchId  String?   @unique
@@ -951,9 +962,10 @@ model InhouseLobbyPlayer {
   acceptedAt     DateTime? // when they pressed ACCEPT in the ready check (null = pending)
   votedMethod    String? // CAPTAIN_VOTE ballot: MMR | RECORD | VOTE
   votedNomineeId String? // player they nominated as captain (when votedMethod = VOTE)
-  // Inhouse record snapshot, frozen at lobby formation (no results can land
-  // while this lobby is the active one) — feeds the vote's RECORD ordering and
-  // the vote/draft UI without a full-history scan on every poll.
+  // Inhouse record snapshot, frozen at lobby formation — feeds the vote's
+  // RECORD ordering and the vote/draft UI without a full-history scan on every
+  // poll. A player's previous game can still be AWAITING_RESULT then, so its
+  // result may land after this snapshot (one game behind, display only).
   wins           Int       @default(0)
   losses         Int       @default(0)
   games          Int       @default(0)
