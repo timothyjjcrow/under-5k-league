@@ -78,6 +78,7 @@ model User {
   replacedAssignments    StandinAssignment[]  @relation("ReplacedUser")
   inhouseQueue           InhouseQueueEntry?
   inhouseNightRsvps      InhouseNightRsvp[]
+  inhouseTimeRsvps       InhouseTimeRsvp[]
   inhouseLobbies         InhouseLobbyPlayer[]
   startedInhouses        InhouseLobby[]       @relation("InhouseStarter")
   inhouseBets            InhouseBet[]
@@ -822,6 +823,21 @@ model InhouseNightRsvp {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([nightId, userId])
+  @@index([userId])
+}
+
+// A player's "I'm in" for an inhouse time a player posted on /inhouse ("Play
+// later", src/lib/inhouse-times.ts). A time is just the rows that share a
+// start, on the quarter hour: posting one is being first in, and it is gone
+// once the last player takes it back. Rows past the time's hour are pruned.
+model InhouseTimeRsvp {
+  startsAt  DateTime
+  userId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([startsAt, userId])
   @@index([userId])
 }
 

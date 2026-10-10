@@ -178,6 +178,7 @@ export function SubmitButton({
   value,
   formNoValidate,
   "aria-pressed": ariaPressed,
+  "aria-describedby": ariaDescribedBy,
 }: {
   children: React.ReactNode;
   variant?: ButtonVariant;
@@ -190,6 +191,8 @@ export function SubmitButton({
   formNoValidate?: boolean;
   /** Toggle-state pass-through for pick-one button groups (e.g. pick'em). */
   "aria-pressed"?: boolean;
+  /** What the button acts on, when a list repeats its label (each time's "I'm in"). */
+  "aria-describedby"?: string;
 }) {
   // Context covers ActionForm's manual dispatch; useFormStatus still covers
   // any SubmitButton rendered inside a plain <form action={…}>.
@@ -203,6 +206,7 @@ export function SubmitButton({
       value={value}
       formNoValidate={formNoValidate}
       aria-pressed={ariaPressed}
+      aria-describedby={ariaDescribedBy}
       disabled={pending || disabled}
       onClick={
         confirm

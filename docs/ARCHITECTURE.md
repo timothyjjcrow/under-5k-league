@@ -678,7 +678,7 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/recap`           | Redirect only: to a finished season's page, or Leaders while the season runs                   | Old links and Discord posts; `?season=`                                                            | `recapDestination`                                                                                            |
 | `/seasons`         | Season history + audit archive/delete; offseason-only reactivation                              | Nav once an archive exists; reactivation disabled while a season is active                         | —                                                                                                             |
 | `/seasons/[id]`    | Season page: champion, standings, bracket, awards once finished, results, rosters              | Same                                                                                               | Recomputed from archived rows; `computeSeasonAwards`                                                          |
-| `/inhouse`         | Planned inhouse night card ("I'm in", invite link `?imin=1`) + inhouse room + scene stats + Elo ladder + results; link preview and picture follow the night | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`                                                                      |
+| `/inhouse`         | Planned inhouse night card ("I'm in", invite link `?imin=1`) + inhouse room + Play later (players' own times; first for a time's link `?at=`) + scene stats + Elo ladder + results; link preview and picture follow the night, or the linked time | Always (season-independent)                                                                        | Polls `/api/inhouse`; `summarizeInhouse`                                                                      |
 | `/inhouse/history` | Complete completed-lobby archive, 100 rows per `?page=N`, exact-row admin void                 | Always                                                                                             | Stable formation ordering; authoritative played-time fallback                                                 |
 | `/news`            | Pinned-first administrator announcement archive with deep links/media fallback                 | Always: Explore (also the phone tab bar's sheet), footer                                           | `NewsPost`; create request receipts; `NewsMedia`                                                              |
 | `/how-it-works`    | One-screen explainer: steps, who can join, match night, standins, FAQ, one phase-aware button  | Always: Explore, footer, signups hero; `/features` redirects here                                  | `howItWorksAction` (join / standin / Discord), `seasonMatchNightLabel`                                        |
@@ -715,6 +715,8 @@ a bounded status enum (200 for fresh clean success, 503 otherwise);
 commit) that a release reads to confirm what is live;
 `/api/calendar` — the .ics feed; `/api/calendar/inhouse-night` — the planned
 inhouse night as a one-event .ics download (404 when none);
+`/api/calendar/inhouse-time?at=` — a Play later time as a one-event .ics
+download (404 once nobody is in on it or it's over);
 `/api/reschedule?match=<id>` — read-only,
 viewer-tailored GET of a match's open reschedule ready check (the card's 15s
 poll; `private, no-store`, 240/min/IP);
@@ -867,6 +869,11 @@ enums, so every status column is a string whose allowed values live in
   Setting row, not a foreign key; rows cascade from their player, only the
   current night's are read, and planning the next night or cancelling prunes
   the rest ([inhouse](features/inhouse.md#inhouse-night)).
+- `InhouseTimeRsvp` — a player's "I'm in" for a Play later time, keyed by
+  (`startsAt`, `userId`). A time is just the rows that share a start (no
+  parent table): posting one is being first in, and it is gone once its last
+  player leaves. Rows cascade from their player; rows of times that are over
+  are pruned after the next "I'm in" ([inhouse](features/inhouse.md#play-later)).
 - `InhouseLobby` — the game + state machine + result columns (`boxScore`
   JSON, `winnerTeam`, `eloDeltas`, `matchStartTime`, immutable result clock
   `completedAt`), its game `slot`, and a unique `dotaMatchId` (one Dota match
