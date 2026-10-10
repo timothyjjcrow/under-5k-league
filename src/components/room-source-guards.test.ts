@@ -576,6 +576,7 @@ describe("the inhouse room is its shell plus the stage folder", () => {
       "DraftView",
       "ReadyView",
       "InProgressView",
+      "PendingResultsView",
     ]) {
       expect(shell).toContain(`<${view}`);
       expect(

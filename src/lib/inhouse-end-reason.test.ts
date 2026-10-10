@@ -47,6 +47,39 @@ describe("end reasons", () => {
     );
   });
 
+  it("names a game marked over by its own window, from the Game over press", () => {
+    expect(abandonedReason(INHOUSE_STATUS.AWAITING_RESULT)).toBe(
+      `No result on OpenDota ${INHOUSE.ABANDON_AWAITING_RESULT_HOURS}h after the game ended`,
+    );
+    // Its own sentence, never the READY fallback ("after the lobby formed").
+    expect(abandonedReason(INHOUSE_STATUS.AWAITING_RESULT)).not.toBe(
+      abandonedReason(INHOUSE_STATUS.READY),
+    );
+  });
+
+  it("says an admin gave up on a game marked over while waiting for its result", () => {
+    expect(adminCancelReason("Boss", INHOUSE_STATUS.AWAITING_RESULT)).toBe(
+      "Cancelled by admin Boss while waiting for the result",
+    );
+  });
+
+  it("names the phase for every status an admin cancel can claim", () => {
+    // The live cancel claims any active phase, and the give-up claims
+    // AWAITING_RESULT: none of them may fall back to the bare sentence.
+    for (const status of [
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CAPTAIN_VOTE,
+      INHOUSE_STATUS.DRAFTING,
+      INHOUSE_STATUS.READY,
+      INHOUSE_STATUS.IN_PROGRESS,
+      INHOUSE_STATUS.AWAITING_RESULT,
+    ]) {
+      expect(adminCancelReason("Boss", status), status).not.toBe(
+        "Cancelled by admin Boss",
+      );
+    }
+  });
+
   it("says which admin cancelled, and in which phase", () => {
     expect(adminCancelReason("Boss", INHOUSE_STATUS.READY_CHECK)).toBe(
       "Cancelled by admin Boss during the ready check",

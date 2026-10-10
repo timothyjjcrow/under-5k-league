@@ -3,6 +3,7 @@
 import { inhouseScanStatus } from "@/lib/inhouse";
 import type { InhouseState } from "@/lib/inhouse-service";
 import { ElapsedClock } from "@/components/inhouse/clocks";
+import { GameOverControl } from "@/components/inhouse/game-over-control";
 import { GameSetupCard } from "@/components/inhouse/game-setup-card";
 import { MatchupGrid } from "@/components/inhouse/matchup-grid";
 import {
@@ -52,6 +53,13 @@ export function InProgressView({
             Started by {lobby.startedByName}
           </p>
         ) : null}
+        <GameOverControl
+          lobby={lobby}
+          me={me}
+          serverNow={serverNow}
+          pending={pending}
+          act={act}
+        />
         {me.canRecord ? (
           <ResultControls scan={scan} pending={pending} act={act} />
         ) : (

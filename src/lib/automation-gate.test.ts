@@ -62,7 +62,13 @@ import {
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
 import { announcementClaimValue } from "./announcement-marker";
 import { honorsClaimValue } from "./honors-service";
-import { AUTO_SYNC, DRAFT_REMINDER, INHOUSE, WEEK_REMINDER } from "./constants";
+import {
+  AUTO_SYNC,
+  DRAFT_REMINDER,
+  INHOUSE,
+  INHOUSE_STATUS,
+  WEEK_REMINDER,
+} from "./constants";
 import { RESULT_NUDGE } from "./result-nudge";
 import { detectIntervalSeconds } from "./inhouse";
 import {
@@ -135,6 +141,7 @@ function inputs(
     leagueWebhookConfigured: false,
     leagueDeliveryAvailable: false,
     activeLobbies: [],
+    awaitingResultLobbies: [],
     queue: [],
     repairableInhouseResult: false,
     leagueOutbox: [],
@@ -163,7 +170,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 11,
+      version: 12,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -257,7 +264,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 11,
+      version: 12,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -825,6 +832,247 @@ describe("computeAutomationGateSnapshot", () => {
     expect(snapshot).toMatchObject({
       nextWakeAtMs: formed + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1,
       reason: "INHOUSE",
+    });
+  });
+
+  describe("games marked over (awaitingResultLobbies)", () => {
+    type Awaiting = AutomationGateInputs["awaitingResultLobbies"][number];
+    const MIN = 60_000;
+    const HOUR = 3_600_000;
+    const awaiting = (overrides: Partial<Awaiting> = {}): Awaiting => ({
+      createdAt: new Date(NOW - 50 * MIN),
+      startedAt: new Date(NOW - 44 * MIN),
+      finishedAt: new Date(NOW - MIN),
+      detectedAt: null,
+      ...overrides,
+    });
+    type Live = AutomationGateInputs["activeLobbies"][number];
+    const drafting: Live = {
+      status: "DRAFTING",
+      acceptEndsAt: null,
+      voteEndsAt: null,
+      pickEndsAt: new Date(NOW + 50_000),
+      startedAt: null,
+      detectedAt: null,
+      createdAt: new Date(NOW),
+    };
+
+    it("scans a game marked over at once when it was never scanned", () => {
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({ awaitingResultLobbies: [awaiting()] }),
+          NOW,
+        ),
+      ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+    });
+
+    it("opens the scan at the press, even before the game's own window", () => {
+      // Formed five minutes ago and never started: READY's own window is ten
+      // minutes off, but the game is known to be over.
+      const snapshot = computeAutomationGateSnapshot(
+        inputs({
+          awaitingResultLobbies: [
+            awaiting({
+              createdAt: new Date(NOW - 5 * MIN),
+              startedAt: null,
+              finishedAt: new Date(NOW - MIN),
+            }),
+          ],
+        }),
+        NOW,
+      );
+      expect(snapshot).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+    });
+
+    it("backs the scan off from the Game over press, not from the game's clock", () => {
+      // A long game: its own age would stretch the interval to minutes. The
+      // press restarts the backoff, as maybeAutoDetectResult measures it.
+      const createdAt = NOW - 180 * MIN;
+      const startedAt = NOW - 170 * MIN;
+      const finishedAt = NOW - 2 * MIN;
+      const scannedAt = NOW - MIN;
+      expect(detectIntervalSeconds(NOW - createdAt)).toBeGreaterThan(
+        detectIntervalSeconds(NOW - finishedAt),
+      );
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({
+            awaitingResultLobbies: [
+              awaiting({
+                createdAt: new Date(createdAt),
+                startedAt: new Date(startedAt),
+                finishedAt: new Date(finishedAt),
+                // Scanned while it was still IN_PROGRESS, then marked over.
+                detectedAt: new Date(scannedAt),
+              }),
+            ],
+          }),
+          NOW,
+        ),
+      ).toMatchObject({
+        nextWakeAtMs:
+          scannedAt + detectIntervalSeconds(NOW - finishedAt) * 1_000 + 1,
+        reason: "INHOUSE",
+      });
+
+      // Hours after the press the backoff has grown again, from the press.
+      const longAgo = NOW - 3 * HOUR;
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({
+            awaitingResultLobbies: [
+              awaiting({
+                createdAt: new Date(longAgo - HOUR),
+                startedAt: new Date(longAgo - 50 * MIN),
+                finishedAt: new Date(longAgo),
+                detectedAt: new Date(scannedAt),
+              }),
+            ],
+          }),
+          NOW,
+        ).nextWakeAtMs,
+      ).toBe(scannedAt + detectIntervalSeconds(NOW - longAgo) * 1_000 + 1);
+    });
+
+    it("wakes for the give-up floor ABANDON_AWAITING_RESULT_HOURS after the press", () => {
+      // A minute short of the floor, just scanned: the next scan is a grown
+      // interval out, so the give-up comes first. Its clock is the press —
+      // the game's own IN_PROGRESS floor (from Start) passed long ago.
+      const finishedAt =
+        NOW - (INHOUSE.ABANDON_AWAITING_RESULT_HOURS * 60 - 1) * MIN;
+      const startedAt = finishedAt - 50 * MIN;
+      expect(
+        startedAt + INHOUSE.ABANDON_IN_PROGRESS_HOURS * HOUR,
+      ).toBeLessThan(NOW);
+      const snapshot = computeAutomationGateSnapshot(
+        inputs({
+          awaitingResultLobbies: [
+            awaiting({
+              createdAt: new Date(startedAt - 10 * MIN),
+              startedAt: new Date(startedAt),
+              finishedAt: new Date(finishedAt),
+              detectedAt: new Date(NOW),
+            }),
+          ],
+        }),
+        NOW,
+      );
+      expect(snapshot).toMatchObject({
+        nextWakeAtMs:
+          finishedAt + INHOUSE.ABANDON_AWAITING_RESULT_HOURS * HOUR + 1,
+        reason: "INHOUSE",
+      });
+
+      // Past the floor (the sweep missed it), it is due now.
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({
+            awaitingResultLobbies: [
+              awaiting({
+                createdAt: new Date(NOW - 8 * HOUR),
+                startedAt: new Date(NOW - 8 * HOUR + 5 * MIN),
+                finishedAt: new Date(NOW - 7 * HOUR),
+                detectedAt: new Date(NOW),
+              }),
+            ],
+          }),
+          NOW,
+        ).nextWakeAtMs,
+      ).toBe(NOW);
+    });
+
+    it("wakes for whichever game marked over comes due first", () => {
+      // x: scanned just now, next scan in three minutes. y: give-up in a minute.
+      const x = awaiting({ finishedAt: new Date(NOW - MIN), detectedAt: new Date(NOW) });
+      const yFinished =
+        NOW - (INHOUSE.ABANDON_AWAITING_RESULT_HOURS * 60 - 1) * MIN;
+      const y = awaiting({
+        createdAt: new Date(yFinished - HOUR),
+        startedAt: new Date(yFinished - 50 * MIN),
+        finishedAt: new Date(yFinished),
+        detectedAt: new Date(NOW),
+      });
+      for (const awaitingResultLobbies of [
+        [x, y],
+        [y, x],
+      ]) {
+        expect(
+          computeAutomationGateSnapshot(inputs({ awaitingResultLobbies }), NOW)
+            .nextWakeAtMs,
+        ).toBe(yFinished + INHOUSE.ABANDON_AWAITING_RESULT_HOURS * HOUR + 1);
+      }
+    });
+
+    it("fails open on a game marked over without a finish time", () => {
+      // A row the clocks can't be read from must run the worker, never sleep it.
+      expect(() =>
+        computeAutomationGateSnapshot(
+          inputs({ awaitingResultLobbies: [awaiting({ finishedAt: null })] }),
+          NOW,
+        ),
+      ).toThrow(/lobby marked over has no finish time/);
+      expect(() =>
+        computeAutomationGateSnapshot(
+          inputs({
+            awaitingResultLobbies: [
+              awaiting(),
+              awaiting({ finishedAt: new Date("invalid") }),
+            ],
+          }),
+          NOW,
+        ),
+      ).toThrow(/awaitingResultLobbies\[1\]\.finishedAt is not a valid timestamp/);
+      expect(() =>
+        computeAutomationGateSnapshot(
+          inputs({
+            awaitingResultLobbies: [awaiting({ detectedAt: new Date(Number.NaN) })],
+          }),
+          NOW,
+        ),
+      ).toThrow(/awaitingResultLobbies\[0\]\.detectedAt is not a valid timestamp/);
+    });
+
+    it("never counts toward the game slots: ten queued players still form the next game", () => {
+      const queue = Array.from({ length: INHOUSE.LOBBY_SIZE }, () => queued());
+      // Each marked-over game next wakes three minutes out (scanned just now).
+      const quiet = awaiting({ detectedAt: new Date(NOW) });
+      const many = Array.from(
+        { length: INHOUSE.MAX_LIVE_GAMES + 1 },
+        () => quiet,
+      );
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({ awaitingResultLobbies: many }),
+          NOW,
+        ).nextWakeAtMs,
+      ).toBe(NOW + INHOUSE.DETECT_INTERVAL_SECONDS * 1_000 + 1);
+
+      // A slot free: formation is due now, however many games are marked over.
+      const oneShort = Array.from(
+        { length: INHOUSE.MAX_LIVE_GAMES - 1 },
+        () => drafting,
+      );
+      for (const activeLobbies of [[], oneShort]) {
+        expect(
+          computeAutomationGateSnapshot(
+            inputs({ activeLobbies, awaitingResultLobbies: many, queue }),
+            NOW,
+          ),
+        ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+      }
+
+      // Every slot live: no formation (the pick clock is next), and games
+      // marked over are not the "more active lobbies than slots" corruption.
+      const full = Array.from(
+        { length: INHOUSE.MAX_LIVE_GAMES },
+        () => drafting,
+      );
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({ activeLobbies: full, awaitingResultLobbies: many, queue }),
+          NOW,
+        ).nextWakeAtMs,
+      ).toBe(NOW + 50_000);
     });
   });
 
@@ -1738,7 +1986,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 11,
+      version: 12,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,
@@ -1793,5 +2041,71 @@ describe("loadAutomationGateSnapshot", () => {
       /multiple active seasons/,
     );
     expect(prismaMocks.setting.findMany).not.toHaveBeenCalled();
+  });
+
+  describe("games marked over", () => {
+    type LobbyQuery = { where?: { status?: unknown } };
+    function quietSite(awaiting: unknown[]) {
+      prismaMocks.season.findMany.mockResolvedValue([]);
+      prismaMocks.setting.findMany.mockResolvedValue([]);
+      prismaMocks.setting.findUnique.mockResolvedValue(null);
+      prismaMocks.inhouseLobby.findFirst.mockResolvedValue(null);
+      prismaMocks.inhouseQueueEntry.findMany.mockResolvedValue([]);
+      prismaMocks.leagueAnnouncement.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseAnnouncement.findMany.mockResolvedValue([]);
+      // The live-slot query and the marked-over query are both findMany on
+      // inhouseLobby: answer each by its own status filter.
+      prismaMocks.inhouseLobby.findMany.mockImplementation(
+        async (args: LobbyQuery) =>
+          args?.where?.status === INHOUSE_STATUS.AWAITING_RESULT
+            ? awaiting
+            : [],
+      );
+    }
+    // A cache fill computes on the wall clock, so pin it to the test's NOW.
+    async function decisionThroughTheCache() {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(NOW);
+      try {
+        cacheMocks.cached.mockImplementationOnce(async () =>
+          cacheMocks.source!(),
+        );
+        return await getAutomationGateDecision(NOW);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+    const finishedAt = NOW - 2 * 60_000;
+    const scannedAt = NOW - 30_000;
+    const row = {
+      createdAt: new Date(NOW - 50 * 60_000),
+      startedAt: new Date(NOW - 44 * 60_000),
+      finishedAt: new Date(finishedAt),
+      detectedAt: new Date(scannedAt),
+    };
+
+    it("reads them apart from the live games and wakes for their scan", async () => {
+      quietSite([row]);
+      await expect(loadAutomationGateSnapshot(NOW)).resolves.toMatchObject({
+        nextWakeAtMs:
+          scannedAt + detectIntervalSeconds(NOW - finishedAt) * 1_000 + 1,
+        reason: "INHOUSE",
+      });
+      expect(prismaMocks.inhouseLobby.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: INHOUSE_STATUS.AWAITING_RESULT },
+          select: expect.objectContaining({ finishedAt: true, detectedAt: true }),
+        }),
+      );
+      // So the gate sleeps until then (the contrast for the fail-open below).
+      expect(await decisionThroughTheCache()).toMatchObject({ run: false });
+    });
+
+    it("fails the worker open on one without a finish time", async () => {
+      quietSite([{ ...row, finishedAt: null }]);
+      await expect(loadAutomationGateSnapshot(NOW)).rejects.toThrow(
+        /lobby marked over has no finish time/,
+      );
+      expect(await decisionThroughTheCache()).toEqual({ run: true });
+    });
   });
 });

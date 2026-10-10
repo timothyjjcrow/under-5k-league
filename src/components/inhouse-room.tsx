@@ -13,7 +13,9 @@ import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import { usePersistedFlag, usePollHealth } from "@/components/room-clock";
 import {
+  autoJoinAlreadyInToast,
   autoJoinDecision,
+  gameMarkedOverToast,
   inhouseAlerts,
   inhouseGameLabel,
   inhouseLobbyCode,
@@ -22,6 +24,7 @@ import {
   otherGameFlags,
   pollingLobby,
   readyCheckEndedToast,
+  resultLandedToast,
   shouldFocusStage,
   showGameLabel,
   wasInReadyCheck,
@@ -48,12 +51,17 @@ import { armAudioUnlock, playChime, unlockAudio } from "@/components/chime";
 import type { InhouseState } from "@/lib/inhouse-service";
 import type { RoomLobby, RoomMe } from "@/components/inhouse/shared";
 import { RoomStages, roomStageLabel } from "@/components/inhouse/room-stages";
-import { NextGameQueueCard, QueueView } from "@/components/inhouse/queue-view";
+import {
+  NextGameQueueCard,
+  QueueView,
+  type RolesDraft,
+} from "@/components/inhouse/queue-view";
 import { ReadyCheckView } from "@/components/inhouse/ready-check-view";
 import { VoteView } from "@/components/inhouse/vote-view";
 import { DraftView } from "@/components/inhouse/draft-view";
 import { ReadyView } from "@/components/inhouse/ready-view";
 import { InProgressView } from "@/components/inhouse/in-progress-view";
+import { PendingResultsView } from "@/components/inhouse/pending-results-view";
 
 /**
  * The lobby whose phase sets the poll rate: the viewer's own game, or the
@@ -99,6 +107,9 @@ export function InhouseRoom({
     reqPending || actionReconciling || disconnected || connectionUnavailable;
   const [selected, setSelected] = useState<string | null>(null);
   const [mmr, setMmr] = useState<number>(signupMmr);
+  // An unsaved positions pick, held here (like the typed MMR) because the
+  // queue's controls move between cards as games form and end.
+  const [rolesDraft, setRolesDraft] = useState<RolesDraft | null>(null);
   const [soundOn, setSoundOn] = usePersistedFlag("inhouseSound");
   // Clock skew as STATE, not a ref read during render. Reading `ref.current`
   // while rendering is unsafe under concurrent React (the value can differ
@@ -410,12 +421,17 @@ export function InhouseRoom({
   // components (see <SecondsClock>/<ElapsedClock>), so the per-second update
   // doesn't re-render this room or the drafting pool.
 
-  // When a live game ends, refresh the server-rendered leaderboard + recent
-  // games sitting below this component.
+  // When a game ends, refresh the server-rendered leaderboard + recent games
+  // sitting below this component. A game marked over moves from the live
+  // lists to pendingResultIds (every viewer gets them), which is not news down
+  // there yet; its result landing (it leaves pendingResultIds) is.
   const liveIdsKey = state
-    ? [state.lobby, ...state.otherLobbies]
-        .flatMap((l) => (l ? [l.id] : []))
-        .join(",")
+    ? [
+        ...[state.lobby, ...state.otherLobbies].flatMap((l) =>
+          l ? [l.id] : [],
+        ),
+        ...state.pendingResultIds,
+      ].join(",")
     : null;
   useEffect(() => {
     if (liveIdsKey === null) return;
@@ -436,8 +452,22 @@ export function InhouseRoom({
       inLobby: state.me.inLobby,
       isOnClock: state.me.isOnClock,
       resultId: state.lastResult?.lobbyId ?? null,
+      lobbyId: state.lobby?.id ?? null,
+      pendingIds: state.pendingResults.map((p) => p.id),
+      inQueue: state.me.inQueue,
     };
     const prev = prevAlertRef.current;
+
+    // Someone in the viewer's game pressed "Game over" (or they did): the
+    // room drops them back to the queue, which without a word reads as a
+    // crash. And a game marked over can land while they are already in the
+    // next one, where the result banner is hidden and the bell would read as
+    // "match found" — so its scoreline comes as a toast. Both are tested pure
+    // helpers; neither rings.
+    const markedOver = gameMarkedOverToast(prev, snap);
+    if (markedOver) pushToast("info", markedOver);
+    const landed = resultLandedToast(prev, snap, state.lastResult);
+    if (landed) pushToast("success", landed);
 
     // A ready check the viewer was in vanished — a decline, an expiry, or an
     // admin cancel scrapped it. The lobby query drops CANCELLED instantly, so
@@ -625,7 +655,7 @@ export function InhouseRoom({
     const decision = autoJoinDecision(state.me);
     if (decision === "signed-out") return;
     if (decision === "already-in") {
-      pushToast("info", "You're already in the queue");
+      pushToast("info", autoJoinAlreadyInToast(state.me));
       return;
     }
     // Deferred a tick: act() flips `pending` immediately, and setting state
@@ -716,6 +746,10 @@ export function InhouseRoom({
   // before two games could run; beside the viewer's own game, or beside the
   // other live game, a pinned clock bar would cover the one that matters.
   const soleWatched = !lobby && otherLobbies.length === 1;
+  // "New to inhouse?" opens for a signed-in first-timer, but not right after
+  // their first game was marked over: they have just played one.
+  const firstGameFold =
+    firstGame && !state.pendingResults.some((p) => p.mine);
 
   // One game's stage view. Its actions name the game, so a click is judged
   // against the lobby it was made on even with two live.
@@ -994,6 +1028,19 @@ export function InhouseRoom({
         </div>
       ) : null}
 
+      {/* Games marked over, results on the way: between games and out of the
+          queue, the full card with its checks; while queued (a ready check can
+          open any second) or in the next game, one folded line. */}
+      {!lobby ? (
+        <PendingResultsView
+          results={state.pendingResults}
+          serverNow={state.now}
+          pending={pending}
+          act={act}
+          folded={me.inQueue}
+        />
+      ) : null}
+
       {/* A live game does not close the queue. People outside it need a clear
           next-game entry point; once queued, the full view keeps their position
           and Leave control visible for the life of the current game. */}
@@ -1004,9 +1051,11 @@ export function InhouseRoom({
             pending={pending}
             mmr={mmr}
             setMmr={setMmr}
+            rolesDraft={rolesDraft}
+            setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             signupMmr={signupMmr}
-            firstGame={firstGame}
+            firstGame={firstGameFold}
             act={act}
             nextGame
           />
@@ -1016,6 +1065,8 @@ export function InhouseRoom({
             pending={pending}
             mmr={mmr}
             setMmr={setMmr}
+            rolesDraft={rolesDraft}
+            setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             signupMmr={signupMmr}
             act={act}
@@ -1033,15 +1084,27 @@ export function InhouseRoom({
             pending={pending}
             mmr={mmr}
             setMmr={setMmr}
+            rolesDraft={rolesDraft}
+            setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             signupMmr={signupMmr}
-            firstGame={firstGame}
+            firstGame={firstGameFold}
             act={act}
           />
         ) : null}
       </div>
 
       {lobby && me.canCancel ? cancelButton(lobby) : null}
+
+      {lobby ? (
+        <PendingResultsView
+          folded
+          results={state.pendingResults}
+          serverNow={state.now}
+          pending={pending}
+          act={act}
+        />
+      ) : null}
 
       {otherLobbies.map(otherGame)}
 

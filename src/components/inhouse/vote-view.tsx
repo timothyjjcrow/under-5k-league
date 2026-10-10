@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef } from "react";
-import { Avatar, Badge, RankBadge } from "@/components/ui";
+import { Avatar, Badge, RankBadge, RoleBadges } from "@/components/ui";
+import { rolesAccessibleName } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 import { useBannerOffscreen } from "@/components/room-clock";
 import { orderCaptains } from "@/lib/inhouse";
@@ -168,12 +169,19 @@ export function VoteView({
         <div className="grid grid-cols-1 gap-1.5 p-3 sm:grid-cols-2">
           {vote.candidates.map((c) => {
             const picked = myNominee === c.userId && myMethod === "VOTE";
+            // The label replaces the button's contents for a screen reader;
+            // the positions ride along as its description.
+            const rolesText = rolesAccessibleName(c.roles, {
+              ranked: c.rolesRanked,
+            });
+            const rolesId = `vote-roles-${lobby.id}-${c.userId}`;
             return (
               <button
                 key={c.userId}
                 disabled={!me.canVote || pending}
                 aria-pressed={picked}
                 aria-label={`Vote for ${c.name} as captain`}
+                aria-describedby={rolesText ? rolesId : undefined}
                 onClick={() =>
                   act({ action: "vote", method: "VOTE", nomineeId: c.userId })
                 }
@@ -186,8 +194,20 @@ export function VoteView({
                 )}
               >
                 <Avatar name={c.name} src={c.avatar} size={26} />
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {c.name}
+                {/* Positions under the name, not beside it: the row is
+                    already full at phone width. */}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{c.name}</span>
+                  <RoleBadges
+                    roles={c.roles}
+                    ranked={c.rolesRanked}
+                    className="mt-0.5"
+                  />
+                  {rolesText ? (
+                    <span id={rolesId} className="sr-only">
+                      {rolesText}
+                    </span>
+                  ) : null}
                 </span>
                 {c.nominations > 0 ? (
                   <Badge tone="accent">

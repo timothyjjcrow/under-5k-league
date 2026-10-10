@@ -1,9 +1,16 @@
 "use client";
 
-import { Avatar, Badge, PlayerLink, RankBadge } from "@/components/ui";
+import {
+  Avatar,
+  Badge,
+  PlayerLink,
+  RankBadge,
+  RoleBadges,
+} from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { avgKnownMmr } from "@/lib/inhouse";
 import { sideMeta, type RoomLobby } from "@/components/inhouse/shared";
+import { TeamRoleNeeds } from "@/components/inhouse/team-role-needs";
 
 /** Both sides' rosters, shared by the Set up and Play screens. */
 export function MatchupGrid({ lobby }: { lobby: RoomLobby }) {
@@ -32,16 +39,24 @@ export function MatchupGrid({ lobby }: { lobby: RoomLobby }) {
                 <span className="text-xs text-muted">avg {avgMmr} MMR</span>
               ) : null}
             </div>
+            {/* Teams are locked, but a side with nobody on Pos 5 still wants
+                to know who flexes before the game. */}
+            <TeamRoleNeeds members={roster} />
             <div className="space-y-1.5 p-3">
               {roster.map((p, i) => (
                 <div key={p.userId} className="flex items-center gap-2 text-sm">
                   <Avatar name={p.name} src={p.avatar} size={24} />
-                  <PlayerLink
-                    userId={p.userId}
-                    className="min-w-6 flex-1 truncate"
-                  >
-                    {p.name}
-                  </PlayerLink>
+                  <span className="min-w-6 flex-1">
+                    <PlayerLink userId={p.userId} className="block truncate">
+                      {p.name}
+                    </PlayerLink>
+                    <RoleBadges
+                      roles={p.roles}
+                      ranked={p.rolesRanked}
+                      labelled
+                      className="mt-0.5"
+                    />
+                  </span>
                   {i === 0 ? <Badge tone={meta.badge}>C</Badge> : null}
                   <RankBadge rankTier={p.rankTier} />
                 </div>

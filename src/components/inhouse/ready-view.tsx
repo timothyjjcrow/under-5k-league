@@ -1,8 +1,9 @@
 "use client";
 
 import { buttonClasses } from "@/components/ui";
-import { inhouseScanStatus } from "@/lib/inhouse";
+import { inhouseReadyInPlay, inhouseScanStatus } from "@/lib/inhouse";
 import type { InhouseState } from "@/lib/inhouse-service";
+import { GameOverControl } from "@/components/inhouse/game-over-control";
 import { GameSetupCard } from "@/components/inhouse/game-setup-card";
 import { MatchupGrid } from "@/components/inhouse/matchup-grid";
 import { ResultControls } from "@/components/inhouse/result-controls";
@@ -33,9 +34,20 @@ export function ReadyView({
         </h2>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
           Join the Dota lobby and your team’s voice channel, then play. The
-          result records itself from OpenDota after the game — nobody has to
-          press anything.
+          result records itself from OpenDota after the game, and once it
+          ends anyone in it can press “Game over — queue again”.
         </p>
+        {/* A game hosted by hand stays READY for its whole length, so once it
+            is plausibly being played the way out of it lives here too. */}
+        {inhouseReadyInPlay(lobby.status, lobby.scanOpensAt, serverNow) ? (
+          <GameOverControl
+            lobby={lobby}
+            me={me}
+            serverNow={serverNow}
+            pending={pending}
+            act={act}
+          />
+        ) : null}
         {me.canRecord ? (
           <ResultControls
             folded

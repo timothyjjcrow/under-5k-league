@@ -7,11 +7,10 @@ import {
 import {
   AUTO_SYNC,
   DRAFT_STATUS,
-  INHOUSE_ACTIVE_STATUSES,
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
-import { queuePresentCutoff } from "./inhouse";
+import { inhouseWatchedLobbyWhere, queuePresentCutoff } from "./inhouse";
 import { INHOUSE_ANNOUNCEMENT_STATUS } from "./inhouse-announcement-outbox";
 import { LEAGUE_ANNOUNCEMENT_STATUS } from "./league-announcement-outbox";
 import { getSetting, SETTING_KEYS } from "./settings";
@@ -81,8 +80,10 @@ export async function loadResultSyncSnapshot(
           select: { id: true },
         })
       : Promise.resolve(null),
+    // A live game, or one marked over whose result is on the way, keeps
+    // pages watching so they repaint when it lands.
     prisma.inhouseLobby.findFirst({
-      where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+      where: inhouseWatchedLobbyWhere(nowMs),
       select: { id: true },
     }),
     prisma.inhouseQueueEntry.findFirst({

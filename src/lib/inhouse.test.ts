@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoJoinAlreadyInToast,
   autoJoinDecision,
   avgKnownMmr,
   detectIntervalSeconds,
   freeGameSlot,
+  gameMarkedOverToast,
   inhouseAlerts,
   inhouseDetectWindow,
   inhouseGameLabel,
+  inhouseGameOverOpen,
+  inhouseResultCeilingSeconds,
+  inhouseWatchedLobbyWhere,
   inhouseHandLobbyName,
   inhouseLobbyCode,
   inhouseVoiceChannel,
@@ -18,6 +23,7 @@ import {
   inhouseTitleFlag,
   mmrBalance,
   readyCheckEndedToast,
+  resultLandedToast,
   nextPickTeam,
   orderCaptains,
   playersNeeded,
@@ -33,7 +39,13 @@ import {
   type CaptainCandidate,
   type InhouseAlertSnapshot,
 } from "./inhouse";
-import { INHOUSE, INHOUSE_STATUS } from "./constants";
+import {
+  INHOUSE,
+  INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_PLAYING_STATUSES,
+  INHOUSE_RESULT_STATUSES,
+  INHOUSE_STATUS,
+} from "./constants";
 
 const p = (userId: string, mmr: number, joinedAt: number) => ({
   userId,
@@ -432,6 +444,7 @@ describe("another live game in the room", () => {
         canPick: false,
         canStart: false,
         canRecord: false,
+        canFinish: false,
         canCancel: false,
       });
     }
@@ -450,10 +463,27 @@ describe("another live game in the room", () => {
     expect(otherGameFlags(true, INHOUSE_STATUS.READY)).toMatchObject({
       canStart: true,
       canRecord: true,
+      canFinish: true,
     });
     expect(otherGameFlags(true, INHOUSE_STATUS.IN_PROGRESS)).toMatchObject({
       canStart: false,
       canRecord: true,
+      canFinish: true,
+    });
+  });
+
+  it("lets an admin mark another game over only while it is being played", () => {
+    // Who may; inhouseGameOverOpen says when. A game still forming has
+    // nothing to mark over, and one already marked over is not a live game.
+    for (const status of Object.values(INHOUSE_STATUS)) {
+      expect(otherGameFlags(true, status).canFinish, status).toBe(
+        INHOUSE_PLAYING_STATUSES.includes(status),
+      );
+    }
+    expect(otherGameFlags(true, INHOUSE_STATUS.AWAITING_RESULT)).toMatchObject({
+      canFinish: false,
+      canRecord: false,
+      canStart: false,
     });
   });
 
@@ -568,6 +598,29 @@ describe("inhouseAlerts", () => {
     expect(inhouseAlerts(snap(), inCheck)).toEqual(["lobby-formed"]);
   });
 
+  it("rings when the viewer's next game replaces their last one in one payload", () => {
+    // "Game over — queue again" can form the presser's next game in the same
+    // press: their old game (IN_PROGRESS) is followed straight by a new
+    // ready check, with no lobby-less payload between.
+    const oldGame = snap({ status: "IN_PROGRESS", inLobby: true, lobbyId: "a" });
+    const nextGame = snap({ status: "READY_CHECK", inLobby: true, lobbyId: "b" });
+    expect(inhouseAlerts(oldGame, nextGame)).toEqual(["lobby-formed"]);
+    // The same game moving on is not a new lobby.
+    expect(
+      inhouseAlerts(
+        snap({ status: "READY_CHECK", inLobby: true, lobbyId: "b" }),
+        snap({ status: "CAPTAIN_VOTE", inLobby: true, lobbyId: "b" }),
+      ),
+    ).toEqual(["vote-opened"]);
+    // Without ids (an older snapshot shape) only the lobby appearing counts.
+    expect(
+      inhouseAlerts(
+        snap({ status: "IN_PROGRESS", inLobby: true }),
+        snap({ status: "READY_CHECK", inLobby: true }),
+      ),
+    ).toEqual([]);
+  });
+
   it("rings for a hidden tab that first SEES the lobby already past the check", () => {
     // The keyed-on-prevStatus-null rule. A hidden tab polls on the slow
     // keepalive, so its first sight of the lobby can be CAPTAIN_VOTE or
@@ -650,6 +703,236 @@ describe("inhouseAlerts", () => {
     const beforePick = snap({ status: "DRAFTING", inLobby: true, isOnClock: true });
     const afterPick = snap({ status: "DRAFTING", inLobby: true });
     expect(inhouseAlerts(afterPick, beforePick)).toEqual(["my-turn"]);
+  });
+
+  it("rings for a result only between games, never mid-way through the next one", () => {
+    // A game marked over can land while its players are already in their next
+    // ready check or draft, where a bell reads as "match found" or "your
+    // pick". resultLandedToast carries that scoreline instead.
+    const queued = snap();
+    expect(inhouseAlerts(queued, snap({ resultId: "g1" }))).toEqual([
+      "game-ended",
+    ]);
+    for (const status of [
+      "READY_CHECK",
+      "CAPTAIN_VOTE",
+      "DRAFTING",
+      "READY",
+      "IN_PROGRESS",
+    ]) {
+      const playing = snap({ status, inLobby: true, lobbyId: "g2" });
+      expect(
+        inhouseAlerts(playing, { ...playing, resultId: "g1" }),
+        status,
+      ).toEqual([]);
+    }
+    // A new lobby and the old game's result in one poll: the bell is for the
+    // lobby, once, and the result goes to the toast.
+    expect(
+      inhouseAlerts(
+        queued,
+        snap({ status: "READY_CHECK", inLobby: true, lobbyId: "g2", resultId: "g1" }),
+      ),
+    ).toEqual(["lobby-formed"]);
+  });
+
+  it("is silent when the viewer's game is marked over (no result yet)", () => {
+    const live = snap({ status: "IN_PROGRESS", inLobby: true, lobbyId: "g1" });
+    expect(inhouseAlerts(live, snap({ pendingIds: ["g1"] }))).toEqual([]);
+  });
+});
+
+describe("gameMarkedOverToast", () => {
+  const snap = (
+    over: Partial<InhouseAlertSnapshot> = {},
+  ): InhouseAlertSnapshot => ({
+    status: null,
+    inLobby: false,
+    isOnClock: false,
+    resultId: null,
+    lobbyId: null,
+    pendingIds: [],
+    ...over,
+  });
+  const live = snap({ status: "IN_PROGRESS", inLobby: true, lobbyId: "g1" });
+
+  it("tells a player their game was marked over and they can queue again", () => {
+    expect(gameMarkedOverToast(live, snap({ pendingIds: ["g1"] }))).toBe(
+      "Game over. The result records itself once OpenDota has it — queue for the next game any time.",
+    );
+    // A READY game hosted by hand is marked over just the same.
+    expect(
+      gameMarkedOverToast(
+        { ...live, status: "READY" },
+        snap({ pendingIds: ["g0", "g1"] }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it("says nothing on the first payload after mount", () => {
+    expect(gameMarkedOverToast(null, snap({ pendingIds: ["g1"] }))).toBeNull();
+  });
+
+  it("stays silent for an admin cancel, which leaves no pending row", () => {
+    expect(gameMarkedOverToast(live, snap())).toBeNull();
+    expect(
+      gameMarkedOverToast(live, snap({ pendingIds: undefined })),
+    ).toBeNull();
+  });
+
+  it("is about THEIR game: another game marked over is not news", () => {
+    expect(gameMarkedOverToast(live, snap({ pendingIds: ["g9"] }))).toBeNull();
+  });
+
+  it("needs the viewer to have been in the game and to be out of it now", () => {
+    // A spectator, or a snapshot without the lobby id.
+    expect(
+      gameMarkedOverToast(
+        { ...live, inLobby: false },
+        snap({ pendingIds: ["g1"] }),
+      ),
+    ).toBeNull();
+    expect(
+      gameMarkedOverToast(
+        { ...live, lobbyId: null },
+        snap({ pendingIds: ["g1"] }),
+      ),
+    ).toBeNull();
+    expect(
+      gameMarkedOverToast(
+        { ...live, lobbyId: undefined },
+        snap({ pendingIds: ["g1"] }),
+      ),
+    ).toBeNull();
+    // Still in a lobby (their own next game already formed): the room shows it.
+    expect(
+      gameMarkedOverToast(
+        live,
+        snap({ status: "READY_CHECK", inLobby: true, lobbyId: "g2", pendingIds: ["g1"] }),
+      ),
+    ).toBeNull();
+  });
+
+  it("fires once: the next poll's previous snapshot is already out of the game", () => {
+    const after = snap({ pendingIds: ["g1"] });
+    expect(gameMarkedOverToast(live, after)).not.toBeNull();
+    expect(gameMarkedOverToast(after, after)).toBeNull();
+  });
+
+  it("tells a presser who is already back in the queue so, not to queue", () => {
+    const before = {
+      status: "IN_PROGRESS",
+      inLobby: true,
+      isOnClock: false,
+      resultId: null,
+      lobbyId: "g1",
+      pendingIds: [],
+    };
+    const after = {
+      status: null,
+      inLobby: false,
+      isOnClock: false,
+      resultId: null,
+      lobbyId: null,
+      pendingIds: ["g1"],
+      inQueue: true,
+    };
+    expect(gameMarkedOverToast(before, after)).toBe(
+      "Game over: you're back in the queue. The result records itself once OpenDota has it.",
+    );
+    expect(gameMarkedOverToast(before, { ...after, inQueue: false })).toMatch(
+      /queue for the next game any time/,
+    );
+  });
+});
+
+describe("resultLandedToast", () => {
+  const snap = (
+    over: Partial<InhouseAlertSnapshot> = {},
+  ): InhouseAlertSnapshot => ({
+    status: null,
+    inLobby: false,
+    isOnClock: false,
+    resultId: null,
+    ...over,
+  });
+  const drafting = snap({ status: "DRAFTING", inLobby: true, lobbyId: "g2" });
+  const landed = { ...drafting, resultId: "g1" };
+  const won = { lobbyId: "g1", myTeamWon: true, eloDelta: 16 };
+  const code = inhouseLobbyCode("g1");
+
+  it("brings the score of a result that lands mid-way through the next game", () => {
+    expect(resultLandedToast(drafting, landed, won)).toBe(
+      `Your last game (#${code}) is in: you won (+16 Elo).`,
+    );
+    expect(
+      resultLandedToast(drafting, landed, {
+        lobbyId: "g1",
+        myTeamWon: false,
+        eloDelta: -14,
+      }),
+    ).toBe(`Your last game (#${code}) is in: you lost (−14 Elo).`);
+    // No swing stamped (or an even zero): no Elo clause at all.
+    expect(
+      resultLandedToast(drafting, landed, { ...won, eloDelta: 0 }),
+    ).toBe(`Your last game (#${code}) is in: you won.`);
+  });
+
+  it("works in every stage of the next game", () => {
+    for (const status of [
+      "READY_CHECK",
+      "CAPTAIN_VOTE",
+      "DRAFTING",
+      "READY",
+      "IN_PROGRESS",
+    ]) {
+      const prev = snap({ status, inLobby: true, lobbyId: "g2" });
+      expect(
+        resultLandedToast(prev, { ...prev, resultId: "g1" }, won),
+        status,
+      ).not.toBeNull();
+    }
+  });
+
+  it("says nothing on the first payload after mount", () => {
+    expect(resultLandedToast(null, landed, won)).toBeNull();
+  });
+
+  it("leaves a result between games to the banner and its bell", () => {
+    const between = snap({ resultId: "g1" });
+    expect(resultLandedToast(snap(), between, won)).toBeNull();
+    expect(inhouseAlerts(snap(), between)).toEqual(["game-ended"]);
+  });
+
+  it("is exactly one of the bell or the toast for each result that lands", () => {
+    for (const [prev, next] of [
+      [snap(), snap({ resultId: "g1" })],
+      [drafting, landed],
+      [snap({ status: "READY", inLobby: true }), snap({ status: "READY", inLobby: true, resultId: "g1" })],
+    ] as const) {
+      const bell = inhouseAlerts(prev, next).includes("game-ended");
+      const toast = resultLandedToast(prev, next, won) !== null;
+      expect(bell !== toast).toBe(true);
+    }
+  });
+
+  it("only for a new result, and only the one the payload describes", () => {
+    // Already seen on the previous poll.
+    expect(resultLandedToast(landed, landed, won)).toBeNull();
+    // No result id, or lastResult describing a different game.
+    expect(resultLandedToast(drafting, drafting, won)).toBeNull();
+    expect(
+      resultLandedToast(drafting, { ...drafting, resultId: "g7" }, won),
+    ).toBeNull();
+    expect(resultLandedToast(drafting, landed, null)).toBeNull();
+    // A second result inside the window is new again.
+    expect(
+      resultLandedToast(
+        { ...drafting, resultId: "g0" },
+        landed,
+        won,
+      ),
+    ).not.toBeNull();
   });
 });
 
@@ -926,6 +1209,7 @@ describe("inhouseDetectWindow", () => {
     ).toEqual({
       clockMs: started,
       opensAtMs: started + INHOUSE.DETECT_MIN_MINUTES * MIN,
+      intervalFromMs: started,
     });
   });
 
@@ -937,6 +1221,7 @@ describe("inhouseDetectWindow", () => {
     const fromFormation = {
       clockMs: FORMED,
       opensAtMs: FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+      intervalFromMs: FORMED,
     };
     for (const late of [
       INHOUSE.DETECT_READY_MIN_MINUTES + 1,
@@ -993,7 +1278,61 @@ describe("inhouseDetectWindow", () => {
     ).toEqual({
       clockMs: FORMED,
       opensAtMs: FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+      intervalFromMs: FORMED,
     });
+  });
+
+  it("keeps scanning a game marked over: open by the press, backoff from it, bot wait on the game's clock", () => {
+    const started = FORMED + 6 * MIN;
+    const finished = started + 40 * MIN;
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.AWAITING_RESULT,
+        createdAtMs: FORMED,
+        startedAtMs: started,
+        finishedAtMs: finished,
+      }),
+    ).toEqual({
+      // The game's own clock, as IN_PROGRESS had it: "Game over" never
+      // restarts the bot-match wait.
+      clockMs: started,
+      opensAtMs: started + INHOUSE.DETECT_MIN_MINUTES * MIN,
+      intervalFromMs: finished,
+    });
+    // Never started (hand-hosted from READY): formation's clock.
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.AWAITING_RESULT,
+        createdAtMs: FORMED,
+        startedAtMs: null,
+        finishedAtMs: finished,
+      }),
+    ).toEqual({
+      clockMs: FORMED,
+      opensAtMs: FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN,
+      intervalFromMs: finished,
+    });
+    // A press before the game's own window (an admin, or a clock edge) opens
+    // the scan at the press: the game is known to be over.
+    expect(
+      inhouseDetectWindow({
+        status: INHOUSE_STATUS.AWAITING_RESULT,
+        createdAtMs: FORMED,
+        startedAtMs: null,
+        finishedAtMs: FORMED + 5 * MIN,
+      })?.opensAtMs,
+    ).toBe(FORMED + 5 * MIN);
+    // No window once the game is closed out.
+    for (const status of [INHOUSE_STATUS.COMPLETED, INHOUSE_STATUS.CANCELLED]) {
+      expect(
+        inhouseDetectWindow({
+          status,
+          createdAtMs: FORMED,
+          startedAtMs: started,
+          finishedAtMs: finished,
+        }),
+      ).toBeNull();
+    }
   });
 
   it("gives a READY lobby longer than a started one: teams still have to host", () => {
@@ -1179,5 +1518,194 @@ describe("shouldFocusStage", () => {
     expect(shouldFocusStage(snap("READY"), snap("IN_PROGRESS"))).toBe(false);
     expect(shouldFocusStage(null, snap("IN_PROGRESS"))).toBe(false);
     expect(shouldFocusStage(snap("READY"), snap(null, false))).toBe(false);
+  });
+});
+
+// "Game over" frees a game's slot and its ten players, so it must not open
+// during set-up. ONE predicate for the room's button and finishGame's refusal.
+describe("inhouseGameOverOpen", () => {
+  const FORMED = Date.UTC(2026, 9, 9, 20, 0);
+  const MIN = 60_000;
+  const readyOpens = inhouseDetectWindow({
+    status: INHOUSE_STATUS.READY,
+    createdAtMs: FORMED,
+    startedAtMs: null,
+  })!.opensAtMs;
+  const startedOpens = inhouseDetectWindow({
+    status: INHOUSE_STATUS.IN_PROGRESS,
+    createdAtMs: FORMED,
+    startedAtMs: FORMED + 2 * MIN,
+  })!.opensAtMs;
+
+  it("opens exactly when the result scan's window does", () => {
+    expect(inhouseGameOverOpen(INHOUSE_STATUS.READY, readyOpens, readyOpens - 1)).toBe(false);
+    expect(inhouseGameOverOpen(INHOUSE_STATUS.READY, readyOpens, readyOpens)).toBe(true);
+    expect(
+      inhouseGameOverOpen(INHOUSE_STATUS.READY, readyOpens, readyOpens + 3 * 3_600_000),
+    ).toBe(true);
+    expect(
+      inhouseGameOverOpen(INHOUSE_STATUS.IN_PROGRESS, startedOpens, startedOpens - 1),
+    ).toBe(false);
+    expect(
+      inhouseGameOverOpen(INHOUSE_STATUS.IN_PROGRESS, startedOpens, startedOpens),
+    ).toBe(true);
+    // The window is the scan's own, not a clock of its own.
+    expect(readyOpens).toBe(FORMED + INHOUSE.DETECT_READY_MIN_MINUTES * MIN);
+    expect(startedOpens).toBe(FORMED + (2 + INHOUSE.DETECT_MIN_MINUTES) * MIN);
+  });
+
+  it("is only for a game being played", () => {
+    const late = readyOpens + 60 * MIN;
+    for (const status of Object.values(INHOUSE_STATUS)) {
+      expect(inhouseGameOverOpen(status, readyOpens, late), status).toBe(
+        INHOUSE_PLAYING_STATUSES.includes(status),
+      );
+    }
+    // Already marked over, finished or cancelled: nothing left to mark.
+    for (const status of [
+      INHOUSE_STATUS.AWAITING_RESULT,
+      INHOUSE_STATUS.COMPLETED,
+      INHOUSE_STATUS.CANCELLED,
+      "SOMETHING_ELSE",
+      "",
+      null,
+      undefined,
+    ]) {
+      expect(inhouseGameOverOpen(status, readyOpens, late), String(status)).toBe(false);
+    }
+  });
+
+  it("stays CLOSED on an unknown window or clock (unlike the scan note)", () => {
+    expect(inhouseGameOverOpen(INHOUSE_STATUS.READY, null, readyOpens + MIN)).toBe(false);
+    expect(inhouseGameOverOpen(INHOUSE_STATUS.READY, undefined, readyOpens + MIN)).toBe(false);
+    expect(inhouseGameOverOpen(INHOUSE_STATUS.READY, readyOpens, null)).toBe(false);
+    expect(inhouseGameOverOpen(INHOUSE_STATUS.READY, readyOpens, undefined)).toBe(false);
+    expect(inhouseGameOverOpen(INHOUSE_STATUS.IN_PROGRESS, null, null)).toBe(false);
+  });
+});
+
+describe("inhouseResultCeilingSeconds", () => {
+  const NEXT_FORMED = Date.UTC(2026, 9, 9, 21, 0, 30, 999);
+
+  it("caps a game marked over at its players' next game's formation, in Dota's seconds", () => {
+    // Floored, never rounded up: a match starting in that formation's own
+    // second is still allowed (the service rejects only start_time >
+    // ceiling), and the next second is not.
+    expect(
+      inhouseResultCeilingSeconds({
+        status: INHOUSE_STATUS.AWAITING_RESULT,
+        nextGameFormedAtMs: NEXT_FORMED,
+      }),
+    ).toBe(Date.UTC(2026, 9, 9, 21, 0, 30) / 1000);
+  });
+
+  it("has no ceiling while no next game has formed, so a press made during set-up still records the real game", () => {
+    expect(
+      inhouseResultCeilingSeconds({
+        status: INHOUSE_STATUS.AWAITING_RESULT,
+        nextGameFormedAtMs: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("has no ceiling for a game still being played or closed out", () => {
+    for (const status of [
+      ...INHOUSE_PLAYING_STATUSES,
+      INHOUSE_STATUS.COMPLETED,
+      INHOUSE_STATUS.CANCELLED,
+      INHOUSE_STATUS.DRAFTING,
+    ]) {
+      expect(
+        inhouseResultCeilingSeconds({ status, nextGameFormedAtMs: NEXT_FORMED }),
+        status,
+      ).toBeNull();
+    }
+  });
+
+  it("lands only where a result can: AWAITING_RESULT is a result status, not a live one", () => {
+    expect(INHOUSE_RESULT_STATUSES).toContain(INHOUSE_STATUS.AWAITING_RESULT);
+    expect(INHOUSE_ACTIVE_STATUSES).not.toContain(INHOUSE_STATUS.AWAITING_RESULT);
+    expect(INHOUSE_PLAYING_STATUSES).not.toContain(INHOUSE_STATUS.AWAITING_RESULT);
+    for (const status of INHOUSE_PLAYING_STATUSES) {
+      expect(INHOUSE_RESULT_STATUSES).toContain(status);
+    }
+  });
+});
+
+describe("inhouseWatchedLobbyWhere", () => {
+  const NOW = Date.UTC(2026, 9, 9, 22, 0);
+  const floor = new Date(NOW - INHOUSE.AWAITING_RESULT_WATCH_MINUTES * 60_000);
+
+  it("watches every live game, and a game marked over for its first hour", () => {
+    expect(inhouseWatchedLobbyWhere(NOW)).toEqual({
+      OR: [
+        { status: { in: INHOUSE_ACTIVE_STATUSES } },
+        {
+          status: INHOUSE_STATUS.AWAITING_RESULT,
+          finishedAt: { gte: floor },
+        },
+      ],
+    });
+    expect(INHOUSE.AWAITING_RESULT_WATCH_MINUTES).toBe(60);
+  });
+
+  it("hands Prisma a fresh status list, never the shared constant", () => {
+    const where = inhouseWatchedLobbyWhere(NOW);
+    const live = where.OR[0] as { status: { in: string[] } };
+    expect(live.status.in).not.toBe(INHOUSE_ACTIVE_STATUSES);
+    live.status.in.push("MUTATED");
+    expect(INHOUSE_ACTIVE_STATUSES).not.toContain("MUTATED");
+  });
+
+  // The same where-object, read the way the database would, so the floor's
+  // edge (gte, inclusive) is pinned and not just the object's shape.
+  function watched(
+    row: { status: string; finishedAt: Date | null },
+    nowMs: number,
+  ): boolean {
+    const [live, marked] = inhouseWatchedLobbyWhere(nowMs).OR as [
+      { status: { in: string[] } },
+      { status: string; finishedAt: { gte: Date } },
+    ];
+    if (live.status.in.includes(row.status)) return true;
+    return (
+      row.status === marked.status &&
+      row.finishedAt !== null &&
+      row.finishedAt.getTime() >= marked.finishedAt.gte.getTime()
+    );
+  }
+
+  it("keeps a game marked over watched up to the floor, inclusive, and drops it after", () => {
+    const marked = (finishedAtMs: number | null) => ({
+      status: INHOUSE_STATUS.AWAITING_RESULT,
+      finishedAt: finishedAtMs === null ? null : new Date(finishedAtMs),
+    });
+    expect(watched(marked(NOW), NOW)).toBe(true);
+    expect(watched(marked(floor.getTime()), NOW)).toBe(true);
+    expect(watched(marked(floor.getTime() - 1), NOW)).toBe(false);
+    expect(watched(marked(null), NOW)).toBe(false);
+  });
+
+  it("never watches a closed game, however recent", () => {
+    for (const status of [INHOUSE_STATUS.COMPLETED, INHOUSE_STATUS.CANCELLED]) {
+      expect(watched({ status, finishedAt: new Date(NOW) }, NOW), status).toBe(false);
+    }
+    for (const status of INHOUSE_ACTIVE_STATUSES) {
+      expect(watched({ status, finishedAt: null }, NOW), status).toBe(true);
+    }
+  });
+});
+
+describe("autoJoinAlreadyInToast", () => {
+  it("tells a player still in a live game how to get back in line", () => {
+    expect(autoJoinAlreadyInToast({ inQueue: false, inLobby: true })).toBe(
+      "You're in a live game here. When it's over, press “Game over — queue again”.",
+    );
+  });
+
+  it("says queued when they are", () => {
+    expect(autoJoinAlreadyInToast({ inQueue: true, inLobby: false })).toBe(
+      "You're already in the queue",
+    );
   });
 });
