@@ -57,3 +57,35 @@ test("installed GC shared-object decoder keeps uint64 lobby IDs and current memb
   assert.deepEqual(decoded.memberIndices, [0]);
   assert.equal(decoded.allMembers[0].id, "76561198000000010");
 });
+test("lobby invites go out as GC 4512 carrying the player's fixed64 Steam ID", () => {
+  const user = new SteamUser({ dataDirectory: null });
+  const dota = new Dota2User(user);
+  user.steamID = { getSteamID64: () => "76561198000000099" };
+  let sent;
+  user.sendToGC = (...args) => {
+    sent = args;
+  };
+  dota.sendPartial(protos.EGCBaseMsg.k_EMsgGCInviteToLobby, {
+    steamId: "76561197960287930",
+  });
+  assert.equal(sent[0], 570);
+  assert.equal(sent[1], 4512);
+  // Field 1, fixed64 little-endian 0x01100001000056BA; client version 0 omitted.
+  assert.equal(Buffer.from(sent[3]).toString("hex"), "09ba56000001001001");
+  // send() leaves the client version undefined and throws: why the bot uses sendPartial.
+  assert.throws(() =>
+    dota.send(protos.EGCBaseMsg.k_EMsgGCInviteToLobby, { steamId: "76561197960287930" }),
+  );
+  // The GC's answer (4502) decodes with the Steam ID as a string.
+  const answer = protos.CMsgInvitationCreated.encode(
+    protos.CMsgInvitationCreated.fromPartial({
+      groupId: "123",
+      steamId: "76561197960287930",
+      userOffline: true,
+    }),
+  ).finish();
+  const decoded = protos.CMsgInvitationCreated.decode(answer);
+  assert.equal(decoded.steamId, "76561197960287930");
+  assert.equal(decoded.userOffline, true);
+  assert.equal(protos.EGCBaseMsg.k_EMsgGCInvitationCreated, 4502);
+});

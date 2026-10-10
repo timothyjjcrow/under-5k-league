@@ -6,9 +6,11 @@ import { seesPlayerLobbyPanel } from "./lobby-access";
 
 /**
  * The season lobby bot's panel for the other people who play this match: the
- * players on both rosters, any booked standin, and admins. Players join
- * through Dota's Custom Lobbies browser with the name and password it shows
- * (docs/DOTA-LOBBY-BOT.md), so without it a captain had to relay them by hand.
+ * players on both rosters, any booked standin, and admins. The bot invites
+ * them in Dota; anyone the invite misses joins through Dota's Custom Lobbies
+ * browser with the name and password it shows (docs/DOTA-LOBBY-BOT.md), so
+ * without it a captain had to relay them by hand. It also lists who is in the
+ * lobby and offers "Send me an invite".
  * The captains' own panel, with the controls, is in the result card inside
  * Captain tools; this one opens in the same windows (season lobby bot on,
  * active season, series not final, results open for the match's phase).

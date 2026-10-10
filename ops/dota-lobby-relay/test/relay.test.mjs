@@ -3,11 +3,21 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Miniflare } from "miniflare";
-import { leaseAlive, LEASE_MS, validReply } from "../src/protocol.mjs";
+import { leaseAlive, LEASE_MS, validControlRequest, validReply } from "../src/protocol.mjs";
 
 const SITE_SECRET = "test-site-secret-".repeat(3);
 const WORKER_SECRET = "test-worker-secret-".repeat(3);
 const REQUEST = { action: "status", spec: { key: "inhouse:fixture:1" } };
+const LOBBY_ACTIONS = ["status", "create", "start", "release", "invite"];
+const PLAYERS = [
+  { id: "76561198000000001", seat: "radiant", invite: "sent" },
+  { id: "76561198000000002", seat: "dire", invite: "none" },
+  { id: "76561198000000003", seat: "unassigned", invite: "offline" },
+  { id: "76561198000000004", seat: "absent", invite: "failed" },
+];
+const roster = (count) => Array.from({ length: count }, (_, i) =>
+  ({ id: `765611980000001${String(i).padStart(2, "0")}`, seat: "absent", invite: "none" }));
+const reply = (body, status = 200) => ({ id: randomUUID(), status, body });
 
 async function fixture(t) {
   const mf = new Miniflare({
@@ -60,7 +70,11 @@ test("separate authentication protects both control and bot connection", async (
 
 test("control input rejects unsupported actions, malformed and oversized bodies", async (t) => {
   const { post } = await fixture(t);
-  for (const body of [{ action: "unknown" }, null, [], { action: "active", spec: {} }, { action: "create", spec: [] }])
+  for (const body of [
+    { action: "unknown" }, null, [], { action: "active", spec: {} }, { action: "create", spec: [] },
+    { action: "invite" }, { action: "invite", spec: [] }, { action: "invite", spec: null },
+    { action: "Invite", spec: {} }, { action: "kick", spec: {} }, { action: "seat", spec: {} },
+  ])
     await assertResponse(await post(body), 400, { code: "INVALID" });
   await assertResponse(await post(REQUEST, { body: "{" }), 400, { code: "INVALID" });
   await assertResponse(await post(REQUEST, { body: JSON.stringify({ action: "create", spec: { padding: "x".repeat(8192) } }) }), 400, { code: "INVALID" });
@@ -80,6 +94,44 @@ test("dispatch correlates a bounded command and forwards only a valid reply", as
   const pong = bot.next();
   bot.ws.send("ping");
   assert.equal(await pong, "pong");
+});
+
+// A refused command never reaches the bot, so a timeout fails it rather than hanging.
+test("invite dispatches like a lobby action and forwards only its seat report and count", { timeout: 5_000 }, async (t) => {
+  const { post, connect } = await fixture(t);
+  const bot = await connect();
+  const spec = {
+    key: "inhouse:fixture:1", radiant: ["76561198000000001"], dire: ["76561198000000002"],
+    invite: ["76561198000000002"], withPlayers: true,
+  };
+  const pending = post({ action: "invite", spec });
+  const command = await bot.nextRequest();
+  assert.deepEqual(command.request, { action: "invite", spec });
+  const invited = { state: "ready", lobbyId: "12345", players: PLAYERS.slice(0, 2), invited: 1 };
+  bot.ws.send(JSON.stringify({ id: command.id, status: 200, body: invited }));
+  await assertResponse(await pending, 200, invited);
+
+  // Any lobby action may carry the seat report; only an invite carries a count.
+  const statusPending = post({ action: "status", spec: { key: "inhouse:fixture:1", withPlayers: true } });
+  const status = await bot.nextRequest();
+  bot.ws.send(JSON.stringify({ id: status.id, status: 200, body: { state: "ready", players: PLAYERS } }));
+  await assertResponse(await statusPending, 200, { state: "ready", players: PLAYERS });
+  const countPending = post();
+  const count = await bot.nextRequest();
+  bot.ws.send(JSON.stringify({ id: count.id, status: 200, body: { state: "ready", invited: 1 } }));
+  await assertResponse(await countPending, 409, { code: "STATE" });
+
+  // A seat entry carrying anything extra fails closed rather than leaking it.
+  const leakPending = post({ action: "invite", spec });
+  const leak = await bot.nextRequest();
+  bot.ws.send(JSON.stringify({ id: leak.id, status: 200, body: {
+    state: "ready", players: [{ ...PLAYERS[0], password: "must-not-leak" }], invited: 0,
+  } }));
+  await assertResponse(await leakPending, 409, { code: "STATE" });
+  const refusedPending = post({ action: "invite", spec });
+  const refused = await bot.nextRequest();
+  bot.ws.send(JSON.stringify({ id: refused.id, status: 409, body: { code: "SETTINGS" } }));
+  await assertResponse(await refusedPending, 409, { code: "SETTINGS" });
 });
 
 test("health and active responses retain only their explicit schemas", async (t) => {
@@ -216,4 +268,77 @@ test("health validation rejects missing identity fields and unsafe response cont
   assert.equal(validReply({ id, status: 200, body: { state: "ready", lobbyId: "not-an-id" } }, "status"), false);
   for (const key of ["asia:inhouse:fixture:1", "eu:us:inhouse:fixture:1", "EU:season:fixture:1"])
     assert.equal(validReply({ id, status: 200, body: { key } }, "active"), false);
+});
+
+test("lobby replies stay valid without a seat report, and accept one of at most 20 exact entries", () => {
+  for (const action of LOBBY_ACTIONS) {
+    assert.equal(validReply(reply({ state: "ready" }), action), true);
+    assert.equal(validReply(reply({ state: "started", lobbyId: "12345", matchId: "67890" }), action), true);
+    assert.equal(validReply(reply({ state: "ready", lobbyId: "12345", players: PLAYERS }), action), true);
+    assert.equal(validReply(reply({ state: "ready", players: [] }), action), true);
+    assert.equal(validReply(reply({ state: "ready", players: roster(20) }), action), true);
+    assert.equal(validReply(reply({ state: "ready", players: roster(21) }), action), false);
+  }
+});
+
+test("seat entries refuse a bad Steam ID, an unknown seat or invite, missing or extra keys", () => {
+  const [entry] = PLAYERS;
+  const badEntries = [
+    null, [], "76561198000000001", 76561198000000001,
+    { ...entry, id: "7656119800000001" }, { ...entry, id: "765611980000000011" },
+    { ...entry, id: "7656119800000000a" }, { ...entry, id: " 76561198000000001" },
+    { ...entry, id: "76561198000000001\n" }, { ...entry, id: 76561198000000001 }, { ...entry, id: null },
+    { ...entry, seat: "spectator" }, { ...entry, seat: "Radiant" }, { ...entry, seat: null },
+    { ...entry, invite: "delivered" }, { ...entry, invite: "blocked" }, { ...entry, invite: true },
+    { seat: entry.seat, invite: entry.invite }, { id: entry.id, invite: entry.invite }, { id: entry.id, seat: entry.seat },
+    { ...entry, name: "player" }, { ...entry, password: "must-not-leak" },
+  ];
+  for (const action of LOBBY_ACTIONS) {
+    for (const bad of badEntries)
+      assert.equal(validReply(reply({ state: "ready", players: [...PLAYERS.slice(1), bad] }), action), false, JSON.stringify(bad));
+    for (const players of [null, {}, { 0: entry }, "players", 1, true])
+      assert.equal(validReply(reply({ state: "ready", players }), action), false, JSON.stringify(players));
+  }
+});
+
+test("invited is a count from 0 to 20 that only an invite reply may carry", () => {
+  for (const invited of [0, 7, 20]) {
+    assert.equal(validReply(reply({ state: "ready", invited }), "invite"), true);
+    assert.equal(validReply(reply({ state: "ready", lobbyId: "12345", players: PLAYERS, invited }), "invite"), true);
+  }
+  for (const invited of [21, -1, 1.5, "3", null, true, [1]])
+    assert.equal(validReply(reply({ state: "ready", invited }), "invite"), false, JSON.stringify(invited));
+  for (const action of ["status", "create", "start", "release"])
+    assert.equal(validReply(reply({ state: "ready", players: PLAYERS, invited: 0 }), action), false);
+  // An invite refusal keeps the error shape and codes every action has.
+  for (const code of ["INVALID", "OFFLINE", "STATE", "SETTINGS"])
+    assert.equal(validReply(reply({ code }, 409), "invite"), true);
+  assert.equal(validReply(reply({ code: "INVALID" }, 400), "invite"), true);
+  for (const body of [{ code: "BLOCKED" }, { code: "STATE", invited: 0 }, { code: "STATE", players: [] }])
+    assert.equal(validReply(reply(body, 409), "invite"), false);
+});
+
+test("health, active and unknown actions refuse the lobby-only reply fields", () => {
+  const health = { online: true, steamId: "76561198000000001", activeKey: null, lobbyId: null, gameMode: null, serverRegion: null, leagueId: null };
+  assert.equal(validReply(reply(health), "health"), true);
+  assert.equal(validReply(reply({ key: null }), "active"), true);
+  for (const extra of [{ players: [] }, { players: PLAYERS }, { invited: 0 }]) {
+    assert.equal(validReply(reply({ ...health, ...extra }), "health"), false);
+    assert.equal(validReply(reply({ key: null, ...extra }), "active"), false);
+  }
+  for (const action of ["kick", "seat", undefined])
+    assert.equal(validReply(reply({ state: "ready" }), action), false);
+});
+
+test("control requests accept invite with a spec exactly like the other lobby actions", () => {
+  for (const action of LOBBY_ACTIONS) {
+    assert.equal(validControlRequest({ action, spec: { key: "inhouse:fixture:1" } }), true);
+    assert.equal(validControlRequest({ action, spec: { key: "inhouse:fixture:1", invite: ["76561198000000001"], withPlayers: true } }), true);
+    for (const spec of [undefined, null, [], "spec"]) assert.equal(validControlRequest({ action, spec }), false);
+    assert.equal(validControlRequest({ action, spec: {}, invite: [] }), false);
+  }
+  for (const action of ["Invite", "kick", "seat", "players", undefined])
+    assert.equal(validControlRequest({ action, spec: {} }), false);
+  assert.equal(validControlRequest({ action: "health" }), true);
+  assert.equal(validControlRequest({ action: "active" }), true);
 });

@@ -1,6 +1,6 @@
 # Steam / Dota lobby bot
 
-The default rollout is **one bot for the league's in-house games**, using **Captains Mode (2)** and **US East (2)**. The same bot can also serve Europe West (3) through the explicit shared-region setup below; it still hosts only one Dota lobby at a time across both leagues. It holds a lobby only until its game is running: it leaves once Dota gives the game a match id, so two in-house games can run at once, set up one after the other. Captains/admins create and start the lobby from the in-house room; participants can see credentials and status. Draft completion alone does not create or launch a Dota lobby. Season support is implemented but its UI and API stay disabled unless the server explicitly sets `DOTA_SEASON_LOBBY_BOT_ENABLED="true"`.
+The default rollout is **one bot for the league's in-house games**, using **Captains Mode (2)** and **US East (2)**. The same bot can also serve Europe West (3) through the explicit shared-region setup below; it still hosts only one Dota lobby at a time across both leagues. It holds a lobby only until its game is running: it leaves once Dota gives the game a match id, so two in-house games can run at once, set up one after the other. Captains/admins create and start the lobby from the in-house room. Once the lobby is ready the bot invites the players in Dota ([Lobby invites](#lobby-invites)); participants see who is in the lobby, its status, and its name and password for anyone the invite misses. Draft completion alone does not create or launch a Dota lobby. Season support is implemented but its UI and API stay disabled unless the server explicitly sets `DOTA_SEASON_LOBBY_BOT_ENABLED="true"`.
 
 ## Architecture and research
 
@@ -154,17 +154,53 @@ Use `node macos-service.mjs stop` before signing in again or moving the bot to a
 ## Match-night flow
 
 1. In-house controls appear once teams are drafted; either in-house captain or an admin clicks **Create Dota lobby**. Any live in-house game with locked teams can create/start a lobby; with two live, the second waits (`BUSY`) until the first game is running. The bot applies that league's in-house ticket, Captains Mode, its configured server region, a password, no cheats, no AI players, and a two-minute DotaTV delay. Each game has a unique name suffix.
-2. Players join through Dota's Custom Lobbies browser using the bot panel's name/password. The bot does not send Steam invitations. Season home team plays Radiant and away team Dire; in-house sides follow the draft's existing Radiant assignment. The panel shows both sides.
-3. When Dota confirms the configured settings, the panel shows **Lobby ready**. The bot removes itself from a playing slot. **Start game with bot** verifies five current roster members on each assigned side, including approved stand-ins and linked Dota account overrides. It does not auto-launch when the tenth player joins.
+2. When Dota confirms the configured settings, the panel shows **Lobby ready**. The bot removes itself from a playing slot and invites every roster player not already in the lobby, once ([Lobby invites](#lobby-invites)). A player accepts the popup in Dota and joins without the password, but lands on neither side: they take their own slot. Anyone the invite misses joins through Dota's Custom Lobbies browser with the panel's name/password. Season home team plays Radiant and away team Dire; in-house sides follow the draft's existing Radiant assignment. The panel shows both sides and, from a bot that invites, who of the roster is where.
+3. **Start game with bot** verifies five current roster members on each assigned side, including approved stand-ins and linked Dota account overrides. A player who accepted an invite but has not taken a slot is not on a side yet. It does not auto-launch when the tenth player joins.
 4. Once the GC reports the game running, the in-house page advances to In Progress on its next bot-status check (a visible tab). Recording does not wait for that: the scheduled worker reads the bot's status itself and, once the bot reports the launched game's match ID, looks that one match up on OpenDota instead of scanning ten players' histories. The match must pass the same checks as a pasted match ID — it started after the lobby formed, and at least two linked players from each drafted team are in it, on opposite sides — or nothing is recorded from it and the history scan takes over. The history scan also resumes if OpenDota still lacks the bot's match two hours after the lobby formed or was marked started (`INHOUSE.DETECT_BOT_MATCH_WAIT_MINUTES`). The bot never invents a result from lobby state; OpenDota's copy of the ticketed game is the result.
 5. The worker leaves automatically once the game is running and Dota has given it a match id (or at postgame, whichever it sees first). The job keeps that match id, so the site still reads it for the result, and the bot is free for the other in-house game. Because the bot has left, it never sees the game end: when it does, a player presses **Game over — queue again** on `/inhouse`, which frees the ten to queue at once while the site keeps looking up the bot's match id on OpenDota ([inhouse: Game over](features/inhouse.md#game-over-result-pending)). That press is refused while this game's bot lobby is still unlaunched and the bot is online (creating, ready or starting): a captain starts it with **Start game with bot** or frees it with **Release bot…** first. A blocked bot (which is also what an offline one reports) never holds the press back; an admin releases it later with **Check bot connection**. A captain can still release it by hand once a game is running. If season support is enabled later, season captains get the same controls, with a new key/password after each imported game. Each Dota lobby is a separate Bo1 while the site's series score remains authoritative.
 
 Manual hosting instructions remain available if the integration is disabled/offline. When using the bot, use its unique lobby name rather than the manual in-house lobby name. Release an existing bot lobby before switching to manual hosting.
 
+## Lobby invites
+
+The bot invites the players into its lobby so they needn't search Custom Lobbies for it. The lobby name and password stay on the panel as the fallback. The bot never kicks anyone and never moves anyone onto a side: an invited player lands unassigned and takes their own slot, and a stranger who takes a slot holds Start back (`ROSTER`) until they move. Tim's calls are in [DECISIONS](DECISIONS.md).
+
+- **Automatic, once per job.** On the job's first ready snapshot (its own lobby, settings confirmed, the bot as leader, not releasing), the bot invites every player on the job's roster who is not already in the lobby, and stamps `autoInvitedAt` on the job in `lobbies.json`. Each invite is recorded there before it is sent, so a reconnect or restart never sends that round again. The Game Coordinator's answer then marks an invite `offline` if the player's Dota is closed. A send that throws (Steam dropped) is marked `failed` and never retried on its own; a re-invite sends it again. The bot never invites itself.
+- **Re-invite missing players** (captains and admins) and **Send me an invite** (any other rostered player: an in-house game's drafted players, a season match's night roster including booked stand-ins). Re-invite shows only while the lobby is ready and someone on the roster is absent, and Send me an invite only while it is ready and the viewer is absent (`reinviteMissingOpen`, `selfInviteOpen` in `src/lib/dota-lobby.ts`). Both build on `lobbyInviteScope`, which is also what `POST /api/dota-lobby` accepts an `invite` by. A captain's or admin's invite names no targets, so the bot invites everyone on the fresh roster who is not in the lobby, a stand-in booked after create included. A player's names only their own playing Steam ID, the same one the spec's side carries (a linked Dota account override wins over the login). Anyone else gets 403, and a game that is not playable is refused before the bot is called. The route leaves "is the lobby ready" and "who is missing" to the bot rather than reading its status first, and an invite counts against the route's write limit.
+- **Resend limits.** Every invite, automatic or pressed, skips anyone already in the lobby, anyone invited in the last 30 seconds (`INVITE_RESEND_MS`) and anyone invited five times in this job (`INVITE_MAX_PER_PLAYER`), so a repeated or retried press can't flood a player. The reply's `invited` count says how many went out; a press that sent none gets a toast saying whether everyone is already in or the limits held the resend back. A lost or timed-out answer is "may have gone out", never failed: on either leg, including the relay's `OFFLINE`, which it also answers for a reply it lost after delivering the command (`InviteOutcomeUnknownError`, which the route marks `unknown` for the panel's neutral toast).
+- **Who's in the lobby.** While the lobby is ready, the panel lists each roster player against the side they belong on: on it, on the other side, in the lobby but on neither side ("In the lobby: needs a Radiant slot"), or absent with what became of their invite. Rows use Dota's side names, Radiant and Dire, because that is what the lobby shows; the panel above the list says which team is which. The browser gets names, sides, seats and invite results only; Steam IDs stay on the server (`lobbyPlayerViews`). The players' copy says to accept the invite (no password needed) and take a slot, and, for a player who sees no popup, to untick "Block party invites from non-friends" in Dota's settings and then get a new invite (the line names the viewer's own button, **Send me an invite** or **Re-invite missing players**, or says to ask a captain: `noPopupHelp`), or join with the name and password. Players are not asked to friend the bot.
+
+What the bot reports for an absent player's invite, and what it means:
+
+| `invite` | Meaning | Row |
+| --- | --- | --- |
+| `none` | No invite yet | Not invited yet |
+| `sent` | The Game Coordinator accepted it. It may still be blocked by the player's Dota setting: a blocked invite looks exactly like a delivered one to the bot | Invite sent |
+| `offline` | The player's Dota was closed. The invite pops up when they open Dota | Invite waiting: pops up when they open Dota |
+| `failed` | The send threw because Steam dropped | Invite didn't send |
+
+### Protocol
+
+The full request and reply shapes are in the [relay README](../ops/dota-lobby-relay/README.md#protocol). In short:
+
+- **`invite`** is a lobby action with the usual full spec, plus optional `invite` (1 to 20 unique Steam64 IDs, each on that request's own `radiant` or `dire`). Without `invite` the bot targets the whole fresh roster. The bot accepts it only for its active job in state `ready`, with its lobby in the UI state, the bot as leader, matching settings, and no launch or release under way; otherwise `409 STATE` or `409 SETTINGS`. Bad targets are `INVALID`, and an offline bot is `OFFLINE`. A 200 reply is the usual status plus `invited`, the number sent (0 to 20).
+- **`withPlayers: true`** on any lobby action's spec adds `players` to a 200 reply while the job is ready or starting with its lobby in the UI state: one `{id, seat, invite}` per distinct roster ID, Radiant then Dire, at most 20, where `seat` is `radiant`, `dire`, `unassigned` or `absent`. Without `withPlayers` the reply is exactly what it was before invites.
+- **The site** asks for `withPlayers` on every browser read and action, and reads the list strictly: anything malformed, or a list that doesn't match the roster ID for ID, is unknown and shows no list. The scheduled worker's status read never asks. A bot without invites ignores `withPlayers` (its spec check reads only the keys it knows) and sends no `players`, so the panel keeps its "Join through Dota → Play → Custom Lobbies" line and shows no list or invite buttons.
+
+### Deploy order
+
+Ship the three parts in this order, each only once the one before it is live:
+
+1. **Relay** (`npm run deploy` from `ops/dota-lobby-relay`, the shared relay both leagues use). An older relay rejects `invite` with `400 INVALID` and turns any reply carrying `players` or `invited` into `409 STATE`, so nothing that sends either may go first.
+2. **Bot**: update the worker code in the service's checkout and restart it (`node macos-service.mjs stop`, then `start`). Restart it while it holds no lobby: a lobby the old bot set up has no `autoInvitedAt`, so the restarted bot sends it one automatic round when it next sees it ready. From here the bot invites on every new lobby, whichever site is live; the old panel's name/password line is still right as the fallback.
+3. **Site**, through [RELEASING](RELEASING.md) to both leagues (no migration). It is the only part that sends `withPlayers` or `invite`.
+
+Roll back in reverse: site first, then bot, then relay. Rolling back the site or the bot alone is safe (an older bot ignores `withPlayers`; an older site never sends it). Never run an older relay while the new site and the new bot are both live: the bot's `players` would turn every panel read and action on a ready lobby into `409 STATE`, and a Start that really launched would read as failed.
+
 ## Recovery and limits
 
 - Duplicate Create/Start requests are idempotent per fixture/game. Intent is written before sending to Steam. A lost HTTP response never triggers an automatic second lobby or launch.
-- The worker stores `lobbies.json` atomically with private permissions. Keep this file across restarts: it holds active ownership and completed request IDs. Do not rotate the shared secret mid-lobby; season passwords derive from it.
+- The worker stores `lobbies.json` atomically with private permissions. Keep this file across restarts: it holds active ownership, completed request IDs and each job's invite records (when each player was last invited, how many times, and the result). Do not rotate the shared secret mid-lobby; season passwords derive from it.
 - On reconnect, the worker reconciles the account's actual GC lobby by its unique name/password. Wrong tickets/settings block launch. Check the bot account's ticket permissions rather than repeatedly clicking Create.
 - A Steam or GC drop can swallow the departure from a launched game, which would leave its claim answering `BUSY` to every next Create. The next GC welcome that resends every cache and holds no lobby counts as that departure (`welcomed` in `controller.mjs`): the claim frees, the job keeps its match id, and the log reads "Reconnected outside the launched game's lobby". This also covers a worker restarted before the departure arrived. A welcome that still holds the running lobby makes the bot leave it again. A welcome never frees a creating, ready, starting or blocked job: those still need a deliberate release.
 - Lobby names come from `src/lib/dota-lobby-service.ts`: `<INHOUSE.LOBBY_NAME> <id>` for in-house games and `<LEAGUE_CONFIG.name> <home> vs <away> G<n> <id>` for season games, so they read "GGD2L" (or "GGD2L Europe"), never "LD2L". The name is part of what the bot checks before starting, so a deploy that changes the format leaves any lobby still open unable to start: release it and create it again.
@@ -179,6 +215,8 @@ Manual hosting instructions remain available if the integration is disabled/offl
 
 ```sh
 npm test --prefix ops/dota-lobby-bot
+npm test --prefix ops/dota-lobby-relay
+npx vitest run src/lib/dota-lobby.test.ts src/components/dota-lobby-controls.test.ts
 npx vitest run --config vitest.integration.config.mts test/integration/dota-lobby.itest.ts test/integration/dota-lobby-recovery.itest.ts
 npx tsc --noEmit
 ```
@@ -213,3 +251,21 @@ shared bot is idle. Stop the existing service, restore the original private
 environment file with mode 0600, then start the same service. Keep its current
 namespace-compatible relay and saved Steam/lobby state; do not start a second
 instance or delete lock files.
+
+Invite live test on October 10, 2026, 16:21 to 16:28 UTC, with the real bot
+account and Tim's Steam account. It checked the bot's invite path; the site's
+list and invite buttons were checked against a fixture database and a
+simulated bot only.
+
+- The invite popup appeared in Dota within seconds. Accepting it joined the
+  lobby without the password, and the player landed unassigned (on neither
+  side) and had to take their own slot.
+- A repeat invite to the same account arrived again.
+- A player who is not Steam friends with the bot received it, with the block
+  setting off.
+- With Dota's "Block party invites from non-friends" ticked, nothing appeared,
+  yet the Game Coordinator still answered "invite created" (not offline). The
+  bot cannot tell a blocked invite from a delivered one, so `sent` never
+  proves delivery and the panel names the setting.
+- With Dota closed, the Game Coordinator answered "player offline"; the invite
+  popped up when the player later opened Dota.
