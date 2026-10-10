@@ -245,8 +245,8 @@ own inhouse choice).
   plus how many haven't set positions: unknown never reads as a gap), and
   pool rows say "fills Pos 4" for the team on the clock (`fillsRoleNeed`).
 - **Auto-pick is unchanged** (MMR, then queue order). A role-aware auto-pick
-  is Tim's call, and it would first need the expected turn passed into
-  `applyPick`.
+  is Tim's call. The turn it judged already reaches `applyPick`, so a choice
+  made for one team can't land on another turn (see "Guarded transitions").
 
 ## Guarded transitions
 
@@ -272,9 +272,14 @@ Every transition is a guarded claim; keep it that way (general rules:
   }`, `makePick` bails on `!lobby.pickTeam`). It throws `PickRaceError`, caught
   OUTSIDE the callback in `makePick` / `resolveStalledPick`. Also keep:
   `pickEndsAt` in the turn claim's WHERE (the snake repeats a team, so
-  `pickTeam` alone doesn't identify a turn), and `expectTeam` from `makePick`
+  `pickTeam` alone doesn't identify a turn), `expectTeam` from `makePick`
   (Postgres re-snapshots per statement, so the re-read can show the other
-  captain's turn).
+  captain's turn), and the turn `resolveStalledPick` judged expired, passed
+  as `expectTeam` plus `expectEndsAt` and claimed on that deadline. A
+  captain's pick landing before `applyPick`'s re-read shows the next turn
+  with a full clock (the same team's at a snake pair), and claiming the
+  re-read's deadline auto-picked for a captain whose clock never ran out
+  (seam `inhouse.resolveStalledPick.beforeApply`).
 - **`restoreLostPickTurn` makes a frozen draft unreachable.** It runs first in
   `resolveStalledPick` and recomputes the turn from the rosters with
   `nextPickTeam`. It and `applyPick` are the only writers of `DRAFTING → READY`.
