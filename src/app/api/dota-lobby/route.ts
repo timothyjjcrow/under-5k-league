@@ -3,11 +3,16 @@ import { getSessionUser } from "@/lib/auth";
 import { guardJsonMutation, readBoundedJsonObject } from "@/lib/json-mutation";
 import {
   callLobbyBot,
+  InviteOutcomeUnknownError,
   lobbyBotConnection,
   lobbyBotKindEnabled,
   resolveDotaLobby,
 } from "@/lib/dota-lobby-service";
-import type { LobbyAction } from "@/lib/dota-lobby";
+import {
+  lobbyInviteScope,
+  lobbyPlayerViews,
+  type LobbyAction,
+} from "@/lib/dota-lobby";
 import { UserFacingError } from "@/lib/user-facing-error";
 import { rateLimit } from "@/lib/rate-limit";
 import { prisma } from "@/lib/prisma";
@@ -31,7 +36,7 @@ export async function POST(req: NextRequest) {
     (kind !== "inhouse" && kind !== "season") ||
     typeof id !== "string" ||
     typeof action !== "string" ||
-    !["status", "create", "start", "release"].includes(action)
+    !["status", "create", "start", "release", "invite"].includes(action)
   ) {
     return NextResponse.json(
       { error: "Invalid lobby request." },
@@ -67,12 +72,21 @@ export async function POST(req: NextRequest) {
         { enabled: false },
         { headers: { "Cache-Control": "no-store" } },
       );
-    const { spec, canControl, playable } = await resolveDotaLobby(
+    const { spec, canControl, playable, roster } = await resolveDotaLobby(
       viewer,
       kind,
       id,
     );
-    if (action !== "status" && !canControl)
+    const rostered = roster.some((p) => p.self);
+    // Who this viewer may invite: everyone missing (captains, admins) or only
+    // themselves (anyone else on the roster), on a playable game. The panel's
+    // invite buttons build on the same answer.
+    const inviteScope = lobbyInviteScope({ canControl, playable, rostered });
+    if (
+      action !== "status" &&
+      !canControl &&
+      !(action === "invite" && rostered)
+    )
       return NextResponse.json(
         { error: "Only the captains and admins can control this lobby." },
         { status: 403 },
@@ -83,9 +97,24 @@ export async function POST(req: NextRequest) {
           ? "Only a live in-house game can create or start a Dota lobby, once its teams are locked."
           : "This match is not open for play.",
       );
+    if (action === "invite" && !inviteScope)
+      throw new UserFacingError(
+        kind === "inhouse"
+          ? "Only a live in-house game's bot can invite players, once its teams are locked."
+          : "This match is not open for play.",
+      );
     const status = await callLobbyBot(
       spec,
       action === "status" ? undefined : (action as LobbyAction),
+      {
+        withPlayers: true,
+        // A player's own invite goes to the account they play Dota on, and
+        // only to them; a captain's or admin's goes to everyone missing.
+        invite:
+          action === "invite" && inviteScope === "self"
+            ? [...new Set(roster.filter((p) => p.self).map((p) => p.steamId))]
+            : undefined,
+      },
     );
     if (kind === "inhouse" && playable && status.state === "started") {
       // The GC has confirmed a running game. A cancelled/replaced lobby can
@@ -95,6 +124,9 @@ export async function POST(req: NextRequest) {
         data: { status: "IN_PROGRESS", startedAt: new Date() },
       });
     }
+    // The bot's list carries Steam ids: the browser gets the roster's names
+    // with each seat, and the status alone, never the reply as it came.
+    const players = lobbyPlayerViews(roster, status.players);
     return NextResponse.json(
       {
         enabled: true,
@@ -105,7 +137,16 @@ export async function POST(req: NextRequest) {
         leagueId: spec.leagueId,
         radiantName: spec.radiantName,
         direName: spec.direName,
-        status,
+        inviteScope,
+        status: {
+          state: status.state,
+          lobbyId: status.lobbyId,
+          matchId: status.matchId,
+        },
+        ...(players ? { players } : {}),
+        ...(action === "invite" && status.invited !== undefined
+          ? { invited: status.invited }
+          : {}),
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -116,6 +157,9 @@ export async function POST(req: NextRequest) {
           error instanceof UserFacingError
             ? error.message
             : "Lobby controls are temporarily unavailable.",
+        // An invite whose answer was lost may have gone out: the panel says
+        // so instead of reporting a failure.
+        ...(error instanceof InviteOutcomeUnknownError ? { unknown: true } : {}),
       },
       { status: 400 },
     );

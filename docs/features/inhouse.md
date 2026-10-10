@@ -402,6 +402,21 @@ Every transition is a guarded claim; keep it that way (general rules:
   the by-hand steps plus the optional "Start the game clock" fold under "Bot
   not working?". Players never see a bot panel that can't help; admins keep
   its status line. See `docs/DOTA-LOBBY-BOT.md`.
+- **The bot invites the ten once its lobby is ready** (Tim's call,
+  2026-10-10; `docs/DOTA-LOBBY-BOT.md#lobby-invites`), once per game.
+  Accepting joins without the password but lands the player on neither side,
+  so they take their own slot; the bot never seats or kicks a player. While the
+  lobby is ready the panel lists "Who's in the lobby" (each player's seat and
+  invite, no Steam IDs) and offers "Re-invite missing players" to the captains
+  and admins and "Send me an invite" to the other players, each only while
+  someone (or the viewer) is missing: `reinviteMissingOpen` and
+  `selfInviteOpen` over `lobbyInviteScope`, which `/api/dota-lobby` accepts an
+  invite by. The bot holds a resend back for 30 seconds and stops at five per
+  player. The name and password stay on the panel as the fallback, and the
+  copy tells a player with no popup to untick "Block party invites from
+  non-friends": a blocked invite looks sent to the bot. A bot without invites
+  reports no seats, so the panel shows no list and keeps the Custom Lobbies
+  line.
 - **By-hand values are per game:** `inhouseHandLobbyName(slot)`
   (`<league name> Inhouse`, `... Inhouse 2` for game 2, so two games never
   share a name in Dota's lobby list), password `ggd2l`, `INHOUSE.LOBBY_TICKET`

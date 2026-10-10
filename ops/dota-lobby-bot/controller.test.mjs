@@ -374,14 +374,16 @@ test("the lobby's first ready moment invites every rostered player, once per job
 test("each invite is saved before it goes out, and a failed send is recorded, not retried", (t) => {
   const { controller: c, transport, invites, options } = setup(t);
   c.request("create", spec);
+  // Read back from disk at send time: the record exists before the GC
+  // command. Asserted afterwards, since the bot catches a throwing send.
+  const onDisk = [];
   transport.invite = (id) => {
-    // Read back from disk: the record exists before the GC command.
-    const saved = JSON.parse(readFileSync(options.file, "utf8"));
-    assert.equal(saved.jobs[spec.key].invites[id].result, "sent");
+    onDisk.push(JSON.parse(readFileSync(options.file, "utf8")).jobs[spec.key].invites?.[id]?.result);
     if (id === ids[3]) throw new Error("Cannot send GC message, not logged into Steam Client");
     invites.push(id);
   };
   c.snapshot(emptyLobby());
+  assert.deepEqual(onDisk, ids.map(() => "sent"));
   assert.equal(invites.length, 9);
   const report = c.request("status", { ...spec, withPlayers: true }).players;
   assert.equal(report.find((p) => p.id === ids[3]).invite, "failed");
@@ -509,4 +511,48 @@ test("the GC's invite answer marks an offline player, and ignores strangers", (t
   assert.equal(players[1].invite, "sent");
   const saved = JSON.parse(readFileSync(options.file, "utf8"));
   assert.equal(saved.jobs[spec.key].invites["76561198000000077"], undefined);
+});
+
+test("an untargeted re-invite and the seat report use the request's fresh roster", (t) => {
+  const { controller: c, invites, later } = setup(t);
+  c.request("create", spec);
+  c.snapshot(lobbyWith(ids.slice(0, 9)));
+  later();
+  // A stand-in booked after create replaces ids[9] in the site's fresh spec.
+  const standin = "76561198000000050";
+  const fresh = { ...spec, dire: [...ids.slice(5, 9), standin], withPlayers: true };
+  const reply = c.request("invite", fresh);
+  assert.equal(reply.invited, 1);
+  assert.equal(invites.at(-1), standin);
+  assert.deepEqual(reply.players.map((p) => p.id), [...ids.slice(0, 9), standin]);
+  assert.equal(reply.players.at(-1).seat, "absent");
+});
+
+test("a re-invite round is saved before its first invite goes out", (t) => {
+  const { controller: c, transport, invites, options, later } = setup(t);
+  c.request("create", spec);
+  c.snapshot(lobbyWith(ids.slice(0, 9)));
+  later();
+  // Read the file at send time; assert afterwards (the bot catches a throwing send).
+  const onDisk = [];
+  transport.invite = (id) => {
+    onDisk.push(JSON.parse(readFileSync(options.file, "utf8")).jobs[spec.key].invites[id]);
+    invites.push(id);
+  };
+  assert.equal(c.request("invite", spec).invited, 1);
+  assert.deepEqual(onDisk.map((e) => [e.count, e.result]), [[2, "sent"]]);
+});
+
+test("no seat report from a foreign lobby or once Dota is setting up the server", (t) => {
+  const { controller: c } = setup(t);
+  const asked = { ...spec, withPlayers: true };
+  c.request("create", spec);
+  c.snapshot(emptyLobby({ gameName: "Someone else's lobby" }));
+  assert.equal(c.request("status", asked).players, undefined);
+  c.snapshot(lobbyWith(ids));
+  assert.equal(c.request("status", asked).players.length, 10);
+  c.request("start", spec);
+  c.snapshot(lobbyWith(ids, { state: 1 }));
+  assert.equal(c.request("status", asked).state, "starting");
+  assert.equal(c.request("status", asked).players, undefined);
 });

@@ -18,12 +18,29 @@ import { accountIdToSteamId64 } from "./dota";
 import { UserFacingError } from "./user-facing-error";
 import { LEAGUE_CONFIG } from "./league-config";
 import {
+  parseBotPlayers,
+  parseInvitedCount,
   parseLobbyLeagueId,
+  type DotaLobbyBotPlayer,
   type DotaLobbySpec,
   type LobbyKind,
   type LobbyAction,
   type DotaLobbyStatus,
+  type LobbyRosterEntry,
+  type LobbySide,
 } from "./dota-lobby";
+
+/**
+ * An invite whose answer was lost on the bot's leg: the invites may have gone
+ * out. The route marks it `unknown`, and the panel words it as unknown.
+ */
+export class InviteOutcomeUnknownError extends UserFacingError {
+  constructor() {
+    super(
+      "The lobby bot didn't confirm, but the invites may have gone out. Check the list before sending again.",
+    );
+  }
+}
 
 function playingSteamId(user: DotaAccountIdentity) {
   const account = effectiveDotaAccountId(user);
@@ -153,6 +170,7 @@ type InhouseSpecLobby = {
   id: string;
   radiantTeam: number;
   players: {
+    userId?: string;
     team: number | null;
     isCaptain?: boolean;
     user: DotaAccountIdentity & { name?: string };
@@ -170,32 +188,61 @@ function inhouseSideName(lobby: InhouseSpecLobby, team: number) {
   return name ? `${name}'s team` : `Team ${team}`;
 }
 
+/** A side's Steam ids for the bot spec, from the one roster pass. */
+function sideSteamIds(roster: readonly LobbyRosterEntry[], side: LobbySide) {
+  return roster.filter((p) => p.side === side).map((p) => p.steamId);
+}
+
 /**
- * The bot spec for an in-house lobby. One builder for the browser controls and
- * the scheduled result scan, so both address the same bot job (the key) with
- * the same settings. Throws a UserFacingError when the ticket is unset or a
- * player has no usable Dota account.
+ * The bot spec for an in-house lobby, and the roster it was built from (each
+ * player's name, side and playing Steam id, and whether they are the viewer).
+ * One builder for the browser controls and the scheduled result scan, so both
+ * address the same bot job (the key) with the same settings. Throws a
+ * UserFacingError when the ticket is unset or a player has no usable Dota
+ * account.
  */
-function inhouseLobbySpec(lobby: InhouseSpecLobby): DotaLobbySpec {
+function inhouseLobbyPlan(
+  lobby: InhouseSpecLobby,
+  viewerId: string | null,
+): { spec: DotaLobbySpec; roster: LobbyRosterEntry[] } {
   const leagueId = parseLobbyLeagueId(process.env.DOTA_INHOUSE_LEAGUE_ID);
   if (!leagueId)
     throw new UserFacingError(
       "An admin must configure the numeric in-house league ticket ID before using the bot.",
     );
-  const team = (n: number) =>
-    lobby.players.filter((p) => p.team === n).map((p) => playingSteamId(p.user));
+  const direTeam = lobby.radiantTeam === 1 ? 2 : 1;
+  const team = (n: number, side: LobbySide): LobbyRosterEntry[] =>
+    lobby.players
+      .filter((p) => p.team === n)
+      .map((p) => ({
+        name: p.user.name ?? "Player",
+        side,
+        steamId: playingSteamId(p.user),
+        self: viewerId !== null && p.userId === viewerId,
+      }));
+  const roster = [
+    ...team(lobby.radiantTeam, "radiant"),
+    ...team(direTeam, "dire"),
+  ];
   return {
-    key: regionalLobbyKey("inhouse", lobby.id, 1),
-    name: `${INHOUSE.LOBBY_NAME} ${lobby.id.slice(-8)}`,
-    password: INHOUSE.LOBBY_PASSWORD,
-    leagueId,
-    gameMode: LEAGUE_GAME_MODE.id,
-    serverRegion: LEAGUE_CONFIG.gameServerRegionId,
-    radiant: team(lobby.radiantTeam),
-    dire: team(lobby.radiantTeam === 1 ? 2 : 1),
-    radiantName: inhouseSideName(lobby, lobby.radiantTeam),
-    direName: inhouseSideName(lobby, lobby.radiantTeam === 1 ? 2 : 1),
+    spec: {
+      key: regionalLobbyKey("inhouse", lobby.id, 1),
+      name: `${INHOUSE.LOBBY_NAME} ${lobby.id.slice(-8)}`,
+      password: INHOUSE.LOBBY_PASSWORD,
+      leagueId,
+      gameMode: LEAGUE_GAME_MODE.id,
+      serverRegion: LEAGUE_CONFIG.gameServerRegionId,
+      radiant: sideSteamIds(roster, "radiant"),
+      dire: sideSteamIds(roster, "dire"),
+      radiantName: inhouseSideName(lobby, lobby.radiantTeam),
+      direName: inhouseSideName(lobby, direTeam),
+    },
+    roster,
   };
+}
+
+function inhouseLobbySpec(lobby: InhouseSpecLobby): DotaLobbySpec {
+  return inhouseLobbyPlan(lobby, null).spec;
 }
 
 /** All lobby settings and roster identities come from trusted app state. */
@@ -210,6 +257,7 @@ export async function resolveDotaLobby(
     throw new UserFacingError("The lobby bot is currently enabled for in-house games only.");
   const admin = viewer.role === "ADMIN";
   let spec: DotaLobbySpec;
+  let roster: LobbyRosterEntry[];
   let canControl = false;
   let playable = false;
   if (kind === "inhouse") {
@@ -231,7 +279,7 @@ export async function resolveDotaLobby(
     playable = (INHOUSE_PLAYING_STATUSES as readonly string[]).includes(
       lobby.status,
     );
-    spec = inhouseLobbySpec(lobby);
+    ({ spec, roster } = inhouseLobbyPlan(lobby, viewer.id));
   } else {
     const match = await prisma.match.findUnique({
       where: { id },
@@ -263,7 +311,10 @@ export async function resolveDotaLobby(
       throw new UserFacingError(
         "Set a valid season league ticket ID before using the bot.",
       );
-    const roster = (team: typeof match.homeTeam) => {
+    const side = (
+      team: typeof match.homeTeam,
+      side: LobbySide,
+    ): LobbyRosterEntry[] => {
       const standins = match.standins.filter((s) => s.teamId === team.id);
       const users = new Map([
         ...team.members.map((p) => [p.userId, p.user] as const),
@@ -272,8 +323,18 @@ export async function resolveDotaLobby(
       return matchNightRoster(
         team.members.map((p) => p.userId),
         standins,
-      ).map((userId) => playingSteamId(users.get(userId)!));
+      ).map((userId) => {
+        const user = users.get(userId)!;
+        return {
+          name: user.name,
+          side,
+          steamId: playingSteamId(user),
+          self: userId === viewer.id,
+        };
+      });
     };
+    // Home plays Radiant, away Dire.
+    roster = [...side(match.homeTeam, "radiant"), ...side(match.awayTeam, "dire")];
     const game = match.homeScore + match.awayScore + 1;
     if (game > match.bestOf) playable = false;
     const key = regionalLobbyKey("season", id, game);
@@ -290,26 +351,61 @@ export async function resolveDotaLobby(
       leagueId,
       gameMode: LEAGUE_GAME_MODE.id,
       serverRegion: LEAGUE_CONFIG.gameServerRegionId,
-      radiant: roster(match.homeTeam),
-      dire: roster(match.awayTeam),
+      radiant: sideSteamIds(roster, "radiant"),
+      dire: sideSteamIds(roster, "dire"),
       radiantName: match.homeTeam.name,
       direName: match.awayTeam.name,
     };
   }
-  return { spec, canControl, playable };
+  // `roster` holds Steam ids: server only. The browser gets
+  // `lobbyPlayerViews`, which leaves them out.
+  return { spec, canControl, playable, roster };
 }
+
+/**
+ * What the bot answered: the status every action returns, plus the roster's
+ * seats when the request asked for them and an invite's count. Server only:
+ * `players` carries Steam ids.
+ */
+export type DotaLobbyBotReply = DotaLobbyStatus & {
+  /** Only when asked (`withPlayers`) and the reply's list parsed. */
+  players?: DotaLobbyBotPlayer[];
+  /** An invite's reply only, when the count parsed. */
+  invited?: number;
+};
 
 export async function callLobbyBot(
   spec: DotaLobbySpec,
   action?: LobbyAction,
-  /** Extra cancellation (the scheduled worker's deadline); 15s applies regardless. */
-  signal?: AbortSignal,
-): Promise<DotaLobbyStatus> {
+  options: {
+    /** Extra cancellation (the scheduled worker's deadline); 15s applies regardless. */
+    signal?: AbortSignal;
+    /**
+     * Ask for the roster's seats and invites. Browser reads only: a bot
+     * without invites ignores it, and the scheduled worker never asks.
+     */
+    withPlayers?: boolean;
+    /**
+     * An invite's targets (playing Steam ids on this spec's sides). Omitted,
+     * the bot invites everyone on the roster not already in its lobby.
+     */
+    invite?: readonly string[];
+  } = {},
+): Promise<DotaLobbyBotReply> {
   const key = ownLobbyKey(spec.key);
   if (!key)
     throw new UserFacingError("This lobby does not belong to this league.");
   if (key.kind === "season" && !lobbyBotKindEnabled("season"))
     throw new UserFacingError("The lobby bot is currently enabled for in-house games only.");
+  const invite = action === "invite" ? options.invite : undefined;
+  if (
+    invite &&
+    (invite.length < 1 ||
+      invite.length > 20 ||
+      new Set(invite).size !== invite.length ||
+      invite.some((id) => !spec.radiant.includes(id) && !spec.dire.includes(id)))
+  )
+    throw new UserFacingError("Only this game's own players can be invited.");
   const connection = lobbyBotConnection();
   if (!connection)
     throw new UserFacingError("The lobby bot has not been configured yet.");
@@ -319,12 +415,20 @@ export async function callLobbyBot(
       method: "POST",
       cache: "no-store",
       redirect: "error",
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${connection.token}`,
       },
-      body: JSON.stringify({ action: action ?? "status", spec }),
+      body: JSON.stringify({
+        action: action ?? "status",
+        // Without these the request is exactly what an older bot expects.
+        spec: {
+          ...spec,
+          ...(options.withPlayers ? { withPlayers: true } : {}),
+          ...(invite ? { invite: [...invite] } : {}),
+        },
+      }),
     });
     const body = await response.json();
     // Only our controlled service's small, fixed response contract is exposed.
@@ -341,10 +445,28 @@ export async function callLobbyBot(
         SETTINGS:
           "Dota has not confirmed the required ticket and lobby settings. Ask an admin to check the bot's ticket permissions.",
         STATE:
-          "This lobby cannot perform that action. Refresh its status first.",
+          action === "invite"
+            ? "The bot invites players only while its lobby is ready and waiting for them. Refresh its status first."
+            : "This lobby cannot perform that action. Refresh its status first.",
+        // An invite's targets the bot didn't accept: a roster that changed
+        // since this page loaded.
+        ...(action === "invite"
+          ? {
+              INVALID:
+                "The bot couldn't match those invites to this game's roster. Refresh its status, then try again.",
+            }
+          : {}),
       };
+      const code: unknown = body?.code;
+      // The relay answers OFFLINE for a reply it lost after delivering the
+      // command too (timeout, dropped socket), so an invite's OFFLINE is
+      // unknown, never failed.
+      if (action === "invite" && code === "OFFLINE")
+        throw new InviteOutcomeUnknownError();
       throw new UserFacingError(
-        messages[body.code] ??
+        (typeof code === "string" && Object.hasOwn(messages, code)
+          ? messages[code]
+          : undefined) ??
           "The bot could not complete that request. Refresh its status before retrying.",
       );
     }
@@ -360,13 +482,26 @@ export async function callLobbyBot(
       ].includes(body.state)
     )
       throw new Error();
-    return {
+    const reply: DotaLobbyBotReply = {
       state: body.state,
       lobbyId: typeof body.lobbyId === "string" ? body.lobbyId : undefined,
       matchId: typeof body.matchId === "string" ? body.matchId : undefined,
     };
+    // A malformed list or count is unknown: left out, never read as "not
+    // invited" or "none sent".
+    if (options.withPlayers) {
+      const players = parseBotPlayers(body.players);
+      if (players) reply.players = players;
+    }
+    if (action === "invite") {
+      const invited = parseInvitedCount(body.invited);
+      if (invited !== undefined) reply.invited = invited;
+    }
+    return reply;
   } catch (error) {
     if (error instanceof UserFacingError) throw error;
+    // A lost answer may still have reached Dota: unknown, never failed.
+    if (action === "invite") throw new InviteOutcomeUnknownError();
     throw new UserFacingError(
       "The lobby bot could not be reached. Refresh its status before retrying; the request may have reached Dota.",
     );
@@ -406,11 +541,11 @@ export async function inhouseBotGameStatus(
     const timeout = AbortSignal.timeout(
       Math.min(BOT_STATUS_TIMEOUT_MS, remaining),
     );
-    return await callLobbyBot(
-      inhouseLobbySpec(lobby),
-      undefined,
-      options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
-    );
+    return await callLobbyBot(inhouseLobbySpec(lobby), undefined, {
+      signal: options.signal
+        ? AbortSignal.any([options.signal, timeout])
+        : timeout,
+    });
   } catch {
     return null;
   }

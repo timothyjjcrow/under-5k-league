@@ -6,6 +6,11 @@ export const INSTANCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const KEY_PATTERN = /^(?:eu:)?(season|inhouse):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/;
 const STATES = new Set(["idle", "creating", "ready", "starting", "started", "blocked", "released"]);
 const ERROR_CODES = new Set(["AUTH", "INVALID", "OFFLINE", "BUSY", "STATE", "ROSTER", "SETTINGS"]);
+const LOBBY_ACTIONS = ["status", "create", "start", "release", "invite"];
+// The seat report: one entry per roster player, two sides of ten at most.
+const MAX_PLAYERS = 20;
+const SEATS = new Set(["radiant", "dire", "unassigned", "absent"]);
+const INVITES = new Set(["none", "sent", "offline", "failed"]);
 
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -25,11 +30,21 @@ function nullableKey(value) {
 function nullableUint(value) {
   return value === null || (Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
 }
+function player(value) {
+  return record(value) && onlyKeys(value, ["id", "seat", "invite"]) &&
+    typeof value.id === "string" && /^\d{17}$/.test(value.id) && SEATS.has(value.seat) && INVITES.has(value.invite);
+}
+function optionalPlayers(value) {
+  return value === undefined || (Array.isArray(value) && value.length <= MAX_PLAYERS && value.every(player));
+}
+function optionalInvited(value) {
+  return value === undefined || (Number.isInteger(value) && value >= 0 && value <= MAX_PLAYERS);
+}
 
 export function validControlRequest(value) {
   if (!record(value) || !onlyKeys(value, ["action", "spec"])) return false;
   if (["active", "health"].includes(value.action)) return value.spec === undefined;
-  return ["status", "create", "start", "release"].includes(value.action) && record(value.spec);
+  return LOBBY_ACTIONS.includes(value.action) && record(value.spec);
 }
 
 /** Whitelist response shapes so a bot error can never expose its input or secrets. */
@@ -46,8 +61,12 @@ export function validReply(value, action) {
       typeof body.online === "boolean" && nullableId(body.steamId) && nullableKey(body.activeKey) &&
       nullableId(body.lobbyId) && nullableUint(body.gameMode) && nullableUint(body.serverRegion) && nullableUint(body.leagueId);
   }
-  return onlyKeys(body, ["state", "lobbyId", "matchId"]) && STATES.has(body.state) &&
-    (body.lobbyId === undefined || id(body.lobbyId)) && (body.matchId === undefined || id(body.matchId));
+  if (!LOBBY_ACTIONS.includes(action)) return false;
+  // players answers a spec's withPlayers; only an invite reports how many it sent.
+  const keys = ["state", "lobbyId", "matchId", "players", ...(action === "invite" ? ["invited"] : [])];
+  return onlyKeys(body, keys) && STATES.has(body.state) &&
+    (body.lobbyId === undefined || id(body.lobbyId)) && (body.matchId === undefined || id(body.matchId)) &&
+    optionalPlayers(body.players) && optionalInvited(body.invited);
 }
 
 export function leaseAlive(attachment, automaticResponseAt, now) {
