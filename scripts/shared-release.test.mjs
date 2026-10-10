@@ -302,14 +302,27 @@ test("the CI mutation job matches the release gate and the nightly verify runs t
 // Docker Hub limits anonymous pulls per IP, and hosted runners share IPs: on
 // 2026-10-09 all five Postgres jobs on main failed to pull postgres:16 and the
 // release waited for a rerun. ECR Public serves the same official image under
-// a per-second limit that the runner's own pull retry absorbs.
-test("every CI service pulls the official Postgres 16 image from ECR Public, not Docker Hub", () => {
+// a per-second limit that the runner's own pull retry absorbs. 18 is the
+// major both leagues' Neon databases run.
+test("every CI service pulls the official Postgres 18 image from ECR Public, not Docker Hub", () => {
   const dir = new URL("../.github/workflows/", import.meta.url);
   const images = readdirSync(dir).filter((file) => /\.ya?ml$/.test(file))
     .flatMap((file) => [...readFileSync(new URL(file, dir), "utf8").matchAll(/^ +image: *(\S+)/gm)].map((m) => m[1]));
   // ci.yml's integration job and mutation shards, and the nightly's shards.
   assert.ok(images.length >= 3, "the workflows' service images were found");
-  assert.deepEqual([...new Set(images)], ["public.ecr.aws/docker/library/postgres:16"]);
+  assert.deepEqual([...new Set(images)], ["public.ecr.aws/docker/library/postgres:18"]);
+});
+// pg_dump refuses a server newer than itself, and the runner image's own
+// client is 16, so the integration job installs its service's major before
+// the backup rehearsal runs pg_dump.
+test("the integration job installs the PostgreSQL client of its service's major", () => {
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const major = ci.match(/^ +image: public\.ecr\.aws\/docker\/library\/postgres:(\d+)$/m)?.[1];
+  assert.ok(major, "the integration job's service image was found");
+  const install = ci.match(new RegExp(`\\n +sudo apt-get install [^\\n]*\\bpostgresql-client-${major}\\b`))?.index;
+  assert.ok(install > 0, `the integration job installs postgresql-client-${major}`);
+  assert.match(ci, new RegExp(`\\n {10}echo /usr/lib/postgresql/${major}/bin >> "\\$GITHUB_PATH"\\n`));
+  assert.ok(install < ci.indexOf("name: Rehearse a verified backup restore"), "the client is installed before the backup rehearsal");
 });
 test("maintenance evidence cannot waive an affected database or scheduler", () => {
   const now = Date.now();
