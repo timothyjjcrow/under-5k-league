@@ -230,13 +230,18 @@ own inhouse choice).
   the order is kept, junk is refused, never dropped) or with `join` (the
   picker's unsaved choice, saved before the join). Auto-join, "Run it back" and API joins
   send none and keep the stored choice.
-- **The picker** (`RolePicker` in the queue's join controls; below md and
-  from lg the filled queue card's `queueCard` puts a short "Positions" label
-  beside the toggles, the full one kept for screen readers): five toggles named "Pos N ·
+- **The picker** (`RolePicker` in the queue's join controls; from lg the
+  filled queue card's `queueCard` puts a short "Positions" label beside the
+  toggles, the full one kept for screen readers; below md it sits beside the
+  card's MMR box or "You're queued" cell with its label for screen readers
+  only, and the empty card's `phoneRow` puts the short label beside the
+  toggles): five toggles named "Pos N ·
   Role" ("…, choice 2" once ranked); the order tapped is the order of
   preference, each pressed toggle shows its rank, and taking one out keeps the
-  others' order. A line spells it out ("Mid first, then Offlane"), "from your
-  league signup" while that is the source (unranked until edited), and "Save
+  others' order. A line spells it out ("Mid first, then Offlane"; one line
+  cut off with an ellipsis in the filled card on a phone), "from your
+  league signup" while that is the source (unranked until edited; "from your
+  signup" on a phone), and "Save
   positions" while edited. It lives only in the
   queue view, never in a timed stage, since every save takes the room's
   action lock.
@@ -344,10 +349,13 @@ Every transition is a guarded claim; keep it that way (general rules:
   MMR alone never decides captaincy for a registered player.
 - **Keep the queue's "How your MMR is set" note after joining** (`mmrHint`,
   built in `src/app/inhouse/page.tsx`, shown by
-  `src/components/inhouse/queue-view.tsx`). It renders only for a medal-holder
+  `src/components/inhouse/queue-view.tsx`; on a phone right under the filled
+  card, to keep the card on the first screen). It renders only for a medal-holder
   with no signup MMR and explains why a typed value outside the medal's window
   is clamped. A registered player gets no MMR input at all, only "Joining at N
-  MMR, from your league signup", which is what explains that override.
+  MMR, from your league signup", which is what explains that override (on a
+  phone's filled queue card it reads "N MMR" over "from your signup" beside
+  the positions, with "Joining at" kept for screen readers).
 - **Order by exact keys, never row order.** Queue reads and formation sort
   `[joinedAt, userId]`; formation copies `joinedAt` to
   `InhouseLobbyPlayer.queuedAt`, and later sorts use `[queuedAt, userId]`.
@@ -850,8 +858,9 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   stage at 375 and 1280 (one stage strip on the right step, Sound on its
   line, no sideways scroll).
 - **The first screen:** `e2e-mid/zz-inhouse-queue-fit.spec.ts` loads
-  /inhouse fresh at every required size (390x844 to 1920x1080, 1366x768, the
-  laptop windows 1280x690 and 1366x657, and 375x667 signed out) signed out,
+  /inhouse fresh at every required size (390x844 to 1920x1080, 1366x768, a
+  phone with Safari's toolbars showing at 390x664, the laptop windows
+  1280x690 and 1366x657, and 375x667 signed out) signed out,
   signed in with and without a signup's MMR, and queued, with 0, 1, 6 and 9
   present, with and without a Play later time and a planned night (and
   three times beside a night), and fails if the queue card leaves the
@@ -860,8 +869,8 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   screen, more than two times sit beside the night or a laptop cuts the
   night's chip off, the bar's row is cut off with no fade, the "Who's
   playing" row wraps or spills, a slot row spills, or the page scrolls
-  sideways. It prints the measured table, with 390x664 and 1440x790 as
-  report-only rows. `FIT_FONT=Verdana` forces the body font to a DejaVu
+  sideways. It prints the measured table, with 1440x790 and 375x667 signed
+  in as report-only rows. `FIT_FONT=Verdana` forces the body font to a DejaVu
   stand-in, so a Mac run sees CI's wider type.
 - **Game over and positions:** `test/integration/inhouse-game-over.itest.ts`
   (the claim and its seams, the result window, the Elo stamp with

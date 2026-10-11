@@ -42,6 +42,23 @@ const MMR_FORMAT = new Intl.NumberFormat("en-US");
 const formatMmr = (mmr: number) => MMR_FORMAT.format(mmr);
 
 /**
+ * The filled queue card's phone grid (below md; md and lg have their own):
+ * four columns, the 40px ring's, a context column, the title's rest and the
+ * action. Row 1 is the ring, the title (over the middle two) and the action
+ * (Join, Leave or Sign in); row 2 is one context cell (the MMR box, the
+ * signup's MMR or your place in line) and the positions beside it. The
+ * whole queue on a phone's first screen with Safari's toolbars showing
+ * (Tim, 2026-10-11).
+ */
+const PHONE_GRID = {
+  grid: "grid-cols-[2.5rem_auto_minmax(0,1fr)_auto]",
+  title: "max-md:col-span-2",
+  join: "max-md:col-start-4 max-md:row-start-1 max-md:justify-self-end",
+  context: "max-md:col-span-2 max-md:col-start-1 max-md:row-start-2 max-md:w-30 max-md:self-start",
+  positions: "max-md:col-span-2 max-md:col-start-3 max-md:row-start-2 max-md:min-w-0",
+} as const;
+
+/**
  * The positions shown and what a join sends. The picker holds an unsaved
  * choice until Join or "Save positions" sends it. It is tied to the saved
  * value it was edited from, so a save (or a change from another tab) that
@@ -74,7 +91,9 @@ type QueueJoin = ReturnType<typeof useQueueJoin>;
  * league signup sets it). On a phone it is 44px high with a narrower MMR
  * box, so the box and Join share one line (stacked, they cost the empty
  * card its first screen). `compact` is the filled card's layout: on a phone
- * the MMR form starts at the left, under the ring.
+ * (below md) the form's wrapper steps aside (`contents`) so Join takes the
+ * ring row's end and the MMR box, its "MMR" label inside the box, sits
+ * beside the positions in the card's grid (QueueView places them).
  */
 function QueueAction({
   me,
@@ -91,8 +110,9 @@ function QueueAction({
   "me" | "pending" | "mmr" | "setMmr" | "signupMmr" | "act" | "nextGame"
 > & { join: QueueJoin; compact?: boolean }) {
   const mmrInputId = useId();
-  // A phone's size: a 44px button, not 48.
-  const big = "max-md:h-11 max-md:px-4 max-md:text-sm";
+  // A phone's size: a 44px button, not 48 (40, the kit's small control
+  // there, in the filled card's ring row, beside its 40px ring).
+  const big = cn(compact ? "max-md:h-10" : "max-md:h-11", "max-md:px-4 max-md:text-sm");
   if (!me.isLoggedIn) {
     return (
       <a href="/login?next=/inhouse" className={buttonClasses("primary", "lg", big)}>
@@ -119,7 +139,11 @@ function QueueAction({
       type="button"
       disabled={pending}
       onClick={() => act(join.joinBody)}
-      className={buttonClasses("accent", "lg", big)}
+      className={buttonClasses(
+        "accent",
+        "lg",
+        cn(big, compact && signupMmr <= 0 && PHONE_GRID.join),
+      )}
     >
       {nextGame ? "Join next-game queue →" : "Join queue →"}
     </button>
@@ -129,45 +153,91 @@ function QueueAction({
     <div
       className={cn(
         "flex flex-wrap items-center gap-2",
-        compact ? "md:justify-center" : "justify-center",
+        compact ? "max-md:contents md:justify-center" : "justify-center",
       )}
     >
-      <label htmlFor={mmrInputId} className="text-sm text-muted">
-        MMR
-      </label>
-      {/* w-32: at w-24 the padding and the number spinner left
-          "e.g. 3200" cut to "e.g. 32". A phone's w-28 (so Join fits
-          beside it) gives back the padding instead. */}
-      <input
-        id={mmrInputId}
-        type="number"
-        min={0}
-        max={12000}
-        inputMode="numeric"
-        value={mmr || ""}
-        placeholder="e.g. 3200"
-        onChange={(e) => setMmr(Number(e.target.value))}
-        title="Seeds captain selection and the balance meter."
-        className="h-11 w-28 rounded-lg border border-line bg-surface-2/50 px-2 text-center text-sm outline-none focus:border-accent/60 md:w-32 md:px-3"
-      />
+      {/* The label and the box, laid out as they always were (`contents`),
+          except in the filled card on a phone: one 40px box with the label
+          inside it, beside the positions. */}
+      <div
+        className={cn(
+          compact
+            ? cn(
+                "md:contents",
+                PHONE_GRID.context,
+                "max-md:flex max-md:h-10 max-md:items-center max-md:gap-1 max-md:rounded-lg max-md:border max-md:border-line max-md:bg-surface-2/50 max-md:pl-2 max-md:focus-within:border-accent/60",
+              )
+            : "contents",
+        )}
+      >
+        <label
+          htmlFor={mmrInputId}
+          className={cn("text-sm text-muted", compact && "max-md:shrink-0 max-md:text-xs")}
+        >
+          MMR
+        </label>
+        {/* w-32: at w-24 the padding and the number spinner left
+            "e.g. 3200" cut to "e.g. 32". A phone's w-28 (so Join fits
+            beside it) gives back the padding instead. The filled card's
+            phone box is the input's border: 120px, as a phone draws the
+            input at 16px (globals.css, against iOS zoom), and 40px high,
+            the input filling it (the box is the target, its label inside
+            focusing the input), so the phones' 44px field minimum gives
+            way; no spinner, which ate "e.g. 3200". */}
+        <input
+          id={mmrInputId}
+          type="number"
+          min={0}
+          max={12000}
+          inputMode="numeric"
+          value={mmr || ""}
+          placeholder="e.g. 3200"
+          onChange={(e) => setMmr(Number(e.target.value))}
+          title="Seeds captain selection and the balance meter."
+          className={cn(
+            "h-11 w-28 rounded-lg border border-line bg-surface-2/50 px-2 text-center text-sm outline-none focus:border-accent/60 md:w-32 md:px-3",
+            compact &&
+              "max-md:h-full max-md:min-h-0! max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:border-0 max-md:bg-transparent max-md:px-0.5 max-md:text-left max-md:[appearance:textfield] max-md:[&::-webkit-inner-spin-button]:appearance-none max-md:[&::-webkit-outer-spin-button]:appearance-none",
+          )}
+        />
+      </div>
       {joinButton}
     </div>
   );
 }
 
-/** Which MMR a league signup joins at, shown under its Join button. */
+/**
+ * Which MMR a league signup joins at, shown under its Join button. `phoneCell`
+ * is the filled card's phone context cell: two short lines ("4,350 MMR",
+ * "from your signup") beside the positions, the same words for a screen
+ * reader.
+ */
 function SignupMmrNote({
   signupMmr,
   className,
+  phoneCell = false,
 }: {
   signupMmr: number;
   className?: string;
+  phoneCell?: boolean;
 }) {
   return (
-    <p className={cn("text-xs text-muted", className)}>
-      Joining at{" "}
-      <span className="tabular-nums text-fg">{formatMmr(signupMmr)}</span>{" "}
-      MMR, from your league signup
+    <p
+      className={cn(
+        "text-xs text-muted",
+        phoneCell && "max-md:flex max-md:h-10 max-md:flex-col max-md:justify-center max-md:leading-4",
+        className,
+      )}
+    >
+      <span>
+        <span className={cn(phoneCell && "max-md:sr-only")}>Joining at </span>
+        <span className="tabular-nums text-fg">{formatMmr(signupMmr)}</span> MMR
+        <span className={cn(phoneCell && "max-md:sr-only")}>,</span>
+      </span>{" "}
+      <span className={cn(phoneCell && "max-md:text-[11px]")}>
+        from your <span className={cn(phoneCell && "max-md:hidden")}>league </span>
+        signup
+      </span>
     </p>
   );
 }
@@ -179,11 +249,14 @@ function QueuePositions({
   act,
   join,
   queueCard = false,
+  phoneRow = false,
   saveClassName,
 }: Pick<QueueControlProps, "pending" | "setRolesDraft" | "act"> & {
   join: QueueJoin;
   /** The filled queue card's dense layout (RolePicker `queueCard`). */
   queueCard?: boolean;
+  /** The empty queue card's phone row (RolePicker `phoneRow`). */
+  phoneRow?: boolean;
   saveClassName: string;
 }) {
   const { saved, shownRoles, rolesDirty } = join;
@@ -195,6 +268,7 @@ function QueuePositions({
         source={rolesDirty ? "inhouse" : saved.source}
         disabled={pending}
         queueCard={queueCard}
+        phoneRow={phoneRow}
       />
       {rolesDirty ? (
         <div className={saveClassName}>
@@ -222,6 +296,7 @@ function QueueMmrHint({
   mmrHint,
   className,
   dense = false,
+  phoneDense = false,
 }: {
   mmrHint: string;
   className?: string;
@@ -230,6 +305,8 @@ function QueueMmrHint({
    * else within reach), and opened it takes the whole row it shares.
    */
   dense?: boolean;
+  /** The 24px summary on a phone only (the empty queue's card). */
+  phoneDense?: boolean;
 }) {
   return (
     <details className={cn("text-xs text-muted", dense && "open:basis-full", className)}>
@@ -237,6 +314,7 @@ function QueueMmrHint({
         className={cn(
           "inline-flex min-h-8 cursor-pointer items-center rounded px-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
           dense && "min-h-6",
+          phoneDense && "max-md:min-h-6",
         )}
       >
         How your MMR is set
@@ -264,7 +342,15 @@ function QueueControls({
   signupMmr,
   act,
   nextGame = false,
-}: QueueControlProps) {
+  phoneCompact = false,
+}: QueueControlProps & {
+  /**
+   * The empty queue's card on a phone (below md): the picker's label beside
+   * its toggles and a 24px "How your MMR is set", tighter, so the card keeps
+   * a phone's first screen. md and up render exactly what shipped.
+   */
+  phoneCompact?: boolean;
+}) {
   const join = useQueueJoin({ me, mmr, rolesDraft });
   const action = (
     <QueueAction
@@ -297,11 +383,18 @@ function QueueControls({
           setRolesDraft={setRolesDraft}
           act={act}
           join={join}
+          phoneRow={phoneCompact}
           saveClassName="mt-2 flex justify-center"
         />
       ) : null}
 
-      {mmrHint ? <QueueMmrHint mmrHint={mmrHint} className="mt-3 text-center" /> : null}
+      {mmrHint ? (
+        <QueueMmrHint
+          mmrHint={mmrHint}
+          phoneDense={phoneCompact}
+          className={cn("mt-3 text-center", phoneCompact && "max-md:mt-1.5")}
+        />
+      ) : null}
     </div>
   );
 }
@@ -416,6 +509,9 @@ export function QueueView({
   const mmrForm = me.isLoggedIn && !me.inQueue && signupMmr <= 0;
   // Phone-sized coverage pills (16px), in the "Who's playing" row.
   const smallPill = "max-md:h-4 max-md:min-w-4 max-md:px-0.5 max-md:text-[10px]";
+  // A phone's slot pills, 14px: the slot's second line is 14px high, so a
+  // row is 32px (the name's line keeps its 16px, the link's 24px target).
+  const slotPill = "max-md:h-3.5 max-md:min-w-3.5 max-md:px-0.5 max-md:text-[10px] max-md:leading-none";
 
   const controls = (
     <QueueControls
@@ -429,6 +525,7 @@ export function QueueView({
       signupMmr={signupMmr}
       act={act}
       nextGame={nextGame}
+      phoneCompact
     />
   );
 
@@ -444,19 +541,27 @@ export function QueueView({
       ) : (
         // The whole card fits the first screen (Tim, 2026-10-10: the entire
         // queue on screen when you open /inhouse), a laptop's browser window
-        // too: below md the ring shrinks beside the title and the join
-        // control, the slots are one short row each and the positions count
-        // rides the "Who's playing" row. From md the ring is 128px over the
-        // title (beside it from lg), with 48px slot rows and, from lg, the
-        // picker's short label beside its toggles.
+        // and a phone with Safari's toolbars showing too (2026-10-11). Below
+        // md, two rows of controls (PHONE_GRID): the 40px ring, the title
+        // and the action, then one context cell (the MMR box, the signup's
+        // MMR or "You're queued" and your place) beside the positions; the
+        // slots are 32px rows and the positions count rides the "Who's
+        // playing" row. From md the ring is 128px over the title (beside it
+        // from lg), with 48px slot rows and, from lg, the picker's short
+        // label beside its toggles.
         <section
           aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
           className="overflow-hidden rounded-2xl border border-accent/25 bg-surface/90 shadow-xl shadow-black/10"
         >
           <div className="grid md:grid-cols-[1fr_1.35fr] lg:grid-cols-[0.85fr_1.35fr]">
-            <div className="relative overflow-hidden bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] px-3 pt-3 md:border-r md:border-line md:p-5 lg:py-4">
-              <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-2.5 md:grid-cols-1 md:justify-items-center md:gap-y-3 md:text-center lg:grid-cols-[auto_minmax(0,1fr)] lg:gap-x-5 lg:gap-y-2.5 lg:justify-items-start lg:text-left">
-                <div className="relative grid h-11 w-11 shrink-0 place-items-center md:h-32 md:w-32">
+            <div className="relative overflow-hidden bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] px-3 pt-2.5 md:border-r md:border-line md:p-5 lg:py-4">
+              <div
+                className={cn(
+                  "grid items-center gap-x-2.5 gap-y-2 md:grid-cols-1 md:justify-items-center md:gap-y-3 md:text-center lg:grid-cols-[auto_minmax(0,1fr)] lg:gap-x-5 lg:gap-y-2.5 lg:justify-items-start lg:text-left",
+                  PHONE_GRID.grid,
+                )}
+              >
+                <div className="relative grid h-10 w-10 shrink-0 place-items-center md:h-32 md:w-32">
                   <svg
                     viewBox="0 0 120 120"
                     aria-hidden
@@ -497,7 +602,7 @@ export function QueueView({
                     aria-valuetext={`${present.length} players queued; ${needed} more needed`}
                     className="text-center"
                   >
-                    <span className="block font-display text-lg font-bold leading-none tabular-nums md:text-4xl">
+                    <span className="block font-display text-base font-bold leading-none tabular-nums md:text-4xl">
                       {present.length}
                     </span>
                     <span className="block text-[10px] leading-none text-muted md:mt-1 md:text-[11px] md:leading-normal">
@@ -506,7 +611,7 @@ export function QueueView({
                     </span>
                   </div>
                 </div>
-                <div className="min-w-0">
+                <div className={cn("min-w-0", PHONE_GRID.title)}>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent max-md:hidden">
                     {nextGame ? "Up next" : "Pick-up Dota"}
                   </p>
@@ -544,10 +649,13 @@ export function QueueView({
                     </p>
                   ) : null}
                 </div>
+                {/* The action: on a phone the ring row's end (Join, Leave
+                    or Sign in), with the MMR form's box stepping into row
+                    2 beside the positions (QueueAction, PHONE_GRID). */}
                 <div
                   className={
                     mmrForm
-                      ? "col-span-full justify-self-start md:mt-2 md:justify-self-center"
+                      ? "max-md:contents md:col-span-full md:mt-2 md:justify-self-center"
                       : "justify-self-end md:col-span-full md:mt-2 md:justify-self-center"
                   }
                 >
@@ -566,11 +674,12 @@ export function QueueView({
                 {me.isLoggedIn && !me.inQueue && signupMmr > 0 ? (
                   <SignupMmrNote
                     signupMmr={signupMmr}
-                    className="col-span-full md:w-full md:text-center"
+                    phoneCell
+                    className={cn("col-span-full md:w-full md:text-center", PHONE_GRID.context)}
                   />
                 ) : null}
                 {me.isLoggedIn ? (
-                  <div className="col-span-full w-full">
+                  <div className={cn("col-span-full w-full", PHONE_GRID.positions)}>
                     <QueuePositions
                       pending={pending}
                       setRolesDraft={setRolesDraft}
@@ -583,26 +692,49 @@ export function QueueView({
                 ) : null}
                 {/* Your place in line and the MMR note share a row
                     where they fit side by side (a laptop), and wrap
-                    where they don't. */}
+                    where they don't. On a phone the row steps aside:
+                    your place is row 2's context cell, on two short
+                    lines ("You're queued", "#2 in line"; the header's
+                    badge gives way to it), and the MMR note sits under
+                    the card. */}
                 {me.inQueue || mmrHint ? (
-                  <div className="col-span-full flex w-full flex-wrap items-center gap-x-3 gap-y-1 md:justify-center">
+                  <div className="col-span-full flex w-full flex-wrap items-center gap-x-3 gap-y-1 max-md:contents md:justify-center">
                     {me.inQueue ? (
-                      <p role="status" className="text-xs text-success">
-                        {myPosition > 0
-                          ? `You’re #${myPosition} in line`
-                          : "Your spot is saved"}
-                        {nextGame ? " · next game" : " · listen for the ready check"}
+                      <p
+                        role="status"
+                        className={cn(
+                          "text-xs text-success max-md:flex max-md:h-10 max-md:flex-col max-md:justify-center max-md:leading-4",
+                          PHONE_GRID.context,
+                        )}
+                      >
+                        <span className="font-medium md:hidden">You’re queued</span>
+                        <span>
+                          {myPosition > 0 ? (
+                            <>
+                              <span className="max-md:hidden">You’re </span>#{myPosition} in line
+                            </>
+                          ) : (
+                            "Your spot is saved"
+                          )}
+                          <span className="max-md:sr-only">
+                            {nextGame ? " · next game" : " · listen for the ready check"}
+                          </span>
+                        </span>
                       </p>
                     ) : null}
                     {mmrHint ? (
-                      <QueueMmrHint mmrHint={mmrHint} dense className="md:text-center" />
+                      <QueueMmrHint
+                        mmrHint={mmrHint}
+                        dense
+                        className="max-md:hidden md:text-center"
+                      />
                     ) : null}
                   </div>
                 ) : null}
               </div>
             </div>
 
-            <div className="min-w-0 px-3 pb-3 pt-2.5 md:p-4">
+            <div className="min-w-0 px-3 pb-2.5 pt-2 md:p-4">
               {/* One line at every width: a second line here cost a phone
                   its first screen once wider type (Linux's DejaVu) wrapped
                   it. Below md, the average gives way first: it sits in a
@@ -612,7 +744,7 @@ export function QueueView({
                   "4,4…" (from md it is under the ring). */}
               <div
                 data-who-row
-                className="mb-1.5 flex flex-nowrap items-center gap-x-2 md:mb-2 md:justify-between"
+                className="mb-1 flex flex-nowrap items-center gap-x-2 md:mb-2 md:justify-between"
               >
                 <h3 className="shrink-0 whitespace-nowrap text-xs font-semibold md:text-sm">
                   Who’s playing
@@ -655,7 +787,7 @@ export function QueueView({
                     return (
                       <li
                         key={`open-${i}`}
-                        className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-dashed border-line/70 px-1.5 md:min-h-12 md:gap-2 md:rounded-xl md:px-3 md:py-1"
+                        className="flex min-h-8 items-center gap-1.5 rounded-lg border border-dashed border-line/70 px-1.5 md:min-h-12 md:gap-2 md:rounded-xl md:px-3 md:py-1"
                       >
                         <span
                           aria-hidden
@@ -675,7 +807,7 @@ export function QueueView({
                     <li
                       key={q.userId}
                       className={cn(
-                        "flex min-h-[34px] min-w-0 items-center gap-1.5 rounded-lg border px-1.5 transition-colors md:min-h-12 md:gap-2 md:rounded-xl md:px-2.5 md:py-[3px]",
+                        "flex min-h-8 min-w-0 items-center gap-1.5 rounded-lg border px-1.5 transition-colors md:min-h-12 md:gap-2 md:rounded-xl md:px-2.5 md:py-[3px]",
                         isMe
                           ? "border-accent/50 bg-accent/10"
                           : "border-line bg-surface-2/50",
@@ -704,7 +836,7 @@ export function QueueView({
                             </span>
                           ) : null}
                         </div>
-                        <span className="flex items-center gap-x-1 text-xs text-muted md:flex-wrap md:gap-x-1.5">
+                        <span className="flex items-center gap-x-1 text-xs text-muted max-md:leading-[14px] md:flex-wrap md:gap-x-1.5">
                           <span className={cn("tabular-nums", isMe && "max-md:hidden")}>
                             #{i + 1}
                           </span>
@@ -719,7 +851,7 @@ export function QueueView({
                             ranked={q.rolesRanked}
                             labelled
                             className="flex-nowrap gap-px md:flex-wrap md:gap-1"
-                            pillClassName={smallPill}
+                            pillClassName={slotPill}
                           />
                         </span>
                       </div>
@@ -776,7 +908,19 @@ export function QueueView({
           </div>
         </section>
       )}
+      {/* A phone's "How your MMR is set", right under the filled card (in
+          it from md): the card keeps the first screen. */}
+      {present.length > 0 && mmrHint ? (
+        <QueueMmrHint mmrHint={mmrHint} dense className="px-1 text-center md:hidden" />
+      ) : null}
       <p className="px-1 text-center text-xs text-muted">
+        {/* A queued phone player's ready-check reminder, which the card keeps
+            for screen readers only: here it costs no first-screen space. */}
+        {me.inQueue && !nextGame ? (
+          <span aria-hidden className="md:hidden">
+            Listen for the ready check ·{" "}
+          </span>
+        ) : null}
         Tab switching keeps your spot · queue clears after{" "}
         {INHOUSE.QUEUE_IDLE_HOURS}h without lobby activity
       </p>
@@ -857,17 +1001,20 @@ function EmptyQueueCard({
   return (
     <section
       aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
-      className="rounded-2xl border border-accent/25 bg-surface/90 p-5 shadow-xl shadow-black/10 sm:p-6"
+      className="rounded-2xl border border-accent/25 bg-surface/90 p-5 shadow-xl shadow-black/10 max-sm:p-4 sm:p-6"
     >
-      <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+      {/* Below md, tighter (no eyebrow, a smaller title and blurb, the
+          picker's label beside its toggles): with Safari's toolbars
+          showing, the card keeps a phone's first screen. */}
+      <div className="flex flex-col gap-5 max-md:gap-3 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent max-md:hidden">
             {nextGame ? "Up next" : "Pick-up Dota"}
           </p>
-          <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">
+          <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight max-md:mt-0 max-md:text-xl">
             {nextGame ? "Next-game queue" : "Inhouse queue"}
           </h2>
-          <p className="mt-1.5 max-w-xl text-sm text-muted">
+          <p className="mt-1.5 max-w-xl text-sm text-muted max-md:mt-1 max-md:text-xs">
             {lobbySize} players queue up, vote on captains, draft two teams and
             play one game of Dota. The result records itself and moves
             everyone&apos;s Elo.
@@ -875,7 +1022,7 @@ function EmptyQueueCard({
         </div>
         <div className="shrink-0">{controls}</div>
       </div>
-      <div className="mt-5 flex items-center gap-3">
+      <div className="mt-5 flex items-center gap-3 max-md:mt-4">
         <div
           role="progressbar"
           aria-label={

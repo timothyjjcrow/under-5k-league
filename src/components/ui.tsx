@@ -985,6 +985,7 @@ export function PageTitle({
   subtitle,
   action,
   compact = false,
+  slim = false,
   nav,
 }: {
   title: string;
@@ -997,17 +998,33 @@ export function PageTitle({
    * no subtitle. Off by default, which renders exactly what shipped.
    */
   compact?: boolean;
+  /**
+   * compact only: below sm the title is smaller (20px) and the row tighter
+   * (32px, not 44), for a page whose first screen must fit a phone with its
+   * browser's toolbars showing (/inhouse). Off by default, which renders
+   * exactly what shipped; sm and up are the same either way.
+   */
+  slim?: boolean;
   /** compact only: a bare SectionNav whose tabs sit on the title's rule, from md up. */
   nav?: React.ReactNode;
 }) {
   if (compact) {
     return (
       <div className="flex flex-wrap items-end gap-x-6 border-b border-line-soft">
-        <h1 className="pb-2 font-display text-[1.75rem] font-semibold leading-tight tracking-tight text-fg [overflow-wrap:anywhere] sm:text-4xl">
+        <h1
+          className={cn(
+            "pb-2 font-display text-[1.75rem] font-semibold leading-tight tracking-tight text-fg [overflow-wrap:anywhere] sm:text-4xl",
+            slim && "max-sm:pb-1.5 max-sm:text-xl",
+          )}
+        >
           {title}
         </h1>
         {nav ? <div className="hidden min-w-0 flex-1 md:block">{nav}</div> : null}
-        {action ? <div className="ml-auto flex items-center gap-2 pb-2.5">{action}</div> : null}
+        {action ? (
+          <div className={cn("ml-auto flex items-center gap-2 pb-2.5", slim && "max-sm:pb-1.5")}>
+            {action}
+          </div>
+        ) : null}
       </div>
     );
   }
