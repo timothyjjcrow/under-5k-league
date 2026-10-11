@@ -16,18 +16,54 @@ describe("inhousePollCadence", () => {
   it("slows waiting queue refreshes while preserving every timed action phase", () => {
     expect(inhousePollCadence({
       ...base, hidden: false, hasStake: true, lobbyStatus: null,
-    })).toEqual({ skip: false, delayMs: 5000 });
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_QUEUE_MS });
     for (const lobbyStatus of [INHOUSE_STATUS.READY_CHECK, INHOUSE_STATUS.CAPTAIN_VOTE, INHOUSE_STATUS.DRAFTING, INHOUSE_STATUS.READY]) {
       expect(inhousePollCadence({
         ...base, hidden: false, hasStake: true, lobbyStatus,
       })).toEqual({ skip: false, delayMs: FAST });
     }
+    // Waiting is a long state: a queue that takes an afternoon to fill must
+    // not poll like a ready check (the hosting budget, constants.ts).
+    expect(INHOUSE.POLL_QUEUE_MS).toBeGreaterThanOrEqual(10_000);
   });
 
-  it("refreshes a game in progress at one sixth of the old request rate", () => {
+  it("refreshes a player's own game in progress at the game rate, tab hidden or not", () => {
+    for (const hidden of [false, true]) {
+      expect(inhousePollCadence({
+        ...base, hidden, hasStake: true, inLobby: true,
+        lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
+      })).toEqual({ skip: false, delayMs: INHOUSE.POLL_GAME_MS });
+    }
+    // Nothing in a game is timed, and all ten players are in the Dota client.
+    expect(INHOUSE.POLL_GAME_MS).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it("polls a queued player by their queue, not by the game they are shown", () => {
+    // pollingLobby hands a queued player someone else's game. They wait for
+    // their OWN lobby to form, so that game in progress must not slow them to
+    // the game rate, and its draft only speeds up a tab they are watching.
+    const queued = { ...base, hasStake: true, inLobby: false };
     expect(inhousePollCadence({
-      ...base, hidden: false, hasStake: true, lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
-    })).toEqual({ skip: false, delayMs: 10000 });
+      ...queued, hidden: false, lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_QUEUE_MS });
+    expect(inhousePollCadence({
+      ...queued, hidden: false, lobbyStatus: INHOUSE_STATUS.DRAFTING,
+    })).toEqual({ skip: false, delayMs: FAST });
+    for (const lobbyStatus of [null, INHOUSE_STATUS.IN_PROGRESS, INHOUSE_STATUS.DRAFTING, INHOUSE_STATUS.READY_CHECK]) {
+      expect(inhousePollCadence({ ...queued, hidden: true, lobbyStatus })).toEqual({
+        skip: false, delayMs: INHOUSE.POLL_QUEUE_KEEPALIVE_MS,
+      });
+    }
+  });
+
+  it("keeps a hidden player in a timed stage of their own game on the vote-safe keepalive", () => {
+    for (const lobbyStatus of [INHOUSE_STATUS.READY_CHECK, INHOUSE_STATUS.CAPTAIN_VOTE, INHOUSE_STATUS.DRAFTING, INHOUSE_STATUS.READY]) {
+      for (const inLobby of [true, undefined]) {
+        expect(inhousePollCadence({
+          ...base, hidden: true, hasStake: true, inLobby, lobbyStatus,
+        })).toEqual({ skip: false, delayMs: INHOUSE.POLL_KEEPALIVE_MS });
+      }
+    }
   });
 
   it("polls a READY game at the game rate once it is plausibly being played", () => {
@@ -63,15 +99,19 @@ describe("inhousePollCadence", () => {
     });
   });
 
-  it("phase savings never slow a failed-poll retry or change the hidden keepalive", () => {
+  it("phase savings never slow a failed-poll retry", () => {
     for (const lobbyStatus of [null, INHOUSE_STATUS.IN_PROGRESS]) {
       expect(inhousePollCadence({
         ...base, hidden: false, hasStake: true, lobbyStatus, reached: false,
       })).toEqual({ skip: false, delayMs: FAST });
-      expect(inhousePollCadence({
-        ...base, hidden: true, hasStake: true, lobbyStatus,
-      })).toEqual({ skip: false, delayMs: INHOUSE.POLL_KEEPALIVE_MS });
     }
+    // A hidden queued tab keepalives by the queue, a hidden game by the game.
+    expect(inhousePollCadence({
+      ...base, hidden: true, hasStake: true, lobbyStatus: null,
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_QUEUE_KEEPALIVE_MS });
+    expect(inhousePollCadence({
+      ...base, hidden: true, hasStake: true, lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_GAME_MS });
   });
 
   it("polls FAST for anyone with a stake — in a lobby OR in the queue", () => {
@@ -107,23 +147,25 @@ describe("inhousePollCadence", () => {
     });
   });
 
-  it("the keepalive stays comfortably under the away cutoff", () => {
+  it("every hidden-tab rate stays comfortably under the away cutoff", () => {
     // The binding case is a live game: all ten tabs are hidden (everyone is in
     // the Dota client), so the keepalive is the ONLY thing holding ten queue
     // spots — and Chrome clamps hidden timers toward once a minute.
-    expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThan(
-      INHOUSE.QUEUE_AWAY_SECONDS * 1000,
-    );
+    for (const ms of [INHOUSE.POLL_KEEPALIVE_MS, INHOUSE.POLL_QUEUE_KEEPALIVE_MS, INHOUSE.POLL_GAME_MS]) {
+      expect(ms).toBeLessThan(INHOUSE.QUEUE_AWAY_SECONDS * 1000);
+    }
   });
 
-  it("the keepalive leaves time to act in every pre-draft deadline", () => {
-    // A lobby can form immediately after this player's hidden-tab poll. The
-    // next poll has to arrive before the accept clock expires, and an accepted
-    // player must not sleep through the entire shorter captain vote either.
-    expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThan(
-      INHOUSE.ACCEPT_SECONDS * 1000,
-    );
+  it("the keepalives leave time to act in every pre-draft deadline", () => {
+    // An accepted player in a timed stage must not sleep through the entire
+    // shorter captain vote.
     expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThan(INHOUSE.VOTE_SECONDS * 1000);
+    // A lobby can form immediately after a queued player's hidden-tab poll.
+    // The next one has to arrive with most of the accept clock left; the vote
+    // can't open until that player has accepted.
+    expect(INHOUSE.ACCEPT_SECONDS * 1000 - INHOUSE.POLL_QUEUE_KEEPALIVE_MS)
+      .toBeGreaterThanOrEqual(60_000);
+    expect(INHOUSE.POLL_KEEPALIVE_MS).toBeLessThanOrEqual(INHOUSE.POLL_QUEUE_KEEPALIVE_MS);
   });
 
   it("stops fetching entirely in a HIDDEN tab with nothing at stake", () => {
@@ -148,7 +190,7 @@ describe("inhousePollCadence", () => {
         hasStake: true,
         rateLimited: true,
       }),
-    ).toEqual({ skip: false, delayMs: IDLE });
+    ).toEqual({ skip: false, delayMs: INHOUSE.POLL_RECOVERY_MS });
   });
 
   it("a 429 outranks even the hidden-tab rules", () => {
@@ -160,8 +202,21 @@ describe("inhousePollCadence", () => {
           hasStake,
           rateLimited: true,
         }),
-      ).toEqual({ skip: false, delayMs: IDLE });
+      ).toEqual({ skip: false, delayMs: INHOUSE.POLL_RECOVERY_MS });
     }
+  });
+
+  it("recovers at the recovery rate, not the slower spectator rate", () => {
+    // The idle rate slowed for the hosting budget; a 429's back-off and a
+    // disconnected room's first backed-off retry kept their 10 seconds.
+    const room = { hidden: false, hasStake: false, activeMs: FAST };
+    expect(INHOUSE.POLL_IDLE_MS).toBeGreaterThan(INHOUSE.POLL_RECOVERY_MS);
+    expect(inhousePollCadence({ ...room, rateLimited: true }).delayMs).toBe(
+      INHOUSE.POLL_RECOVERY_MS,
+    );
+    expect(inhousePollCadence({
+      ...room, reached: false, failureCount: ROOM_POLL_FAIL_THRESHOLD + 1, jitter: 0,
+    }).delayMs).toBe(INHOUSE.POLL_RECOVERY_MS * 0.8);
   });
 
   it("retries at the FAST rate when a poll didn't land", () => {
@@ -399,7 +454,7 @@ describe("cold start (no request has ever left)", () => {
         rateLimited: true,
         activeMs: 1500,
       }).delayMs,
-    ).toBe(INHOUSE.POLL_IDLE_MS);
+    ).toBe(INHOUSE.POLL_RECOVERY_MS);
   });
 });
 
@@ -407,9 +462,9 @@ describe("cold start (no request has ever left)", () => {
 // every rate, and the differences are deliberate. Pinned here so the next
 // person to "unify" them has to argue with a test rather than a comment.
 describe("where the two rooms deliberately differ", () => {
-  it("the draft has its own 429 back-off; the inhouse room reuses its idle rate", () => {
-    // /api/draft/tick's window is 60s, so 8s of quiet drains it; the inhouse
-    // idle rate is already 10s and needs no separate number.
+  it("each room has its own 429 back-off", () => {
+    // /api/draft/tick's window is 60s, so 8s of quiet drains it. The inhouse
+    // room backs off 10s (its old idle rate), slower spectators or not.
     expect(DRAFT_ROOM.POLL_RATE_LIMITED_MS).not.toBe(DRAFT_ROOM.POLL_IDLE_MS);
     expect(
       inhousePollCadence({
@@ -418,7 +473,7 @@ describe("where the two rooms deliberately differ", () => {
         rateLimited: true,
         activeMs: 1500,
       }).delayMs,
-    ).toBe(INHOUSE.POLL_IDLE_MS);
+    ).toBe(INHOUSE.POLL_RECOVERY_MS);
   });
 
   it("'active' means the ROOM's phase in the draft, the VIEWER's stake inhouse", () => {

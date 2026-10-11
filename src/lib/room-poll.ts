@@ -61,6 +61,11 @@ export type RoomPollRates = {
   retryMs: number;
   /** Ceiling for disconnected/offline retry backoff. */
   maxRetryMs: number;
+  /**
+   * The shortest backed-off retry once a room counts as disconnected.
+   * Defaults to `idleMs`, so a backed-off retry is never faster than idling.
+   */
+  retryFloorMs?: number;
 };
 
 export type RoomPollInput = {
@@ -120,7 +125,7 @@ export function roomPollCadence(
     const exponent = Math.min(10, failures - ROOM_POLL_FAIL_THRESHOLD);
     const base = Math.min(
       rates.maxRetryMs,
-      Math.max(rates.idleMs, rates.retryMs * 2 ** exponent),
+      Math.max(rates.retryFloorMs ?? rates.idleMs, rates.retryMs * 2 ** exponent),
     );
     const jitter = Math.min(1, Math.max(0, o.jitter ?? Math.random()));
     return {
@@ -141,6 +146,15 @@ export function roomPollCadence(
  * Game setup ends when a READY lobby is plausibly being played
  * (inhouseReadyInPlay): Start is optional, so a game hosted by hand stays
  * READY for its whole length and must poll at the game rate like IN_PROGRESS.
+ *
+ * Every other state is a long wait, so it polls slowly: each poll is a
+ * function call on the Vercel Hobby plan both leagues share (constants.ts).
+ * Whose game `lobbyStatus` describes decides which wait it is. A player in
+ * their own game waits on nothing timed (`POLL_GAME_MS`, hidden or not). A
+ * queued player sees someone else's game (`pollingLobby`) but is waiting for
+ * their own lobby to form: `POLL_QUEUE_MS`, or the fast rate while that game
+ * drafts, and `POLL_QUEUE_KEEPALIVE_MS` hidden, which only the accept window
+ * binds. A spectator idles at `POLL_IDLE_MS`.
  */
 export function inhousePollCadence(
   o: Omit<RoomPollInput, "active"> & {
@@ -152,6 +166,12 @@ export function inhousePollCadence(
     scanOpensAt?: number | null;
     /** The server clock of the last snapshot. */
     serverNow?: number | null;
+    /**
+     * The viewer plays in the game `lobbyStatus` describes (`me.inLobby`).
+     * False for a queued player shown another game. Defaults to true, so a
+     * game the caller can't attribute polls as the player's own.
+     */
+    inLobby?: boolean;
   },
 ): RoomPollCadence {
   const idleMs = o.idleMs ?? INHOUSE.POLL_IDLE_MS;
@@ -169,18 +189,31 @@ export function inhousePollCadence(
         INHOUSE_STATUS.DRAFTING,
         INHOUSE_STATUS.READY,
       ].some((status) => status === o.lobbyStatus));
+  const inGame =
+    !timedPhase &&
+    (readyInPlay || o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS);
+  const ownLobby = o.lobbyStatus != null && o.inLobby !== false;
+  const playing = inGame && ownLobby;
   const activeMs = timedPhase
     ? o.activeMs
-    : readyInPlay || o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS
+    : playing
       ? INHOUSE.POLL_GAME_MS
       : INHOUSE.POLL_QUEUE_MS;
+  const keepaliveMs =
+    o.lobbyStatus === undefined || (timedPhase && ownLobby)
+      ? INHOUSE.POLL_KEEPALIVE_MS
+      : playing
+        ? INHOUSE.POLL_GAME_MS
+        : INHOUSE.POLL_QUEUE_KEEPALIVE_MS;
   return roomPollCadence(o, {
     activeMs,
     idleMs,
-    keepaliveMs: INHOUSE.POLL_KEEPALIVE_MS,
-    // The inhouse route has no separate back-off rate; its idle rate is
-    // already 10s, which drains the window.
-    rateLimitedMs: idleMs,
+    keepaliveMs,
+    // The inhouse route has no separate back-off rate. These two keep the
+    // 10s they had when the idle rate was 10s, so the slower spectator rate
+    // never slows a recovery.
+    rateLimitedMs: INHOUSE.POLL_RECOVERY_MS,
+    retryFloorMs: INHOUSE.POLL_RECOVERY_MS,
     retryMs: o.activeMs,
     maxRetryMs: 30_000,
   });

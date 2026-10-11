@@ -578,20 +578,32 @@ Every transition is a guarded claim; keep it that way (general rules:
 ## The room (client)
 
 - **Cadence comes only from pure `inhousePollCadence`** (`src/lib/room-poll.ts`,
-  sharing `roomPollCadence` with the draft room). A source guard fails if
-  `INHOUSE.POLL_IDLE_MS` or `POLL_KEEPALIVE_MS` reappear in the room.
+  sharing `roomPollCadence` with the draft room). A source guard fails if an
+  `INHOUSE.POLL_*` rate reappears in the room.
+  - **Every poll is a function call on the Vercel Hobby plan both leagues
+    share** (four hours of Active CPU a month). On 2026-10-11 five /inhouse
+    tabs polling every 10s made 79% of the US site's calls, and the plan ran
+    out. Poll fast only where seconds decide something; every long wait is
+    slow.
   - Fast (`pollMs`, 1500) only for timed stages: ready check, vote, draft, and
     READY until the scan window opens (`inhouseReadyInPlay`, after which a
     hand-hosted game polls like IN_PROGRESS and drops "(!) Teams locked").
-  - Otherwise `POLL_QUEUE_MS` when queued, `POLL_GAME_MS` in a game,
-    `POLL_IDLE_MS` spectating.
-  - Hidden with a stake (queued or in a lobby): `POLL_KEEPALIVE_MS`, which must
-    stay shorter than the accept and vote windows (`room-poll.test.ts`).
-    Hidden with no stake: no fetch. `isColdStart` gives a tab hidden at load a
-    few bounded attempts, since stake is learned from a payload.
-  - A warm-room 429 eases to the idle rate and is not a failure; on a cold
-    page 429s count toward the retry state (else "Loading" forever). Offline
-    sends nothing.
+  - Otherwise `POLL_QUEUE_MS` (10s) when queued, `POLL_GAME_MS` (30s) in your
+    own game, `POLL_IDLE_MS` (30s) spectating. The room passes `inLobby`
+    (source-guarded): `pollingLobby` shows a queued player someone else's
+    game, and that player is waiting for their own lobby, so they poll by the
+    queue (or fast while the other game drafts), never at the game rate.
+  - Hidden with a stake: in your own game's timed stage `POLL_KEEPALIVE_MS`
+    (10s), which must stay shorter than the vote window; in your own game
+    `POLL_GAME_MS`; queued `POLL_QUEUE_KEEPALIVE_MS` (20s), which must leave
+    at least 60s of the accept window (`room-poll.test.ts`; the vote can't
+    open before a queued player has seen the check and accepted). Hidden with
+    no stake: no fetch. `isColdStart` gives a tab hidden at load a few bounded
+    attempts, since stake is learned from a payload.
+  - A warm-room 429 eases to `POLL_RECOVERY_MS` (10s) and is not a failure; on
+    a cold page 429s count toward the retry state (else "Loading" forever). A
+    disconnected room's backoff starts from the same 10s, so the slower
+    spectator rate never slows a recovery. Offline sends nothing.
   - Reschedule from live visibility (refocus mid-fetch snaps back);
     `visibilitychange → visible` polls at once; a successful `act()` nudges the
     loop (`bumpPollRef`) so a join goes fast within ~250ms.
