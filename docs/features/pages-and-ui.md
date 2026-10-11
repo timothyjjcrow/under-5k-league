@@ -45,7 +45,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **`/how-it-works` is the one-screen explainer** (`/features` redirects
   there); its rules are pure in `src/lib/how-it-works.ts` (tested). It prints
   the night through `seasonMatchNightLabel` (`match-night.ts`), never a
-  built-in default, so it agrees with /me, Schedule and the admin hint.
+  built-in default, so it agrees with /me, Schedule and the admin hint; while
+  a match-night poll is deciding it (`pollDecidesMatchNight`), "Match night:
+  being decided in a player poll" and a link to the poll on Home, as Home
+  and /me say ([match-night-poll](match-night-poll.md)).
   `resultsCopy(hasLeagueTicket)` lets only a ticketed season say results
   arrive by themselves; the ticketless copy reuses `NO_TICKET_RESULT_LEAD`
   (`match-hosting.ts`), the match page's wording. Its one button
@@ -72,9 +75,13 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   played it, and that the next season starts with the same settings); with no
   season at all, `carriedSeasonSettings(null)` under a "First-season defaults"
   badge. The night comes from `announcedMatchNight`, so Europe without one
-  says it is to be announced. The team count ("the top N make the playoffs")
-  and the league-ticket sentences need an active season. Only the current
-  tiebreaker format is described (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
+  says it is to be announced, and while a match-night poll is deciding it
+  (`pollDecidesMatchNight`, the `matchNightPoll` input) the section says
+  "Match night: being decided in a player poll", Home's words; the poll
+  service is on the page's import list for that one read. The team count
+  ("the top N make the playoffs") and the league-ticket sentences need an
+  active season. Only the current tiebreaker format is described
+  (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
 - **Every sentence is derived or left out.** Points come from probing
   `computeStandings`, bracket sizes from `pickBracketSize`, round one from
   `playoffFirstRound`, the withdrawal forfeit score from
@@ -593,6 +600,12 @@ the league is already draftable and many visitors have joined. Write for both.
   `schedule-jump-bar.test.ts` pins both props.
 - **A side's playoff stakes flow as one wrapping line of outcome pairs**
   (Win, Draw, Loss, each with its result), not a row per outcome.
+- **Before fixtures, the empty state's match-night callout follows an open
+  poll:** during signups it reads "Match night — being decided in a player
+  poll", with `MatchNightPollNote` (the poll on Home) in place of "Confirm
+  this slot works before you sign up" (rules:
+  [match-night-poll](match-night-poll.md)). The subtitle's "Match night …"
+  prints only once fixtures have kickoffs, which a poll never overrides.
 
 ## Teams (`/teams`, `/teams/[id]`)
 

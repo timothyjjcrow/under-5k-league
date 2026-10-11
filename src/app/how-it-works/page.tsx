@@ -11,8 +11,14 @@ import {
   howItWorksAction,
   resultsCopy,
 } from "@/lib/how-it-works";
-import { seasonMatchNightLabel } from "@/lib/match-night";
-import { leaguePitch } from "@/lib/season-copy";
+import {
+  pollCanDecideMatchNight,
+  pollDecidesMatchNight,
+  seasonMatchNightLabel,
+} from "@/lib/match-night";
+import { matchNightPollOpen } from "@/lib/match-night-poll-service";
+import { MATCH_NIGHT_POLL_LABEL, leaguePitch } from "@/lib/season-copy";
+import { MatchNightPollNote } from "@/components/match-night-poll/poll-note";
 import {
   Card,
   CardBody,
@@ -85,7 +91,7 @@ export default async function HowItWorksPage() {
     getActiveSeason(),
     getSessionUser(),
   ]);
-  const [registration, membership, fixtures] = await Promise.all([
+  const [registration, membership, fixtures, pollOpen] = await Promise.all([
     season && user
       ? prisma.registration.findUnique({
           where: {
@@ -108,7 +114,11 @@ export default async function HowItWorksPage() {
           select: { scheduledAt: true, status: true },
         })
       : [],
+    pollCanDecideMatchNight(season) ? matchNightPollOpen() : false,
   ]);
+  // While a match-night poll is choosing the night, the page says so, as
+  // Home does, instead of printing a time the vote may change.
+  const pollDecidesNight = pollDecidesMatchNight(season, fixtures, pollOpen);
 
   const results = resultsCopy(season ? !!season.dotaLeagueId : null);
   const action = howItWorksAction({
@@ -187,9 +197,17 @@ export default async function HowItWorksPage() {
               <dt className="font-semibold">When and where</dt>
               <dd className="mt-1 leading-relaxed text-muted">
                 <strong className="font-semibold text-fg">
-                  {seasonMatchNightLabel(season, fixtures)}
+                  {pollDecidesNight
+                    ? `Match night: ${MATCH_NIGHT_POLL_LABEL}`
+                    : seasonMatchNightLabel(season, fixtures)}
                 </strong>
-                . Games are on {LEAGUE_CONFIG.gameServerRegion} servers, and the
+                .{" "}
+                {pollDecidesNight ? (
+                  <>
+                    <MatchNightPollNote />{" "}
+                  </>
+                ) : null}
+                Games are on {LEAGUE_CONFIG.gameServerRegion} servers, and the
                 schedule shows every kickoff in your local time.
               </dd>
             </div>

@@ -10,7 +10,15 @@ import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { leagueProgress, progressSummary } from "@/lib/league-progress";
 import Link from "next/link";
 import { getActiveSeason } from "@/lib/season";
-import { fixturesMatchNightLabel, seasonMatchNightLabel } from "@/lib/match-night";
+import {
+  fixturesMatchNightLabel,
+  pollCanDecideMatchNight,
+  pollDecidesMatchNight,
+  seasonMatchNightLabel,
+} from "@/lib/match-night";
+import { matchNightPollOpen } from "@/lib/match-night-poll-service";
+import { MATCH_NIGHT_POLL_LABEL } from "@/lib/season-copy";
+import { MatchNightPollNote } from "@/components/match-night-poll/poll-note";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { parseRescheduleOptions } from "@/lib/reschedule-ready-check";
@@ -226,7 +234,7 @@ export default async function SchedulePage() {
       !!viewerTeamRole,
     ),
   );
-  const [teams, matches, assignments, members, rsvps, draft] =
+  const [teams, matches, assignments, members, rsvps, draft, pollOpen] =
     await Promise.all([
       prisma.team.findMany({ where: { seasonId: season.id } }),
       prisma.match.findMany({
@@ -251,6 +259,7 @@ export default async function SchedulePage() {
         where: { seasonId: season.id },
         select: { status: true },
       }),
+      pollCanDecideMatchNight(season) ? matchNightPollOpen() : false,
     ]);
   const pendingReschedules = await prisma.rescheduleRequest.findMany({
     where: {
@@ -747,6 +756,9 @@ export default async function SchedulePage() {
   // Once fixtures have kickoffs, the weekly night is read from them
   // (lib/match-night), never from the pre-signup text.
   const matchNight = hasTimes ? fixturesMatchNightLabel(matches) : null;
+  // While a match-night poll is choosing the night (signups, no kickoffs),
+  // the callout says so, as Home does, instead of a slot the vote may change.
+  const pollDecidesNight = pollDecidesMatchNight(season, matches, pollOpen);
 
   // The weeks, then the table and its analysis. The regular season sets
   // them side by side from xl (see the return); every other phase stacks
@@ -813,8 +825,18 @@ export default async function SchedulePage() {
                           <div className="flex w-full max-w-md flex-col gap-3">
                             {showMatchNight ? (
                               <ScheduleCallout
-                                label={seasonMatchNightLabel(season, matches)}
-                                description={calloutDescription(season.status)}
+                                label={
+                                  pollDecidesNight
+                                    ? MATCH_NIGHT_POLL_LABEL
+                                    : seasonMatchNightLabel(season, matches)
+                                }
+                                description={
+                                  pollDecidesNight ? (
+                                    <MatchNightPollNote />
+                                  ) : (
+                                    calloutDescription(season.status)
+                                  )
+                                }
                                 className="text-left"
                               />
                             ) : null}
