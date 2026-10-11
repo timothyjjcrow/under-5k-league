@@ -149,12 +149,13 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   page.on("dialog", (d) => d.accept());
 
   // Nine API players queue up (MMRs below the observer's, so the observer
-  // captains team 1 when the vote lands on Highest MMR).
+  // captains team 1 when the vote lands on Highest MMR; everyone under the
+  // inhouse MMR cap, 5,000).
   const players: APIRequestContext[] = [];
   for (let i = 0; i < 9; i++) {
     const ctx = await apiPlayer(`IH Player ${i}`, `7656119000000210${i}`);
     players.push(ctx);
-    const joined = await act(ctx, { action: "join", mmr: 5000 - i * 100 });
+    const joined = await act(ctx, { action: "join", mmr: 4900 - i * 100 });
     expect(joined.ok).toBe(true);
   }
 
@@ -162,7 +163,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await page.goto(
     "/api/auth/dev?name=IH+Observer&steamId=76561190000002000&redirect=/inhouse",
   );
-  await page.getByLabel("MMR").fill("6000");
+  await page.getByLabel("MMR").fill("5000");
   await page.getByRole("button", { name: /Join queue/ }).click();
 
   // Ready check opens — the observer accepts through the real UI…
@@ -211,7 +212,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await expect(page.getByText(/On the clock/)).toBeVisible();
   await expect(page.getByText(/Draft pool/)).toBeVisible();
 
-  // Dire's captain (the 5000-MMR API player) makes the first pick.
+  // Dire's captain (the 4900-MMR API player) makes the first pick.
   const state = await act(players[0], { action: "state" });
   const lobby = state.json.lobby as {
     pool: { userId: string; name: string }[];

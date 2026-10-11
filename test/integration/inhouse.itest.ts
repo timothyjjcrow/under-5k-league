@@ -3108,13 +3108,21 @@ describe("inhouse — queue MMR trust", () => {
     expect(entry.mmr).toBe(4321);
   });
 
-  it("falls back to the clamped typed value for never-registered players", async () => {
+  it("falls back to the typed value for never-registered players, up to the cap", async () => {
     const user = await makeUser("Unregistered");
-    expect((await joinQueue(sessionFor(user), 99999)).ok).toBe(true);
+    // Over the cap is refused as typed, never stored clamped (the MMR cap).
+    expect(await joinQueue(sessionFor(user), 99999)).toEqual({
+      ok: false,
+      error: expect.stringMatching(/you entered 99,999\.$/),
+    });
+    expect(
+      await prisma.inhouseQueueEntry.findUnique({ where: { userId: user.id } }),
+    ).toBeNull();
+    expect((await joinQueue(sessionFor(user), 4999)).ok).toBe(true);
     const entry = await prisma.inhouseQueueEntry.findUniqueOrThrow({
       where: { userId: user.id },
     });
-    expect(entry.mmr).toBe(12000); // clamped, not trusted verbatim
+    expect(entry.mmr).toBe(4999);
   });
 
   it("a blank re-join reuses the last lobby's MMR snapshot (Run it back)", async () => {
@@ -3161,10 +3169,23 @@ describe("inhouse — medal MMR validation on joinQueue", () => {
   }
 
   it("snaps an inflated typed MMR to the medal window's floor", async () => {
-    // Legend 4 (tier 54) window is 3119–4118; an Immortal-sized claim lies.
+    // Legend 4 (tier 54) window is 3119–4118; a Divine-sized claim lies.
     const user = await medaledUser("Inflated", 54);
-    expect((await joinQueue(sessionFor(user), 6800)).ok).toBe(true);
+    expect((await joinQueue(sessionFor(user), 4900)).ok).toBe(true);
     expect(await queuedMmr(user.id)).toBe(3119);
+  });
+
+  it("refuses a claim over the cap as typed, even where the clamp would lower it", async () => {
+    // The clamp would store 3119; judging that number would let any claim
+    // big enough through.
+    const user = await medaledUser("Overclaim", 54);
+    expect(await joinQueue(sessionFor(user), 6800)).toEqual({
+      ok: false,
+      error: expect.stringMatching(/you entered 6,800\.$/),
+    });
+    expect(
+      await prisma.inhouseQueueEntry.findUnique({ where: { userId: user.id } }),
+    ).toBeNull();
   });
 
   it("keeps a typed MMR the medal finds plausible", async () => {
@@ -3200,16 +3221,117 @@ describe("inhouse — medal MMR validation on joinQueue", () => {
       data: { status: INHOUSE_STATUS.COMPLETED, radiantTeam: 1, winnerTeam: 1 },
     });
     await prisma.inhouseLobbyPlayer.create({
-      data: { lobbyId: lobby.id, userId: user.id, mmr: 6000, team: 1 },
+      data: { lobbyId: lobby.id, userId: user.id, mmr: 4900, team: 1 },
     });
     await joinQueue(sessionFor(user), 0);
     expect(await queuedMmr(user.id)).toBe(3119);
+  });
+
+  it("asks for a typed MMR when the last game's snapshot is over the cap", async () => {
+    // A snapshot from before the cap: a blank join can't carry it in, and a
+    // typed number under the cap can.
+    const user = await medaledUser("OverSnapshot", null);
+    const lobby = await prisma.inhouseLobby.create({
+      data: { status: INHOUSE_STATUS.COMPLETED, radiantTeam: 1, winnerTeam: 1 },
+    });
+    await prisma.inhouseLobbyPlayer.create({
+      data: { lobbyId: lobby.id, userId: user.id, mmr: 6000, team: 1 },
+    });
+    expect(await joinQueue(sessionFor(user), 0)).toEqual({
+      ok: false,
+      error: expect.stringMatching(
+        /your last inhouse had you at 6,000 MMR\. Type your MMR to join\.$/,
+      ),
+    });
+    expect((await joinQueue(sessionFor(user), 4200)).ok).toBe(true);
+    expect(await queuedMmr(user.id)).toBe(4200);
   });
 
   it("leaves the typed value alone when there's no medal on file", async () => {
     const user = await medaledUser("NoMedal", null);
     await joinQueue(sessionFor(user), 3000);
     expect(await queuedMmr(user.id)).toBe(3000);
+  });
+});
+
+// The MMR cap (Tim, 2026-10-11, after a Divine 4 joined on an account made
+// 41 seconds earlier): the league's hard ceiling at the queue. A Divine 3 or
+// higher medal is over it whatever is typed, and so is any MMR over it.
+describe("inhouse — the MMR cap on joinQueue", () => {
+  async function playerWith(name: string, rankTier: number | null) {
+    const user = await makeUser(name);
+    await prisma.user.update({ where: { id: user.id }, data: { rankTier } });
+    return user;
+  }
+
+  function queueRow(userId: string) {
+    return prisma.inhouseQueueEntry.findUnique({ where: { userId } });
+  }
+
+  it("refuses a Divine 3 or higher medal whatever is typed, and writes nothing", async () => {
+    const user = await playerWith("Divine Four", 74);
+    expect(await joinQueue(sessionFor(user), 5000, ["2"])).toEqual({
+      ok: false,
+      error:
+        "Inhouses are for players up to 5,000 MMR, the same as the league: your Divine 4 medal puts you above it.",
+    });
+    expect(await queueRow(user.id)).toBeNull();
+    // Refused before the positions save too.
+    const after = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(after.inhouseRoles).toBeNull();
+    for (const rankTier of [73, 75, 80]) {
+      const other = await playerWith(`Over ${rankTier}`, rankTier);
+      expect(await joinQueue(sessionFor(other), 0)).toEqual({
+        ok: false,
+        error: expect.stringMatching(/medal puts you above it\.$/),
+      });
+      expect(await queueRow(other.id)).toBeNull();
+    }
+  });
+
+  it("judges the medal of a player the league admitted too", async () => {
+    // A medal synced after admission: the league keeps them (registrationGate
+    // exempts an ACTIVE signup), but every inhouse join is judged.
+    const season = await makeSeason();
+    const user = await playerWith("Admitted", 75);
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: user.id, mmr: 5000, status: "ACTIVE" },
+    });
+    expect(await joinQueue(sessionFor(user), 0)).toEqual({
+      ok: false,
+      error: expect.stringMatching(/your Divine 5 medal puts you above it\.$/),
+    });
+    expect(await queueRow(user.id)).toBeNull();
+  });
+
+  it("refuses a league signup's MMR over the cap (an admin's override)", async () => {
+    const season = await makeSeason();
+    const user = await playerWith("Overridden", null);
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: user.id, mmr: 5200 },
+    });
+    expect(await joinQueue(sessionFor(user), 3000)).toEqual({
+      ok: false,
+      error: expect.stringMatching(/your league signup has you at 5,200 MMR\.$/),
+    });
+    expect(await queueRow(user.id)).toBeNull();
+  });
+
+  it("lets a Divine 2 in at exactly the cap and refuses one over it", async () => {
+    const user = await playerWith("Divine Two", 72);
+    expect(await joinQueue(sessionFor(user), 5001)).toEqual({
+      ok: false,
+      error: expect.stringMatching(/you entered 5,001\.$/),
+    });
+    expect(await queueRow(user.id)).toBeNull();
+    expect(await joinQueue(sessionFor(user), 5000)).toEqual({ ok: true });
+    expect((await queueRow(user.id))?.mmr).toBe(5000);
+  });
+
+  it("never refuses an unknown MMR with no medal (Tim's call)", async () => {
+    const user = await playerWith("Unknown", null);
+    expect(await joinQueue(sessionFor(user), 0)).toEqual({ ok: true });
+    expect((await queueRow(user.id))?.mmr).toBe(0);
   });
 });
 

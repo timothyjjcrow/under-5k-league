@@ -71,7 +71,9 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   resubmit, so an admin correction survives a role edit. `setRegistrationMmr`
   and `setPlayerRank` (`admin-roster.ts`) are the never-clamped escape hatch,
   adding only a "heads up"; a manual medal (`User.rankTierManual`) beats every
-  automatic write. Inhouse `joinQueue` also trusts it as-is (`inhouse.md`).
+  automatic write. Inhouse `joinQueue` also trusts it as-is, up to the
+  ceiling, and judges the medal on every join, a signup's included
+  (`inhouse.md`, "The MMR cap").
 - **Never rewrite a typed number silently.** `/me` shows the medal window
   (`mmrLeadLine`), a danger line when the medal rules the player out, and a
   display-only preview (`mmrPreviewLine`); the toast names any change. A
