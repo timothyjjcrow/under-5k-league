@@ -346,13 +346,36 @@ Every transition is a guarded claim; keep it that way (general rules:
 - **MMR trust chain:** latest `Registration.mmr` (used as-is, so an admin
   override survives) > the typed value clamped to the medal > the last lobby
   snapshot (clamped), so a blank "Run it back" join keeps a known MMR. Client
-  MMR alone never decides captaincy for a registered player.
+  MMR alone never decides captaincy for a registered player. The signup MMR
+  and the medal are read by `loadInhouseJoinFacts`, for the join and the page.
+- **The MMR cap (Tim, 2026-10-11).** `joinQueue` refuses a Divine 3 or higher
+  medal whatever is typed, and an MMR over `HARD_MMR_CEILING` (5,000, the
+  line league signups enforce): `inhouseJoinRefusal` in
+  `src/lib/inhouse-mmr-cap.ts`. It judges the number the chain resolved as it
+  came (a typed number before the clamp, which only lowers it), before
+  anything is written, the positions too. No medal is no opinion: the typed
+  number stands (Tim's call), so an account OpenDota shows unranked can still
+  get in by typing low. Unlike `registrationGate`, an ACTIVE league signup is
+  no medal exemption (Tim's call too): every join is judged. A medal is corrected through
+  `setPlayerRank`, which needs a signup. It is judged at the join only: a
+  medal that changes while a player is queued or in a game removes nobody,
+  and the requeues (`cancelLobby`, a failed ready check) only put back
+  players who were in a game. "Game over — queue again" ends the game and
+  then gets the join's refusal.
+- **Offer no join the cap refuses.** `/inhouse` reads the same facts and rule
+  (`inhouseJoinRefusalBeforeTyping`: the medal, or a signup MMR over the
+  line) and the room shows the reason, in the accent colour, where Join, the
+  MMR box and the positions would be, and drops "Run it back"; a queued
+  player keeps Leave. A typed number is judged when sent, and the MMR box
+  stops at the cap (`max`). `?join=1` still asks the server and toasts the
+  refusal. A source guard in `inhouse-mmr-cap.test.ts` pins every call site.
 - **Keep the queue's "How your MMR is set" note after joining** (`mmrHint`,
   built in `src/app/inhouse/page.tsx`, shown by
   `src/components/inhouse/queue-view.tsx`; on a phone right under the filled
   card, to keep the card on the first screen). It renders only for a medal-holder
-  with no signup MMR and explains why a typed value outside the medal's window
-  is clamped. A registered player gets no MMR input at all, only "Joining at N
+  with no signup MMR who is under the cap, and explains why a typed value
+  outside the medal's window is clamped and that nothing over the cap joins
+  (the window shown stops at it). A registered player gets no MMR input at all, only "Joining at N
   MMR, from your league signup", which is what explains that override (on a
   phone's filled queue card it reads "N MMR" over "from your signup" beside
   the positions, with "Joining at" kept for screen readers).

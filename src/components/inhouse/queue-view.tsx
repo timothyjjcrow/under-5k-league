@@ -11,7 +11,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { avgKnownMmr, queueSlots } from "@/lib/inhouse";
-import { INHOUSE } from "@/lib/constants";
+import { HARD_MMR_CEILING, INHOUSE } from "@/lib/constants";
 import { roleCoverage } from "@/lib/pool-stats";
 import { parseRoleOrder } from "@/lib/roles";
 import type { InhouseState } from "@/lib/inhouse-service";
@@ -32,6 +32,11 @@ type QueueControlProps = {
   rolesDraft: RolesDraft | null;
   setRolesDraft: (draft: RolesDraft | null) => void;
   mmrHint: string | null;
+  /**
+   * Why the viewer can't join (the MMR cap), shown in place of Join; null
+   * when they can. A queued viewer keeps Leave whatever it says.
+   */
+  joinRefusal: string | null;
   signupMmr: number;
   act: (body: Record<string, unknown>) => void;
   nextGame?: boolean;
@@ -100,6 +105,7 @@ function QueueAction({
   pending,
   mmr,
   setMmr,
+  joinRefusal,
   signupMmr,
   act,
   nextGame = false,
@@ -107,7 +113,7 @@ function QueueAction({
   compact = false,
 }: Pick<
   QueueControlProps,
-  "me" | "pending" | "mmr" | "setMmr" | "signupMmr" | "act" | "nextGame"
+  "me" | "pending" | "mmr" | "setMmr" | "joinRefusal" | "signupMmr" | "act" | "nextGame"
 > & { join: QueueJoin; compact?: boolean }) {
   const mmrInputId = useId();
   // A phone's size: a 44px button, not 48 (40, the kit's small control
@@ -130,6 +136,20 @@ function QueueAction({
       >
         Leave queue
       </button>
+    );
+  }
+  // Over the MMR cap: no join would be accepted, so there is nothing to
+  // press, only the reason (the filled card places it on its own row).
+  if (joinRefusal) {
+    return (
+      <p
+        className={cn(
+          "max-w-md text-xs leading-relaxed text-accent",
+          !compact && "text-center",
+        )}
+      >
+        {joinRefusal}
+      </p>
     );
   }
   // joinQueue always uses the league signup MMR when there is one, so an
@@ -188,7 +208,7 @@ function QueueAction({
           id={mmrInputId}
           type="number"
           min={0}
-          max={12000}
+          max={HARD_MMR_CEILING}
           inputMode="numeric"
           value={mmr || ""}
           placeholder="e.g. 3200"
@@ -339,6 +359,7 @@ function QueueControls({
   rolesDraft,
   setRolesDraft,
   mmrHint,
+  joinRefusal,
   signupMmr,
   act,
   nextGame = false,
@@ -352,12 +373,16 @@ function QueueControls({
   phoneCompact?: boolean;
 }) {
   const join = useQueueJoin({ me, mmr, rolesDraft });
+  // Over the MMR cap and not queued: the reason stands alone, with no
+  // positions to save for a game they can't join.
+  const refused = me.isLoggedIn && !me.inQueue && joinRefusal != null;
   const action = (
     <QueueAction
       me={me}
       pending={pending}
       mmr={mmr}
       setMmr={setMmr}
+      joinRefusal={joinRefusal}
       signupMmr={signupMmr}
       act={act}
       nextGame={nextGame}
@@ -367,7 +392,7 @@ function QueueControls({
   return (
     <div>
       <div className="flex flex-wrap items-center justify-center gap-3">
-        {me.isLoggedIn && !me.inQueue && signupMmr > 0 ? (
+        {me.isLoggedIn && !me.inQueue && signupMmr > 0 && !refused ? (
           <div className="flex flex-col items-center gap-2">
             {action}
             <SignupMmrNote signupMmr={signupMmr} className="text-center" />
@@ -377,7 +402,7 @@ function QueueControls({
         )}
       </div>
 
-      {me.isLoggedIn ? (
+      {me.isLoggedIn && !refused ? (
         <QueuePositions
           pending={pending}
           setRolesDraft={setRolesDraft}
@@ -388,7 +413,7 @@ function QueueControls({
         />
       ) : null}
 
-      {mmrHint ? (
+      {mmrHint && !refused ? (
         <QueueMmrHint
           mmrHint={mmrHint}
           phoneDense={phoneCompact}
@@ -408,6 +433,7 @@ export function NextGameQueueCard({
   rolesDraft,
   setRolesDraft,
   mmrHint,
+  joinRefusal,
   signupMmr,
   act,
 }: Omit<QueueControlProps, "me" | "nextGame"> & { state: InhouseState }) {
@@ -442,6 +468,7 @@ export function NextGameQueueCard({
             rolesDraft={rolesDraft}
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
+            joinRefusal={joinRefusal}
             signupMmr={signupMmr}
             act={act}
             nextGame
@@ -460,6 +487,7 @@ export function QueueView({
   rolesDraft,
   setRolesDraft,
   mmrHint,
+  joinRefusal,
   signupMmr,
   firstGame,
   act,
@@ -472,6 +500,8 @@ export function QueueView({
   rolesDraft: RolesDraft | null;
   setRolesDraft: (draft: RolesDraft | null) => void;
   mmrHint: string | null;
+  /** The MMR cap's reason, in place of Join (QueueControlProps). */
+  joinRefusal: string | null;
   signupMmr: number;
   firstGame: boolean;
   act: (body: Record<string, unknown>) => void;
@@ -506,7 +536,9 @@ export function QueueView({
   const myPosition = present.findIndex((q) => q.userId === me.userId) + 1;
   // The filled card lays the controls' parts out in its own grid.
   const join = useQueueJoin({ me, mmr, rolesDraft });
-  const mmrForm = me.isLoggedIn && !me.inQueue && signupMmr <= 0;
+  // Over the MMR cap and not queued: the reason takes the controls' place.
+  const refused = me.isLoggedIn && !me.inQueue && joinRefusal != null;
+  const mmrForm = me.isLoggedIn && !me.inQueue && signupMmr <= 0 && !refused;
   // Phone-sized coverage pills (16px), in the "Who's playing" row.
   const smallPill = "max-md:h-4 max-md:min-w-4 max-md:px-0.5 max-md:text-[10px]";
   // A phone's slot pills, 14px: the slot's second line is 14px high, so a
@@ -522,6 +554,7 @@ export function QueueView({
       rolesDraft={rolesDraft}
       setRolesDraft={setRolesDraft}
       mmrHint={mmrHint}
+      joinRefusal={joinRefusal}
       signupMmr={signupMmr}
       act={act}
       nextGame={nextGame}
@@ -651,12 +684,15 @@ export function QueueView({
                 </div>
                 {/* The action: on a phone the ring row's end (Join, Leave
                     or Sign in), with the MMR form's box stepping into row
-                    2 beside the positions (QueueAction, PHONE_GRID). */}
+                    2 beside the positions (QueueAction, PHONE_GRID). The
+                    MMR cap's reason, in their place, is row 2 on its own. */}
                 <div
                   className={
-                    mmrForm
-                      ? "max-md:contents md:col-span-full md:mt-2 md:justify-self-center"
-                      : "justify-self-end md:col-span-full md:mt-2 md:justify-self-center"
+                    refused
+                      ? "col-span-full md:mt-2"
+                      : mmrForm
+                        ? "max-md:contents md:col-span-full md:mt-2 md:justify-self-center"
+                        : "justify-self-end md:col-span-full md:mt-2 md:justify-self-center"
                   }
                 >
                   <QueueAction
@@ -664,6 +700,7 @@ export function QueueView({
                     pending={pending}
                     mmr={mmr}
                     setMmr={setMmr}
+                    joinRefusal={joinRefusal}
                     signupMmr={signupMmr}
                     act={act}
                     nextGame={nextGame}
@@ -671,14 +708,14 @@ export function QueueView({
                     compact
                   />
                 </div>
-                {me.isLoggedIn && !me.inQueue && signupMmr > 0 ? (
+                {me.isLoggedIn && !me.inQueue && signupMmr > 0 && !refused ? (
                   <SignupMmrNote
                     signupMmr={signupMmr}
                     phoneCell
                     className={cn("col-span-full md:w-full md:text-center", PHONE_GRID.context)}
                   />
                 ) : null}
-                {me.isLoggedIn ? (
+                {me.isLoggedIn && !refused ? (
                   <div className={cn("col-span-full w-full", PHONE_GRID.positions)}>
                     <QueuePositions
                       pending={pending}

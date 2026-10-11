@@ -469,8 +469,9 @@ The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
 1. **Queue** — `joinQueue` (MMR trust chain: league registration > clamped
-   typed value > last lobby snapshot) into the userId-unique
-   `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
+   typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
+   refuses a Divine 3+ medal or an MMR over `HARD_MMR_CEILING`) into the
+   userId-unique `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
    by the player's own polls); stale entries dim to "away" and are pruned.
    Outsiders may queue for the next game while a lobby is active; nobody in
    a live lobby can queue (a game marked over is not live). A queue crossing

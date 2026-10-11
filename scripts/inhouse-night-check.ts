@@ -97,7 +97,8 @@ async function main() {
     });
     const u: SessionUser = { id: row.id, name: row.name, role: row.role } as SessionUser;
     users.push({ u, acct: p.account_id, side: p.player_slot < 128 ? "R" : "D" });
-    const j = await joinQueue(u, 6000 - i * 100);
+    // Under the inhouse MMR cap (5,000), highest first.
+    const j = await joinQueue(u, 5000 - i * 100);
     if (!j.ok) throw new Error(`join failed: ${j.error}`);
   }
   ok("ten queued", (await prisma.inhouseQueueEntry.count()) === 0 || true);

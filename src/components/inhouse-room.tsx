@@ -75,6 +75,7 @@ export function InhouseRoom({
   pollMs = 1500,
   signupMmr = 0,
   mmrHint = null,
+  joinRefusal = null,
   firstGame = false,
 }: {
   pollMs?: number;
@@ -86,6 +87,11 @@ export function InhouseRoom({
   signupMmr?: number;
   /** Server-computed medal→MMR window note for the queue join panel. */
   mmrHint?: string | null;
+  /**
+   * Why the viewer can't join (the MMR cap, inhouseJoinRefusalBeforeTyping),
+   * shown in place of Join; null when they can. joinQueue refuses the same.
+   */
+  joinRefusal?: string | null;
   /**
    * Signed in with no completed inhouse yet: the queue's "game plan" fold
    * starts open, because it is the page's one walkthrough of what a game is.
@@ -1032,7 +1038,7 @@ export function InhouseRoom({
             </a>
           </span>
           <span className="flex shrink-0 items-center gap-2">
-            {me.canJoin ? (
+            {me.canJoin && !joinRefusal ? (
               // The retention moment: everyone's still here, the game just
               // ended — one tap puts you back in line for the next one.
               <button
@@ -1092,6 +1098,7 @@ export function InhouseRoom({
             rolesDraft={rolesDraft}
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
+            joinRefusal={joinRefusal}
             signupMmr={signupMmr}
             firstGame={firstGameFold}
             act={act}
@@ -1106,6 +1113,7 @@ export function InhouseRoom({
             rolesDraft={rolesDraft}
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
+            joinRefusal={joinRefusal}
             signupMmr={signupMmr}
             act={act}
           />
@@ -1125,6 +1133,7 @@ export function InhouseRoom({
             rolesDraft={rolesDraft}
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
+            joinRefusal={joinRefusal}
             signupMmr={signupMmr}
             firstGame={firstGameFold}
             act={act}

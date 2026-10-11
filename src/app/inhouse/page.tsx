@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { Fragment, Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
+import { HARD_MMR_CEILING, INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
 import {
   parseInhouseBox,
   type InhouseBoxPlayer as BoxPlayer,
@@ -22,6 +22,8 @@ import { gameMvp } from "@/lib/achievements";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
+import { inhouseJoinRefusalBeforeTyping } from "@/lib/inhouse-mmr-cap";
+import { loadInhouseJoinFacts } from "@/lib/inhouse-service";
 import {
   loadInhouseLadderSummary,
   loadInhouseMonthLadder,
@@ -175,26 +177,21 @@ export default async function InhousePage({
   // The player's most recent league signup MMR, if any (the join panel shows
   // it instead of an MMR field), and the medal so the join panel can explain
   // the MMR check for everyone else (the server clamps implausible typed
-  // values to the medal window's floor on join).
+  // values to the medal window's floor on join) and name the MMR cap in
+  // place of Join for a player over it: the same two facts joinQueue reads.
   // The completed-game count decides whether the ladder, results and the
   // section nav have anything to show yet (an indexed count, always fresh).
   const [viewerRows, completedGames] = await Promise.all([
     user
       ? Promise.all([
-          prisma.registration.findFirst({
-            // Match joinQueue's trust rule exactly: the newest positive
-            // league MMR is the number the server will actually seed with.
-            where: { userId: user.id, mmr: { gt: 0 } },
-            orderBy: { createdAt: "desc" },
-            select: { mmr: true },
-          }),
+          loadInhouseJoinFacts(user.id),
           prisma.user.findUnique({
             where: { id: user.id },
             // fhUnavailable is OpenDota's `profile.fh_unavailable` — true
             // means "Expose Public Match Data" is OFF, the #1 reason
             // auto-import can't see a player. It is the one signal that says
             // who the setup guide is actually for.
-            select: { rankTier: true, fhUnavailable: true },
+            select: { fhUnavailable: true },
           }),
           // Any completed game at all? Decides whether the room's "game
           // plan" walkthrough starts open for this viewer.
@@ -209,7 +206,7 @@ export default async function InhousePage({
       : null,
     prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.COMPLETED } }),
   ]);
-  const [lastReg, dbUser, playedLobby] = viewerRows ?? [null, null, null];
+  const [joinFacts, dbUser, playedLobby] = viewerRows ?? [null, null, null];
   const firstGame = user != null && playedLobby == null;
   // Before the first completed game the ladder and results would only be
   // empty cards (and the section nav would jump between them), so the page is
@@ -217,15 +214,24 @@ export default async function InhousePage({
   const hasGames = completedGames > 0;
   // With a league signup the join panel shows that MMR as plain text (the
   // server always uses it), so the medal note is only for everyone else.
-  const signupMmr = lastReg?.mmr ?? 0;
+  const signupMmr = joinFacts?.signupMmr ?? 0;
+  const rankTier = joinFacts?.rankTier ?? null;
+  // A player over the MMR cap gets its reason in place of Join (the room
+  // offers no join the server refuses), and no note on typing an MMR.
+  const joinRefusal = joinFacts ? inhouseJoinRefusalBeforeTyping(joinFacts) : null;
   const mmrWindow =
-    signupMmr > 0 ? null : mmrRangeForRankTier(dbUser?.rankTier ?? null);
-  const mmrHint = mmrWindow
-    ? `Your ${rankMedalName(dbUser?.rankTier)} medal puts you around ${formatMmrRange(mmrWindow)} MMR — ${
-        mmrWindow.min > 0
-          ? `a typed value outside that range is set to ${mmrWindow.min}`
+    signupMmr > 0 || joinRefusal ? null : mmrRangeForRankTier(rankTier);
+  // The window as far as the cap, which refuses anything typed over it.
+  const shownWindow = mmrWindow && {
+    min: mmrWindow.min,
+    max: Math.min(mmrWindow.max ?? HARD_MMR_CEILING, HARD_MMR_CEILING),
+  };
+  const mmrHint = shownWindow
+    ? `Your ${rankMedalName(rankTier)} medal puts you around ${formatMmrRange(shownWindow)} MMR — ${
+        shownWindow.min > 0
+          ? `a typed value outside that range is set to ${shownWindow.min}`
           : "a typed value outside that range is treated as unknown"
-      }. If you sign up for a league season, your signup MMR is used instead.`
+      }, and inhouses take nobody over ${HARD_MMR_CEILING}. If you sign up for a league season, your signup MMR is used instead.`
     : null;
 
   return (
@@ -298,6 +304,7 @@ export default async function InhousePage({
             <InhouseRoom
               signupMmr={signupMmr}
               mmrHint={mmrHint}
+              joinRefusal={joinRefusal}
               firstGame={firstGame}
             />
             {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}

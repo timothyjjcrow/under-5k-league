@@ -76,6 +76,7 @@ import {
 import { lobbyView, syncInhouseBoard } from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
+import { inhouseJoinRefusal, type InhouseMmrSource } from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
 import { raceHook } from "./race-hook";
 import { waitBeforeSerializableRetry } from "./serializable-retry";
@@ -1212,60 +1213,84 @@ export async function makePick(
   }
 }
 
-/** Add the current user to the inhouse queue (or refresh their seed MMR). */
-export async function joinQueue(
-  viewer: SessionUser,
-  mmr: number,
-  /**
-   * The positions picked beside the Join button, saved first (setInhouseRoles)
-   * so a join never loses them. Omitted (auto-join, "Run it back", an API
-   * caller): the stored choice stands.
-   */
-  roles?: unknown,
-): Promise<InhouseActionResult> {
-  if (roles !== undefined) {
-    const saved = await setInhouseRoles(viewer, roles);
-    if (!saved.ok) return saved;
-  }
+/**
+ * What a queue join knows about a player's MMR before anything is typed: the
+ * newest league signup's MMR (0 = none) and the medal. joinQueue resolves its
+ * number from these, and /inhouse reads the same two to decide whether to
+ * offer Join at all (inhouseJoinRefusalBeforeTyping), so the page never
+ * offers a join the server refuses.
+ */
+export async function loadInhouseJoinFacts(
+  userId: string,
+): Promise<{ signupMmr: number; rankTier: number | null }> {
   // MMR drives captain selection, auto-pick order, and the balance meter — so
   // prefer the league-trusted number (their registration, which admins see and
   // the season cap gates) over the free-typed client value. The typed value
   // only seeds players who never registered for a season; a blank re-join
   // ("Run it back") falls back to their last lobby's snapshot instead of
   // silently resetting them to unknown.
-  const [reg, dbUser] = await Promise.all([
+  const [reg, user] = await Promise.all([
     prisma.registration.findFirst({
-      where: { userId: viewer.id, mmr: { gt: 0 } },
+      where: { userId, mmr: { gt: 0 } },
       orderBy: { createdAt: "desc" },
       select: { mmr: true },
     }),
     prisma.user.findUnique({
-      where: { id: viewer.id },
+      where: { id: userId },
       select: { rankTier: true },
     }),
   ]);
+  return { signupMmr: reg?.mmr ?? 0, rankTier: user?.rankTier ?? null };
+}
+
+/** Add the current user to the inhouse queue (or refresh their seed MMR). */
+export async function joinQueue(
+  viewer: SessionUser,
+  mmr: number,
+  /**
+   * The positions picked beside the Join button, saved before the join so it
+   * never loses them (a refused join saves nothing). Omitted (auto-join, "Run
+   * it back", an API caller): the stored choice stands.
+   */
+  roles?: unknown,
+): Promise<InhouseActionResult> {
+  const { signupMmr, rankTier } = await loadInhouseJoinFacts(viewer.id);
   // A registration MMR is league-approved as-is — clamped against the medal
   // at its own save, or deliberately set by an admin override (the escape
   // hatch for stale medals, which this path must not silently undo). Only
   // SELF-reported numbers get the medal check: the free-typed value and the
   // old lobby snapshot (which may predate medal validation). A blank-but-
   // medaled player seeds at the medal floor instead of unknown.
-  let safeMmr: number;
-  if (reg) {
-    safeMmr = reg.mmr;
+  let claimed: number;
+  let source: InhouseMmrSource;
+  if (signupMmr > 0) {
+    claimed = signupMmr;
+    source = "signup";
   } else {
-    safeMmr = Number.isFinite(mmr)
-      ? Math.max(0, Math.min(12000, Math.floor(mmr)))
-      : 0;
-    if (safeMmr === 0) {
+    claimed = Number.isFinite(mmr) ? Math.max(0, Math.floor(mmr)) : 0;
+    source = "typed";
+    if (claimed === 0) {
       const last = await prisma.inhouseLobbyPlayer.findFirst({
         where: { userId: viewer.id, mmr: { gt: 0 } },
         orderBy: { createdAt: "desc" },
         select: { mmr: true },
       });
-      if (last) safeMmr = last.mmr;
+      if (last) {
+        claimed = last.mmr;
+        source = "last-game";
+      }
     }
-    safeMmr = clampMmrToRank(safeMmr, dbUser?.rankTier).mmr;
+  }
+  // The MMR cap (Tim, 2026-10-11): no Divine 3+ medal and nothing over the
+  // league's ceiling, judged on the number as it came, before the clamp
+  // below can only lower it. Refused before anything is written.
+  const refusal = inhouseJoinRefusal({ mmr: claimed, source, rankTier });
+  if (refusal) return { ok: false, error: refusal };
+  const safeMmr =
+    source === "signup" ? claimed : clampMmrToRank(claimed, rankTier).mmr;
+  if (roles !== undefined) {
+    const saved = await setInhouseRoles(viewer, roles);
+    if (!saved.ok) return saved;
   }
 
   // Counted BEFORE the join so the Discord milestone check below sees the
