@@ -2,16 +2,24 @@
 
 // Play later's browser pieces (the card and the banner are inhouse-times.tsx):
 // the time box that turns a clock time into the instant it names on the
-// player's own clock, the button that copies a time's link, and a time's
-// start as the banner says it ("Today, 8:00 PM").
+// player's own clock, the button that copies a time's link, a time's start
+// as the banner says it ("Today, 8:00 PM"), and the bar's swipeable row with
+// its edge fades.
 
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { pushToast } from "@/components/toaster";
 import { buttonClasses } from "@/components/ui";
+import { chipBarEdges, chipBarMask, type ChipBarEdges } from "@/lib/chip-bar";
 import { countdownLabel } from "@/lib/countdown";
 import {
   defaultInhouseTimeClock,
-  inhouseTimeDayWord,
+  inhouseChipWhenText,
   inhouseTimeLinkPath,
   inhouseTimeParam,
   nextInhouseTimeAt,
@@ -22,22 +30,12 @@ import {
 const viewerZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /**
- * "Today, 8:00 PM" or "Tomorrow, 1:00 AM", on the viewer's clock
- * (inhouseTimeDayWord), or "Sun 1:00 AM" for one further out.
+ * "Today, 8:00 PM" or "Tomorrow, 1:00 AM" on the viewer's clock, "Sun 1:00
+ * AM" for one further out, or with `dated` "Fri, Oct 23, 8:00 PM"
+ * (inhouseChipWhenText).
  */
-function dayAndTime(ms: number, nowMs: number): string {
-  const word = inhouseTimeDayWord(ms, nowMs, viewerZone());
-  if (!word) {
-    return new Intl.DateTimeFormat(undefined, {
-      weekday: "short",
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(new Date(ms));
-  }
-  const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
-    new Date(ms),
-  );
-  return `${word}, ${time}`;
+function dayAndTime(ms: number, nowMs: number, dated = false): string {
+  return inhouseChipWhenText(ms, nowMs, viewerZone(), { dated });
 }
 
 /** Re-read once a minute, so a page left open past midnight moves "Tomorrow" to "Today". */
@@ -47,23 +45,26 @@ function subscribeMinute(onChange: () => void): () => void {
 }
 
 /**
- * A time's start in the banner at the top of /inhouse: "Today, 8:00 PM" on
- * the viewer's clock. `initial` is the server's text, the same words on the
+ * A start in the bar at the top of /inhouse: "Today, 8:00 PM" on the
+ * viewer's clock. `initial` is the server's text, the same words on the
  * league's clock with its zone named, shown until the browser takes over
- * (<LocalTime>'s trick).
+ * (<LocalTime>'s trick). `dated` (the inhouse night, which can be weeks off)
+ * names the date past tomorrow, not just the weekday.
  */
 export function InhouseTimeWhen({
   ts,
   initial,
+  dated = false,
   className,
 }: {
   ts: number;
   initial: string;
+  dated?: boolean;
   className?: string;
 }) {
   const text = useSyncExternalStore(
     subscribeMinute,
-    () => dayAndTime(ts, Date.now()),
+    () => dayAndTime(ts, Date.now(), dated),
     () => initial,
   );
   return (
@@ -211,5 +212,60 @@ export function CopyInhouseTimeLink({ at }: { at: string }) {
       <span aria-hidden>{copied ? "✓" : "🔗"}</span>
       {copied ? "Copied!" : "Copy link"}
     </button>
+  );
+}
+
+/**
+ * The bar's one row of chips, which swipes sideways inside the bar when it
+ * doesn't fit (a phone shows about one chip). A fade marks each side that
+ * has more, by SectionNav's rule (chipBarEdges, chipBarMask), so a chip cut
+ * off at the edge never reads as the whole bar. It measures again when a
+ * chip changes size (the night's headcount streams in after the bar) or a
+ * refresh adds or drops one.
+ */
+export function PlansRow({ className, children }: { className?: string; children: ReactNode }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Null until measured: no fade before the browser has laid the row out.
+  const [edges, setEdges] = useState<ChipBarEdges | null>(null);
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const measure = () => {
+      const next = chipBarEdges(row);
+      setEdges((prev) =>
+        prev && prev.start === next.start && prev.end === next.end ? prev : next,
+      );
+    };
+    row.addEventListener("scroll", measure, { passive: true });
+    const resize = new ResizeObserver(measure);
+    resize.observe(row);
+    const observeChips = () => {
+      for (const child of row.children) resize.observe(child);
+      measure();
+    };
+    observeChips();
+    const mutations = new MutationObserver(observeChips);
+    mutations.observe(row, { childList: true });
+    return () => {
+      row.removeEventListener("scroll", measure);
+      resize.disconnect();
+      mutations.disconnect();
+    };
+  }, []);
+  const mask = edges ? chipBarMask(edges) : undefined;
+  return (
+    <div
+      ref={rowRef}
+      // Which sides fade ("start end", "end", ""), once measured: the e2e reads it.
+      data-edges={
+        edges
+          ? [edges.start && "start", edges.end && "end"].filter(Boolean).join(" ")
+          : undefined
+      }
+      className={className}
+      style={{ maskImage: mask, WebkitMaskImage: mask }}
+    >
+      {children}
+    </div>
   );
 }

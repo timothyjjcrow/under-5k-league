@@ -182,7 +182,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   inside a card whose header already names it; wins over `compact`);
   `CheckinBanner variant` (`strip` on `/schedule` and the match page, `panel`
   stacked for a narrow column); `StatStrip`/`StatCell` (the one-line summary
-  band under a page title). One deliberate exception: `TeamCrest`'s initials
+  band under a page title); `PageTitle compact` with `nav` (one short row:
+  the title, a `SectionNav bare` from md and the action on the title's rule,
+  no subtitle, no margin; /inhouse, whose first screen is the queue);
+  `RoleBadges pillClassName` (a 16px pill on a phone's queue row). One deliberate exception: `TeamCrest`'s initials
   wear `crestInk` by default, not behind a prop, because an opt-in would leave
   white initials at about 2:1 on every yellow crest that didn't pass it. A
   contrast fix belongs at every call site.
@@ -461,7 +464,9 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   streamed, because a bar that drops in above an already painted hero shoves
   the whole page down; only its Discord headcount streams. It is one
   wrapping row of single items (title link, time, countdown, headcount, then
-  a spacer and the button), so a phone packs it into two lines. "I'm in" is
+  a spacer and the button), so a phone packs it into two lines. The title
+  links to the night's card (`/inhouse#inhouse-night`), which sits under the
+  room, below /inhouse's first screen. "I'm in" is
   one toggle (`aria-pressed`, the kit's small button), pressed once you're
   in, the way Discord's Interested button works: a separate "can't make it"
   control took a third line on a phone. For a player without a linked
@@ -687,18 +692,72 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## The inhouse page (`/inhouse`)
 
-- **Order is the product:** the planned inhouse night's card (only while one
-  is set, streamed: "I'm in", the headcount, who said they're in on the site
-  as profile chips, "Copy invite link", the Discord event and calendar
-  links; opened from the invite link it says "I'm in" once), the Play later
-  banner (a thin one-row sliver: the soonest three open times, each its
-  start, count and "I'm in", only while one is open or a time's link needs
-  answering; [inhouse](inhouse.md#play-later)), room, the Play later card
-  (players' own times in full, with posting; always here, a time's link too,
-  which only leads the banner with its time and outlines its row),
-  `SceneStats`,
-  ladder, recent results, then the OpenDota guide. The ladder is why people return; the history sections are
-  the costliest queries, so they stream in below the room.
+- **Order is the product:** the title row (`PageTitle compact`: "Inhouse",
+  the section nav from md, "Match history"; no tagline), the one top bar
+  (only while it has something on it, streamed: the planned inhouse night's
+  chip and Play later's soonest open times, three, or two beside the night,
+  earliest first, a link leading with its own, a fade on a side with more
+  off screen; [inhouse](inhouse.md#play-later)), the room, the
+  Play later card (players' own times in full, with posting; always here, a
+  time's link too, which only leads the bar with its time and outlines its
+  row), the inhouse night's card (only while one is set: "I'm in", the
+  headcount, who said they're in as profile chips, "Copy invite link", the
+  Discord event and calendar links; opened from the invite link it says
+  "I'm in" once), a phone's section nav (from md it sits in the title row),
+  `SceneStats`, ladder, recent results, then the OpenDota guide. The ladder
+  is why people return; the history sections are the costliest queries, so
+  they stream in below the room.
+- **The whole queue card fits the first screen** (Tim, 2026-10-10: "the
+  entire queue on the screen when you go to the in-house page, you
+  shouldn't have to scroll down", with the bar where you can opt into a
+  time; his goal is a real browser window, not a full device screen). On a
+  fresh load the queue card, from its status to every slot and the
+  positions count, sits under the 64px header and, below 1024px, above the
+  phone tab bar, from 390x844 to 1920x1080, at 1366x768 and in a laptop's
+  browser window (1280x690, 1366x657, a screen less its tabs, address bar
+  and dock), in every state the spec writes: signed out, signed in with or
+  without a signup's MMR, queued, 0 to 9 present, with and without the bar.
+  `e2e-mid/zz-inhouse-queue-fit.spec.ts` measures it (and 375x667 signed
+  out), also prints 390x664 (Safari's toolbars showing) and 1440x790
+  without asserting them, and prints a table of every load's spare pixels
+  (the visible bottom less the card's); read the latest run's table rather
+  than a number here. The tightest required loads are 1366x657, for every
+  viewer, and a signed-in newcomer or queued player on a 390 phone. Run it
+  with `FIT_FONT=Verdana` too: CI's
+  Linux runner draws DejaVu Sans, wider than a Mac's SF Pro, and Verdana
+  is a close stand-in, so a Mac sees the wraps CI will.
+  What makes it fit:
+  - **Above the room:** the compact title row; the bar, one button high (60px
+    on a phone, 52 from 640), carrying the night as a chip instead of a card
+    above the room; 12px between the title, the bar and the room. The
+    room's blocks sit 12px apart on a phone and 16 from md.
+  - **The room's header and its stage strip are ONE row** (the connection
+    dot, the lobby badge, the stages, Sound; on a phone "Live room" and the
+    Sound words are screen-reader text, "Reconnecting" always shows, and the
+    badge takes a line of its own).
+  - **Below md, a compact card:** a 44px ring beside the title and the join
+    control; the picker's short "Positions" label beside its toggles; your
+    place in line and "How your MMR is set" (a 24px summary) on one row,
+    wrapping where they don't fit; 34px slot rows (the name and MMR, then
+    the slot, or "You" in your own row, and 16px pills); and the positions
+    count in the "Who's playing" row. That row never wraps (a second line
+    cost a phone its first screen in DejaVu): the heading and the counts
+    keep their width, and the average sits in a one-line box that drops it
+    whole when it doesn't fit, never cut to "4,4…". "N more · waits for a
+    game" replaces the row's "Ready check when a game finishes" while every
+    game slot is taken. On a phone the join control is 44px high with a
+    narrower MMR box everywhere (the empty queue's card and the next-game
+    card too), so the box and Join share one line: stacked, they cost the
+    empty card its first screen in DejaVu.
+  - **md (768 to 1023):** two columns, the 128px ring centred over the title
+    with the controls stacked under it, and 48px slot rows (they grow when a
+    narrow slot wraps its positions, with height to spare at 768x1024).
+  - **From lg:** the ring 128px beside the title, the controls centred
+    under it with the picker's short label beside its toggles, 48px slot
+    rows, and a 16px gutter around the slots.
+  States outside the target add height and may scroll: "Also queued", the
+  away line, "Result on the way", the last result's banner, "Save
+  positions", a status line, and an opened "How your MMR is set".
 - **Two live games share the room** ([inhouse](inhouse.md#two-games-at-once)):
   a player sees their own game, with the other folded to one line under it; a
   spectator sees the next-game queue card, then each live game read-only,

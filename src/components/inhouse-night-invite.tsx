@@ -15,8 +15,8 @@ import {
 
 /**
  * Answers the invite once: says "I'm in" for a signed-in player not yet on
- * the list, tells one without a linked Discord to press the card's "Link
- * Discord to say you're in" (it comes back here, and then says it), or says
+ * the list, tells one without a linked Discord to press Link Discord (the
+ * bar's chip or the card; it comes back here, and then says it), or says
  * they already are. It never sends anyone to Discord by itself: a page that
  * bounces to a consent screen on load is jarring, and a reload repeats it.
  * The server decides which (inhouseNightInviteAction); this only acts. It
@@ -27,8 +27,9 @@ import {
  * never reached the page, and the toggle stayed unpressed. A lost answer is
  * unknown, never failed: the card shows the truth on the next load.
  */
-/** What the invite says to a player who must link Discord first; the card's
- *  button beside it carries the label it names. */
+/** What the invite says to a player who must link Discord first. It names
+ *  a control on screen: the night's chip in the bar at the top says "Link
+ *  Discord", and the card's button "Link Discord to say you're in". */
 const INHOUSE_NIGHT_LINK_DISCORD_STEP =
   "One step left: press Link Discord to say you're in, and you're on the list once Discord says yes.";
 

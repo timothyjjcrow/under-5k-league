@@ -37,10 +37,221 @@ type QueueControlProps = {
   nextGame?: boolean;
 };
 
+/** MMR on a hydrated client: one locale, so the server's "7,200" never hydrates as "7.200". */
+const MMR_FORMAT = new Intl.NumberFormat("en-US");
+const formatMmr = (mmr: number) => MMR_FORMAT.format(mmr);
+
 /**
- * The single join/leave/sign-in control used by both the idle queue and the
- * compact live-lobby card. Keeping this in one component prevents the live
- * path from drifting back to a hidden API-only affordance.
+ * The positions shown and what a join sends. The picker holds an unsaved
+ * choice until Join or "Save positions" sends it. It is tied to the saved
+ * value it was edited from, so a save (or a change from another tab) that
+ * moves the saved value drops the stale draft instead of showing it as
+ * unsaved.
+ */
+function useQueueJoin({
+  me,
+  mmr,
+  rolesDraft,
+}: Pick<QueueControlProps, "me" | "mmr" | "rolesDraft">) {
+  const saved = me.roles ?? { roles: "", source: "none" as const };
+  const shownRoles =
+    rolesDraft && rolesDraft.base === saved.roles
+      ? rolesDraft.value
+      : saved.roles;
+  const rolesDirty = shownRoles !== saved.roles;
+  // Only an edited choice rides along with a join; untouched, the stored one
+  // (or the league signup's) stands, as it does for auto-join and Run it back.
+  const joinBody = rolesDirty
+    ? { action: "join", mmr, roles: parseRoleOrder(shownRoles) }
+    : { action: "join", mmr };
+  return { saved, shownRoles, rolesDirty, joinBody };
+}
+
+type QueueJoin = ReturnType<typeof useQueueJoin>;
+
+/**
+ * The queue's one control: sign in, leave, or join (with the MMR box when no
+ * league signup sets it). On a phone it is 44px high with a narrower MMR
+ * box, so the box and Join share one line (stacked, they cost the empty
+ * card its first screen). `compact` is the filled card's layout: on a phone
+ * the MMR form starts at the left, under the ring.
+ */
+function QueueAction({
+  me,
+  pending,
+  mmr,
+  setMmr,
+  signupMmr,
+  act,
+  nextGame = false,
+  join,
+  compact = false,
+}: Pick<
+  QueueControlProps,
+  "me" | "pending" | "mmr" | "setMmr" | "signupMmr" | "act" | "nextGame"
+> & { join: QueueJoin; compact?: boolean }) {
+  const mmrInputId = useId();
+  // A phone's size: a 44px button, not 48.
+  const big = "max-md:h-11 max-md:px-4 max-md:text-sm";
+  if (!me.isLoggedIn) {
+    return (
+      <a href="/login?next=/inhouse" className={buttonClasses("primary", "lg", big)}>
+        {nextGame ? "Sign in for next game" : "Sign in to queue"}
+      </a>
+    );
+  }
+  if (me.inQueue) {
+    return (
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => act({ action: "leave" })}
+        className={buttonClasses("secondary", "lg", big)}
+      >
+        Leave queue
+      </button>
+    );
+  }
+  // joinQueue always uses the league signup MMR when there is one, so an
+  // input there would be a control that does nothing.
+  const joinButton = (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() => act(join.joinBody)}
+      className={buttonClasses("accent", "lg", big)}
+    >
+      {nextGame ? "Join next-game queue →" : "Join queue →"}
+    </button>
+  );
+  if (signupMmr > 0) return joinButton;
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-2",
+        compact ? "md:justify-center" : "justify-center",
+      )}
+    >
+      <label htmlFor={mmrInputId} className="text-sm text-muted">
+        MMR
+      </label>
+      {/* w-32: at w-24 the padding and the number spinner left
+          "e.g. 3200" cut to "e.g. 32". A phone's w-28 (so Join fits
+          beside it) gives back the padding instead. */}
+      <input
+        id={mmrInputId}
+        type="number"
+        min={0}
+        max={12000}
+        inputMode="numeric"
+        value={mmr || ""}
+        placeholder="e.g. 3200"
+        onChange={(e) => setMmr(Number(e.target.value))}
+        title="Seeds captain selection and the balance meter."
+        className="h-11 w-28 rounded-lg border border-line bg-surface-2/50 px-2 text-center text-sm outline-none focus:border-accent/60 md:w-32 md:px-3"
+      />
+      {joinButton}
+    </div>
+  );
+}
+
+/** Which MMR a league signup joins at, shown under its Join button. */
+function SignupMmrNote({
+  signupMmr,
+  className,
+}: {
+  signupMmr: number;
+  className?: string;
+}) {
+  return (
+    <p className={cn("text-xs text-muted", className)}>
+      Joining at{" "}
+      <span className="tabular-nums text-fg">{formatMmr(signupMmr)}</span>{" "}
+      MMR, from your league signup
+    </p>
+  );
+}
+
+/** The positions picker and, while it's edited, "Save positions". */
+function QueuePositions({
+  pending,
+  setRolesDraft,
+  act,
+  join,
+  queueCard = false,
+  saveClassName,
+}: Pick<QueueControlProps, "pending" | "setRolesDraft" | "act"> & {
+  join: QueueJoin;
+  /** The filled queue card's dense layout (RolePicker `queueCard`). */
+  queueCard?: boolean;
+  saveClassName: string;
+}) {
+  const { saved, shownRoles, rolesDirty } = join;
+  return (
+    <>
+      <RolePicker
+        value={shownRoles}
+        onChange={(next) => setRolesDraft({ value: next, base: saved.roles })}
+        source={rolesDirty ? "inhouse" : saved.source}
+        disabled={pending}
+        queueCard={queueCard}
+      />
+      {rolesDirty ? (
+        <div className={saveClassName}>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              act({ action: "roles", roles: parseRoleOrder(shownRoles) })
+            }
+            className={buttonClasses("secondary", "sm")}
+          >
+            Save positions
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * How the typed MMR is checked. Stays visible after joining: it's the
+ * explanation for why the listed MMR can differ from what was typed.
+ */
+function QueueMmrHint({
+  mmrHint,
+  className,
+  dense = false,
+}: {
+  mmrHint: string;
+  className?: string;
+  /**
+   * The filled queue card: a 24px summary (WCAG 2.5.8's size, with nothing
+   * else within reach), and opened it takes the whole row it shares.
+   */
+  dense?: boolean;
+}) {
+  return (
+    <details className={cn("text-xs text-muted", dense && "open:basis-full", className)}>
+      <summary
+        className={cn(
+          "inline-flex min-h-8 cursor-pointer items-center rounded px-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+          dense && "min-h-6",
+        )}
+      >
+        How your MMR is set
+      </summary>
+      <p className="mt-1 text-left leading-relaxed">{mmrHint}</p>
+    </details>
+  );
+}
+
+/**
+ * The single join/leave/sign-in control used by the empty queue and the
+ * compact live-lobby card, stacked: the action, the positions, the MMR
+ * note. The filled queue card lays the same parts out in its own grid.
+ * Keeping them one set of components prevents the live path from drifting
+ * back to a hidden API-only affordance.
  */
 function QueueControls({
   me,
@@ -54,130 +265,43 @@ function QueueControls({
   act,
   nextGame = false,
 }: QueueControlProps) {
-  const mmrInputId = useId();
-  // The positions picker holds an unsaved choice until Join or "Save
-  // positions" sends it. It is tied to the saved value it was edited from, so
-  // a save (or a change from another tab) that moves the saved value drops
-  // the stale draft instead of showing it as unsaved.
-  const saved = me.roles ?? { roles: "", source: "none" as const };
-  const shownRoles =
-    rolesDraft && rolesDraft.base === saved.roles
-      ? rolesDraft.value
-      : saved.roles;
-  const rolesDirty = shownRoles !== saved.roles;
-  // Only an edited choice rides along with a join; untouched, the stored one
-  // (or the league signup's) stands, as it does for auto-join and Run it back.
-  const joinBody = rolesDirty
-    ? { action: "join", mmr, roles: parseRoleOrder(shownRoles) }
-    : { action: "join", mmr };
-
+  const join = useQueueJoin({ me, mmr, rolesDraft });
+  const action = (
+    <QueueAction
+      me={me}
+      pending={pending}
+      mmr={mmr}
+      setMmr={setMmr}
+      signupMmr={signupMmr}
+      act={act}
+      nextGame={nextGame}
+      join={join}
+    />
+  );
   return (
     <div>
       <div className="flex flex-wrap items-center justify-center gap-3">
-        {!me.isLoggedIn ? (
-          <a
-            href="/login?next=/inhouse"
-            className={buttonClasses("primary", "lg")}
-          >
-            {nextGame ? "Sign in for next game" : "Sign in to queue"}
-          </a>
-        ) : me.inQueue ? (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => act({ action: "leave" })}
-            className={buttonClasses("secondary", "lg")}
-          >
-            Leave queue
-          </button>
-        ) : signupMmr > 0 ? (
-          // joinQueue always uses the league signup MMR when there is one,
-          // so an input here would be a control that does nothing.
+        {me.isLoggedIn && !me.inQueue && signupMmr > 0 ? (
           <div className="flex flex-col items-center gap-2">
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => act(joinBody)}
-              className={buttonClasses("accent", "lg")}
-            >
-              {nextGame ? "Join next-game queue →" : "Join queue →"}
-            </button>
-            <p className="text-center text-xs text-muted">
-              Joining at{" "}
-              <span className="tabular-nums text-fg">
-                {signupMmr.toLocaleString()}
-              </span>{" "}
-              MMR, from your league signup
-            </p>
+            {action}
+            <SignupMmrNote signupMmr={signupMmr} className="text-center" />
           </div>
         ) : (
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <label htmlFor={mmrInputId} className="text-sm text-muted">
-              MMR
-            </label>
-            {/* w-32: at w-24 the padding and the number spinner left
-                "e.g. 3200" cut to "e.g. 32". */}
-            <input
-              id={mmrInputId}
-              type="number"
-              min={0}
-              max={12000}
-              inputMode="numeric"
-              value={mmr || ""}
-              placeholder="e.g. 3200"
-              onChange={(e) => setMmr(Number(e.target.value))}
-              title="Seeds captain selection and the balance meter."
-              className="h-11 w-32 rounded-lg border border-line bg-surface-2/50 px-3 text-center text-sm outline-none focus:border-accent/60"
-            />
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => act(joinBody)}
-              className={buttonClasses("accent", "lg")}
-            >
-              {nextGame ? "Join next-game queue →" : "Join queue →"}
-            </button>
-          </div>
+          action
         )}
       </div>
 
       {me.isLoggedIn ? (
-        <>
-          <RolePicker
-            value={shownRoles}
-            onChange={(next) =>
-              setRolesDraft({ value: next, base: saved.roles })
-            }
-            source={rolesDirty ? "inhouse" : saved.source}
-            disabled={pending}
-          />
-          {rolesDirty ? (
-            <div className="mt-2 flex justify-center">
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() =>
-                  act({ action: "roles", roles: parseRoleOrder(shownRoles) })
-                }
-                className={buttonClasses("secondary", "sm")}
-              >
-                Save positions
-              </button>
-            </div>
-          ) : null}
-        </>
+        <QueuePositions
+          pending={pending}
+          setRolesDraft={setRolesDraft}
+          act={act}
+          join={join}
+          saveClassName="mt-2 flex justify-center"
+        />
       ) : null}
 
-      {/* Stays visible after joining — it's the explanation for why the listed
-          MMR can differ from what was typed. */}
-      {mmrHint ? (
-        <details className="mt-3 text-center text-xs text-muted">
-          <summary className="inline-flex min-h-8 cursor-pointer items-center rounded px-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-            How your MMR is set
-          </summary>
-          <p className="mt-1 text-left leading-relaxed">{mmrHint}</p>
-        </details>
-      ) : null}
+      {mmrHint ? <QueueMmrHint mmrHint={mmrHint} className="mt-3 text-center" /> : null}
     </div>
   );
 }
@@ -287,6 +411,11 @@ export function QueueView({
     present.length >= 2 && coverage.some((role) => role.count > 0);
 
   const myPosition = present.findIndex((q) => q.userId === me.userId) + 1;
+  // The filled card lays the controls' parts out in its own grid.
+  const join = useQueueJoin({ me, mmr, rolesDraft });
+  const mmrForm = me.isLoggedIn && !me.inQueue && signupMmr <= 0;
+  // Phone-sized coverage pills (16px), in the "Who's playing" row.
+  const smallPill = "max-md:h-4 max-md:min-w-4 max-md:px-0.5 max-md:text-[10px]";
 
   const controls = (
     <QueueControls
@@ -313,14 +442,21 @@ export function QueueView({
           nextGame={nextGame}
         />
       ) : (
+        // The whole card fits the first screen (Tim, 2026-10-10: the entire
+        // queue on screen when you open /inhouse), a laptop's browser window
+        // too: below md the ring shrinks beside the title and the join
+        // control, the slots are one short row each and the positions count
+        // rides the "Who's playing" row. From md the ring is 128px over the
+        // title (beside it from lg), with 48px slot rows and, from lg, the
+        // picker's short label beside its toggles.
         <section
           aria-label={nextGame ? "Next-game queue" : "Inhouse queue"}
           className="overflow-hidden rounded-2xl border border-accent/25 bg-surface/90 shadow-xl shadow-black/10"
         >
-          <div className="grid lg:grid-cols-[0.85fr_1.35fr]">
-            <div className="relative overflow-hidden border-b border-line bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] p-5 lg:border-b-0 lg:border-r lg:p-6">
-              <div className="flex items-center gap-5 lg:flex-col lg:gap-3 lg:text-center">
-                <div className="relative grid h-32 w-32 shrink-0 place-items-center lg:h-40 lg:w-40">
+          <div className="grid md:grid-cols-[1fr_1.35fr] lg:grid-cols-[0.85fr_1.35fr]">
+            <div className="relative overflow-hidden bg-[radial-gradient(ellipse_at_top_left,color-mix(in_srgb,var(--color-accent)_12%,transparent),transparent_75%)] px-3 pt-3 md:border-r md:border-line md:p-5 lg:py-4">
+              <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-2.5 md:grid-cols-1 md:justify-items-center md:gap-y-3 md:text-center lg:grid-cols-[auto_minmax(0,1fr)] lg:gap-x-5 lg:gap-y-2.5 lg:justify-items-start lg:text-left">
+                <div className="relative grid h-11 w-11 shrink-0 place-items-center md:h-32 md:w-32">
                   <svg
                     viewBox="0 0 120 120"
                     aria-hidden
@@ -333,7 +469,7 @@ export function QueueView({
                       fill="none"
                       stroke="currentColor"
                       strokeWidth="5"
-                      className="text-line"
+                      className="text-line [stroke-width:9] md:[stroke-width:5]"
                     />
                     <circle
                       cx="60"
@@ -345,7 +481,7 @@ export function QueueView({
                       pathLength="100"
                       strokeDasharray={`${pct} 100`}
                       strokeLinecap={pct > 0 ? "round" : "butt"}
-                      className="text-accent transition-[stroke-dasharray] duration-500 motion-reduce:transition-none"
+                      className="text-accent transition-[stroke-dasharray] duration-500 [stroke-width:9] motion-reduce:transition-none md:[stroke-width:5]"
                     />
                   </svg>
                   <div
@@ -361,53 +497,151 @@ export function QueueView({
                     aria-valuetext={`${present.length} players queued; ${needed} more needed`}
                     className="text-center"
                   >
-                    <span className="block font-display text-4xl font-bold leading-none tabular-nums lg:text-5xl">
+                    <span className="block font-display text-lg font-bold leading-none tabular-nums md:text-4xl">
                       {present.length}
                     </span>
-                    <span className="mt-1 block text-[11px] text-muted">
-                      of {lobbySize} players
+                    <span className="block text-[10px] leading-none text-muted md:mt-1 md:text-[11px] md:leading-normal">
+                      of {lobbySize}
+                      <span className="max-md:hidden"> players</span>
                     </span>
                   </div>
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent max-md:hidden">
                     {nextGame ? "Up next" : "Pick-up Dota"}
                   </p>
-                  <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">
+                  <h2 className="font-display text-base font-semibold tracking-tight max-md:leading-snug md:mt-1 md:text-2xl">
                     {nextGame ? "Next-game queue" : "Inhouse queue"}
                   </h2>
-                  <p className="mt-1.5 text-sm text-muted">
-                    {needed > 0
-                      ? `${needed} more ${needed === 1 ? "player" : "players"} to play`
-                      : waitsForGame
-                        ? "Full · waiting for a game to finish"
-                        : "Full · starting the ready check…"}
+                  <p className="text-xs text-muted md:mt-1.5 md:text-sm">
+                    {needed > 0 ? (
+                      <>
+                        {`${needed} more `}
+                        <span className="max-md:hidden">
+                          {needed === 1 ? "player " : "players "}
+                        </span>
+                        {/* A phone has no room for the "Who's playing"
+                            row's "Ready check when a game finishes", so
+                            the count carries it. */}
+                        {waitsForGame ? (
+                          <>
+                            <span className="max-md:hidden">to play</span>
+                            <span className="md:hidden">· waits for a game</span>
+                          </>
+                        ) : (
+                          "to play"
+                        )}
+                      </>
+                    ) : waitsForGame ? (
+                      "Full · waiting for a game to finish"
+                    ) : (
+                      "Full · starting the ready check…"
+                    )}
                   </p>
                   {queueAvg > 0 ? (
-                    <p className="mt-2 text-xs tabular-nums text-muted">
-                      {queueAvg.toLocaleString()} average MMR
+                    <p className="mt-2 text-xs tabular-nums text-muted max-md:hidden">
+                      {formatMmr(queueAvg)} average MMR
                     </p>
                   ) : null}
                 </div>
-              </div>
-              <div className="mt-5">{controls}</div>
-              {me.inQueue ? (
-                <p
-                  role="status"
-                  className="mt-3 text-center text-xs text-success"
+                <div
+                  className={
+                    mmrForm
+                      ? "col-span-full justify-self-start md:mt-2 md:justify-self-center"
+                      : "justify-self-end md:col-span-full md:mt-2 md:justify-self-center"
+                  }
                 >
-                  {myPosition > 0
-                    ? `You’re #${myPosition} in line`
-                    : "Your spot is saved"}
-                  {nextGame ? " · next game" : " · listen for the ready check"}
-                </p>
-              ) : null}
+                  <QueueAction
+                    me={me}
+                    pending={pending}
+                    mmr={mmr}
+                    setMmr={setMmr}
+                    signupMmr={signupMmr}
+                    act={act}
+                    nextGame={nextGame}
+                    join={join}
+                    compact
+                  />
+                </div>
+                {me.isLoggedIn && !me.inQueue && signupMmr > 0 ? (
+                  <SignupMmrNote
+                    signupMmr={signupMmr}
+                    className="col-span-full md:w-full md:text-center"
+                  />
+                ) : null}
+                {me.isLoggedIn ? (
+                  <div className="col-span-full w-full">
+                    <QueuePositions
+                      pending={pending}
+                      setRolesDraft={setRolesDraft}
+                      act={act}
+                      join={join}
+                      queueCard
+                      saveClassName="mt-2 flex md:justify-center"
+                    />
+                  </div>
+                ) : null}
+                {/* Your place in line and the MMR note share a row
+                    where they fit side by side (a laptop), and wrap
+                    where they don't. */}
+                {me.inQueue || mmrHint ? (
+                  <div className="col-span-full flex w-full flex-wrap items-center gap-x-3 gap-y-1 md:justify-center">
+                    {me.inQueue ? (
+                      <p role="status" className="text-xs text-success">
+                        {myPosition > 0
+                          ? `You’re #${myPosition} in line`
+                          : "Your spot is saved"}
+                        {nextGame ? " · next game" : " · listen for the ready check"}
+                      </p>
+                    ) : null}
+                    {mmrHint ? (
+                      <QueueMmrHint mmrHint={mmrHint} dense className="md:text-center" />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
-            <div className="min-w-0 p-4 sm:p-5">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold">Who’s playing</h3>
-                <span className="text-xs text-muted">
+            <div className="min-w-0 px-3 pb-3 pt-2.5 md:p-4">
+              {/* One line at every width: a second line here cost a phone
+                  its first screen once wider type (Linux's DejaVu) wrapped
+                  it. Below md, the average gives way first: it sits in a
+                  one-line box after an empty line-high spacer, so when it
+                  doesn't fit beside the counts it wraps onto the box's
+                  clipped second line and disappears whole, never cut to
+                  "4,4…" (from md it is under the ring). */}
+              <div
+                data-who-row
+                className="mb-1.5 flex flex-nowrap items-center gap-x-2 md:mb-2 md:justify-between"
+              >
+                <h3 className="shrink-0 whitespace-nowrap text-xs font-semibold md:text-sm">
+                  Who’s playing
+                </h3>
+                {queueAvg > 0 ? (
+                  <span className="flex h-4 min-w-0 flex-1 flex-wrap overflow-hidden md:hidden">
+                    <span aria-hidden className="h-4 w-0" />
+                    <span className="whitespace-nowrap text-xs tabular-nums text-muted">
+                      {formatMmr(queueAvg)} avg
+                    </span>
+                  </span>
+                ) : null}
+                {showCoverage ? (
+                  <p className="ml-auto flex shrink-0 items-center gap-x-1 text-xs text-muted md:hidden">
+                    <span className="sr-only">Positions queued:</span>
+                    {coverage.map((role) => (
+                      <span
+                        key={role.key}
+                        className={cn(
+                          "inline-flex items-center tabular-nums",
+                          role.count === 0 ? "text-accent" : "",
+                        )}
+                      >
+                        <RoleBadges roles={role.key} pillClassName={smallPill} />×{role.count}
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
+                <span className="whitespace-nowrap text-xs text-muted max-md:hidden">
                   {waitsForGame ? (
                     "Ready check when a game finishes"
                   ) : (
@@ -415,17 +649,17 @@ export function QueueView({
                   )}
                 </span>
               </div>
-              <ul className="grid grid-cols-2 gap-2">
+              <ul className="grid grid-cols-2 gap-1 md:gap-2">
                 {slots.map((q, i) => {
                   if (!q) {
                     return (
                       <li
                         key={`open-${i}`}
-                        className="flex min-h-16 items-center gap-2 rounded-xl border border-dashed border-line/70 px-3 py-2"
+                        className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-dashed border-line/70 px-1.5 md:min-h-12 md:gap-2 md:rounded-xl md:px-3 md:py-1"
                       >
                         <span
                           aria-hidden
-                          className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-dashed border-line text-sm text-muted"
+                          className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-dashed border-line text-sm text-muted md:h-8 md:w-8"
                         >
                           +
                         </span>
@@ -441,34 +675,51 @@ export function QueueView({
                     <li
                       key={q.userId}
                       className={cn(
-                        "flex min-h-16 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors",
+                        "flex min-h-[34px] min-w-0 items-center gap-1.5 rounded-lg border px-1.5 transition-colors md:min-h-12 md:gap-2 md:rounded-xl md:px-2.5 md:py-[3px]",
                         isMe
                           ? "border-accent/50 bg-accent/10"
                           : "border-line bg-surface-2/50",
                       )}
                     >
-                      <Avatar name={q.name} src={q.avatar} size={30} />
+                      <Avatar
+                        name={q.name}
+                        src={q.avatar}
+                        size={30}
+                        className="shrink-0 max-md:h-6! max-md:w-6!"
+                      />
                       <div className="min-w-0 flex-1">
-                        <PlayerLink
-                          userId={q.userId}
-                          className="block truncate text-xs font-semibold sm:text-sm"
-                        >
-                          {q.name}
-                        </PlayerLink>
-                        <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
-                          <span className="tabular-nums">#{i + 1}</span>
-                          {isMe ? (
-                            <span className="text-accent">You</span>
-                          ) : null}
+                        {/* A phone's line 1: the name and the MMR; line 2
+                            the slot (or "You" in your own: the room says
+                            your place in line) and the positions. */}
+                        <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                          <PlayerLink
+                            userId={q.userId}
+                            className="min-w-6 flex-1 truncate font-semibold sm:text-sm"
+                          >
+                            {q.name}
+                          </PlayerLink>
                           {q.mmr > 0 ? (
-                            <span className="tabular-nums">
-                              {q.mmr.toLocaleString()} MMR
+                            <span className="shrink-0 tabular-nums text-muted md:hidden">
+                              {formatMmr(q.mmr)}
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="flex items-center gap-x-1 text-xs text-muted md:flex-wrap md:gap-x-1.5">
+                          <span className={cn("tabular-nums", isMe && "max-md:hidden")}>
+                            #{i + 1}
+                          </span>
+                          {isMe ? <span className="text-accent">You</span> : null}
+                          {q.mmr > 0 ? (
+                            <span className="tabular-nums max-md:hidden">
+                              {formatMmr(q.mmr)} MMR
                             </span>
                           ) : null}
                           <RoleBadges
                             roles={q.roles}
                             ranked={q.rolesRanked}
                             labelled
+                            className="flex-nowrap gap-px md:flex-wrap md:gap-1"
+                            pillClassName={smallPill}
                           />
                         </span>
                       </div>
@@ -480,7 +731,7 @@ export function QueueView({
                 })}
               </ul>
               {showCoverage ? (
-                <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted">
+                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted max-md:hidden">
                   <span>Positions queued:</span>
                   {coverage.map((role) => (
                     <span

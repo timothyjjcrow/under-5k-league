@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { buttonClasses } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import {
   DOTA_ROLES,
   parseRoleOrder,
@@ -25,6 +26,7 @@ export function RolePicker({
   onChange,
   source,
   disabled = false,
+  queueCard = false,
 }: {
   /** The preference order ("2,3,1"; "" = none picked). */
   value: string;
@@ -35,6 +37,15 @@ export function RolePicker({
    */
   source: InhouseRolesSource;
   disabled?: boolean;
+  /**
+   * The filled queue card (the whole queue on the first screen): below md
+   * and from lg the label, shortened to "Positions" with the rest for screen
+   * readers (so the group's name doesn't change), sits beside the toggles
+   * with the order line under them, left-aligned on a phone and centred on
+   * a desktop. md keeps the stacked picker, with the card's own spacing
+   * above it. Off, it renders exactly what shipped.
+   */
+  queueCard?: boolean;
 }) {
   const labelId = useId();
   const keys = parseRoleOrder(value);
@@ -54,11 +65,26 @@ export function RolePicker({
     );
 
   return (
-    <div role="group" aria-labelledby={labelId} className="mt-4">
+    <div
+      role="group"
+      aria-labelledby={labelId}
+      className={cn(
+        "mt-4",
+        queueCard &&
+          "max-md:mt-0 max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-2 max-md:gap-y-1 md:mt-1 lg:mt-0 lg:flex lg:flex-wrap lg:items-center lg:justify-center lg:gap-x-3 lg:gap-y-1",
+      )}
+    >
       <p id={labelId} className="text-center text-xs font-medium text-muted">
-        Positions you play, in the order you want them
+        {queueCard ? (
+          <>
+            Positions
+            <span className="max-md:sr-only lg:sr-only"> you play, in the order you want them</span>
+          </>
+        ) : (
+          "Positions you play, in the order you want them"
+        )}
       </p>
-      <div className="mt-2 flex justify-center gap-2">
+      <div className={cn("mt-2 flex justify-center gap-2", queueCard && "max-md:mt-0 lg:mt-0")}>
         {DOTA_ROLES.map((role) => {
           const rank = keys.indexOf(role.key) + 1;
           const on = rank > 0;
@@ -92,7 +118,12 @@ export function RolePicker({
           );
         })}
       </div>
-      <p className="mt-1.5 text-center text-xs text-muted">
+      <p
+        className={cn(
+          "mt-1.5 text-center text-xs text-muted",
+          queueCard && "max-md:mt-0 max-md:basis-full max-md:text-left lg:mt-0 lg:basis-full",
+        )}
+      >
         {line || "None picked yet: tap your favorite first"}
         {source === "signup" && line ? " · from your league signup" : null}
       </p>

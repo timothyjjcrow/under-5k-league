@@ -59,6 +59,37 @@ async function horizontalOverflow(page: Page): Promise<number> {
   );
 }
 
+/**
+ * The room's one header row in every stage, on a phone and a desktop: one
+ * stage strip naming the stage the room is in, the Sound button on the
+ * strip's line (the header and the strip share a row: Tim, 2026-10-10, the
+ * whole queue on the first screen), and no sideways scroll. Quick, so the
+ * timed stages' clocks aren't at risk.
+ */
+async function checkRoomHeader(page: Page, stage: string) {
+  const viewport = page.viewportSize();
+  for (const width of [375, 1280]) {
+    await page.setViewportSize({ width, height: 812 });
+    const strip = page.locator('ol[aria-label="Inhouse progress"]');
+    await expect(strip).toHaveCount(1);
+    await expect(strip.locator('li[aria-current="step"]')).toHaveText(
+      new RegExp(`${stage}$`),
+    );
+    const sound = page.getByRole("button", { name: /^(Sound on|Muted)$/ });
+    await expect(sound).toBeVisible();
+    const stripBox = (await strip.boundingBox())!;
+    const soundBox = (await sound.boundingBox())!;
+    expect(
+      Math.abs(
+        stripBox.y + stripBox.height / 2 - (soundBox.y + soundBox.height / 2),
+      ),
+      `${stage} at ${width}px: Sound sits on the strip's line`,
+    ).toBeLessThanOrEqual(6);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  }
+  if (viewport) await page.setViewportSize(viewport);
+}
+
 /** Optional review artifacts; keep CI's timed ready checks free of capture work. */
 async function captureRoom(page: Page, stage: string) {
   const directory = process.env.INHOUSE_UI_CAPTURE_DIR;
@@ -96,6 +127,7 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
   await page.getByRole("button", { name: /Join queue/ }).click();
   await expect(progress).toHaveAttribute("aria-valuenow", "1");
   await expect(page.getByRole("button", { name: /Leave queue/ })).toBeVisible();
+  await checkRoomHeader(page, "Queue");
   await captureRoom(page, "queue");
 
   // The whole page must fit the phone — no horizontal page scroll.
@@ -153,6 +185,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
 
   await page.getByRole("button", { name: "ACCEPT MATCH" }).click();
   await expect(page.getByText(/Accepted — waiting/)).toBeVisible();
+  await checkRoomHeader(page, "Accept");
   await captureRoom(page, "ready-check");
 
   // …and the nine API accepts flip the lobby into the captain vote.
@@ -164,6 +197,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Captain vote opens, clock ticking.
   await expect(page.getByText("Choose your captains")).toBeVisible();
   await expect(page.getByRole("timer")).toBeVisible();
+  await checkRoomHeader(page, "Captains");
   await captureRoom(page, "captain-vote");
 
   // Observer votes through the UI; the nine API votes resolve it early.
@@ -190,6 +224,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
 
   // Now it's the observer's turn — pick through the real UI.
   await expect(page.getByText("Your pick").first()).toBeVisible();
+  await checkRoomHeader(page, "Draft");
   await captureRoom(page, "draft");
   // Tapping a player puts the Draft button on that same row.
   await expect(page.getByRole("button", { name: /^Draft / })).toHaveCount(0);
@@ -271,6 +306,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   }
   await expect(page.getByText(/inhouse team [12]/).first()).toBeVisible();
 
+  await checkRoomHeader(page, "Set up");
   await captureRoom(page, "setup");
 
   // The setup phase carries the widest cards in the room (the copy chips and
@@ -309,6 +345,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await expect(page.getByText("Record by match ID")).toBeVisible();
   await expect(page.getByText("Radiant").first()).toBeVisible();
   await expect(page.getByText("Dire").first()).toBeVisible();
+  await checkRoomHeader(page, "Play");
   await captureRoom(page, "in-progress");
 
   // A normal bystander can still line up while this game is live. Signed-out
