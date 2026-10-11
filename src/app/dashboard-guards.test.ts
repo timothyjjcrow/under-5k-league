@@ -112,23 +112,52 @@ describe("dashboard Your team card", () => {
  * While a match-night poll is open during signups, every "Match night" line a
  * player reads before the draft says the poll is deciding it. Home printed
  * "Match night: Saturday 2PM PST" right above a poll asking when match night
- * should be, with Sunday leading. The pitch's wording is unit-tested in
- * season-copy.test.ts; this pins the three surfaces to the poll check.
+ * should be, with Sunday leading, and once Home and /me followed the poll,
+ * /rules, How it works and Schedule kept printing the old night. The rule is
+ * pollDecidesMatchNight (match-night.test.ts) and the pitch's wording is
+ * unit-tested in season-copy.test.ts; this pins every surface to them.
  */
 describe("match-night lines while a poll is open", () => {
   const home = stripLineComments(homePageSource());
-  const me = stripLineComments(
-    sourceFiles("src/app/me/page.tsx", 1).map((file) => file.text).join("\n"),
-  );
+  const page = (path: string) =>
+    stripLineComments(
+      sourceFiles(path, 1).map((file) => file.text).join("\n"),
+    );
+  const me = page("src/app/me/page.tsx");
+  const rules = page("src/app/rules/page.tsx");
+  const howItWorks = page("src/app/how-it-works/page.tsx");
+  const schedule = page("src/app/schedule/page.tsx");
+  const surfaces = { home, me, rules, howItWorks, schedule };
 
-  it("asks the poll whether the night is settled on Home and /me", () => {
-    expect(home).toContain("await matchNightPollOpen()");
-    expect(me).toContain("matchNightPollOpen()");
+  it("asks the one rule whether a poll is deciding the night, on every page that names it", () => {
+    for (const [name, source] of Object.entries(surfaces)) {
+      expect(source, name).toContain("pollDecidesMatchNight(");
+      // The poll is read only where the rule says one could decide the
+      // night, never behind a phase test of the page's own: a hardcoded
+      // SIGNUPS would hide any change to the rule.
+      expect(source, name).toMatch(
+        /pollCanDecideMatchNight\(\w+\)\s*\?\s*(await\s+)?matchNightPollOpen\(\)/,
+      );
+      expect(source, name).not.toMatch(
+        /SIGNUPS["']?\s*(\?|&&)\s*\(?\s*(await\s+)?matchNightPollOpen\(\)/,
+      );
+    }
   });
 
-  it("passes the answer to the pitch and both callouts", () => {
-    expect(home).toMatch(/<LeaguePitch[\s\S]{0,120}pollOpen=\{pollOpen\}/);
+  it("passes the answer to the pitch and every callout", () => {
+    expect(home).toMatch(
+      /<LeaguePitch[\s\S]{0,120}pollOpen=\{pollDecidesNight\}/,
+    );
+    expect(home).toContain("matchNightPollOpen={pollDecidesNight}");
     expect(home).toContain("label={MATCH_NIGHT_POLL_LABEL}");
-    expect(me).toContain("? MATCH_NIGHT_POLL_LABEL");
+    for (const [name, source] of Object.entries({ me, schedule })) {
+      expect(source, name).toMatch(/pollDecidesNight\s*\?\s*MATCH_NIGHT_POLL_LABEL/);
+      expect(source, name).toMatch(/pollDecidesNight\s*\?\s*\(\s*<MatchNightPollNote \/>/);
+    }
+    expect(howItWorks).toContain("? `Match night: ${MATCH_NIGHT_POLL_LABEL}`");
+    expect(howItWorks).toContain("<MatchNightPollNote />");
+    expect(rules).toContain(
+      "matchNightPoll: pollDecidesMatchNight(active, fixtures, pollOpen)",
+    );
   });
 });

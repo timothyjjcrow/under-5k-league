@@ -36,6 +36,7 @@ import {
   playoffFirstRound,
 } from "./schedule";
 import { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
+import { MATCH_NIGHT_POLL_LABEL } from "./season-copy";
 import {
   carriedSeasonSettings,
   type CarriedSeasonSettings,
@@ -66,6 +67,12 @@ export type LeagueRulesInput = {
    * deployment default); null when nothing is announced yet.
    */
   matchNight: string | null;
+  /**
+   * An open match-night poll is choosing the night (`pollDecidesMatchNight`
+   * for the active season), so the night is quoted as being decided in it
+   * instead of `matchNight`. Omitted, no poll is deciding it.
+   */
+  matchNightPoll?: boolean;
   /** The active season's teams that haven't withdrawn; null when unknown. */
   teamCount: number | null;
   /** The deployment's identity. Tests pass `createLeagueConfig({...})`. */
@@ -298,19 +305,25 @@ function rostersSection(s: CarriedSeasonSettings): RuleSection {
   };
 }
 
-function matchNightSection(matchNight: string | null): RuleSection {
+function matchNightSection(
+  matchNight: string | null,
+  poll: boolean,
+): RuleSection {
   const fixtures = span(FIXTURE_CONFLICT_WINDOW_MS);
   const scrims = span(SCRIM_COLLISION_WINDOW_MS);
   const clash =
     fixtures === scrims
       ? `within ${fixtures} of either team's other league matches or booked scrims`
       : `within ${fixtures} of either team's other league matches, or ${scrims} of their booked scrims`;
+  // While a poll is choosing the night, say so in Home's words rather than
+  // quote a time the vote may change.
+  const night = poll ? MATCH_NIGHT_POLL_LABEL : matchNight;
   return {
     id: "match-night",
     title: "Match night and rescheduling",
     rules: [
-      matchNight
-        ? `Match night: ${matchNight}. Kickoff times show in your own time zone.`
+      night
+        ? `Match night: ${night}. Kickoff times show in your own time zone.`
         : "Match night is to be announced. Kickoff times show in your own time zone.",
       `Once your match has a kickoff time, answer its check-in (I'm in, or Can't make it) so your captain can find cover. It stays open until ${plural(AUTO_SYNC.WINDOW_HOURS, "hour")} after kickoff.`,
       `Captains move a match with a ready check: either captain offers up to ${MAX_RESCHEDULE_OPTIONS} times on the match page, everyone playing answers each one, and the match moves itself once both captains and a full lineup on each side can make a time. Either captain can lock in a time the other captain said yes to without waiting for everyone.`,
@@ -404,6 +417,7 @@ function resultsSection(
 export function leagueRules({
   season,
   matchNight,
+  matchNightPoll = false,
   teamCount,
   config = LEAGUE_CONFIG,
 }: LeagueRulesInput): LeagueRules {
@@ -420,7 +434,7 @@ export function leagueRules({
       playoffsSection(season?.isActive ? teamCount : null),
       forfeitsSection(settings),
       rostersSection(settings),
-      matchNightSection(matchNight),
+      matchNightSection(matchNight, matchNightPoll),
       hostingSection(ticket, config),
       signupsSection(settings),
       draftSection(settings),

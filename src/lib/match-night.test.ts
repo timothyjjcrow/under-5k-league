@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { MATCH_SCHEDULE } from "./constants";
+import { MATCH_SCHEDULE, SEASON_STATUS } from "./constants";
 import {
   fixturesMatchNightLabel,
+  pollCanDecideMatchNight,
+  pollDecidesMatchNight,
   seasonMatchNightLabel,
   type FixtureKickoff,
 } from "./match-night";
@@ -137,18 +139,71 @@ describe("seasonMatchNightLabel", () => {
   });
 });
 
+describe("pollDecidesMatchNight", () => {
+  const signups = { status: SEASON_STATUS.SIGNUPS };
+
+  it("hands the night to an open poll while the season takes signups", () => {
+    expect(pollDecidesMatchNight(signups, [], true)).toBe(true);
+    // A fixture with no kickoff names no night, so the poll still decides.
+    expect(pollDecidesMatchNight(signups, [open(null)], true)).toBe(true);
+  });
+
+  it("leaves the night alone with no poll open", () => {
+    expect(pollDecidesMatchNight(signups, [], false)).toBe(false);
+  });
+
+  it("never applies outside signups: later phases print the season's night", () => {
+    for (const status of [
+      SEASON_STATUS.DRAFT,
+      SEASON_STATUS.REGULAR_SEASON,
+      SEASON_STATUS.PLAYOFFS,
+      SEASON_STATUS.COMPLETE,
+    ]) {
+      expect(pollDecidesMatchNight({ status }, [], true), status).toBe(false);
+    }
+    // Between seasons there is no season's night for a poll to decide.
+    expect(pollDecidesMatchNight(null, [], true)).toBe(false);
+  });
+
+  it("gives way to fixtures once one has a kickoff, whatever the poll says", () => {
+    expect(pollDecidesMatchNight(signups, [open(US_WEEK_ONE)], true)).toBe(false);
+    expect(
+      pollDecidesMatchNight(signups, [open(null), played(US_WEEK_ONE)], true),
+    ).toBe(false);
+  });
+
+  // Pages read the poll only when pollCanDecideMatchNight holds, so it must
+  // cover every season an open poll would decide, and no more.
+  it("tells pages to read the poll exactly where an open poll decides the night", () => {
+    const seasons = [
+      null,
+      ...Object.values(SEASON_STATUS).map((status) => ({ status })),
+    ];
+    for (const season of seasons) {
+      const decides = pollDecidesMatchNight(season, [], true);
+      expect(decides, season?.status ?? "no season").toBe(
+        pollCanDecideMatchNight(season),
+      );
+    }
+    expect(pollCanDecideMatchNight(signups)).toBe(true);
+    expect(pollCanDecideMatchNight({ status: SEASON_STATUS.DRAFT })).toBe(false);
+    expect(pollCanDecideMatchNight(null)).toBe(false);
+  });
+});
+
 describe("pages that print the weekly night once fixtures exist", () => {
   // A pure label proves nothing if a page goes back to printing the raw
   // pre-signup text beside real kickoffs, or labels from the playoff anchor.
   it("go through the fixtures, not matchSchedule or firstMatchNight", async () => {
     const { readFileSync } = await import("node:fs");
     for (const [page, call] of [
-      // /me: the label is the fixtures' night, or a poll's "being decided"
-      // while one is open during signups (pollDecidesNight).
+      // /me, Schedule and How it works: the label is the fixtures' night,
+      // or a poll's "being decided" while one is open during signups
+      // (pollDecidesNight).
       ["src/app/me/page.tsx", ": seasonMatchNightLabel(season, seasonFixtures)"],
-      ["src/app/schedule/page.tsx", "label={seasonMatchNightLabel(season, matches)}"],
+      ["src/app/schedule/page.tsx", ": seasonMatchNightLabel(season, matches)"],
       ["src/app/admin/page.tsx", "fixturesMatchNightLabel(data.matches)"],
-      ["src/app/how-it-works/page.tsx", "{seasonMatchNightLabel(season, fixtures)}"],
+      ["src/app/how-it-works/page.tsx", ": seasonMatchNightLabel(season, fixtures)"],
       ["src/lib/link-preview.ts", "announcedMatchNight(season, season.fixtures)"],
     ] as const) {
       const source = readFileSync(page, "utf8");

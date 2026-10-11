@@ -67,12 +67,16 @@ import { draftSetupOpen } from "@/lib/draft-setup";
 import { rankMedalName, rankTierExactMinMmr } from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchRoundLabel } from "@/lib/schedule";
-import { seasonMatchNightLabel } from "@/lib/match-night";
-import { POLL_ANCHOR } from "@/lib/match-night-poll";
+import {
+  pollCanDecideMatchNight,
+  pollDecidesMatchNight,
+  seasonMatchNightLabel,
+} from "@/lib/match-night";
 import { matchNightPollOpen } from "@/lib/match-night-poll-service";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
+import { MatchNightPollNote } from "@/components/match-night-poll/poll-note";
 import { Countdown } from "@/components/countdown";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { HeroPicker } from "@/components/hero-picker";
@@ -210,12 +214,16 @@ export default async function MePage({
           select: { scheduledAt: true, status: true },
         })
       : [],
-    // During signups an open match-night poll means the night isn't
-    // settled, so the callout says so (as Home does).
-    season?.status === SEASON_STATUS.SIGNUPS ? matchNightPollOpen() : false,
+    pollCanDecideMatchNight(season) ? matchNightPollOpen() : false,
   ]);
-  // Fixtures, once they have kickoffs, are the night whatever a poll says.
-  const pollDecidesNight = pollOpen && seasonFixtures.length === 0;
+  // During signups an open match-night poll means the night isn't settled,
+  // so the callout says so (as Home does); fixtures, once they have
+  // kickoffs, are the night whatever a poll says.
+  const pollDecidesNight = pollDecidesMatchNight(
+    season,
+    seasonFixtures,
+    pollOpen,
+  );
   const form = reg ?? previous;
   // A playoff fixture (booked cover, or the team's next match) is named by
   // its round ("Semifinal"), the way the match page, /schedule and Discord
@@ -765,13 +773,7 @@ export default async function MePage({
                     }
                     description={
                       pollDecidesNight ? (
-                        <>
-                          Signed-up players are voting on it{" "}
-                          <Link href={`/#${POLL_ANCHOR}`} className={textLink()}>
-                            on Home
-                          </Link>
-                          . The time the most can make wins.
-                        </>
+                        <MatchNightPollNote />
                       ) : playerLocked ||
                         (isRegistered && reg?.type === REGISTRATION_TYPE.STANDIN) ? (
                         "Games run weekly. Captains book standins for this night when one of their players can't make it."
